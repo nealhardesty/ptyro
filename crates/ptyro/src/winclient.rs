@@ -13,8 +13,7 @@ const NOT_YOURS: &[&str] =
     &["docker-desktop", "docker-desktop-data", "rancher-desktop", "podman-machine"];
 
 /// What the README installs with (the release tarball, checked against `SHA256SUMS`).
-pub const INSTALL: &str =
-    "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh";
+pub use ptyro_client::wsl_setup::INSTALL;
 
 /// `ptyro --remote wsl://<distro> daemon start` on Windows (what the logon task runs when the
 /// daemon is WSL's, WIN10): start the daemon in that distro, which boots it, and hold it there as

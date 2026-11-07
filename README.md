@@ -166,6 +166,17 @@ ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, 
   `app.setup` and `app.install` in the palette (the checklist in a split). The web app has it
   under More → Set up ptyro, except steps that need admin rights, which only run on the computer
   itself: the page shows their command instead.
+- **Windows: WSL, Windows, or both.** On Windows each agent and tool can go into your WSL
+  distro, onto Windows itself, or both: the checklist has a column each, a number ticks it on
+  the side your daemon runs on (WSL's when ptyro works with ptyro in WSL), and `3:wsl`,
+  `3:windows` or `3:both` puts item 3 there. Unattended, `--where wsl|windows|both`
+  (`ptyro install gh --where both`). WSL's half is done by the ptyro inside the distro, through
+  `wsl.exe`, so its sudo prompt is in your terminal too. WSL is yours to bring: setup never
+  installs WSL, a distro, or ptyro in one. Without them it sets up Windows and says what's
+  missing, with the line to fix it (ptyro in WSL is
+  `wsl -- sh -c 'curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh'`);
+  run setup again afterwards for WSL's side. In the TUI, `app.setup` asks where first; the web
+  app shows both columns when its daemon runs on Windows.
 
 ### Removing ptyro
 

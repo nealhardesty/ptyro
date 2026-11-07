@@ -7,8 +7,11 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 
-use ptyro_agents::catalog::{self, Kind};
-use ptyro_agents::setup::{self, Admin, Entry, Event, Plan, Report, State, Survey};
+use ptyro_agents::catalog::{self, Kind, Platform};
+use ptyro_agents::setup::{
+    self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Survey, Where, WslStatus,
+};
+use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
 
@@ -20,19 +23,178 @@ pub struct SetupArgs {
     pub tools: Option<Vec<String>>,
     pub dry_run: bool,
     pub json: bool,
+    /// `--where` (BOOT8): on Windows `wsl`, `windows` or `both`.
+    pub place: Option<String>,
+    /// Hidden: print what is installed as JSON (Windows' ptyro asks a WSL distro's this way).
+    pub survey: bool,
+    /// Hidden: a person answers on stdin, terminal or not (the TUI's split in WSL running
+    /// Windows' ptyro.exe through interop, whose console is a pipe).
+    pub tty: bool,
 }
 
-/// A person can answer: a terminal (or a test's fake machine, which pipes its answers).
-fn interactive() -> bool {
-    (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
+pub struct InstallArgs {
+    pub names: Vec<String>,
+    pub yes: bool,
+    pub dry_run: bool,
+    pub json: bool,
+    pub place: Option<String>,
+    /// Hidden `--admin ask|never`: Windows' ptyro running this in a WSL distro, the person having
+    /// said yes there already. `ask`: sudo may prompt in the terminal; `never`: for the web.
+    pub admin: Option<String>,
+    pub tty: bool,
+}
+
+/// A person can answer: a terminal (or a test's fake machine, which pipes its answers; or
+/// `--tty`, said by the TUI).
+fn interactive(tty: bool) -> bool {
+    tty || (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         || ptyro_core::test_knob("PTYRO_TEST_SETUP").is_some()
 }
 
-fn look(paths: &Paths) -> (Box<dyn setup::Host + Send>, Survey) {
-    eprintln!("Looking at what's installed…");
+/// What each side has ticked (BOOT8): `here` is this computer (Windows itself, on Windows),
+/// `wsl` the WSL distro's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Picks {
+    here: Vec<String>,
+    wsl: Vec<String>,
+}
+
+impl Picks {
+    fn of(&mut self, side: Side) -> &mut Vec<String> {
+        if side == Side::Wsl { &mut self.wsl } else { &mut self.here }
+    }
+}
+
+/// What setup found: this computer, and on Windows with a usable WSL, the distro.
+struct Sides {
+    here: Survey,
+    /// This computer's side: `Windows` on Windows, else `Local`.
+    side: Side,
+    /// WSL's survey, when WSL is usable (and wanted).
+    wsl: Option<Survey>,
+    /// WSL as found (Windows), or that this is WSL; `None` elsewhere.
+    status: Option<WslStatus>,
+}
+
+impl Sides {
+    fn distro(&self) -> Option<&str> {
+        self.status.as_ref().and_then(WslStatus::usable).filter(|_| self.wsl.is_some())
+    }
+
+    /// The sides `place` means here, those that can be had.
+    fn sides(&self, place: Where) -> Vec<Side> {
+        place
+            .sides(self.side)
+            .into_iter()
+            .filter(|s| *s != Side::Wsl || self.wsl.is_some())
+            .collect()
+    }
+
+    fn plan(&self, picks: &Picks) -> Plan {
+        let mine = setup::plan(&self.here, &picks.here);
+        let wsl = self.wsl.as_ref().map(|s| setup::plan(s, &picks.wsl));
+        Plan::merge(mine, wsl, self.status.clone())
+    }
+
+    /// The default ticks not installed yet, on `place`'s sides.
+    fn defaults(&self, place: Where) -> Picks {
+        let mut p = Picks::default();
+        for side in self.sides(place) {
+            let survey = if side == Side::Wsl { self.wsl.as_ref() } else { Some(&self.here) };
+            if let Some(s) = survey {
+                *p.of(side) = setup::defaults(s);
+            }
+        }
+        p
+    }
+
+    /// `ids` ticked on `place`'s sides.
+    fn picks(&self, place: Where, ids: &[String]) -> Picks {
+        let mut p = Picks::default();
+        for side in self.sides(place) {
+            *p.of(side) = ids.to_vec();
+        }
+        p
+    }
+}
+
+/// `--where`, checked against this machine: on Windows any of them; elsewhere only `local`.
+fn place_of(given: Option<&str>, platform: Platform) -> Result<Option<Where>, Error> {
+    let Some(w) = given else { return Ok(None) };
+    let w: Where = w.parse().map_err(Error::invalid)?;
+    if platform.is_windows() || w == Where::Local {
+        return Ok(Some(w));
+    }
+    Err(Error::invalid(if platform == Platform::Wsl {
+        format!(
+            "--where {} is for Windows' ptyro: this is WSL, and setup here installs into it. For Windows itself, run `ptyro setup --where windows` in a Windows terminal",
+            w.name()
+        )
+    } else {
+        format!(
+            "--where {} is for Windows, where an agent can go into WSL, onto Windows, or both; on {} everything installs on this computer: leave --where out",
+            w.name(),
+            platform.name()
+        )
+    }))
+}
+
+/// Look at this computer, and on Windows at WSL (unless only Windows is wanted). The default
+/// place is the side the user's daemon runs on: WSL's when `client.default_remote` is a
+/// `wsl://` one and WSL is usable, else this computer.
+async fn look(
+    paths: &Paths,
+    given: Option<&str>,
+    quiet: bool,
+) -> Result<(Box<dyn setup::Host + Send>, Sides, Where), Error> {
+    if !quiet {
+        eprintln!("Looking at what's installed…");
+    }
     let host = setup::host(paths);
-    let survey = setup::survey(&*host, &BTreeMap::new());
-    (host, survey)
+    let here = setup::survey(&*host, &BTreeMap::new());
+    let platform = here.platform;
+    let place = place_of(given, platform)?;
+    if !platform.is_windows() {
+        let status = (platform == Platform::Wsl)
+            .then(|| WslStatus::Inside { distro: std::env::var("WSL_DISTRO_NAME").ok() });
+        let sides = Sides { here, side: Side::Local, wsl: None, status };
+        return Ok((host, sides, Where::Local));
+    }
+    let remote = crate::winclient::resolve(None, paths, false).await;
+    let prefer = remote.as_deref().and_then(ptyro_client::remote::wsl_distro).map(str::to_owned);
+    let mut sides = Sides { here, side: Side::Windows, wsl: None, status: None };
+    if !matches!(place, Some(Where::Windows | Where::Local)) {
+        if !quiet {
+            eprintln!("Looking at WSL…");
+        }
+        let mut status = wsl_setup::probe(prefer.as_deref()).await;
+        if let Some(d) = status.usable().map(str::to_owned) {
+            match wsl_setup::survey(&d).await {
+                Ok(s) => sides.wsl = Some(s),
+                Err(why) => status = why,
+            }
+        }
+        sides.status = Some(status);
+    }
+    let place = match place {
+        Some(Where::Wsl) if sides.wsl.is_none() => {
+            let why = match &sides.status {
+                Some(WslStatus::Unusable { reason, fix }) => format!("{reason}: {fix}"),
+                _ => "WSL isn't usable here".to_owned(),
+            };
+            return Err(Error::new(ErrorCode::Unsupported, format!("--where wsl: {why}")));
+        }
+        Some(Where::Both) if sides.wsl.is_none() => {
+            if let Some(s) = &sides.status {
+                eprintln!("{}", s.words());
+            }
+            Where::Windows
+        }
+        Some(p) => p,
+        None if prefer.is_some() && sides.wsl.is_some() => Where::Wsl,
+        None => Where::Windows,
+    };
+    Ok((host, sides, place))
 }
 
 /// The ids `names` mean, each of `kind`; `none` is none.
@@ -58,25 +220,29 @@ fn ids_of(names: &[String], kind: Kind, flag: &str) -> Result<Vec<String>, Error
 }
 
 pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
+    if a.survey {
+        let host = setup::host(&ctx.paths);
+        let survey = setup::survey(&*host, &BTreeMap::new());
+        let text = serde_json::to_string(&survey).map_err(|e| Error::internal(e.to_string()))?;
+        println!("{text}");
+        return Ok(0);
+    }
     let named = a.agents.is_some() || a.tools.is_some();
-    let mut picks = ids_of(a.agents.as_deref().unwrap_or_default(), Kind::Agent, "--agents")?;
-    picks.extend(ids_of(a.tools.as_deref().unwrap_or_default(), Kind::Tool, "--tools")?);
-    if !a.yes && !a.dry_run && !interactive() {
+    let mut ids = ids_of(a.agents.as_deref().unwrap_or_default(), Kind::Agent, "--agents")?;
+    ids.extend(ids_of(a.tools.as_deref().unwrap_or_default(), Kind::Tool, "--tools")?);
+    if !a.yes && !a.dry_run && !interactive(a.tty) {
         return Err(Error::invalid(
             "`ptyro setup` is a checklist: run it in a terminal, or pass --yes (with --agents and --tools, or the defaults: Claude Code, Codex, git, GitHub CLI)",
         ));
     }
-    let (host, survey) = look(&ctx.paths);
-    if !named {
-        picks = setup::defaults(&survey);
-    }
+    let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
+    let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
     if a.dry_run {
-        let plan = setup::plan(&survey, &picks);
-        return show_plan(&plan, a.json);
+        return show_plan(&sides.plan(&picks), a.json);
     }
     if !a.yes {
         let stdin = std::io::stdin();
-        match checklist(&survey, picks, &mut stdin.lock(), &mut std::io::stderr()) {
+        match checklist(&sides, place, picks, &mut stdin.lock(), &mut std::io::stderr()) {
             Some(p) => picks = p,
             None => {
                 eprintln!("Nothing installed.");
@@ -84,77 +250,146 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
             }
         }
     }
-    let plan = setup::plan(&survey, &picks);
-    go(ctx, &*host, &plan, a.yes, a.json)
+    let plan = sides.plan(&picks);
+    let admin = if a.yes { Admin::Silent } else { Admin::Ask };
+    go(ctx, &*host, &sides, &plan, admin, a.json, false)
 }
 
-pub async fn install(
-    ctx: &Ctx,
-    names: Vec<String>,
-    yes: bool,
-    dry_run: bool,
-    json: bool,
-) -> Result<i32, Error> {
-    let mut picks = Vec::new();
-    for n in names.iter().flat_map(|n| n.split([',', ' '])).filter(|n| !n.is_empty()) {
+pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
+    let mut ids = Vec::new();
+    for n in a.names.iter().flat_map(|n| n.split([',', ' '])).filter(|n| !n.is_empty()) {
         let item = setup::resolve(n).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
-        if !picks.contains(&item.id) {
-            picks.push(item.id.clone());
+        if !ids.contains(&item.id) {
+            ids.push(item.id.clone());
         }
     }
-    if picks.is_empty() {
+    if ids.is_empty() {
         return Err(Error::invalid("name what to install: `ptyro install agy`"));
     }
-    if !yes && !dry_run && !interactive() {
+    // Asked already, by Windows' ptyro (BOOT8): run, and ask only for administrator rights.
+    let asked = match a.admin.as_deref() {
+        None => None,
+        Some("ask") => Some(Admin::Ask),
+        Some("never") => Some(Admin::Never),
+        Some(other) => {
+            return Err(Error::invalid(format!("--admin takes ask or never, not {other:?}")));
+        }
+    };
+    if !a.yes && !a.dry_run && asked.is_none() && !interactive(a.tty) {
         return Err(Error::invalid(
             "`ptyro install` asks before it installs: run it in a terminal, or pass --yes",
         ));
     }
-    let (host, survey) = look(&ctx.paths);
-    let plan = setup::plan(&survey, &picks);
-    if dry_run {
-        return show_plan(&plan, json);
+    let quiet = asked.is_some();
+    let (host, sides, place) = look(&ctx.paths, a.place.as_deref(), quiet).await?;
+    let plan = sides.plan(&sides.picks(place, &ids));
+    if a.dry_run {
+        return show_plan(&plan, a.json);
     }
-    if !yes && !plan.steps().is_empty() {
+    let two = plan.sides().len() > 1;
+    if !a.yes && asked.is_none() && !plan.steps().is_empty() {
         eprintln!();
         for e in plan.steps() {
-            eprintln!("  {}", step_line(e));
+            eprintln!("  {}", step_line(e, two));
         }
         if !confirm("Install? [Y/n] ") {
             eprintln!("Nothing installed.");
             return Ok(0);
         }
     }
-    go(ctx, &*host, &plan, yes, json)
+    let admin = asked.unwrap_or(if a.yes { Admin::Silent } else { Admin::Ask });
+    go(ctx, &*host, &sides, &plan, admin, a.json, quiet)
 }
 
-/// Run the plan with live output, then what's next.
-fn go(ctx: &Ctx, host: &dyn setup::Host, plan: &Plan, yes: bool, json: bool) -> Result<i32, Error> {
-    for e in plan.entries.iter().filter(|e| e.picked && e.action.is_none() && e.blocked.is_none()) {
-        eprintln!("✓ {} is here already ({})", e.name, e.state.words());
+/// Run the plan with live output, side by side (this computer first, then WSL's), then what's
+/// next. `quiet`: run for Windows' ptyro, which says the rest itself.
+fn go(
+    ctx: &Ctx,
+    host: &dyn setup::Host,
+    sides: &Sides,
+    plan: &Plan,
+    admin: Admin,
+    json: bool,
+    quiet: bool,
+) -> Result<i32, Error> {
+    let two = plan.sides().len() > 1;
+    let tag =
+        |e: &Entry| if two { format!(" ({})", side_name(e.side, sides)) } else { String::new() };
+    if !quiet {
+        for e in
+            plan.entries.iter().filter(|e| e.picked && e.action.is_none() && e.blocked.is_none())
+        {
+            eprintln!("✓ {}{} is here already ({})", e.name, tag(e), e.state.words());
+        }
     }
-    if plan.steps().is_empty() && !plan.entries.iter().any(|e| e.ticked && e.blocked.is_some()) {
-        eprintln!("Nothing to install.");
+    let work = |side: Side| {
+        plan.side(side).entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some()))
+    };
+    let busy: Vec<Side> = plan.sides().into_iter().filter(|s| work(*s)).collect();
+    if busy.is_empty() {
+        if !quiet {
+            eprintln!("Nothing to install.");
+        }
         return Ok(0);
     }
     let names: BTreeMap<String, String> =
         plan.entries.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
-    let admin = if yes { Admin::Silent } else { Admin::Ask };
     let windows = plan.platform.is_windows();
-    let report = setup::run(plan, host, admin, &mut |ev| {
-        if json {
-            if let Ok(line) = serde_json::to_string(&ev) {
-                println!("{line}");
-            }
-            return;
+    let mut total = Report::default();
+    let mut tools = false;
+    for side in &busy {
+        let side = *side;
+        if busy.len() > 1 && !json {
+            eprintln!(
+                "
+── {} ──",
+                side_name(side, sides)
+            );
         }
-        print_event(&ev, &name, windows);
-    });
-    if report.tools {
-        offer_path(&ctx.paths, yes);
+        let mut on = |ev: Event| {
+            if json {
+                let line = if windows {
+                    serde_json::to_string(&Sided { side, event: ev })
+                } else {
+                    serde_json::to_string(&ev)
+                };
+                if let Ok(line) = line {
+                    println!("{line}");
+                }
+                return;
+            }
+            print_event(&ev, &name, windows && side != Side::Wsl);
+        };
+        let report = match (side, sides.distro()) {
+            (Side::Wsl, Some(distro)) => {
+                let how = match admin {
+                    Admin::Ask => wsl_setup::Admin::Ask,
+                    Admin::Silent => wsl_setup::Admin::Silent,
+                    Admin::Never => wsl_setup::Admin::Never,
+                };
+                wsl_setup::run(distro, plan, how, &mut on)
+            }
+            _ => {
+                let r = setup::run(&plan.side(side), host, admin, &mut on);
+                tools |= r.tools;
+                r
+            }
+        };
+        total.merge(&report);
     }
-    Ok(if report.ok() { 0 } else { 1 })
+    if tools {
+        offer_path(&ctx.paths, admin != Admin::Ask);
+    }
+    Ok(if total.ok() { 0 } else { 1 })
+}
+
+/// `Windows`, `WSL (Ubuntu)`.
+fn side_name(side: Side, sides: &Sides) -> String {
+    match (side, sides.distro()) {
+        (Side::Wsl, Some(d)) => format!("WSL ({d})"),
+        (s, _) => s.words().to_owned(),
+    }
 }
 
 fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
@@ -320,13 +555,15 @@ fn show_plan(plan: &Plan, json: bool) -> Result<i32, Error> {
     let mut out = std::io::stdout();
     let _ = render(plan, &mut out);
     let steps = plan.steps();
+    let two = plan.sides().len() > 1;
     if steps.is_empty() {
         let _ = writeln!(out, "\nNothing to install.");
     } else {
         let _ = writeln!(out, "\nWhat would run, in order:");
         for (e, a) in steps.iter().filter_map(|e| Some((e, e.action.as_ref()?))) {
             let admin = if a.admin { " (as administrator)" } else { "" };
-            let _ = writeln!(out, "  {}{admin}:", e.name);
+            let at = if two { format!(" ({})", e.side.words()) } else { String::new() };
+            let _ = writeln!(out, "  {}{at}{admin}:", e.name);
             for l in a.command.lines() {
                 let _ = writeln!(out, "    $ {}", l.trim());
             }
@@ -335,25 +572,84 @@ fn show_plan(plan: &Plan, json: bool) -> Result<i32, Error> {
     Ok(0)
 }
 
-/// `GitHub CLI: through apt (as administrator)`.
-fn step_line(e: &Entry) -> String {
-    let Some(a) = &e.action else { return e.name.clone() };
+/// `GitHub CLI: through apt (as administrator)`; with two sides, which (`… (WSL)`).
+fn step_line(e: &Entry, two: bool) -> String {
+    let at = if two { format!(" ({})", e.side.words()) } else { String::new() };
+    let Some(a) = &e.action else { return format!("{}{at}", e.name) };
     let admin = if a.admin { " (as administrator)" } else { "" };
     let what = if a.update { "update" } else { "install" };
-    format!("{}: {what} through {}{admin}", e.name, a.via.words())
+    format!("{}{at}: {what} through {}{admin}", e.name, a.via.words())
 }
 
-/// The entries a person can tick: what isn't here, or isn't new enough.
-fn pickable(plan: &Plan) -> Vec<&Entry> {
+fn here_already(e: &Entry) -> bool {
+    matches!(e.state, State::Installed { .. } | State::Other { .. })
+}
+
+/// The items a person can tick, in the checklist's order: what isn't here (or isn't new
+/// enough) on some side.
+fn rows(plan: &Plan) -> Vec<&Entry> {
+    let sides = plan.sides();
+    let Some(first) = sides.first() else { return Vec::new() };
     plan.entries
         .iter()
-        .filter(|e| !matches!(e.state, State::Installed { .. } | State::Other { .. }))
+        .filter(|e| e.side == *first)
+        .filter(|e| {
+            sides.iter().any(|s| plan.entry_on(&e.id, *s).is_some_and(|x| !here_already(x)))
+        })
         .collect()
 }
 
-/// The checklist: agents, tools (numbered), and what's here already.
+/// The checklist: agents, tools (numbered), and what's here already; with two sides, a column
+/// each. Then what WSL is, when it matters.
 fn render(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
-    let pick = pickable(plan);
+    if plan.sides().len() > 1 {
+        render_sides(plan, out)?;
+    } else {
+        render_one(plan, out)?;
+    }
+    match &plan.wsl {
+        Some(w @ (WslStatus::Unusable { .. } | WslStatus::Inside { .. })) => {
+            writeln!(out, "\n{}", w.words())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// What a checklist line says after the name, for one side's entry.
+fn notes_of(plan: &Plan, e: &Entry, label: bool) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(l) = e.label.as_ref().filter(|_| label) {
+        notes.push(l.clone());
+    }
+    if !e.needed_by.is_empty() {
+        let by: Vec<&str> = e
+            .needed_by
+            .iter()
+            .map(|id| plan.entry(id).map_or(id.as_str(), |x| x.name.as_str()))
+            .collect();
+        notes.push(format!("needed by {}", by.join(", ")));
+    }
+    if matches!(e.state, State::TooOld { .. } | State::Outdated { .. }) {
+        notes.push(e.state.words());
+    }
+    if let Some(b) = &e.blocked {
+        notes.push(format!("can't: {b}"));
+    }
+    notes
+}
+
+fn mark(e: &Entry) -> &'static str {
+    if e.picked {
+        "[x]"
+    } else if e.ticked {
+        "[+]"
+    } else {
+        "[ ]"
+    }
+}
+
+fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
+    let pick = rows(plan);
     for (title, kind) in [("Agents", Kind::Agent), ("Tools", Kind::Tool)] {
         let rows: Vec<(usize, &&Entry)> =
             pick.iter().enumerate().filter(|(_, e)| e.kind == kind).collect();
@@ -362,45 +658,19 @@ fn render(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
         }
         writeln!(out, "\n{title}")?;
         for (i, e) in rows {
-            let mark = if e.picked {
-                "[x]"
-            } else if e.ticked {
-                "[+]"
-            } else {
-                "[ ]"
-            };
-            let mut notes = Vec::new();
-            if let Some(l) = &e.label {
-                notes.push(l.clone());
-            }
-            if !e.needed_by.is_empty() {
-                let by: Vec<&str> = e
-                    .needed_by
-                    .iter()
-                    .map(|id| plan.entry(id).map_or(id.as_str(), |x| x.name.as_str()))
-                    .collect();
-                notes.push(format!("needed by {}", by.join(", ")));
-            }
-            if matches!(e.state, State::TooOld { .. } | State::Outdated { .. }) {
-                notes.push(e.state.words());
-            }
+            let mut notes = notes_of(plan, e, true);
             if let Some(a) = e.action.as_ref().filter(|_| e.ticked) {
                 let admin = if a.admin { ", as administrator" } else { "" };
-                notes.push(format!("through {}{admin}", a.via.words()));
-            }
-            if let Some(b) = &e.blocked {
-                notes.push(format!("can't: {b}"));
+                // Where "through" goes: before a reason it can't, as BOOT1 wrote it.
+                let at = notes.iter().position(|n| n.starts_with("can't")).unwrap_or(notes.len());
+                notes.insert(at, format!("through {}{admin}", a.via.words()));
             }
             let notes =
                 if notes.is_empty() { String::new() } else { format!("  ({})", notes.join("; ")) };
-            writeln!(out, "  {:>2} {mark} {}{notes}", i + 1, e.name)?;
+            writeln!(out, "  {:>2} {} {}{notes}", i + 1, mark(e), e.name)?;
         }
     }
-    let here: Vec<&Entry> = plan
-        .entries
-        .iter()
-        .filter(|e| matches!(e.state, State::Installed { .. } | State::Other { .. }))
-        .collect();
+    let here: Vec<&Entry> = plan.entries.iter().filter(|e| here_already(e)).collect();
     if !here.is_empty() {
         writeln!(out, "\nAlready here")?;
         for e in here {
@@ -411,23 +681,114 @@ fn render(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The checklist in a terminal: tick and untick by number (or name) until Enter. `None`: quit.
+/// One side's cell: `[x] WinGet`, `[+] apt (admin)`, `✓ 2.43.0`, `[ ]`.
+fn cell(e: Option<&Entry>) -> String {
+    let Some(e) = e else { return String::new() };
+    if here_already(e) {
+        return format!("✓ {}", e.state.version().unwrap_or("installed"));
+    }
+    match e.action.as_ref().filter(|_| e.ticked) {
+        Some(a) => {
+            format!("{} {}{}", mark(e), a.via.words(), if a.admin { " (admin)" } else { "" })
+        }
+        None if e.ticked && e.blocked.is_some() => format!("{} can't", mark(e)),
+        None => mark(e).to_owned(),
+    }
+}
+
+const NAME: usize = 13;
+const CELL: usize = 28;
+
+fn render_sides(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
+    let sides = plan.sides();
+    let heads: Vec<String> = sides
+        .iter()
+        .map(|s| match (s, &plan.wsl) {
+            (Side::Wsl, Some(WslStatus::Usable { distro, .. })) => format!("WSL ({distro})"),
+            (s, _) => s.words().to_owned(),
+        })
+        .collect();
+    let pick = rows(plan);
+    for (title, kind) in [("Agents", Kind::Agent), ("Tools", Kind::Tool)] {
+        let rows: Vec<(usize, &&Entry)> =
+            pick.iter().enumerate().filter(|(_, e)| e.kind == kind).collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let head: String = heads.iter().map(|h| format!("{h:<CELL$}")).collect();
+        writeln!(out, "\n{:<w$}{}", title, head.trim_end(), w = NAME + 6)?;
+        for (i, e) in rows {
+            let cells: String = sides
+                .iter()
+                .map(|s| format!("{:<CELL$}", cell(plan.entry_on(&e.id, *s))))
+                .collect();
+            let label = e.label.as_ref().map(|l| format!("  ({l})")).unwrap_or_default();
+            let line = format!("  {:>2} {:<NAME$} {}", i + 1, e.name, cells);
+            writeln!(out, "{}{label}", line.trim_end())?;
+            for (s, h) in sides.iter().zip(&heads) {
+                let Some(x) = plan.entry_on(&e.id, *s) else { continue };
+                let notes = notes_of(plan, x, false);
+                if !notes.is_empty() {
+                    writeln!(out, "       {h}: {}", notes.join("; "))?;
+                }
+            }
+        }
+    }
+    let here: Vec<&Entry> = plan
+        .entries
+        .iter()
+        .filter(|e| e.side == sides[0])
+        .filter(|e| sides.iter().all(|s| plan.entry_on(&e.id, *s).is_none_or(here_already)))
+        .collect();
+    if !here.is_empty() {
+        writeln!(out, "\nAlready here")?;
+        for e in here {
+            let each: Vec<String> = sides
+                .iter()
+                .zip(&heads)
+                .filter_map(|(s, h)| {
+                    plan.entry_on(&e.id, *s).map(|x| format!("{h} {}", x.state.words()))
+                })
+                .collect();
+            writeln!(out, "     ✓ {}: {}", e.name, each.join("; "))?;
+        }
+    }
+    Ok(())
+}
+
+/// The checklist in a terminal: tick and untick by number (or name) until Enter. With WSL's
+/// side too, a number ticks on `place`'s sides, and `3:wsl`, `3:windows` or `3:both` puts item 3
+/// there. `None`: quit.
 fn checklist(
-    survey: &Survey,
-    mut picks: Vec<String>,
+    sides: &Sides,
+    place: Where,
+    mut picks: Picks,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
-) -> Option<Vec<String>> {
+) -> Option<Picks> {
+    let two = sides.wsl.is_some();
+    let also = sides.distro().map(|d| format!(" and WSL ({d})")).unwrap_or_default();
     let _ = writeln!(
         out,
-        "\nSet up this computer ({}): tick what to install. [x] ticked, [+] needed by something ticked.",
-        survey.platform.name()
+        "\nSet up this computer ({}){also}: tick what to install. [x] ticked, [+] needed by something ticked.",
+        sides.here.platform.name()
     );
+    if two {
+        let _ = writeln!(
+            out,
+            "A number ticks it on {}; 3:wsl, 3:windows or 3:both puts item 3 there.",
+            match place {
+                Where::Both => "both".to_owned(),
+                p => side_name(sides.sides(p)[0], sides),
+            }
+        );
+    }
+    let offered: Vec<Side> = sides.sides(Where::Both);
     loop {
-        let plan = setup::plan(survey, &picks);
+        let plan = sides.plan(&picks);
         let _ = render(&plan, out);
-        let _ =
-            write!(out, "\nNumbers to tick or untick (e.g. 3 5), Enter to install, q to quit: ");
+        let hint = if two { " (e.g. 3 5, or 3:both)" } else { " (e.g. 3 5)" };
+        let _ = write!(out, "\nNumbers to tick or untick{hint}, Enter to install, q to quit: ");
         let _ = out.flush();
         let mut line = String::new();
         if input.read_line(&mut line).ok()? == 0 {
@@ -441,25 +802,71 @@ fn checklist(
         if matches!(line, "q" | "quit" | "exit") {
             return None;
         }
-        let pick = pickable(&plan);
+        let pick = rows(&plan);
         for word in line.split([',', ' ']).filter(|w| !w.is_empty()) {
-            let entry = match word.parse::<usize>() {
+            let (what, at) = match word.split_once(':') {
+                Some((w, s)) => (w, Some(s)),
+                None => (word, None),
+            };
+            let at = match at.map(str::parse::<Where>) {
+                None => None,
+                Some(Ok(w)) if two => Some(w),
+                Some(Ok(_)) => {
+                    let _ = writeln!(out, "  {word:?}: everything here installs on this computer");
+                    continue;
+                }
+                Some(Err(e)) => {
+                    let _ = writeln!(out, "  {word:?}: {e}");
+                    continue;
+                }
+            };
+            let entry = match what.parse::<usize>() {
                 Ok(n) => pick.get(n.wrapping_sub(1)).copied(),
-                Err(_) => setup::resolve(word).ok().and_then(|i| plan.entry(&i.id)),
+                Err(_) => setup::resolve(what).ok().and_then(|i| plan.entry(&i.id)),
             };
             let Some(e) = entry else {
                 let _ = writeln!(out, "  {word:?}: not on the list");
                 continue;
             };
-            if e.picked {
-                picks.retain(|p| *p != e.id);
-            } else if e.ticked {
-                let _ =
-                    writeln!(out, "  {} is needed by something ticked: untick that first", e.name);
-            } else if matches!(e.state, State::Installed { .. } | State::Other { .. }) {
-                let _ = writeln!(out, "  {} is here already", e.name);
-            } else {
-                picks.push(e.id.clone());
+            let targets = sides.sides(at.unwrap_or(place));
+            let on =
+                |s: Side| if two { format!(" on {}", side_name(s, sides)) } else { String::new() };
+            if at.is_some() {
+                // A place named: ticked there, and nowhere else.
+                for s in &offered {
+                    let Some(x) = plan.entry_on(&e.id, *s) else { continue };
+                    let list = picks.of(*s);
+                    if !targets.contains(s) {
+                        list.retain(|p| *p != e.id);
+                    } else if here_already(x) {
+                        let _ = writeln!(out, "  {} is here already{}", e.name, on(*s));
+                    } else if !list.contains(&e.id) {
+                        list.push(e.id.clone());
+                    }
+                }
+                continue;
+            }
+            let here: Vec<&Entry> =
+                targets.iter().filter_map(|s| plan.entry_on(&e.id, *s)).collect();
+            if here.iter().any(|x| x.picked) {
+                for x in &here {
+                    picks.of(x.side).retain(|p| *p != e.id);
+                }
+                continue;
+            }
+            for x in here {
+                if x.ticked {
+                    let _ = writeln!(
+                        out,
+                        "  {} is needed by something ticked{}: untick that first",
+                        e.name,
+                        on(x.side)
+                    );
+                } else if here_already(x) {
+                    let _ = writeln!(out, "  {} is here already{}", e.name, on(x.side));
+                } else {
+                    picks.of(x.side).push(e.id.clone());
+                }
             }
         }
     }
@@ -489,9 +896,10 @@ mod tests {
 
     fn drive(s: &Survey, picks: &[&str], answers: &str) -> (Option<Vec<String>>, String) {
         let mut out = Vec::new();
-        let picks = picks.iter().map(|p| (*p).to_owned()).collect();
-        let r = checklist(s, picks, &mut answers.as_bytes(), &mut out);
-        (r, String::from_utf8(out).unwrap())
+        let sides = Sides { here: s.clone(), side: Side::Local, wsl: None, status: None };
+        let picks = Picks { here: picks.iter().map(|p| (*p).to_owned()).collect(), wsl: vec![] };
+        let r = checklist(&sides, Where::Local, picks, &mut answers.as_bytes(), &mut out);
+        (r.map(|p| p.here), String::from_utf8(out).unwrap())
     }
 
     #[test]

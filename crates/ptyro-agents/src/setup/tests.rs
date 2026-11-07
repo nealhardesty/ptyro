@@ -414,3 +414,74 @@ fn a_step_ends_when_its_program_does_even_with_a_child_left_holding_the_pipe() {
     assert!(host::stream(&argv, &[], &mut |_| {}).unwrap_err().contains("exited with 3"));
     assert!(start.elapsed() < std::time::Duration::from_secs(10));
 }
+
+fn ids(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| (*s).to_owned()).collect()
+}
+
+#[test]
+fn windows_rows_say_windows_and_wsls_plan_joins_them_as_a_second_side() {
+    let win = TestHost::on(Platform::WindowsX64).with(&["winget"]);
+    let linux = TestHost::on(Platform::Linux).with(&["apt-get", "sudo", "curl"]);
+    let mine = plan(&survey(&win, &BTreeMap::new()), &ids(&["gemini"]));
+    assert!(mine.entries.iter().all(|e| e.side == Side::Windows));
+    let theirs = plan(&survey(&linux, &BTreeMap::new()), &ids(&["gemini", "gh"]));
+    assert!(theirs.entries.iter().all(|e| e.side == Side::Local));
+    let status = WslStatus::Usable { distro: "Ubuntu".into(), version: "ptyro 0.0.63".into() };
+    let both = Plan::merge(mine, Some(theirs), Some(status.clone()));
+    assert_eq!(both.sides(), [Side::Windows, Side::Wsl]);
+    // Each side in order, each item after what it needs on its own side.
+    let steps: Vec<(Side, &str)> = both.steps().iter().map(|e| (e.side, e.id.as_str())).collect();
+    assert_eq!(
+        steps,
+        [
+            (Side::Windows, "node"),
+            (Side::Windows, "gemini"),
+            (Side::Wsl, "gh"),
+            (Side::Wsl, "node"),
+            (Side::Wsl, "gemini"),
+        ]
+    );
+    let wsl = both.side(Side::Wsl);
+    assert!(wsl.entries.iter().all(|e| e.side == Side::Wsl));
+    assert_eq!(wsl.entry_on("gh", Side::Wsl).unwrap().action.as_ref().unwrap().via, Via::Apt);
+    assert!(both.entry_on("gh", Side::Windows).is_some_and(|e| !e.ticked));
+    // The JSON carries the sides and WSL's state, and reads back.
+    let j = serde_json::to_value(&both).unwrap();
+    assert_eq!(
+        j["wsl"],
+        serde_json::json!({"state": "usable", "distro": "Ubuntu", "version": "ptyro 0.0.63"})
+    );
+    let back: Plan = serde_json::from_value(j).unwrap();
+    assert_eq!(back, both);
+    // A plan from before BOOT8 (no `wsl`, no `side`) still reads.
+    let old = serde_json::json!({"platform": "linux", "entries": []});
+    assert_eq!(serde_json::from_value::<Plan>(old).unwrap().wsl, None);
+}
+
+#[test]
+fn where_means_sides_and_events_carry_theirs() {
+    assert_eq!("both".parse::<Where>().unwrap().sides(Side::Windows), [Side::Windows, Side::Wsl]);
+    assert_eq!("WSL".parse::<Where>().unwrap().sides(Side::Windows), [Side::Wsl]);
+    assert_eq!("windows".parse::<Where>().unwrap().sides(Side::Windows), [Side::Windows]);
+    assert_eq!("local".parse::<Where>().unwrap().sides(Side::Local), [Side::Local]);
+    assert!("mars".parse::<Where>().unwrap_err().contains("wsl, windows or both"));
+    let ev = Sided { side: Side::Wsl, event: Event::Done { id: "gh".into(), version: None } };
+    let j = serde_json::to_value(&ev).unwrap();
+    assert_eq!(j, serde_json::json!({"side": "wsl", "event": "done", "id": "gh", "version": null}));
+    // A reader that knows only events reads it too.
+    assert_eq!(serde_json::from_value::<Event>(j.clone()).unwrap(), ev.event);
+    assert_eq!(serde_json::from_value::<Sided>(j).unwrap(), ev);
+    let mut r = Report { done: ids(&["claude"]), ..Report::default() };
+    r.merge(&Report { failed: ids(&["gh"]), tools: true, ..Report::default() });
+    assert!(!r.ok() && r.tools && r.done == ["claude"]);
+    let no = WslStatus::Unusable {
+        reason: "WSL has no Linux distro".into(),
+        fix: "`wsl --install`".into(),
+    };
+    assert_eq!(
+        no.words(),
+        "WSL: WSL has no Linux distro, so this sets up Windows only. For WSL too: `wsl --install`"
+    );
+    assert_eq!(no.usable(), None);
+}

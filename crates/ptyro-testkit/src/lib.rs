@@ -5,6 +5,7 @@ pub mod fake_adapters;
 pub mod fake_agent;
 pub mod fake_gh;
 pub mod fake_structured;
+pub mod fake_wsl;
 pub mod fuzz;
 pub mod headless;
 pub mod program;

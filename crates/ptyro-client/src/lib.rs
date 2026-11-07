@@ -5,6 +5,7 @@
 //! pushes (frames, events, goodbye) arrives on [`Client::pushes`].
 
 pub mod remote;
+pub mod wsl_setup;
 
 use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;

@@ -169,6 +169,11 @@ async fn dispatch(
     } else if matches!(cmd, Some(Cmd::Setup { .. } | Cmd::Install { .. })) {
         // Setup installs on this computer, with no daemon (BOOT1).
         if let Some(r) = remote.filter(|r| !ptyro_client::is_local(Some(r))) {
+            if r.starts_with("wsl://") {
+                return Err(Error::invalid(format!(
+                    "setup reaches WSL itself: `ptyro setup --where wsl` (or both), not --remote {r}"
+                )));
+            }
             return Err(Error::invalid(format!(
                 "setup installs on this computer, not on {r}: run `ptyro setup` there"
             )));
@@ -334,12 +339,14 @@ async fn dispatch(
             Ok(0)
         }
         Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
-        Some(Cmd::Setup { yes, agents, tools, dry_run, json }) => {
-            let a = crate::setup::SetupArgs { yes, agents, tools, dry_run, json };
+        Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, survey, tty }) => {
+            let a =
+                crate::setup::SetupArgs { yes, agents, tools, dry_run, json, place, survey, tty };
             crate::setup::setup(&ctx, a).await
         }
-        Some(Cmd::Install { names, yes, dry_run, json }) => {
-            crate::setup::install(&ctx, names, yes, dry_run, json).await
+        Some(Cmd::Install { names, yes, dry_run, json, place, admin, tty }) => {
+            let a = crate::setup::InstallArgs { names, yes, dry_run, json, place, admin, tty };
+            crate::setup::install(&ctx, a).await
         }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
@@ -637,7 +644,9 @@ async fn dispatch(
         Some(Cmd::Daemon { cmd }) => daemon(&ctx, cmd).await,
         Some(Cmd::FakeAgent { .. }) => unreachable!("handled in main"),
         #[cfg(debug_assertions)]
-        Some(Cmd::FakeGh { .. } | Cmd::FakeInstaller { .. }) => unreachable!("handled in main"),
+        Some(Cmd::FakeGh { .. } | Cmd::FakeInstaller { .. } | Cmd::FakeWsl { .. }) => {
+            unreachable!("handled in main")
+        }
     }
 }
 

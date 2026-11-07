@@ -74,6 +74,15 @@ pub enum Event {
     },
 }
 
+/// An event and the side it happened on (BOOT8): what `ptyro setup --json` prints on Windows,
+/// where a run can have two sides. A reader that knows only [`Event`] still reads it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sided {
+    pub side: super::Side,
+    #[serde(flatten)]
+    pub event: Event,
+}
+
 /// How a run ended.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Report {
@@ -90,6 +99,15 @@ pub struct Report {
 }
 
 impl Report {
+    /// Another side's report added to this one (for the exit code and the summary).
+    pub fn merge(&mut self, other: &Report) {
+        self.done.extend(other.done.iter().cloned());
+        self.failed.extend(other.failed.iter().cloned());
+        self.skipped.extend(other.skipped.iter().cloned());
+        self.blocked.extend(other.blocked.iter().cloned());
+        self.tools |= other.tools;
+    }
+
     pub fn ok(&self) -> bool {
         self.failed.is_empty() && self.skipped.is_empty() && self.blocked.is_empty()
     }
