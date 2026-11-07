@@ -267,7 +267,19 @@ export function updateOffer(c) {
     const d = c.data;
     if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program)
         return null;
-    return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin };
+    return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin, path: d.path ?? null, managed: d.managed ?? null };
+}
+export function selfUpdate(o) {
+    if (o.id !== "ptyro")
+        return null;
+    if (o.managed)
+        return { kind: "managed", how: o.managed };
+    if (o.admin)
+        return { kind: "command", command: o.command };
+    const what = o.command
+        ? `runs ${o.command}`
+        : `downloads the release, checks it against its SHA256SUMS (and its signed provenance where gh is installed), and replaces ${o.path ?? "ptyro"}`;
+    return { kind: "run", what };
 }
 /// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
 /// update leaves them on the old version until they restart, so the page names them.

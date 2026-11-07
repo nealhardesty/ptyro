@@ -258,11 +258,29 @@ export class SetupLog {
 
 /// An update the doctor offers (BOOT5, SPEC §24.7): its `updates` finding's `data`, the engine's
 /// `Outdated` (not its words, which may change).
-export interface UpdateOffer { id: string; program: string; name: string; latest: string; version: string; command: string | null; admin: boolean }
+export interface UpdateOffer { id: string; program: string; name: string; latest: string; version: string; command: string | null; admin: boolean; path: string | null; managed: string | null }
 export function updateOffer(c: { section?: string; level?: string; data?: any }): UpdateOffer | null {
   const d = c.data;
   if (c.section !== "updates" || c.level !== "warn" || !d?.id || !d.program) return null;
-  return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin };
+  return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin, path: d.path ?? null, managed: d.managed ?? null };
+}
+
+/// ptyro's own update from the web (BOOT6): run on the computer (`updates.self`: a session there
+/// running `ptyro update ptyro --yes`), or, for a binary only an administrator can replace, the
+/// command to run there (the owner's exception: a password never goes through the web), or, for
+/// one a package manager owns, how it updates instead.
+export type SelfUpdate =
+  | { kind: "run"; what: string }
+  | { kind: "command"; command: string | null }
+  | { kind: "managed"; how: string };
+export function selfUpdate(o: UpdateOffer): SelfUpdate | null {
+  if (o.id !== "ptyro") return null;
+  if (o.managed) return { kind: "managed", how: o.managed };
+  if (o.admin) return { kind: "command", command: o.command };
+  const what = o.command
+    ? `runs ${o.command}`
+    : `downloads the release, checks it against its SHA256SUMS (and its signed provenance where gh is installed), and replaces ${o.path ?? "ptyro"}`;
+  return { kind: "run", what };
 }
 
 /// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an

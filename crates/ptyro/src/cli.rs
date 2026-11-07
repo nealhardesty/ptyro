@@ -685,7 +685,11 @@ async fn dispatch(
 }
 
 /// `ptyro daemon upgrade`: hand off, then wait for the new image to answer.
-async fn upgrade(ctx: &Ctx, binary: Option<std::path::PathBuf>, json: bool) -> Result<i32, Error> {
+pub(crate) async fn upgrade(
+    ctx: &Ctx,
+    binary: Option<std::path::PathBuf>,
+    json: bool,
+) -> Result<i32, Error> {
     let client = ctx.connect(false).await.map_err(no_daemon)?;
     let Reply::Status { status: before } = client.request(Request::Status).await? else {
         return Err(Error::internal("unexpected reply"));

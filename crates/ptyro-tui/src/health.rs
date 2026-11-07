@@ -193,12 +193,14 @@ pub fn finding(c: &Check) -> Option<Finding> {
     Some(Finding { problem, what: format!("{} {}", c.section, c.name), text: c.text.clone(), fix })
 }
 
-/// A finding about one agent out of date (`updates <agent id>`), as the daemon's `Updates` gives
-/// them (the badge's other `updates` warnings, a typo in `updates.ignore`, aren't).
+/// A finding about one agent, or ptyro itself, out of date (`updates <agent id>`, `updates
+/// ptyro`), as the daemon's `Updates` gives them (the badge's other `updates` warnings, a typo in
+/// `updates.ignore`, aren't).
 pub(crate) fn agent_update(f: &Finding) -> bool {
     f.what.strip_prefix("updates ").is_some_and(|id| {
-        ptyro_agents::catalog::item(id)
-            .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
+        id == ptyro_agents::own::ID
+            || ptyro_agents::catalog::item(id)
+                .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
     })
 }
 

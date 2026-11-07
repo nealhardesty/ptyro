@@ -15,6 +15,7 @@ mod logins;
 mod machines;
 mod mcp;
 mod orch;
+mod own;
 mod pad;
 #[cfg(test)]
 mod parity;
@@ -816,10 +817,11 @@ enum Cmd {
         #[arg(long, hide = true)]
         confirmed: bool,
     },
-    /// Update agents that have a newer version out (or those named), each the way it was
-    /// installed: `ptyro update`, `ptyro update codex`; `--check` only looks
+    /// Update agents, and ptyro itself, when a newer version is out (or those named), each the
+    /// way it was installed: `ptyro update`, `ptyro update codex`, `ptyro update ptyro`;
+    /// `--check` only looks
     Update {
-        /// claude, codex, agy, opencode, gemini (default: every agent with a newer version,
+        /// claude, codex, agy, opencode, gemini, ptyro (default: every one with a newer version,
         /// less what `updates.ignore` skips)
         #[arg(value_name = "NAME")]
         names: Vec<String>,
@@ -1342,6 +1344,11 @@ fn main() {
     // A shell asking for completions: answer and exit before anything else happens.
     complete::handle(Cli::command);
     let cli = Cli::parse();
+    // Windows: what an update renamed aside while it ran (`ptyro.exe.old`), once it doesn't
+    // (BOOT6). Not on the hooks' path, which runs inside agents on every event.
+    if cfg!(windows) && !matches!(cli.cmd, Some(Cmd::Hook { .. } | Cmd::StatuslineRelay)) {
+        ptyro_agents::own::sweep(&ptyro_agents::own::binary());
+    }
     let code = match cli.cmd {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
             winclient::start_in_wsl(cli.remote.as_deref())

@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, leftForComputer, noAgent, retryOf, runningAgent, SetupLog, updateOffer, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, leftForComputer, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -191,7 +191,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const data = { id: "antigravity", name: "Antigravity", program: "agy", version: "1.3.2", latest: "1.4.0", command: "agy update", admin: false };
   const c = { section: "updates", name: "antigravity", level: "warn", text: "whatever the words say", data };
-  assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false });
+  assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false, path: null, managed: null });
   assert.equal(updateOffer({ ...c, data: { ...data, admin: true } }).admin, true);
   assert.equal(updateOffer({ ...c, level: "note" }), null, "a skipped one (updates.ignore) offers no update");
   assert.equal(updateOffer({ ...c, data: undefined }), null, "no data, no button (never parsed from the words)");
@@ -226,3 +226,21 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 }
 
 console.log("setup: ok");
+
+// ptyro itself (BOOT6): run on the computer; an administrator's binary shows its command; a
+// package manager's says how; an agent isn't this.
+{
+  const data = { id: "ptyro", name: "ptyro", program: "ptyro", version: "0.0.63", latest: "0.0.64", command: null, admin: false, path: "/home/me/.local/bin/ptyro" };
+  const c = { section: "updates", level: "warn", data };
+  const o = updateOffer(c);
+  assert.equal(o.path, "/home/me/.local/bin/ptyro");
+  const run = selfUpdate(o);
+  assert.equal(run.kind, "run");
+  assert.match(run.what, /SHA256SUMS/);
+  assert.match(run.what, /replaces \/home\/me\/\.local\/bin\/ptyro/);
+  assert.deepEqual(selfUpdate(updateOffer({ ...c, data: { ...data, command: "brew upgrade ptyro", via: "brew" } })), { kind: "run", what: "runs brew upgrade ptyro" });
+  const admin = updateOffer({ ...c, data: { ...data, admin: true, command: "curl -fsSL x/install.sh | sudo env PTYRO_PREFIX=/usr/local PTYRO_VERSION=0.0.64 sh" } });
+  assert.deepEqual(selfUpdate(admin), { kind: "command", command: admin.command }, "a password never goes through the web");
+  assert.deepEqual(selfUpdate(updateOffer({ ...c, data: { ...data, managed: "cargo (`cargo install`)" } })), { kind: "managed", how: "cargo (`cargo install`)" });
+  assert.equal(selfUpdate(updateOffer({ section: "updates", level: "warn", data: { id: "codex", program: "codex", latest: "1", version: "0" } })), null);
+}

@@ -450,7 +450,12 @@ fn doctor_says_when_the_ignore_list_names_no_agent() {
     let checks = m.doctor(true);
     let bad: Vec<&Value> = checks.iter().filter(|c| c["name"] == "ignore").collect();
     assert_eq!(bad.len(), 1, "{checks:?}");
-    assert!(bad[0]["text"].as_str().unwrap().contains("\"codx@0.170.0\", which isn't an agent"));
+    assert!(
+        bad[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"codx@0.170.0\", which isn't something ptyro updates")
+    );
     // The finding carries what it is about, for a client to act on (the web's Update).
     let claude = m.doctor(false).into_iter().find(|c| c["name"] == "claude").unwrap();
     assert_eq!(claude["data"]["program"], "claude");
