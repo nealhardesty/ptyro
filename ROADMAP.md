@@ -3325,10 +3325,24 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   BOOT6's row. Protocol 1.35 (SPEC §24.7). Tested with a fixture registry (`PTYRO_TEST_LATEST`)
   and a clock knob (`PTYRO_TEST_NOW`): `tests/boot5.rs`, `setup/tests.rs`, the TUI's, `web/test/setup.mjs`
   and a browser scenario in `make web-e2e`.
-- [ ] **BOOT6 ptyro updates itself** **M**: the newer release downloaded and verified
+- [x] **BOOT6 ptyro updates itself** **M**: the newer release downloaded and verified
   (`SHA256SUMS`, signed provenance), then offered: install, and `daemon upgrade` live. A
   package-managed ptyro (Homebrew) is updated through that manager. On Windows with WSL's
   daemon, both halves are updated.
+
+  *Done (2026-11-07):* ptyro is one more row of BOOT5's machinery (`ptyro_agents::own`, id
+  `ptyro`; RESEARCH R-SEC-04): its newest release looked up with the agents (GitHub's latest
+  release, metadata only), offered in the same four places, and `ptyro update ptyro` (or `ptyro
+  update`) after a yes, under the setup lock: the release for this machine downloaded, checked
+  against `SHA256SUMS` and, with `gh`, its provenance (a tampered one refused, nothing replaced),
+  swapped in atomically (Windows: renamed aside, swept on a later start), the old kept until the
+  new one answers `--version` (else put back), then `daemon upgrade` live. Homebrew's through
+  `brew upgrade ptyro`; cargo's or a system package's said, never replaced; a build never offered;
+  an administrator's folder with sudo at a terminal, the command shown on the web. On Windows with
+  WSL, each half updates itself and asks the other to match. Web: Health → Update ptyro
+  (`updates.self`, a session the page opens). Tested end to end against a fake release server on
+  127.0.0.1 (`PTYRO_TEST_RELEASE_URL`), with a tampered download, a rollback, the daemon's live
+  upgrade, both halves through `ptyro fake-wsl` and Homebrew's (`tests/boot6.rs`; SPEC §24.8).
 - [ ] **BOOT7 Moves to the recommended installer** **S**, for an agent installed another way
   (Claude Code through npm or Homebrew, for example). The offer can be dismissed.
 - [x] **BOOT8 Windows: WSL, Windows, or both** **S**. Per agent; WSL is the user's to bring. On a

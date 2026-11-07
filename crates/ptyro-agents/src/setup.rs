@@ -18,7 +18,7 @@
 
 pub mod checklist;
 mod fake;
-mod host;
+pub(crate) mod host;
 pub mod lock;
 pub mod login;
 mod run;

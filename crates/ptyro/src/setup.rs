@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 
 use ptyro_agents::catalog::{self, Kind, Platform};
+use ptyro_agents::own;
 use ptyro_agents::setup::checklist::{self, Picks, Sides, cell, here_already, mark, rows};
 use ptyro_agents::setup::{
     self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Where, WslStatus,
@@ -306,10 +307,19 @@ pub struct UpdateArgs {
 /// each through the plan engine with the method it was installed by, under the machine's setup
 /// lock, after a yes. Sessions running an updated agent keep the old version until they restart,
 /// and are named; on Windows, an agent that can't be replaced while it runs is offered a retry.
+/// ptyro itself is one more row (BOOT6, SPEC §24.8): its release downloaded, checked and swapped
+/// in last, then the daemon upgraded live, and on Windows with WSL the other half brought to the
+/// same version.
 pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let cfg = updates_config(&ctx.paths);
     let mut ids: Vec<String> = Vec::new();
     for n in a.names.iter().flat_map(|n| n.split([',', ' '])).filter(|n| !n.is_empty()) {
+        if n.eq_ignore_ascii_case(own::ID) {
+            if !ids.iter().any(|i| i == own::ID) {
+                ids.push(own::ID.to_owned());
+            }
+            continue;
+        }
         let item = setup::resolve(n).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
         if item.kind != Kind::Agent {
             return Err(Error::invalid(format!(
@@ -370,14 +380,28 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let lock = take_lock(ctx, "`ptyro update`")?;
     let since = updates::generation(&state);
     let (v, survey) = updates::remember(&*host, &state, updates::now(), since, Some(looked), true);
+    // A ptyro a package manager owns is said, not updated, unless named (it then says how).
     let todo: Vec<Outdated> = v
         .outdated
         .iter()
         .filter(|o| {
-            if ids.is_empty() { !updates::ignored(&cfg.ignore, o) } else { ids.contains(&o.id) }
+            if ids.is_empty() {
+                !updates::ignored(&cfg.ignore, o) && o.managed.is_none()
+            } else {
+                ids.contains(&o.id)
+            }
         })
         .cloned()
         .collect();
+    let install = own::Install::here();
+    let ptyro_todo = todo.iter().find(|o| o.id == own::ID).cloned();
+    // Named and the newest already: the halves are still brought into step (BOOT6).
+    let ptyro_named = ids.iter().any(|i| i == own::ID);
+    let half = if ptyro_todo.is_some() || (ptyro_named && v.latest.contains_key(own::ID)) {
+        crate::own::other_half(&ctx.paths, survey.platform).await
+    } else {
+        None
+    };
     if !a.json {
         for id in ids.iter().filter(|id| !todo.iter().any(|o| &o.id == *id)) {
             eprintln!("{}", standing(id, &v, &survey));
@@ -387,13 +411,31 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         if ids.is_empty() && !a.json {
             say_where_each_stands(&v, &survey, &cfg, &[]);
         }
+        drop(lock);
+        if let (Some(h), Some(now)) = (&half, own::version_of(&install.path)) {
+            return Ok(if crate::own::keep_in_step(h, &now, a.json).await { 0 } else { 1 });
+        }
         return Ok(0);
     }
     let todo_ids: Vec<String> = todo.iter().map(|o| o.id.clone()).collect();
     let running = sessions_running(ctx, &todo_ids).await;
     if !a.yes {
         eprintln!();
-        for o in &todo {
+        for o in todo.iter().filter(|o| o.id == own::ID) {
+            for l in crate::own::question(o, &install) {
+                eprintln!("{l}");
+            }
+            if let Some(h) = half.as_ref().filter(|h| h.version.as_deref() != Some(&o.latest)) {
+                eprintln!(
+                    "    and {} {} too, so both halves agree",
+                    h.label,
+                    h.version
+                        .as_deref()
+                        .map_or("(version unknown)".into(), |v| format!("{v} → {}", o.latest))
+                );
+            }
+        }
+        for o in todo.iter().filter(|o| o.id != own::ID) {
             let how = o.command.as_deref().map(|c| format!(": `{c}`")).unwrap_or_default();
             let admin = if o.admin { " (as administrator)" } else { "" };
             eprintln!("  {} {} → {}{how}{admin}", o.name, o.version, o.latest);
@@ -420,7 +462,11 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let mut plan = setup::plan(&survey, &todo_ids);
     let mut done: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
+    let agents = todo.iter().any(|o| o.id != own::ID);
     loop {
+        if !agents {
+            break;
+        }
         let mut busy: Vec<String> = Vec::new();
         let mut on = |ev: Event| {
             if let Event::Failed { id, in_use: true, .. } = &ev {
@@ -494,8 +540,57 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         }
         plan = setup::plan(&fresh, &still);
     }
+    // ptyro itself last (BOOT6), still under the lock: its release, checked and swapped in.
+    let mut ptyro_new: Option<String> = None;
+    if let Some(o) = &ptyro_todo {
+        let on = |ev: Event| {
+            if a.json {
+                if let Ok(line) = serde_json::to_string(&ev) {
+                    println!("{line}");
+                }
+            } else {
+                print_event(&ev, &name, false);
+            }
+        };
+        // Off the runtime's thread, its progress shown as it comes.
+        let (install, latest) = (install.clone(), o.latest.clone());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let job = tokio::task::spawn_blocking(move || {
+            own::update(&install, &latest, admin, &mut |ev| {
+                let _ = tx.send(ev);
+            })
+        });
+        while let Some(ev) = rx.recv().await {
+            on(ev);
+        }
+        let r = job.await.map_err(|e| Error::internal(e.to_string()))?;
+        match r {
+            Ok(v) => {
+                done.push(own::ID.to_owned());
+                ptyro_new = Some(v);
+            }
+            Err(_) => failed.push(own::ID.to_owned()),
+        }
+    }
     let after = updates::refresh(&*host, &state, updates::now());
     drop(lock);
+    // Then the daemon onto it, live, and the other half to the same version (also when ptyro
+    // was named and is the newest already).
+    if let Some(v) = &ptyro_new
+        && !crate::own::upgrade_daemon(ctx, install.after(), v).await
+    {
+        failed.push("daemon".into());
+    }
+    let ptyro_now = match (&ptyro_new, &ptyro_todo) {
+        (Some(v), _) => Some(v.clone()),
+        (None, None) if ptyro_named => own::version_of(&install.path),
+        _ => None,
+    };
+    if let (Some(h), Some(v)) = (&half, &ptyro_now)
+        && !crate::own::keep_in_step(h, v, a.json).await
+    {
+        failed.push("the other half".into());
+    }
     if !a.json {
         for id in &done {
             if let (Some(o), Some(n)) = (todo.iter().find(|o| &o.id == id), running.get(id)) {
@@ -540,6 +635,9 @@ fn still_run(n: usize) -> String {
 
 /// A named agent with nothing to update: the newest already, not installed, or not known.
 fn standing(id: &str, v: &updates::Versions, survey: &setup::Survey) -> String {
+    if id == own::ID {
+        return own_standing(v);
+    }
     let name = catalog::item(id).map_or(id, |i| i.name.as_str());
     let program = catalog::item(id).map_or(id, |i| i.program.as_str());
     match (survey.states.get(id), v.latest.get(id)) {
@@ -557,6 +655,26 @@ fn standing(id: &str, v: &updates::Versions, survey: &setup::Survey) -> String {
     }
 }
 
+/// Where ptyro itself stands (BOOT6): the newest, a build, or not looked up.
+fn own_standing(v: &updates::Versions) -> String {
+    let install = own::Install::here();
+    let have = own::version_of(&install.path).unwrap_or_else(|| "(version unknown)".into());
+    if install.how == own::How::Build {
+        return format!(
+            "· ptyro {have} is a build ({}): it updates by building again",
+            install.path.display()
+        );
+    }
+    match (v.outdated.iter().find(|o| o.id == own::ID), v.latest.get(own::ID)) {
+        (Some(o), _) => format!("! {}", o.finding()),
+        (None, Some(l)) => format!("✓ ptyro {have} is the newest ({l})"),
+        (None, None) => format!(
+            "? ptyro {have}: its newest version couldn't be looked up ({})",
+            v.failed.get(own::ID).map_or("no source", String::as_str)
+        ),
+    }
+}
+
 /// `--check`, or nothing to update: where each installed agent stands.
 fn say_where_each_stands(
     v: &updates::Versions,
@@ -569,9 +687,9 @@ fn say_where_each_stands(
         .filter(|i| i.kind == Kind::Agent && (ids.is_empty() || ids.contains(&i.id)))
         .filter(|i| survey.states.get(&i.id).is_some_and(State::present))
         .collect();
-    if installed.is_empty() {
+    let only_ptyro = !ids.is_empty() && ids.iter().all(|i| i == own::ID);
+    if installed.is_empty() && !only_ptyro {
         eprintln!("No agent is installed: `ptyro setup` installs them.");
-        return;
     }
     let mut any = false;
     for i in installed {
@@ -586,7 +704,22 @@ fn say_where_each_stands(
             None => eprintln!("{}", standing(&i.id, v, survey)),
         }
     }
-    if !v.failed.is_empty() && v.failed.len() == updates::sources().len() {
+    if ids.is_empty() || ids.iter().any(|i| i == own::ID) {
+        let install = own::Install::here();
+        if install.how != own::How::Build {
+            match v.outdated.iter().find(|o| o.id == own::ID) {
+                Some(o) if updates::ignored(&cfg.ignore, o) => {
+                    eprintln!("· {}: skipped (updates.ignore)", o.line())
+                }
+                Some(o) => {
+                    any = o.managed.is_none() || any;
+                    eprintln!("! {}", o.finding());
+                }
+                None => eprintln!("{}", own_standing(v)),
+            }
+        }
+    }
+    if !v.failed.is_empty() && v.failed.len() == updates::looked_up().len() {
         eprintln!("Couldn't look for newer versions (offline?): ptyro looks again tomorrow.");
     }
     if any {

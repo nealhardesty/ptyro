@@ -8841,6 +8841,8 @@ mod tests {
             via: None,
             admin: false,
             doc: String::new(),
+            path: None,
+            managed: None,
         };
         // The badge's own ask: findings, no note.
         app.got_updates(vec![codex.clone()], Vec::new(), false);
@@ -8897,6 +8899,50 @@ mod tests {
         let t = app.toast.take().unwrap();
         assert!(t.text.starts_with("on box: Codex 0.170.0 is out"), "{}", t.text);
         assert!(app.health.updates[0].text.starts_with("on box: "));
+    }
+
+    /// BOOT6: ptyro itself is one more row: the badge's finding updates it with `ptyro update
+    /// ptyro` in a split where the daemon is, and the note names it among the agents.
+    #[tokio::test]
+    async fn ptyro_itself_is_noted_and_fixed_like_an_agent() {
+        use ptyro_agents::updates;
+        let mut app = app();
+        let me = updates::Outdated {
+            id: "ptyro".into(),
+            name: "ptyro".into(),
+            program: "ptyro".into(),
+            version: "0.0.63".into(),
+            latest: "0.0.64".into(),
+            command: None,
+            via: None,
+            admin: false,
+            doc: String::new(),
+            path: Some("/home/me/.local/bin/ptyro".into()),
+            managed: None,
+        };
+        let codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            latest: "0.170.0".into(),
+            version: "0.162.1".into(),
+            path: None,
+            ..me.clone()
+        };
+        app.got_updates(vec![me.clone(), codex.clone()], vec![me.clone(), codex], true);
+        let t = app.toast.take().expect("the note");
+        assert_eq!(
+            t.text,
+            "2 newer versions are out: ptyro 0.0.64, Codex 0.170.0 · C-q u updates them"
+        );
+        let f = app.health.findings.iter().find(|f| f.what == "updates ptyro").expect("found");
+        assert!(f.text.contains("replaces /home/me/.local/bin/ptyro"), "{}", f.text);
+        assert!(f.text.contains("upgrades the daemon live"), "{}", f.text);
+        assert_eq!(f.fix, Some(crate::health::Fix::Update(vec!["ptyro".into()])));
+        let i = app.health.findings.iter().position(|f| f.what == "updates ptyro").unwrap();
+        app.fix(i);
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(app.last_cli, Some(words(&["update", "ptyro"])));
     }
 
     /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never

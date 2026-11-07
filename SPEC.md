@@ -8811,7 +8811,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3 and BOOT5 built 2026-11-07]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3, BOOT5 and BOOT6 built 2026-11-07]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -9532,11 +9532,11 @@ of date. on 'doctor' as well"; "once a day, remembered in between, or with docto
 agent with a newer version is reported with a one-step update and the command shown, never
 updated silently; newest versions are fetched at most once a day, remembered, and fetched afresh
 by `doctor`. What is checked is the agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
-CLI): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself is BOOT6.
+CLI): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself is one more row (BOOT6, §24.8).
 
 **The engine** (`ptyro_agents::updates`, beside the version table and the plan engine):
-- `sources()`: each agent row with a `latest` source (§24.1). BOOT6 adds ptyro as one more
-  source and finding under the id `ptyro`; nothing else changes shape.
+- `sources()`: each agent row with a `latest` source (§24.1); `looked_up()` adds ptyro's own
+  (BOOT6, §24.8) as one more source and finding under the id `ptyro`.
 - `lookup(host)`: every source at once (a scoped thread each), each reply through
   `Host::latest_reply(url)` (the real host: `curl -fsSL --connect-timeout 5 --max-time 10`, as the
   rest of setup downloads; the fake machine: offline), read by `Latest::parse`. A dead network
@@ -9720,3 +9720,157 @@ make `ptyro install` wait or be refused); `ptyro update --check` and `ptyro upda
 off (asked for); an agent installed another way updates through its own installer until BOOT7
 offers the move; protocol 1.35 (above).
 
+### 24.8 ptyro updates itself (BOOT6) **[built 2026-11-07]**
+
+The design's goal 7 (the owner: "download, and offer to install and upgrade"): install ptyro from
+its binary once, and from then on ptyro keeps itself current the way it keeps the agents current.
+It is **one more row of §24.7's machinery**, under the id `ptyro`, not a system beside it: the same
+daily look and `versions.json`, the same `Outdated` finding in the same four places (the start-up
+note, the health badge, the web's Health page, `doctor`), the same `ptyro update`, the same
+machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `ptyro@0.0.70`).
+
+**The engine** (`ptyro_agents::own`):
+- **The newest version:** GitHub's latest release of `nealhardesty/ptyro`
+  (`https://api.github.com/repos/nealhardesty/ptyro/releases/latest`, `tag_name` = `v<version>`,
+  what `install.sh` reads), as a `github-release` source (`Latest::new`). `updates::looked_up()`
+  adds it to the agents' sources, so it is fetched in the same concurrent look, with the same
+  timeouts, and offline is just as quiet. A test's `PTYRO_TEST_LATEST/ptyro` holds the reply.
+- **What is installed:** `Install::here()`: this ptyro's binary (`current_exe`, on Linux with a
+  replaced file's ` (deleted)` dropped; a debug build's `PTYRO_TEST_SELF_EXE` names another), and
+  how it updates, by where it is (`classify`, as `ptyro uninstall` tells):
+  - `Release`: a folder the user can write (`~/.local/bin`, `%LOCALAPPDATA%\Programs\ptyro\bin`,
+    or anywhere copied by hand): downloaded, checked and replaced here.
+  - `Admin`: the same in a folder only an administrator can write (`/usr/local/bin` owned by
+    root): replaced with sudo, at a terminal only.
+  - `Brew`: `/Cellar/`, `/homebrew/`, `/linuxbrew/`: `brew upgrade ptyro`, never overwritten.
+  - `Managed`: cargo (`~/.cargo`), a system package (`/usr/bin`, `/bin`, `/snap`), WinGet, Scoop:
+    said, with how it updates ("it was installed with cargo, so update it that way"), never
+    replaced; `ptyro update` (all) passes over it, `ptyro update ptyro` says so (exit 1).
+  - `Build`: a cargo `target/{debug,release}` (or `target/<triple>/…`): never offered, never
+    looked up (so a developer's build and every test of another feature never reach the network
+    for it).
+  Its version is what the binary answers to `--version` (the file on disk, not the process: a
+  daemon still running the old image after an install by hand isn't "outdated", it is `daemon
+  upgrade`'s finding).
+- **The finding:** `own::finding(install, latest)`: an `Outdated` with `id`/`program` `ptyro`,
+  plus two optional fields (`path`: the binary it replaces; `managed`: who owns it instead; wire
+  compatible, so no protocol bump). Its words: "ptyro 0.0.64 is out (you have 0.0.63): `ptyro
+  update ptyro` updates it (it downloads the release, checks it against SHA256SUMS, replaces
+  /home/me/.local/bin/ptyro and upgrades the daemon live)"; Homebrew's "(it runs `brew upgrade
+  ptyro`, then upgrades the daemon live)"; an administrator's "`ptyro update ptyro` in a terminal
+  on the computer updates it (it replaces /usr/local/bin/ptyro as administrator …)", whose
+  `command` is the installer line to run there instead (`curl -fsSL
+  …/releases/download/v<v>/install.sh | sudo env PTYRO_PREFIX=/usr/local PTYRO_VERSION=<v> sh`; on
+  Windows install.ps1 in an administrator PowerShell). The start-up note with ptyro among others
+  says "2 newer versions are out: ptyro 0.0.64, Codex 0.170.0".
+- **The update** (`own::update`, only after the person's yes, under the setup lock), reporting
+  setup's events under the id `ptyro`, exactly as `install.sh` / `install.ps1` check a release:
+  1. `ptyro-<v>-<triple>.tar.gz` (Windows: `.zip`) and `SHA256SUMS` downloaded with curl from
+     `https://github.com/nealhardesty/ptyro/releases/download/v<v>` (a debug build's
+     `PTYRO_TEST_RELEASE_URL`, as `install.sh`'s `PTYRO_RELEASE_URL`) into a temporary folder of
+     its own (untrusted until checked; removed afterwards, whatever happens). The triple is this
+     build's (`own::triple`).
+  2. Its SHA-256 against its `SHA256SUMS` line (either mode). **A mismatch is refused** and
+     nothing is replaced: "the download's checksum is …, but the release's SHA256SUMS says …: it
+     was changed or broken on the way, so it isn't installed", fix "nothing was replaced; `ptyro
+     update ptyro` tries again (if it keeps failing, don't install it by hand either: tell the
+     maintainers …)". No line for the file is refused the same way.
+  3. With `gh` on `PATH`, the signed build provenance: `gh attestation verify <file> --repo
+     nealhardesty/ptyro`. As in the installers: not verifiable (not logged in, an old release) is a
+     note, the checksum having matched; `PTYRO_VERIFY=0` skips it; `PTYRO_REQUIRE_ATTESTATION=1`
+     refuses without it.
+  4. Unpacked with `tar -xf` (Windows: System32's bsdtar, which reads a zip; Git's GNU tar can't),
+     `ptyro-<v>-<triple>/ptyro[.exe]` required.
+  5. **Swapped in atomically, the old kept until the new one runs** (`own::swap`): each new file
+     copied beside its place (the same folder, so the move is atomic); the old one kept aside
+     (elsewhere hard-linked to `.ptyro.old.<pid>`, so the name is never missing; on Windows
+     renamed to `ptyro.exe.old`, since a running exe can't be overwritten but can be renamed);
+     the new one renamed into place; then **`<path> --version` must say `ptyro <v>`**. If it
+     doesn't (it won't run, Smart App Control, the wrong version), every file is put back: "the
+     new ptyro <v> didn't run (…), so the old one is back in place". On success the old file is
+     removed (on Windows, while the old image still runs — the daemon, a TUI — it can't be: every
+     ptyro start sweeps `ptyro.exe.old`, `ptyro.exe.old.<pid>` and the same for the zip's
+     `ptyrow.exe`, `conpty.dll`, `OpenConsole.exe`, which are swapped with it, as install.ps1 puts
+     them). The release's shell completions are copied over `<prefix>/share/ptyro/completions` when
+     that folder exists (as install.sh puts them).
+  6. An administrator's binary (Unix, at a terminal: `Admin::Ask`): the same, with the place,
+     put-back and removal done by `sudo sh -c …` (sudo asks for the password in the terminal,
+     never through ptyro). With `--yes`, from the web, or on Windows, it isn't attempted: the
+     command above is the fix.
+  Homebrew's: `brew upgrade ptyro` live, then the version Homebrew's `bin/ptyro` link answers (the
+  keg's folder changes with each version, so the daemon is upgraded onto the link).
+
+**`ptyro update`** (§24.7's, extended): `ptyro update ptyro` names it (`ptyro update` covers it
+with the agents, ptyro last; `--check` and `--json` include it). The question shows it as "ptyro
+0.0.63 → 0.0.64: download ptyro 0.0.64 (ptyro-0.0.64-x86_64-unknown-linux-gnu.tar.gz), check it
+against SHA256SUMS, and replace /home/me/.local/bin/ptyro / then the daemon is upgraded live: every
+session carries on". After the swap, still under the lock, `versions.json` is refreshed (the
+finding goes); then, the lock released:
+- **The daemon, live:** when this computer's daemon answers, `daemon upgrade --binary <the new
+  binary>` (§4.5): every session carries on, in `daemon upgrade`'s own words ("upgraded
+  in 41 ms: daemon … N session(s)"). No daemon: "the next one starts as ptyro 0.0.64". A failed
+  upgrade leaves the new binary installed and says the fix (`ptyro daemon upgrade`).
+- **On Windows with WSL, both halves** (the design's call): the two ptyros are kept at one version,
+  so Windows never passes flags to an older WSL ptyro that rejects them. Each half updates
+  itself; the half that updated asks the other, when it says another version, to run `ptyro update
+  ptyro --yes`:
+  - Windows → WSL: the distro of `client.default_remote` (else WSL's default) with ptyro, through
+    `wsl.exe` (`wsl_setup::probe` and `ptyro_args`, as setup's WSL side): it updates its binary and
+    live-upgrades WSL's daemon.
+  - WSL → Windows: Windows' `ptyro.exe` on `PATH` (WSL appends Windows' own), else where
+    install.ps1 puts it (`%USERPROFILE%\AppData\Local\Programs\ptyro\bin`), through interop.
+  It stops by itself: the other half, updated, sees this one at its version and doesn't ask back.
+  The question names it ("and WSL's ptyro (Ubuntu) 0.0.62 → 0.0.64 too, so both halves agree"),
+  the result is "✓ WSL's ptyro (Ubuntu) 0.0.64", and `ptyro update ptyro` when this half is the
+  newest still brings the other along ("✓ … is 0.0.64 too"). A half too old to update itself (from
+  before BOOT6, which doesn't know `ptyro update ptyro`) is "✗ … wasn't updated" with the fix: its
+  installer (`wsl -d <distro> -- sh -c "curl … install.sh | sh"`, then `ptyro daemon upgrade`
+  there; or install.ps1 in PowerShell). So the TUI on Windows attached to WSL's daemon, whose fix
+  runs `ptyro update ptyro` in WSL, updates Windows' `ptyro.exe` too.
+
+**The four places**, unchanged in shape: the TUI's start-up note (`C-q u`) and badge (⏎: `ptyro
+update ptyro` in a split where the daemon is, tracked as §24.7's), and `app.update` in the palette;
+`doctor`'s `updates` section; the web's Health page, whose finding for ptyro offers "Update ptyro
+to <v>" (`updates.self`): asked first (what it does, that the daemon upgrades live and the page
+reconnects, that on Windows with WSL the other half comes along), then the host operation
+`updates.self` starts `ptyro update ptyro --yes` in a session on the daemon (refused at once while
+setup runs; the setup lock is one-at-a-time) and the page opens it: its progress live, and the
+daemon's live upgrade at its end keeps that session. Installing from the web replaces the daemon's
+own binary on the computer, which isn't an administrator's step for a user-owned install. For one
+only an administrator can replace (the owner's parity exception, §24.6), the page shows the command
+to run on the computer, with Copy, and `ptyro update ptyro` / `C-q u` there; the host operation
+refuses it too. A package manager's says how it updates.
+
+**Decided by the builder:**
+- **Nothing is downloaded before the yes.** The daily look fetches the release's metadata only (a
+  small JSON, as for the agents); the binary (tens of MB) is fetched by the update the person said
+  yes to. Downloading ahead would make the yes quicker by seconds but would spend the network
+  unasked on every machine, every release, against the anti-goal (no network install or update
+  without the user's yes).
+- `ptyro update ptyro` rather than a separate `self-update` command: ptyro is a row like the
+  agents, and `ptyro update` (everything) covers it.
+- The version is the file's (`--version`), not the process's; a build in `target/` is never a row.
+- The halves are kept in step by each updating itself, asked by the other only when the versions
+  differ (no new hidden flag an older half would reject).
+- After a swap the daemon is upgraded onto the binary just installed (`--binary`), so a daemon
+  started from elsewhere (a build) still ends up on it.
+
+**Tests, never the network** (`crates/ptyro/tests/boot6.rs`): a fake release server on 127.0.0.1
+(a thread serving a folder, each request logged) with the archive (`tar`; on Windows System32's,
+`-a` for the zip) and `SHA256SUMS`; the registry's `ptyro`; the installed binary is the test's own
+(`PTYRO_TEST_SELF_EXE`), never the build. Offered in `--check --json` and `doctor` (with `data`),
+the question answered no fetching nothing, `updates.ignore = ["ptyro"]` skipping it; **a tampered
+download refused** (the sums say another file's: exit 1, nothing replaced, nothing left beside it);
+**a new binary that doesn't run rolled back** (the old one answers again, still offered); a build
+never looked up; a yes installing it and **the daemon upgraded live with a session kept** (its
+generation moves, the session's process alive, the finding gone); the web's `updates.self` running
+it in a session whose daemon is upgraded under it; on "Windows" (the fake machine's platform)
+WSL's half brought along through `ptyro fake-wsl` (whose distro now has its own installed binary,
+`<distro>/bin/ptyro`, which answers its `--version` and is what its update replaces); in "WSL"
+Windows' half (`PTYRO_TEST_WINDOWS_PTYRO`, a stand-in) brought along, and one too old to know how
+given its fix; Homebrew's through a stand-in `brew` with its keg never overwritten; cargo's said and
+never replaced. The success paths use shell-script stand-ins (Unix); the refusals and the rollback
+run on Windows too, with this build hard-linked as the installed one. Unit tests: `classify`,
+`checksum_for`, the administrator's command, `swap` keeping and restoring (with an injected check,
+on every platform), `sweep` removing only leftovers (`own.rs`); the TUI's finding and note
+(`app.rs`); the web's `selfUpdate` (`web/test/setup.mjs`).

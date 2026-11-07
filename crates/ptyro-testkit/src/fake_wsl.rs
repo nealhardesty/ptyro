@@ -9,6 +9,7 @@
 //! | `<distro>/fake/` | that distro's fake machine, setup's `PTYRO_TEST_SETUP` there |
 //! | `<distro>/home/` | its `$HOME` |
 //! | `<distro>/old` | its ptyro is one from before setup: only `--version` works |
+//! | `<distro>/bin/ptyro` | its installed ptyro binary (BOOT6): the one its `ptyro update ptyro` replaces (`PTYRO_TEST_SELF_EXE`), and what answers its `--version` |
 //! | `wsl.log` | each call's arguments, one call a line (written) |
 //!
 //! `wsl [-d D] --exec sh -c SCRIPT BIN ARGS…` runs this same ptyro as the distro's: the words
@@ -83,7 +84,22 @@ pub fn main(args: &[String]) -> i32 {
         return 2;
     }
     let Ok(me) = std::env::current_exe() else { return 2 };
+    // Its installed binary (BOOT6): replaced by its own update, and asked its version.
+    let installed = d.join("bin").join(if cfg!(windows) { "ptyro.exe" } else { "ptyro" });
+    let have = installed.is_file();
+    if have && argv.first().map(String::as_str) == Some("--version") {
+        return std::process::Command::new(&installed)
+            .arg("--version")
+            .status()
+            .map_or(127, |s| s.code().unwrap_or(1));
+    }
     let mut cmd = std::process::Command::new(me);
+    if have {
+        cmd.env("PTYRO_TEST_SELF_EXE", &installed);
+    } else {
+        cmd.env_remove("PTYRO_TEST_SELF_EXE");
+    }
+    cmd.env_remove("PTYRO_TEST_WINDOWS_PTYRO");
     cmd.args(&argv)
         .env("PTYRO_TEST_SETUP", d.join("fake"))
         .env("PTYRO_HOME", d.join("ptyro"))

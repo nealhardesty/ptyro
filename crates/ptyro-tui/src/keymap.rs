@@ -242,7 +242,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("app.install", "Install an agent or tool by name, with what it needs first, in a split"),
     a(
         "app.update",
-        "Update your agents that have a newer version out (looked for once a day), in a split: it shows each update's command and asks first",
+        "Update your agents, and ptyro itself, when a newer version is out (looked for once a day), in a split: it shows each update's command and asks first; ptyro's own is checked against its SHA256SUMS, then the daemon upgrades live",
     ),
     a(
         "app.login",
