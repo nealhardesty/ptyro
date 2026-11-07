@@ -242,7 +242,9 @@ fn a_removal_that_leaves_the_old_copy_says_so_with_the_exact_fix() {
         "{t}"
     );
     // Never "run it again": the same removal would do the same. The fix pastes as it is.
-    let old = m.fake().join("old-bin/codex");
+    // The fake machine plans for Linux on every host, so the fix is sh's (`rm`); the PowerShell
+    // form, by the shims, is `setup/tests.rs`'s `a_windows_npm_leftover_…`.
+    let old = m.fake().join("old-bin").join("codex");
     assert!(t.contains(&format!("fix: remove it yourself: `rm '{}'`", old.display())), "{t}");
     assert!(!t.contains("fix: `ptyro install codex`"), "{t}");
 }
@@ -259,7 +261,7 @@ fn another_old_copy_still_first_on_path_is_said_with_its_fix() {
         ),
         "{t}"
     );
-    let second = m.fake().join("second-bin/codex");
+    let second = m.fake().join("second-bin").join("codex");
     assert!(
         t.contains(&format!(
             "fix: remove it (`rm '{}'`), or uninstall it with the tool that put it there, or put (fake) codex's folder ahead of it on PATH",
