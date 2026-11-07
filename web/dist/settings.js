@@ -6,7 +6,7 @@ import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "more": "Everything beyond the lists: health, devices, profiles, the config, the daemon",
@@ -58,6 +58,7 @@ const ACTIONS = {
     "updates.self": "Update ptyro itself on the computer: the release is downloaded, checked against its SHA256SUMS and put in place, then the daemon is upgraded live (every session carries on); on Windows with WSL both halves. A binary only an administrator can replace shows the command to run there",
     "setup.move": "Move an agent installed another way (npm, Homebrew, WinGet) to the vendor's recommended installer: the new one is installed and checked first, then the old copy is removed; settings and logins stay. Tick it in the checklist, or from its Health finding",
     "setup.keep": "Keep an agent installed another way as it is: the move isn't offered again, and it updates the way it's installed (Settings → Updates → keep_installer)",
+    "setup.offer": "An agent or tool that isn't installed (a chat, a new task, a Health finding) offers setup: the checklist opens with it ticked, to install on the computer",
     "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
     "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 };
@@ -169,6 +170,10 @@ function fixesFor(c) {
         out.push({ title: tip("setup.move"), label: `Move ${mv.name} to ${viaWords(mv.to)}`, hint: mv.admin ? "On the computer: removing the old copy needs administrator rights" : "The new one first, then the old removed", run: () => askMove(mv) });
         out.push({ title: tip("setup.keep"), label: `Keep ${mv.name} with ${viaWords(mv.from)}`, hint: "Not offered again", run: () => void keepInstaller(mv.program, mv.name, mv.from) });
     }
+    // An agent or tool that isn't installed (BOOT9): the checklist, with it ticked.
+    const picks = ["agents", "git"].includes(c.section) ? setupOffer(c.text) : null;
+    if (picks)
+        out.push({ title: tip("setup.offer"), label: picks.length ? `Set up ${picks.join(", ")}` : "Set up agents and tools", hint: "The checklist, to install on the computer", run: () => openSetup(picks) });
     if (c.section === "updates") {
         out.push({ title: tip("updates.check"), label: "Look for newer versions now", run: () => void checkUpdates() });
         out.push({ label: "Update settings", hint: "Turn the daily look off, or skip an agent or a version", run: () => go("#/settings/updates") });
@@ -783,6 +788,25 @@ export function setupConnected() {
 /// This device saw a coding agent on the computer: the banner stops asking (a survey each time).
 const AGENT_SEEN = "ptyro.setup.agent";
 const bannerRetry = { wait: 5_000, timer: 0 };
+/// The checklist with `picks` ticked (none: its defaults): a message's setup offer (BOOT9).
+export function openSetup(picks) {
+    installKey = picks.join(",");
+    go("#/setup");
+    askPlan();
+}
+/// A refused request that says an agent or tool isn't installed (BOOT9: "`ptyro install codex`
+/// installs it", "`ptyro setup` installs one"): a sheet with its words and Set up, which opens
+/// the checklist with it ticked. False for any other message (the caller toasts it).
+export function offerSetup(text) {
+    const picks = setupOffer(text);
+    if (!picks)
+        return false;
+    const s = sheet(picks.length ? "Not installed" : "No agent installed", [h("p", { class: "intro" }, text)], [
+        h("button", { onclick: () => s.close() }, "Not now"),
+        h("button", { class: "primary", title: tip("setup.offer"), onclick: () => { s.close(); openSetup(picks); } }, picks.length ? `Set up ${picks.join(", ")}` : "Set up agents and tools"),
+    ]);
+    return true;
+}
 /// The first-run banner on the Sessions tab: no coding agent on the computer yet (BOOT3). Only
 /// for a device that can install (`full`), and never again once this device has seen an agent.
 export function setupBanner() {

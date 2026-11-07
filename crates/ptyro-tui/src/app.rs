@@ -674,8 +674,18 @@ const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro config edit", "config.edit", "edit the config"),
 ];
 
-/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]).
+/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]). A missing agent or tool
+/// (`` `ptyro install codex` installs it ``, `` `ptyro setup` installs one ``) opens the setup
+/// checklist with it ticked (BOOT9).
 pub fn offer_for(message: &str) -> Option<Offer> {
+    if let Some(names) = ptyro_agents::locate::setup_offer(message) {
+        let arg = Some(names.join(" ")).filter(|a| !a.is_empty());
+        let label = if names.is_empty() { "set up agents" } else { "set it up" };
+        return Some(Offer {
+            label: format!("{label} (the checklist)"),
+            then: Then::Run(Command { action: "app.setup", arg }),
+        });
+    }
     SUGGESTED
         .iter()
         .find(|(cli, _, _)| message.contains(cli))
@@ -3355,7 +3365,11 @@ impl App {
                 );
             }
             "first.run" => self.open_first_run(),
-            "app.setup" => self.open_setup(None, None),
+            // With names: those ticked (a message's offer, BOOT9).
+            "app.setup" => self.open_setup(
+                cmd.arg.as_deref().map(|a| a.split_whitespace().map(str::to_owned).collect()),
+                None,
+            ),
             "app.update" => self.update_agents(
                 cmd.arg.as_deref().unwrap_or("").split_whitespace().map(str::to_owned).collect(),
             ),
@@ -8359,6 +8373,35 @@ mod tests {
         app.run(&Command { action: "broadcast", arg: None });
         act(&mut app);
         assert_eq!(app.focus, Focus::Sidebar);
+    }
+
+    /// BOOT9: an agent that isn't installed (a session or a chat refused for it) offers the setup
+    /// checklist with it ticked, on `toast.act`; no agent at all offers the checklist's defaults.
+    #[test]
+    fn a_missing_agent_offers_the_setup_checklist() {
+        let mut app = app();
+        let missing = ptyro_agents::locate::not_installed("codex", "codex");
+        let refused = ptyro_core::Error::new(ErrorCode::NotFound, missing.clone());
+        app.handle_reply(
+            Pending::Spawned { split: None, spec: Box::default(), back: false },
+            Err(refused),
+        );
+        let toast = app.toast.take().unwrap();
+        assert_eq!(toast.text, format!("{missing} · C-q u set it up (the checklist)"));
+        let Some(Offer { then: Then::Run(cmd), .. }) = toast.offer else {
+            panic!("{}", toast.text)
+        };
+        assert_eq!((cmd.action, cmd.arg.as_deref()), ("app.setup", Some("codex")));
+        // A chat with no agent to answer it: the checklist as it opens by itself.
+        app.chat_not_made(0, "hello".into(), ptyro_agents::locate::no_chat_agent());
+        let toast = app.toast.take().unwrap();
+        assert!(toast.text.ends_with("· C-q u set up agents (the checklist)"), "{}", toast.text);
+        let Some(Offer { then: Then::Run(cmd), .. }) = toast.offer else {
+            panic!("{}", toast.text)
+        };
+        assert_eq!((cmd.action, cmd.arg), ("app.setup", None));
+        // The chat picker names the checklist's key for one that isn't installed.
+        assert_eq!(app.setup_key(), "C-q U");
     }
 
     /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.

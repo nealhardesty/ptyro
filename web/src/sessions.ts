@@ -9,7 +9,7 @@ import type { Worktree } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
 import type { Frame, Session } from "./screen.js";
-import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
 import type { Item } from "./kit.js";
 import { shellMenuItems } from "./shells.js";
 
@@ -119,9 +119,15 @@ export function newTask(where?: string, task?: string): void {
   for (const el of [agent, placeSel, source]) el.addEventListener("change", () => { sync(); loadBranches(); });
   sync();
   const go1 = h("button", { class: "primary" }, "Start");
+  // Setup is a tap away (BOOT9): with no agent on the computer, said first.
+  const none = data.agents.length > 0 && !agents.length;
+  const setupLink = h("a", { href: "#/setup", title: tipOf("setup.offer"), onclick: () => s.close() }, none ? "Set up agents and tools" : "Install another agent");
+  const agentHint = none
+    ? h("p", { class: "form-err" }, "No coding agent is installed on the computer yet: ", setupLink, " (Claude Code, Codex, or Antigravity for a Google account).")
+    : h("small", { class: "sub" }, setupLink);
   const s = sheet("New task", [
     h("label", { class: "field" }, h("span", {}, "Task"), prompt),
-    h("label", { class: "field" }, h("span", {}, "Agent"), agent), commandRow,
+    h("label", { class: "field" }, h("span", {}, "Agent"), agent), agentHint, commandRow,
     h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow, err,
   ], [h("button", { onclick: () => s.close() }, "Cancel"), go1]);
   go1.addEventListener("click", async () => {

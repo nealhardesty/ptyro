@@ -453,6 +453,8 @@ impl Daemon {
         let mut sidecar = None;
         let mut dangerous = false;
         let mut structured: Option<StructuredStart> = None;
+        // The agent and the program it runs, to say it isn't installed if it doesn't start.
+        let mut agent_program: Option<(String, String)> = None;
         if let Some(a) = &l.agent {
             let def = ptyro_agents::def(&config, &a.name);
             let id = ptyro_agents::adapter_name(&config, &a.name);
@@ -468,6 +470,7 @@ impl Daemon {
                         ),
                     )
                 })?;
+            agent_program = base.first().map(|p| (a.name.clone(), p.clone()));
             base.extend(l.argv.iter().cloned());
             dangerous = ptyro_core::config::dangerous_arg(&base).is_some();
             if dangerous && !def.dangerous {
@@ -661,6 +664,13 @@ impl Daemon {
             } else {
                 ErrorCode::Invalid
             };
+            // An agent that isn't installed offers setup (BOOT9), not the OS's "No such file".
+            if let Some((name, prog)) = &agent_program
+                && code == ErrorCode::NotFound
+                && ptyro_agents::locate::find(prog, &self.daemon_path()).is_none()
+            {
+                return Error::new(code, ptyro_agents::locate::not_installed(name, prog));
+            }
             Error::new(code, format!("cannot start session: {e}"))
         })?;
         // Its number in SHELLS (SPEC §23), before anyone can see it: a new one's, else the one

@@ -410,6 +410,11 @@ impl App {
         self.dirty = true;
     }
 
+    /// The checklist's key (`C-q U`), else the palette's action, for a message offering it.
+    pub(crate) fn setup_key(&self) -> String {
+        self.keymap.key_for("app.setup").unwrap_or_else(|| "the palette's app.setup".to_owned())
+    }
+
     /// How to come back to the checklist: its key, or the palette.
     fn setup_later(&self) -> String {
         match self.keymap.key_for("app.setup") {

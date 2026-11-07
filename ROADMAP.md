@@ -3232,7 +3232,7 @@ it; the phone's strip shows 1 and 2; after `ptyro daemon restart` both come back
 starts again in their directories. Then `C-t` in a worktree still opens that worktree's quick
 terminal, untouched.
 
-## BOOT — Bootstrap: agents, tools and updates (proposed 2026-11-06; open)
+## BOOT — Bootstrap: agents, tools and updates (proposed 2026-11-06; built 2026-11-07, the owner's hand checks open)
 
 The owner's goal: "just install ptyro from binary, then bootstrap everything else on a new
 machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`
@@ -3248,7 +3248,7 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
 
   *Done (2026-11-06):* `crates/ptyro-agents/src/catalog.toml` read by `ptyro_agents::catalog`
   (SPEC §24.1, facts §20.15); `locate::install_hint` reads it; fixtures in
-  `tests/fixtures/catalog/`, recorded by `make catalog-fixtures`. Found when checking: Codex now
+  `crates/ptyro-agents/tests/fixtures/catalog/`, recorded by `make catalog-fixtures`. Found when checking: Codex now
   installs with its own standalone installer (no Node.js), and OpenCode 2 changed the server API
   ptyro speaks, so the table installs OpenCode 1. (R-BOOT-01, R-BOOT-03)
 - [x] **BOOT1 The plan engine and `ptyro setup` / `ptyro install <name>…`** **M**:
@@ -3370,10 +3370,75 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   half done by the distro's own ptyro through `wsl.exe` (`ptyro_client::wsl_setup`), the TUI's
   `{where}` picker, the web's per-side boxes on a Windows daemon, protocol 1.32; tested through
   `ptyro fake-wsl` on every platform (SPEC §24.3).
-- [ ] **BOOT9 The stale suggestions** **S**: the "no agent found" messages (`doctor.rs`,
+- [x] **BOOT9 The stale suggestions** **S**: the "no agent found" messages (`doctor.rs`,
   `chats.rs`) put Gemini CLI first; they become "open setup", naming Antigravity for Google.
+  **[built 2026-11-07]** (R-BOOT-02) One set of words in `ptyro_agents::locate` (`no_agent`,
+  `no_chat_agent`, `install_fix`, `not_installed`, read back by `setup_offer`): "No coding agent
+  is installed: `ptyro setup` installs one (Claude Code, Codex, or Antigravity for a Google
+  account; Gemini CLI is for Gemini API keys and enterprise accounts)", "codex isn't installed …:
+  `ptyro install codex` installs it", in `doctor` (agents, git, gh, Gemini CLI's Google note), the
+  daemon's chat, session, `gh` and git refusals (a session of a missing agent no longer says "No
+  such file or directory"), `ptyro update` and `ptyro init` (which now notices no agent). The TUI
+  offers each on `toast.act` ("C-q u set it up (the checklist)", that one ticked) and its chat
+  picker names `C-q U`; the web opens a sheet with Set up (`setup.offer`) for a refused request,
+  offers it from Health's findings, and links setup from the new-task sheet and the chat's agent
+  picker. No protocol change. SPEC §24.10; tested in `locate.rs`, the TUI's
+  `a_missing_agent_offers_the_setup_checklist`, `chat_compare.rs`'s
+  `a_missing_agent_offers_setup_not_the_os_error` and `web/test/setup.mjs`.
 
 **Done when:** the design's five checks pass on fresh Windows 11, Ubuntu and macOS machines.
+What CI checks (on the fake machine, `PTYRO_TEST_SETUP`, with no network and no real installer;
+`make test`, `make web-test`, `make web-e2e`, on Linux and Windows) is ticked, with its tests;
+the rest is the owner's, by hand, below.
+
+| # | The check | CI | Tests |
+|---|---|---|---|
+| 1a | The first `ptyro` shows the checklist; ticking and ⏎ installs, admin asked once, then the logins | [x] | `boot2.rs` `the_first_run_installs_the_ticked_in_a_split_then_walks_the_logins`; `boot1.rs` `admin_steps_ask_once_in_a_terminal_and_never_with_yes`, `unattended_setup_installs_the_defaults_in_order`; `boot4.rs` `setup_walks_through_the_logins_of_what_it_installed_then_names_profiles` |
+| 1b | Node.js comes with what needs it | [x] | `boot1.rs` `node_from_nodejs_org_when_apts_is_too_old_and_its_folder_goes_on_path`, `a_folder_an_installer_stored_is_on_path_for_the_next_step`; `setup/tests.rs` |
+| 1c | Windows without WSL offers the Windows side only; WSL's added later | [x] | `boot8.rs` `without_a_usable_wsl_only_windows_is_offered_and_the_plan_says_why`, `both_sides_are_one_plan_and_the_default_is_where_the_daemon_runs` |
+| 1d | A Claude and a Codex session start and work afterwards | [ ] | hand check H1 (the fake machine installs nothing real) |
+| 2 | `ptyro install agy`, the TUI's checklist or palette, or the web's Settings adds Antigravity | [x] | `boot2.rs` `the_checklist_comes_back_on_its_key_and_installs_what_is_ticked` (Antigravity alone, then its sign-in); `boot1.rs` `the_daemon_plans_and_installs_without_admin`; `make web-e2e` (Settings → Agents and tools, Install 2) |
+| 3a | An older agent: start-up and `doctor` say a newer one is out; the fix updates it | [x] | `boot5.rs` `doctor_looks_afresh_and_the_quick_one_reads_whats_remembered`, `update_shows_the_command_asks_and_updates_then_nothing_is_offered`, `the_daemon_looks_once_a_day_and_the_webs_update_runs_through_it`; the TUI's note and badge (`app.rs`); `make web-e2e` (Health → Update) |
+| 3b | An older ptyro: downloaded, verified, installed, the daemon upgraded live, sessions intact | [x] | `boot6.rs` `a_yes_installs_it_and_the_daemon_upgrades_live_with_every_session`, `a_tampered_download_is_refused_and_nothing_is_replaced`, `a_new_ptyro_that_doesnt_run_is_rolled_back`, `on_windows_wsls_half_is_brought_along` |
+| 4 | Offline nothing blocks or errors loudly; `updates.check = "off"` fetches nothing | [x] | `boot5.rs` `offline_is_quiet_and_off_fetches_nothing`; the testkit's empty `PTYRO_TEST_LATEST` for every test daemon |
+| 5 | `make parity` passes; the new options are in both settings screens | [x] | `make parity` (in `make test`); `settings/tests.rs` `every_field_of_the_config_has_a_setting_and_every_setting_a_field`; the TUI's `every_setting_is_in_the_palette_and_opens_the_panel_on_it`; the web's panel is built from the same schema |
+| — | Missing agents offer setup, naming Antigravity for Google (BOOT9) | [x] | see BOOT9 above |
+
+**Hand checks (the owner's)**, each on a fresh machine (a new VM or user account) with only
+ptyro installed from its release (`install.sh` / `install.ps1`), signed in to real accounts:
+- **H1, Ubuntu 24.04** (fresh, with sudo): run `ptyro`. The checklist opens with Claude Code,
+  Codex, git and GitHub CLI ticked. Press ⏎: sudo asks once (apt's git and gh), each installs with
+  live output, then Claude Code's, Codex's and gh's sign-ins run one after another (finish each in
+  the browser). The last line names `ptyro profile login`. Then `ptyro new -a claude` and `ptyro
+  new -a codex` each start, answer a prompt, and show working/idle in the sidebar.
+- **H2, Ubuntu, Gemini CLI:** `C-q U`, tick Gemini CLI: Node.js ticks itself ("ticked because
+  Gemini CLI needs it"); ⏎ installs nodejs.org's build into `~/.local/share/ptyro-tools` (24.04's
+  apt Node.js is too old), offers the rc line, and a new terminal finds `gemini`.
+- **H3, Windows 11 without WSL** (`wsl -l -q` lists nothing): run `ptyro.exe`. The checklist
+  offers the Windows side only and says how to add WSL. ⏎ installs through WinGet with one UAC
+  prompt per installer that needs it, no console window flashing; the logins run; a Claude and a
+  Codex session work in Windows Terminal.
+- **H4, Windows 11 with WSL** (Ubuntu, ptyro installed in it): the checklist has a column per
+  side; tick Codex on both; ⏎ installs WSL's half in WSL (sudo asked in that terminal) and
+  Windows'; `ptyro login --where both` logs both in.
+- **H5, macOS** (fresh, no Homebrew): run `ptyro`; git comes from Xcode's Command Line Tools
+  (its own dialog), gh and Node.js where the table says; Claude and Codex sessions work.
+- **H6, add an agent later** (any of them): `ptyro install agy` installs Antigravity and starts
+  its sign-in; on another, the web's Settings → Agents and tools → tick Antigravity → Install 1.
+- **H7, an older agent:** install an older Codex (`npm i -g @openai/codex@<an older version>`),
+  then `ptyro doctor`: "Codex … is out (you have …)", and the move to the vendor's installer
+  offered; start `ptyro`: the note says it once (`C-q u` updates it); `ptyro update codex`
+  updates it. Start again: no note.
+- **H8, an older ptyro:** install the previous release (`PTYRO_VERSION=<previous> install.sh`),
+  start a session, run `ptyro update ptyro`: it downloads, checks SHA256SUMS (and, with gh, the
+  provenance), replaces the binary and upgrades the daemon live; the session is still there. On
+  Windows with WSL both halves end at the new version.
+- **H9, offline:** with the network off, `ptyro` starts at once, `ptyro doctor` says it couldn't
+  look for newer versions (a note, not an error); with `updates.check = "off"` (Settings →
+  Updates), nothing is fetched (watch with `tcpdump` or the firewall log).
+- **H10, no agent:** on a machine with no agent, `ptyro chat new hi`, `ptyro new -a codex` and the
+  web's new task each say what is missing and offer setup (the TUI's `C-q u`, the web's Set up
+  button), naming Antigravity for a Google account.
 
 ## Backlog (unscheduled; ideas welcome)
 

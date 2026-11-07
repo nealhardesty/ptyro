@@ -1899,10 +1899,13 @@ impl App {
                 let prog = ptyro_agents::command(&self.config, &n)
                     .and_then(|a| a.into_iter().next())
                     .unwrap_or_else(|| n.clone());
+                // Not installed: the checklist's key, which installs it (BOOT9).
                 let detail = match ptyro_agents::locate::find(&prog, &path) {
                     Some(f) => f.describe(),
-                    None => ptyro_agents::locate::install_hint(&prog)
-                        .map_or_else(|| "not found".into(), |h| format!("not installed: {h}")),
+                    None if ptyro_agents::locate::install_fix(&prog).is_some() => {
+                        format!("not installed: {setup} sets it up", setup = self.setup_key())
+                    }
+                    None => "not found".into(),
                 };
                 Item { detail, label: n.clone(), key: None, target: Target::Agent(n) }
             })
@@ -1999,7 +2002,10 @@ impl App {
             None => {}
         }
         if let Some(e) = err {
-            self.toast(e);
+            match crate::app::offer_for(&e) {
+                Some(offer) => self.toast_offer(e, true, offer),
+                None => self.toast(e),
+            }
         }
         self.dirty = true;
     }
@@ -2019,7 +2025,11 @@ impl App {
                 self.chat_drafts.insert(String::new(), d);
             }
         }
-        self.toast(err);
+        // No agent to chat with offers the setup checklist (BOOT9).
+        match crate::app::offer_for(&err) {
+            Some(offer) => self.toast_offer(err, true, offer),
+            None => self.toast(err),
+        }
         self.dirty = true;
     }
 

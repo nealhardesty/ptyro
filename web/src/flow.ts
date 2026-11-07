@@ -12,12 +12,12 @@ export async function withConfirm(req: any, key: string): Promise<any | undefine
   try {
     return await send(false);
   } catch (e) {
-    if ((e as { code?: string }).code !== "needs_confirmation") { ui.toast(errText(e)); return undefined; }
+    if ((e as { code?: string }).code !== "needs_confirmation") { ui.fail(errText(e)); return undefined; }
     return new Promise((ok) => {
       let said = false;
       const s = confirm("Are you sure?", (e as Error).message, "Go ahead", async () => {
         said = true;
-        try { ok(await send(true)); } catch (e2) { ui.toast(errText(e2)); ok(undefined); }
+        try { ok(await send(true)); } catch (e2) { ui.fail(errText(e2)); ok(undefined); }
       }, false);
       // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
       s.onClose(() => setTimeout(() => { if (!said) ok(undefined); }, 0));

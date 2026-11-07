@@ -595,21 +595,31 @@ mod tests {
         let s = |v: &[&str]| {
             Some(Fix::Setup { names: v.iter().map(|s| (*s).to_owned()).collect(), place: None })
         };
+        // The doctor's words (BOOT9): each offers setup, which the badge's ⏎ opens.
         assert_eq!(
             fix(
                 "agents",
                 "claude",
                 "problem",
-                "claude not found: `curl -fsSL https://claude.ai/install.sh | bash` installs it"
+                "claude not found: `ptyro install claude` installs it"
             ),
             s(&["claude"])
         );
         assert_eq!(fix("agents", "antigravity", "problem", "agy not found"), s(&["agy"]));
         assert_eq!(
-            fix("git", "version", "problem", "git not found: projects and worktrees need it"),
+            fix(
+                "git",
+                "version",
+                "problem",
+                "git not found: projects and worktrees need it; `ptyro install git` installs it"
+            ),
             s(&["git"])
         );
-        assert_eq!(fix("agents", "agents", "warn", "no agent found: install one, e.g. …"), s(&[]));
+        assert_eq!(
+            fix("git", "version", "problem", "git not found: projects need it"),
+            s(&["git"])
+        );
+        assert_eq!(fix("agents", "agents", "warn", &ptyro_agents::locate::no_agent()), s(&[]));
         assert_eq!(
             fix("agents", "x", "warn", "run `ptyro install agy gh` to add them"),
             s(&["agy", "gh"])

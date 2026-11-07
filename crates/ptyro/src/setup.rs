@@ -812,7 +812,7 @@ fn say_where_each_stands(
         .collect();
     let only_ptyro = !ids.is_empty() && ids.iter().all(|i| i == own::ID);
     if installed.is_empty() && !only_ptyro {
-        eprintln!("No agent is installed: `ptyro setup` installs them.");
+        eprintln!("{}", ptyro_agents::locate::no_agent());
     }
     let mut any = false;
     for i in installed {

@@ -1220,16 +1220,9 @@ impl Daemon {
                     ));
                 }
                 if let Some(c) = agents.iter().find(|c| c.name == a && !c.installed) {
-                    let fix = ptyro_agents::locate::install_hint(&c.program).map_or_else(
-                        || format!("install it, or set [agents.{a}] command to its full path"),
-                        |h| format!("`{h}` installs it"),
-                    );
                     return Err(Error::new(
                         ErrorCode::NotFound,
-                        format!(
-                            "{a} isn't installed ({} is nowhere ptyro looks): {fix}",
-                            c.program
-                        ),
+                        ptyro_agents::locate::not_installed(a, &c.program),
                     ));
                 }
                 (a.to_owned(), p.map(str::to_owned))
@@ -1240,10 +1233,7 @@ impl Daemon {
                     .chain(["claude", "codex", "gemini", "opencode"])
                     .find(|n| installed(n) && structured(n))
                     .ok_or_else(|| {
-                        Error::new(
-                            ErrorCode::NotFound,
-                            "No agent found to chat with. Install one, then try again: Gemini CLI `npm i -g @google/gemini-cli`, Codex `npm i -g @openai/codex`, or Claude Code `curl -fsSL https://claude.ai/install.sh | bash` (`ptyro doctor` shows what it finds)",
-                        )
+                        Error::new(ErrorCode::NotFound, ptyro_agents::locate::no_chat_agent())
                     })?;
                 (pick.to_owned(), None)
             }

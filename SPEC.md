@@ -7567,8 +7567,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   that package, and a `bin` script inside it: relative, no `..`), running a Node script with the `node`
   beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
   (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
-  TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
-  isn't installed offer the install command. **On Windows (WIN8):** a program is found by
+  TUI agent pickers) and the first-run screen use it; no agent at all and an asked-for agent that
+  isn't installed offer setup (`ptyro setup`, `ptyro install <program>`; BOOT9, §24.10). **On Windows (WIN8):** a program is found by
   `PATHEXT` (`claude.exe`, `codex.cmd`; never npm's extensionless `sh` shim beside the `.cmd`),
   with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
   `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
@@ -7811,7 +7811,8 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   (default `2m`) idle, as sessions do (§7.4).
 - **Which agent.** `[chat] agent`, else the workspace's default agent, else the first of claude,
   codex, gemini, opencode that is installed and has a structured protocol (§7.1). With none: the new
-  chat says "No agent found" and offers `ptyro doctor`'s fix. An agent without a structured
+  chat says no agent that can chat is installed and offers setup (BOOT9, §24.10: the TUI's
+  checklist, the web's setup page, `ptyro setup`). An agent without a structured
   protocol is not offered (a `protocol = "acp"` entry makes it one). `agent@profile` works as it
   does for sessions. The agent of a chat can be changed at any time (§22.7).
 - **Permissions.** Tools the chat's preset allows are approved at launch where the agent can
@@ -8910,7 +8911,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3, BOOT5, BOOT6 and BOOT7 built 2026-11-07]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3, BOOT5, BOOT6, BOOT7 and BOOT9 built 2026-11-07: the feature is complete]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8973,9 +8974,10 @@ its release); `at_least` checks a minimum.
 - **Not handled:** musl Linux for Antigravity's manifest (its installer picks `_musl` builds);
   Alpine generally.
 
-**Uses today:** `locate::install_hint` (the fix offered when an agent isn't installed, in `doctor`,
-chats and the TUI's agent picker) is the table's first method for the platform. BOOT1 builds the
-plan engine on the rest.
+**Uses:** `locate::install_hint` is the table's first method for the platform (`doctor`'s note
+for an agent run from npx's cache); BOOT1 builds the plan engine on the rest. A missing agent's fix
+was `install_hint`'s command to copy until BOOT9 made it `ptyro install <program>`
+(`locate::install_fix`, §24.10), the table deciding which programs setup installs here.
 
 ### 24.2 The plan engine, `ptyro setup` and `ptyro install` (BOOT1) **[built 2026-11-06]**
 
@@ -9075,7 +9077,7 @@ since BOOT0). With `--agents`/`--tools`, exactly those (`none` for none; an agen
 an error naming the right flag); with neither, the defaults. `--yes` asks nothing; without it and
 without a terminal it refuses and says to pass `--yes`. `--dry-run` prints the checklist and each
 step's command (`--json`: the `Plan`); `--json` on a run prints each event as a JSON line on
-stdout. `--where` is BOOT8's (§24.3).
+stdout. `--where` is BOOT8's (§24.3), `--move` BOOT7's (§24.9).
 **`ptyro install NAME… [-y] [--dry-run] [--json]`:** names as people say them (`setup::resolve`:
 the id, the program or the name, any case, without spaces or dots: `agy`, `github-cli`,
 `"Claude Code"`, `nodejs`); an unknown one exits 3 listing the known. It shows the steps and asks
@@ -9213,7 +9215,8 @@ ptyro (its side natively, sudo in that terminal); `windows` runs this `ptyro.exe
 person answers although the console is a pipe there (Windows' admin prompts are UAC dialogs, not
 the terminal); `both` opens the two splits.
 
-**Web, daemon.** A daemon on Windows probes WSL like the CLI (the result kept a minute, as the
+**Web, daemon.** Protocol 1.32 (additive, §6.4): `SetupPlan` and `SetupRun` carry `wsl_picks`
+beside `picks`, and each entry its `side`. A daemon on Windows probes WSL like the CLI (the result kept a minute, as the
 page re-plans on every tick; forgotten after a run) and plans `wsl_picks` beside its own; its
 run does both sides with `Admin::Never` on each, so WSL's admin steps show their command too. The
 page shows a Windows and a WSL checkbox per item when WSL is usable (`setup.where`), the reason
@@ -9420,11 +9423,12 @@ to open it again (`C-q U opens the setup checklist (agents and tools) any time`)
   agents") and the palette: the checklist alone (" Setup ", "Set up this computer: …"), which writes no config.
 - **The health badge** (`M`): `health::Fix::Setup(names)` for a doctor line suggesting `` `ptyro
   setup` `` or `` `ptyro install NAME…` ``, an agent not found (`claude not found: …`, in
-  `agents`), git not found, and "no agent found": ⏎ opens the checklist with those ticked (none:
+  `agents`), git not found, and no agent at all: ⏎ opens the checklist with those ticked (none:
   the defaults), on the side a suggested `--where` names; flags' values are never names
   (`--agents`/`--tools` lists are). With a daemon on another computer, the fix runs that
   computer's `ptyro install <names> [--where …]` in a split (`ptyro setup` when it names none).
-  The doctor's own wording is BOOT9's.
+  The doctor's lines offer setup in BOOT9's words (§24.10): "No coding agent is installed:
+  `ptyro setup` installs one (…)", "codex not found: `ptyro install codex` installs it".
 - **`ptyro init`** (the CLI): its agents step asks "open the setup checklist, to install agents
   and tools?" (yes by default when no agent is found) and runs `ptyro setup`'s checklist in that
   terminal, then carries on; never with `--yes` or `--dry-run`.
@@ -9455,8 +9459,8 @@ not exist yet, and WSL's side needs Windows' ptyro), not through `SetupPlan`; in
 CLI in a split rather than through `SetupRun`, which never runs admin steps (the owner's
 exception keeps those to the TUI and the CLI on the computer); `--confirmed` for the question
 already asked; `U` for `app.setup`; the catalog's `about` lines; `s` keeps the first run's other
-choices; the health badge opens it for missing agents and git now, before BOOT9 rewrites the
-doctor's lines.
+choices; the health badge opens it for missing agents and git (BOOT9 then rewrote the doctor's
+lines to offer setup, §24.10).
 
 ### 24.6 The web checklist (BOOT3) **[built 2026-11-07]**
 
@@ -9713,6 +9717,10 @@ a look that began before an update never writes the old version back over it (un
 touches the network: the daemon answers from what the last look remembered), and is tried again the next day. Only `doctor` says so, as a note: "couldn't look for
 newer versions (offline?): ptyro looks again tomorrow" (or which agents' sources couldn't be
 reached). `ptyro update` offline says the same and exits 0.
+
+**Protocol 1.35** (additive, §6.4): `Request::Updates{note}` → `Reply::Updates{offered, note}`,
+the daemon machine's `Outdated` findings (less what is skipped; none when off), and with `note`
+those the start-up note says now, marked said.
 
 **The four places a finding shows:**
 1. **The start-up note**, once per new version: when the TUI starts (its first tick with no
@@ -10200,3 +10208,72 @@ itself (`e2e.rs`'s `cli_autospawns_and_maps_errors_to_exit_codes` and
 `only_one_daemon_per_home_and_stale_sockets_are_recovered`, `hardening.rs`) clear it. `doctor` notes an agent installed another way that isn't offered the
 move, and why (`updates::Versions.unmovable`: the vendor's place unknown, no npm prefix,
 someone else's Homebrew).
+
+### 24.10 The stale suggestions (BOOT9) **[built 2026-11-07]**
+
+The design's last call: the "no agent found" and "isn't installed" messages, which put Gemini CLI
+first with npm commands to copy, become offers of setup that name Antigravity for Google. Every
+such message now offers the fix, in one set of words shared by the CLI, the TUI and the web.
+
+**The words** (`ptyro_agents::locate`, so no client writes its own):
+- `no_agent()`: "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex, or
+  Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts)"
+  (`WHICH_AGENT`; Gemini CLI kept, labelled as the checklist labels it, never first).
+- `no_chat_agent()`: "No agent that can chat is installed: `ptyro setup` installs one (Claude
+  Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account,
+  runs in sessions but can't chat)". Antigravity has no structured mode (§22.5), so a chat never
+  offers it as the fix.
+- `install_fix(program)`: "`ptyro install codex` installs it", for a program the version table
+  knows and can install on this platform (`None` otherwise: an agent of your own keeps "install
+  it, or set [agents.NAME] command to its full path").
+- `not_installed(agent, program)`: "codex isn't installed (codex is nowhere ptyro looks): `ptyro
+  install codex` installs it".
+- `setup_offer(text)`: what a message's offer installs, read back by the clients that act on it:
+  "`ptyro setup` installs" → the checklist's defaults, "`ptyro install codex agy` installs" →
+  those names. Only that form: a lock held by "`ptyro install`" or a move ("`ptyro install codex`
+  moves it") is something else. The web's `setupOffer` (`web/src/setupkit.ts`) is the same rule.
+
+**Where they are said:**
+- **`doctor`** (`agents` and `git`): no agent at all is `no_agent()` (Antigravity now counts as an
+  agent: it runs sessions, and with only it installed "no agent" would be wrong); a configured
+  agent not found, "claude not found: `ptyro install claude` installs it"; git, "git not found:
+  projects and worktrees need it; `ptyro install git` installs it"; gh, "gh not found: pull
+  requests (`wt new --pr`) need it; `ptyro install gh` installs it"; Gemini CLI without an API
+  key, "… with a personal Google account, use Antigravity (`agy`): `ptyro install agy` installs
+  it" when agy isn't installed.
+- **The daemon:** a chat with no agent that can chat (`no_chat_agent()`) or with a named one not
+  installed (`not_installed`, also a compare's note for that agent); a session whose agent's
+  program isn't anywhere ptyro looks (`not_installed`, instead of "cannot start session: No such
+  file or directory"; a missing working folder still gives the OS's words); `gh` missing for PR
+  features and git missing for a project, each with `install_fix`.
+- **The CLI:** the messages as they are: a command to run, which is the CLI's way. `ptyro update`
+  with no agent says `no_agent()`. `ptyro init` now notices the no-agent line (it never did: the
+  line made the report non-empty) and asks to open the checklist with yes as the default.
+- **The TUI:** any refused request whose message carries an offer (a session's spawn, a new
+  worktree's agent, a chat made or sent) shows it with `toast.act`: "… · C-q u set it up (the
+  checklist)", which runs `app.setup` with that one ticked (`app.setup`'s argument: names), or
+  "set up agents (the checklist)" for the defaults (`offer_for`, UX1.17's mechanism). The health
+  badge's findings already opened the checklist (§24.5) and now read the same words. The chat's
+  agent picker says "not installed: C-q U sets it up" (`setup_key`: the key, else the palette's
+  action).
+- **The web:** a refused request (`ui.fail`, which `ask`, `withConfirm` and the chat composer
+  use) whose message carries an offer opens a sheet with its words and "Set up codex" (or "Set up
+  agents and tools"), which opens the checklist with it ticked (`offerSetup`, `openSetup`,
+  `setup.offer`); any other is a toast as before. Health's findings in `agents` and `git` with an
+  offer get the same item in their menu. The new-task sheet links "Install another agent", or,
+  with none installed, says "No coding agent is installed on the computer yet: Set up agents and
+  tools (Claude Code, Codex, or Antigravity for a Google account)"; the chat's agent picker ends
+  with "Install another agent…".
+
+**Tests:** `locate.rs` (the words, Gemini CLI never first, Antigravity named, `setup_offer` and
+what it refuses); `doctor.rs` (`fix_for`); the TUI's `a_missing_agent_offers_the_setup_checklist`
+(a refused spawn and a chat not made, with the offer and its `app.setup` argument) and
+`health.rs` (the doctor's new lines opening the checklist); `crates/ptyro/tests/chat_compare.rs`'s
+`a_missing_agent_offers_setup_not_the_os_error` (a chat with no agent, and `ptyro new --agent`
+of one that isn't there, against a real daemon); `web/test/setup.mjs` (`setupOffer`).
+
+**Decided by the builder:** the daemon's errors carry the CLI's words (a command, which every
+client can show), and the TUI and the web act on them through `setup_offer` rather than each
+error growing a field; offers are recognised only in their "`…` installs" form, so a message
+merely naming `ptyro install` never turns into a setup button; the chat's no-agent words name
+Antigravity as what can't chat rather than as the fix.

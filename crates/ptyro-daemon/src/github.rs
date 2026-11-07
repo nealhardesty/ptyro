@@ -161,7 +161,12 @@ impl Daemon {
         let out = match out {
             Ok(o) => o,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(gh_err("the GitHub CLI (`gh`) isn't installed: PR features need it"));
+                let fix = ptyro_agents::locate::install_fix("gh")
+                    .map(|f| format!("; {f}"))
+                    .unwrap_or_default();
+                return Err(gh_err(format!(
+                    "the GitHub CLI (`gh`) isn't installed: PR features need it{fix}"
+                )));
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
                 return Err(Error::new(

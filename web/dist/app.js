@@ -16,7 +16,7 @@ import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
-import { coach, setupBanner, setupConnected, setupEvent } from "./settings.js";
+import { coach, offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
 import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
@@ -629,6 +629,8 @@ conn.onDropped = (m) => {
 conn.onTooBig = (m) => toast(m.t === "input" ? "Not sent: that paste is too large (over 4 MiB)" : "Not sent: too large (over 4 MiB)");
 ui.render = render;
 ui.toast = toast;
+ui.fail = (text) => { if (!offerSetup(text))
+    toast(text); };
 ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };

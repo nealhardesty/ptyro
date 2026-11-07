@@ -326,3 +326,14 @@ export function retryOf(r: { id: string; side: string }, name: string): { label:
   const wsl = r.side === "wsl";
   return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
 }
+
+/// What a message's setup offer installs (BOOT9, `ptyro_agents::locate::setup_offer`'s rule):
+/// "`ptyro setup` installs one" is the checklist's defaults (`[]`), "`ptyro install codex`
+/// installs it" those names; `null` for anything else (a lock held by `ptyro install`, a move).
+export function setupOffer(text: string): string[] | null {
+  const m = /`ptyro (setup|install)((?: [^`\s]+)*)` installs/.exec(text);
+  if (!m) return null;
+  const names = m[2].split(" ").filter(Boolean);
+  if (m[1] === "setup") return [];
+  return names.length ? names : null;
+}
