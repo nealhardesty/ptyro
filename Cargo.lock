@@ -2472,6 +2472,7 @@ name = "ptyro-protocol"
 version = "0.0.63"
 dependencies = [
  "bytes",
+ "ptyro-agents",
  "ptyro-core",
  "ptyro-run",
  "rmp-serde",

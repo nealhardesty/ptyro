@@ -70,9 +70,21 @@ fn the_web_app_works_in_a_real_browser() {
     let config = format!(
         "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[ui]\n# e2e: keep this comment\n"
     );
-    let d =
-        TempDaemon::start_with(BIN, &[("HOME", hs.as_str()), ("SHELL", "/bin/sh")], Some(&config))
-            .unwrap();
+    // Setup's fake machine (BOOT1): the page installs through `ptyro fake-installer`, never for real.
+    let fake = hp.join("fake-setup");
+    std::fs::create_dir_all(&fake).unwrap();
+    std::fs::write(
+        fake.join("world.json"),
+        r#"{"platform":"linux","programs":["apt-get","sudo"]}"#,
+    )
+    .unwrap();
+    let fs = fake.to_string_lossy().into_owned();
+    let d = TempDaemon::start_with(
+        BIN,
+        &[("HOME", hs.as_str()), ("SHELL", "/bin/sh"), ("PTYRO_TEST_SETUP", fs.as_str())],
+        Some(&config),
+    )
+    .unwrap();
 
     let repo = hp.join("repo");
     std::fs::create_dir_all(&repo).unwrap();

@@ -107,6 +107,9 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("devices.push_test", &["devices", "push-test"]),
     ("config.show", &["config", "show"]),
     ("app.backup", &["backup"]),
+    // Setup (BOOT1): the checklist in the split's terminal, where sudo can ask for a password.
+    ("app.setup", &["setup"]),
+    ("app.install", &["install", "{ask:What to install (e.g. agy, or gemini gh)}"]),
     // Detach first: the daemon stops, and this screen with it. It asks in the split.
     ("app.uninstall", &["uninstall"]),
 ];

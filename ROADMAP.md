@@ -3242,12 +3242,23 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   `tests/fixtures/catalog/`, recorded by `make catalog-fixtures`. Found when checking: Codex now
   installs with its own standalone installer (no Node.js), and OpenCode 2 changed the server API
   ptyro speaks, so the table installs OpenCode 1. (R-BOOT-01, R-BOOT-03)
-- [ ] **BOOT1 The plan engine and `ptyro setup` / `ptyro install <name>…`** **M**:
+- [x] **BOOT1 The plan engine and `ptyro setup` / `ptyro install <name>…`** **M**:
   - the checklist's states (missing, installed, outdated, installed another way);
   - prerequisites ticked for what needs them, and admin steps asked for once;
   - live output, and a fix offered per failure;
   - `--yes --agents … --tools … --where …` for unattended machines.
   It works before any daemon exists (a fresh Windows machine).
+
+  *Done (2026-11-06):* `ptyro_agents::setup` (survey, plan, run; SPEC §24.2) with states missing,
+  installed, outdated, other and too old; required prerequisites ticked and ordered first; admin
+  steps asked once (sudo in the terminal; `--yes` reports them with their command; the daemon
+  never runs them). Node.js by the design's rule: apt's or dnf's only when its candidate is new
+  enough, else nodejs.org's checked build in `ptyro-tools`, on `PATH` through `ptyro shell-init`
+  and the daemon's environment. `ptyro setup [--yes --agents --tools] [--dry-run] [--json]`,
+  `ptyro install NAME…`; protocol 1.31 `SetupPlan`/`SetupRun`/`SetupProgress`; the TUI's
+  `app.setup`/`app.install` (a split) and the web's More → Set up ptyro, so parity holds now
+  (BOOT2 and BOOT3 give them their full places). Tested end to end through a fake machine
+  (`PTYRO_TEST_SETUP`, `ptyro fake-installer`). `--where` is BOOT8's.
 - [ ] **BOOT2 The TUI checklist** **M**, as the first part of the onboarding screen (UX1.19,
   `onboard.rs`; the owner chose one checklist screen). Reopened from `ptyro init`, the palette's
   `first.run`, and the health badge.

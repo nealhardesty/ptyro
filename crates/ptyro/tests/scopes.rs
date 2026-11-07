@@ -59,6 +59,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"events","session":null,"limit":5}), READ, true),
         s(json!({"t":"usage"}), READ, true),
         s(json!({"t":"machine_list"}), READ, true),
+        // Reads the machine, but runs each agent's `--version`: not sent to the test daemon.
+        s(json!({"t":"setup_plan","picks":null}), READ, false),
         s(json!({"t":"history","limit":5}), READ, true),
         s(json!({"t":"project_list"}), READ, true),
         s(json!({"t":"project_get","addr":a}), READ, true),
@@ -95,6 +97,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"chat_compare","chat":a,"agents":["claude","codex"]}), CONTROL, true),
         s(json!({"t":"chat_pick","chat":a}), CONTROL, true),
         s(json!({"t":"chat_import","dry_run":true}), FULL, true),
+        // Installs software (an unknown name is refused before anything runs).
+        s(json!({"t":"setup_run","picks":[a]}), FULL, true),
         s(json!({"t":"checkpoint_diff","addr":a,"n":1,"to":null}), READ, true),
         s(json!({"t":"worktree_archives","project":null}), READ, true),
         s(json!({"t":"branches","project":a}), READ, true),

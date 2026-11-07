@@ -495,6 +495,36 @@ fn ext(kind: ShellKind) -> &'static str {
 }
 
 /// POSIX single quotes.
+/// Lines that put `dirs` at the front of `PATH`, each once, for an rc file: what `ptyro
+/// shell-init` prints first, for every shell (not only ptyro's), so the tools `ptyro setup`
+/// installed into ptyro's own folder are found (BOOT1, SPEC §24.2). `dirs[0]` ends up first.
+pub fn path_lines(kind: ShellKind, dirs: &[PathBuf]) -> String {
+    if dirs.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("# The tools `ptyro setup` installed into ptyro's own folder.\n");
+    for d in dirs.iter().rev() {
+        let d = d.to_string_lossy();
+        out.push_str(&match kind {
+            ShellKind::Bash | ShellKind::Zsh => {
+                let q = sh_quote(&d);
+                format!("case \":$PATH:\" in *:{q}:*) ;; *) PATH={q}:\"$PATH\"; export PATH ;; esac\n")
+            }
+            ShellKind::Fish => {
+                let q = fish_quote(&d);
+                format!("contains -- {q} $PATH; or set -gx PATH {q} $PATH\n")
+            }
+            ShellKind::Pwsh => {
+                let q = format!("'{}'", d.replace('\'', "''"));
+                format!(
+                    "if (($env:PATH -split [IO.Path]::PathSeparator) -notcontains {q}) {{ $env:PATH = {q} + [IO.Path]::PathSeparator + $env:PATH }}\n"
+                )
+            }
+        });
+    }
+    out
+}
+
 fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
@@ -699,6 +729,21 @@ mod tests {
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn path_lines_put_the_tools_first_once_in_every_shell() {
+        let dirs = [PathBuf::from("/h/ptyro-tools/node/bin"), PathBuf::from("/h/it's/npm/bin")];
+        assert_eq!(path_lines(ShellKind::Bash, &[]), "");
+        let sh = path_lines(ShellKind::Zsh, &dirs);
+        assert!(sh.contains(r#"case ":$PATH:" in *:'/h/ptyro-tools/node/bin':*) ;; *) PATH='/h/ptyro-tools/node/bin':"$PATH"; export PATH ;; esac"#), "{sh}");
+        // The last line is the first dir: it ends up in front.
+        assert!(sh.trim_end().lines().last().unwrap().contains("node/bin"));
+        assert!(sh.contains(r"'/h/it'\''s/npm/bin'"));
+        let fish = path_lines(ShellKind::Fish, &dirs);
+        assert!(fish.contains("contains -- '/h/ptyro-tools/node/bin' $PATH; or set -gx PATH '/h/ptyro-tools/node/bin' $PATH"));
+        let ps = path_lines(ShellKind::Pwsh, &dirs);
+        assert!(ps.contains("-notcontains '/h/it''s/npm/bin'"), "{ps}");
     }
 
     #[test]

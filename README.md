@@ -63,10 +63,10 @@ Google, or any other tool named here; their names and trademarks belong to their
   [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
   (for Gemini API-key and enterprise accounts),
   [Antigravity CLI](https://antigravity.google) (`agy`, Google's agent for personal accounts)
-  or [OpenCode](https://opencode.ai). Any other program runs too, with less status detail. When
-  one you ask for isn't installed, ptyro gives its vendor's recommended install command for your
-  platform (Claude Code's native installer, Codex's and Antigravity's own installers, npm for
-  Gemini CLI), from a table checked against each vendor's documentation (SPEC §24.1).
+  or [OpenCode](https://opencode.ai). Any other program runs too, with less status detail.
+  `ptyro setup` installs them for you ([below](#agents-and-tools-ptyro-setup)), each its
+  vendor's recommended way for your platform, from a table checked against each vendor's
+  documentation (SPEC §24.1).
 - **A modern terminal:** Ghostty, kitty, WezTerm, Alacritty, iTerm2, foot… Inside tmux works too.
 - **Optional:** the [GitHub CLI](https://cli.github.com) (`gh`) for PRs and checks;
   [Tailscale](https://tailscale.com) for the phone app.
@@ -124,12 +124,48 @@ refuses them: run `xattr -d com.apple.quarantine ptyro` once, or use the install
 doesn't set the mark). Then let ptyro look around:
 
 ```bash
+ptyro setup      # installs the coding agents and the tools they need (a checklist)
 ptyro init       # finds your agents, accounts and repositories; asks a few questions
 ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 ```
 
 **Upgrading** while agents run: install the new binary (run the install script again), then
 `ptyro daemon upgrade`. Every session keeps running.
+
+### Agents and tools: `ptyro setup`
+
+A new machine needs only ptyro: `ptyro setup` installs the rest. It shows one checklist of the
+coding agents (Claude Code, Codex, Antigravity, OpenCode, and Gemini CLI for Gemini API-key and
+enterprise accounts) and the tools (git, the GitHub CLI, Node.js), with what is already here.
+Claude Code, Codex, git and the GitHub CLI are ticked unless you have them. Type the numbers to
+tick or untick, then press Enter: each one installs with its output as it runs, ends ✓ or ✗ with
+the fix, and one failure doesn't stop the rest.
+
+```bash
+ptyro setup                                   # the checklist
+ptyro install agy                             # one by name (agy, gemini, gh, node…), any time later
+ptyro install gemini --dry-run                # what it would run, changing nothing
+ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, a fresh VM
+```
+
+- **The vendors' own ways.** Each install command is the vendor's recommended one for your
+  platform (Claude Code's native installer, Codex's and Antigravity's installers, npm for Gemini
+  CLI, apt, dnf, Homebrew or WinGet for git and the GitHub CLI), from a table checked against
+  their documentation (SPEC §24.1). Nothing is guessed.
+- **Prerequisites come along.** Ticking Gemini CLI ticks Node.js. When your package manager's
+  Node.js is too old for it (Ubuntu 24.04's is 18), ptyro puts nodejs.org's build, checked
+  against its published checksums, in a folder of its own (`~/.local/share/ptyro-tools`), with no
+  admin rights and no `sudo npm`. It then offers to add `ptyro shell-init`'s line to your shell's
+  rc file so new terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
+  already. `ptyro uninstall` leaves that folder alone: the tools are yours.
+- **Admin rights only after asking, once.** apt, dnf and WinGet's machine-wide installers need
+  them: sudo asks for your password once, in your terminal, before the first of them (on Windows
+  each installer raises its own UAC prompt). ptyro never sees the password. `--yes` asks nothing:
+  a step that would need a password is skipped and its command printed for you to run.
+- **No daemon needed**, so it works on a machine where ptyro has never run. In the TUI it's
+  `app.setup` and `app.install` in the palette (the checklist in a split). The web app has it
+  under More → Set up ptyro, except steps that need admin rights, which only run on the computer
+  itself: the page shows their command instead.
 
 ### Removing ptyro
 

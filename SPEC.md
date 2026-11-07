@@ -1087,6 +1087,10 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built BOOT1] Protocol 1.31** (additive): setup (§24.2). `SetupPlan{picks?}` → `SetupPlan{plan}`
+(`read`), `SetupRun{picks}` → `SetupStarted{run, plan}` (`full`), and the event
+`SetupProgress{run, event}` to every watcher. An older daemon refuses the new requests.
+
 **[built SH.13] Protocol 1.30** (additive): SHELLS windows (§23.17). `ShellSplit{addr, dir,
 env, size?}`, `ShellJoin{addr, into?, dir}`, `ShellLayout{addr, layout}` → `Session`.
 `SessionInfo.pane/layout`. `%N.P` addresses a pane. An older daemon refuses the new requests.
@@ -3500,6 +3504,8 @@ ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
 ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
+ptyro setup [-y] [--agents A,B] [--tools T,U] [--dry-run] [--json]   # the setup checklist (§24.2)
+ptyro install NAME… [-y] [--dry-run] [--json]                         # install agents/tools by name (§24.2)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
 ptyro mcp                              # MCP server exposing ptyro to agents (§15.4)
@@ -8770,7 +8776,7 @@ strip, and a split is always a shell.
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
 
-## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 built 2026-11-06]**
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06]**
 
 The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
 that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
@@ -8836,4 +8842,145 @@ its release); `at_least` checks a minimum.
 **Uses today:** `locate::install_hint` (the fix offered when an agent isn't installed, in `doctor`,
 chats and the TUI's agent picker) is the table's first method for the platform. BOOT1 builds the
 plan engine on the rest.
+
+### 24.2 The plan engine, `ptyro setup` and `ptyro install` (BOOT1) **[built 2026-11-06]**
+
+**One engine:** `ptyro_agents::setup` (`crates/ptyro-agents/src/setup.rs`, with `setup/host.rs`,
+`run.rs`, `fake.rs`). A library, so the CLI runs it with no daemon (a fresh machine has none),
+the daemon runs it for the web, and the TUI runs the CLI's checklist in a split. Three steps:
+
+1. **`survey(host, latest)`** looks at every row of the table through a `Host`: the item's
+   program found (`locate::find`, so npm's, nvm's and the vendors' folders count, with ptyro's
+   tools folders first on `PATH`), its `version` argv run (15 s at most) and read with
+   `catalog::Version`; the methods' `needs` (and `sudo`, `curl`) present; and the Node.js apt or
+   dnf would install (`apt-cache policy nodejs`'s `Candidate:`, `dnf -q -C info nodejs`'s
+   `Version`, cache only, never the network; an epoch and the distro's revision dropped).
+2. **`plan(survey, picks)`** gives one `Entry` per row: its `State`, `ticked` (picked, or needed),
+   `picked`, `needed_by`, its `Action` (`via`, the command as typed, `admin`, `update`, `after`)
+   or why there's none here (`blocked`: the programs its methods need, and the vendor's page).
+   `Plan::steps()` orders the steps so each comes after what it needs (else the table's order:
+   agents, then tools); `Plan::admin()` lists those needing administrator rights.
+3. **`run(plan, host, admin, on)`** runs the steps, each event to `on`; a failure never stops
+   the rest, only what needs the failed item (`Skipped`, "it needs Node.js, which didn't install").
+
+**States** (the design left the model to the builder): `missing`; `installed`; `outdated`
+(installed older than a newest version passed in: BOOT5 passes them, the engine then runs the
+method's `update`); `other` (installed through one of the row's `others`, by its folder:
+`node_modules`/`npm`/`_npx`, Homebrew's `Cellar`/`Caskroom`, WinGet's links; BOOT7 offers the
+move, the engine installs nothing for it); `too_old` (older than a minimum something ticked needs:
+Node.js 18 for Gemini CLI's 20). Each entry has a `side`, only `local` until BOOT8 adds WSL's and
+Windows'.
+
+**Prerequisites:** only *required* ones tick (Node.js for Gemini CLI everywhere and for OpenCode
+on Windows); recommended ones (git for Codex's PR helpers, Git for Windows for Claude) don't, but
+git is a default tick. A ticked prerequisite can't be unticked while what needs it is ticked.
+`npm` counts as present when Node.js is installed or about to be, so Gemini CLI plans through npm
+on a machine with no Node.js yet.
+
+**Node.js, the design's rule** (and BOOT0's review's open note): methods in the table's order,
+skipping those whose `needs` is absent. apt's and dnf's are used only when the candidate version
+is known and meets the highest minimum of what needs it (and, for one too old already, is newer);
+an unknown candidate is not trusted. Homebrew and WinGet ship the newest, so they are used as they
+are (`update` for one too old). Else **nodejs.org's build** (`node-dist`): the newest LTS from
+`index.json`, the archive for the platform and architecture, its SHA-256 checked against
+`SHASUMS256.txt` (a mismatch is refused and deleted), unpacked with `tar` (Windows 10's
+`tar.exe` reads the zip), and moved into place only once unpacked (the old one kept until then).
+Downloads use `curl` (Windows 10 has `curl.exe`), so ptyro carries no HTTP client for this.
+
+**ptyro's tools folder:** `Paths::tools()`, beside the data directory, not in it:
+`~/.local/share/ptyro-tools` (XDG), `%LOCALAPPDATA%\ptyro-tools`, `$PTYRO_HOME/ptyro-tools`.
+`ptyro uninstall` leaves it, because the tools are the user's (the design's "`ptyro uninstall`
+leaves installed agents and tools alone"). In it: `node` (nodejs.org's build) and `npm` (the npm
+prefix used when npm's own global prefix isn't writable, as with a distro's Node.js: never `sudo
+npm`; on Windows npm's prefix is the user's `%APPDATA%\npm` already). `setup::path_dirs` names
+their program folders (`bin` under each, except on Windows):
+- **`ptyro shell-init`** prints `ptyro_core::shell::path_lines` first, for the folders that
+  exist, before the snippet's `PTYRO` guard, so every shell gets them, not only ptyro's: each
+  added at the front of `PATH` once (bash/zsh `case ":$PATH:"`, fish `contains`, PowerShell
+  `-notcontains`). A machine that never needed them prints nothing new.
+- **The daemon's environment:** `base_env`'s `PATH` gets them in front at start-up, existing or
+  not, so a session finds a tool installed after the daemon started.
+- **After a run that used the folder,** the CLI offers to add `ptyro shell-init`'s line to the
+  shell's rc file (`ShellKind::rc_line`, with a `# ptyro …` comment above it: exactly the form
+  `ptyro uninstall` takes out), or says it's there already. On Windows it offers to put the
+  folders in the user's `PATH` (`[Environment]::SetEnvironmentVariable(…, 'User')`, each once).
+  `--yes` only says what to add, as `ptyro init --yes` leaves rc files alone.
+
+**Administrator rights:** asked for once, before the first step that needs them, never through
+ptyro. `Admin::Ask` (the CLI at a terminal): sudo's own `sudo -v` in the real terminal, then each
+step's `sudo` finds it remembered; on Windows nothing is asked ahead, since WinGet's installers
+raise their own UAC prompt. `Admin::Silent` (`--yes`): only when no prompt is needed (root, sudo's
+remembered password or a `NOPASSWD` rule: `sudo -n true`; an elevated Windows terminal: `net
+session` succeeds); otherwise each admin step is `Skipped` with its command to run. `Admin::Never`
+(the daemon, for the web): never, whatever it could do, and the fix names the computer: "on the
+computer itself: `ptyro install gh`". As root with no sudo (a fresh container), a command's
+`sudo` runs through `sudo() { "$@"; }`.
+
+**Running a step:** the method's `shell` argv (`sh -c`, PowerShell with `-ExecutionPolicy
+Bypass`), stdin empty, stdout and stderr read line by line as they come (a progress bar's `\r`
+keeps its last state), with ptyro's tools folders first on `PATH`, and on Windows
+`CREATE_NO_WINDOW` (§20.12). An `Err` is the exit code and the last three lines. Afterwards the
+item is looked for again, and `Done` carries the version found (none: "a new terminal may be
+needed").
+
+**Events** (`setup::Event`, JSON-tagged `event`): `elevating{ids}`, `started{id, name, command,
+admin}`, `line{id, text}`, `done{id, version?}`, `failed{id, error, fix}`, `skipped{id, reason,
+fix}`, `logins{ids}`, `finished{report}`. **Fixes:** a failure offers `ptyro install <program>`
+again, the command to run yourself and the vendor's page; nodejs.org's build, the connection and
+the page. **Logins:** after the installs, `logins` names the installed items with a login; the CLI
+prints each one's own `start` command from the table. BOOT4 makes it walk through them.
+
+**`ptyro setup [-y] [--agents A,B] [--tools T,U] [--dry-run] [--json]`:** the checklist in a
+terminal (stderr): Agents and Tools numbered (`[x]` picked, `[+]` needed by something picked,
+with the method and "as administrator"), then Already here (✓ with version and path). Typing
+numbers (or names) ticks and unticks, Enter installs, `q` or end of input quits. Defaults: the
+design's ticks less what is installed (Claude Code, Codex, git, GitHub CLI; Codex needs no Node.js
+since BOOT0). With `--agents`/`--tools`, exactly those (`none` for none; an agent in `--tools` is
+an error naming the right flag); with neither, the defaults. `--yes` asks nothing; without it and
+without a terminal it refuses and says to pass `--yes`. `--dry-run` prints the checklist and each
+step's command (`--json`: the `Plan`); `--json` on a run prints each event as a JSON line on
+stdout. `--where` is BOOT8's.
+**`ptyro install NAME… [-y] [--dry-run] [--json]`:** names as people say them (`setup::resolve`:
+the id, the program or the name, any case, without spaces or dots: `agy`, `github-cli`,
+`"Claude Code"`, `nodejs`); an unknown one exits 3 listing the known. It shows the steps and asks
+`Install? [Y/n]` (end of input is no). Already installed: "✓ GitHub CLI is here already". Both
+exit 0 when everything ran, 1 when anything failed or was skipped, and never talk to a daemon (an
+explicit `--remote` elsewhere is refused: setup is about this computer).
+
+**TUI:** `app.setup` and `app.install` (palette) run those commands in a split (UX1.21's
+`cli_actions`), a real terminal where sudo can ask. BOOT2 makes the checklist the first part of
+the onboarding screen.
+**Web:** More → Set up ptyro → "Install agents and tools" (`setup.plan`, `setup.install` in
+`web/src/settings.ts`): the plan with checkboxes (re-planned on each tick, so prerequisites tick
+themselves), Install, and the run's lines from `setup_progress` events; administrator steps are
+shown with `ptyro install …` to run on the computer. BOOT3 gives it its full place (Settings, a
+first-run banner).
+
+**Protocol 1.31** (§6.4): `SetupPlan{picks?}` → `SetupPlan{plan}` (`read` scope: it only looks,
+but runs each agent's `--version`); `SetupRun{picks}` → `SetupStarted{run, plan}` (`full`), then
+`DomainEvent::SetupProgress{run, event}` to every watcher. One run at a time (two package
+managers fight over their locks): a second is a conflict. An unknown name is `not_found` before
+anything runs.
+
+**Tests, without the network or real installers:** the engine's logic in
+`crates/ptyro-agents/src/setup/tests.rs` (an in-process `Host`: defaults, ordering, the Node.js
+rule, too old, other and outdated, admin per mode, a failure's skips, names, the plan as JSON);
+the CLI end to end in `crates/ptyro/tests/boot1.rs` through the **fake machine**:
+`PTYRO_TEST_SETUP=<dir>` (debug builds, `ptyro_core::test_knob`) makes `setup::host` a fake that
+reads `<dir>/world.json` (platform, programs, installed versions, other installers, apt's or dnf's
+Node.js, `elevation` ready/prompt/unavailable, whether `elevate` succeeds, per-item outcomes
+`ok`/`fail`/`slow`/`quiet`) and runs each step as `ptyro fake-installer` (hidden, debug builds), a
+real child whose output streams like an installer's and which "installs" by writing
+`<dir>/installed/<id>`; `<dir>/calls.log` records each step and each elevation asked. They cover
+success, a failure with its fix, live output (lines 300 ms apart arrive 300 ms apart), admin asked
+once / never with `--yes` / refused, the checklist's ticks and quitting, the Node.js rule with the
+tools folder on `PATH` through a real `bash`, the rc line `ptyro uninstall` removes again, and the
+daemon's `SetupPlan`/`SetupRun` with its events and its never-admin rule. With the knob set, the
+checklist reads its answers from stdin even when it isn't a terminal.
+
+**Decided by the builder** (the design's "Left to the builder"): the states above; elevation per
+mode as above; the engine in `ptyro-agents` (beside the table it reads; the protocol crate now
+depends on it for the wire types); the tools folder beside the data directory; `curl` and `tar`
+for nodejs.org's build; required prerequisites tick, recommended ones don't; outdated ones update
+through the recommended method's `update`.
 

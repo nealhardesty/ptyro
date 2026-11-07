@@ -966,6 +966,7 @@ async fn forward_events(
             | DomainEvent::MachineRemoved { .. }
             | DomainEvent::ChatUpdated { .. }
             | DomainEvent::ChatRemoved { .. }
+            | DomainEvent::SetupProgress { .. }
             | DomainEvent::RunUpdated { .. } => {
                 let watching = interest.locked().watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {
