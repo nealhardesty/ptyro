@@ -149,6 +149,13 @@ pub trait Adapter: Send + Sync {
     fn ready_needs_screen(&self) -> bool {
         false
     }
+    /// Whether it is known to drop a prompt's Enter while it says it is idle, so ptyro may press
+    /// Enter again (WIN8, SPEC §8.2): Codex 0.166 does, as it starts. Off for every other agent:
+    /// in Claude's dialogs Enter is "Yes", and its box has never been seen to drop one, so a
+    /// prompt left in its box is reported, never entered again.
+    fn drops_enter(&self) -> bool {
+        false
+    }
     /// What sits in its input box, typed and not sent, when it shows one: a prompt whose Enter
     /// was dropped (Codex 0.166 is busy for a moment after it first says idle) is still there.
     fn pending_input(&self, screen: &str) -> Option<String> {

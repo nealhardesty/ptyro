@@ -38,9 +38,12 @@
 //! The fake Claude's terminal doesn't echo: as Claude does, it draws a prompt into the
 //! conversation once it takes it, and empties its box. So it never shows a typed-but-unsent
 //! draft: a dropped Enter on Claude's box isn't modelled (Codex's is,
-//! `PTYRO_FAKE_DROP_FIRST_ENTER`). With `PTYRO_FAKE_LAGGY_BOX=1` it is a Claude whose redraw
-//! lags: a prompt it took stays in its box, and `ask` draws its permission dialog at once,
-//! before its hooks (what ptyro's second Enter must never answer).
+//! `PTYRO_FAKE_DROP_FIRST_ENTER`). With `PTYRO_FAKE_LAGGY_BOX=N` it is a Claude whose redraw
+//! lags: a prompt it took stays in its box, and `ask` draws its permission dialog N ms later,
+//! before its hooks (what ptyro must never press Enter on); `PTYRO_FAKE_PLAIN_DIALOG=1` words
+//! that dialog so no adapter recognises it. `PTYRO_FAKE_START_GATE=<path>` keeps it loading
+//! (output every 200 ms) until the file exists, then it starts. These three and
+//! `PTYRO_FAKE_HOOK_DELAY_MS` are test knobs (`ptyro_core::test_knob`).
 //!
 //! Like Claude, a Stop hook that answers `{"decision":"block"}` keeps the turn going (the fake
 //! "works" again and stops again). A verified-done bounce (`[via ptyro: verify]…`) and mail
@@ -68,8 +71,11 @@ struct Fake {
     /// `PTYRO_FAKE_LATE_SESSION_START=1`: SessionStart only with the first prompt, after the
     /// turn's OSC 7501 working, as Codex 0.166 sends it. Set until it has been sent.
     late_start: std::cell::Cell<bool>,
-    /// `PTYRO_FAKE_LAGGY_BOX=1` (claude): a taken prompt stays in the box, a dialog comes first.
-    laggy: bool,
+    /// `PTYRO_FAKE_LAGGY_BOX=N` (claude): a taken prompt stays in the box, and `ask`'s dialog
+    /// comes N ms after it is taken, before its hooks.
+    laggy: Option<u64>,
+    /// `PTYRO_FAKE_PLAIN_DIALOG=1`: `ask`'s dialog in words no adapter recognises.
+    plain_dialog: bool,
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -103,7 +109,10 @@ impl Fake {
             late_start: std::cell::Cell::new(
                 std::env::var_os("PTYRO_FAKE_LATE_SESSION_START").is_some(),
             ),
-            laggy: adapter == "claude" && ptyro_core::test_knob("PTYRO_FAKE_LAGGY_BOX").is_some(),
+            laggy: ptyro_core::test_knob("PTYRO_FAKE_LAGGY_BOX")
+                .filter(|_| adapter == "claude")
+                .map(|v| v.parse().unwrap_or(0)),
+            plain_dialog: ptyro_core::test_knob("PTYRO_FAKE_PLAIN_DIALOG").is_some(),
             adapter,
         };
         match f.adapter.as_str() {
@@ -402,13 +411,18 @@ impl Fake {
         let f = self;
         let tool = json!({ "tool_name": "Bash", "tool_input": { "command": rest } });
         let dialog = |out: &mut std::io::Stdout| {
-            let _ = write!(
-                out,
-                "\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. Yes, and don't ask again\r\n  3. No (esc)\r\n"
-            );
+            if f.plain_dialog {
+                let _ = write!(out, "\r\nRun `{rest}`? Enter runs it, Esc refuses.\r\n");
+            } else {
+                let _ = write!(
+                    out,
+                    "\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. Yes, and don't ask again\r\n  3. No (esc)\r\n"
+                );
+            }
             let _ = out.flush();
         };
-        if f.laggy {
+        if let Some(ms) = f.laggy {
+            std::thread::sleep(Duration::from_millis(ms));
             dialog(out);
         }
         f.hook("PreToolUse", tool.clone());
@@ -426,7 +440,7 @@ impl Fake {
                     _ => f.hook("PermissionRequest", tool.clone()),
                 }
         f.report(out, "state=blocked:kind=permission:msg=YXBwcm92ZQ");
-        if !f.laggy {
+        if f.laggy.is_none() {
             dialog(out);
         }
         let answer = if f.adapter == "opencode" {
@@ -683,6 +697,18 @@ pub fn main(args: &[String]) -> i32 {
     let _ = writeln!(out, "fake {} session={} resumed={}", f.adapter, f.session, f.resumed);
     // Claude's SessionStart and every Codex hook name the model the agent runs.
     let model = if f.adapter == "claude" { "claude-opus-5-5" } else { "gpt-5.6-sol" };
+    // `PTYRO_FAKE_START_GATE=<path>`: it loads (output, every 200 ms) until the file exists, then
+    // starts: a test holds its first hook back for as long as it needs.
+    if let Some(gate) = ptyro_core::test_knob("PTYRO_FAKE_START_GATE") {
+        let mut n = 0u32;
+        while !std::path::Path::new(&gate).exists() {
+            let _ = write!(out, "\r\x1b[2Kloading {n} {}", "·".repeat(70));
+            let _ = out.flush();
+            std::thread::sleep(Duration::from_millis(200));
+            n += 1;
+        }
+        let _ = write!(out, "\r\x1b[2K");
+    }
     if !f.late_start.get() {
         f.hook(
             "SessionStart",
@@ -704,7 +730,7 @@ pub fn main(args: &[String]) -> i32 {
     // Claude draws what is typed into its box itself: the fake does too (`take_from_box`), so a
     // line typed ahead while it works can't land where a taken prompt is redrawn.
     let raw_lines = cfg!(windows) && std::env::var_os("PTYRO_FAKE_PASTE").is_some();
-    let unechoed = (f.adapter == "claude" && !raw_lines && !f.laggy)
+    let unechoed = (f.adapter == "claude" && !raw_lines && f.laggy.is_none())
         .then(ptyro_pty::console::RawInput::unechoed);
     // `PTYRO_FAKE_DROP_FIRST_ENTER=1`: the first prompt's Enter is lost, its text left in the
     // composer until the next Enter, as Codex 0.166 drops one while busy just after it says idle.

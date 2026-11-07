@@ -1598,23 +1598,41 @@ Verified against Claude Code **2.1.304** (§20).
     It relies on an agent emptying its box as it takes a prompt, as Claude and Codex do; the
     fake agent does too since 2026-11-07 (§18.2: it didn't, and a second Enter answered a
     permission dialog "no").
-  - **[2026-11-07] The second Enter never answers a dialog.** In Claude's dialogs Enter is
-    "Yes", so a press needs every sign that the agent never took the prompt, and any doubt
-    means no press:
-    - the box holds exactly this prompt (a long one, wrapped, can't be told, so it never gets
-      a second Enter);
-    - no hook or OSC 7501 report has come since the Enter (the agent spoke: it took it);
-    - the status is idle, done or not yet said, never blocked, and no dialog the adapter
+  - **[2026-11-07] Enter is pressed again only where an Enter is known to be dropped.**
+    Each adapter says whether it drops one (`Adapter::drops_enter`): only Codex does (0.166,
+    above). For every other agent, Claude included (Enter on its dialogs is "Yes", and its box
+    has never been seen to drop an Enter), a prompt that still sits in the box is never pressed
+    again: it is reported. So a second Enter can't land on a Claude dialog.
+  - For Codex, a press needs every sign that it never took the prompt; any doubt is no press:
+    - the box shows this prompt, unsent: all of it, or its start when it wraps (the box's
+      first line);
+    - no hook or OSC 7501 report has come since the Enter;
+    - the status is idle, done or not yet said, never blocked, and no dialog its adapter
       recognises (`on_screen`, `screen_status`) is on screen;
-    - two looks 500 ms apart saw the same screen, with no output between them. An agent that
-      took the prompt redraws; a dropped Enter leaves the screen still.
+    - two looks 500 ms apart saw the same screen, with no output between them (an agent that
+      took the prompt redraws; a dropped Enter leaves the screen still);
+    - just before the key is written, no output and no report came since that second look, and
+      the session still runs.
 
-    When the prompt still sits in the box and no press was safe, ptyro presses nothing and the
-    session's events say so (`prompt_unconfirmed`, with why). Tested by m4
-    `a_second_enter_never_answers_a_dialog`: a Claude whose redraw lags keeps the taken prompt in
-    its box, shows a permission dialog at once, and leaves the status idle with slow hooks
-    (`PTYRO_FAKE_LAGGY_BOX`, `PTYRO_FAKE_HOOK_DELAY_MS`). Before the guard, ptyro pressed Enter
-    and the dialog took it.
+    What is left for Codex: a Codex that took the prompt, then froze its screen for over a
+    second, then showed a dialog it doesn't recognise as one, could read that Enter. Its own
+    dialogs are recognised, and none has been seen to come that way.
+  - **Reported, never silently dropped.** Whenever the prompt still sits in the box and nothing
+    is pressed (any agent but Codex at the end of the ~10 s watch; the agent spoke or a dialog
+    came while it still shows; Codex after two presses, or when no press was safe), the session
+    gets a `prompt_unconfirmed` event with why, and attention: "its prompt may not have been sent
+    (…): look, and press Enter in it if not".
+  - **Tests.** m4, with a Claude whose redraw lags (`PTYRO_FAKE_LAGGY_BOX`: the taken prompt
+    stays in its box, its slow hooks leave the status idle):
+    - `a_claude_prompt_left_in_its_box_is_reported_not_entered_again` (the dialog at once);
+    - `a_dialog_drawn_between_two_looks_is_reported_not_answered` (the dialog 700 ms later);
+    - `a_dialog_no_adapter_recognises_is_never_answered` (`PTYRO_FAKE_PLAIN_DIALOG`);
+    - `a_wrapped_claude_prompt_left_in_its_box_is_reported`.
+
+    For Codex: `a_prompt_whose_enter_was_lost_is_sent` and
+    `a_wrapped_prompt_whose_enter_was_lost_is_sent`. The decision itself is `look_at_box`, with
+    table tests. Each m4 test fails against the guard of the first review round, which still
+    pressed Enter for Claude, reported nothing when a dialog came and lost a wrapped prompt.
 - **A session starting doesn't end a turn [WIN8]:** a `SessionStart` hook that comes while the
   session is working moves nothing to idle (its conversation and model still count). Codex 0.166
   sends it only with the first prompt, after OSC 7501's working (verified live, 2026-11-05).
@@ -5937,9 +5955,12 @@ command): ptyro doesn't confine that.
 - `PTYRO_FAKE_LAGGY_BOX=1` is a Claude whose redraw lags: a prompt it took stays in its box,
   and `ask` shows its permission dialog at once, before its hooks.
 - `PTYRO_FAKE_HOOK_DELAY_MS=N` makes each of its hooks take N ms to start, as on a loaded
-  machine (both knobs are test knobs, `ptyro_core::test_knob`: a release build ignores them), so what ptyro does before a hook arrives is tested on every machine, not only on a
-  slow CI runner (m4 `a_slow_session_start_replaces_a_guessed_working`, m5
-  `a_prompt_taken_with_slow_hooks_is_entered_once`).
+  machine, so what ptyro does before a hook arrives is tested on every machine, not only on a
+  slow CI runner (m5 `a_prompt_taken_with_slow_hooks_is_entered_once`, and the m4 tests above).
+  `PTYRO_FAKE_START_GATE=<path>` keeps it loading, with output, until the file exists: m4
+  `a_slow_session_start_replaces_a_guessed_working` waits for the heuristic's guess before it
+  lets the first hook go. These, `PTYRO_FAKE_LAGGY_BOX` and `PTYRO_FAKE_PLAIN_DIALOG` are test
+  knobs (`ptyro_core::test_knob`: a release build ignores them).
 - A test that asserts which source a status came from first waits for the agent's first
   reliable word: before it, the output heuristic may guess "working" from start-up output (§9.3).
 
