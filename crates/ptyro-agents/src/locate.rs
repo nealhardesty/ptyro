@@ -2,7 +2,8 @@
 //! started by a service manager has a short `PATH`, and npm-installed agents live where nvm, an
 //! npm prefix or `npx`'s cache put them. Gemini CLI run as `npx …` (a shell alias) is only ever in
 //! that cache. ptyro never downloads an agent: it runs one that is already on disk, and when none
-//! is, it says how to install it ([`install_hint`]).
+//! is, it offers setup to install it ([`install_fix`], BOOT9; the vendor's own command is
+//! [`install_hint`]).
 //!
 //! On Windows (WIN8) a program has an extension from `PATHEXT` (`claude.exe`, `codex.cmd`), the
 //! home is `%USERPROFILE%`, and the places are Windows' own: Claude's native installer
@@ -58,6 +59,61 @@ pub fn install_hint(program: &str) -> Option<String> {
 
 fn hint_on(program: &str, platform: crate::catalog::Platform) -> Option<String> {
     crate::catalog::by_program(program)?.method(platform, |_| true)?.install.clone()
+}
+
+/// Which agent to install, where a message finds none (BOOT9): Antigravity for a Google account,
+/// Gemini CLI kept for the accounts it still serves (SPEC §24.10).
+pub const WHICH_AGENT: &str = "Claude Code, Codex, or Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts";
+
+/// No coding agent installed (BOOT9), in every client's words: `ptyro setup` is the fix, which
+/// the TUI offers as its checklist (`C-q U`) and the web as its setup page.
+pub fn no_agent() -> String {
+    format!("No coding agent is installed: `ptyro setup` installs one ({WHICH_AGENT})")
+}
+
+/// No agent that can chat (BOOT9). Antigravity has no structured mode (SPEC §22.5), so it is
+/// named as what a Google account runs in a session, not as a fix.
+pub fn no_chat_agent() -> String {
+    "No agent that can chat is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account, runs in sessions but can't chat)".into()
+}
+
+/// The fix for a missing agent or tool setup installs here: `` `ptyro install codex` installs
+/// it ``. `None` for a program the version table doesn't know (an agent of your own) or has no
+/// way to install on this platform.
+pub fn install_fix(program: &str) -> Option<String> {
+    let item = crate::catalog::by_program(program)?;
+    item.method(crate::catalog::Platform::current(), |_| true)?;
+    Some(format!("`ptyro install {}` installs it", item.program))
+}
+
+/// An agent whose program isn't anywhere ptyro looks (BOOT9), with the fix: `ptyro install` for
+/// one setup installs, else its `[agents.NAME] command`. Sessions and chats both say it.
+pub fn not_installed(agent: &str, program: &str) -> String {
+    let fix = install_fix(program)
+        .unwrap_or_else(|| format!("install it, or set [agents.{agent}] command to its full path"));
+    format!("{agent} isn't installed ({program} is nowhere ptyro looks): {fix}")
+}
+
+/// What a message's setup offer installs (BOOT9), for a client that does it instead of leaving it
+/// to be typed: `` `ptyro setup` installs `` is the checklist's defaults (`Some([])`), and
+/// `` `ptyro install codex agy` installs `` those names. Only the offers above: a lock held by
+/// `` `ptyro install` `` or a move (`` `ptyro install codex` moves it ``) is something else.
+pub fn setup_offer(text: &str) -> Option<Vec<String>> {
+    text.match_indices("`ptyro ").find_map(|(at, open)| {
+        let rest = &text[at + open.len()..];
+        let end = rest.find('`')?;
+        if !rest[end + 1..].starts_with(" installs") {
+            return None;
+        }
+        let mut words = rest[..end].split_whitespace();
+        match words.next()? {
+            "setup" => Some(Vec::new()),
+            "install" => {
+                Some(words.map(str::to_owned).collect()).filter(|n: &Vec<_>| !n.is_empty())
+            }
+            _ => None,
+        }
+    })
 }
 
 /// The user's home: `$HOME`, else `%USERPROFILE%` (Windows sets only that).
@@ -172,7 +228,36 @@ fn places() -> Option<Places> {
             exts: None,
         }
     };
+    let mut places = places;
+    for d in vendor_bins(crate::catalog::Platform::current()) {
+        if !places.dirs.iter().any(|(p, _)| *p == d.0) {
+            places.dirs.push(d);
+        }
+    }
     Some(places)
+}
+
+/// The folders the version table's vendor installers put their programs in on `platform` (each
+/// method's `bin`), expanded here, each with how to say it: what they installed is found before
+/// the daemon or a shell has the `PATH` they added (the final review's I2: one list, so `locate`
+/// and the table can't drift apart).
+fn vendor_bins(platform: crate::catalog::Platform) -> Vec<(PathBuf, String)> {
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    for m in crate::catalog::items()
+        .iter()
+        .flat_map(|i| &i.methods)
+        .filter(|m| m.via == crate::catalog::Via::Vendor && m.on(platform))
+    {
+        for b in &m.bin {
+            let Some(dir) = crate::setup::expand_place(b) else { continue };
+            let dir = PathBuf::from(dir);
+            let say = if platform.is_windows() { b.replace('/', "\\") } else { b.clone() };
+            if !out.iter().any(|(p, _)| *p == dir) {
+                out.push((dir, say));
+            }
+        }
+    }
+    out
 }
 
 /// After `PATH`: `places.dirs`, then nvm, then `npx`'s cache.
@@ -350,6 +435,41 @@ fn tilde(p: &Path) -> String {
 }
 
 #[cfg(test)]
+mod vendor_tests {
+    use super::*;
+
+    /// Every folder the version table says a vendor installer puts its program in is one
+    /// `locate` searches (the final review's I2: `~/.opencode/bin` and Codex's Windows folder
+    /// were missing), so `find` sees a fresh install.
+    #[test]
+    fn every_vendor_bin_in_the_table_is_searched() {
+        let platform = crate::catalog::Platform::current();
+        let dirs: Vec<PathBuf> = places().expect("a home").dirs.into_iter().map(|d| d.0).collect();
+        let mut checked = 0;
+        for i in crate::catalog::items() {
+            for m in
+                i.methods.iter().filter(|m| m.via == crate::catalog::Via::Vendor && m.on(platform))
+            {
+                for b in &m.bin {
+                    let Some(d) = crate::setup::expand_place(b) else { continue };
+                    assert!(
+                        dirs.contains(&PathBuf::from(&d)),
+                        "{}: {b} ({d}) isn't searched: {dirs:?}",
+                        i.id
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 0, "no vendor bin on {platform:?}");
+        if !platform.is_windows() {
+            let home = home().unwrap();
+            assert!(dirs.contains(&home.join(".opencode").join("bin")), "{dirs:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 #[cfg(unix)] // fakes agents with execute bits
 mod tests {
     use super::*;
@@ -453,6 +573,59 @@ mod tests {
         );
         assert_eq!(h("opencode", WindowsX64).as_deref(), Some("npm install -g opencode-ai"));
         assert_eq!(h("my-own-agent", Linux), None);
+    }
+
+    /// BOOT9: a missing agent offers setup, not a command to copy, and the no-agent words name
+    /// Antigravity for a Google account (Gemini CLI only for the accounts it still serves).
+    #[test]
+    fn missing_agents_offer_setup() {
+        assert_eq!(install_fix("codex").as_deref(), Some("`ptyro install codex` installs it"));
+        assert_eq!(install_fix("agy").as_deref(), Some("`ptyro install agy` installs it"));
+        assert_eq!(install_fix("git").as_deref(), Some("`ptyro install git` installs it"));
+        assert_eq!(install_fix("my-own-agent"), None);
+        assert_eq!(
+            not_installed("codex", "codex"),
+            "codex isn't installed (codex is nowhere ptyro looks): `ptyro install codex` installs it"
+        );
+        assert_eq!(
+            not_installed("mine", "/opt/mine"),
+            "mine isn't installed (/opt/mine is nowhere ptyro looks): install it, or set [agents.mine] command to its full path"
+        );
+        let none = no_agent();
+        assert!(none.contains("`ptyro setup` installs one"), "{none}");
+        assert!(none.contains("Antigravity for a Google account"), "{none}");
+        assert!(
+            none.contains("Gemini CLI is for Gemini API keys and enterprise accounts"),
+            "{none}"
+        );
+        assert!(
+            none.find("Claude Code") < none.find("Gemini CLI"),
+            "Gemini CLI isn't first: {none}"
+        );
+        let chat = no_chat_agent();
+        assert!(chat.contains("`ptyro setup` installs one"), "{chat}");
+        assert!(
+            chat.contains("Antigravity, for a Google account, runs in sessions but can't chat")
+        );
+        // The offers parse back to what they install; other mentions of the commands don't.
+        assert_eq!(setup_offer(&none), Some(vec![]));
+        assert_eq!(setup_offer(&chat), Some(vec![]));
+        let fix = format!("codex isn't installed: {}", install_fix("codex").unwrap());
+        assert_eq!(setup_offer(&fix), Some(vec!["codex".to_owned()]));
+        assert_eq!(
+            setup_offer("`ptyro install codex gh` installs them"),
+            Some(vec!["codex".into(), "gh".into()])
+        );
+        assert_eq!(setup_offer("setup is running: `ptyro install` (process 42)"), None);
+        assert_eq!(setup_offer("`ptyro install` installs"), None, "no names");
+        assert_eq!(setup_offer("`ptyro install codex` moves it to the vendor's installer"), None);
+        assert_eq!(setup_offer("`ptyro update codex` updates it"), None);
+        assert_eq!(
+            setup_offer("PR features (`wt new --pr`) need it; `ptyro install gh` installs it"),
+            Some(vec!["gh".to_owned()]),
+            "the offer, wherever it is in the message"
+        );
+        assert_eq!(setup_offer("nothing to see"), None);
     }
 }
 

@@ -1490,13 +1490,27 @@ pub(crate) async fn git(r: &mut Report) {
                 },
             );
         }
-        None => {
-            r.add("git", "version", Level::Problem, "git not found: projects and worktrees need it")
-        }
+        None => r.add(
+            "git",
+            "version",
+            Level::Problem,
+            format!("git not found: projects and worktrees need it{}", fix_for("git")),
+        ),
     }
     if which("gh").is_none() {
-        r.add("git", "gh", Level::Note, "gh not found: `wt new --pr` and PR features need it");
+        r.add(
+            "git",
+            "gh",
+            Level::Note,
+            format!("gh not found: pull requests (`wt new --pr`) need it{}", fix_for("gh")),
+        );
     }
+}
+
+/// The fix for a tool setup installs here (BOOT9), as "; `ptyro install gh` installs it"; else
+/// nothing.
+fn fix_for(program: &str) -> String {
+    ptyro_agents::locate::install_fix(program).map(|f| format!("; {f}")).unwrap_or_default()
 }
 
 pub(crate) async fn agents(config: &Config, r: &mut Report) {
@@ -1508,14 +1522,14 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
         let configured = config.agents.contains_key(&agent);
         let Some(found) = ptyro_agents::locate::find(&argv[0], &path_var) else {
             if configured {
-                let fix = ptyro_agents::locate::install_hint(&argv[0])
-                    .map(|h| format!(": `{h}` installs it"))
+                let fix = ptyro_agents::locate::install_fix(&argv[0])
+                    .map(|f| format!(": {f}"))
                     .unwrap_or_default();
                 r.add(S, &agent, Level::Problem, format!("{} not found{fix}", argv[0]));
             }
             continue;
         };
-        any |= agent != "antigravity";
+        any = true;
         let path = PathBuf::from(found.describe());
         let adapter = ptyro_agents::adapter_name(config, &agent);
         // `fake-agent` and wrappers may not answer --version: only ask real CLIs.
@@ -1551,12 +1565,7 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
         }
     }
     if !any {
-        r.add(
-            S,
-            "agents",
-            Level::Warn,
-            "no agent found: install one, e.g. `npm i -g @google/gemini-cli` (Gemini CLI), `npm i -g @openai/codex` (Codex) or `curl -fsSL https://claude.ai/install.sh | bash` (Claude Code)",
-        );
+        r.add(S, "agents", Level::Warn, ptyro_agents::locate::no_agent());
     }
     // Gemini CLI stopped serving unpaid / Google One accounts on 2026-06-18 (RESEARCH G3).
     let gemini_key = std::env::var_os("GEMINI_API_KEY").is_some()
@@ -1566,11 +1575,18 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
             .values()
             .any(|p| p.gemini.as_ref().and_then(|g| g.def()).is_some_and(|d| d.api_key.is_some()));
     if ptyro_agents::locate::find("gemini", &path_var).is_some() && !gemini_key {
+        // Antigravity offered where it isn't installed yet (BOOT9).
+        let agy = match ptyro_agents::locate::find("agy", &path_var) {
+            Some(_) => String::new(),
+            None => ptyro_agents::locate::install_fix("agy")
+                .map(|f| format!(": {f}"))
+                .unwrap_or_default(),
+        };
         r.add(
             S,
             "gemini",
             Level::Note,
-            "Gemini CLI no longer serves consumer Google accounts (since 2026-06-18); use the Antigravity CLI (`agy`) with a personal account",
+            format!("Gemini CLI no longer serves consumer Google accounts (since 2026-06-18); with a personal Google account, use Antigravity (`agy`){agy}"),
         );
     }
 }
@@ -1727,6 +1743,14 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    /// BOOT9: git or gh missing offers setup, which the TUI's badge and the web's Health act on.
+    #[test]
+    fn a_missing_tool_offers_setup() {
+        assert_eq!(super::fix_for("git"), "; `ptyro install git` installs it");
+        assert_eq!(super::fix_for("gh"), "; `ptyro install gh` installs it");
+        assert_eq!(super::fix_for("my-own-tool"), "");
+    }
+
     #[test]
     fn codex_says_whether_its_commands_run_in_a_windows_sandbox() {
         use super::{Level, codex_sandbox};

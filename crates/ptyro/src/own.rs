@@ -133,9 +133,7 @@ async fn wsl_half(prefer: Option<&str>) -> WslHalf {
         let Ok(argv) = wsl_setup::ptyro_args(&d, &["--version".to_owned()]) else { continue };
         let ran = tokio::time::timeout(
             std::time::Duration::from_secs(20),
-            tokio::process::Command::new(ptyro_client::remote::wsl_exe())
-                .args(&argv)
-                .env("WSL_UTF8", "1")
+            ptyro_client::remote::hidden_wsl(&argv)
                 .stdin(Stdio::null())
                 .kill_on_drop(true)
                 .output(),
@@ -235,9 +233,11 @@ async fn other_version(half: &Half) -> Option<String> {
     let mut args: Vec<String> = args.to_vec();
     args.truncate(args.len().saturating_sub(3));
     args.push("--version".into());
-    let out = tokio::process::Command::new(prog)
-        .args(&args)
-        .env("WSL_UTF8", "1")
+    let mut cmd = std::process::Command::new(prog);
+    cmd.args(&args).env("WSL_UTF8", "1");
+    // A question whose answer is read: no window (SPEC §20.12).
+    ptyro_core::os::no_window(&mut cmd);
+    let out = tokio::process::Command::from(cmd)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

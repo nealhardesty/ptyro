@@ -55,6 +55,9 @@ export const tipOf = (k: string): string => tips[k] ?? "";
 export const ui = {
   render: () => {},
   toast: (_text: string) => {},
+  /// A request refused: its message, with what fixes it where there is one (BOOT9: an agent that
+  /// isn't installed offers setup), else a toast.
+  fail: (text: string) => ui.toast(text),
   /// A page's top bar: the title, a back arrow, and extra controls on its right.
   header: (title: string, _back: boolean | string, ..._extra: Child[]): HTMLElement => h("header", {}, h("h1", {}, title)),
   /// Turn notifications on for this device.
@@ -89,7 +92,7 @@ export async function ask<T = any>(req: object, ok?: string): Promise<T | undefi
     if (ok) ui.toast(ok);
     return r as T;
   } catch (e) {
-    ui.toast(errText(e));
+    ui.fail(errText(e));
     return undefined;
   }
 }

@@ -252,6 +252,30 @@ fn an_agent_that_isnt_installed_is_a_cross_and_the_others_answer() {
     assert!(String::from_utf8_lossy(&bad.stderr).contains("no agent named"), "{bad:?}");
 }
 
+/// BOOT9: no agent to chat with, or a session's agent that isn't installed, offers setup (the
+/// clients act on it: the TUI's checklist, the web's setup page), naming Antigravity for Google.
+#[test]
+fn a_missing_agent_offers_setup_not_the_os_error() {
+    let w = World::with(&[], &["claude", "codex", "gemini", "opencode"]);
+    let out = w.cli(&["chat", "new", "hello"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("No agent that can chat is installed: `ptyro setup` installs one"),
+        "{err}"
+    );
+    assert!(err.contains("Antigravity, for a Google account, runs in sessions but can't chat"));
+    assert!(!err.contains("npm i -g"), "a command to copy, no longer: {err}");
+    // A session of an agent that isn't there: what it is, not "No such file or directory".
+    let out = w.cli(&["new", "-d", "--agent", "codex"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("codex isn't installed (/nonexistent/ptyro-test/codex is nowhere ptyro looks): install it, or set [agents.codex] command to its full path"),
+        "{err}"
+    );
+}
+
 #[test]
 fn stop_stops_every_agent_and_a_compare_is_busy_until_then() {
     let w = World::new(&[]);

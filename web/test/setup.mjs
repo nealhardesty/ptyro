@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -269,4 +269,31 @@ console.log("setup: ok");
   assert.equal(webSteps(plan).length, 0);
   // A run asks to move only what was ticked where offered.
   assert.deepEqual(movesOf({ entries: [{ id: "codex", picked: true, moves: move }, { id: "claude", picked: false, moves: move }, { id: "gh", picked: true }, { id: "codex", side: "wsl", picked: true, moves: move }] }), ["codex"]);
+}
+
+// BOOT9: a message that an agent or tool isn't installed offers setup (the daemon's words,
+// `ptyro_agents::locate`): the checklist's defaults for "no agent", that one ticked for a missing
+// one; nothing for a lock held by `ptyro install`, a move, or an update.
+{
+  const noAgent = "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex, or Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts)";
+  assert.deepEqual(setupOffer(noAgent), []);
+  assert.deepEqual(setupOffer("No agent that can chat is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account, runs in sessions but can't chat)"), []);
+  assert.deepEqual(setupOffer("codex isn't installed (codex is nowhere ptyro looks): `ptyro install codex` installs it"), ["codex"]);
+  assert.deepEqual(setupOffer("gh not found: pull requests (`wt new --pr`) need it; `ptyro install gh` installs it"), ["gh"]);
+  assert.equal(setupOffer("setup is running already: `ptyro install` (process 42)"), null);
+  assert.equal(setupOffer("`ptyro install codex` moves it to the vendor's installer"), null);
+  assert.equal(setupOffer("Codex 0.170.0 is out: `ptyro update codex` updates it"), null);
+  assert.equal(setupOffer("mine isn't installed (/opt/mine is nowhere ptyro looks): install it, or set [agents.mine] command to its full path"), null);
+}
+
+// A setup offer's button names what the checklist calls it: Antigravity, never its program
+// `agy` (BOOT9 review); the agent's name while no plan is known; the defaults with no picks.
+{
+  const agents = [{ name: "antigravity", program: "agy" }, { name: "codex", program: "codex" }];
+  const entries = [{ id: "antigravity", name: "Antigravity" }, { id: "gh", name: "GitHub CLI" }];
+  assert.equal(setupLabel(["agy"], agents, entries), "Set up Antigravity");
+  assert.equal(setupLabel(["agy", "gh"], agents, entries), "Set up Antigravity, GitHub CLI");
+  assert.equal(setupLabel(["agy"], agents, []), "Set up antigravity");
+  assert.equal(setupLabel(["codex"], agents, entries), "Set up codex");
+  assert.equal(setupLabel([], agents, entries), "Set up agents and tools");
 }

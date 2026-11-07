@@ -37,7 +37,7 @@ pub use fake::installer as fake_installer;
 pub use host::registry_path;
 pub use host::{
     Elevation, Host, Installed, RealHost, Step, expand_vars, host, path_dirs, path_with,
-    prepend_entries, refreshed_path,
+    prepend_entries, refreshed_path, stored_path,
 };
 pub use run::{Admin, Event, Report, Sided, in_use, run};
 

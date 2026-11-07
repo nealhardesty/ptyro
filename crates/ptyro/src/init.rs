@@ -124,10 +124,8 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     section("agents");
     let mut r = crate::doctor::Report::default();
     crate::doctor::agents(&current, &mut r).await;
-    let none = r.0.is_empty();
-    if none {
-        eprintln!("  none found on PATH (claude, codex, gemini, opencode, agy)");
-    }
+    // The no-agent line (it offers `ptyro setup`, BOOT9): nothing was found.
+    let none = r.0.iter().any(|c| c.name == "agents");
     crate::doctor::print_checks(&r);
     // The setup checklist (BOOT2): the agents and tools to install, then their logins. Asked
     // first (yes by default when no agent is here); never with --yes or --dry-run.

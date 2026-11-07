@@ -674,8 +674,18 @@ const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro config edit", "config.edit", "edit the config"),
 ];
 
-/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]).
+/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]). A missing agent or tool
+/// (`` `ptyro install codex` installs it ``, `` `ptyro setup` installs one ``) opens the setup
+/// checklist with it ticked (BOOT9).
 pub fn offer_for(message: &str) -> Option<Offer> {
+    if let Some(names) = ptyro_agents::locate::setup_offer(message) {
+        let arg = Some(names.join(" ")).filter(|a| !a.is_empty());
+        let label = if names.is_empty() { "set up agents" } else { "set it up" };
+        return Some(Offer {
+            label: format!("{label} (the checklist)"),
+            then: Then::Run(Command { action: "app.setup", arg }),
+        });
+    }
     SUGGESTED
         .iter()
         .find(|(cli, _, _)| message.contains(cli))
@@ -1981,7 +1991,12 @@ impl App {
             && self.setup_run.is_some()
         {
             let name = spec.name.clone();
-            self.setup_spawned(name.as_deref(), res.is_ok());
+            // Asked to agree first: the Confirm overlay may still start it (a `y`), so the run
+            // is kept until it does, or the person declines (BOOT2's M2).
+            let asked = matches!(&res, Err(e) if e.code == ErrorCode::NeedsConfirmation);
+            if !asked {
+                self.setup_spawned(name.as_deref(), res.is_ok());
+            }
         }
         // A reply that opens a dialog must not replace the box someone is typing in: it is
         // held aside while the reply is handled, then put back (and the reply said so).
@@ -3355,7 +3370,11 @@ impl App {
                 );
             }
             "first.run" => self.open_first_run(),
-            "app.setup" => self.open_setup(None, None),
+            // With names: those ticked (a message's offer, BOOT9).
+            "app.setup" => self.open_setup(
+                cmd.arg.as_deref().map(|a| a.split_whitespace().map(str::to_owned).collect()),
+                None,
+            ),
             "app.update" => self.update_agents(
                 cmd.arg.as_deref().unwrap_or("").split_whitespace().map(str::to_owned).collect(),
             ),
@@ -5536,6 +5555,14 @@ impl App {
                         let why = "not sent: no chat was made (the message is back to edit)";
                         self.chat_not_made(*token, text.clone(), why.into());
                     }
+                }
+                // The setup checklist's split declined: it never starts, so the run is over.
+                (
+                    KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter,
+                    Confirmed::Spawn(spec, _),
+                ) => {
+                    let name = spec.name.clone();
+                    self.setup_spawned(name.as_deref(), false);
                 }
                 (KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter, _) => {}
                 _ => self.overlay = Some(Overlay::Confirm { action, text }),
@@ -8361,6 +8388,33 @@ mod tests {
         assert_eq!(app.focus, Focus::Sidebar);
     }
 
+    /// BOOT9: an agent that isn't installed (a session or a chat refused for it) offers the setup
+    /// checklist with it ticked, on `toast.act`; no agent at all offers the checklist's defaults.
+    #[test]
+    fn a_missing_agent_offers_the_setup_checklist() {
+        let mut app = app();
+        let missing = ptyro_agents::locate::not_installed("codex", "codex");
+        let refused = ptyro_core::Error::new(ErrorCode::NotFound, missing.clone());
+        app.handle_reply(
+            Pending::Spawned { split: None, spec: Box::default(), back: false },
+            Err(refused),
+        );
+        let toast = app.toast.take().unwrap();
+        assert_eq!(toast.text, format!("{missing} · C-q u set it up (the checklist)"));
+        let Some(Offer { then: Then::Run(cmd), .. }) = toast.offer else {
+            panic!("{}", toast.text)
+        };
+        assert_eq!((cmd.action, cmd.arg.as_deref()), ("app.setup", Some("codex")));
+        // A chat with no agent to answer it: the checklist as it opens by itself.
+        app.chat_not_made(0, "hello".into(), ptyro_agents::locate::no_chat_agent());
+        let toast = app.toast.take().unwrap();
+        assert!(toast.text.ends_with("· C-q u set up agents (the checklist)"), "{}", toast.text);
+        let Some(Offer { then: Then::Run(cmd), .. }) = toast.offer else {
+            panic!("{}", toast.text)
+        };
+        assert_eq!((cmd.action, cmd.arg), ("app.setup", None));
+    }
+
     /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.
     #[test]
     fn no_toast_names_a_command_to_type() {
@@ -9058,6 +9112,17 @@ mod tests {
             Err(ptyro_core::Error::new(ErrorCode::Internal, "no pty")),
         ));
         assert!(app.setup_run.is_none(), "a failed spawn frees it");
+        // 1b. Asked to agree first: kept while the question is up (a `y` still starts it); a
+        // `n` means it never starts, which frees it.
+        app.setup_run = run();
+        app.on_reply(AppMsg::Reply(
+            spawned(),
+            Err(ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?")),
+        ));
+        assert!(app.setup_run.is_some(), "kept while the question is up");
+        assert!(matches!(app.overlay, Some(Overlay::Confirm { action: Confirmed::Spawn(..), .. })));
+        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'n' }, Mods::NONE));
+        assert!(app.setup_run.is_none(), "declined: freed");
         // 2. Started, then closed by the person before the list ever showed it running.
         app.setup_run = run();
         let s = session("ptyro-install");
@@ -9194,8 +9259,14 @@ mod tests {
         assert!(
             app.toast.as_ref().unwrap().text.contains("setup is already running (from the web app")
         );
-        // Let go: the checklist installs again.
+        // Let go: the checklist installs again. Another test thread's fork can hold a copy of the
+        // lock's descriptor until its exec, so wait for the lock to be free, not just dropped.
         drop(held);
+        let free_by = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ptyro_agents::setup::lock::Lock::held_by(&app.paths.state).is_some() {
+            assert!(std::time::Instant::now() < free_by, "the lock never came free");
+            std::thread::yield_now();
+        }
         app.first_run = Some(FirstRun {
             setup: crate::setup_list::tests::one(&[]),
             only_setup: true,

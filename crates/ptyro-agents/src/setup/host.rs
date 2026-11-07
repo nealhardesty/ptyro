@@ -194,6 +194,17 @@ pub fn prepend_entries(raw: &str, dirs: &[String]) -> String {
     dirs.iter().map(String::as_str).chain(rest).collect::<Vec<_>>().join(";")
 }
 
+/// The folders in a stored `Path`, as a new terminal reads them: each trimmed and unquoted
+/// (`"C:\Program Files\x"` is common there, and a `"` would make `join_paths` refuse the lot).
+#[cfg(any(windows, test))]
+pub fn path_entries(text: &str) -> Vec<PathBuf> {
+    text.split(';')
+        .map(|e| e.trim().trim_matches('"').trim())
+        .filter(|e| !e.is_empty() && !e.contains('"'))
+        .map(PathBuf::from)
+        .collect()
+}
+
 /// The machine's and the user's stored `Path` on Windows, expanded: what a new terminal gets.
 #[cfg(windows)]
 pub fn registry_path() -> Vec<PathBuf> {
@@ -207,9 +218,24 @@ pub fn registry_path() -> Vec<PathBuf> {
         .flatten()
         .flat_map(|r| {
             let text = if r.expand { expand_vars(&r.text, var) } else { r.text };
-            text.split(';').filter(|e| !e.trim().is_empty()).map(PathBuf::from).collect::<Vec<_>>()
+            path_entries(&text)
         })
         .collect()
+}
+
+/// The folders installers stored in the `Path` a new terminal gets, for a process that has run
+/// since (the daemon, SPEC §24.2): Windows' registry; on the fake machine a test names
+/// (`PTYRO_TEST_SETUP`, debug builds), its `stored-path`. `None` elsewhere: a Unix `PATH` is
+/// the shell's, with nothing stored to read again (a vendor's own folder is one `locate`
+/// searches).
+pub fn stored_path() -> Option<Vec<PathBuf>> {
+    if let Some(dir) = ptyro_core::test_knob("PTYRO_TEST_SETUP") {
+        return Some(super::fake::stored(Path::new(&dir)));
+    }
+    #[cfg(windows)]
+    return Some(registry_path());
+    #[cfg(not(windows))]
+    None
 }
 
 /// This computer.

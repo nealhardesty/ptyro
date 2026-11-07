@@ -467,6 +467,79 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     assert!(m.calls().iter().all(|c| !c.contains("opencode")), "{:?}", m.calls());
 }
 
+/// The final review's I1: a daemon that was running before setup installed an agent starts it
+/// afterwards, without a restart. On Windows the installer adds its folder only to the
+/// registry's `Path`, which a running process never sees; the fake models that with
+/// `path_adds` (its `stored-path`), and the daemon takes it in when the run ends and before it
+/// looks for an agent.
+#[tokio::test]
+async fn an_agent_setup_installed_starts_without_a_daemon_restart() {
+    let m = Machine::new(fresh_linux(json!({ "path_adds": { "codex": "Codex" } })));
+    // Where the "installer" puts codex: off every PATH the daemon has, and nowhere `locate`
+    // looks, until the stored Path names it.
+    let bin = m.fake().join("Codex");
+    std::fs::create_dir_all(&bin).unwrap();
+    if cfg!(windows) {
+        std::fs::write(bin.join("codex.cmd"), "@ping -n 60 127.0.0.1 >nul\r\n").unwrap();
+    } else {
+        let f = bin.join("codex");
+        std::fs::write(&f, "#!/bin/sh\nsleep 60\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    let fake = m.fake().display().to_string();
+    let home = m.home().display().to_string();
+    let mut env = vec![("PTYRO_TEST_SETUP", fake.as_str()), ("HOME", home.as_str())];
+    // No real codex the developer has on PATH may answer for the fake's.
+    if cfg!(unix) {
+        env.push(("PATH", "/usr/bin:/bin"));
+    }
+    let d = TempDaemon::start_with_env(BIN, &env).unwrap();
+    let mut c = d.client().await.unwrap();
+    let codex = |r: Reply| match r {
+        Reply::Agents { agents, .. } => agents.into_iter().find(|a| a.name == "codex").unwrap(),
+        r => panic!("not agents: {r:?}"),
+    };
+    assert!(!codex(c.request(Request::Agents).await.unwrap()).installed);
+    let new = || d.cmd().args(["new", "-d", "--agent", "codex"]).output().unwrap();
+    let o = new();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("codex isn't installed"), "{o:?}");
+
+    let mut pushes = c.pushes();
+    c.send(ClientMsg::WatchEvents).unwrap();
+    let Reply::SetupStarted { .. } = c
+        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
+        .await
+        .unwrap()
+    else {
+        panic!("not started");
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(Instant::now() < deadline, "no report");
+        if let Ok(Some(ServerMsg::Event {
+            event:
+                DomainEvent::SetupProgress {
+                    event: ptyro_agents::setup::Event::Finished { report },
+                    ..
+                },
+        })) = tokio::time::timeout(Duration::from_millis(500), pushes.recv()).await
+        {
+            assert_eq!(report.done, ["codex"]);
+            break;
+        }
+    }
+    let found = codex(c.request(Request::Agents).await.unwrap());
+    assert!(found.installed, "{found:?}");
+    assert!(found.found.unwrap_or_default().contains("Codex"), "found in the stored folder");
+    let o = new();
+    assert!(o.status.success(), "a codex session starts: {o:?}");
+}
+
 /// One install at a time on a machine, from any client (the machine's setup lock): a second
 /// `ptyro install` while one runs says where the first came from and installs nothing; the first
 /// carries on, and afterwards the lock is free again.

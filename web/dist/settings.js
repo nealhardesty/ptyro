@@ -6,7 +6,7 @@ import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
 import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "more": "Everything beyond the lists: health, devices, profiles, the config, the daemon",
@@ -58,6 +58,7 @@ const ACTIONS = {
     "updates.self": "Update ptyro itself on the computer: the release is downloaded, checked against its SHA256SUMS and put in place, then the daemon is upgraded live (every session carries on); on Windows with WSL both halves. A binary only an administrator can replace shows the command to run there",
     "setup.move": "Move an agent installed another way (npm, Homebrew, WinGet) to the vendor's recommended installer: the new one is installed and checked first, then the old copy is removed; settings and logins stay. Tick it in the checklist, or from its Health finding",
     "setup.keep": "Keep an agent installed another way as it is: the move isn't offered again, and it updates the way it's installed (Settings → Updates → keep_installer)",
+    "setup.offer": "An agent or tool that isn't installed (a chat, a new task, a Health finding) offers setup: the checklist opens with it ticked, to install on the computer",
     "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
     "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 };
@@ -169,6 +170,11 @@ function fixesFor(c) {
         out.push({ title: tip("setup.move"), label: `Move ${mv.name} to ${viaWords(mv.to)}`, hint: mv.admin ? "On the computer: removing the old copy needs administrator rights" : "The new one first, then the old removed", run: () => askMove(mv) });
         out.push({ title: tip("setup.keep"), label: `Keep ${mv.name} with ${viaWords(mv.from)}`, hint: "Not offered again", run: () => void keepInstaller(mv.program, mv.name, mv.from) });
     }
+    // An agent or tool that isn't installed (BOOT9): the checklist, with it ticked.
+    // Only a device that can install (full scope) is offered it.
+    const picks = ["agents", "git"].includes(c.section) && conn.scope === "full" ? setupOffer(c.text) : null;
+    if (picks)
+        out.push({ title: tip("setup.offer"), label: offerLabel(picks), hint: "The checklist, to install on the computer", run: () => openSetup(picks) });
     if (c.section === "updates") {
         out.push({ title: tip("updates.check"), label: "Look for newer versions now", run: () => void checkUpdates() });
         out.push({ label: "Update settings", hint: "Turn the daily look off, or skip an agent or a version", run: () => go("#/settings/updates") });
@@ -733,7 +739,7 @@ const setupPlan = new Cache((key) => {
         // The checklist and the logins as they are after a run that ended out of this page's sight
         // (or that a join found finished): this survey may be from before its end.
         if (said === "ended" || said === "done" || (said === "joined" && installRun.report)) {
-            setupLogins.reload("");
+            reloadLogins();
             setTimeout(() => setupPlan.refresh(installKey), 0);
         }
         if (said)
@@ -770,7 +776,7 @@ export function setupEvent(e) {
         askPlan();
     if (said === "done") {
         setupPlan.reload();
-        setupLogins.reload("");
+        reloadLogins();
     }
     ui.render();
 }
@@ -783,6 +789,32 @@ export function setupConnected() {
 /// This device saw a coding agent on the computer: the banner stops asking (a survey each time).
 const AGENT_SEEN = "ptyro.setup.agent";
 const bannerRetry = { wait: 5_000, timer: 0 };
+/// The checklist with `picks` ticked (none: its defaults): a message's setup offer (BOOT9).
+export function openSetup(picks) {
+    installKey = picks.join(",");
+    go("#/setup");
+    askPlan();
+}
+/// A refused request that says an agent or tool isn't installed (BOOT9: "`ptyro install codex`
+/// installs it", "`ptyro setup` installs one"): a sheet with its words and Set up, which opens
+/// the checklist with it ticked. False for any other message (the caller toasts it).
+export function offerSetup(text) {
+    // A device paired for less than full scope can't install: the message alone (a toast).
+    if (conn.scope !== "full")
+        return false;
+    const picks = setupOffer(text);
+    if (!picks)
+        return false;
+    const s = sheet(picks.length ? "Not installed" : "No agent installed", [h("p", { class: "intro" }, text)], [
+        h("button", { onclick: () => s.close() }, "Not now"),
+        h("button", { class: "primary", title: tip("setup.offer"), onclick: () => { s.close(); openSetup(picks); } }, offerLabel(picks)),
+    ]);
+    return true;
+}
+/// A setup offer's button, in the checklist's names (a plan, when one is known here).
+function offerLabel(picks) {
+    return setupLabel(picks, data.agents, setupPlan.get(installKey)?.plan?.entries ?? []);
+}
 /// The first-run banner on the Sessions tab: no coding agent on the computer yet (BOOT3). Only
 /// for a device that can install (`full`), and never again once this device has seen an agent.
 export function setupBanner() {
@@ -932,7 +964,9 @@ async function startInstall(picks, wslPicks, moves = []) {
     ui.render();
 }
 // ── logins (BOOT4: each tool's own sign-in, confirmed by its status command, SPEC §24.4) ─────
-const setupLogins = new Cache(() => host("login.list"));
+/// Keyed by side: "" the daemon's computer, "wsl" a Windows daemon's WSL distro (its own ptyro).
+const setupLogins = new Cache((side) => host("login.list", side ? { where: side } : {}));
+const reloadLogins = () => setupLogins.reload();
 const LOGIN_STATE = {
     logged_in: "✓ logged in",
     logged_out: "not logged in",
@@ -947,17 +981,29 @@ function loginsSection() {
     const waiting = pending(setupLogins, "", "Checking each login…");
     if (waiting || !r)
         return section(title, waiting ?? h("p", { class: "sub" }, "Checking…"));
-    const rows = r.logins.filter((l) => l.state !== "missing");
     const plan = setupPlan.get(installKey)?.plan;
     const wsl = plan?.wsl?.state === "usable" ? plan.wsl.distro : null;
-    return section(title, h("p", { class: "sub", title: tip("setup.login") }, "One account each, through each tool's own sign-in. Log in runs it in a session here: follow the link it shows and enter its code (at the computer, it may open the browser there). ptyro never sees the credentials; each tool's own status command says whether it worked."), rows.length
-        ? h("div", { class: "rows" }, ...rows.map((l) => row(l.name, `${LOGIN_STATE[l.state] ?? l.state}${l.state === "logged_in" ? "" : ` · runs ${l.command}`}`, l.state === "logged_in" ? null : h("button", { class: "small", title: tip("setup.login"), onclick: () => void startLogin(l.id, l.name) }, "Log in"))))
-        : h("p", { class: "sub" }, "No agent or GitHub CLI is installed yet: install them above, then log in here."), wsl ? h("p", { class: "sub" }, "For WSL's (", wsl, "): run ", h("code", {}, "ptyro login --where wsl"), " on the computer.") : null, bar(h("button", { onclick: () => setupLogins.reload("") }, "Check again")), h("p", { class: "sub" }, r.profiles));
+    // One list per side: the computer's, and on a Windows daemon with WSL, WSL's too.
+    const list = (side, logins) => {
+        const rows = logins.filter((l) => l.state !== "missing");
+        return rows.length
+            ? h("div", { class: "rows" }, ...rows.map((l) => row(l.name, `${LOGIN_STATE[l.state] ?? l.state}${l.state === "logged_in" ? "" : ` · runs ${l.command}`}`, l.state === "logged_in" ? null : h("button", { class: "small", title: tip("setup.login"), onclick: () => void startLogin(l.id, l.name, side) }, "Log in"))))
+            : h("p", { class: "sub" }, "No agent or GitHub CLI is installed yet: install them above, then log in here.");
+    };
+    const wslPart = () => {
+        if (!wsl)
+            return [];
+        const w = setupLogins.get("wsl");
+        const failed = setupLogins.error("wsl");
+        return [h("h3", { class: "day" }, `WSL (${wsl})`),
+            w ? list("wsl", w.logins) : h("p", { class: "sub" }, failed ? `WSL's logins can't be checked: ${failed}` : "Checking WSL's logins…")];
+    };
+    return section(title, h("p", { class: "sub", title: tip("setup.login") }, "One account each, through each tool's own sign-in. Log in runs it in a session here: follow the link it shows and enter its code (at the computer, it may open the browser there). ptyro never sees the credentials; each tool's own status command says whether it worked."), wsl ? h("h3", { class: "day" }, "Windows") : null, list("", r.logins), ...wslPart(), bar(h("button", { onclick: reloadLogins }, "Check again")), h("p", { class: "sub" }, r.profiles));
 }
-async function startLogin(id, name) {
-    const r = await doHost("login.start", { id });
+async function startLogin(id, name, side) {
+    const r = await doHost("login.start", side ? { id, where: side } : { id });
     if (r) {
-        ui.toast(`Logging in to ${name}: its own sign-in; come back and Check again when it's done`);
+        ui.toast(`Logging in to ${name}${side === "wsl" ? " in WSL" : ""}: its own sign-in; come back and Check again when it's done`);
         go(`#/s/${enc(r.session)}`);
     }
 }

@@ -20,6 +20,15 @@ fn opt(a: &Value, k: &str) -> Option<String> {
     a[k].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
+/// A login op's side: `local` (the default) or `wsl`.
+fn login_place(a: &Value) -> Result<&'static str, Error> {
+    match opt(a, "where").as_deref() {
+        None | Some("local") => Ok("local"),
+        Some("wsl") => Ok("wsl"),
+        Some(w) => Err(Error::invalid(format!("where: {w}? local or wsl"))),
+    }
+}
+
 /// Run ptyro itself with `args` (the CLI's own non-interactive commands) and say what it did.
 async fn cli(args: &[&str]) -> Result<Value, Error> {
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
@@ -261,8 +270,11 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
         }
 
         // ── logins (BOOT4): where each stands, and one run in a session the web shows ──
+        // `where`: `local` (default, the daemon's computer) or `wsl` (a Windows daemon's WSL
+        // distro, through WSL's own ptyro).
         "login.list" => {
-            let r = cli(&["login", "--check", "--json", "--where", "local"]).await?;
+            let place = login_place(a)?;
+            let r = cli(&["login", "--check", "--json", "--where", place]).await?;
             let rows: Value =
                 serde_json::from_str(r["out"].as_str().unwrap_or("")).map_err(|_| {
                     Error::internal(format!("ptyro login --check: {}", notes(&r).join("; ")))
@@ -270,7 +282,7 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "logins": rows, "profiles": ptyro_agents::setup::login::PROFILES_HINT }))
         }
         "login.start" => {
-            let info = crate::logins::spawn(ctx, str_of(a, "id")?).await?;
+            let info = crate::logins::spawn(ctx, str_of(a, "id")?, login_place(a)?).await?;
             Ok(json!({ "session": info.id.full() }))
         }
 

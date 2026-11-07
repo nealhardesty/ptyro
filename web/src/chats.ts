@@ -6,7 +6,7 @@
 import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, ago, ask, confirm, download, errText, form, h, menu, patch, ui, views } from "./kit.js";
+import { actions, ago, ask, confirm, download, errText, form, go, h, menu, patch, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
 import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
@@ -374,7 +374,7 @@ async function askAgreed<T = any>(req: Record<string, unknown>, ok?: string): Pr
     if (ok) ui.toast(ok);
     return r;
   } catch (e) {
-    if ((e as Error).message !== "cancelled") ui.toast(errText(e));
+    if ((e as Error).message !== "cancelled") ui.fail(errText(e));
     return undefined;
   }
 }
@@ -534,7 +534,11 @@ function agentNames(): string[] {
 function pickAgent(c: Chat): void {
   // Each with where ptyro found it (an npx cache, nvm…), so a surprising copy is visible.
   const where = (a: string) => data.agents.find((x) => x.name === a)?.found ?? "";
-  menu("Which agent? The conversation carries over", agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })));
+  menu("Which agent? The conversation carries over", [
+    ...agentNames().map((a) => ({ title: tip("chat.agent"), label: a, hint: [a === c.agent ? "now" : "", where(a)].filter(Boolean).join(" · "), run: () => update(c, { agent: a }, `The next message goes to ${a}`) })),
+    // Another one is a tap away (BOOT9), on a device that can install.
+    ...(conn.scope === "full" ? [{ title: tipOf("setup.offer"), label: "Install another agent…", hint: "The setup checklist", run: () => go("#/setup") }] : []),
+  ]);
 }
 
 /// Whether `presets` is the daemon's list (yours too), not the built-in three it starts as.
@@ -741,7 +745,7 @@ async function send(): Promise<void> {
         location.hash = `#/c/${encodeURIComponent(info.id)}`;
       }
     }
-  } catch (e) { ui.toast(errText(e)); }
+  } catch (e) { ui.fail(errText(e)); }
   p.sending = false;
 }
 

@@ -12,7 +12,7 @@ export async function withConfirm(req, key) {
     }
     catch (e) {
         if (e.code !== "needs_confirmation") {
-            ui.toast(errText(e));
+            ui.fail(errText(e));
             return undefined;
         }
         return new Promise((ok) => {
@@ -23,7 +23,7 @@ export async function withConfirm(req, key) {
                     ok(await send(true));
                 }
                 catch (e2) {
-                    ui.toast(errText(e2));
+                    ui.fail(errText(e2));
                     ok(undefined);
                 }
             }, false);

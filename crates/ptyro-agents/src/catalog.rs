@@ -208,6 +208,11 @@ pub struct Method {
     /// copy only once this one answers). Empty: not known, and no move to it is offered.
     #[serde(default)]
     pub places: Vec<String>,
+    /// A vendor installer's: the folders it puts its program in, the ones a new terminal's
+    /// `PATH` gets (same forms as `places`). `locate` searches them, so what it installed is
+    /// found before the daemon or a shell picks up that `PATH`.
+    #[serde(default)]
+    pub bin: Vec<String>,
     /// The item updates itself in the background when installed this way.
     #[serde(default)]
     pub auto_update: bool,
@@ -700,6 +705,18 @@ mod tests {
                     );
                 }
                 assert!(m.update.is_some() || m.auto_update, "{}: no way to update", i.id);
+            }
+        }
+        // `locate` finds a vendor installer's copy through its `bin` (the final review's I2):
+        // every vendor method that knows where its copy is says where its program goes too.
+        for i in items() {
+            for m in i.methods.iter().filter(|m| m.via == Via::Vendor && !m.places.is_empty()) {
+                assert!(
+                    !m.bin.is_empty(),
+                    "{}: the vendor's installer on {:?} names no `bin`",
+                    i.id,
+                    m.platforms
+                );
             }
         }
         // The design's recommended methods (RESEARCH G, 2026-11-06).

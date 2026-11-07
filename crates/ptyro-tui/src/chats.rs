@@ -1899,12 +1899,9 @@ impl App {
                 let prog = ptyro_agents::command(&self.config, &n)
                     .and_then(|a| a.into_iter().next())
                     .unwrap_or_else(|| n.clone());
-                let detail = match ptyro_agents::locate::find(&prog, &path) {
-                    Some(f) => f.describe(),
-                    None => ptyro_agents::locate::install_hint(&prog)
-                        .map_or_else(|| "not found".into(), |h| format!("not installed: {h}")),
-                };
-                Item { detail, label: n.clone(), key: None, target: Target::Agent(n) }
+                let found = ptyro_agents::locate::find(&prog, &path).map(|f| f.describe());
+                let (detail, target) = agent_row(&n, &prog, found);
+                Item { detail, label: n, key: None, target }
             })
             .collect();
         self.overlay = Some(Overlay::Picker {
@@ -1999,7 +1996,10 @@ impl App {
             None => {}
         }
         if let Some(e) = err {
-            self.toast(e);
+            match crate::app::offer_for(&e) {
+                Some(offer) => self.toast_offer(e, true, offer),
+                None => self.toast(e),
+            }
         }
         self.dirty = true;
     }
@@ -2019,7 +2019,11 @@ impl App {
                 self.chat_drafts.insert(String::new(), d);
             }
         }
-        self.toast(err);
+        // No agent to chat with offers the setup checklist (BOOT9).
+        match crate::app::offer_for(&err) {
+            Some(offer) => self.toast_offer(err, true, offer),
+            None => self.toast(err),
+        }
         self.dirty = true;
     }
 
@@ -3031,9 +3035,42 @@ fn short(id: &str) -> String {
     id[id.len().saturating_sub(6)..].to_owned()
 }
 
+/// One row of the chat's agent picker: where its program is, and picking it switches to it; or,
+/// not installed but setup knows how, ⏎ opens the setup checklist with it ticked (`app.setup
+/// <program>`, as a toast's offer does, BOOT9); else "not found".
+fn agent_row(name: &str, prog: &str, found: Option<String>) -> (String, Target) {
+    match found {
+        Some(at) => (at, Target::Agent(name.to_owned())),
+        None if ptyro_agents::locate::install_fix(prog).is_some() => (
+            "not installed: ⏎ sets it up".into(),
+            Target::Action(Command { action: "app.setup", arg: Some(prog.to_owned()) }),
+        ),
+        None => ("not found".into(), Target::Agent(name.to_owned())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// BOOT9 review: an agent the picker lists that isn't installed opens the setup checklist
+    /// with it ticked on ⏎ (as the toast's offer does), instead of naming a key that opens the
+    /// defaults.
+    #[test]
+    fn a_missing_agent_in_the_picker_sets_itself_up() {
+        let (detail, target) = agent_row("antigravity", "agy", None);
+        assert_eq!(detail, "not installed: ⏎ sets it up");
+        assert!(
+            matches!(&target, Target::Action(Command { action: "app.setup", arg: Some(a) }) if a == "agy"),
+            "{target:?}"
+        );
+        let (detail, target) = agent_row("codex", "codex", Some("~/.local/bin/codex".into()));
+        assert_eq!(detail, "~/.local/bin/codex");
+        assert!(matches!(&target, Target::Agent(a) if a == "codex"));
+        let (detail, target) = agent_row("mine", "/opt/mine", None);
+        assert_eq!(detail, "not found");
+        assert!(matches!(&target, Target::Agent(a) if a == "mine"));
+    }
 
     #[test]
     fn citations_are_found() {

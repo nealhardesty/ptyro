@@ -387,9 +387,15 @@ pub(crate) fn after_setup(
     true
 }
 
-/// A session on the daemon running `ptyro login <id>` (the web's "Log in"): the tool's own
-/// sign-in in a terminal the web shows, confirmed there as in the CLI.
-pub(crate) async fn spawn(ctx: &Ctx, id: &str) -> Result<ptyro_core::session::SessionInfo, Error> {
+/// A session on the daemon running `ptyro login --where <place> <id>` (the web's "Log in"): the
+/// tool's own sign-in in a terminal the web shows, confirmed there as in the CLI. `place` is
+/// `local` (the daemon's computer) or `wsl` (a Windows daemon's WSL distro: WSL's own ptyro runs
+/// it through `wsl.exe`, in the same terminal).
+pub(crate) async fn spawn(
+    ctx: &Ctx,
+    id: &str,
+    place: &str,
+) -> Result<ptyro_core::session::SessionInfo, Error> {
     use ptyro_core::session::SpawnSpec;
     use ptyro_protocol::Request;
     let item = setup::resolve(id).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
@@ -397,6 +403,9 @@ pub(crate) async fn spawn(ctx: &Ctx, id: &str) -> Result<ptyro_core::session::Se
         return Err(Error::invalid(format!("{} has no login", item.name)));
     }
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
+    // The installed binary's own name, as the self-update's session uses (`own::spawn_update`):
+    // after `ptyro update ptyro`, `current_exe` can be `…/ptyro (deleted)` or `ptyro.exe.old`.
+    let exe = ptyro_agents::own::installed_name(&exe);
     // Windows sets only USERPROFILE.
     let home = ["HOME", "USERPROFILE"]
         .into_iter()
@@ -404,12 +413,12 @@ pub(crate) async fn spawn(ctx: &Ctx, id: &str) -> Result<ptyro_core::session::Se
         .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
     let c = ctx.connect(true).await?;
     let spec = SpawnSpec {
-        // This computer's side, always: the page lists the daemon machine's logins.
+        // The side the page listed it on: the daemon machine's, or its WSL distro's.
         argv: vec![
             exe.to_string_lossy().into_owned(),
             "login".into(),
             "--where".into(),
-            "local".into(),
+            place.into(),
             item.program.clone(),
         ],
         cwd: home,

@@ -200,14 +200,26 @@ pub fn wsl_args(distro: &str, bin: &str) -> Result<Vec<String>, ClientError> {
     Ok(args)
 }
 
+/// `wsl.exe` with `args`, its messages in UTF-8, run in the background: on Windows with no
+/// window of its own (`ptyro_core::os::no_window`, SPEC §20.12). For probes and surveys whose
+/// output is read, never a terminal's.
+pub fn hidden_wsl<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Command {
+    let mut cmd = std::process::Command::new(wsl_exe());
+    cmd.args(args).env("WSL_UTF8", "1");
+    ptyro_core::os::no_window(&mut cmd);
+    Command::from(cmd)
+}
+
 /// Start `ptyro proxy` in a WSL distro through `wsl.exe`.
 pub fn wsl(distro: &str) -> Result<Child, ClientError> {
     let exe = wsl_exe();
     let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
-    Command::new(&exe)
-        .args(wsl_args(distro, &bin)?)
-        // wsl.exe's own messages ("There is no distribution…") in UTF-8, not UTF-16.
-        .env("WSL_UTF8", "1")
+    let mut cmd = std::process::Command::new(&exe);
+    // wsl.exe's own messages ("There is no distribution…") in UTF-8, not UTF-16.
+    cmd.args(wsl_args(distro, &bin)?).env("WSL_UTF8", "1");
+    // The bridge's bytes are the protocol, on pipes: no window of its own (SPEC §20.12).
+    ptyro_core::os::no_window(&mut cmd);
+    Command::from(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -273,12 +285,7 @@ pub async fn version_in(distro: &str) -> Option<String> {
     args[script] = args[script].replace(" proxy", " --version");
     let out = tokio::time::timeout(
         Duration::from_secs(20),
-        Command::new(wsl_exe())
-            .args(&args)
-            .env("WSL_UTF8", "1")
-            .stdin(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
+        hidden_wsl(&args).stdin(Stdio::null()).kill_on_drop(true).output(),
     )
     .await
     .ok()?
@@ -295,13 +302,10 @@ pub async fn distros() -> Option<Vec<String>> {
 /// [`distros`], and whether `wsl -l -q` succeeded (it fails, with its own message as the lines,
 /// when WSL isn't installed or has no distro).
 pub async fn distros_listed() -> Option<(bool, Vec<String>)> {
-    let out = tokio::time::timeout(
-        Duration::from_secs(5),
-        Command::new(wsl_exe()).args(["-l", "-q"]).env("WSL_UTF8", "1").output(),
-    )
-    .await
-    .ok()?
-    .ok()?;
+    let out = tokio::time::timeout(Duration::from_secs(5), hidden_wsl(&["-l", "-q"]).output())
+        .await
+        .ok()?
+        .ok()?;
     Some((out.status.success(), parse_distros(&out.stdout)))
 }
 

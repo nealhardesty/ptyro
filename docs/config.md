@@ -132,6 +132,7 @@ max_bytes = "16MiB"                       # per session, as a ring
 [updates]
 check = "daily"                           # look for newer agent versions once a day and offer them (never installed without you); "off" never looks
 # ignore = ["codex@0.170.0"]              # updates not to offer: an agent ("codex") or one version of it
+# keep_installer = ["codex"]              # agents to keep the way you installed them (npm, Homebrew, WinGet): no move to the vendor's installer offered
 
 [client]
 # default_remote = "wsl://Ubuntu"         # where this ptyro's daemon is, when --remote / PTYRO_REMOTE don't say (wsl://, wsl://<distro>, an ssh host); on Windows asked the first time

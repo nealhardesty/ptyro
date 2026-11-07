@@ -1126,10 +1126,13 @@ impl Daemon {
                             format!("✗{code} {what} ({})", crate::agents::human(ran)),
                         ),
                     };
-                    self.raise(&s, kind, text).await;
+                    // Cleared before the attention is raised: `raise` awaits the desktop
+                    // notification (slow inside WSL, through Windows' interop), and a client
+                    // must never see a fired once-only watch still set (WSL CI, 2026-11-07).
                     if watched {
                         self.watch_fired(&s);
                     }
+                    self.raise(&s, kind, text).await;
                 }
             }
             let watched_now = self.watched(s.id);
@@ -1173,8 +1176,9 @@ impl Daemon {
                     let hit = matching.into_iter().find(|l| !shelf.seen.contains(l));
                     if let Some(line) = hit {
                         let text = ptyro_core::session::brief(&format!("matched: {line}"), 160);
-                        self.raise(&s, AttentionKind::Notification, text).await;
+                        // Cleared first, as `done`'s above.
                         self.watch_fired(&s);
+                        self.raise(&s, AttentionKind::Notification, text).await;
                     }
                 }
                 _ => e.out = out,

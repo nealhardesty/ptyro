@@ -558,6 +558,20 @@ fn a_refreshed_path_keeps_what_it_had_and_adds_what_installers_stored() {
     );
 }
 
+/// A quoted or padded entry in a stored `Path` (common on Windows) is read as its folder, so
+/// one such entry can't make `join_paths` refuse the whole refresh.
+#[test]
+fn stored_path_entries_are_trimmed_and_unquoted() {
+    assert_eq!(
+        host::path_entries(r#" "C:\Program Files\nodejs" ;;C:\Tools\ ;" ";C:\a"b"#),
+        [r"C:\Program Files\nodejs", r"C:\Tools\"].map(std::path::PathBuf::from)
+    );
+    let cur = std::env::join_paths(["/usr/bin"]).unwrap();
+    let fresh = host::path_entries(r#""/opt/x y""#);
+    let out = refreshed_path(&cur, &fresh, &[]);
+    assert!(std::env::split_paths(&out).any(|p| p == std::path::Path::new("/opt/x y")));
+}
+
 #[test]
 fn stored_paths_expand_and_prepend_without_touching_the_rest() {
     let var = |k: &str| (k == "USERPROFILE").then(|| r"C:\Users\me".to_owned());
@@ -1400,12 +1414,11 @@ fn the_vendors_own_copy_not_answering_is_repaired_never_deleted() {
         .unwrap();
     assert!(error.contains("doesn't answer `codex --version`"), "{error}");
     assert!(
-        fix.starts_with(
-            "repair it by installing it again: install it again: `ptyro install codex`"
-        ),
+        fix.starts_with("repair it by installing it again: `ptyro install codex`, or run `"),
         "{fix}"
     );
     assert!(!fix.contains("rm ") && !fix.contains("Remove-Item"), "{fix}");
+    assert_eq!(fix.matches("again").count(), 1, "said once: {fix}");
 }
 
 #[test]

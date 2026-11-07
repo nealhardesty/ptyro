@@ -29,7 +29,7 @@ impl Daemon {
 
     pub(crate) fn doctor(&self) -> DaemonDoctor {
         let var = |k: &str| {
-            self.base_env
+            self.base_env()
                 .iter()
                 .find(|(n, _)| n == k)
                 .map(|(_, v)| v.to_string_lossy().into_owned())

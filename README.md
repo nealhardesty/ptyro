@@ -60,10 +60,10 @@ Google, or any other tool named here; their names and trademarks belong to their
   `sh scripts/rust-install.sh`).
 - **git 2.40 or later**, and **GNU make** for building from a checkout.
 - **At least one agent CLI:** [Claude Code](https://code.claude.com) (the best supported),
-  [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-  (for Gemini API-key and enterprise accounts),
-  [Antigravity CLI](https://antigravity.google) (`agy`, Google's agent for personal accounts)
-  or [OpenCode](https://opencode.ai). Any other program runs too, with less status detail.
+  [Codex CLI](https://github.com/openai/codex),
+  [Antigravity CLI](https://antigravity.google) (`agy`, Google's agent for a Google account),
+  [OpenCode](https://opencode.ai), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+  (for Gemini API-key and enterprise accounts). Any other program runs too, with less status detail.
   `ptyro setup` installs them for you ([below](#agents-and-tools-ptyro-setup)), each its
   vendor's recommended way for your platform, from a table checked against each vendor's
   documentation (SPEC §24.1).
@@ -208,7 +208,7 @@ ptyro login --check                           # where each login stands, changin
   such command, so they sign in when they start; `ptyro login agy` starts one now. Later,
   `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
   `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
-  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
+  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there (on Windows with WSL, WSL's logins are listed there too). With `--yes`,
   setup only says which aren't logged in.
 - **Installed another way? Move it, or keep it.** An agent you installed with npm, Homebrew or
   WinGet (Codex through `npm install -g @openai/codex`, say) shows in the checklist as "installed
@@ -225,6 +225,13 @@ ptyro login --check                           # where each login stands, changin
   move whose old copy only an administrator can remove (a system npm prefix) runs from a terminal
   or the TUI; the web shows the command. `ptyro doctor`, the health badge and the web's Health
   page offer the move too.
+- **Something missing? It says so, with the fix.** Anything that finds no agent, or an agent
+  or tool that isn't installed (a new chat, a session of an agent you don't have, `ptyro
+  doctor`, the health badge, a pull request without `gh`), offers setup rather than a command to
+  copy: in a terminal, `ptyro setup` or `ptyro install codex`; in the TUI, `Ctrl-Q u` on its
+  message opens the checklist with it ticked; on the web, a Set up button does the same. With a
+  Google account, the agent to pick is Antigravity (Gemini CLI now serves only Gemini API keys and
+  some enterprise accounts).
 - **More accounts are profiles.** Setup logs in one account each. For a second (work and
   personal), make a profile and log it in: `ptyro profile new work`, then
   `ptyro profile login work claude`. Each profile keeps its own logins.
@@ -254,7 +261,7 @@ ptyro update --check      # only look now, and say what's out of date
   nothing is replaced. Then the daemon is upgraded live: every session keeps running. On Windows
   with WSL, Windows' `ptyro.exe` and the ptyro in your distro are updated together, so the two
   always match. Installed with Homebrew, it runs `brew upgrade ptyro`; installed another way
-  (cargo, a system package), ptyro says how to update it and never replaces it. In a folder only
+  (cargo, a system package, Nix or Guix), ptyro says how to update it and never replaces it. In a folder only
   an administrator can write (`/usr/local/bin`), `ptyro update ptyro` in a terminal asks for your
   password (sudo); the web app shows the command to run there instead.
 - **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's

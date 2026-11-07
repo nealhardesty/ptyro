@@ -170,6 +170,13 @@ pub fn classify(path: &Path) -> How {
     if low.contains("/scoop/") {
         return How::Managed("Scoop (`scoop update ptyro`)".into());
     }
+    // Nix's and Guix's stores are read-only and theirs alone: never a sudo swap there.
+    if s.starts_with("/nix/store/") {
+        return How::Managed("Nix (`nix profile upgrade`, or your Nix configuration)".into());
+    }
+    if s.starts_with("/gnu/store/") {
+        return How::Managed("Guix (`guix upgrade`)".into());
+    }
     if ["/usr/bin/", "/bin/", "/usr/sbin/", "/sbin/", "/snap/"].iter().any(|d| s.starts_with(d)) {
         return How::Managed("the system's package manager (apt, dnf, pacman, snap…)".into());
     }
@@ -250,13 +257,16 @@ pub fn admin_command(path: &Path, version: &str) -> Option<String> {
     }
     let prefix = bin.parent()?.to_string_lossy().into_owned();
     let base = format!("https://github.com/{REPO}/releases/download/v{version}");
+    // The prefix as one word (`/Users/Jane Doe/…`), in each shell's single quotes.
     Some(if cfg!(windows) {
+        let prefix = prefix.replace('\'', "''");
         format!(
             "$env:PTYRO_PREFIX = '{prefix}'; $env:PTYRO_VERSION = '{version}'; irm {base}/install.ps1 | iex   (in PowerShell run as administrator)"
         )
     } else {
+        let prefix = prefix.replace('\'', r"'\''");
         format!(
-            "curl -fsSL {base}/install.sh | sudo env PTYRO_PREFIX={prefix} PTYRO_VERSION={version} sh"
+            "curl -fsSL {base}/install.sh | sudo env PTYRO_PREFIX='{prefix}' PTYRO_VERSION={version} sh"
         )
     })
 }
@@ -929,6 +939,14 @@ mod tests {
         assert!(matches!(c("/home/me/.cargo/bin/ptyro"), How::Managed(m) if m.contains("cargo")));
         assert!(matches!(c("/usr/bin/ptyro"), How::Managed(_)));
         assert!(matches!(c("/snap/bin/ptyro"), How::Managed(_)));
+        // The final review's M4: never `How::Admin` (a sudo swap into the store).
+        assert!(matches!(
+            c("/nix/store/abc123-ptyro-0.0.63/bin/ptyro"),
+            How::Managed(m) if m.starts_with("Nix")
+        ));
+        assert!(
+            matches!(c("/gnu/store/abc123-ptyro/bin/ptyro"), How::Managed(m) if m.starts_with("Guix"))
+        );
         assert!(matches!(
             c(r"C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\x\ptyro.exe"),
             How::Managed(m) if m.contains("WinGet")
@@ -961,8 +979,11 @@ mod tests {
         } else {
             assert_eq!(
                 c,
-                "curl -fsSL https://github.com/nealhardesty/ptyro/releases/download/v0.0.64/install.sh | sudo env PTYRO_PREFIX=/usr/local PTYRO_VERSION=0.0.64 sh"
+                "curl -fsSL https://github.com/nealhardesty/ptyro/releases/download/v0.0.64/install.sh | sudo env PTYRO_PREFIX='/usr/local' PTYRO_VERSION=0.0.64 sh"
             );
+            // A prefix with a space, or a quote, stays one word (the final review's M3).
+            let c = admin_command(Path::new("/Users/Jane Doe's/bin/ptyro"), "0.0.64").unwrap();
+            assert!(c.contains(r"PTYRO_PREFIX='/Users/Jane Doe'\''s' PTYRO_VERSION"), "{c}");
         }
         assert_eq!(admin_command(Path::new("/opt/tools/ptyro"), "0.0.64"), None);
     }

@@ -74,8 +74,8 @@ pub(super) fn run(
         }
     };
     let new_path = new.path.clone().unwrap_or_else(|| program.clone());
-    let reinstall =
-        format!("install it again: `ptyro install {program}`, or run `{install}` yourself");
+    let again = format!("`ptyro install {program}`, or run `{install}` yourself");
+    let reinstall = format!("install it again: {again}");
     // What the new copy is now, for a message after the removal: looked at again, since a removal
     // can take a link the new install put in a shared folder.
     let now = |host: &dyn Host| match fresh(host) {
@@ -159,7 +159,7 @@ pub(super) fn run(
                     format!(
                         "{name} through {to} is installed ({first}), but it doesn't answer `{program} --version`"
                     ),
-                    format!("repair it by installing it again: {reinstall}"),
+                    format!("repair it by installing it again: {again}"),
                 ));
             }
             let pkg = f.via.and_then(|v| super::npm_package(item, v, platform));
