@@ -48,6 +48,7 @@ const ACTIONS = {
     "setup.plan": "The setup checklist: which agents and tools are on the computer, and what installing the ticked ones would run",
     "setup.install": "Install the ticked agents and tools on the computer, with what they need first; a step that needs administrator rights shows the command to run there",
     "setup.where": "On Windows with WSL: where each agent or tool goes, into WSL's distro, onto Windows, or both (tick either column)",
+    "setup.login": "Log in to each agent and the GitHub CLI, one account each: the tool's own sign-in in a session here, confirmed by its own status command (ptyro never sees the credentials)",
     "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 };
 const tip = actions(ACTIONS);
@@ -600,7 +601,7 @@ let setupPicks = new Set();
 function setupView() {
     const agents = (setupChecks.get("") ?? []).filter((c) => c.section === "agents");
     const repos = (discovered.get("") ?? []).filter((p) => ![...data.projects.values()].some((x) => x.root === p));
-    return h("div", {}, ui.header("Set up ptyro", "#/more"), h("main", { class: "stack", title: tip("first.run") }, h("p", { class: "intro" }, "Nothing changes until you tap a button."), installSection(), section("Your agents", conn.scope !== "full" ? h("p", { class: "sub" }, "Needs a device paired with --scope full.") : pending(setupChecks, "", "Looking…") ?? (agents.length ? h("div", { class: "rows" }, ...agents.map((c) => row(h("span", {}, h("span", { class: `lvl ${(LEVEL[c.level] ?? ["", ""])[1]}` }, (LEVEL[c.level] ?? ["·"])[0]), " ", c.name), c.text))) : h("p", { class: "sub" }, "No agent CLIs found: install claude, codex, gemini or opencode."))), section("Your accounts", h("p", { class: "sub" }, "Several logins on one machine (aliases, ~/.claude-* directories, git identities) can become profiles."), bar(h("button", { onclick: () => void detectProfiles(), disabled: conn.scope !== "full" }, "Find my accounts"))), section("Your repositories", pending(discovered, "", "Looking…") ?? (repos.length ? h("div", { class: "stack-in" }, ...repos.map((p) => { const c = h("input", { type: "checkbox" }); c.checked = setupPicks.has(p); c.addEventListener("change", () => { if (c.checked)
+    return h("div", {}, ui.header("Set up ptyro", "#/more"), h("main", { class: "stack", title: tip("first.run") }, h("p", { class: "intro" }, "Nothing changes until you tap a button."), installSection(), loginsSection(), section("Your agents", conn.scope !== "full" ? h("p", { class: "sub" }, "Needs a device paired with --scope full.") : pending(setupChecks, "", "Looking…") ?? (agents.length ? h("div", { class: "rows" }, ...agents.map((c) => row(h("span", {}, h("span", { class: `lvl ${(LEVEL[c.level] ?? ["", ""])[1]}` }, (LEVEL[c.level] ?? ["·"])[0]), " ", c.name), c.text))) : h("p", { class: "sub" }, "No agent CLIs found: install claude, codex, gemini or opencode."))), section("Your accounts", h("p", { class: "sub" }, "Several logins on one machine (aliases, ~/.claude-* directories, git identities) can become profiles."), bar(h("button", { onclick: () => void detectProfiles(), disabled: conn.scope !== "full" }, "Find my accounts"))), section("Your repositories", pending(discovered, "", "Looking…") ?? (repos.length ? h("div", { class: "stack-in" }, ...repos.map((p) => { const c = h("input", { type: "checkbox" }); c.checked = setupPicks.has(p); c.addEventListener("change", () => { if (c.checked)
         setupPicks.add(p);
     else
         setupPicks.delete(p); }); return h("label", { class: "field check" }, c, h("span", {}, p.split("/").pop() ?? p), h("small", {}, p)); }), bar(h("button", { class: "primary", onclick: async () => { const n = setupPicks.size; for (const p of setupPicks)
@@ -649,6 +650,7 @@ export function setupEvent(e) {
             const all = (k) => installRun.reports.flatMap((r) => r[k] ?? []);
             installRun.report = { done: all("done"), failed: all("failed"), skipped: all("skipped"), blocked: all("blocked") };
             setupPlan.reload();
+            setupLogins.reload("");
         }
     }
     ui.render();
@@ -756,6 +758,36 @@ async function startInstall(picks, wslPicks) {
     }
     finally {
         installRun.starting = false;
+    }
+}
+// ── logins (BOOT4: each tool's own sign-in, confirmed by its status command, SPEC §24.4) ─────
+const setupLogins = new Cache(() => host("login.list"));
+const LOGIN_STATE = {
+    logged_in: "✓ logged in",
+    logged_out: "not logged in",
+    unconfirmed: "can't be checked (no status command): it signs in when it starts",
+    missing: "not installed",
+};
+function loginsSection() {
+    const title = "Log in";
+    if (conn.scope !== "full")
+        return section(title, h("p", { class: "sub" }, "Needs a device paired with --scope full."));
+    const r = setupLogins.get("");
+    const waiting = pending(setupLogins, "", "Checking each login…");
+    if (waiting || !r)
+        return section(title, waiting ?? h("p", { class: "sub" }, "Checking…"));
+    const rows = r.logins.filter((l) => l.state !== "missing");
+    const plan = setupPlan.get(installKey);
+    const wsl = plan?.wsl?.state === "usable" ? plan.wsl.distro : null;
+    return section(title, h("p", { class: "sub", title: tip("setup.login") }, "One account each, through each tool's own sign-in. Log in runs it in a session here: follow the link it shows and enter its code (at the computer, it may open the browser there). ptyro never sees the credentials; each tool's own status command says whether it worked."), rows.length
+        ? h("div", { class: "rows" }, ...rows.map((l) => row(l.name, `${LOGIN_STATE[l.state] ?? l.state}${l.state === "logged_in" ? "" : ` · runs ${l.command}`}`, l.state === "logged_in" ? null : h("button", { class: "small", title: tip("setup.login"), onclick: () => void startLogin(l.id, l.name) }, "Log in"))))
+        : h("p", { class: "sub" }, "No agent or GitHub CLI is installed yet: install them above, then log in here."), wsl ? h("p", { class: "sub" }, "For WSL's (", wsl, "): run ", h("code", {}, "ptyro login --where wsl"), " on the computer.") : null, bar(h("button", { onclick: () => setupLogins.reload("") }, "Check again")), h("p", { class: "sub" }, r.profiles));
+}
+async function startLogin(id, name) {
+    const r = await doHost("login.start", { id });
+    if (r) {
+        ui.toast(`Logging in to ${name}: its own sign-in; come back and Check again when it's done`);
+        go(`#/s/${enc(r.session)}`);
     }
 }
 // ── the tour ────────────────────────────────────────────────────────────────────────────────

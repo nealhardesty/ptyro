@@ -12,6 +12,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use ptyro_agents::setup::login::LoginRow;
 use ptyro_agents::setup::{Event, Plan, Report, Side, Survey, WslStatus};
 
 use crate::remote;
@@ -255,6 +256,47 @@ pub fn run(distro: &str, plan: &Plan, admin: Admin, on: &mut dyn FnMut(Event)) -
     }
     forward(Event::Finished { report: r.clone() }, &mut seen, &mut None);
     r
+}
+
+/// `ptyro <args>` in `distro`, in this terminal: a login there (BOOT4), whose sign-in is the
+/// person's to see. Its exit code.
+pub fn interact(distro: &str, args: &[String]) -> Result<i32, String> {
+    let argv = ptyro_args(distro, args)?;
+    let status = Command::new(remote::wsl_exe())
+        .args(&argv)
+        .env("WSL_UTF8", "1")
+        .status()
+        .map_err(|e| format!("couldn't run wsl.exe: {e}"))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// Where each login stands in `distro` (`ptyro login --check --json`), each row said to be WSL's.
+pub fn logins(distro: &str, ids: &[String]) -> Result<Vec<LoginRow>, String> {
+    let mut args = vec!["login".to_owned(), "--check".to_owned(), "--json".to_owned()];
+    args.extend(ids.iter().cloned());
+    let argv = ptyro_args(distro, &args)?;
+    let mut cmd = Command::new(remote::wsl_exe());
+    cmd.args(&argv).env("WSL_UTF8", "1").stdin(Stdio::null()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().map_err(|e| format!("couldn't run wsl.exe: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut rows: Vec<LoginRow> = serde_json::from_str(text.trim()).map_err(|_| {
+        let said = tail(&String::from_utf8_lossy(&out.stderr));
+        format!(
+            "ptyro in {distro} (WSL) couldn't say{}: it may be older than logins; update it: `{}`",
+            if said.is_empty() { String::new() } else { format!(" ({said})") },
+            install_line(distro)
+        )
+    })?;
+    for r in &mut rows {
+        r.side = Side::Wsl;
+    }
+    Ok(rows)
 }
 
 #[cfg(test)]

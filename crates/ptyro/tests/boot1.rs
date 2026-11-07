@@ -117,8 +117,11 @@ fn unattended_setup_installs_the_defaults_in_order() {
     assert!(t.contains("✓ Claude Code 1.0.0"), "{t}");
     assert!(t.contains("▸ git (as administrator)"), "{t}");
     assert!(t.contains("4 installed."), "{t}");
-    // The logins come next (BOOT4): each one's own command, from the table.
-    assert!(t.contains("GitHub CLI: `gh auth login --web`"), "{t}");
+    // The logins come next (BOOT4): --yes runs none, and says where each stands.
+    assert!(
+        t.contains("✗ GitHub CLI: not logged in: `ptyro login gh` (it runs `gh auth login --web`)"),
+        "{t}"
+    );
     // Again: everything is here.
     let o = m.run(&["setup", "--yes"], "");
     assert!(o.status.success());

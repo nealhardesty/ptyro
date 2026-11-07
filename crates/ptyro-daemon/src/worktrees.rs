@@ -669,6 +669,7 @@ impl Daemon {
                 quick: false,
                 pad: false,
                 chat: None,
+                unrecorded: false,
             },
             replace: false,
             agent: None,
