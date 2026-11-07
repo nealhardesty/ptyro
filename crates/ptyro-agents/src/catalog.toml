@@ -21,7 +21,10 @@
 # `about`: one line for people, shown beside the name in the setup checklist (BOOT2).
 # `methods` are in order of preference: a platform's first method whose `needs` is present wins.
 # `others` are the other ways an item may already be installed, with how each updates (BOOT5,
-#   BOOT7's moves to the recommended method).
+#   BOOT7's moves to the recommended method), and how each is removed (`uninstall`, never with sudo:
+#   ptyro adds it for a copy only an administrator can change).
+# `keeps`: where an agent's settings and logins live, in the home (BOOT7, checked 2026-11-07): no
+#   installer touches them, so a move between installers keeps them.
 
 [[item]]
 id = "claude"
@@ -32,6 +35,7 @@ program = "claude"
 doc = "https://code.claude.com/docs/en/setup"
 checked = "2026-11-06"
 version = ["claude", "--version"]          # `2.1.319 (Claude Code)`
+keeps = ["~/.claude", "~/.claude.json"]    # [V 2026-11-07: the setup page's "Remove configuration files", a step apart from uninstalling]
 note = "Native installs update themselves in the background; `claude update` applies one now."
 login = { start = ["claude", "auth", "login"], check = ["claude", "auth", "status"], mark = "V", note = "docs: run `claude` and follow the browser; `claude auth status` exits 1 when logged out (checked with 2.1.319)" }
 latest = { source = "plain-text", url = "https://downloads.claude.ai/claude-code-releases/latest", mark = "S", note = "the URL the vendor's install.sh reads; the docs name the bucket, not this file" }
@@ -64,6 +68,7 @@ shell = "sh"
 needs = "npm"
 install = "npm install -g @anthropic-ai/claude-code"
 update = "npm install -g @anthropic-ai/claude-code@latest"
+uninstall = "npm uninstall -g @anthropic-ai/claude-code"
 mark = "V"
 note = "the npm package needs Node.js 22 or later"
 
@@ -74,6 +79,7 @@ shell = "powershell"
 needs = "npm"
 install = "npm install -g @anthropic-ai/claude-code"
 update = "npm install -g @anthropic-ai/claude-code@latest"
+uninstall = "npm uninstall -g @anthropic-ai/claude-code"
 mark = "V"
 note = "the npm package needs Node.js 22 or later"
 
@@ -84,6 +90,7 @@ shell = "sh"
 needs = "brew"
 install = "brew install --cask claude-code"
 update = "brew upgrade claude-code"
+uninstall = "brew uninstall --cask claude-code"
 mark = "V"
 note = "the `claude-code` cask is the stable channel; `claude-code@latest` updates with `brew upgrade claude-code@latest`"
 
@@ -94,6 +101,7 @@ shell = "powershell"
 needs = "winget"
 install = "winget install --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements"
 update = "winget upgrade --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements"
+uninstall = "winget uninstall --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements"
 mark = "V"
 
 [[item]]
@@ -105,6 +113,7 @@ program = "codex"
 doc = "https://learn.chatgpt.com/docs/codex/cli"
 checked = "2026-11-06"
 version = ["codex", "--version"]           # `codex-cli 0.162.1`
+keeps = ["~/.codex"]                       # [V 2026-11-07: config-basic, `~/.codex/config.toml`; its `auth.json` there S: SPEC §10.10's CODEX_HOME]
 note = "The docs update by running the installer again; the CLI also has `codex update`."
 login = { start = ["codex", "login"], check = ["codex", "login", "status"], mark = "V", note = "docs: run `codex` and choose Sign in with ChatGPT; `codex login status` exits 1 when logged out (checked with 0.162.1)" }
 latest = { source = "github-release", url = "https://releases.openai.com/codex/channels/latest", tag_prefix = "rust-v", mark = "S", note = "the channel the vendor's install.sh reads; GitHub-release JSON, `tag_name` = `rust-v<version>`" }
@@ -136,8 +145,9 @@ shell = "sh"
 needs = "npm"
 install = "npm install -g @openai/codex"
 update = "npm install -g @openai/codex@latest"
+uninstall = "npm uninstall -g @openai/codex"
 mark = "S"
-note = "the install command is in the README; the update form is npm's own, not the vendor's"
+note = "the install command is in the README; the update and uninstall forms are npm's own, not the vendor's"
 
 [[item.others]]
 platforms = ["windows-x64", "windows-arm64"]
@@ -146,8 +156,9 @@ shell = "powershell"
 needs = "npm"
 install = "npm install -g @openai/codex"
 update = "npm install -g @openai/codex@latest"
+uninstall = "npm uninstall -g @openai/codex"
 mark = "S"
-note = "the install command is in the README; the update form is npm's own, not the vendor's"
+note = "the install command is in the README; the update and uninstall forms are npm's own, not the vendor's"
 
 [[item.others]]
 platforms = ["macos", "linux"]
@@ -156,8 +167,9 @@ shell = "sh"
 needs = "brew"
 install = "brew install --cask codex"
 update = "brew upgrade --cask codex"
+uninstall = "brew uninstall --cask codex"
 mark = "S"
-note = "the install command is in the README; the update form is Homebrew's own"
+note = "the install command is in the README; the update and uninstall forms are Homebrew's own"
 
 [[item]]
 id = "antigravity"
@@ -201,6 +213,7 @@ program = "opencode"
 doc = "https://docs.opencode.ai/docs/"
 checked = "2026-11-07"
 version = ["opencode", "--version"]
+keeps = ["~/.config/opencode", "~/.local/share/opencode"]   # [S 2026-11-07: the config folder and the auth file under $XDG_DATA_HOME/opencode, SPEC §10.10; the docs name neither]
 note = "OpenCode 1. OpenCode 2 (@opencode/cli, `curl -fsSL https://opencode.ai/v2/install | bash`) changed its server API, which ptyro's adapter speaks, and is beta; the two share the `opencode` command."
 login = { start = ["opencode", "auth", "login"], mark = "U", note = "`opencode auth login` is in the docs [V]; `opencode auth list` lists providers, but whether it fails when nothing is logged in isn't documented, so it isn't a `check` (2026-11-07: a check must exit 0 only when logged in)" }
 latest = { source = "npm", url = "https://registry.npmjs.org/opencode-ai/latest", mark = "V", note = "the vendor's install script reads the same registry entry" }
@@ -233,8 +246,9 @@ shell = "sh"
 needs = "brew"
 install = "brew install anomalyco/tap/opencode"
 update = "brew upgrade opencode"
+uninstall = "brew uninstall opencode"
 mark = "S"
-note = "the install command is in the docs (`brew install opencode` is OpenCode 2); the update form is Homebrew's own"
+note = "the install command is in the docs (`brew install opencode` is OpenCode 2); the update and uninstall forms are Homebrew's own"
 
 [[item.others]]
 platforms = ["linux", "macos", "wsl"]
@@ -243,7 +257,9 @@ shell = "sh"
 needs = "npm"
 install = "npm install -g opencode-ai"
 update = "opencode upgrade"
+uninstall = "npm uninstall -g opencode-ai"
 mark = "V"
+note = "install and update [V docs]; the uninstall form is npm's own [S]"
 
 [[item]]
 id = "gemini"
@@ -255,6 +271,7 @@ label = "for Gemini API-key and enterprise accounts (others: Antigravity)"
 doc = "https://geminicli.com/docs/get-started/installation/"
 checked = "2026-11-06"
 version = ["gemini", "--version"]          # `0.33.0`
+keeps = ["~/.gemini"]                      # [S 2026-11-07: its settings.json there (RESEARCH H), GEMINI_CLI_HOME's default]
 note = "Replaced by Antigravity for unpaid and Google One accounts on 2026-06-18; Google's pages disagree on exactly who kept it. Requirements: macOS 15+, Windows 11 24H2+, Ubuntu 20.04+."
 login = { start = ["gemini"], mark = "U", note = "run `gemini` and choose Sign in with Google, a Gemini API key (GEMINI_API_KEY) or Vertex AI [V]; the docs name no status command" }
 latest = { source = "npm", url = "https://registry.npmjs.org/@google%2fgemini-cli/latest", mark = "V" }
@@ -289,8 +306,9 @@ shell = "sh"
 needs = "brew"
 install = "brew install gemini-cli"
 update = "brew upgrade gemini-cli"
+uninstall = "brew uninstall gemini-cli"
 mark = "S"
-note = "the install command is in the docs; the update form is Homebrew's own"
+note = "the install command is in the docs; the update and uninstall forms are Homebrew's own"
 
 [[item]]
 id = "git"

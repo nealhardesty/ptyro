@@ -4,7 +4,7 @@
 // missed or shown twice.
 //   node web/test/setup.mjs
 import assert from "node:assert/strict";
-import { adminSteps, bannerWants, leftForComputer, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, waitsForAdmin, webSteps } from "../dist/setupkit.js";
+import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, moveWords, noAgent, retryOf, runningAgent, selfUpdate, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
 const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
 
@@ -191,7 +191,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const data = { id: "antigravity", name: "Antigravity", program: "agy", version: "1.3.2", latest: "1.4.0", command: "agy update", admin: false };
   const c = { section: "updates", name: "antigravity", level: "warn", text: "whatever the words say", data };
-  assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false, path: null, managed: null });
+  assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false, path: null, managed: null, via: null });
   assert.equal(updateOffer({ ...c, data: { ...data, admin: true } }).admin, true);
   assert.equal(updateOffer({ ...c, level: "note" }), null, "a skipped one (updates.ignore) offers no update");
   assert.equal(updateOffer({ ...c, data: undefined }), null, "no data, no button (never parsed from the words)");
@@ -243,4 +243,28 @@ console.log("setup: ok");
   assert.deepEqual(selfUpdate(admin), { kind: "command", command: admin.command }, "a password never goes through the web");
   assert.deepEqual(selfUpdate(updateOffer({ ...c, data: { ...data, managed: "cargo (`cargo install`)" } })), { kind: "managed", how: "cargo (`cargo install`)" });
   assert.equal(selfUpdate(updateOffer({ section: "updates", level: "warn", data: { id: "codex", program: "codex", latest: "1", version: "0" } })), null);
+}
+
+// BOOT7: an agent installed another way and offered the move is a row, not "already here"; its
+// Health finding's `data.move` is read into the offer; a move's run says it moved; an
+// administrator's move is left for the computer.
+{
+  const move = { from: "npm", to: "vendor", uninstall: "npm uninstall -g @openai/codex", admin: false, keeps: ["~/.codex"] };
+  assert.equal(isHere({ state: "other" }), true, "kept (no offer): here already");
+  assert.equal(isHere({ state: "other", moves: move }), false, "offered: a row to tick");
+  assert.equal(isHere({ state: "installed" }), true);
+  const c = { section: "updates", name: "codex", level: "note", data: { move: { id: "codex", name: "Codex", program: "codex", version: "0.162.1", ...move } } };
+  const m = moveOffer(c);
+  assert.deepEqual(m, { id: "codex", program: "codex", name: "Codex", from: "npm", to: "vendor", uninstall: "npm uninstall -g @openai/codex", admin: false, keeps: ["~/.codex"] });
+  assert.equal(moveWords(m), "Codex is installed with npm. Moving it installs it through the vendor's installer, the recommended way, checks the new one runs, and only then removes npm's copy (npm uninstall -g @openai/codex); your settings and logins (~/.codex) stay. If the new install fails, the old one stays as it was.");
+  assert.equal(moveOffer({ section: "updates", data: { id: "codex" } }), null, "an update's data alone offers no move");
+  assert.equal(viaWords("brew"), "Homebrew");
+  const log = new SetupLog();
+  log.start();
+  log.started("m1", { entries: [{ id: "codex", side: "local", ticked: true, action: { moving: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
+  log.event(ev("m1", 1, finished(["codex", "gh"])));
+  assert.equal(log.summary(), "1 installed, 1 moved to the recommended installer.");
+  const plan = { entries: [{ id: "claude", name: "Claude Code", side: "local", ticked: true, action: { moving: true, admin: true }, moves: { ...move, admin: true } }] };
+  assert.deepEqual(adminSteps(plan), [{ side: "local", names: ["Claude Code"], command: "ptyro install claude" }]);
+  assert.equal(webSteps(plan).length, 0);
 }

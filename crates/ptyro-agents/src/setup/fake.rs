@@ -11,6 +11,11 @@
 //! | `stored-path` | folders installers "added to the registry's Path", one per line (written) |
 //! | `logged-in/<id>` | an item logged in since (written by the fake login, BOOT4) |
 //! | `logins.log` | each login run and each status asked, one per line (written) |
+//! | `new/<id>` | an item installed the recommended way beside its `other` copy (a move, BOOT7) |
+//! | `removed/<id>` | its `other` copy removed (a move's uninstall) |
+//!
+//! An item with an `other` installer has two copies once a move installs the new one: the old
+//! comes first (as an npm prefix early on `PATH` would) until it is removed.
 //!
 //! A login runs `ptyro fake-installer login ID` in the person's terminal: it prints a device
 //! code as a real one would and "logs in" by writing `logged-in/<id>`. A status command is
@@ -28,7 +33,7 @@ use ptyro_core::paths::Paths;
 use serde::Deserialize;
 
 use super::host::{Elevation, Host, Installed, Step, stream};
-use crate::catalog::{Item, Platform, Via};
+use crate::catalog::{Item, Method, Platform, Via};
 
 /// `world.json`. Every field is optional.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -68,6 +73,11 @@ pub struct World {
     /// out: a failure, or Ctrl+C), `nothing` (exits 0, still logged out: the person closed the
     /// page) or `slow` (the code, then two seconds before it logs in: time for a test's Ctrl+C).
     pub logins: BTreeMap<String, String>,
+    /// Items whose `other` copy is in an administrator's folder (a system npm prefix, BOOT7).
+    pub system: Vec<String>,
+    /// Per item, what removing its `other` copy does (BOOT7): `ok` (default), `fail` (exits 1,
+    /// the copy stays) or `leftover` (exits 0, but the copy stays first on `PATH`).
+    pub uninstalls: BTreeMap<String, String>,
 }
 
 impl World {
@@ -129,12 +139,58 @@ impl Host for FakeHost {
     }
 
     fn installed(&self, item: &Item) -> Option<Installed> {
-        let version = self.version_of(&item.id)?;
-        Some(Installed {
-            version: Some(version).filter(|v| !v.is_empty()),
-            path: Some(format!("(fake) {}", item.program)),
-            via: self.world.other.get(&item.id).copied(),
-        })
+        self.copies(item).into_iter().next()
+    }
+
+    fn copies(&self, item: &Item) -> Vec<Installed> {
+        let id = &item.id;
+        let via = self.world.other.get(id).copied();
+        let mut out = Vec::new();
+        if let Some(version) = self.version_of(id)
+            && !self.dir.join("removed").join(id).exists()
+        {
+            out.push(Installed {
+                version: Some(version).filter(|v| !v.is_empty()),
+                path: Some(match via {
+                    Some(v) => format!("(fake {}) {}", v.name(), item.program),
+                    None => format!("(fake) {}", item.program),
+                }),
+                via,
+                system: via.is_some() && self.world.system.contains(id),
+            });
+        }
+        if via.is_some()
+            && let Ok(v) = std::fs::read_to_string(self.dir.join("new").join(id))
+        {
+            out.push(Installed {
+                version: Some(v.trim().to_owned()).filter(|v| !v.is_empty()),
+                path: Some(format!("(fake) {}", item.program)),
+                via: None,
+                system: false,
+            });
+        }
+        out
+    }
+
+    fn uninstall(
+        &self,
+        item: &Item,
+        method: &Method,
+        _command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let admin = self.world.system.contains(&item.id);
+        let argv = vec![
+            exe.to_string_lossy().into_owned(),
+            "fake-installer".to_owned(),
+            item.id.clone(),
+            method.via.name().to_owned(),
+            "uninstall".to_owned(),
+            admin.to_string(),
+        ];
+        let env = [("PTYRO_TEST_SETUP".into(), self.dir.clone().into_os_string())];
+        stream(&argv, &env, line)
     }
 
     fn candidate(&self, via: Via) -> Option<String> {
@@ -239,6 +295,9 @@ pub fn installer(args: &[String]) -> i32 {
     };
     let world = World::read(&dir);
     log(&dir, &format!("{what} {id} via {via} admin={admin}"));
+    if what == "uninstall" {
+        return fake_uninstall(&dir, &world, id, via);
+    }
     let outcome = world.outcomes.get(id).map_or("ok", String::as_str);
     println!("fake {via}: {what} {id}");
     if let Some(need) = world.path_needs.get(id) {
@@ -282,7 +341,10 @@ pub fn installer(args: &[String]) -> i32 {
     if outcome != "quiet" {
         let default = if id == "node" { "26.13.0" } else { "1.0.0" };
         let v = world.versions.get(id).map_or(default, String::as_str);
-        let d = dir.join("installed");
+        // Installed the recommended way beside a copy that came another way: a second copy (a
+        // move, BOOT7); else the item's one copy.
+        let beside = what == "install" && world.other.get(id).is_some_and(|o| o.name() != via);
+        let d = dir.join(if beside { "new" } else { "installed" });
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::write(d.join(id), v);
         if let Some(add) = world.path_adds.get(id)
@@ -301,6 +363,28 @@ pub fn installer(args: &[String]) -> i32 {
     }
     println!("fake {via}: {id} is installed");
     0
+}
+
+/// A move's removal of the `other` copy (BOOT7), by `world.json`'s `uninstalls`.
+fn fake_uninstall(dir: &Path, world: &World, id: &str, via: &str) -> i32 {
+    println!("fake {via}: removing {id}");
+    match world.uninstalls.get(id).map_or("ok", String::as_str) {
+        "fail" => {
+            eprintln!("fake {via}: EACCES: permission denied, unlink '{id}'");
+            1
+        }
+        "leftover" => {
+            println!("fake {via}: removed {id}");
+            0
+        }
+        _ => {
+            let d = dir.join("removed");
+            let _ = std::fs::create_dir_all(&d);
+            let _ = std::fs::write(d.join(id), "");
+            println!("fake {via}: removed {id}");
+            0
+        }
+    }
 }
 
 /// `ptyro fake-installer login ID`: a login as the person sees it, a device code and a link,

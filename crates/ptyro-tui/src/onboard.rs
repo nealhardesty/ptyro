@@ -149,6 +149,28 @@ impl App {
             KeyCode::Left | KeyCode::Char { c: 'h' } => fr.setup.side_step(-1),
             KeyCode::Right | KeyCode::Char { c: 'l' } => fr.setup.side_step(1),
             KeyCode::Char { c: ' ' } if fr.sel < ns => fr.setup.toggle(fr.sel),
+            // Keep an agent installed another way as it is (BOOT7): no move, now or later.
+            KeyCode::Char { c: 'K' } if fr.sel < ns => match fr.setup.keep(fr.sel) {
+                Ok(Some((id, name, via))) => {
+                    let mut list = self.config.updates.keep_installer.clone();
+                    if !list.iter().any(|k| k.eq_ignore_ascii_case(&id)) {
+                        list.push(id);
+                    }
+                    let value = format!(
+                        "[{}]",
+                        list.iter().map(|k| format!("{k:?}")).collect::<Vec<_>>().join(", ")
+                    );
+                    self.set_config(
+                        "updates.keep_installer",
+                        &value,
+                        &format!(
+                            "{name} stays installed with {via}: it updates that way, and the move isn't offered again (updates.keep_installer)"
+                        ),
+                    );
+                }
+                Ok(None) => {}
+                Err(why) => self.toast(why),
+            },
             KeyCode::Char { c: ' ' } => {
                 if let Some(c) = fr.choices.get_mut(fr.sel - ns) {
                     c.on = !c.on;
@@ -618,7 +640,8 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     let side = if two { " · ←/→ side" } else { "" };
     let keys = if fr.only_setup {
         let go = if steps > 0 { format!("⏎ install {steps}") } else { "⏎ done".to_owned() };
-        format!(" {go} · Space toggle · j/k move{side} · s not now")
+        let keep = if fr.setup.offers_moves() { " · K keep as installed" } else { "" };
+        format!(" {go} · Space toggle · j/k move{side}{keep} · s not now")
     } else {
         let go = if steps > 0 {
             format!("⏎ install {steps} and use these")

@@ -26,6 +26,12 @@ struct TestHost {
     asked: Mutex<Vec<String>>,
     /// A step's error, by item id (instead of the default failure).
     errors: BTreeMap<String, String>,
+    /// Copies installed the recommended way beside the `other` one (BOOT7's moves), by id.
+    new: Mutex<BTreeMap<String, String>>,
+    /// `other` copies removed.
+    removed: Mutex<BTreeSet<String>>,
+    /// Removals that fail.
+    uninstall_fails: BTreeSet<String>,
 }
 
 impl TestHost {
@@ -53,8 +59,36 @@ impl Host for TestHost {
         self.programs.contains(p)
     }
     fn installed(&self, item: &Item) -> Option<Installed> {
-        let v = self.installed.lock().unwrap().get(&item.id).cloned()?;
-        Some(Installed { version: Some(v), path: None, via: self.other.get(&item.id).copied() })
+        self.copies(item).into_iter().next()
+    }
+    fn copies(&self, item: &Item) -> Vec<Installed> {
+        let mut out = Vec::new();
+        if let Some(v) = self.installed.lock().unwrap().get(&item.id).cloned()
+            && !self.removed.lock().unwrap().contains(&item.id)
+        {
+            let via = self.other.get(&item.id).copied();
+            out.push(Installed { version: Some(v), path: None, via, system: false });
+        }
+        if let Some(v) = self.new.lock().unwrap().get(&item.id).cloned() {
+            let path = Some("~/.local/bin/x".into());
+            out.push(Installed { version: Some(v), path, via: None, system: false });
+        }
+        out
+    }
+    fn uninstall(
+        &self,
+        item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        self.calls.lock().unwrap().push(format!("uninstall {} {}", item.id, method.via.name()));
+        line(command);
+        if self.uninstall_fails.contains(&item.id) {
+            return Err("it exited with 1: EACCES".into());
+        }
+        self.removed.lock().unwrap().insert(item.id.clone());
+        Ok(())
     }
     fn candidate(&self, via: Via) -> Option<String> {
         self.candidates.get(via.name()).cloned()
@@ -77,7 +111,11 @@ impl Host for TestHost {
                 .cloned()
                 .unwrap_or_else(|| "it exited with 1: E: no network".into()));
         }
-        self.installed.lock().unwrap().insert(id.clone(), "26.13.0".into());
+        if self.other.get(id).is_some_and(|v| *v != step.method.via) {
+            self.new.lock().unwrap().insert(id.clone(), "26.13.0".into());
+        } else {
+            self.installed.lock().unwrap().insert(id.clone(), "26.13.0".into());
+        }
         Ok(())
     }
     fn tools_used(&self) -> bool {
@@ -241,7 +279,14 @@ fn states_other_and_outdated() {
     assert!(matches!(s.states["claude"], State::Other { via: Via::Npm, .. }));
     assert!(matches!(&s.states["codex"], State::Outdated { latest, .. } if latest == "0.167.0"));
     let p = plan(&s, &picks(&["claude", "codex"]));
-    assert!(p.entry("claude").unwrap().action.is_none(), "BOOT7 offers the move");
+    // BOOT7: ticked, it moves to the recommended installer.
+    let claude = p.entry("claude").unwrap();
+    let a = claude.action.clone().expect("the move");
+    assert!(a.moving && !a.update && a.via == Via::Vendor, "{a:?}");
+    assert_eq!(
+        a.command,
+        "curl -fsSL https://claude.ai/install.sh | bash\nnpm uninstall -g @anthropic-ai/claude-code"
+    );
     let codex = p.entry("codex").unwrap().action.clone().unwrap();
     assert!(codex.update);
     assert_eq!(codex.command, "curl -fsSL https://chatgpt.com/codex/install.sh | sh");
@@ -658,6 +703,7 @@ fn updates_cfg(check: &str, ignore: &[&str]) -> ptyro_core::config::Updates {
             ptyro_core::config::UpdateCheck::Daily
         },
         ignore: ignore.iter().map(|s| (*s).to_owned()).collect(),
+        keep_installer: Vec::new(),
     }
 }
 
@@ -715,15 +761,20 @@ fn an_agent_installed_another_way_updates_that_way() {
     let out = updates::outdated(&s);
     assert_eq!(out[0].command.as_deref(), Some("npm install -g @openai/codex@latest"));
     assert_eq!(out[0].via, Some(Via::Npm));
-    let p = plan(&s, &picks(&["codex"]));
+    // Kept the way it is (`updates.keep_installer`, BOOT7): npm's own update.
+    let mut kept = s.clone();
+    kept.keep.insert("codex".into());
+    let p = plan(&kept, &picks(&["codex"]));
     let a = p.entry("codex").unwrap().action.clone().expect("an update");
-    assert!(a.update && a.via == Via::Npm, "{a:?}");
+    assert!(a.update && a.via == Via::Npm && !a.moving, "{a:?}");
+    assert!(p.entry("codex").unwrap().moves.is_none(), "kept: no move offered");
     let (r, _) = run_all(&p, &host, Admin::Ask);
     assert_eq!(r.done, ["codex"]);
     assert_eq!(host.calls(), ["codex npm"]);
-    // Not outdated: still "other", with nothing to do (BOOT7 offers the move).
-    let s = survey(&host, &BTreeMap::new());
+    // Not outdated and kept: still "other", with nothing to do.
+    let mut s = survey(&host, &BTreeMap::new());
     assert!(matches!(&s.states["codex"], State::Other { latest: None, .. }));
+    s.keep.insert("codex".into());
     assert!(plan(&s, &picks(&["codex"])).entry("codex").unwrap().action.is_none());
 }
 
@@ -878,4 +929,162 @@ fn the_refresh_asks_only_the_agents() {
     assert!(s.states.contains_key("claude"));
     assert!(!s.states.contains_key("git"), "no tool asked");
     assert!(s.candidates.is_empty());
+}
+
+// ── BOOT7: moves to the recommended installer ──────────────────────────────────────────────
+
+fn npm_codex() -> TestHost {
+    let mut h = TestHost::on(Platform::Linux).with(&["npm"]).have("codex", "0.162.1");
+    h.other.insert("codex".into(), Via::Npm);
+    h
+}
+
+#[test]
+fn an_agent_installed_another_way_is_offered_the_move_and_ticking_it_moves() {
+    let h = npm_codex();
+    let s = survey(&h, &BTreeMap::new());
+    let p = plan(&s, &[]);
+    let e = p.entry("codex").unwrap();
+    let mv = e.moves.clone().expect("offered");
+    assert_eq!((mv.from, mv.to), (Via::Npm, Via::Vendor));
+    assert_eq!(mv.uninstall, "npm uninstall -g @openai/codex");
+    assert!(!mv.admin);
+    assert_eq!(mv.keeps, ["~/.codex"]);
+    assert!(e.action.is_none(), "not ticked: nothing runs");
+    // A row of the checklist (not "already here"), with the offer in its words.
+    assert!(!checklist::here_already(e));
+    assert!(checklist::rows(&p).iter().any(|r| r.id == "codex"));
+    let line = checklist::about(&p, e, &|_| true, false);
+    assert!(line.contains("installed with npm · move to the recommended installer?"), "{line}");
+    // Ticked: installed the vendor's way, checked, then npm's copy removed.
+    let p = plan(&s, &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"], "{events:?}");
+    assert_eq!(h.calls(), ["codex vendor", "uninstall codex npm"]);
+    let starts: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Started { command, .. } => Some(command.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        starts,
+        ["curl -fsSL https://chatgpt.com/codex/install.sh | sh", "npm uninstall -g @openai/codex"]
+    );
+    // Now the recommended one: installed, nothing offered.
+    let s = survey(&h, &BTreeMap::new());
+    assert!(matches!(s.states["codex"], State::Installed { .. }), "{:?}", s.states["codex"]);
+    assert!(plan(&s, &[]).entry("codex").unwrap().moves.is_none());
+}
+
+#[test]
+fn a_new_install_that_fails_leaves_the_old_one_as_it_was() {
+    let mut h = npm_codex();
+    h.fail.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.failed, ["codex"]);
+    assert_eq!(h.calls(), ["codex vendor"], "nothing removed");
+    let fix = events.iter().find_map(|e| match e {
+        Event::Failed { fix, .. } => Some(fix.clone()),
+        _ => None,
+    });
+    assert!(fix.unwrap().contains("nothing was removed: Codex through npm is still installed"));
+    let s = survey(&h, &BTreeMap::new());
+    assert!(
+        matches!(&s.states["codex"], State::Other { via: Via::Npm, version: Some(v), .. } if v == "0.162.1")
+    );
+}
+
+#[test]
+fn a_removal_that_fails_says_the_command_that_finishes_it_and_a_retry_only_removes() {
+    let mut h = npm_codex();
+    h.uninstall_fails.insert("codex".into());
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, events) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.failed, ["codex"]);
+    let (error, fix) = events
+        .iter()
+        .find_map(|e| match e {
+            Event::Failed { error, fix, .. } => Some((error.clone(), fix.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert!(error.contains("works (~/.local/bin/x), but removing npm's copy"), "{error}");
+    assert!(fix.contains("`npm uninstall -g @openai/codex`"), "{fix}");
+    // Tried again once it can be removed: the new copy is here, so only the removal runs.
+    h.uninstall_fails.clear();
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["codex"]));
+    let (r, _) = run_all(&p, &h, Admin::Ask);
+    assert_eq!(r.done, ["codex"]);
+    assert_eq!(h.calls(), ["codex vendor", "uninstall codex npm", "uninstall codex npm"]);
+}
+
+#[test]
+fn a_kept_agent_is_not_offered_the_move_and_a_system_copy_needs_admin() {
+    let h = npm_codex();
+    let mut s = survey(&h, &BTreeMap::new());
+    s.keep.insert("codex".into());
+    let p = plan(&s, &picks(&["codex"]));
+    let e = p.entry("codex").unwrap();
+    assert!(e.moves.is_none() && e.action.is_none());
+    assert!(checklist::here_already(e));
+    // In an administrator's folder (a system npm prefix): removing it is sudo's, and the whole
+    // move is an administrator's step (TUI and CLI only; the web shows the command).
+    let item = catalog::item("codex").unwrap();
+    let st = State::Other {
+        version: Some("0.162.1".into()),
+        via: Via::Npm,
+        path: None,
+        latest: None,
+        system: true,
+    };
+    let mv = offer(item, Platform::Linux, &st, &BTreeSet::new(), &|_| true).unwrap();
+    assert!(mv.admin);
+    assert_eq!(mv.uninstall, "sudo npm uninstall -g @openai/codex");
+    let mut s = survey(&h, &BTreeMap::new());
+    s.states.insert("codex".into(), st);
+    let p = plan(&s, &picks(&["codex"]));
+    assert!(p.entry("codex").unwrap().action.as_ref().unwrap().admin);
+    let (r, _) = run_all(&p, &h, Admin::Never);
+    assert_eq!(r.skipped, ["codex"], "never over the network");
+    // The findings: offered unless kept.
+    let v = crate::updates::Versions {
+        movable: crate::updates::movable(&survey(&h, &BTreeMap::new())),
+        ..Default::default()
+    };
+    assert_eq!(v.movable.len(), 1);
+    assert!(
+        v.movable[0].finding().contains("`ptyro install codex` moves it to the vendor's installer")
+    );
+    let mut cfg = updates_cfg("daily", &[]);
+    assert!(!v.movable[0].kept(&cfg));
+    cfg.keep_installer = vec!["Codex".into()];
+    assert!(v.movable[0].kept(&cfg));
+}
+
+#[test]
+fn an_outdated_agent_installed_another_way_offers_both_until_kept() {
+    let mut h = npm_codex();
+    h.replies.insert("codex".into(), r#"{"tag_name":"rust-v0.170.0"}"#.into());
+    let dir = tempfile::tempdir().unwrap();
+    let v = crate::updates::check(&h, dir.path(), 1);
+    let o = &crate::updates::offered(&v, &updates_cfg("daily", &[]))[0];
+    assert_eq!(o.move_to, Some(Via::Vendor));
+    assert!(
+        o.finding()
+            .contains("; or `ptyro install codex` moves it from npm to the vendor's installer"),
+        "{}",
+        o.finding()
+    );
+    assert_eq!(
+        crate::updates::note_line(std::slice::from_ref(o)).unwrap(),
+        "Codex 0.170.0 is out (you have 0.162.1) (installed with npm; the move to the vendor's installer is offered too)"
+    );
+    let mut cfg = updates_cfg("daily", &[]);
+    cfg.keep_installer = vec!["codex".into()];
+    let o = &crate::updates::offered(&v, &cfg)[0];
+    assert_eq!(o.move_to, None);
+    assert!(!o.finding().contains("moves it"));
 }

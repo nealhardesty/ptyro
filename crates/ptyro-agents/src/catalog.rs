@@ -199,6 +199,10 @@ pub struct Method {
     /// `None`: the vendor documents no update command for this method.
     #[serde(default)]
     pub update: Option<String>,
+    /// How it is removed (an `others` row, BOOT7: the old copy after a move to the recommended
+    /// method), as the vendor or the package manager documents it.
+    #[serde(default)]
+    pub uninstall: Option<String>,
     /// The item updates itself in the background when installed this way.
     #[serde(default)]
     pub auto_update: bool,
@@ -421,9 +425,13 @@ pub struct Item {
     pub prereqs: Vec<Prereq>,
     /// In order of preference.
     pub methods: Vec<Method>,
-    /// Other ways it may already be installed, and how each updates.
+    /// Other ways it may already be installed, and how each updates and is removed.
     #[serde(default)]
     pub others: Vec<Method>,
+    /// Where its settings and logins live, in the user's home (BOOT7): no installer touches
+    /// them, so a move between installers keeps them. For people, `~` for the home.
+    #[serde(default)]
+    pub keeps: Vec<String>,
 }
 
 impl Item {
@@ -620,6 +628,18 @@ mod tests {
                             }
                         }
                     }
+                    // A way it may already be installed says how it is removed, for a move to
+                    // the recommended one (BOOT7); never with sudo (ptyro adds it, only for a
+                    // copy in an administrator's folder).
+                    if i.others.contains(m) {
+                        let u = m.uninstall.as_deref().unwrap_or_else(|| {
+                            panic!("{}: the {} way says no uninstall", i.id, m.via.name())
+                        });
+                        assert!(!u.trim().is_empty() && !u.contains("sudo"), "{}: {u}", i.id);
+                        if m.via == Via::Winget {
+                            assert!(u.contains("--source winget"), "{}: {u}", i.id);
+                        }
+                    }
                     // sudo means admin, and admin is said.
                     if cmd.contains("sudo ") {
                         assert!(m.admin, "{}: {cmd} uses sudo but isn't admin", i.id);
@@ -653,6 +673,13 @@ mod tests {
     fn agents_need_no_admin_and_are_checked_for_updates() {
         for i in items().iter().filter(|i| i.kind == Kind::Agent) {
             assert!(i.latest.is_some(), "{} has no newest-version source", i.id);
+            // A move between installers keeps these (BOOT7): every agent that can be installed
+            // another way says where they are.
+            assert!(
+                i.others.is_empty() || !i.keeps.is_empty(),
+                "{}: where its settings and logins live (`keeps`)",
+                i.id
+            );
             assert!(i.login.is_some(), "{} has no login", i.id);
             for m in &i.methods {
                 assert!(!m.admin, "{}: the recommended way needs admin", i.id);

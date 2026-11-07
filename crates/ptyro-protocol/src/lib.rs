@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 35 };
+pub const PROTO: Version = Version { major: 1, minor: 36 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -379,6 +379,11 @@ pub enum Request {
         /// Protocol 1.32: install these in WSL's distro too, through its ptyro (`wsl.exe`).
         #[serde(default)]
         wsl_picks: Option<Vec<String>>,
+        /// Protocol 1.36 (BOOT7): agents installed another way to keep that way for this run (an
+        /// update from the Health page, through that installer), as if `updates.keep_installer`
+        /// named them; the rest of `picks` installed another way move to the recommended installer.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keep: Vec<String>,
     },
     /// The agents out of date on the daemon's machine (BOOT5, protocol 1.35), as its daily look
     /// remembered them (installed versions asked again, never the network), less what

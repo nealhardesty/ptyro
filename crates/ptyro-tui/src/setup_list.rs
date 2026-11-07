@@ -140,6 +140,43 @@ impl Setup {
         self.said = (!said.is_empty()).then(|| said.join("; "));
     }
 
+    /// `K` on row `i` (BOOT7): an agent offered the move to the recommended installer is kept the
+    /// way it's installed, on this computer's side (WSL keeps its own, in its config): unticked,
+    /// and no longer offered. `Ok(Some((id, name, installer)))` to remember in
+    /// `updates.keep_installer`; `Err`: why it can't be kept here.
+    pub fn keep(&mut self, i: usize) -> Result<Option<(String, String, String)>, String> {
+        let col = self.col;
+        let Found::Ready(r) = &mut self.found else { return Ok(None) };
+        let Some(id) = checklist::rows(&r.plan).get(i).map(|e| e.id.clone()) else {
+            return Ok(None);
+        };
+        let side = r.plan.sides().get(col).copied().unwrap_or(r.sides.side);
+        let Some(e) = r.plan.entry_on(&id, side) else { return Ok(None) };
+        let Some(m) = e.moves.clone() else {
+            return Err(format!(
+                "K keeps an agent installed another way (npm, Homebrew, WinGet) as it is; {} isn't",
+                e.name
+            ));
+        };
+        let name = e.name.clone();
+        if side == Side::Wsl {
+            return Err(format!(
+                "WSL keeps its own: in WSL, `ptyro install {}` and answer k (or add it to updates.keep_installer there)",
+                program(&id)
+            ));
+        }
+        r.sides.here.keep.insert(id.clone());
+        r.picks.here.retain(|p| *p != id);
+        r.replan();
+        self.said = None;
+        Ok(Some((id, name, m.from.words().to_owned())))
+    }
+
+    /// Some row is offered the move (BOOT7): the footer names `K`.
+    pub fn offers_moves(&self) -> bool {
+        self.ready().is_some_and(|r| r.plan.entries.iter().any(|e| e.moves.is_some()))
+    }
+
     /// ←/→: the other side's column (two sides only).
     pub fn side_step(&mut self, by: isize) {
         let n = self.ready().map_or(1, |r| r.plan.sides().len());
@@ -222,11 +259,13 @@ pub fn elsewhere(remote: Option<&str>, windows: bool) -> Option<String> {
 pub async fn look(paths: Paths, remote: Option<String>) -> Option<(Sides, Where, Option<String>)> {
     let here = tokio::task::spawn_blocking(move || {
         let host = setup::host(&paths);
-        // The remembered newest versions (BOOT5): an outdated agent can be ticked to update.
+        // The remembered newest versions (BOOT5): an outdated agent can be ticked to update;
+        // `updates.keep_installer` (BOOT7): one installed another way is offered the move
+        // unless kept.
         let cfg = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&paths))
             .map(|c| c.updates)
             .unwrap_or_default();
-        setup::survey(&*host, &ptyro_agents::updates::known(&paths.state, &cfg))
+        ptyro_agents::updates::survey(&*host, &paths.state, &cfg)
     })
     .await
     .ok()?;
@@ -296,6 +335,7 @@ pub(crate) mod tests {
             states,
             programs: programs.iter().map(|p| (*p).to_owned()).collect(),
             candidates: BTreeMap::new(),
+            keep: Default::default(),
         }
     }
 
@@ -310,6 +350,36 @@ pub(crate) mod tests {
         };
         s.found(sides, Where::Local, None);
         s
+    }
+
+    /// BOOT7: Codex through npm is a row offering the move; Space ticks it (⏎ runs `ptyro
+    /// install codex`, which moves it); K keeps it the way it is, and it leaves the rows.
+    #[test]
+    fn an_agent_installed_another_way_can_be_moved_or_kept() {
+        let mut here = survey(Platform::Linux, &[("git", "2.43.0"), ("gh", "2.57.0")], &["npm"]);
+        here.states.insert(
+            "codex".into(),
+            State::Other {
+                version: Some("0.162.1".into()),
+                via: catalog::Via::Npm,
+                path: None,
+                latest: None,
+                system: false,
+            },
+        );
+        let mut s = Setup::looking(Some(vec![]));
+        s.found(Sides { here, side: Side::Local, wsl: None, status: None }, Where::Local, None);
+        assert!(s.offers_moves());
+        let i = s.rows().iter().position(|e| e.id == "codex").expect("a row");
+        s.toggle(i);
+        assert_eq!(s.commands(false, None).unwrap()[0].1, ["install", "codex", "--confirmed"]);
+        let kept = s.keep(i).unwrap().unwrap();
+        assert_eq!(kept, ("codex".into(), "Codex".into(), "npm".into()));
+        assert!(!s.rows().iter().any(|e| e.id == "codex"), "kept: here already");
+        assert!(s.commands(false, None).unwrap().is_empty(), "and unticked");
+        // K on a row that isn't installed another way says what K is for.
+        let i = s.rows().iter().position(|e| e.id == "claude").unwrap();
+        assert!(s.keep(i).unwrap_err().contains("K keeps an agent installed another way"));
     }
 
     #[test]

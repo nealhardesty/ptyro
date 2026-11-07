@@ -197,11 +197,14 @@ pub fn finding(c: &Check) -> Option<Finding> {
 /// ptyro`), as the daemon's `Updates` gives them (the badge's other `updates` warnings, a typo in
 /// `updates.ignore`, aren't).
 pub(crate) fn agent_update(f: &Finding) -> bool {
-    f.what.strip_prefix("updates ").is_some_and(|id| {
-        id == ptyro_agents::own::ID
-            || ptyro_agents::catalog::item(id)
-                .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
-    })
+    // The move offered beside an update (BOOT7) is `updates <id> move`.
+    f.what.strip_prefix("updates ").map(|w| w.strip_suffix(" move").unwrap_or(w)).is_some_and(
+        |id| {
+            id == ptyro_agents::own::ID
+                || ptyro_agents::catalog::item(id)
+                    .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
+        },
+    )
 }
 
 /// The shell's rc file and the line that sets up ptyro's integration in it, when it's missing:
@@ -268,11 +271,27 @@ impl App {
         let prefix = self.update_place().map(|p| format!("on {p}: ")).unwrap_or_default();
         self.health.updates = offered
             .iter()
-            .map(|o| Finding {
-                problem: false,
-                what: format!("updates {}", o.id),
-                text: format!("{prefix}{}", o.finding()),
-                fix: Some(Fix::Update(vec![o.program.clone()])),
+            .flat_map(|o| {
+                let update = Finding {
+                    problem: false,
+                    what: format!("updates {}", o.id),
+                    text: format!("{prefix}{}", o.finding()),
+                    fix: Some(Fix::Update(vec![o.program.clone()])),
+                };
+                // Installed another way (BOOT7): the move too, through the setup checklist,
+                // where it is a row (and `K` keeps it as installed).
+                let moving = o.via.zip(o.move_to).map(|(from, to)| Finding {
+                    problem: false,
+                    what: format!("updates {} move", o.id),
+                    text: format!(
+                        "{prefix}{} is installed with {}: moving it to {}, the recommended way, also brings it up to date (settings and logins stay)",
+                        o.name,
+                        from.words(),
+                        to.words()
+                    ),
+                    fix: Some(Fix::Setup { names: vec![o.program.clone()], place: None }),
+                });
+                std::iter::once(update).chain(moving)
             })
             .collect();
         if !self.health_open() {

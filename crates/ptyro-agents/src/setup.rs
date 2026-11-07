@@ -21,6 +21,7 @@ mod fake;
 pub(crate) mod host;
 pub mod lock;
 pub mod login;
+mod moving;
 mod run;
 #[cfg(test)]
 mod tests;
@@ -178,7 +179,8 @@ pub enum State {
         path: Option<String>,
     },
     /// Installed some way other than the table's recommended one (Claude Code through npm):
-    /// BOOT7 offers the move. Until then it updates the way it was installed (BOOT5).
+    /// offered the move to the recommended one (BOOT7, [`Entry::moves`]); kept
+    /// (`updates.keep_installer`), it updates the way it was installed (BOOT5).
     Other {
         #[serde(default)]
         version: Option<String>,
@@ -188,6 +190,10 @@ pub enum State {
         /// A newer version is out (BOOT5): its update is that installer's own.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         latest: Option<String>,
+        /// It is in a folder only an administrator can change (a system npm prefix): removing
+        /// it, after a move, needs administrator rights (BOOT7).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        system: bool,
     },
     /// Older than something ticked needs (Node.js 18 for Gemini CLI's 20).
     TooOld {
@@ -248,6 +254,11 @@ pub struct Survey {
     pub platform: Platform,
     /// By item id, every row of the table.
     pub states: BTreeMap<String, State>,
+    /// Agents kept the way they were installed (`updates.keep_installer`, BOOT7, as ids): the
+    /// move to the recommended installer isn't offered, and ticking one updates it its own way.
+    /// The caller fills it from its own side's config ([`crate::updates::survey`]).
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub keep: BTreeSet<String>,
     /// The methods' `needs` (and `sudo`, `curl`) that are on `PATH`.
     pub programs: BTreeSet<String>,
     /// The version of Node.js apt or dnf would install (`apt` → `18.19.1`), when it could be read.
@@ -296,7 +307,7 @@ fn survey_of(
             }
         }
     }
-    Survey { platform, states, programs, candidates }
+    Survey { platform, states, programs, candidates, keep: BTreeSet::new() }
 }
 
 /// The way an agent installed another way (`via`) updates: that installer's `others` row with
@@ -318,7 +329,13 @@ fn classify(item: &Item, platform: Platform, found: Installed, latest: Option<&S
         && Some(via) != recommended
         && item.others.iter().any(|m| m.via == via && m.on(platform))
     {
-        return State::Other { version: found.version, via, path: found.path, latest: newer };
+        return State::Other {
+            version: found.version,
+            via,
+            path: found.path,
+            latest: newer,
+            system: found.system,
+        };
     }
     if let (Some(v), Some(l)) = (&found.version, newer) {
         return State::Outdated { version: v.clone(), latest: l, path: found.path };
@@ -340,6 +357,71 @@ pub struct Action {
     /// Ticked items that must be installed first: if one fails, this is skipped.
     #[serde(default)]
     pub after: Vec<String>,
+    /// A move to the recommended installer (BOOT7): install it this way, confirm it runs, then
+    /// remove the old copy ([`Entry::moves`] says how).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub moving: bool,
+}
+
+/// The move an agent installed another way is offered (BOOT7, the design's goal 9): the
+/// recommended installer first, the new copy confirmed to run, and only then the old copy removed
+/// with its own installer's uninstall. Settings and logins stay where they are (`keeps`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Moving {
+    /// How it is installed now (`npm`).
+    pub from: Via,
+    /// The recommended way it moves to (`vendor`).
+    pub to: Via,
+    /// What removes the old copy, as typed (`npm uninstall -g @openai/codex`; with `sudo` for a
+    /// copy in an administrator's folder).
+    pub uninstall: String,
+    /// Removing the old copy needs administrator rights.
+    #[serde(default)]
+    pub admin: bool,
+    /// Where its settings and logins live, which stay (`~/.codex`).
+    #[serde(default)]
+    pub keeps: Vec<String>,
+}
+
+impl Moving {
+    /// `move from npm to the vendor's installer`.
+    pub fn words(&self) -> String {
+        format!("move from {} to {}", self.from.words(), self.to.words())
+    }
+
+    /// `your settings and login (~/.codex) stay`.
+    pub fn keeps_words(&self) -> String {
+        if self.keeps.is_empty() {
+            "your settings and logins stay".into()
+        } else {
+            format!("your settings and logins ({}) stay", self.keeps.join(", "))
+        }
+    }
+}
+
+/// The move `item` is offered, when it is installed another way (`state`), not kept
+/// (`updates.keep_installer`), and both its recommended method here (`has`: what is on `PATH`)
+/// and its current installer's uninstall are known.
+pub fn offer(
+    item: &Item,
+    platform: Platform,
+    state: &State,
+    keep: &BTreeSet<String>,
+    has: &dyn Fn(&str) -> bool,
+) -> Option<Moving> {
+    let State::Other { via, system, .. } = state else { return None };
+    if keep.contains(&item.id) {
+        return None;
+    }
+    let to = item.method(platform, has).filter(|m| m.via != *via && m.install.is_some())?;
+    let old = item.others.iter().find(|m| m.via == *via && m.on(platform))?;
+    let plain = old.uninstall.as_deref()?;
+    // A copy only an administrator can change: sudo removes it (Windows' installers raise
+    // their own prompt).
+    let admin = *system;
+    let uninstall =
+        if admin && !platform.is_windows() { format!("sudo {plain}") } else { plain.to_owned() };
+    Some(Moving { from: *via, to: to.via, uninstall, admin, keeps: item.keeps.clone() })
 }
 
 /// One line of the checklist.
@@ -365,6 +447,10 @@ pub struct Entry {
     /// What installing it runs; `None` when there's nothing to do or no way here.
     #[serde(default)]
     pub action: Option<Action>,
+    /// Installed another way, and offered the move to the recommended installer (BOOT7):
+    /// ticking it moves it ([`Action::moving`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moves: Option<Moving>,
     /// Ticked, but there's no way to install it here, and why (with the vendor's page).
     #[serde(default)]
     pub blocked: Option<String>,
@@ -533,7 +619,12 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
         } else {
             Vec::new()
         };
+        let moves = offer(item, platform, &st, &survey.keep, &has);
         let chosen = match &st {
+            // Offered the move (BOOT7): the recommended method's install, then the old removed.
+            State::Other { .. } if moves.is_some() => {
+                item.method(platform, has).map(|m| (m, false))
+            }
             State::Missing => method_for(item, survey, min.as_deref(), None, &has),
             State::TooOld { version, .. } => {
                 method_for(item, survey, min.as_deref(), Version::parse(version), &has)
@@ -552,8 +643,20 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
             .map(|p| p.item.clone())
             .collect();
         let action = chosen.and_then(|(m, update)| {
-            let command = command_of(m, update)?;
-            Some(Action { via: m.via, command, admin: m.admin, update, after: after.clone() })
+            let mut command = command_of(m, update)?;
+            let mut admin = m.admin;
+            if let Some(mv) = &moves {
+                command = format!("{command}\n{}", mv.uninstall);
+                admin |= mv.admin;
+            }
+            Some(Action {
+                via: m.via,
+                command,
+                admin,
+                update,
+                after: after.clone(),
+                moving: moves.is_some(),
+            })
         });
         let blocked =
             (is_ticked && action.is_none() && matches!(st, State::Missing | State::TooOld { .. }))
@@ -569,6 +672,7 @@ pub fn plan(survey: &Survey, picks: &[String]) -> Plan {
             picked: picked.contains(item.id.as_str()),
             needed_by,
             action: if is_ticked { action } else { None },
+            moves,
             blocked,
             doc: item.doc.clone(),
         });

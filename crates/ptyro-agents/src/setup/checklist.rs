@@ -90,9 +90,14 @@ impl Sides {
     }
 }
 
-/// Installed already, as wanted: nothing to tick.
+/// Installed already, as wanted: nothing to tick. One installed another way and offered the move
+/// to the recommended installer (BOOT7) is a row to tick instead.
 pub fn here_already(e: &Entry) -> bool {
-    matches!(e.state, State::Installed { .. } | State::Other { .. })
+    match e.state {
+        State::Installed { .. } => true,
+        State::Other { .. } => e.moves.is_none(),
+        _ => false,
+    }
 }
 
 /// The items a person can tick, in the checklist's order: what isn't here (or isn't new
@@ -210,9 +215,12 @@ pub fn how(e: &Entry) -> String {
         return format!("✓ {}", e.state.version().unwrap_or("installed"));
     }
     match e.action.as_ref().filter(|_| e.ticked) {
+        Some(a) if a.moving => {
+            format!("move to {}{}", a.via.words(), if a.admin { " (admin)" } else { "" })
+        }
         Some(a) => format!("{}{}", a.via.words(), if a.admin { " (admin)" } else { "" }),
         None if e.ticked && e.blocked.is_some() => "can't".to_owned(),
-        None => String::new(),
+        None => e.moves.as_ref().map(|m| format!("{}: move?", m.from.words())).unwrap_or_default(),
     }
 }
 
@@ -226,6 +234,27 @@ pub fn about(plan: &Plan, e: &Entry, programs: &dyn Fn(&str) -> bool, two: bool)
     // it is, so it takes that place.
     let mut parts: Vec<String> = vec![e.label.clone().unwrap_or_else(|| item.about.clone())];
     let platform = plan.platform;
+    // Installed another way (BOOT7): the move is the offer.
+    if let Some(m) = &e.moves {
+        parts.push(format!("installed with {}", m.from.words()));
+        if e.action.as_ref().is_some_and(|a| a.moving) {
+            parts.push(format!(
+                "moves to {}, then removes {}'s copy",
+                m.to.words(),
+                m.from.words()
+            ));
+            if m.admin {
+                parts.push("asks for admin".into());
+            }
+            parts.push(m.keeps_words());
+        } else {
+            parts.push("move to the recommended installer?".into());
+        }
+        if let State::Other { latest: Some(l), .. } = &e.state {
+            parts.push(format!("{l} is out"));
+        }
+        return parts.join(" · ");
+    }
     if !two {
         match (&e.action, &e.blocked) {
             (Some(a), _) => {

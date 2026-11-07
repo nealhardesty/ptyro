@@ -315,7 +315,11 @@ async fn the_daemon_plans_and_installs_without_admin() {
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun { picks: vec!["agy".into(), "git".into()], wsl_picks: None })
+        .request(Request::SetupRun {
+            picks: vec!["agy".into(), "git".into()],
+            wsl_picks: None,
+            keep: vec![],
+        })
         .await
         .unwrap()
     else {
@@ -375,8 +379,10 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
 
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
-    let Reply::SetupStarted { run, .. } =
-        c.request(Request::SetupRun { picks: vec!["agy".into()], wsl_picks: None }).await.unwrap()
+    let Reply::SetupStarted { run, .. } = c
+        .request(Request::SetupRun { picks: vec!["agy".into()], wsl_picks: None, keep: vec![] })
+        .await
+        .unwrap()
     else {
         panic!("not started");
     };
@@ -403,8 +409,13 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let kept: Vec<(u64, Value)> =
         going.events.iter().map(|l| (l.seq, serde_json::to_value(&l.event).unwrap())).collect();
     assert_eq!(kept, live, "the events so far, as they were sent");
-    let again =
-        c.request(Request::SetupRun { picks: vec!["opencode".into()], wsl_picks: None }).await;
+    let again = c
+        .request(Request::SetupRun {
+            picks: vec!["opencode".into()],
+            wsl_picks: None,
+            keep: vec![],
+        })
+        .await;
     assert!(
         format!("{again:?}").contains("setup is already running (from the web app"),
         "{again:?}"
@@ -526,7 +537,13 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
     assert!(running.is_none(), "not the daemon's run");
     let by = held_by.expect("who holds it");
     assert!(by.starts_with("`ptyro install` (process "), "{by}");
-    let r = c.request(Request::SetupRun { picks: vec!["opencode".into()], wsl_picks: None }).await;
+    let r = c
+        .request(Request::SetupRun {
+            picks: vec!["opencode".into()],
+            wsl_picks: None,
+            keep: vec![],
+        })
+        .await;
     std::fs::write(m.fake().join("go"), "").unwrap();
     let said = format!("{r:?}");
     assert!(said.contains("setup is already running (from `ptyro install` (process "), "{said}");
@@ -539,7 +556,11 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
     assert!(held_by.is_none(), "free again");
     // A refused run doesn't keep the daemon's own flag: the next one starts.
     let Reply::SetupStarted { .. } = c
-        .request(Request::SetupRun { picks: vec!["opencode".into()], wsl_picks: None })
+        .request(Request::SetupRun {
+            picks: vec!["opencode".into()],
+            wsl_picks: None,
+            keep: vec![],
+        })
         .await
         .unwrap()
     else {

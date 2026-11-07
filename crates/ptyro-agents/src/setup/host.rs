@@ -23,6 +23,8 @@ pub struct Installed {
     pub path: Option<String>,
     /// How it was installed, when its folder says (npm's, Homebrew's, WinGet's).
     pub via: Option<Via>,
+    /// Its folder is an administrator's (a system npm prefix): removing it needs those rights.
+    pub system: bool,
 }
 
 /// Whether administrator rights can be had.
@@ -64,6 +66,19 @@ pub trait Host: Sync {
     fn has(&self, program: &str) -> bool;
     /// The item's program, found, and the version it prints.
     fn installed(&self, item: &Item) -> Option<Installed>;
+    /// Every copy of the item's program, in the order they're found (`PATH` first, then npm's,
+    /// nvm's and the vendors' folders), each with the version it prints (BOOT7: the new copy
+    /// after a move, and whether the old one still comes first).
+    fn copies(&self, item: &Item) -> Vec<Installed>;
+    /// Remove the copy `method` installed (an `others` row) with `command` (its `uninstall`, as
+    /// the plan wrote it), each line of output to `line`.
+    fn uninstall(
+        &self,
+        item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String>;
     /// The Node.js version apt or dnf would install.
     fn candidate(&self, via: Via) -> Option<String>;
     fn elevation(&self) -> Elevation;
@@ -336,14 +351,30 @@ impl Host for RealHost {
 
     fn installed(&self, item: &Item) -> Option<Installed> {
         let found = crate::locate::find(&item.program, &self.path().to_string_lossy())?;
-        let mut cmd = found.argv.clone();
-        cmd.extend(item.version.iter().skip(1).cloned());
-        let text = capture(&cmd, &self.env(), Duration::from_secs(15)).map(|(_, t)| t);
-        Some(Installed {
-            version: text.as_deref().and_then(Version::parse).map(|v| v.to_string()),
-            path: Some(found.describe()),
-            via: installed_via(&found.path),
-        })
+        Some(self.copy_of(item, &found))
+    }
+
+    fn copies(&self, item: &Item) -> Vec<Installed> {
+        crate::locate::find_all(&item.program, &self.path().to_string_lossy())
+            .iter()
+            .map(|f| self.copy_of(item, f))
+            .collect()
+    }
+
+    fn uninstall(
+        &self,
+        _item: &Item,
+        method: &Method,
+        command: &str,
+        line: &mut dyn FnMut(&str),
+    ) -> Result<(), String> {
+        let shell = method.shell.ok_or("the table names no shell for this")?;
+        let cmd = if cfg!(unix) && self.root() && !self.has("sudo") && command.contains("sudo ") {
+            format!("sudo() {{ \"$@\"; }}; {command}")
+        } else {
+            command.to_owned()
+        };
+        stream(&shell.argv(&cmd), &self.env(), line)
     }
 
     fn candidate(&self, via: Via) -> Option<String> {
@@ -446,6 +477,22 @@ impl Host for RealHost {
 }
 
 impl RealHost {
+    /// A found copy, with the version it prints and how it came, by where its file really is (a
+    /// link in `~/.npm-global/bin` or Homebrew's `bin` names npm's or Homebrew's folder).
+    fn copy_of(&self, item: &Item, found: &crate::locate::Found) -> Installed {
+        let mut cmd = found.argv.clone();
+        cmd.extend(item.version.iter().skip(1).cloned());
+        let text = capture(&cmd, &self.env(), Duration::from_secs(15)).map(|(_, t)| t);
+        let real = ptyro_core::os::canonicalize(&found.path).unwrap_or_else(|_| found.path.clone());
+        let via = installed_via(&real).or_else(|| installed_via(&found.path));
+        Installed {
+            version: text.as_deref().and_then(Version::parse).map(|v| v.to_string()),
+            path: Some(found.describe()),
+            via,
+            system: via.is_some() && real.parent().is_some_and(admins_folder),
+        }
+    }
+
     /// [`Host::latest_reply`]: curl, 5 s to connect (a dead network fails fast), 10 s in all.
     fn reply(&self, url: &str) -> Result<String, String> {
         let words = argv(&["curl", "-fsSL", "--connect-timeout", "5", "--max-time", "10", url]);
@@ -494,6 +541,23 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
     let value = value.split_once(':').map_or(value.as_str(), |(_, v)| v);
     let upstream = value.split(['+', '~', '-']).next()?;
     Version::parse(upstream).map(|v| v.to_string())
+}
+
+/// `dir` is an administrator's (BOOT7: a system npm prefix), by its owner and mode, without
+/// writing in it: neither this user's nor writable by everyone. Windows: never (npm's prefix is
+/// the user's own, and WinGet's uninstaller raises its own prompt).
+fn admins_folder(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let Ok(m) = std::fs::metadata(dir) else { return false };
+        Some(m.uid()) != ptyro_core::os::uid() && m.mode() & 0o002 == 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        false
+    }
 }
 
 /// The user can write in `dir`.

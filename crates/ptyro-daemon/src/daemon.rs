@@ -1196,7 +1196,9 @@ impl Daemon {
             | Request::MachineRetry { .. }) => self.handle_machines(req).await,
             Request::SetupPlan { picks, wsl_picks } => self.setup_plan(picks, wsl_picks).await,
             Request::Updates { note } => self.updates(note).await,
-            Request::SetupRun { picks, wsl_picks } => self.setup_run(picks, wsl_picks).await,
+            Request::SetupRun { picks, wsl_picks, keep } => {
+                self.setup_run(picks, wsl_picks, keep).await
+            }
             Request::LastLaunch { worktree, .. } => {
                 Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }
