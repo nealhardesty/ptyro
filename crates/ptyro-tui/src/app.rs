@@ -368,6 +368,17 @@ pub(crate) fn is_newline_key(key: &KeyEvent) -> bool {
     }
 }
 
+/// A name as its own machine knows it: `laptop2:work` → `work` for a thing mirrored from
+/// `laptop2` (MM1.B). A rename types and checks this, and the daemon renames it there.
+pub(crate) fn bare<'a>(machine: Option<&str>, name: &'a str) -> &'a str {
+    machine.and_then(|m| name.strip_prefix(m)?.strip_prefix(':')).unwrap_or(name)
+}
+
+/// `bare`'s inverse: `work` on `laptop2` is `laptop2:work` here.
+fn on_machine(machine: Option<&str>, name: &str) -> String {
+    machine.map_or_else(|| name.to_owned(), |m| format!("{m}:{name}"))
+}
+
 impl PromptKind {
     /// Free text that may run over several lines (UX1.26): a prompt for agents, a comment, a
     /// commit message. Names, titles and command lines stay on one line.
@@ -3820,7 +3831,7 @@ impl App {
             "session.rename" => {
                 self.overlay = Some(Overlay::Prompt {
                     title: format!("Rename {} (its address; C-t: its title)", info.name),
-                    text: info.name.clone(),
+                    text: bare(info.machine.as_deref(), &info.name).to_owned(),
                     kind: PromptKind::Rename(id),
                 });
             }
@@ -4197,7 +4208,7 @@ impl App {
                                 "Rename project {} (its address: {}/name finds its worktrees)",
                                 p.slug, p.slug
                             ),
-                            text: p.slug.clone(),
+                            text: bare(p.machine.as_deref(), &p.slug).to_owned(),
                             kind: PromptKind::RenameProject(p.id),
                         });
                     }
@@ -4293,9 +4304,10 @@ impl App {
                 None => need_wt(self),
             },
             "workspace.rename" => {
+                let machine = self.workspace_machine(&self.workspace);
                 self.overlay = Some(Overlay::Prompt {
                     title: format!("Rename workspace {}", self.workspace),
-                    text: self.workspace.clone(),
+                    text: bare(machine.as_deref(), &self.workspace).to_owned(),
                     kind: PromptKind::RenameWorkspace(self.workspace.clone()),
                 });
             }
@@ -6051,15 +6063,20 @@ impl App {
         let name = |t: &str| ptyro_core::names::problem(t).map_or(Ok(()), Err);
         match kind {
             PromptKind::Rename(id) => {
-                let current = self.session(*id).map(|s| s.name.as_str());
-                if t.is_empty() || current == Some(t) {
+                let me = self.session(*id);
+                let machine = me.and_then(|s| s.machine.as_deref());
+                if t.is_empty() || me.is_some_and(|s| bare(machine, &s.name) == t) {
                     return Ok(Some("unchanged".into()));
                 }
                 name(t)?;
                 // Unique per project (SPEC §2.3): another project's session may share it.
-                let project = self.session(*id).and_then(|s| s.project.clone());
-                if self.sessions.iter().any(|s| s.id != *id && s.name == t && s.project == project)
-                {
+                let project = me.and_then(|s| s.project.clone());
+                if self.sessions.iter().any(|s| {
+                    s.id != *id
+                        && s.machine.as_deref() == machine
+                        && bare(machine, &s.name) == t
+                        && s.project == project
+                }) {
                     return Err(match project.as_deref().and_then(|p| self.project(p)) {
                         Some(p) => format!("a session named {t} exists in {}", p.slug),
                         None => format!("a session named {t} exists"),
@@ -6067,6 +6084,8 @@ impl App {
                 }
             }
             PromptKind::RenameWorkspace(old) => {
+                let machine = self.workspace_machine(old);
+                let old = bare(machine.as_deref(), old);
                 if old == "main" {
                     return Err("the main workspace can't be renamed".into());
                 }
@@ -6074,7 +6093,7 @@ impl App {
                     return Ok(Some("unchanged".into()));
                 }
                 name(t)?;
-                if self.workspaces.iter().any(|w| w.name == t) {
+                if self.workspaces.iter().any(|w| w.name == on_machine(machine.as_deref(), t)) {
                     return Err(format!("workspace {t} exists"));
                 }
             }
@@ -6095,11 +6114,12 @@ impl App {
             }
             PromptKind::RenameProject(id) => {
                 let Some(p) = self.project(id) else { return Ok(None) };
-                if t.is_empty() || t == p.slug {
+                let machine = p.machine.as_deref();
+                if t.is_empty() || t == bare(machine, &p.slug) {
                     return Ok(Some("unchanged".into()));
                 }
                 name(t)?;
-                if self.projects.iter().any(|o| o.id != p.id && o.slug == t) {
+                if self.projects.iter().any(|o| o.id != p.id && o.slug == on_machine(machine, t)) {
                     return Err(format!("a project named {t} exists"));
                 }
             }
@@ -6220,8 +6240,9 @@ impl App {
                 );
             }
             PromptKind::RenameWorkspace(old) => {
-                let new_name = text.trim().to_owned();
-                if !new_name.is_empty() && new_name != old {
+                let machine = self.workspace_machine(&old);
+                let new_name = on_machine(machine.as_deref(), text.trim());
+                if !text.trim().is_empty() && new_name != old {
                     // The name changes here once the daemon has accepted it: it refuses `main`
                     // and bad names, and a rename that failed must not leave this TUI on a
                     // workspace that doesn't exist.
@@ -6242,7 +6263,11 @@ impl App {
             }
             PromptKind::RenameProject(id) => {
                 let name = text.trim().to_owned();
-                if !name.is_empty() && self.project(&id).is_some_and(|p| p.slug != name) {
+                if !name.is_empty()
+                    && self
+                        .project(&id)
+                        .is_some_and(|p| bare(p.machine.as_deref(), &p.slug) != name)
+                {
                     self.request(
                         Pending::Done(format!("renamed to {name}")),
                         Request::ProjectRename { addr: id, name },
@@ -6284,7 +6309,8 @@ impl App {
             }
             PromptKind::Rename(id) => {
                 let name = text.trim().to_owned();
-                let same = self.session(id).is_some_and(|s| s.name == name);
+                let same =
+                    self.session(id).is_some_and(|s| bare(s.machine.as_deref(), &s.name) == name);
                 if !name.is_empty() && !same {
                     self.request(
                         Pending::Done(format!("renamed to {name}")),
@@ -6763,6 +6789,11 @@ impl App {
 
     pub fn worktree(&self, id: &str) -> Option<&WorktreeInfo> {
         self.worktrees.iter().find(|w| w.id == id)
+    }
+
+    /// The machine a workspace (by name) is mirrored from, if any.
+    fn workspace_machine(&self, name: &str) -> Option<String> {
+        self.workspaces.iter().find(|w| w.name == name).and_then(|w| w.machine.clone())
     }
 
     pub fn project(&self, id: &str) -> Option<&ProjectInfo> {
@@ -8782,9 +8813,10 @@ mod tests {
         assert_eq!(app.prompt_check(&kind, "other"), Err("p1/other exists".into()));
         assert!(app.prompt_check(&kind, "a/b").is_err(), "the daemon's rule");
         assert!(app.prompt_check(&kind, "login-fix").is_ok());
-        // Typed: what a name can't hold becomes _, as in every name prompt.
+        // Typed: what a name can't hold is replaced, as in every name prompt.
         typed(&mut app, "\x08\x08\x08\x08Login Fix");
-        assert_eq!(prompt_text(&app), Some("login_fix"));
+        let want = ptyro_core::names::typed("Login Fix");
+        assert_eq!(prompt_text(&app), Some(want.as_str()));
         typed(&mut app, "\n");
         assert!(app.overlay.is_none(), "sent");
 
@@ -8800,6 +8832,45 @@ mod tests {
         assert_eq!(app.prompt_check(&kind, "myrepo"), Ok(Some("unchanged".into())));
         assert_eq!(app.prompt_check(&kind, "lib"), Err("a project named lib exists".into()));
         assert!(app.prompt_check(&kind, "web").is_ok());
+    }
+
+    /// Renaming something mirrored from another machine (MM1.B) types and checks the name it
+    /// has there: `laptop2:app` is offered as `app`, never as `laptop2_app`.
+    #[test]
+    fn a_mirrored_thing_is_renamed_by_its_own_name() {
+        let mut app = app();
+        let mirrored = |id: &str, slug: &str| ProjectInfo {
+            machine: Some("laptop2".into()),
+            ..project(id, &format!("laptop2:{slug}"))
+        };
+        app.projects = vec![project("p1", "lib"), mirrored("m1", "app"), mirrored("m2", "tool")];
+        let kind = PromptKind::RenameProject("m1".into());
+        assert_eq!(app.prompt_check(&kind, "app"), Ok(Some("unchanged".into())));
+        assert!(app.prompt_check(&kind, "lib").is_ok(), "this machine's lib is another one");
+        assert_eq!(app.prompt_check(&kind, "tool"), Err("a project named tool exists".into()));
+        app.workspaces.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "w", "name": "laptop2:work", "profile": "default", "projects": [],
+                "notify": "all", "created_ms": 0, "machine": "laptop2",
+            }))
+            .unwrap(),
+        );
+        app.workspace = "laptop2:work".into();
+        app.run(&Command { action: "workspace.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("work"));
+        let ws = PromptKind::RenameWorkspace("laptop2:work".into());
+        assert_eq!(app.prompt_check(&ws, "work"), Ok(Some("unchanged".into())));
+        let mut s = session("laptop2:fixer");
+        s.machine = Some("laptop2".into());
+        app.sessions = vec![s.clone()];
+        app.overlay = None;
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.run(&Command { action: "session.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("fixer"));
+        assert_eq!(
+            app.prompt_check(&PromptKind::Rename(s.id), "fixer"),
+            Ok(Some("unchanged".into()))
+        );
     }
 
     #[test]

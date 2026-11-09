@@ -2210,7 +2210,12 @@ modes, other-workspace badges and the per-workspace inbox tabs.
   project when it is added). Sessions, workspaces, trust and pins refer to the project by id,
   so they follow on their own; its worktrees' `project/name` and its archives
   (`wt restore NEW/name`) follow it. A change set's member keeps the name it was added with:
-  that is the member's directory in the set.
+  that is the member's directory in the set. A change-set template that names its members by
+  slug doesn't follow either: after a rename, edit the template (or name the project by id).
+  On another machine's project (MM1.B), the clients offer and check the name it has there
+  (`app`, not `laptop2:app`), and the daemon takes the `laptop2:` off a rename's new name where it
+  routes the request. Sessions and workspaces are renamed the same way.
+  A worktree is renamed only while it is ready or missing; one being created is refused.
 - `remote_url` is `origin`'s URL, else the first remote's.
 - Every project gets an `@root` worktree row for its main checkout. It is never locked or
   removable.

@@ -1180,6 +1180,20 @@ async fn worktrees_and_projects_are_renamed() {
     assert!(e.message.contains("@root"), "{}", e.message);
     let e = c.request(rename("app/other", "Bad Name")).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::Invalid, "{e:?}");
+    // Two renames to one name at once: one wins, the other is refused, and both sides agree.
+    for n in ["r1", "r2"] {
+        new_wt(&c, wt(n)).await.unwrap();
+    }
+    let c2 = w.d.client().await.unwrap();
+    let (a, b) =
+        tokio::join!(c.request(rename("app/r1", "dup")), c2.request(rename("app/r2", "dup")));
+    assert!(a.is_ok() != b.is_ok(), "exactly one: {a:?} {b:?}");
+    let Reply::Worktrees { worktrees } =
+        c.request(Request::WorktreeList { project: Some("app".into()) }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(worktrees.iter().filter(|w| w.name == "dup").count(), 1);
     // Another project's worktree may share it.
     new_wt(&c, WorktreeSpec { project: "lib".into(), ..wt("shared") }).await.unwrap();
     c.request(rename("app/other", "shared")).await.expect("unique per project only");

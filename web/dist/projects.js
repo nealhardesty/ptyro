@@ -177,8 +177,10 @@ async function suggest(p) {
     ]);
 }
 function renameProject(p) {
-    form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: p.slug, required: true, slug: "name", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. A space or other odd character becomes _ (a-z 0-9 . _ -)` }], "Rename", async (v) => {
-        if (v.name === p.slug)
+    // Another machine's project is renamed there, by the name it has there (MM1.B).
+    const slug = splitMachine(p.slug)[1];
+    form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "name", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. A space or other odd character becomes _ (a-z 0-9 . _ -)` }], "Rename", async (v) => {
+        if (v.name === slug)
             return;
         await conn.request({ t: "project_rename", addr: p.id, name: v.name });
         ui.toast(`Renamed to ${v.name}`);
@@ -283,7 +285,7 @@ function workspacesView() {
     const wss = [...data.workspaces.values()];
     return h("div", {}, ui.header("Workspaces", "#/p", h("button", { class: "icon plus", title: tip("workspace.new"), onclick: () => workspaceForm() }, "＋")), h("main", { class: "stack", title: tip("workspace.set") }, h("div", { class: "rows" }, ...wss.map((w) => row(w.name, `${w.projects.length} project${w.projects.length === 1 ? "" : "s"} · ${w.profile} · notifies ${w.notify}`, null, { onclick: () => menu(w.name, [
             { title: tip("workspace.set"), label: "Profile and notifications…", run: () => workspaceForm(w) },
-            { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
+            { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: splitMachine(w.name)[1], required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
             { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove ${w.name}?`, "Its projects stay; they just leave this workspace.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
         ]) })))));
 }
