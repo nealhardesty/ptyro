@@ -460,10 +460,14 @@ impl Daemon {
     }
 
     async fn cs_new(self: &Arc<Self>, spec: CsNewSpec) -> Result<String, Error> {
-        let name = ptyro_core::model::slugify(&spec.name);
-        if name.is_empty() {
+        // A name someone gave: checked, never rewritten (SPEC §2.3).
+        let name = spec.name.clone();
+        if name.trim().is_empty() {
             return Err(Error::invalid("a change set needs a name"));
         }
+        // Kept short because its members' names are appended (`<set>-<member>`).
+        ptyro_core::names::validate_within(&name, 40, ", since its members' names are appended")
+            .map_err(Error::invalid)?;
         if let Ok(r) = self.find_set(&name)
             && self.set_state(&r).is_ok_and(|c| c.phase != Phase::Removed)
         {

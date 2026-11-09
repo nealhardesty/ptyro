@@ -37,6 +37,10 @@ Conventions:
   `ptyro wait --for` the status ones (`working` to `error`).
 - **`W`** (a worktree) is `project/name` (`myrepo/@root` is the main checkout), a unique name, or
   a path. It defaults to the worktree you're in.
+- **A name you give** (a session, worktree, workspace, profile, change set, `fanout --name`,
+  machine or device) is `a-z 0-9 . _ -`, 1–64 characters. It is kept exactly as you wrote it
+  (`cs new my_fix` makes `my_fix`). A bad one is refused, and the error offers the fix:
+  `invalid name "My Feature": … try "my-feature"`.
 
 ## Sessions
 

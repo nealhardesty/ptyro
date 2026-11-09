@@ -1990,7 +1990,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     let nl = if kind.multiline() {
                         format!(" · {}", newline_hint(app))
                     } else if kind.is_name() {
-                        " · a space or other odd character becomes _ (a-z 0-9 . _ -)".to_owned()
+                        format!(" · {}", ptyro_core::names::TYPED_HINT.to_lowercase())
                     } else {
                         String::new()
                     };

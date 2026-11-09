@@ -1298,7 +1298,7 @@ impl Daemon {
             ));
         }
         let name =
-            match name.or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::as_name)) {
+            match name.or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::derive)) {
                 Some(n) => n,
                 None => {
                     let _ = std::fs::remove_file(self.token_path(&probe));
@@ -1321,7 +1321,7 @@ impl Daemon {
                 "`c` can't name a machine: `c:…` is how chats are addressed. Pick another with --name",
             ));
         }
-        if ptyro_core::names::as_name(&self.machine()).as_deref() == Some(name.as_str()) {
+        if ptyro_core::names::derive(&self.machine()).as_deref() == Some(name.as_str()) {
             cleanup();
             return Err(Error::invalid(format!(
                 "{name} is this machine's own name: a machine can't mirror itself"

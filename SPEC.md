@@ -171,6 +171,32 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.
   - The friendly-name generator draws from a corvid-themed word list (`brisk-rook`,
     `quiet-jackdaw`, `sly-magpie`; `ptyro_core::names`).
+- **One name policy** (owner, 2026-11-09). Every name a person, an agent or a script gives
+  follows the same rule, `names::validate`: `[a-z0-9._-]`, 1–64 characters, not all digits, not
+  starting with `.` or `-`, no `..`, not ending in `.` or `.lock`. That covers sessions (and
+  shells), worktrees, workspaces, profiles, change sets, a fan-out's name prefix, a lead's name
+  for its worker, machines, paired devices, and the config panel's named members (agents,
+  tools, …). A change set's name and a fan-out's prefix are at most 40 characters, kept short
+  because member names are appended (`<set>-<member>`, `<prefix>-<agent>`); the fix offered
+  then fits in 40 too (`names::validate_within`).
+  - **Given names are refused, never rewritten.** `cs new my_fix` makes `my_fix`. A bad one is an
+    error that offers the fix: `invalid name "My Feature": 'M' (uppercase) isn't allowed (only
+    a-z 0-9 . _ -); try "my-feature"` (`names::tidy`). An empty name is refused, never replaced
+    by a stand-in.
+  - **`-` is the one replacement character.** The suggestion, generated names and the TUI's and
+    web's live name fields all use it. As a name is typed (`names::typed`, the web's `slugify`)
+    a character it can't hold becomes `-`, and what a name can't start with is dropped at the
+    start. The fields say so: "A space or other odd character becomes - (a-z 0-9 . _ -)".
+  - **Derived names may be tidied silently**, since they are no one's input: names made from a
+    title, a prompt, a directory, a recipe's template (`names::derive`, always valid, or none so
+    the caller picks its own fallback), a machine's name from what it calls itself, and names
+    ptyro composes itself (`<set>-<member>`, a step's agent, `judge`). A taken name gets `-2`,
+    `-3` (`names::numbered`), its base cut so the whole stays within 64.
+  - **Project slugs** fold to the narrower `[a-z0-9-]`, at most 40 (`model::slugify`, built on the
+    same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
+    its worktrees and archives, so this fold stays as it was: re-adding a repository finds them
+    again, and stored slugs keep working. A directory with nothing slug-like in its name gets
+    `repo`; nothing else falls back to it.
 - **Address syntax** used across CLI and protocol (resolved by the daemon):
 
   | Form | Example | Resolves to |
@@ -2927,13 +2953,16 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   nothing.
 - **Name fields swap, they don't refuse** (`names::typed`, `names::branch_typed`): as a name is
   typed or pasted, uppercase is lowercased and any other character outside `[a-z0-9._-]` (a
-  space, `/`, an accent) becomes `_`, as does a leading `.` or `-` and the second `.` of `..`
-  (`My Feat/2` → `my_feat_2`). The dialog says so. What no one character fixes (all digits,
-  ending in `.` or `.lock`, over 64) is still flagged with its reason, and Tab applies the
-  suggested fix. A branch name keeps case and `/` and swaps whitespace, `~ ^ : ? * [ \` and a
-  leading `-`. It applies to every interactive name field in the TUI and the web (`slug` on a
-  form field): session rename, the task box's name, new worktree, workspace new and rename,
-  profile new and rename, config-panel members, machine names, and the branch rename. The CLI
+  space, `/`, an accent) becomes `-`, as does the second `.` of `..`; a leading `.`, `-` or
+  space is dropped (`My Feat/2` → `my-feat-2`; owner, 2026-11-09: `-`, not `_`, the same
+  character as the suggestion and generated names, §2.3). The dialog says so. What no one
+  character fixes (all digits, ending in `.` or `.lock`, over 64) is still flagged with its
+  reason, and Tab applies the suggested fix. A branch name keeps case and `/`, swaps
+  whitespace and `~ ^ : ? * [ \` for `-`, and drops them or a `-` at the start. It applies to
+  every interactive name field in the TUI and the web (`slug` on a form field): session rename,
+  the task box's name, new session, shell and worktree, workspace new and rename, profile new
+  and rename, a change set's and a fan-out's name, a paired device's, config-panel members,
+  machine names, and the branch rename. The CLI
   and the daemon stay strict: a bad name given as an argument is an error, so a script never
   gets a name it didn't write.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.

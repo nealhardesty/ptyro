@@ -8,7 +8,7 @@ import { data } from "./data.js";
 import { startSession } from "./flow.js";
 import type { Session } from "./screen.js";
 import { shellLabel } from "./shellkit.js";
-import { actions, ask, enc, form, go, h, menu, ui } from "./kit.js";
+import { actions, NAME_HINT, ask, enc, form, go, h, menu, ui } from "./kit.js";
 import type { Item } from "./kit.js";
 
 const ACTIONS = {
@@ -104,7 +104,7 @@ function commandForm(workspace?: string): void {
     { key: "dir", label: "Directory", placeholder: "~", hint: "Where it starts (default: your home directory)" },
     { key: "slot", label: "Number", type: "number", placeholder: "the next free one", hint: "A number that's taken is refused" },
     { key: "workspace", label: "Workspace", type: "select", options: wss.includes(ws) ? wss : [ws, ...wss], value: ws, more: true },
-    { key: "name", label: "Name", slug: "name", placeholder: "a friendly name is picked for you", hint: "Its address", more: true },
+    { key: "name", label: "Name", slug: "name", placeholder: "a friendly name is picked for you", hint: `Its address. ${NAME_HINT}`, more: true },
     { key: "title", label: "Title", placeholder: "what it's for", hint: "For people to read", more: true },
     { key: "scratch", label: "In a scratch directory", type: "check", hint: "A new, empty directory of its own, which goes with it (instead of Directory)", more: true },
   ], "Start", async (v) => {
