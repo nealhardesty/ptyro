@@ -25,6 +25,8 @@ pub struct Ui {
     pub sidebar_width: u16,
     pub status_bar: bool,
     pub clock: bool,
+    /// The daemon's computer's load average in the status bar (and the web's header).
+    pub load: bool,
     /// Capture the mouse for click-to-focus, wheel scrollback and border drags.
     pub mouse: bool,
     /// Ask before stopping a session from the TUI.
@@ -137,6 +139,7 @@ impl Default for Ui {
             sidebar_width: 30,
             status_bar: true,
             clock: true,
+            load: true,
             mouse: true,
             confirm_kill: true,
             show_ports: true,

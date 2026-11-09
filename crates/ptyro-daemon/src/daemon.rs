@@ -130,6 +130,8 @@ pub struct Daemon {
     pub upgraded_ms: AtomicU64,
     /// The watchdog's lag tick (M8.5).
     pub(crate) lag: Arc<crate::watchdog::Lag>,
+    /// The computer's load average as last sent (`load.rs`).
+    pub(crate) host_load: Mutex<Option<ptyro_protocol::HostLoad>>,
     // ── remote (M9) ──
     pub(crate) devices: Mutex<Vec<crate::devices::DeviceRecord>>,
     /// Bumped on revocation: device connections re-check that they're still paired.
@@ -254,6 +256,7 @@ impl Daemon {
             rolled_back: std::sync::atomic::AtomicBool::new(false),
             upgraded_ms: AtomicU64::new(0),
             lag: Arc::new(crate::watchdog::Lag::default()),
+            host_load: Mutex::new(None),
             devices: Mutex::new(Vec::new()),
             devices_epoch: watch::Sender::new(0),
             vapid: Mutex::new(None),
@@ -1033,6 +1036,7 @@ impl Daemon {
             web: Some(self.web_status()),
             machine: Some(self.machine()),
             wsl_hold: self.wsl_hold_status(),
+            load: *self.host_load.locked(),
         }
     }
 

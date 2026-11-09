@@ -29,6 +29,7 @@ const ACTIONS = {
     "session.view": "Chat or terminal; the terminal fitted or 1:1",
     "answer": "Answer what it asks: allow once, always, or deny",
     "inbox": "The inbox: what happened while you were away",
+    "host.load": "The load average of the computer ptyro runs on, over 1, 5 and 15 minutes: amber once every CPU is busy, red at twice that ([ui] load)",
     "inbox.read": "Mark everything in the inbox read",
     "notifications": "Notifications on this device (a test is sent)",
     "scratchpad": "The scratchpad: your notes file, edited here; it saves as you type",
@@ -197,11 +198,29 @@ async function answer(id, decision) {
             toast(e.message);
     }
 }
+let hostLoad = null;
+const loadText = (l) => l.avg.map((a) => (a / 100).toFixed(2)).join(" ");
+const loadLevel = (l) => l.avg[0] >= 200 * Math.max(1, l.cpus) ? "bad" : l.avg[0] >= 100 * Math.max(1, l.cpus) ? "warn" : "";
+const machineTitle = () => [conn.machine ? `This ptyro runs on ${conn.machine}` : "", hostLoad ? `load average ${loadText(hostLoad)} (1, 5, 15 minutes) on ${hostLoad.cpus} CPUs` : ""].filter(Boolean).join("; ");
+const loadSpan = () => hostLoad ? h("span", { class: `load ${loadLevel(hostLoad)}`, title: tip("host.load") }, `${conn.machine ? " · " : ""}${loadText(hostLoad)}`) : null;
+function setHostLoad(l) {
+    const had = !!hostLoad;
+    hostLoad = l;
+    // Shown or hidden: the header changes shape. Else only the numbers.
+    if (had !== !!l) {
+        render();
+        return;
+    }
+    for (const chip of document.querySelectorAll("header .machine")) {
+        chip.title = machineTitle();
+        chip.querySelector(".load")?.replaceWith(loadSpan() ?? "");
+    }
+}
 /// `back`: true goes to the session list; a string is where it goes instead.
 function header(title, back, ...extra) {
     const unread = app.inbox.filter((e) => !e.read_ms).length;
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine ? h("span", { class: "machine", title: `This ptyro runs on ${conn.machine}` }, conn.machine) : null, dot, notesLink(), h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
+    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, dot, notesLink(), h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null), h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
 }
 function sessionCard(s) {
     const st = statusOf(s);
@@ -536,6 +555,7 @@ conn.listeners.add((msg) => {
         void refresh();
         void loadAll();
         notesConnected();
+        conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => { });
         return;
     }
     if (msg.t === "chat") {
@@ -574,6 +594,10 @@ conn.listeners.add((msg) => {
     }
     if (msg.t === "event") {
         const e = msg.event;
+        if (e.t === "host_load") {
+            setHostLoad(e.load ?? null);
+            return;
+        }
         staleMaybeChanged(e);
         if (onEvent(e)) {
             render();

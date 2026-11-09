@@ -51,6 +51,7 @@ tint_borders = true       # colour pane dividers with the session's profile
 # sidebar_width = 30      # at least 12
 # status_bar = false
 # clock = false           # no clock in the status bar
+# load = false            # no load average in the status bar (or the web's header)
 # show_ports = false      # hide listening ports in the sidebar and pane headers
 
 [worktrees]

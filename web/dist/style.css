@@ -25,6 +25,9 @@ header { position: sticky; top: 0; z-index: 5; display: flex; align-items: cente
   border-top: 3px solid var(--machine, transparent); }
 header .machine { font-size: 12px; color: var(--muted); max-width: 30vw; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; padding: 1px 8px; border-radius: 9px; border: 1px solid var(--machine, var(--line)); }
+header .machine .load { font-variant-numeric: tabular-nums; }
+header .machine .load.warn { color: var(--warn); }
+header .machine .load.bad { color: var(--bad); }
 header h1 { font-size: 17px; margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 header .logo { width: 24px; height: 24px; }
 header .back { font-size: 28px; line-height: 1; padding: 0 6px; }
