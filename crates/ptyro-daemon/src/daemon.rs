@@ -16,7 +16,9 @@ use ptyro_core::ids::short_handle;
 use ptyro_core::model::MAIN_WORKSPACE;
 use ptyro_core::paths::Paths;
 use ptyro_core::session::{HistoryEntry, SessionInfo, SessionKind, SpawnSpec};
-use ptyro_core::{ClientId, Error, ErrorCode, SessionId, TermSize, lookup, names, now_ms};
+use ptyro_core::{
+    ClientId, Error, ErrorCode, SessionId, TermSize, lookup, names, now_ms, selector,
+};
 use ptyro_protocol::{DaemonStatus, DomainEvent, PROTO, Reply, Request};
 use ptyro_store::{Registry, Store};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -632,31 +634,37 @@ impl Daemon {
             .ok_or_else(missing)
     }
 
-    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus `@all`, `@live`
-    /// (`@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error` (the status engine's
-    /// verdict, whatever its source: hooks, self-reports, the screen), and name globs with `*` and
-    /// `?`. Order follows the session list; duplicates are dropped.
+    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus the `@` selectors of
+    /// `ptyro_core::selector::SELECTORS` (`@all`, `@exited`, `@dormant`, the status engine's
+    /// verdicts, …) and name globs with `*` and `?`. Order follows the session list; duplicates
+    /// are dropped.
     pub fn resolve_many(&self, selector: &str) -> Result<Vec<Arc<Session>>, Error> {
         let sessions = self.sessions();
         let mut picked: Vec<SessionId> = Vec::new();
         for part in selector.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let status_is =
-                |s: &Session, want: &str| s.status().is_some_and(|st| st.label() == want);
             let found: Vec<SessionId> = match part {
-                "@all" => sessions.iter().map(|s| s.id).collect(),
-                "@live" | "@running" => {
-                    sessions.iter().filter(|s| s.is_live()).map(|s| s.id).collect()
-                }
-                "@exited" => sessions.iter().filter(|s| !s.is_live()).map(|s| s.id).collect(),
                 "@last" | "@focused" => vec![self.resolve(part)?.id],
+                "@all" => sessions.iter().map(|s| s.id).collect(),
                 p if p.starts_with('@') => {
-                    let want = &p[1..];
-                    if !["working", "blocked", "idle", "done", "error"].contains(&want) {
+                    let Some(want) = selector::find(p).and_then(|s| s.state) else {
                         return Err(Error::invalid(format!(
-                            "unknown selector {p:?}; try @all, @live, @exited, @focused, @last, @working, @blocked, @idle, @done"
+                            "unknown selector {p:?}; try {}",
+                            selector::list()
                         )));
-                    }
-                    sessions.iter().filter(|s| status_is(s, want)).map(|s| s.id).collect()
+                    };
+                    sessions
+                        .iter()
+                        .filter(|s| {
+                            let state = s
+                                .meta
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .state
+                                .clone();
+                            want.matches(&state, s.status(), || self.info(s).is_active())
+                        })
+                        .map(|s| s.id)
+                        .collect()
                 }
                 p if p.contains(['*', '?']) => sessions
                     .iter()

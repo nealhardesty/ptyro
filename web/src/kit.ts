@@ -383,6 +383,9 @@ export function argWords(line: string): string[] {
 /// The profile a new workspace starts with: the one named like it, else `default`.
 export const profileFor = (names: string[], workspace: string): string => names.includes(workspace) ? workspace : "default";
 
+/// The word a status is shown as: the selectors' and the CLI's (`error`; the wire says `errored`).
+export const statusWord = (st: string): string => (st === "errored" ? "error" : st);
+
 // ── small parts ─────────────────────────────────────────────────────────────────────────────
 
 export const badge = (text: string, kind = ""): HTMLElement => h("span", { class: `badge ${kind}` }, text);

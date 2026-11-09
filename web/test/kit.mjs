@@ -11,7 +11,7 @@ globalThis.localStorage = { getItem: () => { throw new Error("blocked"); }, setI
 globalThis.location = { origin: "http://x", hash: "" };
 globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send() {} close() {} };
 
-const { safeDecode, webHref, once, Cache, slugify } = await import("../dist/kit.js");
+const { safeDecode, webHref, once, Cache, slugify, statusWord } = await import("../dist/kit.js");
 const { conn, store, token } = await import("../dist/conn.js");
 
 // A malformed escape in a route is kept as typed instead of throwing.
@@ -27,6 +27,9 @@ assert.equal(slugify("name", "-x"), "_x");
 assert.equal(slugify("name", "x..y"), "x._y");
 assert.equal(slugify("name", "brisk-rook.v1"), "brisk-rook.v1");
 assert.equal(slugify("branch", "fix this/Now: ok"), "fix_this/Now__ok");
+// A status is shown with the selectors' word: `error`, as `@error` and `ptyro ls --status error` say.
+assert.equal(statusWord("errored"), "error");
+assert.equal(statusWord("idle"), "idle");
 // localStorage that throws is not a crash.
 assert.equal(token(), null);
 store.set("k", "v");

@@ -1323,7 +1323,7 @@ pub fn shell_init(shell: Shell, paths: &Paths) -> String {
 
 /// `ls --status/--project/--workspace`.
 pub struct Filter {
-    pub status: Option<String>,
+    pub status: Option<ptyro_core::selector::State>,
     pub project: Option<String>,
     pub workspace: Option<String>,
     /// Chats' engines too (SPEC §22.2).
@@ -1332,20 +1332,8 @@ pub struct Filter {
 
 impl Filter {
     fn keeps(&self, s: &SessionInfo, projects: &[ptyro_core::model::ProjectInfo]) -> bool {
-        let status_ok = self.status.as_deref().is_none_or(|want| {
-            let st = s.status.as_ref().map(|r| r.status.label());
-            match want {
-                "running" | "live" => s.state.is_live(),
-                // Busy now: an agent working or waiting for you, a shell running a command.
-                "active" => s.is_active(),
-                "exited" => matches!(
-                    s.state,
-                    ptyro_core::session::ProcessState::Exited { .. }
-                        | ptyro_core::session::ProcessState::Failed { .. }
-                ),
-                "dormant" => s.state == ptyro_core::session::ProcessState::Dormant,
-                w => st == Some(w) || (w == "errored" && st == Some("error")),
-            }
+        let status_ok = self.status.is_none_or(|want| {
+            want.matches(&s.state, s.status.as_ref().map(|r| r.status), || s.is_active())
         });
         let project_ok = self.project.as_deref().is_none_or(|p| {
             s.project

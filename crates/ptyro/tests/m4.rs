@@ -648,6 +648,40 @@ async fn dormant_resume_and_hibernate_across_daemon_restarts() {
     assert_eq!(get(&c, "cdx").await.state, ProcessState::Dormant);
 }
 
+/// `@exited` is ended and not resumable; a hibernated agent is `@dormant`, so `rm @exited` never
+/// throws away a conversation (owner, 2026-11-09). `ls --status` takes the same words.
+#[tokio::test]
+async fn rm_exited_leaves_a_dormant_agent_alone() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    agent(&c, "sleeper", "claude", None).await;
+    w.d.wait_for_text(&c, "sleeper", "resumed=false", WAIT).await.unwrap();
+    let spec = SpawnSpec {
+        argv: vec!["true".into()],
+        cwd: std::env::temp_dir(),
+        name: Some("gone".into()),
+        ..SpawnSpec::default()
+    };
+    c.request(Request::Spawn { spec }).await.unwrap();
+    wait_for(&c, "gone", "exited", |s| matches!(s.state, ProcessState::Exited { .. })).await;
+    w.ok(&["hibernate", "sleeper"]);
+    wait_for(&c, "sleeper", "dormant", |s| s.state == ProcessState::Dormant).await;
+
+    assert_eq!(resolve(&c, "@exited").await, ["gone"]);
+    assert_eq!(resolve(&c, "@dormant").await, ["sleeper"]);
+    assert_eq!(resolve(&c, "@live").await, Vec::<String>::new(), "dormant isn't live");
+    assert_eq!(resolve(&c, "@all").await, ["sleeper", "gone"], "@all has both");
+    assert_eq!(resolve(&c, "@errored").await, resolve(&c, "@error").await);
+    let ls = w.ok(&["ls", "--status", "dormant"]);
+    assert!(ls.contains("sleeper") && !ls.contains("gone"), "{ls}");
+    let err = c.request(Request::Resolve { addr: "@nonsense".into() }).await.unwrap_err();
+    assert!(err.message.contains("@dormant") && err.message.contains("@error"), "{err:?}");
+
+    w.ok(&["rm", "@exited"]);
+    assert!(c.request(Request::Get { addr: "gone".into() }).await.is_err(), "removed");
+    assert_eq!(get(&c, "sleeper").await.state, ProcessState::Dormant, "kept, still resumable");
+}
+
 #[tokio::test]
 async fn notifications_sinks_mutes_and_signed_links() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
