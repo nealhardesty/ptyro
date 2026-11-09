@@ -650,6 +650,10 @@ pub fn human_bytes(b: u64) -> String {
 /// commit under `refs/ptyro/archive/`, so `wt restore` brings it back as it was.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchiveEntry {
+    /// Its address when several archives share a name (protocol 1.38; SPEC §2.3). Archives from
+    /// before then are given one when the list is read.
+    #[serde(default)]
+    pub id: String,
     pub project: String,
     pub project_slug: String,
     pub name: String,

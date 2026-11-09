@@ -170,7 +170,7 @@ pub async fn each(
     for a in addrs {
         match c.request(Request::Resolve { addr: a.clone() }).await? {
             Reply::Sessions { sessions } if !sessions.is_empty() => targets.extend(sessions),
-            _ => return Err(Error::new(ErrorCode::NotFound, format!("no session matches {a:?}"))),
+            _ => return Err(ptyro_core::lookup::not_found("session", a)),
         }
     }
     let mut code = 0;

@@ -160,10 +160,10 @@ pub enum WtCmd {
         #[arg(long)]
         stop_sessions: bool,
     },
-    /// Bring an archived worktree back as it was (`name` or `project/name`)
+    /// Bring an archived worktree back as it was (`name`, `project/name` or its handle)
     Restore { worktree: String },
-    /// Delete archived worktrees for good (`name` or `project/name`): the saved files go, and
-    /// the branch too when it is merged or pushed. Asks first unless --yes
+    /// Delete archived worktrees for good (`name`, `project/name` or its handle): the saved
+    /// files go, and the branch too when it is merged or pushed. Asks first unless --yes
     ArchiveRm {
         #[arg(required = true)]
         worktrees: Vec<String>,
@@ -1006,9 +1006,12 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             if entries.is_empty() {
                 eprintln!("nothing archived");
             }
+            // Its handle tells apart archives that share a name (`wt restore 7f3k`).
+            let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
             for e in &entries {
                 println!(
-                    "{:<28} {:<8} {:<24} {}",
+                    "{:<6} {:<28} {:<8} {:<24} {}",
+                    ptyro_core::model::short_suffix(&e.id, &ids),
                     truncate(&format!("{}/{}", e.project_slug, e.name), 28),
                     age(e.archived_ms),
                     truncate(&e.branch, 24),

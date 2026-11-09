@@ -1131,4 +1131,32 @@ async fn session_names_are_unique_per_project() {
     let spare = spawn(&c, named("lib/@root", "spare")).await.unwrap();
     let e = c.request(rename(spare.id.full(), "build")).await.unwrap_err();
     assert!(e.message.contains("in project lib"), "{}", e.message);
+
+    // One lookup policy (SPEC §2.3). The CLI exits 4 on an ambiguous name, listing each.
+    let out = w.cli(&["read", "build"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.contains("lib/build") && err.contains("say which"), "{err}");
+    // Case doesn't matter, for names and handles alike.
+    let get = |addr: String| c.request(Request::Get { addr });
+    let Reply::Session { info } = get("LIB/BUILD".into()).await.unwrap() else { panic!() };
+    assert_eq!(info.id, lib.id);
+    let Reply::Session { info } = get(spare.handle.to_uppercase()).await.unwrap() else { panic!() };
+    assert_eq!(info.id, spare.id);
+    // Three characters of an id are too few, and the message says so; four are enough.
+    let full = spare.id.full();
+    let e = get(full[full.len() - 3..].to_owned()).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    assert!(e.message.contains("at least 4 characters"), "{}", e.message);
+    let out = w.cli(&["read", &format!("s:{}", &full[full.len() - 3..])]);
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    // Projects: not found names the kind.
+    let e = c.request(Request::ProjectGet { addr: "nope".into() }).await.unwrap_err();
+    assert_eq!((e.code, e.message.as_str()), (ErrorCode::NotFound, r#"no project matches "nope""#));
+    let Reply::Project { info, .. } =
+        c.request(Request::ProjectGet { addr: "LIB".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(info.slug, "lib");
 }

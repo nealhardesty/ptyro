@@ -5,7 +5,7 @@
 
 use ptyro_core::secret::{ct_eq, token};
 use ptyro_core::sync::MutexExt;
-use ptyro_core::{Error, ErrorCode, now_ms};
+use ptyro_core::{Error, ErrorCode, lookup, now_ms};
 use ptyro_protocol::{DeviceInfo, PushSub, Reply, Request, Scope};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -82,7 +82,30 @@ const MAX_PUSH_PER_DEVICE: usize = 10;
 
 /// Device names are one device each, whatever their case.
 fn same_name(a: &str, b: &str) -> bool {
-    a.trim().eq_ignore_ascii_case(b.trim())
+    lookup::same(a, b)
+}
+
+/// The id of the device `addr` names (SPEC §2.3): its name, whatever its case, else its id or
+/// the end of it (at least 4 characters).
+fn find_device(devices: &[DeviceRecord], addr: &str) -> Result<String, Error> {
+    let label = |d: &&DeviceRecord| format!("{} ({})", d.name, d.id);
+    let named: Vec<&DeviceRecord> = devices.iter().filter(|d| same_name(&d.name, addr)).collect();
+    if named.len() > 1 {
+        let which: Vec<String> = named.iter().map(label).collect();
+        return Err(lookup::ambiguous_name("device", addr, &which));
+    }
+    if let [one] = named.as_slice() {
+        return Ok(one.id.clone());
+    }
+    let key = lookup::key(addr);
+    let by_id = devices.iter().filter(|d| lookup::id_matches(&d.id, &key)).collect();
+    match lookup::one("device", addr, by_id, label)? {
+        Some(d) => Ok(d.id.clone()),
+        None => {
+            let names: Vec<String> = devices.iter().map(|d| d.name.clone()).collect();
+            Err(lookup::not_found_among("device", addr, &names))
+        }
+    }
 }
 
 fn id_num(id: &str) -> u64 {
@@ -490,28 +513,15 @@ impl Daemon {
                 })
             }
             Request::DeviceRevoke { id } => {
-                let removed = {
+                let gone = {
                     let mut d = self.devices.locked();
-                    // Names needn't be unique: by name, only when it names one device.
-                    let named = d.iter().filter(|x| x.name == id).count();
-                    if named > 1 && !d.iter().any(|x| x.id == id) {
-                        return Err(Error::new(
-                            ErrorCode::Ambiguous,
-                            format!(
-                                "{named} devices are called {id:?}: revoke by id (ptyro devices)"
-                            ),
-                        ));
-                    }
-                    let before = d.len();
-                    d.retain(|x| x.id != id && x.name != id);
-                    before != d.len()
+                    let gone = find_device(&d, &id)?;
+                    d.retain(|x| x.id != gone);
+                    gone
                 };
-                if !removed {
-                    return Err(Error::not_found(&id));
-                }
                 self.save_devices();
                 self.devices_epoch.send_modify(|e| *e += 1);
-                tracing::info!(device = %id, "revoked");
+                tracing::info!(device = %gone, "revoked");
                 Ok(Reply::Done)
             }
             Request::PushKey => Ok(Reply::PushKey { key: self.vapid()?.public_b64() }),
@@ -653,6 +663,37 @@ fn req_label(req: &Request) -> &'static str {
 mod tests {
     use super::*;
     use ptyro_core::session::SpawnSpec;
+
+    /// Pairing and revoking compare names one way, whatever their case (SPEC §2.3).
+    #[test]
+    fn devices_are_found_by_name_in_any_case_or_by_id() {
+        let dev = |id: &str, name: &str| DeviceRecord {
+            id: id.into(),
+            name: name.into(),
+            scope: Scope::Full,
+            token_sha256: String::new(),
+            created_ms: 0,
+            last_seen_ms: None,
+            last_via: None,
+            push: Vec::new(),
+            pairing: None,
+            machine: false,
+        };
+        let list = [dev("a1b2c3d4e5f6", "Phone"), dev("0f0f0f0fe5f6", "laptop")];
+        assert_eq!(find_device(&list, "phone").unwrap(), "a1b2c3d4e5f6");
+        assert_eq!(find_device(&list, "LAPTOP").unwrap(), "0f0f0f0fe5f6");
+        assert_eq!(find_device(&list, "A1B2C3D4E5F6").unwrap(), "a1b2c3d4e5f6");
+        let e = find_device(&list, "e5f6").unwrap_err();
+        assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+        assert!(e.message.contains("Phone (a1b2c3d4e5f6)") && e.message.contains("laptop"));
+        let e = find_device(&list, "tablet").unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound);
+        assert_eq!(e.message, r#"no device matches "tablet"; the devices are Phone and laptop"#);
+        let twice = [dev("a1b2c3d4e5f6", "phone"), dev("0f0f0f0f0f0f", "PHONE")];
+        let e = find_device(&twice, "Phone").unwrap_err();
+        assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+        assert!(e.message.starts_with(r#"2 devices are named "Phone""#), "{}", e.message);
+    }
 
     #[test]
     fn scopes_are_ordered_and_requests_classified() {

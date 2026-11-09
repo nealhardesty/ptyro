@@ -17,9 +17,10 @@ use std::time::{Duration, Instant};
 use ptyro_core::model::{ArchiveEntry, RemoveOpts, WorktreeInfo, WorktreeSpec};
 use ptyro_core::session::SessionKind;
 use ptyro_core::status::AgentStatus;
-use ptyro_core::{Error, now_ms};
+use ptyro_core::{Error, lookup, now_ms};
 use ptyro_git::{BranchFate, Git};
 use ptyro_protocol::{DomainEvent, Reply, Request};
+use sha2::Digest;
 
 use crate::daemon::Daemon;
 use crate::registry::git_err;
@@ -41,11 +42,18 @@ impl Daemon {
                 .map_err(|e| Error::internal(format!("reading the archive list: {e}")))?,
             None => self.views.locked().get(ARCHIVES).cloned(),
         };
-        match v {
-            None => Ok(Vec::new()),
+        let mut list: Vec<ArchiveEntry> = match v {
+            None => Vec::new(),
             Some(v) => serde_json::from_value(v)
-                .map_err(|e| Error::internal(format!("the archive list isn't readable: {e}"))),
+                .map_err(|e| Error::internal(format!("the archive list isn't readable: {e}")))?,
+        };
+        // One from before archives had ids: the same one each time it is read (its snapshot is
+        // one of a kind in its project).
+        for e in list.iter_mut().filter(|e| e.id.is_empty()) {
+            let h = sha2::Sha256::digest(format!("{}\0{}", e.project, e.snapshot).as_bytes());
+            e.id = h.iter().take(13).map(|b| format!("{b:02x}")).collect();
         }
+        Ok(list)
     }
 
     async fn save_archives(&self, list: &[ArchiveEntry]) -> Result<(), Error> {
@@ -161,6 +169,7 @@ impl Daemon {
         list.insert(
             0,
             ArchiveEntry {
+                id: ptyro_core::model::new_id(),
                 project: p.id.clone(),
                 project_slug: p.slug.clone(),
                 name: wt.name.clone(),
@@ -195,7 +204,7 @@ impl Daemon {
     pub(crate) async fn restore_worktree(self: &Arc<Self>, addr: &str) -> Result<Reply, Error> {
         let _one = self.archive_list.lock().await;
         let mut list = self.archives().await?;
-        let i = archive_index(&list, addr)?;
+        let i = self.archive_index(&list, addr)?;
         let e = list[i].clone();
         // The branch must still be where the snapshot was taken: restoring puts the files back
         // over its tip, and a branch that has moved on (an integrate, a commit from another
@@ -256,7 +265,7 @@ impl Daemon {
     pub(crate) async fn delete_archive(&self, addr: &str) -> Result<Reply, Error> {
         let _one = self.archive_list.lock().await;
         let mut list = self.archives().await?;
-        let e = list.remove(archive_index(&list, addr)?);
+        let e = list.remove(self.archive_index(&list, addr)?);
         // The list first: an entry whose snapshot is gone could no longer be restored.
         self.save_archives(&list).await?;
         let notes = self.forget_archive(&e, &list).await;
@@ -342,12 +351,58 @@ impl Daemon {
         .unwrap_or_default()
     }
 
+    /// Whether the archive `e` is of the project `addr` names: its slug, its id (or the end of
+    /// it), or a path in it, as any project address (SPEC §2.3), even once the project is gone.
+    fn archive_in(&self, e: &ArchiveEntry, addr: &str) -> bool {
+        match self.find_project(addr) {
+            Ok(p) => p.id == e.project,
+            Err(_) => {
+                let key = lookup::key(addr);
+                lookup::same(&e.project_slug, &key) || lookup::id_matches(&e.project, &key)
+            }
+        }
+    }
+
+    /// The entry `addr` names (SPEC §2.3): its name, `project/name` (the project as any project
+    /// address: slug, id or path), or its id or the end of it. Several archives of one name are
+    /// listed with how old each is, to be told apart by id.
+    fn archive_index(&self, list: &[ArchiveEntry], addr: &str) -> Result<usize, Error> {
+        let addr = addr.trim();
+        let ids: Vec<&str> = list.iter().map(|e| e.id.as_str()).collect();
+        let label = |i: &usize| {
+            let e = &list[*i];
+            let handle = ptyro_core::model::short_suffix(&e.id, &ids);
+            format!("{handle} ({}/{}, archived {} ago)", e.project_slug, e.name, ago(e.archived_ms))
+        };
+        let key = lookup::key(addr);
+        let (project, name) = match addr.rsplit_once('/') {
+            Some((p, n)) => (Some(p), lookup::key(n)),
+            None => (None, key.clone()),
+        };
+        let named: Vec<usize> = (0..list.len())
+            .filter(|i| {
+                let e = &list[*i];
+                lookup::same(&e.name, &name) && project.is_none_or(|p| self.archive_in(e, p))
+            })
+            .collect();
+        if named.len() > 1 {
+            let which: Vec<String> = named.iter().map(label).collect();
+            return Err(lookup::ambiguous_name("archived worktree", &name, &which));
+        }
+        if let [i] = named.as_slice() {
+            return Ok(*i);
+        }
+        let by_id = (0..list.len()).filter(|i| lookup::id_matches(&list[*i].id, &key)).collect();
+        lookup::one("archived worktree", addr, by_id, label)?
+            .ok_or_else(|| lookup::not_found("archived worktree", addr))
+    }
+
     pub(crate) async fn list_archives(&self, project: Option<&str>) -> Result<Reply, Error> {
         let entries = self
             .archives()
             .await?
             .into_iter()
-            .filter(|e| project.is_none_or(|p| p == e.project || p == e.project_slug))
+            .filter(|e| project.is_none_or(|p| self.archive_in(e, p)))
             .collect();
         Ok(Reply::Archives { entries })
     }
@@ -502,30 +557,14 @@ fn expired(list: Vec<ArchiveEntry>, days: u32, now: u64) -> (Vec<ArchiveEntry>, 
     list.into_iter().partition(|e| days > 0 && e.archived_ms < before)
 }
 
-/// The entry `addr` (`name`, or `project/name`) names: the newest of several with a project,
-/// ambiguous without one.
-fn archive_index(list: &[ArchiveEntry], addr: &str) -> Result<usize, Error> {
-    let (slug, name) = match addr.split_once('/') {
-        Some((p, n)) => (Some(p), n),
-        None => (None, addr),
-    };
-    let matches: Vec<usize> = list
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.name == name && slug.is_none_or(|s| s == e.project_slug))
-        .map(|(i, _)| i)
-        .collect();
-    match matches.as_slice() {
-        [] => Err(Error::missing("archived worktree", addr)),
-        [i] => Ok(*i),
-        // Newest first: the latest of several with that name.
-        [i, ..] if slug.is_some() => Ok(*i),
-        _ => Err(Error::new(
-            ptyro_core::ErrorCode::Ambiguous,
-            format!(
-                "several archived worktrees are named {name}: say which project (`myrepo/{name}`)"
-            ),
-        )),
+/// `3d`: how long ago `ms` was.
+fn ago(ms: u64) -> String {
+    let secs = now_ms().saturating_sub(ms) / 1000;
+    match secs {
+        0..60 => format!("{secs}s"),
+        60..3600 => format!("{}m", secs / 60),
+        3600..86400 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86400),
     }
 }
 
@@ -616,6 +655,7 @@ mod tests {
     fn purging_takes_only_archives_older_than_the_setting() {
         const DAY: u64 = 86_400_000;
         let at = |name: &str, archived_ms| ArchiveEntry {
+            id: name.into(),
             project: "p".into(),
             project_slug: "p".into(),
             name: name.into(),

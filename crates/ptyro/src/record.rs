@@ -22,7 +22,9 @@ async fn session_id(ctx: &Ctx, addr: &str) -> Result<String, Error> {
         if let Ok(Reply::History { entries }) =
             c.request(Request::History { limit: Some(5000) }).await
             && let Some(e) = entries.iter().find(|e| {
-                e.name == addr || e.id == addr || e.id.ends_with(&addr.to_ascii_lowercase())
+                let key = ptyro_core::lookup::key(addr);
+                ptyro_core::lookup::same(&e.name, &key)
+                    || ptyro_core::lookup::id_matches(&e.id, &key)
             })
         {
             return Ok(e.id.clone());

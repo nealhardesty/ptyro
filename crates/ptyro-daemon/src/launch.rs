@@ -150,12 +150,11 @@ impl Daemon {
         confirmed: bool,
     ) -> Result<Resolution, Error> {
         let config = self.config();
-        let ws_profile = {
-            let reg = self.registry.locked();
-            reg.workspaces.iter().find(|w| w.name == workspace).map(|w| w.profile.clone())
-        };
+        let ws_profile = self.find_workspace(workspace).ok().map(|w| w.profile);
+        // Names are lowercase (SPEC §2.3): `--profile Work` means work.
+        let explicit = explicit.map(ptyro_core::lookup::key);
         let inputs = Inputs {
-            explicit,
+            explicit: explicit.as_deref(),
             worktree: target.and_then(|(w, _)| w.profile.as_deref()),
             pin: target.and_then(|(_, p)| p.pin.as_deref()),
             workspace: ws_profile.as_deref().filter(|p| *p != DEFAULT_PROFILE),

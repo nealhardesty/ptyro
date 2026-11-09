@@ -207,6 +207,30 @@ inside them, so CLI commands default to the worktree you're standing in. Ids are
 (`claude-rook`), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
 show the suggestion before ⏎ (§11.2h).
 
+**One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
+way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, runs, change
+sets, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
+uses it, so the rules can't drift apart.
+
+1. **Order**: an exact name (a project's slug) → the qualified form where the kind has one
+   (`project/name`) → the full id → a handle: the end of the id, **at least 4 characters**,
+   with or without its prefix (`s:`, `w:`, `p:`, `c:`, `r-`). A shorter one never matches, and
+   the not-found message says why. Runs match the end of their id, never a part of the middle.
+2. **Case**: names and ids are lowercase, so the input is lowercased before names, ids and
+   handles are compared (`Build` finds `build`; device and machine names likewise). Titles are
+   not addresses. Chats still take a word of a title, as the last resort; a destructive request
+   doesn't (`find_chat_by(addr, false)`).
+3. **Ambiguity** is always `ambiguous` (CLI exit 4), and the message lists the candidates as
+   they can be addressed, at most 5 and then "and N more": `2 sessions are named "build": say
+   which, app/build or lib/build`; `2 runs match "k3x9": say which, r-ak3x9 (fanout) or …`.
+   Several archived worktrees of one name are listed with their handles and ages.
+4. **Not found names the kind**: `no run matches "zz9q"`, `no device matches "phone"; the
+   devices are laptop and tablet`. Where the set is small (devices, workspaces, profiles,
+   machines) the message lists what there is.
+5. **Archived worktrees** have an id (protocol 1.38; earlier ones get a stable one when the list
+   is read) and resolve by name, `project/name` (the project by slug, id or path, as anywhere),
+   or handle. `ptyro wt archives` shows the handle; the TUI and the web send the id.
+
 ---
 
 ## 3. Architecture overview
@@ -1099,6 +1123,10 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
 client ignores both.
+
+**Protocol 1.38** (additive): `ArchiveEntry.id`, so archived worktrees that share a name can be
+told apart (§2.3). Clients send it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's
+entries have none (empty), and the clients then send `project/name` as before.
 
 **[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
 entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
@@ -7783,12 +7811,12 @@ shown in every workspace, including those of linked machines (§16.4b).
 
 - A chat and a node have a **ULID** (§2.3); the human handle of a chat is `c:7f3k`.
 - A chat has a **title** (free text) and no name. It is addressed by handle (`7f3k`, `c:7f3k`),
-  by a title substring that matches one chat, or by `@last` (the chat most recently used), `@pinned`
-  and `@unread` (the one pinned chat, or the one with answers not read; when several are, the
-  error lists them, newest first). A chat of another machine is `laptop2:c:7f3k`, as sessions are
+  by `@last` (the chat most recently used), `@pinned` and `@unread` (the one pinned chat, or the
+  one with answers not read; when several are, the error lists them, newest first), and, as the
+  last resort (§2.3), by a title substring that matches one chat. A chat of another machine is `laptop2:c:7f3k`, as sessions are
   (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
   alike).
-- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 6), for `fork --at` and search hits.
+- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search hits.
 
 ### 22.4 Storage: `chat.db`
 

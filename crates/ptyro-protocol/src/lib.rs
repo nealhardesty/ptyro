@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 37 };
+pub const PROTO: Version = Version { major: 1, minor: 38 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2574,7 +2574,7 @@ mod tests {
         });
         round_trip(ServerMsg::Response {
             id: 1,
-            outcome: Outcome::Err { error: Error::not_found("x") },
+            outcome: Outcome::Err { error: Error::missing("session", "x") },
         });
     }
 

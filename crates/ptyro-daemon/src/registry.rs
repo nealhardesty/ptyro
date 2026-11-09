@@ -11,7 +11,7 @@ use ptyro_core::model::{
     WorktreeState, new_id, slugify,
 };
 use ptyro_core::project::ProjectConfig;
-use ptyro_core::{Error, ErrorCode, now_ms};
+use ptyro_core::{Error, ErrorCode, lookup, now_ms};
 use ptyro_git::Git;
 use ptyro_protocol::{DomainEvent, Reply, Request};
 use ptyro_store::TrustRow;
@@ -53,13 +53,11 @@ impl Daemon {
         reg.worktrees.iter().find(|w| w.project == project && w.is_root).cloned()
     }
 
-    /// A project by slug, id (or a ≥4-character id suffix), or a path inside one of its checkouts.
+    /// A project by slug, id (or a ≥4-character id suffix), or a path inside one of its checkouts
+    /// (SPEC §2.3).
     pub fn find_project(&self, addr: &str) -> Result<ProjectInfo, Error> {
         let reg = self.registry.locked();
-        let addr = addr.trim().strip_prefix("p:").unwrap_or(addr.trim());
-        if let Some(p) = reg.projects.iter().find(|p| p.slug == addr || p.id == addr) {
-            return Ok(p.clone());
-        }
+        let addr = addr.trim();
         if ptyro_core::os::looks_like_path(addr) {
             let path = ptyro_core::config::expand_home(addr);
             let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
@@ -69,21 +67,21 @@ impl Daemon {
             }
             return Err(Error::missing("project", addr));
         }
-        let lower = addr.to_ascii_lowercase();
-        let by_suffix: Vec<_> =
-            reg.projects.iter().filter(|p| lower.len() >= 4 && p.id.ends_with(&lower)).collect();
-        match by_suffix.as_slice() {
-            [one] => Ok((*one).clone()),
-            [] => Err(Error::missing("project", addr)),
-            _ => {
-                Err(Error::new(ErrorCode::Ambiguous, format!("{addr:?} matches several projects")))
-            }
+        let key = lookup::key(addr);
+        let key = key.strip_prefix("p:").unwrap_or(&key);
+        if let Some(p) = reg.projects.iter().find(|p| lookup::same(&p.slug, key) || p.id == key) {
+            return Ok(p.clone());
         }
+        let by_id = reg.projects.iter().filter(|p| lookup::id_matches(&p.id, key)).collect();
+        lookup::one("project", addr, by_id, |p| p.slug.clone())?
+            .cloned()
+            .ok_or_else(|| lookup::not_found("project", addr))
     }
 
-    /// A worktree by `project/name` (`myrepo/@root`), unique name, id suffix, or path.
+    /// A worktree by `project/name` (`myrepo/@root`), unique name, id (or a ≥4-character id
+    /// suffix), or path (SPEC §2.3).
     pub fn find_worktree(&self, addr: &str) -> Result<WorktreeInfo, Error> {
-        let addr = addr.trim().strip_prefix("w:").unwrap_or(addr.trim());
+        let addr = addr.trim();
         if ptyro_core::os::looks_like_path(addr) {
             let path = ptyro_core::config::expand_home(addr);
             let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
@@ -92,48 +90,51 @@ impl Daemon {
                 .cloned()
                 .ok_or_else(|| Error::missing("worktree", addr));
         }
-        if let Some((project, name)) = addr.split_once('/') {
+        let key = lookup::key(addr);
+        let key = key.strip_prefix("w:").unwrap_or(&key);
+        if let Some((project, name)) = key.split_once('/') {
             let p = self.find_project(project)?;
             let reg = self.registry.locked();
             return reg
                 .worktrees
                 .iter()
-                .find(|w| w.project == p.id && w.name == name)
+                .find(|w| w.project == p.id && lookup::same(&w.name, name))
                 .cloned()
                 .ok_or_else(|| Error::missing("worktree", addr));
         }
         let reg = self.registry.locked();
-        let named: Vec<_> = reg.worktrees.iter().filter(|w| w.name == addr).collect();
+        let named: Vec<_> = reg.worktrees.iter().filter(|w| lookup::same(&w.name, key)).collect();
         match named.as_slice() {
             [one] => return Ok((*one).clone()),
             [] => {}
             many => {
                 let q: Vec<String> = many.iter().map(|w| w.qualified()).collect();
-                return Err(Error::new(
-                    ErrorCode::Ambiguous,
-                    format!("{addr:?} is ambiguous: {}", q.join(", ")),
-                ));
+                return Err(lookup::ambiguous_name("worktree", addr, &q));
             }
         }
-        let lower = addr.to_ascii_lowercase();
-        let by_suffix: Vec<_> =
-            reg.worktrees.iter().filter(|w| lower.len() >= 4 && w.id.ends_with(&lower)).collect();
-        match by_suffix.as_slice() {
-            [one] => Ok((*one).clone()),
-            [] => Err(Error::missing("worktree", addr)),
-            _ => {
-                Err(Error::new(ErrorCode::Ambiguous, format!("{addr:?} matches several worktrees")))
-            }
-        }
+        let by_id = reg.worktrees.iter().filter(|w| lookup::id_matches(&w.id, key)).collect();
+        lookup::one("worktree", addr, by_id, |w| w.qualified())?
+            .cloned()
+            .ok_or_else(|| lookup::not_found("worktree", addr))
     }
 
-    pub fn find_workspace(&self, name: &str) -> Result<WorkspaceInfo, Error> {
+    /// A workspace by name, id, or a ≥4-character id suffix (SPEC §2.3).
+    pub fn find_workspace(&self, addr: &str) -> Result<WorkspaceInfo, Error> {
         let reg = self.registry.locked();
-        reg.workspaces
-            .iter()
-            .find(|w| w.name == name)
-            .cloned()
-            .ok_or_else(|| Error::missing("workspace", name))
+        let key = lookup::key(addr);
+        if let Some(w) = reg.workspaces.iter().find(|w| lookup::same(&w.name, &key)) {
+            return Ok(w.clone());
+        }
+        let by_id = reg.workspaces.iter().filter(|w| lookup::id_matches(&w.id, &key)).collect();
+        lookup::one("workspace", addr, by_id, |w| w.name.clone())?.cloned().ok_or_else(|| {
+            let names: Vec<String> = reg.workspaces.iter().map(|w| w.name.clone()).collect();
+            lookup::not_found_among("workspace", addr, &names)
+        })
+    }
+
+    /// Whether a workspace has this name (not an id: a new name is checked with this).
+    pub(crate) fn workspace_named(&self, name: &str) -> bool {
+        self.registry.locked().workspaces.iter().any(|w| lookup::same(&w.name, name))
     }
 
     // ── persistence + events ────────────────────────────────────────────────
@@ -612,7 +613,7 @@ impl Daemon {
         notify: Option<String>,
     ) -> Result<Reply, Error> {
         ptyro_core::names::validate(name).map_err(Error::invalid)?;
-        if self.find_workspace(name).is_ok() {
+        if self.workspace_named(name) {
             return Err(Error::conflict(format!("workspace {name} exists")));
         }
         let w = WorkspaceInfo {
@@ -629,9 +630,10 @@ impl Daemon {
     }
 
     fn check_profile(&self, p: Option<String>) -> Result<Option<String>, Error> {
-        match p {
-            Some(n) if !profile::exists(&self.config(), &n) => {
-                Err(Error::invalid(format!("no profile named {n:?}")))
+        let config = self.config();
+        match p.map(|n| lookup::key(&n)) {
+            Some(n) if !profile::exists(&config, &n) => {
+                Err(lookup::not_found_among("profile", &n, &profile::names(&config)))
             }
             other => Ok(other),
         }
@@ -732,13 +734,14 @@ impl Daemon {
             }
             Request::WorkspaceRename { name, new_name } => {
                 ptyro_core::names::validate(&new_name).map_err(Error::invalid)?;
+                let mut w = self.find_workspace(&name)?;
+                let name = w.name.clone();
                 if name == MAIN_WORKSPACE {
                     return Err(Error::invalid("the main workspace can't be renamed"));
                 }
-                if self.find_workspace(&new_name).is_ok() {
+                if self.workspace_named(&new_name) {
                     return Err(Error::conflict(format!("workspace {new_name} exists")));
                 }
-                let mut w = self.find_workspace(&name)?;
                 w.name = new_name.clone();
                 self.put_workspace(w.clone());
                 for s in self.sessions() {
@@ -762,10 +765,11 @@ impl Daemon {
                 Ok(Reply::Workspace { info: w })
             }
             Request::WorkspaceRemove { name } => {
+                let w = self.find_workspace(&name)?;
+                let name = w.name.clone();
                 if name == MAIN_WORKSPACE {
                     return Err(Error::invalid("the main workspace always exists"));
                 }
-                let w = self.find_workspace(&name)?;
                 self.registry.locked().workspaces.retain(|o| o.id != w.id);
                 if let Some(store) = &self.store {
                     store.delete_workspace(w.id.clone());
@@ -824,8 +828,10 @@ impl Daemon {
                 Ok(Reply::Workspace { info: w })
             }
             Request::ProfileList => Ok(self.profile_list()),
-            Request::ProfileEnv { name } => self.profile_env(&name),
-            Request::ProfileRename { old, new } => self.profile_rename(&old, &new).await,
+            Request::ProfileEnv { name } => self.profile_env(&lookup::key(&name)),
+            Request::ProfileRename { old, new } => {
+                self.profile_rename(&lookup::key(&old), &new).await
+            }
             Request::ProfileResolve { spec } => {
                 let explicit = spec.profile.clone().or_else(|| {
                     spec.agent
@@ -965,4 +971,112 @@ fn line_endings(root: &std::path::Path, checkouts: &[(String, std::path::PathBuf
         );
     }
     notes
+}
+
+#[cfg(test)]
+mod tests {
+    use ptyro_core::ErrorCode;
+    use ptyro_core::model::{ProjectInfo, WorkspaceInfo, WorktreeInfo, WorktreeState};
+    use ptyro_store::Registry;
+
+    fn project(id: &str, slug: &str) -> ProjectInfo {
+        ProjectInfo {
+            id: id.into(),
+            machine: None,
+            slug: slug.into(),
+            root: format!("/nowhere/{slug}").into(),
+            default_branch: None,
+            remote_url: None,
+            pin: None,
+            created_ms: 0,
+            last_used_ms: None,
+        }
+    }
+
+    fn worktree(id: &str, p: &ProjectInfo, name: &str) -> WorktreeInfo {
+        WorktreeInfo {
+            id: id.into(),
+            machine: None,
+            project: p.id.clone(),
+            project_slug: p.slug.clone(),
+            name: name.into(),
+            path: format!("/nowhere/{}-{name}", p.slug).into(),
+            branch: None,
+            base: None,
+            is_root: false,
+            profile: None,
+            state: WorktreeState::Ready,
+            ports: None,
+            created_ms: 0,
+            removed_ms: None,
+            last_used_ms: None,
+            status: None,
+            locked: false,
+            pr: None,
+            title: None,
+            integrated: None,
+        }
+    }
+
+    fn workspace(id: &str, name: &str) -> WorkspaceInfo {
+        WorkspaceInfo {
+            id: id.into(),
+            machine: None,
+            name: name.into(),
+            profile: "default".into(),
+            notify: "all".into(),
+            projects: Vec::new(),
+            created_ms: 0,
+        }
+    }
+
+    /// One policy for projects, worktrees and workspaces (SPEC §2.3): names first, whatever
+    /// their case; ids by their last 4 or more characters; several are listed, never picked.
+    #[tokio::test]
+    async fn projects_worktrees_and_workspaces_resolve_one_way() {
+        let app = project("01aaaaaaaaaaaaaaaaaaaa1234", "app");
+        let lib = project("01bbbbbbbbbbbbbbbbbbbb1234", "lib");
+        let reg = Registry {
+            workspaces: vec![
+                workspace("01cccccccccccccccccccc5678", "main"),
+                workspace("01dddddddddddddddddddd9876", "work"),
+            ],
+            worktrees: vec![
+                worktree("01eeeeeeeeeeeeeeeeeeee4321", &app, "feat"),
+                worktree("01ffffffffffffffffffff8765", &lib, "feat"),
+            ],
+            projects: vec![app, lib],
+            trust: Vec::new(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let d = crate::daemon::test_daemon(dir.path(), reg);
+
+        // Projects: slug in any case, `p:` and an id suffix of 4 or more.
+        assert_eq!(d.find_project("APP").unwrap().slug, "app");
+        assert_eq!(d.find_project("p:B1234").unwrap().slug, "lib");
+        let e = d.find_project("1234").unwrap_err();
+        assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+        assert_eq!(e.message, r#"2 projects match "1234": say which, app or lib"#);
+        let e = d.find_project("234").unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+        assert!(e.message.contains("no project matches") && e.message.contains("at least 4"));
+        assert!(d.find_project("aaaa").is_err(), "the middle of an id is no address");
+
+        // Worktrees: a name two projects share lists both; `project/name` in any case.
+        let e = d.find_worktree("feat").unwrap_err();
+        assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+        assert_eq!(e.message, r#"2 worktrees are named "feat": say which, app/feat or lib/feat"#);
+        assert_eq!(d.find_worktree("LIB/Feat").unwrap().project_slug, "lib");
+        assert_eq!(d.find_worktree("w:4321").unwrap().project_slug, "app");
+        let e = d.find_worktree("nope").unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound);
+        assert_eq!(e.message, r#"no worktree matches "nope""#);
+
+        // Workspaces: by name in any case or by id; not found lists the ones there are.
+        assert_eq!(d.find_workspace("Work").unwrap().name, "work");
+        assert_eq!(d.find_workspace("9876").unwrap().name, "work");
+        let e = d.find_workspace("home").unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound);
+        assert_eq!(e.message, r#"no workspace matches "home"; the workspaces are main and work"#);
+    }
 }

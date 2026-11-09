@@ -689,7 +689,10 @@ mod tests {
         assert!(decode::<ServerMsg>(bad).is_err());
         assert_eq!(response_id(bad), Some(7));
         let packed = encode(
-            &ServerMsg::Response { id: 9, outcome: Outcome::Err { error: Error::not_found("x") } },
+            &ServerMsg::Response {
+                id: 9,
+                outcome: Outcome::Err { error: Error::missing("session", "x") },
+            },
             Encoding::MsgPack,
         )
         .unwrap();

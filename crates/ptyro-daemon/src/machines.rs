@@ -31,7 +31,7 @@ use ptyro_core::model::{
 use ptyro_core::session::SessionInfo;
 use ptyro_core::status::{InboxEntry, Usage};
 use ptyro_core::sync::MutexExt;
-use ptyro_core::{ClientId, Error, ErrorCode, SessionId, now_ms};
+use ptyro_core::{ClientId, Error, ErrorCode, SessionId, lookup, now_ms};
 use ptyro_protocol::{ClientKind, ClientMsg, DomainEvent, Reply, Request, ServerMsg};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -956,11 +956,22 @@ impl Daemon {
         match hits.as_slice() {
             [] => Ok(None),
             [m] => Ok(Some(m.clone())),
-            many => Err(Error::invalid(format!(
-                "{a} is on several machines: say which ({})",
-                many.iter().map(|m| qualify(m, &a)).collect::<Vec<_>>().join(", ")
-            ))),
+            many => Err(lookup::ambiguous(
+                "machine",
+                &a,
+                &many.iter().map(|m| qualify(m, &a)).collect::<Vec<_>>(),
+            )),
         }
+    }
+
+    /// The machine `name` names, whatever its case (SPEC §2.3).
+    fn machine_named(&self, name: &str) -> Result<String, Error> {
+        let links = self.links.locked();
+        if let Some(m) = links.keys().find(|m| lookup::same(m, name)) {
+            return Ok(m.clone());
+        }
+        let known: Vec<String> = links.keys().cloned().collect();
+        Err(lookup::not_found_among("machine", name, &known))
     }
 
     /// Send a request to its machine, its names taken off; its reply with them put back.
@@ -1181,6 +1192,7 @@ impl Daemon {
                 self.add_machine(name, transport, token, force).await
             }
             Request::MachineRemove { name } => {
+                let name = self.machine_named(&name)?;
                 let gone = self.links.locked().remove(&name);
                 let Some(link) = gone else { return Err(Error::missing("machine", &name)) };
                 let _ = std::fs::remove_file(self.token_path(&name));
@@ -1208,6 +1220,7 @@ impl Daemon {
                 Ok(Reply::Done)
             }
             Request::MachineHide { name, workspace, hidden } => {
+                let name = self.machine_named(&name)?;
                 let ws = split_machine(&workspace)
                     .filter(|(m, _)| *m == name)
                     .map_or(workspace.clone(), |(_, w)| w.to_owned());
@@ -1244,6 +1257,7 @@ impl Daemon {
                 Ok(Reply::Machine { info })
             }
             Request::MachineRetry { name } => {
+                let name = self.machine_named(&name)?;
                 let info = {
                     let links = self.links.locked();
                     let l = links.get(&name).ok_or_else(|| Error::missing("machine", &name))?;
