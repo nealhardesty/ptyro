@@ -3078,7 +3078,8 @@ impl Daemon {
     ) -> Result<Value, Error> {
         let set = self.set_state(run)?;
         let p = self.find_project(project)?;
-        if set.member(&p.slug).is_some() {
+        // By id too: a project renamed since it joined keeps its member's old name.
+        if set.member(&p.slug).is_some() || set.members.iter().any(|m| m.project == p.id) {
             return Err(Error::conflict(format!("{} is a member already", p.slug)));
         }
         for d in &depends_on {

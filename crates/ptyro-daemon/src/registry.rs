@@ -489,6 +489,39 @@ impl Daemon {
         Ok(Reply::Removed { notes })
     }
 
+    /// `ProjectRename` (SPEC §2.3): a new slug, the project's address. Sessions, workspaces and
+    /// trust refer to it by id, so only what carries the slug follows: its worktrees (`newslug/
+    /// name`) and its archives. Worktree directories stay where they are.
+    async fn project_rename(&self, addr: &str, name: &str) -> Result<Reply, Error> {
+        let mut p = self.find_project(addr)?;
+        ptyro_core::names::validate(name).map_err(Error::invalid)?;
+        if p.slug == name {
+            return Ok(Reply::Project { info: p, notes: Vec::new() });
+        }
+        if self.registry.locked().projects.iter().any(|o| o.id != p.id && o.slug == name) {
+            return Err(Error::conflict(format!("a project named {name} exists")));
+        }
+        p.slug = name.into();
+        self.put_project(p.clone());
+        // Stored worktree rows take the slug from the project's row; the copies here carry it.
+        let worktrees: Vec<WorktreeInfo> = {
+            let mut reg = self.registry.locked();
+            reg.worktrees
+                .iter_mut()
+                .filter(|w| w.project == p.id)
+                .map(|w| {
+                    w.project_slug = p.slug.clone();
+                    w.clone()
+                })
+                .collect()
+        };
+        for w in worktrees {
+            let _ = self.events.send(DomainEvent::WorktreeUpdated { info: w });
+        }
+        self.archives_follow_project(&p.id, &p.slug).await;
+        Ok(Reply::Project { info: p, notes: Vec::new() })
+    }
+
     fn project_pin(&self, addr: &str, pin: Option<String>) -> Result<Reply, Error> {
         let mut p = self.find_project(addr)?;
         if let Some(name) = &pin
@@ -673,6 +706,7 @@ impl Daemon {
                 Ok(Reply::Project { info: self.find_project(&addr)?, notes: Vec::new() })
             }
             Request::ProjectRemove { addr, release } => self.project_remove(&addr, release),
+            Request::ProjectRename { addr, name } => self.project_rename(&addr, &name).await,
             Request::ProjectPin { addr, profile } => self.project_pin(&addr, profile),
             Request::ProjectScripts { addr, worktree } => {
                 let p = self.find_project(&addr)?;

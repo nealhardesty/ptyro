@@ -1392,6 +1392,12 @@ mod tests {
         assert_eq!(s.rename_profile("work".into(), "acme".into()).await.unwrap(), 3);
         let reg = s.load_registry().await.unwrap();
         assert_eq!(reg.projects[0].pin.as_deref(), Some("acme"));
+        // Renames (SPEC §2.3): a worktree's name, a project's slug, which its worktrees show.
+        s.save_worktree(WorktreeInfo { name: "login-fix".into(), ..reg.worktrees[0].clone() });
+        s.save_project(ProjectInfo { slug: "app".into(), ..reg.projects[0].clone() });
+        let reg = s.load_registry().await.unwrap();
+        assert_eq!(reg.projects[0].slug, "app");
+        assert_eq!(reg.worktrees[0].qualified(), "app/login-fix");
         s.delete_project("p1".into());
         let reg = s.load_registry().await.unwrap();
         assert!(

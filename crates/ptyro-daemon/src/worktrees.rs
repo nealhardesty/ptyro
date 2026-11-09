@@ -350,7 +350,13 @@ impl Daemon {
         };
         let (path, ours) = match &spec.path {
             Some(at) => (at.clone(), at.parent().map(Path::to_path_buf).unwrap_or_default()),
-            None => worktree_path(config.worktrees.location, &self.paths.data, &p, &name),
+            // A renamed worktree keeps its directory, so the one this name would get may be
+            // taken: then the next free one (`name-2`).
+            None => std::iter::once(name.clone())
+                .chain((2..).map(|k| format!("{name}-{k}")))
+                .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
+                .find(|(path, _)| std::fs::symlink_metadata(path).is_err())
+                .expect("infinite"),
         };
         refuse_symlinks(&ours, &path)?;
         if path.exists() {
@@ -1166,6 +1172,48 @@ impl Daemon {
         Ok(Reply::Worktree { info: wt })
     }
 
+    /// `WorktreeRename` (SPEC §2.3): a new name, the worktree's address `project/name`. Its
+    /// branch stays (`rename-branch` changes that) and so does its directory: sessions running in
+    /// it keep their working directory. The marker git keeps for it follows, so a re-adoption
+    /// finds the new name.
+    async fn rename_worktree(&self, addr: &str, name: &str) -> Result<Reply, Error> {
+        let mut wt = self.find_worktree(addr)?;
+        if wt.is_root {
+            return Err(Error::invalid(format!(
+                "{} is the project's main checkout and is always called @root: rename the project, or give it a title",
+                wt.qualified()
+            )));
+        }
+        names::validate(name).map_err(Error::invalid)?;
+        if wt.name == name {
+            return Ok(Reply::Worktree { info: wt });
+        }
+        let taken = {
+            let reg = self.registry.locked();
+            reg.worktrees.iter().any(|w| w.project == wt.project && w.id != wt.id && w.name == name)
+        };
+        if taken {
+            return Err(Error::conflict(format!("{}/{name} exists", wt.project_slug)));
+        }
+        let (path, n) = (wt.path.clone(), name.to_owned());
+        blocking(move || {
+            let Ok(dir) = Git::new().git_dir(&path) else { return };
+            let file = dir.join("ptyro.json");
+            let Some(mut marker) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            else {
+                return;
+            };
+            marker["name"] = n.into();
+            let _ = std::fs::write(&file, marker.to_string());
+        })
+        .await?;
+        wt.name = name.into();
+        self.put_worktree(wt.clone());
+        Ok(Reply::Worktree { info: wt })
+    }
+
     pub(crate) async fn handle_worktrees(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
         match req {
             Request::WorktreeList { project } => {
@@ -1275,6 +1323,7 @@ impl Daemon {
                 let info = self.update_worktree(&wt.id, |w| w.locked = lock).unwrap_or(wt);
                 Ok(Reply::Worktree { info })
             }
+            Request::WorktreeRename { addr, name } => self.rename_worktree(&addr, &name).await,
             Request::WorktreeRenameBranch { addr, branch } => {
                 self.rename_branch(&addr, branch).await
             }

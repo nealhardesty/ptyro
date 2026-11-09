@@ -330,6 +330,10 @@ pub enum PromptKind {
     OpenPr,
     /// A workspace's new name.
     RenameWorkspace(String),
+    /// A worktree's new name (by id).
+    RenameWorktree(String),
+    /// A project's new slug (by id).
+    RenameProject(String),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
@@ -373,7 +377,13 @@ impl PromptKind {
 
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
-        matches!(self, Self::Rename(_) | Self::RenameWorkspace(_))
+        matches!(
+            self,
+            Self::Rename(_)
+                | Self::RenameWorkspace(_)
+                | Self::RenameWorktree(_)
+                | Self::RenameProject(_)
+        )
     }
 
     /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `_`.
@@ -3211,17 +3221,8 @@ impl App {
             "scratchpad.note" => self.note_this(),
             "scratchpad.items" => self.open_pad_items(),
             "scratchpad.history" => self.open_pad_history(),
-            "worktree.retitle" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
-                Some(w) => {
-                    self.overlay = Some(Overlay::Prompt {
-                        title: format!(
-                            "Title of {} (what it's for; empty clears it)",
-                            w.qualified()
-                        ),
-                        text: w.title.clone().unwrap_or_default(),
-                        kind: PromptKind::RetitleWorktree(w.id.clone()),
-                    })
-                }
+            "worktree.retitle" => match self.context().1.filter(|w| self.worktree(w).is_some()) {
+                Some(w) => self.open_retitle_worktree(&w),
                 None => self.pick_project(Some(AfterAdd::Run("worktree.retitle"))),
             },
             "worktree.remove" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
@@ -3838,6 +3839,16 @@ impl App {
         }
     }
 
+    /// A worktree's title prompt, filled with its title.
+    fn open_retitle_worktree(&mut self, id: &str) {
+        let Some(w) = self.worktree(id).cloned() else { return };
+        self.overlay = Some(Overlay::Prompt {
+            title: format!("Title of {} (what it's for; empty clears it)", w.qualified()),
+            text: w.title.clone().unwrap_or_default(),
+            kind: PromptKind::RetitleWorktree(w.id.clone()),
+        });
+    }
+
     /// The title prompt (UX1.24), filled with the current title.
     fn open_retitle(&mut self, id: SessionId) {
         let Some(info) = self.session(id) else { return };
@@ -4156,6 +4167,7 @@ impl App {
                 }
             }
             "project.remove"
+            | "project.rename"
             | "project.untrust"
             | "project.pin"
             | "project.unpin"
@@ -4177,6 +4189,16 @@ impl App {
                                 Box::new(Request::ProjectRemove { addr: p.id, release: false }),
                                 "forgotten".into(),
                             ),
+                        });
+                    }
+                    "project.rename" => {
+                        self.overlay = Some(Overlay::Prompt {
+                            title: format!(
+                                "Rename project {} (its address: {}/name finds its worktrees)",
+                                p.slug, p.slug
+                            ),
+                            text: p.slug.clone(),
+                            kind: PromptKind::RenameProject(p.id),
                         });
                     }
                     "project.untrust" => self.request(
@@ -4239,6 +4261,22 @@ impl App {
                         refresh: false,
                     },
                 ),
+                None => need_wt(self),
+            },
+            "worktree.rename" => match worktree {
+                Some(w) if w.is_root => self.toast_err(
+                    "that's the main checkout: it's always @root (rename the project, or give it a title)",
+                ),
+                Some(w) => {
+                    self.overlay = Some(Overlay::Prompt {
+                        title: format!(
+                            "Rename {} (its address; its branch and directory stay; C-t: its title)",
+                            w.qualified()
+                        ),
+                        text: w.name.clone(),
+                        kind: PromptKind::RenameWorktree(w.id),
+                    });
+                }
                 None => need_wt(self),
             },
             "worktree.rename_branch" => match worktree {
@@ -4473,7 +4511,7 @@ impl App {
                 ];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
                 if !root {
-                    v.extend(["worktree.archive", "worktree.remove"]);
+                    v.extend(["worktree.rename", "worktree.archive", "worktree.remove"]);
                 }
                 v
             }
@@ -4486,6 +4524,7 @@ impl App {
                 "shell.pane",
                 "project.trust",
                 "project.workspaces",
+                "project.rename",
                 "script.pick",
                 "worktree.open",
             ],
@@ -5521,6 +5560,7 @@ impl App {
                 // Renaming: C-t edits the title instead (UX1.24).
                 KeyCode::Char { c: 't' } if key.mods.has(Mods::CTRL) => match kind {
                     PromptKind::Rename(id) => self.open_retitle(id),
+                    PromptKind::RenameWorktree(id) => self.open_retitle_worktree(&id),
                     kind => self.overlay = Some(Overlay::Prompt { title, text, kind }),
                 },
                 KeyCode::Char { c } if !key.mods.has(Mods::CTRL) => {
@@ -6038,6 +6078,31 @@ impl App {
                     return Err(format!("workspace {t} exists"));
                 }
             }
+            // Unique among the project's worktrees (SPEC §2.3).
+            PromptKind::RenameWorktree(id) => {
+                let Some(wt) = self.worktree(id) else { return Ok(None) };
+                if t.is_empty() || t == wt.name {
+                    return Ok(Some("unchanged".into()));
+                }
+                name(t)?;
+                if self
+                    .worktrees
+                    .iter()
+                    .any(|w| w.id != wt.id && w.project == wt.project && w.name == t)
+                {
+                    return Err(format!("{}/{t} exists", wt.project_slug));
+                }
+            }
+            PromptKind::RenameProject(id) => {
+                let Some(p) = self.project(id) else { return Ok(None) };
+                if t.is_empty() || t == p.slug {
+                    return Ok(Some("unchanged".into()));
+                }
+                name(t)?;
+                if self.projects.iter().any(|o| o.id != p.id && o.slug == t) {
+                    return Err(format!("a project named {t} exists"));
+                }
+            }
             _ => {}
         }
         Ok(None)
@@ -6163,6 +6228,24 @@ impl App {
                     self.request(
                         Pending::WorkspaceRenamed(new_name.clone()),
                         Request::WorkspaceRename { name: old, new_name },
+                    );
+                }
+            }
+            PromptKind::RenameWorktree(id) => {
+                let name = text.trim().to_owned();
+                if !name.is_empty() && self.worktree(&id).is_some_and(|w| w.name != name) {
+                    self.request(
+                        Pending::Done(format!("renamed to {name}")),
+                        Request::WorktreeRename { addr: id, name },
+                    );
+                }
+            }
+            PromptKind::RenameProject(id) => {
+                let name = text.trim().to_owned();
+                if !name.is_empty() && self.project(&id).is_some_and(|p| p.slug != name) {
+                    self.request(
+                        Pending::Done(format!("renamed to {name}")),
+                        Request::ProjectRename { addr: id, name },
                     );
                 }
             }
@@ -8665,6 +8748,58 @@ mod tests {
         }
         app.worktrees.push(w.clone());
         w
+    }
+
+    /// Worktrees and projects are renamed from their row menu (SPEC §2.3), with the session
+    /// rename's live check: a taken or bad name is flagged as it is typed.
+    #[test]
+    fn worktrees_and_projects_are_renamed_with_a_live_check() {
+        let mut app = app();
+        with_project(&mut app);
+        app.projects.push(project("p2", "lib"));
+        let w = feature(&mut app, false);
+        let mut other = w.clone();
+        (other.id, other.name) = ("p1-other".into(), "other".into());
+        app.worktrees.push(other);
+        assert!(app.row_actions(&Row::Worktree(w.id.clone())).contains(&"worktree.rename"));
+        assert!(!app.row_actions(&Row::Worktree("p1-root".into())).contains(&"worktree.rename"));
+        assert!(app.row_actions(&Row::Project("p1".into())).contains(&"project.rename"));
+        for a in ["worktree.rename", "project.rename"] {
+            assert!(keymap::spec(a).is_some(), "{a} is in the palette");
+        }
+
+        app.focus = Focus::Sidebar;
+        let select = |app: &mut App, row: Row| {
+            let rows = app.rows();
+            let i = rows.iter().position(|r| *r == row).unwrap();
+            app.set_sel(&rows, i);
+        };
+        select(&mut app, Row::Worktree(w.id.clone()));
+        app.run(&Command { action: "worktree.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("feat"));
+        assert!(screen(&app).contains("⏎ ok (unchanged)"), "{}", screen(&app));
+        let kind = PromptKind::RenameWorktree(w.id.clone());
+        assert_eq!(app.prompt_check(&kind, "other"), Err("p1/other exists".into()));
+        assert!(app.prompt_check(&kind, "a/b").is_err(), "the daemon's rule");
+        assert!(app.prompt_check(&kind, "login-fix").is_ok());
+        // Typed: what a name can't hold becomes _, as in every name prompt.
+        typed(&mut app, "\x08\x08\x08\x08Login Fix");
+        assert_eq!(prompt_text(&app), Some("login_fix"));
+        typed(&mut app, "\n");
+        assert!(app.overlay.is_none(), "sent");
+
+        // The main checkout is always @root: it says so instead of asking.
+        select(&mut app, Row::Worktree("p1-root".into()));
+        app.run(&Command { action: "worktree.rename", arg: None });
+        assert!(prompt_text(&app).is_none());
+
+        select(&mut app, Row::Project("p1".into()));
+        app.run(&Command { action: "project.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("myrepo"));
+        let kind = PromptKind::RenameProject("p1".into());
+        assert_eq!(app.prompt_check(&kind, "myrepo"), Ok(Some("unchanged".into())));
+        assert_eq!(app.prompt_check(&kind, "lib"), Err("a project named lib exists".into()));
+        assert!(app.prompt_check(&kind, "web").is_ok());
     }
 
     #[test]
