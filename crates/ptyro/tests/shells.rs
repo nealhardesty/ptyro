@@ -166,7 +166,7 @@ async fn numbers_stay_put_and_address_their_shell() {
     assert_eq!(get(&c, "main%1").await.unwrap().id, one.id);
     let e = c.request(Request::Get { addr: "%9".into() }).await.unwrap_err();
     assert!(e.message.contains("no shell 9 in main"), "{}", e.message);
-    assert!(e.message.contains("--slot 9"), "the error offers the fix: {}", e.message);
+    assert!(e.message.contains("start one there"), "the error offers the fix: {}", e.message);
 
     // Removing 2 leaves 1 and 3 where they are; the next one takes 2.
     kill_and_wait(&c, &two).await;

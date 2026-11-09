@@ -185,8 +185,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         "session.last",
         "Back and forth: a chat and the session under it, else the last session here",
     ),
-    a("session.stop", "Stop the session (HUP→TERM→KILL); removes it if it already exited"),
-    a("session.kill", "Kill the session's process group now (SIGKILL)"),
+    a(
+        "session.stop",
+        "Stop the session, kept listed: an agent's turn is interrupted and it gets a moment to exit, then HUP, TERM, KILL. On an ended one: remove it",
+    ),
+    a("session.kill", "Kill the session now (SIGKILL, no chance to clean up), kept listed"),
+    a(
+        "session.remove",
+        "Remove the session from the list: an ended one, or stop a running one first",
+    ),
     a("session.restart", "Run an exited session's command again"),
     a("session.rename", "Rename the session: its address (C-t in the dialog: its title)"),
     a("session.retitle", "Change the session's title: what it's about, for people to read"),

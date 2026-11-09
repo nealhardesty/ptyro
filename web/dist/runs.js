@@ -3,7 +3,7 @@
 // checks, checkpoints and merge train.
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "runs": "Runs: recipes, fan-outs and leads, with the gates waiting for you",
@@ -376,7 +376,7 @@ function newSet() {
                         r = await conn.request({ t: "cs", op: { op: "new", spec: spec(null) } });
                     }
                     catch (e) {
-                        const fp = e.code === "untrusted_project" ? e.message.split("--trust ").pop() : null;
+                        const fp = fixOf(e)?.fingerprint;
                         if (!fp)
                             throw e;
                         // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.

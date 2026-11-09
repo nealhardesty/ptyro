@@ -29,7 +29,7 @@ pub struct Ui {
     pub load: bool,
     /// Capture the mouse for click-to-focus, wheel scrollback and border drags.
     pub mouse: bool,
-    /// Ask before stopping a session from the TUI.
+    /// Ask before stopping, killing, or stopping and removing a session (the TUI and the web).
     pub confirm_kill: bool,
     /// Show listening ports in the sidebar and pane headers.
     pub show_ports: bool,

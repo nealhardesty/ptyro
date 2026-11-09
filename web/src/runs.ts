@@ -4,7 +4,7 @@
 
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import type { Child, Field, Item } from "./kit.js";
 import { allSessions } from "./sessions.js";
 
@@ -410,7 +410,7 @@ function newSet(): void {
     try {
       let r: any;
       try { r = await conn.request({ t: "cs", op: { op: "new", spec: spec(null) } }); } catch (e) {
-        const fp = (e as { code?: string }).code === "untrusted_project" ? (e as Error).message.split("--trust ").pop() : null;
+        const fp = fixOf(e)?.fingerprint;
         if (!fp) throw e;
         // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.
         const yes = await new Promise<boolean>((ok) => {

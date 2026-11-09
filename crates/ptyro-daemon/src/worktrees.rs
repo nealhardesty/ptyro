@@ -318,7 +318,7 @@ impl Daemon {
                 (Source::PullRequest { number: n, branch: branch.clone(), remote }, branch)
             }
             (None, true, Some(b)) => (Source::Existing { branch: b.clone() }, b),
-            (None, true, None) => return Err(Error::invalid("--existing needs --branch")),
+            (None, true, None) => return Err(Error::invalid("an existing branch needs its name")),
             (None, false, b) => {
                 let branch = b.unwrap_or_else(|| self.branch_for(&root_cfg, &name));
                 let base = spec
@@ -695,7 +695,7 @@ impl Daemon {
         let wt = self.find_worktree(addr)?;
         if wt.is_root {
             return Err(Error::invalid(format!(
-                "{} is the project's main checkout; use `ptyro project rm {}` to forget the project",
+                "{} is the project's main checkout; forget the project {} instead",
                 wt.qualified(),
                 wt.project_slug
             )));
@@ -716,11 +716,12 @@ impl Daemon {
                 })
                 .collect();
             return Err(Error::conflict(format!(
-                "refusing to remove {}: {} session(s) running in it ({}); stop them or use --stop-sessions",
+                "refusing to remove {}: {} session(s) running in it ({}); stop them first",
                 wt.qualified(),
                 names.len(),
                 names.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::StopSessions, "Stop them and remove it"));
         }
         let mut notes = Vec::new();
         let exists = wt.path.exists();
@@ -734,11 +735,12 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "refusing to remove {} — it has work that would be lost:\n  {}\nCommit or push it, or use --force to discard it.",
+                        "refusing to remove {} — it has work that would be lost:\n  {}\nCommit or push it, archive it to keep it, or remove it anyway to discard it.",
                         wt.qualified(),
                         safety.report()
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Remove anyway"));
             }
             if !safety.is_clean() {
                 notes.push(format!("discarded: {}", safety.report().replace("\n  ", "; ")));

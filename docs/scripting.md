@@ -17,7 +17,7 @@ while the script runs. The building blocks:
 | `ptyro ls --json --status blocked` | who needs you |
 | `ptyro answer S allow\|always\|deny` | answer a permission prompt |
 | `ptyro broadcast S… TEXT` | one prompt into several sessions |
-| `ptyro stop S…` / `ptyro kill S…` | stop gracefully (kept listed) / stop and remove |
+| `ptyro stop S…` / `ptyro kill S…` / `ptyro rm S… [--stop]` | stop (interrupt, then signal; kept listed) / kill now (SIGKILL; kept listed) / forget an ended one (`--stop` stops it first) |
 
 Sessions can be selectors: `@working`, `@blocked`, `@idle`, `@live`, `build-*`, `a,b` (all of them
 are in [commands.md](commands.md#naming-sessions-and-worktrees)).
@@ -182,7 +182,7 @@ Use these commands; they print JSON with `--json`:
   follow-up) in their scratchpad, `$PTYRO_SCRATCHPAD`, stamped with your name; `ptyro scratchpad
   todo` lists what they've noted. Add with the command; don't edit the file.
 
-Rules: never `ptyro kill` or `ptyro wt rm` sessions or worktrees you didn't create; never answer
+Rules: never `ptyro stop`, `kill` or `rm` sessions, or `ptyro wt rm` worktrees, you didn't create; never answer
 another session's permission prompt (`ptyro answer`) or a gate; the human does that (ptyro
 refuses agents both). If you're a lead (started with `--lead`), use the `ptyro` MCP tools for
 workers; your policy limits how many and where.

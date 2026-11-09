@@ -300,7 +300,8 @@ fn cli_selectors_restart_scrollback_config_and_shell_init() {
     let ls = ok(&["ls"]);
     assert!(ls.contains("keep") && !ls.contains("w2"), "{ls}");
     assert_eq!(run(&["kill", "@nothing-matches-this"]).status.code(), Some(2));
-    ok(&["kill", "@live"]);
+    ok(&["rm", "--stop", "@live"]);
+    assert!(!ok(&["ls"]).contains("keep"), "rm --stop forgot it");
     let all = ok(&["ls", "--all"]);
     assert!(all.contains("keep") && all.contains("w2"), "history lists removed sessions:\n{all}");
 
@@ -326,6 +327,72 @@ fn cli_selectors_restart_scrollback_config_and_shell_init() {
             "{shell}"
         );
     }
+}
+
+/// The same three words as the TUI and the web (SPEC §7.3): `kill` is SIGKILL now and keeps the
+/// session listed; `rm` refuses a running one and offers `--stop`; `rm --stop` stops and forgets.
+#[test]
+fn kill_is_immediate_and_keeps_the_session_and_rm_stop_forgets_one() {
+    let d = TempDaemon::start(BIN).unwrap();
+    let run = |args: &[&str]| d.cmd().args(args).output().unwrap();
+    let ok = |args: &[&str]| {
+        let o = run(args);
+        assert!(o.status.success(), "{args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    let state = |name: &str| -> Option<String> {
+        let ls: serde_json::Value = serde_json::from_str(&ok(&["ls", "--json"])).unwrap();
+        let s = ls.as_array()?.iter().find(|s| s["name"] == name)?;
+        Some(s["state"]["t"].as_str().unwrap_or_default().to_owned())
+    };
+    let until_ended = |name: &str| {
+        let t = Instant::now();
+        while state(name).as_deref() == Some("running") && t.elapsed() < WAIT {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        t.elapsed()
+    };
+    // Ignores HUP and TERM: the graceful sequence would take 5 s to reach KILL.
+    ok(&[
+        "new",
+        "-d",
+        "-n",
+        "stubborn",
+        "--",
+        "sh",
+        "-c",
+        "trap '' HUP TERM; while :; do sleep 1; done",
+    ]);
+    ok(&["new", "-d", "-n", "plain", "--", "sh", "-c", "sleep 30"]);
+    std::thread::sleep(Duration::from_millis(300));
+
+    let t = Instant::now();
+    let out = run(&["kill", "stubborn"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("killed stubborn"));
+    let took = t.elapsed() + until_ended("stubborn");
+    assert!(took < Duration::from_secs(2), "kill waited {took:?}: it should be SIGKILL at once");
+    assert_eq!(state("stubborn").as_deref(), Some("exited"), "kill keeps it listed");
+    // The old `--keep` still parses; killing an ended one says so and signals nothing.
+    let out = run(&["kill", "stubborn", "--keep"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("stubborn isn't running"));
+
+    // rm refuses a running session, says why, and offers the CLI's way through.
+    let out = run(&["rm", "plain"]);
+    assert_eq!(out.status.code(), Some(5), "a conflict");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("plain is still running: stop it first"), "{err}");
+    assert!(err.contains("(again with `--stop`: stop and remove)"), "{err}");
+    assert!(!err.contains("kill"), "the daemon's words are stop and remove: {err}");
+    assert_eq!(state("plain").as_deref(), Some("running"));
+    // rm --stop: stopped, then forgotten, in one go.
+    let out = run(&["rm", "--stop", "plain"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(state("plain"), None, "rm --stop forgets it");
+    // And rm on an ended one just forgets it.
+    ok(&["rm", "stubborn"]);
+    assert_eq!(state("stubborn"), None);
 }
 
 // ── the TUI, inside the headless emulator ──────────────────────────────────

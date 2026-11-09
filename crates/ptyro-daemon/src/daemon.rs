@@ -801,7 +801,7 @@ impl Daemon {
         let config = self.config();
         let (verify, lead) = (spec.verify.clone(), spec.lead.clone());
         if lead.is_some() && spec.agent.is_none() {
-            return Err(Error::invalid("--lead needs an agent (--agent claude)"));
+            return Err(Error::invalid("a lead needs an agent (claude)"));
         }
         let policy: Option<ptyro_run::Policy> = lead
             .map(|p| serde_json::from_value(p).map_err(|e| Error::invalid(format!("policy: {e}"))))
@@ -816,7 +816,7 @@ impl Daemon {
         if let (Some(a), Some(b)) = (&spec.profile, &agent_profile)
             && a != b
         {
-            return Err(Error::invalid(format!("--profile {a} contradicts the agent's @{b}")));
+            return Err(Error::invalid(format!("the profile {a} contradicts the agent's @{b}")));
         }
         let explicit = spec.profile.clone().or(agent_profile);
         // SHELLS (SPEC §23.2): a loose session belongs to its workspace, wherever it starts.
@@ -980,7 +980,7 @@ impl Daemon {
         };
         if spec.structured && agent.is_none() {
             return Err(Error::invalid(
-                "--structured drives an agent over its protocol: give it --agent",
+                "structured mode drives an agent over its protocol: pick an agent",
             ));
         }
         let prompt_text = prompt.clone();
@@ -1062,7 +1062,7 @@ impl Daemon {
     pub async fn restart(self: &Arc<Self>, addr: &str) -> Result<Arc<Session>, Error> {
         let old = self.resolve(addr)?;
         if old.is_live() {
-            return Err(Error::conflict("session is still running; kill it first"));
+            return Err(still_running(&old));
         }
         let meta = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         if !ptyro_agents::profile::exists(&self.config(), &meta.place.profile) {
@@ -1360,13 +1360,28 @@ impl Daemon {
                 }
                 Ok(Reply::Session { info: self.info(&s) })
             }
-            Request::Remove { addr } => {
+            Request::Remove { addr, stop } => {
                 let s = self.resolve(&addr)?;
                 if self.launching.locked().0.contains(&s.id) {
                     return Err(Error::conflict("the session is restarting; remove it after"));
                 }
+                if s.is_live() && stop {
+                    self.stop_session(&s).await;
+                    // A quick terminal forgets itself once it exits (UX1.25).
+                    if self.session(s.id).is_none() {
+                        return Ok(Reply::Done);
+                    }
+                    // Restarted while it stopped: that one is new, so it stays.
+                    if self.launching.locked().0.contains(&s.id) {
+                        return Err(Error::conflict("the session is restarting; remove it after"));
+                    }
+                }
+                if s.is_live() && !stop {
+                    let again = ptyro_core::error::Again::Stop;
+                    return Err(still_running(&s).with_fix(again, "Stop and remove"));
+                }
                 if s.is_live() {
-                    return Err(Error::conflict("session is still running; kill it first"));
+                    return Err(still_running(&s));
                 }
                 // A removed dormant session must not come back at the next start.
                 {
@@ -1582,8 +1597,9 @@ impl Daemon {
                 let live = self.sessions().iter().filter(|s| s.is_live()).count();
                 if live > 0 && !force {
                     return Err(Error::conflict(format!(
-                        "{live} session(s) still running; use --force to stop them"
-                    )));
+                        "{live} session(s) still running: stopping the daemon stops them too"
+                    ))
+                    .with_fix(ptyro_core::error::Again::Force, "Stop them too"));
                 }
                 let _ = self.shutdown.send(true);
                 Ok(Reply::Done)
@@ -1758,6 +1774,13 @@ impl Daemon {
     }
 }
 
+/// Remove or restart on a live session. Each client offers the fix its own way: the CLI's
+/// `rm --stop`, the TUI's and the web's Stop and remove (SPEC §7.3).
+fn still_running(s: &Session) -> Error {
+    let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
+    Error::conflict(format!("{name} is still running: stop it first"))
+}
+
 /// What a new shell session runs: `[shell] command`, else the login shell (`$SHELL -l`).
 pub(crate) fn shell_command(config: &ptyro_core::config::Config) -> Vec<String> {
     if config.shell.command.is_empty() {
@@ -1825,5 +1848,53 @@ mod tests {
         // The pathological pattern finishes at once.
         let name = "a".repeat(64);
         assert!(!glob("*a*a*a*a*a*a*a*a*a*a*a*a*b", &name));
+    }
+
+    /// The daemon's refusals reach the CLI, the TUI and the web alike, so they say what to do in
+    /// words all three share, never a CLI flag; and they say stop, not kill (SPEC §7.3). The
+    /// CLI adds its flag itself (`cli::offer`).
+    #[test]
+    fn refusals_name_no_cli_flag() {
+        const SAID: &[&str] = &[
+            "kill\x20it first",
+            "use \x2d-",
+            "or \x2d-force",
+            "\x2d-stop-sessions",
+            "\x2d-keep <",
+            "(\x2d-member",
+            "(\x2d-agents",
+            "\x2d-agents claude",
+            "\x2d-project (",
+            "with \x2d-project",
+            "with \x2d-name",
+            "(\x2d-name",
+            "pick \x2d-profile",
+            "\x2d-existing needs",
+            "\x2d-lead needs",
+            "with \x2d-trust",
+            "pair \x2d-scope",
+            "ptyro\x20machine rm",
+        ];
+        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    let text = std::fs::read_to_string(&p).unwrap();
+                    for l in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                        out.push((p.display().to_string(), l.to_owned()));
+                    }
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut lines);
+        // SAID is written escaped, so this file is checked too.
+        for (file, line) in &lines {
+            for s in SAID {
+                assert!(!line.contains(s), "{file}: {:?} names a CLI flag or verb: {line}", s);
+            }
+        }
     }
 }

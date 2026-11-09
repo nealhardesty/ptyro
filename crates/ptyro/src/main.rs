@@ -199,19 +199,20 @@ enum Cmd {
         #[arg(long)]
         chats: bool,
     },
-    /// Stop sessions (SIGHUP, then TERM, then KILL) and remove them.
+    /// Kill sessions now: SIGKILL, no chance to clean up. They stay listed (`rm` forgets them).
     /// SESSION may be a selector: `@all`, `@live`, `@exited`, `@blocked`, `build-*`, `a,b`…
     Kill {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
-        /// Send this signal number instead of the graceful sequence
+        /// Send this signal number instead of SIGKILL (9)
         #[arg(short, long)]
         signal: Option<i32>,
-        /// Keep the exited session listed (with its final screen)
-        #[arg(long)]
+        /// Does nothing: kill always keeps the session listed now (it used to remove it)
+        #[arg(long, hide = true)]
         keep: bool,
     },
-    /// Stop sessions gracefully and keep them listed (agents finish their turn first)
+    /// Stop sessions and keep them listed: an agent's turn is interrupted and it gets a moment
+    /// to exit, then the process gets HUP, TERM and KILL
     Stop {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
@@ -221,11 +222,14 @@ enum Cmd {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
     },
-    /// Remove ended sessions (exited or dormant) from the list; a dormant agent's conversation is
-    /// forgotten
+    /// Forget ended sessions (exited or dormant): they leave the list, and a dormant agent's
+    /// conversation is forgotten. A running one is refused, unless `--stop`
     Rm {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
+        /// Stop a running one first (as `stop`), then forget it
+        #[arg(long)]
+        stop: bool,
     },
     /// Rename a session
     Rename {

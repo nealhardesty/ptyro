@@ -195,7 +195,7 @@ impl Daemon {
                         return Err(Error::new(
                             ErrorCode::PermissionDenied,
                             format!(
-                                "{text}; refusing (profiles.{owner}.guard = \"refuse\"). Pin the project or pick --profile {owner}"
+                                "{text}; refusing (profiles.{owner}.guard = \"refuse\"). Pin the project, or pick the profile {owner}"
                             ),
                         ));
                     }

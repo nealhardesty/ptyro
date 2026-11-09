@@ -363,7 +363,7 @@ impl Daemon {
         {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "devices are paired and revoked on the machine that runs ptyro, or from a device paired with `--scope full`",
+                "devices are paired and revoked on the machine that runs ptyro, or from a device paired with full scope",
             ));
         }
         let need = needed(req);
@@ -372,7 +372,7 @@ impl Daemon {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
                 format!(
-                    "this device is paired with scope {}; that needs {} (`ptyro pair --scope {}`)",
+                    "this device is paired with scope {}; that needs {}: pair it again with {} on the computer that runs ptyro",
                     g.scope.label(),
                     need.label(),
                     need.label()
@@ -385,7 +385,7 @@ impl Daemon {
         {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "this gate lets code ship: answering it needs control (`ptyro pair --scope control`)",
+                "this gate lets code ship: answering it needs control (pair this device again with control, on the computer that runs ptyro)",
             ));
         }
         if need >= Scope::Approve
@@ -651,7 +651,10 @@ fn req_label(req: &Request) -> &'static str {
         Request::ClearAttention { .. } => "cleared attention",
         Request::Resume { .. } => "resumed",
         Request::Hibernate { .. } => "hibernated",
-        Request::Kill { .. } => "stopped",
+        Request::Kill { signal: None, .. } => "stopped",
+        Request::Kill { .. } => "killed",
+        Request::Remove { stop: true, .. } => "stopped and removed",
+        Request::Remove { .. } => "removed",
         Request::Restart { .. } => "restarted",
         Request::Rename { .. } => "renamed",
         _ => "acted",
@@ -770,7 +773,7 @@ mod tests {
         // Stopping what you started is control's, as the scope's description says; starting any
         // command, making worktrees and shipping aren't.
         assert_eq!(needed(&Request::Kill { addr: "x".into(), signal: None }), Scope::Control);
-        assert_eq!(needed(&Request::Remove { addr: "x".into() }), Scope::Control);
+        assert_eq!(needed(&Request::Remove { addr: "x".into(), stop: false }), Scope::Control);
         assert_eq!(needed(&Request::Agents), Scope::Read);
         assert_eq!(needed(&Request::Replay { addr: "x".into() }), Scope::Read);
         assert_eq!(needed(&Request::Editors), Scope::Read);

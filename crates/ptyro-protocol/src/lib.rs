@@ -179,15 +179,20 @@ pub enum Request {
     Get {
         addr: String,
     },
-    /// Stop the session's process group (default: the graceful HUP→TERM→KILL sequence).
+    /// `signal: None` stops the session (SPEC §7.3): an agent is interrupted and given a moment
+    /// to exit, then the process group gets HUP, TERM and KILL. `Some(n)` sends that signal at
+    /// once (kill: 9). Either way the session stays listed.
     Kill {
         addr: String,
         #[serde(default)]
         signal: Option<i32>,
     },
-    /// Forget an exited session.
+    /// Forget an ended session. A live one is refused, unless `stop` (1.39): stop it, then
+    /// forget it.
     Remove {
         addr: String,
+        #[serde(default)]
+        stop: bool,
     },
     Rename {
         addr: String,
@@ -1637,6 +1642,56 @@ pub struct Metrics {
     pub scrollback_bytes: u64,
     /// Per session: `(name, approximate bytes of terminal state)`.
     pub sessions: Vec<(String, u64)>,
+}
+
+impl Request {
+    /// One that a refusal's way through can apply to (see [`Request::with_fix`]).
+    pub fn fixable(&self) -> bool {
+        matches!(
+            self,
+            Request::Remove { .. }
+                | Request::WorktreeRemove { .. }
+                | Request::WorktreeArchive { .. }
+                | Request::Shutdown { .. }
+                | Request::Convert { .. }
+                | Request::Cs { .. }
+                | Request::RecipeRun { .. }
+        )
+    }
+
+    /// This request again with a refusal's way through said (SPEC §6.6), for the TUI's
+    /// button; `None` when it can't say that.
+    pub fn with_fix(&self, again: &ptyro_core::error::Again) -> Option<Request> {
+        use ptyro_core::error::Again as A;
+        use ptyro_run::wire::CsOp;
+        let mut r = self.clone();
+        match (&mut r, again) {
+            (Request::Remove { stop, .. }, A::Stop) => *stop = true,
+            (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
+            (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
+            (Request::WorktreeArchive { stop_sessions, .. }, A::StopSessions) => {
+                *stop_sessions = true
+            }
+            (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
+                *force = true
+            }
+            (
+                Request::Cs {
+                    op:
+                        CsOp::Restore { force, .. } | CsOp::Drop { force, .. } | CsOp::Rm { force, .. },
+                },
+                A::Force,
+            ) => *force = true,
+            (Request::Cs { op: CsOp::New { spec } }, A::Trust { fingerprint }) => {
+                spec.trust = Some(fingerprint.clone())
+            }
+            (Request::RecipeRun { trust, .. }, A::Trust { fingerprint }) => {
+                *trust = Some(fingerprint.clone())
+            }
+            _ => return None,
+        }
+        Some(r)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -137,7 +137,7 @@ export class Conn {
       const timer = waits ? 0 : window.setTimeout(() => {
         if (this.pending.delete(id)) { err(Object.assign(new Error("no answer: the connection may be down"), { code: "timeout" })); this.check(); }
       }, timeoutMs);
-      this.pending.set(id, (o) => { clearTimeout(timer); o.t === "ok" ? ok(o.reply) : err(Object.assign(new Error(o.error.message), { code: o.error.code })); });
+      this.pending.set(id, (o) => { clearTimeout(timer); o.t === "ok" ? ok(o.reply) : err(Object.assign(new Error(o.error.message), { code: o.error.code, fix: o.error.fix })); });
       this.send({ t: "request", id, req });
     });
   }
@@ -166,6 +166,6 @@ export async function host(op: string, args: Record<string, unknown> = {}): Prom
   });
   if (!r.ok) throw new Error(r.status === 401 ? "this device isn't paired any more" : await r.text());
   const o = await r.json();
-  if (o.t === "err") throw Object.assign(new Error(o.error.message), { code: o.error.code });
+  if (o.t === "err") throw Object.assign(new Error(o.error.message), { code: o.error.code, fix: o.error.fix });
   return o.reply;
 }

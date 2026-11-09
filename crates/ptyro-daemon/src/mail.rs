@@ -306,7 +306,7 @@ impl Daemon {
             }
             // This run's own sessions.
             Request::Kill { addr, .. }
-            | Request::Remove { addr }
+            | Request::Remove { addr, .. }
             | Request::Restart { addr }
             | Request::Resume { addr }
             | Request::Hibernate { addr }
@@ -1822,7 +1822,7 @@ impl Daemon {
                     Some(p) => p,
                     None => {
                         return Err(Error::invalid(
-                            "which project? --project (or run it inside a repository)",
+                            "which project? name one (or run it inside a repository)",
                         ));
                     }
                 };

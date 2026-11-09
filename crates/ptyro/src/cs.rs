@@ -23,7 +23,7 @@ use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, age, ask_first, client_env, confirm, no_daemon, unexpected};
+use crate::cli::{Ctx, age, ask_first, client_env, confirm, no_daemon, trust_of, unexpected};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -521,7 +521,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             if let Err(e) = &v
                 && e.code == ErrorCode::UntrustedProject
                 && std::io::stdin().is_terminal()
-                && let Some(fp) = e.message.rsplit("--trust ").next().map(str::to_owned)
+                && let Some(fp) = trust_of(e)
             {
                 eprintln!("{}", e.message);
                 if confirm("Trust this template and go on?") {

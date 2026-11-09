@@ -716,11 +716,11 @@ impl Daemon {
             warnings.push("more than 6 candidates rarely finds a better answer".into());
         }
         if out.len() > 1 && agents.len() == 1 {
-            warnings.push("every candidate is the same agent; mixed agents fail differently (--agents claude,codex,gemini)".into());
+            warnings.push("every candidate is the same agent; mixed agents fail differently (claude, codex, gemini)".into());
         }
         if out.iter().all(|c| c.tests.is_none()) {
             warnings.push(
-                "no tests ran: ranked on status and diff only (fanout --test, or verify.tests)"
+                "no tests ran: ranked on status and diff only (give the fanout a test command, or set verify.tests)"
                     .into(),
             );
         }
@@ -823,7 +823,7 @@ impl Daemon {
                     PickMode::Apply => {
                         if paths.is_empty() && hunks.is_empty() {
                             return Err(Error::invalid(
-                                "say what to take: --path FILE (repeatable) or --hunk FILE:N",
+                                "say what to take: files, or hunks (FILE:N)",
                             ));
                         }
                         let target = match &into {

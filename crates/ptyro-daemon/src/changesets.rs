@@ -470,7 +470,7 @@ impl Daemon {
                 self.set_state(run)?.member(&n).ok_or_else(|| Error::missing("member", &n))?;
                 Ok(n)
             }
-            (_, None) => Err(Error::invalid("which member? (--member NAME)")),
+            (_, None) => Err(Error::invalid("which member? name one")),
         }
     }
 
@@ -513,9 +513,13 @@ impl Daemon {
                         return Err(Error::new(
                             ErrorCode::UntrustedProject,
                             format!(
-                                "template {t} comes from the {} repository and isn't trusted; read {}, then run with --trust {fp}",
+                                "template {t} comes from the {} repository and isn't trusted: read {}, then trust it to go on",
                                 hub.slug, info.path
                             ),
+                        )
+                        .with_fix(
+                            ptyro_core::error::Again::Trust { fingerprint: fp },
+                            "Trust and go on",
                         ));
                     }
                 }
@@ -2425,11 +2429,12 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "{} changed since the last set checkpoint: restoring would lose that. `ptyro cs checkpoint {}` first, or --force (which checkpoints the present first)",
+                        "{} changed since the last set checkpoint: restoring would lose that. Checkpoint {} first, or restore anyway (which checkpoints the present first)",
                         unrecorded.join(", "),
                         set.name
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Restore anyway"));
             }
             let safety =
                 self.cs_checkpoint(run, Some(format!("before restoring #{n}")), "restore").await?;
@@ -3183,9 +3188,10 @@ impl Daemon {
             .collect();
         if !users.is_empty() && !force {
             return Err(Error::conflict(format!(
-                "{} depend on {member}: drop them first, or --force",
+                "{} depend on {member}: drop them first, or drop it anyway",
                 users.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::Force, "Drop it anyway"));
         }
         if let Some(w) = &m.worktree {
             self.remove_worktree(w, RemoveOpts { force, stop_sessions: true, keep_branch: false })
@@ -3250,11 +3256,12 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "refusing to remove {}: work would be lost in {}. Ship it, `--keep <member>`, or --force",
+                        "refusing to remove {}: work would be lost in {}. Ship it, keep that member, or remove the set anyway",
                         set.name,
                         unsafe_.join("; ")
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Remove the set anyway"));
             }
         }
         // The agents first.

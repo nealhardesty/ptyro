@@ -47,11 +47,45 @@ impl ErrorCode {
 pub struct Error {
     pub code: ErrorCode,
     pub message: String,
+    /// The way through this refusal, when there is one (protocol 1.39, SPEC §6.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<Fix>,
+}
+
+/// A way through a refusal: the same request again with one thing said. Each client offers it
+/// its own way: the CLI names the flag, the TUI and the web show a button with `label`. The
+/// message itself names no flag (SPEC §6.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fix {
+    #[serde(flatten)]
+    pub again: Again,
+    /// What a button says: "Remove anyway", "Stop and remove".
+    pub label: String,
+}
+
+/// What the request says the second time. Stable ids on the wire (`"fix": "force"`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "fix", rename_all = "snake_case")]
+pub enum Again {
+    /// `force`: go on anyway (discard the work, interrupt the turn, stop what runs).
+    Force,
+    /// `stop_sessions`: stop the sessions running in it too.
+    StopSessions,
+    /// `stop`: stop the session first.
+    Stop,
+    /// `trust`: trust what was read, by its fingerprint.
+    Trust { fingerprint: String },
 }
 
 impl Error {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self { code, message: message.into() }
+        Self { code, message: message.into(), fix: None }
+    }
+    /// Says the way through (see [`Fix`]).
+    #[must_use]
+    pub fn with_fix(mut self, again: Again, label: &str) -> Self {
+        self.fix = Some(Fix { again, label: label.into() });
+        self
     }
     pub fn invalid(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Invalid, message)

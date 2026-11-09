@@ -410,6 +410,10 @@ impl PromptKind {
 #[derive(Debug, Clone)]
 pub enum Confirmed {
     Stop(SessionId),
+    /// SIGKILL, now.
+    Kill(SessionId),
+    /// Stop it, then forget it (`rm --stop`).
+    StopRemove(SessionId),
     /// Resend with the guard / pin override acknowledged.
     Spawn(Box<SpawnSpec>, Option<Dir>),
     Worktree(Box<WorktreeSpec>, Option<Dir>),
@@ -616,6 +620,8 @@ pub enum CopyStart {
 
 pub enum AppMsg {
     Reply(Pending, Result<Reply, Error>),
+    /// A refusal with a way through, and the request that takes it (SPEC §6.6).
+    Refused(Pending, Error, Box<Request>),
     /// A workspace's saved view, after switching to it.
     View(String, Result<Reply, Error>),
     /// What `ptyro doctor` found (UX1.20).
@@ -853,6 +859,8 @@ pub struct App {
     reported_focus: Option<(SessionId, bool)>,
     /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
     stopping: HashSet<SessionId>,
+    /// While a refusal is handled: the request that takes its way through (SPEC §6.6).
+    retry: Option<Box<Request>>,
     /// A project just added, and what to do in it once its main checkout is known (UX1.6).
     after_add: Option<(String, AfterAdd)>,
     /// The project `context()` answers while an `after_add` runs.
@@ -994,6 +1002,7 @@ impl App {
             drag: None,
             reported_focus: None,
             stopping: HashSet::new(),
+            retry: None,
             after_add: None,
             context_hint: None,
             first_run: None,
@@ -1278,9 +1287,18 @@ impl App {
             return;
         };
         let tx = self.tx.clone();
+        // Kept for a refusal's way through (SPEC §6.6): the same request, said again.
+        let again = req.fixable().then(|| req.clone());
         tokio::spawn(async move {
             let res = client.request(req).await;
-            let _ = tx.send(AppMsg::Reply(pending, res));
+            let retry = match (&res, again) {
+                (Err(e), Some(r)) => e.fix.as_ref().and_then(|f| r.with_fix(&f.again)),
+                _ => None,
+            };
+            let _ = tx.send(match (res, retry) {
+                (Err(e), Some(r)) => AppMsg::Refused(pending, e, Box::new(r)),
+                (res, _) => AppMsg::Reply(pending, res),
+            });
         });
     }
 
@@ -1982,8 +2000,9 @@ impl App {
 
     pub fn on_reply(&mut self, msg: AppMsg) {
         self.dirty = true;
-        let (pending, res) = match msg {
-            AppMsg::Reply(p, r) => (p, r),
+        let (pending, res, retry) = match msg {
+            AppMsg::Reply(p, r) => (p, r, None),
+            AppMsg::Refused(p, e, r) => (p, Err(e), Some(r)),
             AppMsg::Health(checks) => {
                 self.got_health(checks);
                 return;
@@ -2036,7 +2055,10 @@ impl App {
             ) if !matches!(pending, Pending::Peek(_)) => self.overlay.take(),
             _ => None,
         };
+        // A refusal's way through, for the reply's error to offer (SPEC §6.6).
+        self.retry = retry;
         self.handle_reply(pending, res);
+        self.retry = None;
         if let Some(h) = held {
             if self.overlay.is_some() {
                 self.toast("a reply arrived while you were typing: ask again when you're done");
@@ -2642,9 +2664,17 @@ impl App {
             }
             // Only a label: a worktree still being made says so elsewhere.
             (Pending::Again(_), Err(_)) => {}
-            (_, Err(e)) => match offer_for(&e.message) {
-                Some(offer) => self.toast_offer(e.message, true, offer),
-                None => self.toast_err(e.message),
+            // A refusal's way through (SPEC §6.6), else what its words suggest.
+            (_, Err(e)) => match (self.retry.take(), &e.fix) {
+                (Some(req), Some(fix)) => {
+                    let label = fix.label.to_lowercase();
+                    let offer = Offer { label: label.clone(), then: Then::Send(req, label) };
+                    self.toast_offer(e.message, true, offer)
+                }
+                _ => match offer_for(&e.message) {
+                    Some(offer) => self.toast_offer(e.message, true, offer),
+                    None => self.toast_err(e.message),
+                },
             },
             _ => {}
         }
@@ -3286,6 +3316,7 @@ impl App {
             }
             "session.stop"
             | "session.kill"
+            | "session.remove"
             | "session.restart"
             | "session.rename"
             | "session.retitle"
@@ -3816,31 +3847,29 @@ impl App {
         let Some(info) = self.session(id).cloned() else { return };
         let addr = id.full();
         match action {
-            "session.stop" if !info.state.is_live() => {
+            // `x` on an ended session removes it.
+            "session.stop" | "session.remove" if !info.state.is_live() => {
                 self.request(
                     Pending::Done(format!("removed {}", info.name)),
-                    Request::Remove { addr },
+                    Request::Remove { addr, stop: false },
                 );
             }
-            "session.stop" if self.config.ui.confirm_kill => {
-                self.overlay = Some(Overlay::Confirm {
-                    text: format!("Stop {} ({})? [y/N]", info.name, info.argv.join(" ")),
-                    action: Confirmed::Stop(id),
-                });
-            }
-            "session.stop" => {
-                self.stopping.insert(id);
-                self.request(
-                    Pending::Done(format!("stopped {}", info.name)),
-                    Request::Kill { addr, signal: None },
-                );
-            }
-            "session.kill" => {
-                self.stopping.insert(id);
-                self.request(
-                    Pending::Done(format!("killed {}", info.name)),
-                    Request::Kill { addr, signal: Some(9) },
-                );
+            // Stop, kill, and stop and remove all end a running session: `ui.confirm_kill` asks
+            // first for each, as the web does (SPEC §7.3).
+            "session.stop" | "session.kill" | "session.remove" => {
+                let (verb, end) = match action {
+                    "session.stop" => ("Stop", Confirmed::Stop(id)),
+                    "session.kill" => ("Kill", Confirmed::Kill(id)),
+                    _ => ("Stop and remove", Confirmed::StopRemove(id)),
+                };
+                if self.config.ui.confirm_kill {
+                    self.overlay = Some(Overlay::Confirm {
+                        text: format!("{verb} {} ({})? [y/N]", info.name, info.argv.join(" ")),
+                        action: end,
+                    });
+                } else {
+                    self.confirmed(end);
+                }
             }
             "session.restart" if info.state.is_live() => self.toast_offer(
                 format!("{} is still running", info.name),
@@ -4532,9 +4561,8 @@ impl App {
                 }
                 if s.state.is_live() {
                     v.extend(["session.stop", "session.kill"]);
-                } else {
-                    v.push("session.stop");
                 }
+                v.push("session.remove");
                 v
             }
             Row::Worktree(w) => {
@@ -5822,13 +5850,16 @@ impl App {
                     push: false,
                 },
             ),
-            Confirmed::Stop(id) => {
-                self.stopping.insert(id);
+            Confirmed::Stop(id) | Confirmed::Kill(id) | Confirmed::StopRemove(id) => {
                 let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
-                self.request(
-                    Pending::Done(format!("stopped {name}")),
-                    Request::Kill { addr: id.full(), signal: None },
-                );
+                let addr = id.full();
+                let (said, req) = match action {
+                    Confirmed::Stop(_) => ("stopped", Request::Kill { addr, signal: None }),
+                    Confirmed::Kill(_) => ("killed", Request::Kill { addr, signal: Some(9) }),
+                    _ => ("stopped and removed", Request::Remove { addr, stop: true }),
+                };
+                self.stopping.insert(id);
+                self.request(Pending::Done(format!("{said} {name}")), req);
             }
             Confirmed::Spawn(mut spec, split) => {
                 spec.override_pin = true;
@@ -8736,6 +8767,58 @@ mod tests {
         app.panes.get_mut(&1).unwrap().session = Some(live.id);
         app.run(&Command { action: "row.menu", arg: None });
         assert!(screen(&app).contains("Session live"), "in the pane: the focused session's");
+    }
+
+    /// Stop, kill, and stop and remove each ask first while `ui.confirm_kill` is on (the web does
+    /// the same), and none asks once it is off. An ended session is removed without asking.
+    #[test]
+    fn confirm_kill_asks_before_stop_kill_and_stop_and_remove() {
+        for action in ["session.stop", "session.kill", "session.remove"] {
+            let mut app = app();
+            let live = session("live");
+            app.sessions = vec![live.clone()];
+            app.session_action(action, live.id);
+            let Some(Overlay::Confirm { text, .. }) = &app.overlay else {
+                panic!("{action} didn't ask: {:?}", app.overlay.is_some())
+            };
+            assert!(text.contains("live"), "{text}");
+            assert!(!app.stopping.contains(&live.id), "{action} waits for the answer");
+
+            app.overlay = None;
+            app.config.ui.confirm_kill = false;
+            app.session_action(action, live.id);
+            assert!(app.overlay.is_none(), "{action} asked with confirm_kill off");
+            assert!(app.stopping.contains(&live.id), "{action} ran");
+        }
+        let mut app = app();
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(0), signal: None };
+        app.sessions = vec![gone.clone()];
+        app.session_action("session.remove", gone.id);
+        assert!(app.overlay.is_none(), "an ended session is removed without asking");
+        let actions = app.row_actions(&Row::Session(gone.id));
+        assert!(actions.contains(&"session.remove") && !actions.contains(&"session.stop"));
+    }
+
+    /// A refusal's way through (SPEC §6.6) is a button: the same request with it said.
+    #[test]
+    fn a_refusal_s_fix_becomes_a_button() {
+        use ptyro_core::error::Again;
+        let mut app = app();
+        let req = Request::Remove { addr: "x".into(), stop: false };
+        let e = Error::conflict("x is still running: stop it first")
+            .with_fix(Again::Stop, "Stop and remove");
+        let retry = req.with_fix(&e.fix.as_ref().unwrap().again).unwrap();
+        app.on_reply(AppMsg::Refused(Pending::Done(String::new()), e, Box::new(retry)));
+        let t = app.toast.as_ref().unwrap();
+        assert!(t.text.contains("stop it first"), "{}", t.text);
+        let Some(Offer { label, then: Then::Send(req, _) }) = &t.offer else { panic!("no button") };
+        assert_eq!(label, "stop and remove");
+        assert!(matches!(**req, Request::Remove { stop: true, .. }));
+        // Without one, its words still decide (or nothing is offered).
+        let mut app = self::app();
+        app.on_reply(AppMsg::Reply(Pending::Done(String::new()), Err(Error::conflict("nope"))));
+        assert!(app.toast.as_ref().unwrap().offer.is_none());
     }
 
     #[test]

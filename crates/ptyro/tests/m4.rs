@@ -281,7 +281,7 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     assert!(out.contains("applied: working → blocked"), "{out}");
     assert!(out.contains("hook (high)"), "{out}");
     // Graceful stop: the fake honours /exit.
-    w.ok(&["kill", "cl", "--keep"]);
+    w.ok(&["stop", "cl"]);
     assert!(!get(&c, "cl").await.state.is_live());
 }
 

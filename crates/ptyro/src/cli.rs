@@ -89,7 +89,7 @@ pub async fn run(
     match dispatch(cmd, task, json_wire, remote).await {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("ptyro: {}", e.message);
+            eprintln!("ptyro: {}", said(&e));
             e.code.exit_code()
         }
     }
@@ -410,19 +410,21 @@ async fn dispatch(
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
         Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
         Some(Cmd::Tour { here: true }) => tour_here(&ctx).await,
-        Some(Cmd::Kill { sessions, signal, keep }) => {
+        // Kill is immediate and keeps the session listed, as in the TUI and the web (SPEC §7.3).
+        Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
-                let addr = info.id.full();
-                client.request(Request::Kill { addr: addr.clone(), signal }).await?;
-                if signal.is_none() && !keep {
-                    // A quick terminal forgets itself once it exits (UX1.25).
-                    if !info.quick {
-                        client.request(Request::Remove { addr }).await?;
-                    }
-                    eprintln!("killed {}", info.name);
-                } else {
-                    eprintln!("signalled {}", info.name);
+                if !info.state.is_live() {
+                    eprintln!("{} isn't running", info.name);
+                    continue;
+                }
+                let signal = signal.unwrap_or(9);
+                client
+                    .request(Request::Kill { addr: info.id.full(), signal: Some(signal) })
+                    .await?;
+                match signal {
+                    9 => eprintln!("killed {}", info.name),
+                    n => eprintln!("sent signal {n} to {}", info.name),
                 }
             }
             Ok(0)
@@ -436,10 +438,13 @@ async fn dispatch(
             }
             Ok(0)
         }
-        Some(Cmd::Rm { sessions }) => {
+        Some(Cmd::Rm { sessions, stop }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
-                client.request(Request::Remove { addr: info.id.full() }).await?;
+                client.request(Request::Remove { addr: info.id.full(), stop }).await?;
+                if stop && info.state.is_live() {
+                    eprintln!("stopped and removed {}", info.name);
+                }
             }
             Ok(0)
         }
@@ -795,6 +800,28 @@ async fn tour_here(ctx: &Ctx) -> Result<i32, Error> {
     };
     let tui = ptyro_tui::Options { tour: true, ..Default::default() };
     attach_with(ctx, client, Some(info), tui).await
+}
+
+/// What the CLI prints for an error: the daemon's words, then a refusal's way through the
+/// CLI's way, the flag that says it (SPEC §6.6).
+pub fn said(e: &Error) -> String {
+    use ptyro_core::error::Again;
+    let Some(f) = &e.fix else { return e.message.clone() };
+    let flag = match &f.again {
+        Again::Force => "--force".to_owned(),
+        Again::StopSessions => "--stop-sessions".to_owned(),
+        Again::Stop => "--stop".to_owned(),
+        Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
+    };
+    format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
+}
+
+/// The fingerprint a refusal asks you to trust, if it asks.
+pub fn trust_of(e: &Error) -> Option<String> {
+    match &e.fix.as_ref()?.again {
+        ptyro_core::error::Again::Trust { fingerprint } => Some(fingerprint.clone()),
+        _ => None,
+    }
 }
 
 pub fn no_daemon(e: Error) -> Error {
