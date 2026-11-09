@@ -165,11 +165,6 @@ export function shipped(w: Worktree): boolean {
 }
 
 export const projectOf = (w: Worktree): Project | undefined => data.projects.get(w.project);
-/// A worktree by id, name, `project/name` or the end of its id (how addresses read).
-export function findWorktree(addr: string): Worktree | undefined {
-  const all = [...data.worktrees.values()];
-  return data.worktrees.get(addr) ?? all.find((w) => `${w.project_slug}/${w.name}` === addr) ?? all.find((w) => w.name === addr) ?? all.find((w) => w.id.endsWith(addr));
-}
 export const liveWorktrees = (): Worktree[] => [...data.worktrees.values()].filter((w) => w.state !== "removed");
 
 /// Does this device's scope allow `need`? (The daemon decides; this only hides what would fail.)

@@ -28,7 +28,7 @@ use std::time::Duration;
 use ptyro_core::model::{RemoveOpts, WorktreeInfo, WorktreeSpec, WorktreeState};
 use ptyro_core::session::{ProcessState, SessionKind, SpawnSpec};
 use ptyro_core::status::{AgentStatus, AttentionKind};
-use ptyro_core::{Error, ErrorCode, now_ms};
+use ptyro_core::{Error, ErrorCode, lookup, now_ms};
 use ptyro_protocol::{Reply, Request};
 use ptyro_run::changeset::{
     self as cs, ChangeSet, CheckResult, ContractRev, CsEvent, Layout, Member, MemberLive, Phase,
@@ -147,30 +147,51 @@ pub(crate) fn normalize(p: &Path) -> PathBuf {
 impl Daemon {
     // ── finding sets ───────────────────────────────────────────────────────
 
-    /// A set by name, run id, or `@last`.
+    /// A set by name (the live one, else the newest), `@last`, or its run's id or the end of
+    /// it, at least 4 characters (SPEC §2.3).
     pub(crate) fn find_set(&self, addr: &str) -> Result<String, Error> {
         let runs = self.runs.locked();
         let sets: Vec<(&String, &ChangeSet, u64)> = runs
             .iter()
             .filter_map(|(id, e)| e.state.changeset.as_ref().map(|c| (id, c, e.state.created_ms)))
             .collect();
+        let addr = addr.trim();
         if addr == "@last" {
             return sets
                 .iter()
                 .max_by_key(|(_, _, t)| *t)
                 .map(|(id, _, _)| (*id).clone())
-                .ok_or_else(|| Error::not_found("no change sets yet"));
+                .ok_or_else(|| Error::new(ErrorCode::NotFound, "there are no change sets yet"));
         }
+        let key = lookup::key(addr);
         let live = |c: &ChangeSet| c.phase != Phase::Removed;
-        if let Some((id, _, _)) =
-            sets.iter().filter(|(_, c, _)| c.name == addr).max_by_key(|(_, c, t)| (live(c), *t))
+        if let Some((id, _, _)) = sets
+            .iter()
+            .filter(|(_, c, _)| lookup::same(&c.name, &key))
+            .max_by_key(|(_, c, t)| (live(c), *t))
         {
             return Ok((*id).clone());
         }
-        if sets.iter().any(|(id, _, _)| *id == addr) {
-            return Ok(addr.to_owned());
-        }
-        Err(Error::missing("change set", addr))
+        let bare = key.strip_prefix("r-").unwrap_or(&key);
+        let by_id = sets
+            .iter()
+            .filter(|(id, _, _)| lookup::id_matches(id.trim_start_matches("r-"), bare))
+            .collect();
+        lookup::one("change set", addr, by_id, |(id, c, _)| format!("{id} ({})", c.name))?
+            .map(|(id, _, _)| (*id).clone())
+            .ok_or_else(|| {
+                lookup::not_found("change set", addr, sets.iter().map(|(id, _, _)| id.as_str()))
+            })
+    }
+
+    /// Whether a live set has this name (not an id: a new name is checked with this).
+    pub(crate) fn set_named(&self, name: &str) -> bool {
+        self.runs.locked().values().any(|e| {
+            e.state
+                .changeset
+                .as_ref()
+                .is_some_and(|c| c.phase != Phase::Removed && lookup::same(&c.name, name))
+        })
     }
 
     pub(crate) fn set_state(&self, run: &str) -> Result<ChangeSet, Error> {
@@ -468,9 +489,7 @@ impl Daemon {
         // Kept short because its members' names are appended (`<set>-<member>`).
         ptyro_core::names::validate_within(&name, 40, ", since its members' names are appended")
             .map_err(Error::invalid)?;
-        if let Ok(r) = self.find_set(&name)
-            && self.set_state(&r).is_ok_and(|c| c.phase != Phase::Removed)
-        {
+        if self.set_named(&name) {
             return Err(Error::conflict(format!(
                 "change set {name} exists (ptyro cs show {name})"
             )));

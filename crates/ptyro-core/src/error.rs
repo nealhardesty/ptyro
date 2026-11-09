@@ -53,12 +53,11 @@ impl Error {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self { code, message: message.into() }
     }
-    pub fn not_found(what: impl std::fmt::Display) -> Self {
-        Self::new(ErrorCode::NotFound, format!("no session matches \"{what}\""))
-    }
     pub fn invalid(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Invalid, message)
     }
+    /// Nothing of the kind `what` (a session, a run, a device) matches `addr`. Resolvers use
+    /// [`crate::lookup::not_found`], which also explains a handle that is too short.
     pub fn missing(what: &str, addr: impl std::fmt::Display) -> Self {
         Self::new(ErrorCode::NotFound, format!("no {what} matches \"{addr}\""))
     }

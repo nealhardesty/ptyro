@@ -308,7 +308,7 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 | `1` | error (for `doctor`: a problem was found; for `pr checks`: a check fails) |
 | `2` | usage: bad arguments or values |
 | `3` | not found |
-| `4` | ambiguous: a handle or selector matched several |
+| `4` | ambiguous: a name, handle or selector matched several (the message lists them) |
 | `5` | conflict: unsaved work, a profile question, or (`wait`) a session exited first |
 | `6` | untrusted scripts |
 | `7` | timeout (`wait`, `send --wait-ready`), `wait --stall` saw no output, or (`pr checks`) checks still running |

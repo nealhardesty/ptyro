@@ -16,7 +16,9 @@ use ptyro_core::ids::short_handle;
 use ptyro_core::model::MAIN_WORKSPACE;
 use ptyro_core::paths::Paths;
 use ptyro_core::session::{HistoryEntry, SessionInfo, SessionKind, SpawnSpec};
-use ptyro_core::{ClientId, Error, ErrorCode, SessionId, TermSize, names, now_ms, selector};
+use ptyro_core::{
+    ClientId, Error, ErrorCode, SessionId, TermSize, lookup, names, now_ms, selector,
+};
 use ptyro_protocol::{DaemonStatus, DomainEvent, PROTO, Reply, Request};
 use ptyro_store::{Registry, Store};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -550,7 +552,8 @@ impl Daemon {
     }
 
     /// One session (SPEC §2.3): `@last`, `@focused`, a full id, `s:<handle>`, an exact name,
-    /// `project/name`, or a handle (id suffix). Exact names win over handles. Selectors that can
+    /// `project/name`, or a handle (the end of the id, at least 4 characters), all in any case
+    /// (`ptyro_core::lookup`). Exact names win over handles. Selectors that can
     /// match several sessions are an error here unless they match exactly one; use
     /// `resolve_many`. Names are unique per project, so a bare name two projects share is
     /// ambiguous, and the error names each `project/name`.
@@ -571,33 +574,32 @@ impl Daemon {
         if let Some(found) = self.resolve_slot(addr) {
             return found;
         }
+        let missing = || {
+            let ids: Vec<String> = sessions.iter().map(|s| s.id.full()).collect();
+            lookup::not_found("session", addr, ids.iter().map(String::as_str))
+        };
         match addr {
-            "@last" => return sessions.last().cloned().ok_or_else(|| Error::not_found(addr)),
+            "@last" => return sessions.last().cloned().ok_or_else(missing),
             "@focused" => {
                 let id = *self.focused.locked();
-                return id.and_then(|id| self.session(id)).ok_or_else(|| Error::not_found(addr));
+                return id.and_then(|id| self.session(id)).ok_or_else(missing);
             }
             _ => {}
         }
         if addr.starts_with('@') || addr.contains(['*', '?', ',']) {
-            return match self.resolve_many(addr)?.as_slice() {
-                [one] => Ok(Arc::clone(one)),
-                [] => Err(Error::not_found(addr)),
-                many => Err(Error::new(
-                    ErrorCode::Ambiguous,
-                    format!("{addr:?} matches {} sessions", many.len()),
-                )),
-            };
+            let many = self.resolve_many(addr)?;
+            return lookup::one("session", addr, many, |s| self.session_addr(s))?
+                .ok_or_else(missing);
         }
-        let named: Vec<&Arc<Session>> = sessions
-            .iter()
-            .filter(|s| {
-                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == addr
-            })
-            .collect();
+        let key = lookup::key(addr);
+        let name_of = |s: &Session| {
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone()
+        };
         let project_of = |s: &Session| {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone()
         };
+        let named: Vec<&Arc<Session>> =
+            sessions.iter().filter(|s| lookup::same(&name_of(s), &key)).collect();
         match named.as_slice() {
             [] => {}
             [one] => return Ok(Arc::clone(one)),
@@ -610,40 +612,29 @@ impl Daemon {
                     return Ok(Arc::clone(one));
                 }
                 let which: Vec<String> = many.iter().map(|s| self.session_addr(s)).collect();
-                return Err(Error::new(
-                    ErrorCode::Ambiguous,
-                    format!(
-                        "{} sessions are named {addr:?}: say which, {}",
-                        many.len(),
-                        which.join(" or ")
-                    ),
-                ));
+                return Err(lookup::ambiguous_name("session", addr, &which));
             }
         }
-        if let Some((project, name)) = addr.split_once('/') {
+        if let Some((project, name)) = key.split_once('/') {
             let project = self.find_project(project)?;
             return sessions
                 .iter()
                 .find(|s| {
-                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    m.name == name && m.place.project.as_deref() == Some(project.id.as_str())
+                    lookup::same(&name_of(s), name)
+                        && project_of(s).as_deref() == Some(project.id.as_str())
                 })
                 .cloned()
-                .ok_or_else(|| Error::not_found(addr));
+                .ok_or_else(missing);
         }
-        let handle = addr.strip_prefix("s:").unwrap_or(addr).to_ascii_lowercase();
+        let handle = key.strip_prefix("s:").unwrap_or(&key);
         if handle.is_empty() {
             return Err(Error::invalid("empty session address"));
         }
-        let matches: Vec<_> = sessions.iter().filter(|s| s.id.full().ends_with(&handle)).collect();
-        match matches.as_slice() {
-            [one] => Ok(Arc::clone(one)),
-            [] => Err(Error::not_found(addr)),
-            many => Err(Error::new(
-                ErrorCode::Ambiguous,
-                format!("{addr:?} matches {} sessions; use a longer handle", many.len()),
-            )),
-        }
+        let matches: Vec<_> =
+            sessions.iter().filter(|s| lookup::id_matches(&s.id.full(), handle)).collect();
+        lookup::one("session", addr, matches, |s| self.session_addr(s))?
+            .cloned()
+            .ok_or_else(missing)
     }
 
     /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus the `@` selectors of
@@ -687,7 +678,7 @@ impl Daemon {
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .name
                             .clone();
-                        glob(p, &name)
+                        glob(&lookup::key(p), &name.to_lowercase())
                     })
                     .map(|s| s.id)
                     .collect(),
@@ -1754,15 +1745,10 @@ impl Daemon {
         asked: Option<&str>,
         project: Option<&ptyro_core::model::ProjectInfo>,
     ) -> Result<String, Error> {
-        let reg = self.registry.locked();
         if let Some(name) = asked {
-            return reg
-                .workspaces
-                .iter()
-                .find(|w| w.name == name)
-                .map(|w| w.name.clone())
-                .ok_or_else(|| Error::missing("workspace", name));
+            return self.find_workspace(name).map(|w| w.name);
         }
+        let reg = self.registry.locked();
         if let Some(p) = project
             && let Some(w) = reg.workspaces.iter().find(|w| w.projects.contains(&p.id))
         {
@@ -1813,6 +1799,14 @@ pub fn glob(pattern: &str, text: &str) -> bool {
         }
     }
     p[pi..].iter().all(|c| *c == '*')
+}
+
+/// A daemon with no store and nothing running, over `registry`: for tests of what it decides.
+#[cfg(test)]
+pub(crate) fn test_daemon(dir: &std::path::Path, registry: Registry) -> Arc<Daemon> {
+    let home = dir.to_path_buf();
+    let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+    Daemon::new(paths, None, Config::default(), registry)
 }
 
 #[cfg(test)]

@@ -258,6 +258,32 @@ inside them, so CLI commands default to the worktree you're standing in. Ids are
 (`claude-rook`), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
 show the suggestion before ⏎ (§11.2h).
 
+**One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
+way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, runs, change
+sets, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
+uses it, so the rules can't drift apart.
+
+1. **Order**: an exact name (a project's slug) → the qualified form where the kind has one
+   (`project/name`) → the full id → a handle: the end of the id, **at least 4 characters**,
+   with or without its prefix (`s:`, `w:`, `p:`, `c:`, `r-`). A shorter one never matches, and
+   the not-found message says why. Runs match the end of their id, never a part of the middle.
+2. **Case**: names and ids are lowercase, so the input is lowercased before names, ids and
+   handles are compared (`Build` finds `build`; device and machine names likewise). Titles are
+   not addresses. Chats still take a word of a title, as the last resort; a destructive request
+   doesn't (`find_chat_by(addr, false)`).
+3. **Ambiguity** is always `ambiguous` (CLI exit 4), and the message lists the candidates as
+   they can be addressed, at most 5 and then "and N more": `2 sessions are named "build": say
+   which, app/build or lib/build`; `2 runs match "k3x9": say which, r-ak3x9 (fanout) or …`.
+   Several archived worktrees of one name are listed with their handles and ages. Each
+   candidate reads "address (description)": `r-ef9999 (login)`, `a1b2c3d4e5f6 (Phone)`,
+   `c:7f3k (Fix the build)`, `7f3k (myrepo/feat, archived 3d ago)`.
+4. **Not found names the kind**: `no run matches "zz9q"`, `no device matches "phone"; the
+   devices are laptop and tablet`. Where the set is small (devices, workspaces, profiles,
+   machines) the message lists what there is.
+5. **Archived worktrees** have an id (protocol 1.38; earlier ones get a stable one when the list
+   is read) and resolve by name, `project/name` (the project by slug, id or path, as anywhere),
+   or handle. `ptyro wt archives` shows the handle; the TUI and the web send the id.
+
 ---
 
 ## 3. Architecture overview
@@ -1155,6 +1181,10 @@ the new `project_slug`) and `ProjectUpdated`. An older daemon answers "unsupport
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
 client ignores both.
+
+**Protocol 1.38** (additive): `ArchiveEntry.id`, so archived worktrees that share a name can be
+told apart (§2.3). Clients send it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's
+entries have none (empty), and the clients then send `project/name` as before.
 
 **[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
 entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
@@ -2605,10 +2635,11 @@ branches, no sessions for N days.
   keep makes the archive refuse and name it, so nothing is lost silently. The archive list is
   kv `archive:list` (`ArchiveEntry`, newest first; read and written under a lock, errors
   propagated, the entry written after the removal; `WorktreeArchives`, `ptyro wt archives`).
-- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
-  its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the branch
-  has moved since) puts the snapshot back with the changes
-  uncommitted again, untracked files untracked. The entry leaves the list.
+- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name|handle`): the branch checked
+  out at its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the
+  branch has moved since) puts the snapshot back with the changes uncommitted again, untracked
+  files untracked. The entry leaves the list. Several archives of one name are listed (handle
+  and age), never picked between; the handle says which (§2.3, owner, 2026-11-09).
 - **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
   worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
   or 1 min if it never starts); what's left is committed as the worktree's profile with its
@@ -2621,7 +2652,7 @@ branches, no sessions for N days.
   a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
   could both snapshot it and both list it).
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
-- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name…`, asks
+- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name|handle…`, asks
   unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
   couldn't be restored), then the snapshot ref and its `archive-extras/` copies go, and its branch
   by `wt rm`'s rule (deleted when merged into the base, kept in the archive as `ArchiveEntry::base`,
@@ -7860,12 +7891,14 @@ shown in every workspace, including those of linked machines (§16.4b).
 
 - A chat and a node have a **ULID** (§2.3); the human handle of a chat is `c:7f3k`.
 - A chat has a **title** (free text) and no name. It is addressed by handle (`7f3k`, `c:7f3k`),
-  by a title substring that matches one chat, or by `@last` (the chat most recently used), `@pinned`
-  and `@unread` (the one pinned chat, or the one with answers not read; when several are, the
-  error lists them, newest first). A chat of another machine is `laptop2:c:7f3k`, as sessions are
+  by `@last` (the chat most recently used), `@pinned` and `@unread` (the one pinned chat, or the
+  one with answers not read; when several are, the error lists them, newest first), and, as the
+  last resort (§2.3), by a title substring that matches one chat. A chat of another machine is `laptop2:c:7f3k`, as sessions are
   (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
   alike).
-- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 6), for `fork --at` and search hits.
+- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search
+  hits. The web's citation links look for 6 or more characters after the slash: that only finds
+  citations in prose (fewer would catch ordinary words); the daemon resolves the link.
 
 ### 22.4 Storage: `chat.db`
 

@@ -606,7 +606,7 @@ impl Daemon {
         env: BTreeMap<String, String>,
     ) -> Result<Reply, Error> {
         let id: SessionId = session.parse().map_err(|_| Error::invalid("bad session id"))?;
-        let s = self.session_soon(id).await.ok_or_else(|| Error::not_found(session))?;
+        let s = self.session_soon(id).await.ok_or_else(|| Error::missing("session", session))?;
         let adapter = s.adapter().unwrap_or_else(|| adapter.to_owned());
         // Codex's `notify` also reports its side threads (the one that writes the conversation's
         // title, SPEC §20.2): only the session's own conversation counts.

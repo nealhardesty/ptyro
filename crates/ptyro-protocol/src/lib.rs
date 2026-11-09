@@ -2586,7 +2586,7 @@ mod tests {
         });
         round_trip(ServerMsg::Response {
             id: 1,
-            outcome: Outcome::Err { error: Error::not_found("x") },
+            outcome: Outcome::Err { error: Error::missing("session", "x") },
         });
     }
 

@@ -74,17 +74,11 @@ impl FromStr for SessionId {
     }
 }
 
-/// Shortest suffix of `id` (≥ [`MIN_HANDLE`]) that no other id in `all` shares.
+/// Shortest suffix of `id` (≥ [`MIN_HANDLE`]) that no other id in `all` shares
+/// ([`crate::lookup::handle`]).
 pub fn short_handle(id: &SessionId, all: &[SessionId]) -> String {
-    let full = id.full();
-    let others: Vec<String> = all.iter().filter(|o| *o != id).map(SessionId::full).collect();
-    for len in MIN_HANDLE..full.len() {
-        let suffix = &full[full.len() - len..];
-        if !others.iter().any(|o| o.ends_with(suffix)) {
-            return suffix.to_owned();
-        }
-    }
-    full
+    let all: Vec<String> = all.iter().map(SessionId::full).collect();
+    crate::lookup::handle(&id.full(), all.iter().map(String::as_str))
 }
 
 /// A connection to the daemon, unique for the daemon's lifetime.

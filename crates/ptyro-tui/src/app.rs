@@ -2501,10 +2501,16 @@ impl App {
                                 e.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default()
                             ),
                             key: None,
-                            target: Target::Path(std::path::PathBuf::from(format!(
-                                "{}/{}",
-                                e.project_slug, e.name
-                            ))),
+                            // By id: several archives can share a name (an older
+                            // daemon's have none).
+                            target: Target::Archive(
+                                if e.id.is_empty() {
+                                    format!("{}/{}", e.project_slug, e.name)
+                                } else {
+                                    e.id.clone()
+                                },
+                                format!("{}/{}", e.project_slug, e.name),
+                            ),
                         })
                         .collect();
                     let (title, purpose) = if delete {
@@ -5235,10 +5241,10 @@ impl App {
     }
 
     /// Deleting an archive can't be undone: asked first.
-    fn confirm_archive_delete(&mut self, addr: &str) {
+    fn confirm_archive_delete(&mut self, addr: &str, label: &str) {
         self.overlay = Some(Overlay::Confirm {
             text: format!(
-                "Delete the archive of {addr} for good? Its saved files go, and its branch if merged or pushed. [y/N]"
+                "Delete the archive of {label} for good? Its saved files go, and its branch if merged or pushed. [y/N]"
             ),
             action: Confirmed::Send(
                 Box::new(Request::WorktreeArchiveDelete { addr: addr.to_owned() }),
@@ -5533,12 +5539,12 @@ impl App {
                     && key.mods.has(Mods::CTRL)
                     && key.code == (KeyCode::Char { c: 'x' })
                 {
-                    if let Some(Target::Path(addr)) = palette
+                    if let Some(Target::Archive(addr, label)) = palette
                         .filtered
                         .get(palette.selected)
                         .map(|_| palette.item(palette.selected).target.clone())
                     {
-                        self.confirm_archive_delete(&addr.to_string_lossy());
+                        self.confirm_archive_delete(&addr, &label);
                     } else {
                         self.overlay = Some(Overlay::Picker { palette, purpose });
                     }
@@ -5953,14 +5959,11 @@ impl App {
                 args.push(arg.to_string_lossy().into_owned());
                 self.run_cli(&args);
             }
-            (Target::Path(addr), Purpose::ArchiveDelete) => {
-                self.confirm_archive_delete(&addr.to_string_lossy())
+            (Target::Archive(addr, label), Purpose::ArchiveDelete) => {
+                self.confirm_archive_delete(&addr, &label)
             }
-            (Target::Path(addr), Purpose::Restore) => {
-                self.request(
-                    Pending::Done("restored".into()),
-                    Request::WorktreeRestore { addr: addr.to_string_lossy().into_owned() },
-                );
+            (Target::Archive(addr, _), Purpose::Restore) => {
+                self.request(Pending::Done("restored".into()), Request::WorktreeRestore { addr });
             }
             // Picked on its own: where it goes, on the form (SPEC §11.5a).
             (Target::Path(path), Purpose::AddProject(None)) => self.open_project_form(Some(path)),

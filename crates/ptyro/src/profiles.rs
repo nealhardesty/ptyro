@@ -25,7 +25,7 @@ pub enum ProfileCmd {
     },
     /// Show a profile: its dirs, identity and the variables sessions get
     Show {
-        #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: String,
         #[arg(long)]
         json: bool,
@@ -52,29 +52,33 @@ pub enum ProfileCmd {
     },
     /// Delete a profile from your config (refused while anything uses it)
     Rm {
-        #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: String,
         #[arg(long)]
         force: bool,
     },
     /// Rename a profile everywhere: config, workspaces, pins, worktrees, sessions
-    Rename { old: String, new: String },
+    Rename {
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
+        old: String,
+        new: String,
+    },
     /// The environment its sessions get (secrets shown as <secret:NAME>)
     Env {
-        #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: String,
         #[arg(long)]
         json: bool,
     },
     /// Log in: run the tool's own login flow under the profile (claude, codex, gemini, opencode, gh)
     Login {
-        #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: String,
         target: String,
     },
     /// Create the `share` symlinks (CLAUDE.md, skills, …) from the agents' default dirs
     Sync {
-        #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: String,
     },
     /// Find existing multi-account setups (aliases, exports, ~/.claude-* dirs, git includeIf)
@@ -85,7 +89,7 @@ pub enum ProfileCmd {
     },
     /// Check each profile: dirs, logins, git identity, and pins that contradict match rules
     Doctor {
-        #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
+        #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: Option<String>,
         #[arg(long)]
         json: bool,
@@ -171,6 +175,16 @@ pub(crate) fn credential_file(agent: &str) -> &'static str {
     }
 }
 
+/// No profile is named `name`: which ones there are, as the daemon says it (SPEC §2.3).
+pub(crate) fn missing(name: &str, known: impl IntoIterator<Item = String>) -> Error {
+    ptyro_core::lookup::not_found_among("profile", name, &known.into_iter().collect::<Vec<_>>())
+}
+
+/// A profile the user names: lowercase, as names are (SPEC §2.3).
+fn addr(s: &str) -> Result<String, String> {
+    Ok(ptyro_core::lookup::key(s))
+}
+
 pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
     match cmd {
         ProfileCmd::Ls { json } => {
@@ -201,7 +215,7 @@ pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
             let p = all
                 .iter()
                 .find(|p| p.name == name)
-                .ok_or_else(|| Error::missing("profile", &name))?;
+                .ok_or_else(|| missing(&name, all.iter().map(|p| p.name.clone())))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(p).unwrap_or_default());
                 return Ok(0);
@@ -499,7 +513,7 @@ pub(crate) async fn login(
     })?;
     let config = load(ctx)?;
     if !profile::exists(&config, name) {
-        return Err(Error::missing("profile", name));
+        return Err(missing(name, profile::names(&config)));
     }
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
     let c = ctx.connect(true).await?;
@@ -522,7 +536,7 @@ pub(crate) async fn login(
 pub(crate) fn sync(ctx: &Ctx, name: &str) -> Result<Vec<String>, Error> {
     let config = load(ctx)?;
     if !config.profiles.contains_key(name) {
-        return Err(Error::missing("profile", name));
+        return Err(missing(name, config.profiles.keys().cloned()));
     }
     let out = profile::sync_shares(&config, name, &ctx.paths.data.join("profiles"));
     if out.is_empty() {

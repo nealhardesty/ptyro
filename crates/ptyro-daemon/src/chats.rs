@@ -26,7 +26,7 @@ use ptyro_core::config::{ChatTools, parse_duration};
 use ptyro_core::model::MAIN_WORKSPACE;
 use ptyro_core::session::SessionKind;
 use ptyro_core::status::{AgentStatus, AttentionKind};
-use ptyro_core::{Error, ErrorCode, SessionId, TermSize, now_ms};
+use ptyro_core::{Error, ErrorCode, SessionId, TermSize, lookup, now_ms};
 use ptyro_protocol::{DomainEvent, Reply, Request};
 use ptyro_store::chat::{ChatDb, Conv, ListFilter, NewChat};
 use tokio::sync::watch;
@@ -451,29 +451,26 @@ impl Daemon {
         }
     }
 
-    /// A node of a chat by its id or the end of it (≥ 6 characters), or `7f3k/01jb…`.
+    /// A node of a chat by its id or the end of it (at least 4 characters), or `7f3k/01jb…`
+    /// (SPEC §2.3).
     async fn find_node(&self, chat: &str, addr: &str) -> Result<ChatNode, Error> {
-        let addr = addr.rsplit('/').next().unwrap_or(addr);
+        let addr = addr.rsplit('/').next().unwrap_or(addr).trim();
+        let key = lookup::key(addr);
         if self.incognito_of(chat).is_some() {
             let nodes = self.rec_branch(chat, None).await?;
-            return nodes
-                .into_iter()
-                .find(|n| n.id == addr || (addr.len() >= 6 && n.id.ends_with(addr)))
-                .ok_or_else(|| Error::missing("message", addr));
+            let found = nodes.into_iter().filter(|n| lookup::id_matches(&n.id, &key)).collect();
+            return lookup::one("message", addr, found, |n: &ChatNode| n.id.clone())?
+                .ok_or_else(|| lookup::not_found("message", addr, []));
         }
         let db = self.chat_db()?;
-        let ids = db.find_node(chat.to_owned(), addr.to_owned()).await.map_err(store_err)?;
-        match ids.as_slice() {
-            [one] => db
-                .node(chat.to_owned(), one.clone())
-                .await
-                .map_err(store_err)?
-                .ok_or_else(|| Error::missing("message", addr)),
-            [] => Err(Error::missing("message", addr)),
-            _ => Err(Error::invalid(format!(
-                "{addr:?} is the end of several messages' ids: give more of it"
-            ))),
-        }
+        let ids = db.find_node(chat.to_owned(), key).await.map_err(store_err)?;
+        let Some(id) = lookup::one("message", addr, ids, Clone::clone)? else {
+            return Err(lookup::not_found("message", addr, []));
+        };
+        db.node(chat.to_owned(), id)
+            .await
+            .map_err(store_err)?
+            .ok_or_else(|| lookup::not_found("message", addr, []))
     }
 
     /// Ends the chat when it is incognito: its record goes with its agent (SPEC §22.9).
@@ -551,9 +548,16 @@ impl Daemon {
 
     // ── addressing ────────────────────────────────────────────────────────────────────────
 
-    /// A chat by address: a handle (`7f3k`, `c:7f3k`), a full id, `@last`, `@pinned` or
-    /// `@unread` (when one chat is), or a title substring that matches one chat.
+    /// A chat by address (SPEC §2.3): a handle (`7f3k`, `c:7f3k`), a full id, `@last`,
+    /// `@pinned` or `@unread` (when one chat is), or, last, a title substring that matches one
+    /// chat.
     pub(crate) async fn find_chat(&self, addr: &str) -> Result<ChatInfo, Error> {
+        self.find_chat_by(addr, true).await
+    }
+
+    /// `find_chat`; with `titles` false, never by its title: what a destructive request takes,
+    /// so a word that happens to be in a title can't pick a chat to delete.
+    pub(crate) async fn find_chat_by(&self, addr: &str, titles: bool) -> Result<ChatInfo, Error> {
         let db = self.chat_db()?;
         let all = db
             .list(ListFilter { sides: true, ..ListFilter::default() })
@@ -567,9 +571,12 @@ impl Daemon {
         all.append(&mut archived);
         all.extend(self.visible_incognito());
         // `7f3k/01jb…` names a message of it: the chat is the part before the slash.
-        let addr = addr.split('/').next().unwrap_or(addr);
-        let a = addr.trim();
-        let a = a.strip_prefix("c:").unwrap_or(a);
+        let addr = addr.split('/').next().unwrap_or(addr).trim();
+        let key = lookup::key(addr);
+        let (a, handle) = match key.strip_prefix("c:") {
+            Some(h) => (h, true),
+            None => (key.as_str(), false),
+        };
         if a.is_empty() {
             return Err(Error::invalid("which chat? (its handle, like 7f3k, or @last)"));
         }
@@ -584,44 +591,37 @@ impl Daemon {
             v.sort_by_key(|c| std::cmp::Reverse(c.last_ms));
             v
         } else {
-            let lower = a.to_lowercase();
-            let by_id: Vec<&ChatInfo> = all.iter().filter(|c| c.id.ends_with(&lower)).collect();
-            if !by_id.is_empty() && lower.len() >= 4 {
+            let by_id: Vec<&ChatInfo> =
+                all.iter().filter(|c| lookup::id_matches(&c.id, a)).collect();
+            if !by_id.is_empty() || handle || !titles {
                 by_id
             } else {
+                // Titles aren't addresses; a word of one is the last resort.
                 all.iter()
-                    .filter(|c| {
-                        c.title.as_deref().is_some_and(|t| t.to_lowercase().contains(&lower))
-                    })
+                    .filter(|c| c.title.as_deref().is_some_and(|t| t.to_lowercase().contains(a)))
                     .collect()
             }
         };
-        match found.as_slice() {
-            [one] => Ok(self.chat_info((*one).clone(), &all)),
-            [] if a == "@pinned" => Err(Error::new(ErrorCode::NotFound, "no chat is pinned")),
-            [] if a == "@unread" => {
+        let label = |c: &&ChatInfo| {
+            format!(
+                "c:{} ({})",
+                lookup::handle(&c.id, all.iter().map(|x| x.id.as_str())),
+                c.label()
+            )
+        };
+        match lookup::one("chat", addr, found, label)? {
+            Some(one) => Ok(self.chat_info(one.clone(), &all)),
+            None if a == "@pinned" => Err(Error::new(ErrorCode::NotFound, "no chat is pinned")),
+            None if a == "@unread" => {
                 Err(Error::new(ErrorCode::NotFound, "no chat has an answer you haven't read"))
             }
-            [] => Err(Error::missing("chat", addr)),
-            many => Err(Error::invalid(format!(
-                "{addr:?} matches {} chats: {}",
-                many.len(),
-                many.iter()
-                    .take(5)
-                    .map(|c| format!(
-                        "c:{} ({})",
-                        chats::handle(&c.id, all.iter().map(|x| x.id.as_str())),
-                        c.label()
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
+            None => Err(lookup::not_found("chat", addr, all.iter().map(|c| c.id.as_str()))),
         }
     }
 
     /// A row as clients see it: its handle, its workspace's name, its engine's status.
     fn chat_info(&self, mut c: ChatInfo, all: &[ChatInfo]) -> ChatInfo {
-        c.handle = chats::handle(&c.id, all.iter().map(|x| x.id.as_str()));
+        c.handle = lookup::handle(&c.id, all.iter().map(|x| x.id.as_str()));
         c.workspace = self.workspace_name(&c.workspace);
         let config = self.config();
         let preset = config.chat.preset(&c.tools).unwrap_or_default();
@@ -641,7 +641,7 @@ impl Daemon {
         let c = self.rec_get(id).await?.ok_or_else(|| Error::missing("chat", id))?;
         let ids = self.rec_ids().await;
         let mut c = self.chat_info(c, &[]);
-        c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+        c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
         Ok(c)
     }
 
@@ -761,7 +761,7 @@ impl Daemon {
                     .filter(|c| scope.sees(c) && scope.itself.as_deref() != Some(c.id.as_str()))
                     .map(|c| {
                         let mut c = self.chat_info(c, &[]);
-                        c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+                        c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
                         c
                     })
                     .collect();
@@ -859,7 +859,7 @@ impl Daemon {
                     .into_iter()
                     .map(|c| {
                         let mut c = self.chat_info(c, &[]);
-                        c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+                        c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
                         c
                     })
                     .collect();
@@ -1504,7 +1504,7 @@ impl Daemon {
             .filter(|(h, _)| scope.is_none_or(|s| s.itself.as_deref() != Some(h.chat.id.as_str())))
             .map(|(h, how)| {
                 let mut c = self.chat_info(h.chat, &[]);
-                c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+                c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
                 ChatHit {
                     chat: c,
                     node: h.node,
@@ -1615,7 +1615,7 @@ impl Daemon {
                 ErrorCode::Busy,
                 format!(
                     "c:{} is comparing answers: wait for them, or stop it first",
-                    chats::handle(&info.id, [info.id.as_str()])
+                    lookup::handle(&info.id, [info.id.as_str()])
                 ),
             ));
         }
@@ -1626,14 +1626,14 @@ impl Daemon {
                 ErrorCode::Busy,
                 format!(
                     "c:{} is still answering: wait for its answer, or stop it first",
-                    chats::handle(&info.id, [info.id.as_str()])
+                    lookup::handle(&info.id, [info.id.as_str()])
                 ),
             )),
             _ if given => Err(Error::new(
                 ErrorCode::Busy,
                 format!(
                     "c:{} is still answering: wait for its answer, or stop it first",
-                    chats::handle(&info.id, [info.id.as_str()])
+                    lookup::handle(&info.id, [info.id.as_str()])
                 ),
             )),
             Some(AgentStatus::Blocked) => Err(Error::new(
@@ -2159,7 +2159,7 @@ impl Daemon {
         };
         let (args, params) =
             preset_launch(&protocol, &preset, &dir, mcp.unwrap_or_default(), &readable, &extra);
-        let handle = chats::handle(&info.id, self.rec_ids().await.iter().map(String::as_str));
+        let handle = lookup::handle(&info.id, self.rec_ids().await.iter().map(String::as_str));
         let ws = self.workspace_name(&info.workspace);
         let session = self
             .launch(Launch {

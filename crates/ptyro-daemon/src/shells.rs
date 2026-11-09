@@ -277,7 +277,7 @@ impl Daemon {
     /// `launch` will make session `id` a new pane of the window loose session `src` is in
     /// (`ShellSplit`); refused at [`MAX_PANES`], counting panes still starting.
     pub(crate) fn pend_pane(&self, src: SessionId, id: SessionId) -> Result<(), Error> {
-        let s = self.session(src).ok_or_else(|| Error::not_found(src.full()))?;
+        let s = self.session(src).ok_or_else(|| Error::missing("session", src.full()))?;
         let Some((ws, slot)) = Self::window_of(&s) else {
             let name =
                 s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
@@ -1267,11 +1267,9 @@ impl Daemon {
                 }
                 continue;
             }
-            let ws = if self.find_workspace(&k.workspace).is_ok() {
-                k.workspace.clone()
-            } else {
-                MAIN_WORKSPACE.into()
-            };
+            let ws = self
+                .find_workspace(&k.workspace)
+                .map_or_else(|_| MAIN_WORKSPACE.into(), |w| w.name);
             let Some((slot, r)) = number(self, &ws, &k) else { continue };
             let cwd =
                 if k.cwd.is_dir() { k.cwd.clone() } else { ptyro_core::config::expand_home("~") };

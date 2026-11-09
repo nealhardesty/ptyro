@@ -63,6 +63,7 @@ async fn selectors_expand_to_the_right_sessions() {
     assert_eq!(resolve(&c, "@live").await, ["build-web", "build-api"]);
     assert_eq!(resolve(&c, "@exited").await, ["notes"]);
     assert_eq!(resolve(&c, "build-*").await, ["build-web", "build-api"]);
+    assert_eq!(resolve(&c, "Build-*").await, ["build-web", "build-api"], "globs ignore case");
     assert_eq!(
         resolve(&c, "notes,build-a?i").await,
         ["build-api", "notes"],

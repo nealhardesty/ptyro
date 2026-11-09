@@ -41,6 +41,11 @@ Conventions:
   machine or device) is `a-z 0-9 . _ -`, 1–64 characters. It is kept exactly as you wrote it
   (`cs new my_fix` makes `my_fix`). A bad one is refused, and the error offers the fix:
   `invalid name "My Feature": … try "my-feature"`.
+- **Everything else you name** (projects, workspaces, profiles, chats, runs, change sets, devices,
+  archives, machines) resolves the same way: the exact name (a project's slug), then
+  `project/name` where there is one, then the full id, then the end of the id, **at least 4
+  characters** (`7f3k`, `c:7f3k`, `r-k3x9`). Case doesn't matter. When several match, ptyro lists
+  them and exits 4; say which. A chat also takes a word of its title, as the last resort.
 
 ## Sessions
 
@@ -154,8 +159,8 @@ Conventions:
 | `ptyro wt lock\|unlock W` / `rename-branch W [NEW]` | manual lock / rename the branch (never once pushed) |
 | `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
 | `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
-| `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them |
-| `ptyro wt archive-rm [P/]NAME… [-y]` | delete archives for good: the saved files, and each branch if merged or pushed (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
+| `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME\|HANDLE` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them, each with the handle that tells apart archives of one name |
+| `ptyro wt archive-rm [P/]NAME\|HANDLE… [-y]` | delete archives for good: the saved files, and each branch if merged or pushed (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
 | `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add\|remove …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`, `add WS PROJECT` |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
@@ -263,7 +268,7 @@ See [`remote.md`](remote.md).
 | `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `run wait`: the run failed; `radar`: a predicted conflict; `cs check`: not ok; `daemon upgrade`: rolled back) |
 | `2` | invalid arguments |
 | `3` | not found |
-| `4` | ambiguous: a handle or selector matched several |
+| `4` | ambiguous: a name, handle or selector matched several (the message lists them) |
 | `5` | conflict: unsaved work, a profile question needing `--yes` / `--override-pin`, (`wait`) the session exited first, (`run wait`) the run was cancelled, or (`lease claim`) refused |
 | `6` | untrusted scripts |
 | `7` | timeout (`wait`, `send --wait-ready`), `--stall` saw no output, or (`pr checks`) checks still running |

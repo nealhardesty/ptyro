@@ -507,7 +507,8 @@ function archivesView() {
     const entries = archives.get("");
     const body = pending(archives, "") ?? (entries.length
         ? h("div", { class: "rows" }, ...entries.map((e) => {
-            const name = e.title || e.name, addr = `${e.project_slug}/${e.name}`;
+            // By id: several archives can share a name (an older daemon's have none).
+            const name = e.title || e.name, addr = e.id || `${e.project_slug}/${e.name}`;
             return row(name, `${e.project_slug} · ${e.branch}`, ago(e.archived_ms), {
                 onclick: () => menu(name, [
                     { title: tip("worktree.restore"), label: "Restore", hint: "Back as it was", run: () => confirm(`Restore ${name}?`, "The branch is checked out again and the saved files come back as uncommitted work.", "Restore", async () => {

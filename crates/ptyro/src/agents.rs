@@ -170,7 +170,7 @@ pub async fn each(
     for a in addrs {
         match c.request(Request::Resolve { addr: a.clone() }).await? {
             Reply::Sessions { sessions } if !sessions.is_empty() => targets.extend(sessions),
-            _ => return Err(Error::new(ErrorCode::NotFound, format!("no session matches {a:?}"))),
+            _ => return Err(ptyro_core::lookup::not_found("session", a, [])),
         }
     }
     let mut code = 0;
@@ -326,9 +326,12 @@ async fn agent_home(ctx: &Ctx, profile: Option<&str>) -> Result<PathBuf, Error> 
     let Reply::Profiles { profiles } = c.request(Request::ProfileList).await? else {
         return Err(Error::internal("unexpected reply"));
     };
-    let name = profile.unwrap_or(ptyro_core::model::DEFAULT_PROFILE);
-    let p =
-        profiles.iter().find(|p| p.name == name).ok_or_else(|| Error::missing("profile", name))?;
+    let name = ptyro_core::lookup::key(profile.unwrap_or(ptyro_core::model::DEFAULT_PROFILE));
+    let name = name.as_str();
+    let p = profiles
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| crate::profiles::missing(name, profiles.iter().map(|p| p.name.clone())))?;
     // Gemini and Antigravity both live under the Gemini home: `<GEMINI_CLI_HOME>/.gemini`.
     let base =
         p.dirs.get("gemini").cloned().unwrap_or_else(|| ptyro_core::config::expand_home("~"));
