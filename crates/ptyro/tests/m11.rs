@@ -927,5 +927,5 @@ fn a_change_sets_name_is_checked_never_rewritten() {
         out.contains("at most 40") && out.contains(&format!("try \"{}\"", &long[..40])),
         "{out}"
     );
-    w.ok(&["cs", "rm", "my_fix", "--force"]);
+    w.ok(&["cs", "rm", "-y", "my_fix", "--force"]);
 }
