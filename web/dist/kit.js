@@ -278,14 +278,15 @@ export function slugify(kind, raw) {
     }
     return out;
 }
-/// Keep `box` as a name (or branch) while it is typed into. Past the start one character in is
-/// one out; what is dropped at the start moves the cursor back by as much.
+/// Keep `box` as a name (or branch) while it is typed into. The cursor stays after what was
+/// before it: slugify never looks ahead, so the text before the cursor, slugified, is where the
+/// cursor goes (in UTF-16 units, as an emoji turned into one `-` shrinks).
 export function slugInput(box, kind) {
     box.addEventListener("input", () => {
         const fixed = slugify(kind, box.value);
         if (fixed === box.value)
             return;
-        const at = Math.max(0, (box.selectionStart ?? fixed.length) - (box.value.length - fixed.length));
+        const at = slugify(kind, box.value.slice(0, box.selectionStart ?? box.value.length)).length;
         box.value = fixed;
         box.setSelectionRange(at, at);
     });

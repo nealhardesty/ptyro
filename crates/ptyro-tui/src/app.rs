@@ -376,7 +376,7 @@ impl PromptKind {
         matches!(self, Self::Rename(_) | Self::RenameWorkspace(_))
     }
 
-    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `_`.
+    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `-`.
     pub fn fit(&self, text: &str) -> String {
         match self {
             _ if self.is_name() => ptyro_core::names::typed(text),
@@ -3970,7 +3970,10 @@ impl App {
         let taken = |n: &str| self.worktrees.iter().any(|w| w.project == project && w.name == n);
         match want {
             Some(n) if !taken(n) => n.to_owned(),
-            Some(n) => (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite"),
+            Some(n) => (2..)
+                .map(|k| ptyro_core::names::numbered(n, k))
+                .find(|c| !taken(c))
+                .expect("infinite"),
             None => ptyro_core::names::friendly(SessionId::new().seed(), taken),
         }
     }

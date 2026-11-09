@@ -1032,7 +1032,7 @@ impl Daemon {
         if !taken(want) {
             return want.to_owned();
         }
-        (2..).map(|k| format!("{want}-{k}")).find(|n| !taken(n)).expect("infinite")
+        (2..).map(|k| ptyro_core::names::numbered(want, k)).find(|n| !taken(n)).expect("infinite")
     }
 
     /// `refs/ptyro/runs/<run>/<step>/<n>/<which>` for the worktree as it is now.
@@ -2397,9 +2397,11 @@ impl Daemon {
         if spec.prompt.trim().is_empty() {
             return Err(Error::invalid("the prompt is empty"));
         }
-        // The prefix someone gave: checked, never rewritten (SPEC §2.3).
+        // The prefix someone gave: checked, never rewritten (SPEC §2.3). Kept short because
+        // each candidate's agent is appended (`<prefix>-<agent>`).
         if let Some(n) = &spec.name {
-            ptyro_core::names::validate(n).map_err(Error::invalid)?;
+            ptyro_core::names::validate_within(n, 40, ", since each agent's name is appended")
+                .map_err(Error::invalid)?;
         }
         let config = self.config();
         for a in &spec.agents {
@@ -2431,7 +2433,9 @@ impl Daemon {
         // Candidate ids: the agent's name, numbered on repeats (claude, claude-2).
         let mut ids: Vec<(String, String)> = Vec::new();
         for a in &spec.agents {
+            // A step id in the recipe below, so `[a-z0-9-]` (a `.` would split the TOML key).
             let base = ptyro_core::model::slugify(ptyro_agents::split_agent(a).0);
+            let base = if base.is_empty() { "agent".to_owned() } else { base };
             let id = if ids.iter().any(|(i, _)| *i == base) {
                 (2..)
                     .map(|k| format!("{base}-{k}"))

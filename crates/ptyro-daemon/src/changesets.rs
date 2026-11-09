@@ -465,14 +465,9 @@ impl Daemon {
         if name.trim().is_empty() {
             return Err(Error::invalid("a change set needs a name"));
         }
-        ptyro_core::names::validate(&name).map_err(Error::invalid)?;
-        // Its worktrees and agents are named after it (`<set>-<member>`), and they are names too.
-        if name.len() > 40 {
-            return Err(Error::invalid(format!(
-                "invalid name {name:?}: a change set's name is at most 40 characters (its \
-                 worktrees and agents are named <set>-<member>)"
-            )));
-        }
+        // Kept short because its members' names are appended (`<set>-<member>`).
+        ptyro_core::names::validate_within(&name, 40, ", since its members' names are appended")
+            .map_err(Error::invalid)?;
         if let Ok(r) = self.find_set(&name)
             && self.set_state(&r).is_ok_and(|c| c.phase != Phase::Removed)
         {

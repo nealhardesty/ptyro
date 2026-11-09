@@ -727,7 +727,7 @@ impl Daemon {
             return name.to_owned();
         }
         (2..)
-            .map(|k| format!("{name}-{k}"))
+            .map(|k| ptyro_core::names::numbered(name, k))
             .find(|n| !self.name_taken(project, n))
             .expect("infinite")
     }
@@ -929,7 +929,13 @@ impl Daemon {
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let project = target.as_ref().map(|(_, p)| p.id.as_str());
         let name = match spec.name {
-            Some(n) if spec.name_or_next => self.free_name(project, &n),
+            // Composed by ptyro itself (`<set>-<member>`, a step, `judge`), so derived: made a
+            // valid name of at most 64, then a free one.
+            Some(n) if spec.name_or_next => {
+                let n = names::derive(&n)
+                    .ok_or_else(|| Error::invalid(names::validate(&n).err().unwrap_or_default()))?;
+                self.free_name(project, &n)
+            }
             Some(n) => {
                 names::validate(&n).map_err(Error::invalid)?;
                 self.name_free_or_why(project, &n)?;

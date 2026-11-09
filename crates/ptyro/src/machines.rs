@@ -199,7 +199,7 @@ pub async fn pair(ctx: &Ctx, url: Option<String>, json: bool) -> Result<i32, Err
         base: base.trim_end_matches('/').to_owned(),
         code,
         ca,
-        name: me.as_deref().and_then(ptyro_core::names::as_name),
+        name: me.as_deref().and_then(ptyro_core::names::derive),
     };
     if json {
         println!(

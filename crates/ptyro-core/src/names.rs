@@ -39,7 +39,7 @@ pub fn friendly(seed: u128, taken: impl Fn(&str) -> bool) -> String {
         }
     }
     let base = format!("{}-{}", ADJECTIVES[(start / c) as usize], CORVIDS[(start % c) as usize]);
-    (2..).map(|k| format!("{base}-{k}")).find(|n| !taken(n)).expect("infinite")
+    (2..).map(|k| numbered(&base, k)).find(|n| !taken(n)).expect("infinite")
 }
 
 /// `claude-rook`: `prefix` and a corvid, not `claude-2` (UX1.24). Falls back to
@@ -92,10 +92,22 @@ pub fn allowed(c: char) -> bool {
 /// fix when there is one: `invalid name "my feature": a space isn't allowed (only a-z 0-9 . _ -);
 /// try "my-feature"`.
 pub fn validate(name: &str) -> Result<(), String> {
-    let Some(p) = problem(name) else { return Ok(()) };
-    Err(match tidy(name) {
-        Some(t) => format!("invalid name {name:?}: {p}; try {t:?}"),
-        None => format!("invalid name {name:?}: {p}"),
+    validate_within(name, 64, "")
+}
+
+/// [`validate`] for a name that is kept shorter than 64 because more is appended to it (a
+/// change set's members, a fan-out's agents): at most `max` characters, `why` saying so when
+/// it's longer, and the fix offered fits.
+pub fn validate_within(name: &str, max: usize, why: &str) -> Result<(), String> {
+    let n = name.chars().count();
+    let p =
+        problem(name).or_else(|| (n > max).then(|| format!("too long: {n} of at most {max}{why}")));
+    let Some(p) = p else { return Ok(()) };
+    let fix = fold(name, allowed, max);
+    Err(if fix != name && problem(&fix).is_none() {
+        format!("invalid name {name:?}: {p}; try {fix:?}")
+    } else {
+        format!("invalid name {name:?}: {p}")
     })
 }
 
@@ -173,12 +185,6 @@ pub fn branch_typed(raw: &str) -> String {
     out
 }
 
-/// `raw` as a name: itself when valid, else tidied (`Laptop 2` → `laptop-2`). For a name ptyro
-/// derives (what a machine calls itself); a name someone gives is [`validate`]d instead.
-pub fn as_name(raw: &str) -> Option<String> {
-    if problem(raw).is_none() { Some(raw.to_owned()) } else { tidy(raw) }
-}
-
 /// The fix a refused name's error offers: `raw` turned into a valid name, when that changes it
 /// and works (`My Feature/2` → `my-feature-2`).
 pub fn tidy(raw: &str) -> Option<String> {
@@ -186,29 +192,56 @@ pub fn tidy(raw: &str) -> Option<String> {
     (out != raw && problem(&out).is_none()).then_some(out)
 }
 
-/// A name made from text that isn't a name (a title, a directory, a recipe's template), always
-/// valid: [`fold`]ed, or `None` when nothing valid is left. Tidying it silently is fine, since
-/// it isn't anyone's input.
+/// A name made from text that isn't a name (a title, a directory, what a machine calls itself,
+/// a recipe's template), always valid: itself when it already is one (`Laptop 2` → `laptop-2`,
+/// `laptop2` → `laptop2`), else [`fold`]ed, or `None` when nothing valid is left. Tidying it
+/// silently is fine, since it isn't anyone's input.
 pub fn derive(raw: &str) -> Option<String> {
+    if problem(raw).is_none() {
+        return Some(raw.to_owned());
+    }
     let out = fold(raw, allowed, 64);
     problem(&out).is_none().then_some(out)
 }
 
+/// `base-k`, the `k`th try at a free name, with `base` cut short so the whole stays within a
+/// name's 64 characters.
+pub fn numbered(base: &str, k: u32) -> String {
+    let suffix = format!("-{k}");
+    let room = 64usize.saturating_sub(suffix.len());
+    if base.chars().count() <= room {
+        return format!("{base}{suffix}");
+    }
+    let cut: String = base.chars().take(room).collect();
+    format!("{}{suffix}", cut.trim_end_matches(['.', '-']))
+}
+
 /// The one way ptyro turns text into a name: lowercased, each run of characters `keep` refuses
-/// becomes one `-`, with no `.` or `-` at either end and at most `max` characters. [`tidy`] and
-/// [`derive`] keep a name's characters; `model::slugify` keeps only `a-z0-9` (project slugs).
-/// It may return `""`: there is no made-up stand-in.
+/// (and a `.` after a `.`) becomes one `-`, with no `.` or `-` at either end, no `.lock` at the
+/// end, and at most `max` characters. [`tidy`] and [`derive`] keep a name's characters;
+/// `model::slugify` keeps only `a-z0-9` (project slugs). It may return `""`: there is no
+/// made-up stand-in.
 pub fn fold(raw: &str, keep: impl Fn(char) -> bool, max: usize) -> String {
     let mut out = String::new();
     for c in raw.trim().chars().map(|c| c.to_ascii_lowercase()) {
-        if keep(c) {
+        if keep(c) && !(c == '.' && out.ends_with('.')) {
             out.push(c);
         } else if !out.is_empty() && !out.ends_with('-') {
+            if out.ends_with('.') {
+                out.pop();
+            }
             out.push('-');
         }
     }
-    let out: String = out.trim_start_matches(['.', '-']).chars().take(max).collect();
-    out.trim_end_matches(['.', '-']).to_owned()
+    let mut out: String = out.trim_start_matches(['.', '-']).chars().take(max).collect();
+    loop {
+        let end = out.trim_end_matches(['.', '-']);
+        let end = end.strip_suffix(".lock").unwrap_or(end);
+        if end.len() == out.len() {
+            return out;
+        }
+        out = end.to_owned();
+    }
 }
 
 #[cfg(test)]
@@ -284,14 +317,56 @@ mod tests {
         assert!(!validate("123").unwrap_err().contains("try"));
         assert!(validate("my_fix").is_ok(), "_ is allowed, and kept");
         // What it offers is valid, and typing the bad name gives a valid one too.
-        for bad in ["My Feature", " .Hidden ", "a/b c", "x.", "Fix: the THING!", "-lead"] {
-            let t = tidy(bad).unwrap();
+        let bad = [
+            "My Feature",
+            " .Hidden ",
+            "a/b c",
+            "x.",
+            "Fix: the THING!",
+            "-lead",
+            "a..b",
+            "x.lock",
+        ];
+        for bad in bad {
+            let t = tidy(bad).unwrap_or_else(|| panic!("{bad:?}: no fix offered"));
             assert!(validate(&t).is_ok(), "{bad:?} → {t:?}");
-            // `x.` is still flagged as it's typed: no one character fixes it.
-            if bad != "x." {
+            // `x.` and `x.lock` stay flagged as they're typed: no one character fixes them.
+            if !bad.starts_with("x.") {
                 assert!(validate(&typed(bad)).is_ok(), "{bad:?} typed → {:?}", typed(bad));
             }
         }
+        assert_eq!(tidy("a..b").as_deref(), Some("a-b"));
+        assert_eq!(tidy("x.lock").as_deref(), Some("x"));
+        assert!(validate("a..b").unwrap_err().ends_with("try \"a-b\""));
+    }
+
+    #[test]
+    fn a_shorter_limit_offers_a_fix_that_fits() {
+        let long = "a-".repeat(22) + "z"; // 45
+        let e = validate_within(&long, 40, ", since more is appended").unwrap_err();
+        assert!(e.contains("too long: 45 of at most 40, since more is appended"), "{e}");
+        let fix = e.rsplit("try ").next().unwrap().trim_matches('"');
+        assert!(fix.len() <= 40 && validate_within(fix, 40, "").is_ok(), "{e}");
+        // A bad character in a long name: the fix fits too.
+        let e = validate_within(&format!("My {long}"), 40, "").unwrap_err();
+        let fix = e.rsplit("try ").next().unwrap().trim_matches('"');
+        assert!(validate_within(fix, 40, "").is_ok(), "{e}");
+        assert!(validate_within("my_fix", 40, "").is_ok());
+    }
+
+    #[test]
+    fn numbered_names_stay_names() {
+        assert_eq!(numbered("brisk-rook", 2), "brisk-rook-2");
+        let base = "b".repeat(63);
+        assert!(validate(&base).is_ok());
+        for k in [2, 10, 1000] {
+            let n = numbered(&base, k);
+            assert!(n.len() <= 64 && n.ends_with(&format!("-{k}")), "{n}");
+            assert!(validate(&n).is_ok(), "{n}");
+        }
+        // A cut that would end in `.` or `-` doesn't.
+        let base = format!("{}.x", "c".repeat(61));
+        assert!(validate(&numbered(&base, 2)).is_ok(), "{}", numbered(&base, 2));
     }
 
     #[test]
@@ -303,11 +378,16 @@ mod tests {
         assert_eq!(derive(""), None, "no made-up stand-in");
         assert_eq!(derive("!!!"), None);
         assert_eq!(derive("123"), None);
+        assert_eq!(derive("laptop-"), Some("laptop-".into()), "a valid name is itself");
         let long = "y".repeat(99);
-        for raw in ["", "...", "a..b", "x.lock", "Ünïcødé", long.as_str(), "--x--", "a .b"] {
-            if let Some(n) = derive(raw) {
-                assert!(validate(&n).is_ok(), "{raw:?} → {n:?}");
-            }
+        for raw in ["a..b", "x.lock", "Ünïcødé", long.as_str(), "--x--", "a .b", "v1..lock"] {
+            let n = derive(raw).unwrap_or_else(|| panic!("{raw:?}: nothing derived"));
+            assert!(validate(&n).is_ok(), "{raw:?} → {n:?}");
+        }
+        assert_eq!(derive("a..b").as_deref(), Some("a-b"));
+        assert_eq!(derive("x.lock").as_deref(), Some("x"));
+        for raw in ["", "...", "-", "42"] {
+            assert_eq!(derive(raw), None, "{raw:?}");
         }
     }
 

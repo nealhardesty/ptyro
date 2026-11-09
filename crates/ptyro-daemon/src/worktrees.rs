@@ -263,7 +263,7 @@ impl Daemon {
                 match spec.title.as_deref().or(spec.prompt.as_deref()).and_then(names::from_text) {
                     Some(n) if !taken(&n) => n,
                     Some(n) => {
-                        (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite")
+                        (2..).map(|k| names::numbered(&n, k)).find(|c| !taken(c)).expect("infinite")
                     }
                     None => names::friendly(SessionId::new().seed(), |n| {
                         taken(n) || self.name_taken(Some(&p.id), n)

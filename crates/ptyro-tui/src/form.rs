@@ -161,7 +161,8 @@ impl Field {
         self
     }
 
-    /// A name (a-z 0-9 . _ -). `suggested`, dimmed, is what ⏎ takes when nothing is typed;
+    /// A name (a-z 0-9 . _ -), converted as it is typed; the form shows `names::TYPED_HINT` under
+    /// it. `suggested`, dimmed, is what ⏎ takes when nothing is typed;
     /// without one, a name is needed.
     pub fn name(key: &str, label: &str, suggested: &str, hint: &str) -> Self {
         Field {
@@ -469,6 +470,10 @@ pub fn draw(app: &App, form: &Form, f: &mut Frame<'_>, area: Rect) {
         Some(e) => Line::styled(format!("✗ {e}"), fg(app, t.error)),
         None => Line::styled(hint, fg(app, t.dim)),
     });
+    // Every name field says the same thing about what typing into it does.
+    if let Some(Kind::Text { name: true, .. }) = form.fields.get(form.sel).map(|x| &x.kind) {
+        lines.push(Line::styled(ptyro_core::names::TYPED_HINT, fg(app, t.dim)));
+    }
     let keys = match form.fields.get(form.sel).map(|x| &x.kind) {
         Some(Kind::Choice { .. }) => "←→ or a letter change it · Tab/↑↓ next · Esc cancel",
         Some(Kind::Multi { .. }) => "space ticks · ←→ move · a all · Tab/↑↓ next · Esc",
@@ -714,7 +719,7 @@ impl App {
         let mut form = Form::new(
             format!("New workspace{on}"),
             vec![
-                Field::name("name", "Name", &suggested, ptyro_core::names::TYPED_HINT),
+                Field::name("name", "Name", &suggested, "What you'll pick it by"),
                 self.profile_field(machine.as_deref(), &suggested),
                 Field::choice(
                     "notify",
@@ -776,7 +781,7 @@ impl App {
     pub(crate) fn open_profile_form(&mut self, name: &str, workspace: Option<Box<Form>>) {
         let data = self.paths.data.join("profiles");
         let mut fields = vec![
-            Field::name("name", "Name", "", "e.g. work: what you'll pick it by (a-z 0-9 . _ -)")
+            Field::name("name", "Name", "", "e.g. work: what you'll pick it by")
                 .with(name)
                 .arg(Arg::Pos),
             Field::text(
@@ -1112,7 +1117,7 @@ impl App {
         let here = self.context_project_slug();
         let templates = self.changeset_templates();
         let fields = vec![
-            Field::name("name", "Name", "", "The change set's name (a-z 0-9 . _ -)").arg(Arg::Pos),
+            Field::name("name", "Name", "", "The change set's name").arg(Arg::Pos),
             Field::multi(
                 "projects",
                 "Projects",
@@ -1253,13 +1258,8 @@ impl App {
     /// `remote.pair`: a phone or browser, its name and what it may do.
     pub(crate) fn open_pair_form(&mut self) {
         let fields = vec![
-            Field::name(
-                "name",
-                "Name",
-                "phone",
-                "What to call it in the devices list (a-z 0-9 . _ -)",
-            )
-            .arg(Arg::Pos),
+            Field::name("name", "Name", "phone", "What to call it in the devices list")
+                .arg(Arg::Pos),
             Field::choice(
                 "scope",
                 "May",
@@ -1300,7 +1300,7 @@ impl App {
                 "name",
                 "Name",
                 "(what it calls itself)",
-                "What its names carry here (laptop2:work; a-z 0-9 . _ -)",
+                "What its names carry here (laptop2:work)",
             )
             .arg(Arg::Flag("--name")),
             Field::yes_no(
@@ -1542,7 +1542,7 @@ impl App {
                 "name",
                 "Name prefix",
                 "(from the task)",
-                "Their worktrees' names start with it (a-z 0-9 . _ -)",
+                "Their worktrees' names start with it",
             ),
             Field::text(
                 "test",
@@ -1664,12 +1664,7 @@ impl App {
                 "(the lowest free)",
                 "Its number in SHELLS: Alt-N shows it",
             ),
-            Field::name(
-                "name",
-                "Name",
-                "(a random one)",
-                "Its address (ptyro send NAME …; a-z 0-9 . _ -)",
-            ),
+            Field::name("name", "Name", "(a random one)", "Its address (ptyro send NAME …)"),
             Field::text("title", "Title", "(none)", "What the sidebar says it is"),
             Field::yes_no(
                 "scratch",
@@ -1883,7 +1878,7 @@ impl App {
                 "name",
                 "Name",
                 "(from the task, else a random one)",
-                "Its name, a new worktree's too (a-z 0-9 . _ -)",
+                "Its name, a new worktree's too",
             )
             .with(w.name.clone().unwrap_or_default()),
             Field::text("title", "Title", "(the task)", "What the sidebar says it is"),

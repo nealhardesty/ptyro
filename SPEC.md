@@ -176,8 +176,9 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   starting with `.` or `-`, no `..`, not ending in `.` or `.lock`. That covers sessions (and
   shells), worktrees, workspaces, profiles, change sets, a fan-out's name prefix, a lead's name
   for its worker, machines, paired devices, and the config panel's named members (agents,
-  tools, …). A change set's name is also at most 40 characters, since its worktrees and agents
-  are named `<set>-<member>`.
+  tools, …). A change set's name and a fan-out's prefix are at most 40 characters, kept short
+  because member names are appended (`<set>-<member>`, `<prefix>-<agent>`); the fix offered
+  then fits in 40 too (`names::validate_within`).
   - **Given names are refused, never rewritten.** `cs new my_fix` makes `my_fix`. A bad one is an
     error that offers the fix: `invalid name "My Feature": 'M' (uppercase) isn't allowed (only
     a-z 0-9 . _ -); try "my-feature"` (`names::tidy`). An empty name is refused, never replaced
@@ -188,7 +189,9 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     start. The fields say so: "A space or other odd character becomes - (a-z 0-9 . _ -)".
   - **Derived names may be tidied silently**, since they are no one's input: names made from a
     title, a prompt, a directory, a recipe's template (`names::derive`, always valid, or none so
-    the caller picks its own fallback), and a machine's name from what it calls itself.
+    the caller picks its own fallback), a machine's name from what it calls itself, and names
+    ptyro composes itself (`<set>-<member>`, a step's agent, `judge`). A taken name gets `-2`,
+    `-3` (`names::numbered`), its base cut so the whole stays within 64.
   - **Project slugs** fold to the narrower `[a-z0-9-]`, at most 40 (`model::slugify`, built on the
     same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
     its worktrees and archives, so this fold stays as it was: re-adding a repository finds them

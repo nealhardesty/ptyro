@@ -920,5 +920,12 @@ fn a_change_sets_name_is_checked_never_rewritten() {
     assert!(out.contains("a change set needs a name"), "{out}");
     let out = w.fails(&["cs", "new", "!!!", "--projects", "api", "--layout", "manual"]);
     assert!(out.contains("invalid name") && !out.contains("try"), "{out}");
+    // Too long for a set (members' names are appended): the fix offered fits.
+    let long = format!("{}-z", "ab".repeat(22));
+    let out = w.fails(&["cs", "new", &long, "--projects", "api", "--layout", "manual"]);
+    assert!(
+        out.contains("at most 40") && out.contains(&format!("try \"{}\"", &long[..40])),
+        "{out}"
+    );
     w.ok(&["cs", "rm", "my_fix", "--force"]);
 }

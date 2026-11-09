@@ -58,7 +58,7 @@ impl Suggestion {
 
 /// `claude-work` → `work`, `cl_personal` → `personal`, `codexwork` → `codexwork`.
 pub fn profile_from_alias(alias: &str) -> String {
-    alias_suffix(alias).unwrap_or_else(|| ptyro_core::model::slugify(alias))
+    alias_suffix(alias).or_else(|| profile_name(alias)).unwrap_or_else(|| "default".into())
 }
 
 fn alias_suffix(alias: &str) -> Option<String> {
@@ -84,7 +84,8 @@ fn profile_name(raw: &str) -> Option<String> {
 fn profile_for(alias: &str, dir: &str) -> String {
     alias_suffix(alias)
         .or_else(|| dir_profile(dir))
-        .unwrap_or_else(|| ptyro_core::model::slugify(alias))
+        .or_else(|| profile_name(alias))
+        .unwrap_or_else(|| "default".into())
 }
 
 fn clean(v: &str) -> String {

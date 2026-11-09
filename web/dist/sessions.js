@@ -6,7 +6,7 @@ import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, NAME_HINT, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
@@ -107,7 +107,8 @@ export function newTask(where, task) {
     const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
     const sourceRow = h("label", { class: "field" }, h("span", {}, "Start from"), source);
     const whichRow = h("label", { class: "field" }, h("span", {}, "Which one?"), which);
-    const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name);
+    slugInput(name, "name");
+    const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name, h("small", {}, NAME_HINT));
     const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
     const verifyRow = h("label", { class: "field" }, h("span", {}, "Done when"), verify, h("small", {}, "Verified-done: a turn counts as done only once this passes; failures go back to the agent"));
     const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
