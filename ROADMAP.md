@@ -3224,6 +3224,14 @@ parity rows, in each task.
   `a_window_comes_back_whole_after_a_restart` (daemon), and the TUI's
   `showing_a_window_shows_its_whole_layout_and_keeps_the_screen_it_replaces` and
   `a_window_s_arrangement_goes_to_the_daemon_and_comes_back_from_it`.
+- [x] **SH.14 The load average** — S. (R-UX-44) Like a tmux status line: the load of the computer
+  the daemon runs on (`0.52 0.48 0.40`), on the right of the TUI's status bar (the first thing to
+  go when the bar is short), beside the machine's name in the web's header, on its Daemon page,
+  and in `ptyro daemon status`. Amber once the 1-minute load reaches the number of CPUs, red at
+  twice that. `[ui] load` (on by default) turns it off everywhere: the daemon stops sampling.
+  *Done (2026-11-06):* `ptyro_pty::load_average`, `crates/ptyro-daemon/src/load.rs`, protocol
+  **1.37** (`HostLoad`, `DaemonStatus.load`); tested by
+  `the_load_average_is_on_the_status_bar_while_the_daemon_sends_it`.
 
 **Done when:** in one workspace, with no project open: `C-q C-c` makes shell 1 in `~`, `Alt-2`
 makes shell 2 running `htop`, `Alt-1` and `` C-q ` `` flip between them; `make test` started in

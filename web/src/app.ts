@@ -35,6 +35,7 @@ const ACTIONS = {
   "session.view": "Chat or terminal; the terminal fitted or 1:1",
   "answer": "Answer what it asks: allow once, always, or deny",
   "inbox": "The inbox: what happened while you were away",
+  "host.load": "The load average of the computer ptyro runs on, over 1, 5 and 15 minutes: amber once every CPU is busy, red at twice that ([ui] load)",
   "inbox.read": "Mark everything in the inbox read",
   "notifications": "Notifications on this device (a test is sent)",
   "scratchpad": "The scratchpad: your notes file, edited here; it saves as you type",
@@ -198,6 +199,25 @@ async function answer(id: string, decision: string): Promise<void> {
   }
 }
 
+/// The daemon's computer's load average (`[ui] load`): from `status` on connecting, then
+/// `host_load` events, which change only this text (every 5 s), never the page.
+type HostLoad = { avg: [number, number, number]; cpus: number };
+let hostLoad: HostLoad | null = null;
+const loadText = (l: HostLoad): string => l.avg.map((a) => (a / 100).toFixed(2)).join(" ");
+const loadLevel = (l: HostLoad): string => l.avg[0] >= 200 * Math.max(1, l.cpus) ? "bad" : l.avg[0] >= 100 * Math.max(1, l.cpus) ? "warn" : "";
+const machineTitle = (): string => [conn.machine ? `This ptyro runs on ${conn.machine}` : "", hostLoad ? `load average ${loadText(hostLoad)} (1, 5, 15 minutes) on ${hostLoad.cpus} CPUs` : ""].filter(Boolean).join("; ");
+const loadSpan = (): HTMLElement | null => hostLoad ? h("span", { class: `load ${loadLevel(hostLoad)}`, title: tip("host.load") }, `${conn.machine ? " · " : ""}${loadText(hostLoad)}`) : null;
+function setHostLoad(l: HostLoad | null): void {
+  const had = !!hostLoad;
+  hostLoad = l;
+  // Shown or hidden: the header changes shape. Else only the numbers.
+  if (had !== !!l) { render(); return; }
+  for (const chip of document.querySelectorAll<HTMLElement>("header .machine")) {
+    chip.title = machineTitle();
+    chip.querySelector(".load")?.replaceWith(loadSpan() ?? "");
+  }
+}
+
 /// `back`: true goes to the session list; a string is where it goes instead.
 function header(title: string, back: boolean | string, ...extra: Child[]): HTMLElement {
   const unread = app.inbox.filter((e) => !e.read_ms).length;
@@ -206,7 +226,7 @@ function header(title: string, back: boolean | string, ...extra: Child[]): HTMLE
     back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }),
     h("h1", {}, title),
     ...extra,
-    conn.machine ? h("span", { class: "machine", title: `This ptyro runs on ${conn.machine}` }, conn.machine) : null,
+    conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null,
     dot,
     notesLink(),
     h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null),
@@ -594,6 +614,7 @@ conn.listeners.add((msg) => {
     void loadAll();
     notesConnected();
     setupConnected();
+    conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => {});
     return;
   }
   if (msg.t === "chat") {
@@ -621,6 +642,7 @@ conn.listeners.add((msg) => {
   }
   if (msg.t === "event") {
     const e = msg.event;
+    if (e.t === "host_load") { setHostLoad(e.load ?? null); return; }
     staleMaybeChanged(e);
     if (onEvent(e)) { render(); return; }
     if (e.info?.chat) return;

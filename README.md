@@ -937,6 +937,9 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 - **Completions:** `source <(ptyro completions zsh)` (or bash, fish…). **Start at login:**
   `ptyro daemon install-service` (systemd or launchd). Inside WSL with systemd off, it offers to
   turn systemd on (it asks, then edits `/etc/wsl.conf` with sudo; WSL restarts once).
+- **Is the machine busy?** The numbers on the right of the status bar (`0.52 0.48 0.40`) are the
+  load average of the computer ptyro runs on, as in a tmux status line. They turn amber once every
+  CPU is busy. The web app shows them beside the machine's name. `[ui] load = false` hides them.
 - **Something odd?** A `⚕` in the status bar means the doctor found something: `Ctrl-Q M` lists
   it, each with its fix (tmux options, a login, a daemon upgrade). Or run
   `ptyro doctor`. `ptyro daemon logs` shows the daemon's log, and

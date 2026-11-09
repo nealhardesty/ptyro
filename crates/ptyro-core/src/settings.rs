@@ -694,6 +694,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.sidebar_detail", "interface", pick(DETAIL), "How much each session row says under its first line (its task, what it is on, its last reply)."),
     s("ui.status_bar", "interface", Kind::Bool, "Show the status bar along the bottom."),
     s("ui.clock", "interface", Kind::Bool, "Show the time in the status bar."),
+    s("ui.load", "interface", Kind::Bool, "Show the load average of the computer ptyro runs on (1, 5 and 15 minutes) in the status bar and the web app's header. It turns amber once it passes the number of CPUs.").also("cpu busy uptime system"),
     s("ui.mouse", "interface", Kind::Bool, "Let ptyro take the mouse: click to focus, wheel to scroll, drag borders. Off leaves it to your terminal, so you can select and copy text with it.").also("click scroll select copy"),
     s("ui.confirm_kill", "interface", Kind::Bool, "Ask before stopping a session."),
     s("ui.show_ports", "interface", Kind::Bool, "Show the ports a session listens on, in the sidebar and pane headers."),

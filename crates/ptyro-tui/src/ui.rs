@@ -1616,6 +1616,14 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
             }
         }
     }
+    // The computer's load (tmux users keep it in their status bar), amber once the CPUs are all
+    // busy, red at twice that. First in line, it is the first to go when the bar is short.
+    if app.config.ui.load
+        && let Some(l) = app.host_load
+    {
+        let c = [t.dim, t.blocked, t.error][usize::from(l.level())];
+        right.insert(0, Span::styled(format!("{} ", l.text()), bar.fg(app.depth.fit(c))));
+    }
     for (ws, n) in app.other_workspace_attention() {
         right.push(Span::styled(format!("{ws} ⚑{n} "), bar.fg(app.depth.fit(t.search))));
     }

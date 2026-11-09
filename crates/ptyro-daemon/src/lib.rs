@@ -19,6 +19,7 @@ mod github;
 mod handoff;
 mod launch;
 mod listen;
+mod load;
 mod machines;
 mod mail;
 mod meaning;
@@ -455,6 +456,7 @@ async fn serve(
     daemon.ensure_main_workspace();
     daemon.reconcile().await;
     daemon.lag.start();
+    daemon.start_host_load();
     daemon.start_background();
     daemon.start_agents();
     daemon.start_pr_poller();

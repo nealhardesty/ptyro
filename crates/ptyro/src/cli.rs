@@ -1570,6 +1570,9 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                 }
                 println!("  pid       {}", status.pid);
                 println!("  uptime    {}", age(status.started_ms));
+                if let Some(l) = &status.load {
+                    println!("  load      {} ({} CPUs)", l.text(), l.cpus);
+                }
                 println!("  sessions  {} ({} running)", status.sessions, status.live_sessions);
                 println!("  clients   {}", status.clients);
                 println!("  socket    {}", status.socket.display());
