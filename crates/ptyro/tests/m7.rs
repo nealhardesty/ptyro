@@ -186,13 +186,13 @@ fn done_when_fanout_compare_and_merge_the_best() {
     std::fs::write(w.home().join("task.md"), "sh echo $PTYRO_STEP_ID > answer.txt\n").unwrap();
     let out = w.ok(&[
         "fanout",
-        "--agents",
+        "--agent",
         "claude,codex,gemini",
         "--prompt-file",
         w.home().join("task.md").to_str().unwrap(),
         "--project",
         "app",
-        "--name",
+        "--prefix",
         "ans",
         "--test",
         "grep -q claude answer.txt",
@@ -757,9 +757,9 @@ fn fanout_with_an_advisory_judge() {
     let id = w
         .ok(&[
             "fanout",
-            "--agents",
+            "--agent",
             "claude,codex",
-            "-p",
+            "--prompt",
             "sh echo $PTYRO_STEP_ID > a.txt",
             "--project",
             "app",
@@ -815,15 +815,15 @@ fn json_shapes() {
     let id = w
         .ok(&[
             "fanout",
-            "--agents",
+            "--agent",
             "claude,codex",
-            "-p",
+            "--prompt",
             "sh echo $PTYRO_STEP_ID > a.txt",
             "--project",
             "app",
             "--test",
             "true",
-            "--name",
+            "--prefix",
             "j",
         ])
         .lines()

@@ -427,7 +427,7 @@ ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.r
 
 Every session and worktree has a **name** (its address: `ptyro send fix-flaky-test …`) and a
 **title** (what people read, the task by default). `ptyro retitle` and `ptyro wt retitle` change
-the title, `ptyro rename` the name.
+the title (no title clears it), `ptyro rename` the name.
 
 **4. See who needs you.** The sidebar shows each session's status. `⚑` means it wants you.
 
@@ -575,7 +575,7 @@ profile, then start a new session.
 - **CLI:** `ptyro profile new work`, `ptyro profile login work claude`, then
   `ptyro ws new work` (a profile named like the workspace is used; else `--profile P`).
   `ptyro ws set work --profile work` changes it later.
-- **A project can be in several workspaces** (`ptyro ws add WS PROJECT`, or a project's menu →
+- **A project can be in several workspaces** (`ptyro ws add-project WS PROJECT`, or a project's menu →
   `project.workspaces` in the TUI). It shows under each one; a session shows under the workspace
   it started in.
 
@@ -640,7 +640,7 @@ Give one task to several agents, each in its own worktree, then compare them by 
 diff size, time) and take the best:
 
 ```bash
-ptyro fanout --agents claude,codex,gemini --prompt-file task.md --test
+ptyro fanout -a claude,codex,gemini --prompt-file task.md --test
 ptyro compare @last                        # ranked candidates, with reasons
 ptyro pick @last claude                    # merge it; `ptyro discard @last` removes the rest
 ptyro recipe run implement-and-review --var task="add --json to ls"
@@ -662,7 +662,7 @@ against the others' unpushed code. Checkpoints cover every repo, and a merge tra
 in dependency order.
 
 ```bash
-ptyro cs new add-user-tier --projects api,sdk,web --overlay -p "users get a tier: free or pro"
+ptyro cs new add-user-tier --projects api,sdk,web --overlay --prompt "users get a tier: free or pro"
 ptyro cs contract add-user-tier approve    # after reading the lead's CONTRACT.md
 ptyro cs status add-user-tier              # members, gates, and what needs doing
 ptyro cs pr add-user-tier && ptyro cs land add-user-tier
@@ -689,9 +689,9 @@ ptyro chat search 'retry policy since:7d -draft'    # every chat, on every linke
 ptyro chat find "what did we decide about the retry policy?"   # an agent answers from your history, with citations
 ptyro chat --folder ~/notes "what's left on the launch list?"    # it reads that folder, and nothing else
 ptyro chat presets                          # what each tool preset lets a chat use
-ptyro chat task @last --project myrepo      # an agent carries the chat out in a new worktree
+ptyro chat task @last -p myrepo             # an agent carries the chat out in a new worktree
 ptyro chat search --meaning "pets"          # by what messages are about, not their words (opt-in, below)
-ptyro chat compare @last --agents claude,codex,gemini "which is faster?"   # each answers, as a branch
+ptyro chat compare @last -a claude,codex,gemini "which is faster?"   # each answers, as a branch
 ptyro chat pick @last 4k2m9x01              # keep codex's answer: codex takes the next message
 ptyro chat import                           # your Claude Code, Codex and Gemini sessions, as chats
 ptyro chat new --json "a question"           # waits, then the chat and its answer as JSON (as `send`, `retry`, `fork`, `find --json`)
@@ -764,7 +764,7 @@ into this pad with `ptyro scratchpad add -`.
 ptyro web on                   # the daemon runs the web app's server (HTTPS, port 7091), and keeps it up;
                                # Tailscale network if it is running, else every network; `ptyro web` says how it is
 ptyro config set remote.access tailscale   # who can reach it: localhost, tailscale or open (Settings → remote)
-ptyro pair phone               # a one-time QR code (10 min; full control, it warns you): scan it and the phone is signed in;
+ptyro pair -n phone            # a one-time QR code (10 min; full control, it warns you): scan it and the phone is signed in;
                                # over Tailscale it uses Tailscale's certificate when your tailnet has HTTPS
                                # certificates on (nothing to install, Android included); else it says how to
                                # trust ptyro's certificate once
@@ -803,7 +803,7 @@ supervised `ptyro serve`, so a daemon restart or live upgrade brings it back, an
 says why when it won't start (a port taken by something else, say). `ptyro serve` by hand still
 works for trying it out.
 
-Each device gets a scope (`read`, `approve`, `control` or `full`). `ptyro pair phone` gives
+Each device gets a scope (`read`, `approve`, `control` or `full`). `ptyro pair` gives
 `full` by default, the whole app (it changes your machine: worktrees, the config, devices), and
 warns you in plain words that it can run commands as you; `--scope approve` answers prompts only,
 `--scope control` also types and stops. Pairing a name that exists replaces that device with the
@@ -883,7 +883,7 @@ ptyro config list --changed        # what you've set, and where each comes from
 ptyro config get ui.theme --explain
 ptyro config set ui.sidebar_width 40
 ptyro config set discover.roots ~/work ~/src
-ptyro config set scripts.setup "make deps" --project     # .ptyro.local.toml of this repository
+ptyro config set scripts.setup "make deps" -p .        # .ptyro.local.toml of this repository
 ptyro config add agents aider command="aider --model sonnet"
 ptyro config unset ui.theme        # back to the default
 ptyro config list keys             # every key, defaults too (--changed: only yours)

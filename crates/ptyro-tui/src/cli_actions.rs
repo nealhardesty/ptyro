@@ -49,7 +49,7 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
         "checkpoint.restore",
         &["checkpoint", "restore", "{session}", "{ask:Back to which checkpoint (its number)}"],
     ),
-    ("pr.reply", &["pr", "reply", "{ask:Your reply on the PR}", "-w", "{worktree}"]),
+    ("pr.reply", &["pr", "reply", "{ask:Your reply on the PR}", "--wt", "{worktree}"]),
     ("project.show", &["project", "show", "{project}"]),
     ("project.config", &["project", "config", "{project}", "--explain"]),
     ("profile.list", &["profile", "ls"]),

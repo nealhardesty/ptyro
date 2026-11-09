@@ -6122,6 +6122,7 @@ impl App {
                         keep: None,
                         folders: None,
                         confirmed: false,
+                        auto_title: false,
                     },
                 );
             }

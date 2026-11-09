@@ -2387,7 +2387,7 @@ impl Daemon {
     async fn fanout(self: &Arc<Self>, spec: FanoutSpec) -> Result<Reply, Error> {
         if spec.agents.is_empty() {
             return Err(Error::invalid(
-                "say which agents: --agents claude,codex,gemini (or -n 3 --agents claude)",
+                "say which agents: --agent claude,codex,gemini (or --count 3 --agent claude)",
             ));
         }
         if spec.prompt.trim().is_empty() {

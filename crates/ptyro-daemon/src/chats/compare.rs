@@ -208,7 +208,7 @@ impl Daemon {
             }
         } else if who.len() + cant.len() < 2 {
             return Err(Error::invalid(
-                "a compare needs two agents or more: name them (--agents claude,codex), or install another",
+                "a compare needs two agents or more: name them (--agent claude,codex), or install another",
             ));
         }
         let own = who.iter().position(|(a, p)| *a == info.agent && *p == info.profile);

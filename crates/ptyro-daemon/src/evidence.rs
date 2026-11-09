@@ -716,7 +716,7 @@ impl Daemon {
             warnings.push("more than 6 candidates rarely finds a better answer".into());
         }
         if out.len() > 1 && agents.len() == 1 {
-            warnings.push("every candidate is the same agent; mixed agents fail differently (--agents claude,codex,gemini)".into());
+            warnings.push("every candidate is the same agent; mixed agents fail differently (--agent claude,codex,gemini)".into());
         }
         if out.iter().all(|c| c.tests.is_none()) {
             warnings.push(

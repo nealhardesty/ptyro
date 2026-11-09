@@ -100,7 +100,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
 | `chat answer` | `chat.open`: `a` allow, `A` always, `d` deny on the permission card | `chat.answer`: Allow, Always, Deny on the card |
 | `chat stop` | `chat.stop`: `Ctrl-C` in the view | `chat.stop`: Stop beside the box while it answers |
-| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list) | `chat.retitle`: ⋯ → Rename |
+| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list; empty clears it), `chat.autotitle` (`--auto`) | `chat.retitle`: ⋯ → Rename (empty clears it), `chat.autotitle`: ⋯ → New automatic title |
 | `chat pin` | `chat.pin` (`*` on a chat row or in the list) | `chat.pin`: ⋯ → Pin |
 | `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
 | `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
@@ -176,8 +176,8 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `ws set` | `workspace.profile` and `workspace.notify` | `workspace.set`: a workspace's menu: its profile and notifications |
 | `ws rm` | `workspace.remove` (asks first) | `workspace.remove`: a workspace's menu (asks first) |
 | `ws rename` | `workspace.rename` | `workspace.rename`: a workspace's menu |
-| `ws add` | `project.workspaces` (a project's row menu): every workspace, ticked where it is; `project.add` adds a new one to the one you pick | `workspace.member`: a project's ⋯ menu → Workspaces |
-| `ws remove` | `project.workspaces`: untick it; `project.leave` takes the selected project out of this workspace | `workspace.member`: a project's ⋯ menu → Workspaces |
+| `ws add-project` | `project.workspaces` (a project's row menu): every workspace, ticked where it is; `project.add` adds a new one to the one you pick | `workspace.member`: a project's ⋯ menu → Workspaces |
+| `ws remove-project` | `project.workspaces`: untick it; `project.leave` takes the selected project out of this workspace | `workspace.member`: a project's ⋯ menu → Workspaces |
 
 ## Profiles
 

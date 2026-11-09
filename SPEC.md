@@ -1095,6 +1095,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built] Protocol 1.38**: `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An
+empty `title` now clears a chat's title (before 1.38 it asked for an automatic one), as `Retitle`
+does for a session or a worktree. Clients send `auto_title` with an empty `title`, so a daemon older
+than 1.38 (which ignores `auto_title`) still makes a new one; an older client's empty title now
+clears it.
+
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
@@ -3598,6 +3604,24 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   refused as a likely mistyped command.
 - **[built M1]** Attaching from inside a ptyro session is refused unless `PTYRO_ALLOW_NESTED=1`
   (a nested TUI fights over the prefix key).
+- **[built] One CLI surface (owner, 2026-11-09):**
+  - A short flag means one long flag in every command: `-a --agent`, `-C --cwd`, `-d --detach`,
+    `-e --editor`, `-f --follow`, `-l --limit`, `-m --message`, `-n --name`, `-o --output`,
+    `-p --project`, `-s --signal`, `-u --unread`, `-w --workspace`, `-y --yes`; and a long flag
+    that has a letter has it everywhere it is taken. The rest is long only (`--prompt`, `--all`,
+    `--force`, `--session`, `--wt`). The table is in `docs/commands.md`; the test
+    `a_short_flag_means_one_thing_everywhere` walks the command tree and fails on a clash.
+  - A value follows a flag after a space or an `=`, for every flag: none insists on `=`
+    (`no_flag_insists_on_an_equals_sign`). `config … -p .` is the repository you're in.
+  - A command that starts a session you'd work in (`new`, `wt new --agent`, `shells new`,
+    `shells split`, `chat task`) attaches in a terminal unless `-d/--detach`; `--json` prints
+    instead. Without a terminal, or inside a ptyro session (whose TUI shows the new one), it
+    starts detached and prints it. A command whose session isn't one you'd type into (`wt run`,
+    `fanout`'s candidates) attaches only when asked (`wt run --attach`).
+  - A name you may leave out is `-n/--name`; a name a command needs is a positional word.
+    `fanout`'s worktree-name start is `--prefix`.
+  - `retitle X` with no title clears it, for a session, a worktree and a chat alike; a chat's
+    `--auto` (the TUI's and web's `chat.autotitle`) asks for a new automatic one.
 - All listing/query commands support `--json` (stable schemas, documented in `docs/cli-json.md`)
   and `--format` templates later.
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
@@ -3625,14 +3649,14 @@ ptyro rename <session> <name>
 ptyro replay <session> [--speed 2]      ;  ptyro export <session> --asciicast|--text [-o file]
 
 ptyro ws ls|new <name> [--profile <pr>] [--notify all|badge|mute]|rm <name>|rename <a> <b>
-         |add <project>|remove <project>|set <name> [--profile <pr>] [--notify …]
+         |add-project <ws> <project>|remove-project <ws> <project>|set <name> [--profile <pr>] [--notify …]
 ptyro profile ls|show <pr>|new <pr> [--adopt <agent>=<dir>…]|rm <pr>|rename <a> <b>
               |login <pr> <agent|gh>|env <pr> [--agent <a>]|sync <pr>|doctor [<pr>]
 ptyro project add [<path>]|ls|rm <p>|show <p>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
 ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>] [--setup run|skip]
          |rm <wt> [--force] [--keep-branch]|status <wt>|diff <wt>|open <wt> [--editor <e>]
          |run <wt> [<script>]|lock <wt>|unlock <wt>|rename-branch <wt> [<new>]
-ptyro fanout --agents claude,codex --prompt <p> [--base <ref>] [--name <prefix>] [--wait]
+ptyro fanout --agent claude,codex --prompt <p> [--base <ref>] [--prefix <prefix>] [--wait]
 ptyro broadcast <session…> <text>
 ptyro run ls|show <run>|cancel <run>|gate <run> <gate> approve|reject
 ptyro recipe ls|run <recipe> [--var k=v]
@@ -3646,7 +3670,7 @@ ptyro daemon start [--foreground]|stop [--force|--hibernate]|restart|status|logs
              |upgrade|install-service|uninstall-service
 ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
-ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
+ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--activity|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
 ptyro setup [-y] [--agents A,B] [--tools T,U] [--where W] [--dry-run] [--json]   # the setup checklist (§24.2, §24.3)
 ptyro install NAME… [-y] [--where W] [--dry-run] [--json]             # install agents/tools by name; W: wsl|windows|both (Windows)
@@ -3852,8 +3876,8 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   (every mistake, exit 2), `recipe graph NAME|FILE [--format mermaid|dot]`,
   `recipe run NAME|FILE [--var k=v]… [--project] [--base] [--trust FP] [--wait] [--json]`.
   On a terminal an untrusted repo recipe asks first.
-- **Fan-out:** `fanout --agents a,b,c | -n N [--agents a] (--prompt P | --prompt-file F)
-  [--project] [--base] [--name PREFIX] [--test [CHECK]] [--verify CHECK] [--judge AGENT]
+- **Fan-out:** `fanout -a a,b,c | --count N [-a a] (--prompt P | --prompt-file F)
+  [-p P] [--base] [--prefix PREFIX] [--test [CHECK]] [--verify CHECK] [--judge AGENT]
   [--timeout D] [--wait] [--json]`; `compare R [--refresh] [--json]`;
   `pick R CANDIDATE [--cherry-pick|--pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
   `discard R [CANDIDATE] [--force]`; `iterate R [CANDIDATE] TEXT`.
@@ -8006,7 +8030,8 @@ for Claude and Codex this step never happens and (2) always runs); else (2) `[ch
 `<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`), fed the first user
 and assistant messages (redacted as summaries are); else (3) the first line of the first message.
 A title the user typed (`title_src = user`) is never replaced; `chat.retitle` with an empty box
-makes a new one. `[chat] title = "off"` uses (3) only.
+clears it (and none is made for it again), `chat.autotitle` (`chat retitle --auto`) makes a new
+one (owner, 2026-11-09: retitle clears, for every kind). `[chat] title = "off"` uses (3) only.
 
 ### 22.9 Incognito
 
@@ -8230,19 +8255,19 @@ hides when `enabled`):
   ptyro chat [new] [PROMPT] [--agent A[@P]] [--preset|--tools PRESET] [--folder DIR]… [--incognito|--keep]
                    [--workspace W] [--title T] [--compare A,B] [--no-wait] [--timeout S]   # new chat; with no PROMPT, opens it in a terminal
   ptyro chat ask QUESTION [--keep] [--agent A] [--preset|--tools PRESET] [--no-stdin] [--timeout S]   # one-shot answer on stdout; stdin is context
-  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-n N]   # every workspace's unless -w
+  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-l N]   # every workspace's unless -w
   ptyro chat show CHAT [--all] [--ids] [--branches] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view
   ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]   # waits for the answer by default
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
   ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes] [PROMPT] [--no-wait] [--timeout S]
-  ptyro chat retitle CHAT [TITLE] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
+  ptyro chat retitle CHAT [TITLE|--auto] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION   # no match is exit 0
   ptyro chat answer CHAT allow|always|deny  ·  ptyro chat stop CHAT
   ptyro chat export CHAT [--format md|json] [-o FILE]
   ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
-  ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
-  ptyro chat compare CHAT [--agents A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
+  ptyro chat presets [--json]  ·  ptyro chat task CHAT [-p P] [-a A] [-n NAME] [-d]
+  ptyro chat compare CHAT [-a A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
   ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
   ```
 
@@ -8430,7 +8455,7 @@ agent installed:
 - **A loose spawn** whose directory doesn't exist on the daemon's machine (`~` from the web, a gone
   directory, another machine's path) starts at home. `~/x` is expanded when it exists.
 - **Joining SHELLS** happens on a `ProjectRemove{release}`, at a spawn outside every project, and by
-  hand. A project dropped from a workspace (`ws remove`) keeps its sessions placed, and they are
+  hand. A project dropped from a workspace (`ws remove-project`) keeps its sessions placed, and they are
   listed unnumbered under SHELLS. So is any other session with no row (the old `other sessions`).
   The note when one joins is in the log, not sent to clients.
 - **Put there, or landed there** (`Shelf.pinned`, the full suite's UX1.5 tests found it): a shell
@@ -8573,7 +8598,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
   sessions` group (`tree.rs`), which disappears. Such a session becomes loose, takes the lowest free
   slot in its home workspace, and the daemon raises a note ("`make dev` moved to SHELLS as 4"):
   - a session whose project is let go (`ProjectRemove{release}`);
-  - a session whose project leaves its workspace (`ws remove`);
+  - a session whose project leaves its workspace (`ws remove-project`);
   - a session started outside every project (`ptyro new --cwd /tmp -- htop`);
   - a session left running when its worktree goes: removal can't stop a busy one, and one set
     loose by hand (§23.8) stays.
@@ -8697,18 +8722,19 @@ showing it):
 
 ```text
 ptyro shells [ls] [--workspace WS] [--all] [--json]   # the workspace's shells, by number (--all: every workspace)
-ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--name N] [--title T] [--scratch] [--workspace WS] [--attach] [--json]
+ptyro shells new [-- CMD…] [-C DIR] [--slot N] [-n NAME] [--title T] [--scratch] [-w WS] [-d] [--json]
 ptyro shells go N [--workspace WS]                    # attach with shell N shown (= ptyro attach %N)
 ptyro shells move N M [--workspace WS]                # renumber; swaps when M is taken
 ptyro shells loose <session>                          # set a worktree's session loose into SHELLS (§23.8)
 ptyro shells adopt <session> [WORKTREE]               # move a loose one into a worktree (default: where its directory is)
-ptyro shells watch <session> [--done|--output|--silence DUR|--match RE|--off]   # §23.9
+ptyro shells watch <session> [--done|--activity|--silence DUR|--match RE|--off]   # §23.9
 ```
 
 - `ls --json` prints `[{slot, id, name, label, kind, state, cwd, live_cwd, command, last_exit,
   watch, attention}]`. Text is one line a shell: `3  ssh prod  ◉ bell  ~`.
-- `new` prints the slot and name (`4 quiet-jackdaw`), `--json` the session. Without `--attach` it
-  doesn't attach, so scripts can run `ptyro shells new --slot 9 -- htop`.
+- `new` attaches in a terminal unless `-d` (§12.1); detached it prints the slot and name
+  (`4 quiet-jackdaw`), `--json` the session. A script (no terminal) never attaches, so
+  `ptyro shells new --slot 9 -- htop` works there as it is.
 - `ls` and the session commands with `%N` work against other machines' workspaces as the session
   commands already do (§16.4b).
 
@@ -8841,7 +8867,7 @@ The web has no splits and no `Alt` it can count on: on macOS the browser types c
   - removal frees a number and nothing renumbers;
   - a loose spawn inside a worktree isn't placed;
   - auto-registration doesn't move a loose shell that `cd`s into a new repository;
-  - `release`, `ws remove` and a session started outside every project join SHELLS with a note;
+  - `release`, `ws remove-project` and a session started outside every project join SHELLS with a note;
   - worktree removal still refuses a busy loose shell whose directory is inside it;
   - adopt refuses another profile;
   - `restore = offer|start|forget` across a daemon restart;
@@ -8953,7 +8979,8 @@ strip, and a split is always a shell.
   - `shells.break` and `shells.join` are in a shell's row menu and the palette; join asks for the
     number.
 - **The CLI:**
-  - `shells split [S] [--down] [--attach]`, where S defaults to the session it runs in;
+  - `shells split [S] [--down] [-d]`, where S defaults to the session it runs in (it attaches as
+    `shells new` does, §12.1);
   - `shells break S`;
   - `shells join S N [--right]`;
   - `shells ls` lists panes under their window, and its `--json` rows carry `pane`.

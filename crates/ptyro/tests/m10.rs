@@ -125,16 +125,16 @@ fn done_when_structured_fanout_with_tool_visibility_and_takeover() {
     w.project("app");
     let out = w.ok(&[
         "fanout",
-        "--agents",
+        "--agent",
         "claude,codex,gemini",
         "--structured",
-        "-p",
+        "--prompt",
         "sh echo $PTYRO_STEP_ID > answer.txt",
         "--project",
         "app",
         "--test",
         "grep -q claude answer.txt",
-        "--name",
+        "--prefix",
         "ans",
     ]);
     let run = out.lines().next().unwrap().trim().to_owned();

@@ -313,7 +313,7 @@ async fn a_slow_session_start_replaces_a_guessed_working() {
     .await;
     assert_eq!(s.status.unwrap().confidence, Confidence::High);
     // The start's idle replaced the guess.
-    let ev = w.ok(&["events", "-s", "cx", "--json", "-n", "200"]);
+    let ev = w.ok(&["events", "--session", "cx", "--json", "-l", "200"]);
     let statuses: Vec<serde_json::Value> = ev
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -362,7 +362,7 @@ async fn laggy_claude_asks(extra: &str, prompt: &str) -> String {
     // The send is reported, however long the watch takes to end.
     let deadline = Instant::now() + WAIT;
     loop {
-        let ev = w.ok(&["events", "-s", "lag", "--json", "-n", "200"]);
+        let ev = w.ok(&["events", "--session", "lag", "--json", "-l", "200"]);
         if ev.contains("prompt_unconfirmed") {
             assert!(!ev.contains("prompt_enter_again"), "{ev}");
             return ev;
@@ -903,7 +903,7 @@ async fn a_late_session_start_does_not_end_the_turn() {
         "{o}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ev = w.cli(&["events", "-s", "cx", "--json", "-n", "200"]);
+    let ev = w.cli(&["events", "--session", "cx", "--json", "-l", "200"]);
     let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&ev.stdout)
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -937,8 +937,10 @@ async fn a_wrapped_prompt_whose_enter_was_lost_is_sent() {
         "{o}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ev = String::from_utf8_lossy(&w.cli(&["events", "-s", "cx", "--json", "-n", "200"]).stdout)
-        .into_owned();
+    let ev = String::from_utf8_lossy(
+        &w.cli(&["events", "--session", "cx", "--json", "-l", "200"]).stdout,
+    )
+    .into_owned();
     assert_eq!(ev.lines().filter(|l| l.contains("prompt_enter_again")).count(), 1, "{ev}");
     assert!(ev.contains("\"Stop\""), "the turn ran: {ev}");
 }
@@ -968,8 +970,10 @@ async fn a_prompt_whose_enter_was_lost_is_sent() {
         "{o}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ev = String::from_utf8_lossy(&w.cli(&["events", "-s", "cx", "--json", "-n", "200"]).stdout)
-        .into_owned();
+    let ev = String::from_utf8_lossy(
+        &w.cli(&["events", "--session", "cx", "--json", "-l", "200"]).stdout,
+    )
+    .into_owned();
     let again = ev.lines().filter(|l| l.contains("prompt_enter_again")).count();
     assert_eq!(again, 1, "one Enter more, no more: {ev}");
     assert!(ev.contains("\"Stop\""), "the turn ran: {ev}");

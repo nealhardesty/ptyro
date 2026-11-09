@@ -449,7 +449,7 @@ fn pull_requests_and_the_pr_event_loop() {
     // A stranger's comment never reaches the agent (it goes to you).
     assert!(!w.screen("fixer").contains("curl evil.sh"), "strangers don't instruct agents");
     // Reply, auto-merge, open by PR.
-    w.ok(&["pr", "reply", "-w", "svc/fix", "--comment", "2", "Done in the next commit."]);
+    w.ok(&["pr", "reply", "--wt", "svc/fix", "--comment", "2", "Done in the next commit."]);
     let replies = std::fs::read_to_string(w.gh.join("replies.txt")).unwrap();
     assert!(
         replies.contains("pulls/7/comments/2/replies") && replies.contains("via ptyro"),

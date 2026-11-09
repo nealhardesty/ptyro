@@ -20,8 +20,8 @@ pub enum ProjectCmd {
     /// Register the git repository containing PATH (default: the current directory)
     Add {
         path: Option<PathBuf>,
-        /// Add it to this workspace (default: main)
-        #[arg(long)]
+        /// Add it to this workspace (default: the one the TUI showed last)
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::workspaces))]
         workspace: Option<String>,
     },
     /// List projects
@@ -136,10 +136,22 @@ pub enum WsCmd {
     },
     /// Rename a workspace
     Rename { name: String, new_name: String },
-    /// Add a project to a workspace
-    Add { name: String, project: String },
-    /// Take a project out of a workspace
-    Remove { name: String, project: String },
+    /// Add a project to a workspace (it can be in several)
+    #[command(alias = "add")]
+    AddProject {
+        #[arg(add = ArgValueCandidates::new(crate::complete::workspaces))]
+        name: String,
+        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
+        project: String,
+    },
+    /// Take a project out of a workspace (it stays registered)
+    #[command(alias = "remove")]
+    RemoveProject {
+        #[arg(add = ArgValueCandidates::new(crate::complete::workspaces))]
+        name: String,
+        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
+        project: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -173,7 +185,8 @@ pub enum WtCmd {
     },
     /// Archived worktrees, newest first
     Archives {
-        #[arg(short, long)]
+        /// Only this project's
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -186,16 +199,22 @@ pub enum WtCmd {
     },
     /// List worktrees
     Ls {
-        #[arg(long)]
+        /// Only this project's
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
     },
-    /// Create a worktree on a new branch (default name: a friendly random one)
+    /// Create a worktree on a new branch; with --agent, start it there and attach (unless -d)
     New {
-        name: Option<String>,
-        /// Project (default: the one containing the current directory)
+        /// Its name (default: from the prompt or title, else a friendly random one)
         #[arg(short, long)]
+        name: Option<String>,
+        /// (The name, the old way: `wt new NAME`)
+        #[arg(hide = true, conflicts_with = "name")]
+        name_arg: Option<String>,
+        /// Project (default: the one containing the current directory)
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         /// Start from this ref (default: the project's base, e.g. origin/main)
         #[arg(long)]
@@ -229,18 +248,22 @@ pub enum WtCmd {
         /// Don't fetch the base first
         #[arg(long)]
         no_fetch: bool,
-        /// Start an agent in it (after setup)
-        #[arg(short, long)]
+        /// Start an agent in it (after setup), and attach to it unless -d
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::agents))]
         agent: Option<String>,
-        #[arg(long)]
+        #[arg(long, add = ArgValueCandidates::new(crate::complete::profiles))]
         profile: Option<String>,
         #[arg(long)]
         override_pin: bool,
         #[arg(short, long)]
         yes: bool,
-        /// Attach to it afterwards
-        #[arg(long)]
+        /// Don't attach to the agent; print the worktree
+        #[arg(short, long)]
+        detach: bool,
+        /// Attach even without an agent (to watch setup)
+        #[arg(long, hide = true, conflicts_with = "detach")]
         attach: bool,
+        /// Print the worktree as JSON (doesn't attach)
         #[arg(long)]
         json: bool,
     },
@@ -295,7 +318,7 @@ pub enum WtCmd {
         #[arg(short, long, required_unless_present = "ask_agent")]
         message: Option<String>,
         /// Stage everything first (new files too)
-        #[arg(short, long)]
+        #[arg(long)]
         all: bool,
         /// Stage these files first
         #[arg(last = true)]
@@ -721,7 +744,7 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             c.request(Request::WorkspaceNew { name: name.clone(), profile, notify }).await?;
             let why = if named.is_some() { ", named like it" } else { "" };
             eprintln!(
-                "workspace {name} created with profile {shown}{why} (`ptyro ws set {name} --profile P` changes it); add projects with `ptyro ws add {name} <project>`"
+                "workspace {name} created with profile {shown}{why} (`ptyro ws set {name} --profile P` changes it); add projects with `ptyro ws add-project {name} <project>`"
             );
             Ok(0)
         }
@@ -737,11 +760,11 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             c.request(Request::WorkspaceRename { name, new_name }).await?;
             Ok(0)
         }
-        WsCmd::Add { name, project } => {
+        WsCmd::AddProject { name, project } => {
             c.request(Request::WorkspaceMember { name, project, remove: false }).await?;
             Ok(0)
         }
-        WsCmd::Remove { name, project } => {
+        WsCmd::RemoveProject { name, project } => {
             c.request(Request::WorkspaceMember { name, project, remove: true }).await?;
             Ok(0)
         }
@@ -813,9 +836,8 @@ pub async fn new_in_new_worktree(
     name: String,
     project: Option<String>,
 ) -> Result<i32, Error> {
-    if !a.detach {
-        check_attachable()?;
-    }
+    // Decided once: `new` below attaches (or not) the same way.
+    a.detach = !crate::cli::attaches(a.detach || a.json);
     let c = client(ctx).await?;
     // The project: --project, else the one containing -C, else the current directory's.
     let project = match (project, &a.cwd) {
@@ -1033,6 +1055,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::New {
             name,
+            name_arg,
             project,
             base,
             branch,
@@ -1048,15 +1071,18 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             profile,
             override_pin,
             yes,
+            detach,
             attach,
             json,
         } => {
+            // It attaches to the agent it starts, as `ptyro new` does (`--attach`: even without).
+            let attach = attach || (agent.is_some() && crate::cli::attaches(detach || json));
             if attach {
                 check_attachable()?;
             }
             let spec = WorktreeSpec {
                 project: project_addr(project)?,
-                name,
+                name: name.or(name_arg),
                 branch,
                 existing,
                 pr,

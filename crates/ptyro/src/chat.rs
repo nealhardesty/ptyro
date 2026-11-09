@@ -23,7 +23,7 @@ pub struct NewArgs {
     /// a subcommand's name (`show me how…`, `find`, `set`, `open`…) needs `chat new` or quotes
     prompt: Vec<String>,
     /// `agent` or `agent@profile` (default `[chat] agent`, else the first installed)
-    #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+    #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
     agent: Option<String>,
     /// What it may use: chat (web search, the default), read, none, or your own (`chat presets`)
     #[arg(long, visible_alias = "tools", add = ArgValueCandidates::new(complete::chat_presets))]
@@ -72,7 +72,7 @@ pub enum ChatCmd {
         /// Keep it as a chat
         #[arg(long)]
         keep: bool,
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
         #[arg(long, visible_alias = "tools", add = ArgValueCandidates::new(complete::chat_presets))]
         preset: Option<String>,
@@ -103,7 +103,7 @@ pub enum ChatCmd {
         #[arg(long, add = ArgValueCandidates::new(complete::machines))]
         machine: Option<String>,
         /// At most N
-        #[arg(short = 'n', long)]
+        #[arg(short, long)]
         limit: Option<u32>,
         /// Only chats imported from the agents' own histories (`chat import`)
         #[arg(long)]
@@ -178,7 +178,7 @@ pub enum ChatCmd {
         #[arg(long)]
         at: Option<String>,
         /// Continue on another agent (`agent@profile`)
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
         #[arg(long)]
         side: bool,
@@ -218,7 +218,7 @@ pub enum ChatCmd {
         chat: Option<String>,
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
         #[arg(long)]
         pinned: bool,
@@ -234,7 +234,8 @@ pub enum ChatCmd {
         /// Only messages with the words, even when meaning search is on
         #[arg(long)]
         words: bool,
-        #[arg(short = 'n', long, default_value_t = 20)]
+        /// At most N
+        #[arg(short, long, default_value_t = 20)]
         limit: u32,
         #[arg(long)]
         json: bool,
@@ -243,7 +244,7 @@ pub enum ChatCmd {
     Find {
         #[arg(required = true)]
         question: Vec<String>,
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
         #[arg(long, default_value_t = 600)]
         timeout: u64,
@@ -287,11 +288,16 @@ pub enum ChatCmd {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
     },
-    /// Give a chat a title (none: a new automatic one)
+    /// Change a chat's title; no title clears it, --auto asks for a new automatic one
     Retitle {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
+        /// The new title (several words are joined)
+        #[arg(conflicts_with = "auto")]
         title: Vec<String>,
+        /// A new automatic title, made from the conversation (`[chat] title`)
+        #[arg(long)]
+        auto: bool,
         #[arg(long)]
         json: bool,
     },
@@ -326,7 +332,7 @@ pub enum ChatCmd {
     Set {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
         #[arg(long, visible_alias = "tools", add = ArgValueCandidates::new(complete::chat_presets))]
         preset: Option<String>,
@@ -359,14 +365,18 @@ pub enum ChatCmd {
         #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         /// `agent` or `agent@profile` (default: the chat's agent)
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
         /// The worktree's name (default: from the chat's title)
-        #[arg(long)]
+        #[arg(short, long)]
         name: Option<String>,
         /// Go ahead when the task's profile isn't the chat's (or a profile guard asks)
         #[arg(short, long)]
         yes: bool,
+        /// Don't attach to its agent; print the worktree instead (in a terminal it attaches)
+        #[arg(short, long)]
+        detach: bool,
+        /// Print the worktree and its session as JSON (doesn't attach)
         #[arg(long)]
         json: bool,
     },
@@ -384,9 +394,9 @@ pub enum ChatCmd {
         chat: String,
         /// The question (none: the chat's last message again)
         text: Vec<String>,
-        /// Which agents, `agent` or `agent@profile`, comma-separated (default: every installed
-        /// one that can chat)
-        #[arg(long, value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
+        /// Which agents, `agent` or `agent@profile`, comma-separated or repeated (default: every
+        /// installed one that can chat)
+        #[arg(short, long = "agent", visible_alias = "agents", value_delimiter = ',', add = ArgValueCandidates::new(complete::agents))]
         agents: Vec<String>,
         /// Ask an agent under another profile than the chat's without asking first
         #[arg(short, long)]
@@ -413,7 +423,7 @@ pub enum ChatCmd {
     /// a message to one continues it as a fork. `[chat] import = true` keeps doing it
     Import {
         /// claude, codex, gemini, or all (the default)
-        #[arg(long, default_value = "all")]
+        #[arg(short, long, default_value = "all")]
         agent: String,
         /// One profile's histories (default: every profile's)
         #[arg(long, add = ArgValueCandidates::new(complete::profiles))]
@@ -639,10 +649,11 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             done(ctx, Request::ChatAnswer { chat, decision, node }).await
         }
         ChatCmd::Stop { chat } => done(ctx, Request::ChatStop { chat }).await,
-        ChatCmd::Retitle { chat, title, json } => {
+        ChatCmd::Retitle { chat, title, auto, json } => {
             update_as(ctx, &chat, false, json, |r| {
-                if let Request::ChatUpdate { title: t, .. } = r {
+                if let Request::ChatUpdate { title: t, auto_title, .. } = r {
                     *t = Some(title.join(" "));
+                    *auto_title = auto;
                 }
             })
             .await
@@ -694,8 +705,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             }
             Ok(0)
         }
-        ChatCmd::Task { chat, project, agent, name, yes, json } => {
-            task(ctx, chat, project, agent, name, yes, json).await
+        ChatCmd::Task { chat, project, agent, name, yes, detach, json } => {
+            task(ctx, chat, project, agent, name, yes, detach || json, json).await
         }
         ChatCmd::Rm { chats } => {
             let c = ctx.connect(true).await?;
@@ -812,6 +823,7 @@ async fn compare_refusal(c: &ptyro_client::Client, info: &ChatInfo) -> String {
 }
 
 /// `chat task`: the worktree and the session that carries the chat out.
+#[allow(clippy::too_many_arguments)]
 async fn task(
     ctx: &Ctx,
     chat: String,
@@ -819,8 +831,10 @@ async fn task(
     agent: Option<String>,
     name: Option<String>,
     yes: bool,
+    detach: bool,
     json: bool,
 ) -> Result<i32, Error> {
+    let attaching = crate::cli::attaches(detach);
     let c = ctx.connect(true).await?;
     let req = Request::ChatTask { chat, project, agent, name, confirmed: false };
     let r = confirmed(&c, req, yes).await?;
@@ -834,6 +848,11 @@ async fn task(
     }
     for n in &notes {
         eprintln!("  {n}");
+    }
+    if attaching && (agent.is_some() || agent_pending) {
+        let follow = agent_pending.then(|| info.id.clone());
+        let opts = ptyro_tui::Options { follow_worktree: follow, ..Default::default() };
+        return crate::cli::attach_with(ctx, c, agent, opts).await;
     }
     match agent {
         Some(s) => println!(
@@ -1639,6 +1658,7 @@ async fn fork(ctx: &Ctx, chat: String, f: Fork, prompt: String, json: bool) -> R
             keep: Some(true),
             folders: None,
             confirmed: false,
+            auto_title: false,
         })
         .await?;
     }
@@ -1721,8 +1741,8 @@ impl SearchArgs {
                 }
                 "--chat" => self.chat = Some(value(&mut it)?),
                 "-w" | "--workspace" => self.workspace = Some(value(&mut it)?),
-                "--agent" => self.agent = Some(value(&mut it)?),
-                "-n" | "--limit" => {
+                "-a" | "--agent" => self.agent = Some(value(&mut it)?),
+                "-l" | "--limit" => {
                     let v = value(&mut it)?;
                     self.limit = v.parse().map_err(|_| {
                         Error::new(ErrorCode::Invalid, format!("{name}: {v:?} is not a number"))
@@ -1849,6 +1869,7 @@ fn blank(chat: &str) -> Request {
         keep: None,
         folders: None,
         confirmed: false,
+        auto_title: false,
     }
 }
 
@@ -1938,7 +1959,7 @@ mod tests {
 
     #[test]
     fn search_flags_after_the_words_are_flags() {
-        let q: Vec<String> = "redis -budget -w work --chat=c:7f3k -n 3 --agent codex --json -- -n"
+        let q: Vec<String> = "redis -budget -w work --chat=c:7f3k -l 3 -a codex --json -- -n"
             .split(' ')
             .map(str::to_owned)
             .collect();
@@ -1957,6 +1978,6 @@ mod tests {
         clap_said.by = Some("words");
         assert!(clap_said.take_flags(&["cats".into(), "--meaning".into()]).is_err());
         assert!(args().take_flags(&["x".into(), "--chat".into()]).is_err());
-        assert!(args().take_flags(&["x".into(), "-n".into(), "lots".into()]).is_err());
+        assert!(args().take_flags(&["x".into(), "-l".into(), "lots".into()]).is_err());
     }
 }

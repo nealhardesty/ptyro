@@ -1259,7 +1259,7 @@ impl App {
     pub(crate) fn open_pair_form(&mut self) {
         let fields = vec![
             Field::text("name", "Name", "phone", "What to call it in the devices list")
-                .arg(Arg::Pos),
+                .arg(Arg::Flag("--name")),
             Field::choice(
                 "scope",
                 "May",

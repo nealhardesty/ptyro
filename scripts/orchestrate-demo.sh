@@ -50,7 +50,7 @@ wait_run() {
 }
 
 say "fan-out: the same task to claude, codex and gemini, each in its own worktree"
-run=$(p fanout --agents claude,codex,gemini -p 'sh echo $PTYRO_STEP_ID > answer.txt' --name answer --test 'grep -q claude answer.txt' 2>/dev/null)
+run=$(p fanout --agent claude,codex,gemini --prompt 'sh echo $PTYRO_STEP_ID > answer.txt' --prefix answer --test 'grep -q claude answer.txt' 2>/dev/null)
 wait_run "$run"
 say "ptyro compare $run   (ranked by evidence: tests, the base, diff, time)"
 p compare "$run"

@@ -261,7 +261,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
 
     // The repository's settings: --project goes to .ptyro.local.toml; --shared to .ptyro.toml.
     assert!(ptyro(&["project", "add", "."]).status.success());
-    let o = ptyro(&["config", "set", "scripts.setup", "make deps", "--project"]);
+    let o = ptyro(&["config", "set", "scripts.setup", "make deps", "--project", "."]);
     assert!(o.status.success(), "{}", text(&o));
     assert!(text(&o).contains("trust"), "scripts changing asks for trust again: {}", text(&o));
     let local = std::fs::read_to_string(repo.join(".ptyro.local.toml")).unwrap();
@@ -271,7 +271,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
             .unwrap()
             .contains(".ptyro.local.toml")
     );
-    let o = ptyro(&["config", "set", "project.base", "origin/main", "--project", "--shared"]);
+    let o = ptyro(&["config", "set", "project.base", "origin/main", "--project", ".", "--shared"]);
     assert!(o.status.success() && text(&o).contains("committed"), "{}", text(&o));
     assert!(
         std::fs::read_to_string(repo.join(".ptyro.toml"))
@@ -279,13 +279,15 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
             .contains("base = \"origin/main\"")
     );
     assert_eq!(
-        String::from_utf8_lossy(&ptyro(&["config", "get", "scripts.setup", "--project"]).stdout),
+        String::from_utf8_lossy(
+            &ptyro(&["config", "get", "scripts.setup", "--project", "."]).stdout
+        ),
         "make deps\n"
     );
-    let o = ptyro(&["config", "list", "scripts", "--project", "--changed"]);
+    let o = ptyro(&["config", "list", "scripts", "--project", ".", "--changed"]);
     assert!(text(&o).contains("← .ptyro.local.toml"), "{}", text(&o));
     // Agents can't be set in a repository.
-    let o = ptyro(&["config", "add", "agents", "x", "--project"]);
+    let o = ptyro(&["config", "add", "agents", "x", "--project", "."]);
     assert!(!o.status.success(), "{}", text(&o));
     // The schema, for tools.
     let o = ptyro(&["config", "schema"]);

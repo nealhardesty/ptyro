@@ -914,6 +914,7 @@ impl App {
             keep: None,
             folders: None,
             confirmed: false,
+            auto_title: false,
         };
         // A picker of the chat's messages (or branches) needs them: the chat opens first.
         let wants_transcript =
@@ -931,10 +932,19 @@ impl App {
             "chat.open" => self.open_chat(&id),
             "chat.retitle" => {
                 self.overlay = Some(Overlay::Prompt {
-                    title: "Chat title (empty: a new automatic one)".into(),
+                    title: "Chat title (empty clears it; chat.autotitle makes one)".into(),
                     text: info.and_then(|c| c.title).unwrap_or_default(),
                     kind: PromptKind::ChatRetitle(id),
                 });
+            }
+            "chat.autotitle" => {
+                let mut req = update(None, None);
+                // (An empty title too: a daemon older than 1.38 makes a new one from that.)
+                if let Request::ChatUpdate { title, auto_title, .. } = &mut req {
+                    *title = Some(String::new());
+                    *auto_title = true;
+                }
+                self.request(Pending::Done("a new title is on its way".into()), req);
             }
             "chat.pin" => {
                 let on = !info.as_ref().is_some_and(|c| c.pinned);
@@ -1034,6 +1044,7 @@ impl App {
                             keep: Some(true),
                             folders: None,
                             confirmed: false,
+                            auto_title: false,
                         },
                     );
                 } else {
@@ -1518,6 +1529,7 @@ impl App {
                     keep: None,
                     folders: None,
                     confirmed: false,
+                    auto_title: false,
                 },
             ),
             // Not lost: back in the composer, to fix or to send as a message.
@@ -1821,6 +1833,7 @@ impl App {
                 keep: None,
                 folders: Some(folders),
                 confirmed: false,
+                auto_title: false,
             },
         );
     }
@@ -1933,6 +1946,7 @@ impl App {
                     keep: None,
                     folders: None,
                     confirmed: false,
+                    auto_title: false,
                 };
                 let then = Box::new(Pending::Done("the next message carries the chat over".into()));
                 self.request(Pending::Confirm(Box::new(req.clone()), then), req);
@@ -2416,6 +2430,7 @@ impl App {
 pub const CHAT_ACTIONS: &[&str] = &[
     "chat.open",
     "chat.retitle",
+    "chat.autotitle",
     "chat.pin",
     "chat.stop",
     "chat.retry",

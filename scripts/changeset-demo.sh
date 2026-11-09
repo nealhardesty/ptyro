@@ -63,7 +63,7 @@ repo web '{"name":"web","dependencies":{"@acme/api":"1","@acme/sdk":"1"}}'
 cd "$dir"
 
 say "ptyro cs new tier --projects api,sdk,web --agent api=codex --overlay   (order from package.json)"
-p cs new tier --projects api,sdk,web --agent api=codex --overlay -p "users get a tier: free or pro"
+p cs new tier --projects api,sdk,web --agent api=codex --overlay --prompt "users get a tier: free or pro"
 set_root=$(show "i['set']['root']")
 echo "web builds against api's worktree: node_modules/@acme/api → $(readlink "$set_root/web/node_modules/@acme/api")"
 

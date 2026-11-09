@@ -72,8 +72,8 @@ pub enum PrCmd {
     },
     /// Reply on a review thread (`--comment ID`) or on the PR, marked "via ptyro"
     Reply {
-        /// Default: the worktree you're in
-        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::worktrees))]
+        /// The worktree (default: the one you're in)
+        #[arg(long = "wt", alias = "worktree", add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: Option<String>,
         #[arg(long)]
         comment: Option<u64>,

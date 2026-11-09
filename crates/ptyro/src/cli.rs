@@ -506,12 +506,12 @@ async fn dispatch(
         Some(Cmd::Recipe { cmd }) => crate::orch::recipe(&ctx, cmd).await,
         Some(Cmd::Fanout {
             agents,
-            n,
+            count,
             prompt,
             prompt_file,
             project,
             base,
-            name,
+            prefix,
             test,
             verify,
             judge,
@@ -525,14 +525,14 @@ async fn dispatch(
                 prompt: String::new(),
                 project,
                 base,
-                name,
+                name: prefix,
                 test,
                 verify,
                 judge,
                 timeout,
                 structured,
             };
-            crate::orch::fanout(&ctx, spec, n, prompt, prompt_file, wait, json).await
+            crate::orch::fanout(&ctx, spec, count, prompt, prompt_file, wait, json).await
         }
         Some(Cmd::Compare { run, refresh, json }) => {
             crate::orch::compare(&ctx, run, refresh, json).await
@@ -637,9 +637,11 @@ async fn dispatch(
         Some(Cmd::Web { action, access, pair, json }) => {
             crate::webapp::run(&ctx, &action, access, json, pair).await
         }
-        Some(Cmd::Pair { name, scope, url, json, open }) => {
+        Some(Cmd::Pair { name, name_arg, scope, url, json, open }) => {
             // "phone" is the default name; a browser on this computer is a "browser".
-            let name = if open && name == "phone" { "browser".to_owned() } else { name };
+            let name = name
+                .or(name_arg)
+                .unwrap_or_else(|| if open { "browser" } else { "phone" }.to_owned());
             crate::remote::pair(&ctx, name, scope.as_deref(), url, json, open).await
         }
         Some(Cmd::Devices { cmd }) => crate::remote::devices(&ctx, cmd).await,
@@ -1053,7 +1055,8 @@ where
 }
 
 pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
-    let attaching = !a.detach;
+    // `ptyro` alone opens the TUI, so it says why it can't instead of starting a shell.
+    let attaching = a.welcome || attaches(a.detach || a.json);
     if attaching {
         check_attachable()?;
     }
@@ -1112,6 +1115,17 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         );
     }
     Ok(0)
+}
+
+/// Whether a command that starts an interactive session attaches to it (owner, 2026-11-09):
+/// yes in a terminal of its own, unless `-d`. Without a terminal (a script), or inside a ptyro
+/// session (whose TUI shows the new one), it starts detached and says so.
+pub fn attaches(detach: bool) -> bool {
+    !detach
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && (std::env::var_os("PTYRO_SESSION_ID").is_none()
+            || std::env::var_os("PTYRO_ALLOW_NESTED").is_some())
 }
 
 pub fn check_attachable() -> Result<(), Error> {

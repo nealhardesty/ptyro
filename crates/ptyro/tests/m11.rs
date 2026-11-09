@@ -266,7 +266,7 @@ fn done_when_a_set_drafts_approves_builds_restores_and_lands() {
         "--agent",
         "api=codex",
         "--overlay",
-        "-p",
+        "--prompt",
         "users get a tier: free or pro",
         "--json",
     ]);
@@ -762,7 +762,7 @@ fn linked_prs_and_a_ci_failure_stopping_the_train() {
         "manual",
         "--gates",
         "land",
-        "-p",
+        "--prompt",
         "Add the tier field",
         "--json",
     ]);

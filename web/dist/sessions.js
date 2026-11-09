@@ -273,13 +273,13 @@ export function newTask(where, task) {
 const notice = (r, ok) => { if (r)
     ui.toast(ok); };
 export function renameSession(s) {
-    form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: "Its address: what you type to find it. A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
+    form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: "Its address: what you type to find it, unique in its project. A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
         await conn.request({ t: "rename", addr: addr(s), name: v.name });
         ui.toast(`Renamed to ${v.name}`);
     });
 }
 export function retitleSession(s) {
-    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty goes back to the default." }], "Save", async (v) => {
+    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty clears it." }], "Save", async (v) => {
         await conn.request({ t: "retitle", addr: addr(s), title: v.title || null, worktree: false });
     });
 }
