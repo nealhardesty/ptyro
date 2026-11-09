@@ -810,20 +810,28 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         CsCmd::Drop { set, member, force, yes } => {
+            // Found first, then asked about by name: a typo asks nothing.
+            let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            if !i.set.members.iter().any(|m| m.name == member) {
+                return Err(Error::missing("member", &member));
+            }
             let (what, safety) = (removal::SET_MEMBER, removal::safety(force));
-            ask_first(&format!("Drop {member} from change set {set}? {what} {safety}"), yes)?;
-            op(&c, CsOp::Drop { set, member: member.clone(), force }).await?;
+            let name = &i.set.name;
+            ask_first(&format!("Drop {member} from change set {name}? {what} {safety}"), yes)?;
+            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force }).await?;
             eprintln!("dropped {member}");
             Ok(0)
         }
         CsCmd::Rm { set, keep, force, yes } => {
-            let mut q =
-                format!("Remove change set {set}? {} {}", removal::SET, removal::safety(force));
+            // Found first, then asked about by name: a typo asks nothing.
+            let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            let (what, safety) = (removal::SET, removal::safety(force));
+            let mut q = format!("Remove change set {}? {what} {safety}", i.set.name);
             if !keep.is_empty() {
                 q = format!("{q} Kept: {}.", keep.join(", "));
             }
             ask_first(&q, yes)?;
-            let v = op(&c, CsOp::Rm { set, keep, force }).await?;
+            let v = op(&c, CsOp::Rm { set: i.run, keep, force }).await?;
             eprintln!(
                 "removed {}",
                 v["removed"]

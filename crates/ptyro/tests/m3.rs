@@ -802,6 +802,16 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     assert!(err.contains(ptyro_core::removal::WORKSPACE) && err.contains("--yes"), "{err}");
     assert!(w.ok(&["ws", "ls"]).contains("side"), "nothing was removed");
     w.ok(&["ws", "rm", "--yes", "side"]);
+    // Found first, then asked: a typo is "not found" (exit 3), not a question.
+    for args in [&["ws", "rm", "sdie"][..], &["project", "rm", "ap"], &["wt", "rm", "app/nope"]] {
+        let out = w.cli(args);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     let c = w.d.client().await.unwrap();
     let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();

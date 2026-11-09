@@ -200,7 +200,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 |---|---|---|
 | `review add` | `inspector` (`D`): `c` on a line | `review.add`: tap a line on the Changes tab |
 | `review ls` | `inspector` (`D`): comments show on their lines | `review.list`: comments show under their lines, counted in a bar |
-| `review rm` | `inspector` (`D`): `x` on a comment | `review.rm`: ✕ on a comment, or Clear |
+| `review rm` | `inspector` (`D`): `x` on a comment, `X` every comment (asks first) | `review.rm`: ✕ on a comment, or Clear (asks first) |
 | `review send` | `inspector` (`D`): `S` | `review.send`: Send to agent, on the comments bar |
 | `review queue` | `review.queue` (`Q`) | `review.queue`: More → Review queue |
 | `review done` | `review.queue` (`Q`): `d` | `review.done`: a queue item's menu → Mark reviewed |

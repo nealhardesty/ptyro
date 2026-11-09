@@ -198,7 +198,7 @@ run=$(ptyro fanout --agents claude,codex -p "Fix the flaky test in src/net" --te
 ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 5 cancelled, 7 timeout
 best=$(ptyro compare "$run" --json | jq -r '.candidates[0].step')
 ptyro pick "$run" "$best" --pr                        # push + PR from the winner
-ptyro discard "$run" --force
+ptyro discard "$run" --force -y
 ```
 
 ```sh

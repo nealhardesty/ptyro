@@ -910,6 +910,12 @@ pub async fn discard(
     yes: bool,
 ) -> Result<i32, Error> {
     use ptyro_core::removal::{DISCARD, DISCARD_REST, safety};
+    let c = ctx.connect(false).await.map_err(no_daemon)?;
+    // Found first, then asked about by its id: a typo asks nothing.
+    let Reply::Run { run: info } = c.request(Request::RunGet { id: run }).await? else {
+        return Err(Error::internal("unexpected reply"));
+    };
+    let run = info.state.id;
     let q = match &candidate {
         Some(c) => format!("Discard candidate {c} of {run}? {DISCARD} {}", safety(force)),
         None => format!(
@@ -918,7 +924,6 @@ pub async fn discard(
         ),
     };
     crate::cli::ask_first(&q, yes)?;
-    let c = ctx.connect(false).await.map_err(no_daemon)?;
     notes(c.request(Request::Discard { run, candidate, force }).await?)
 }
 

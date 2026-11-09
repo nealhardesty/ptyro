@@ -503,11 +503,18 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ProjectCmd::Rm { project, release, yes } => {
-            let mut q = format!("Forget project {project}? {}", removal::PROJECT);
+            // Found first, then asked about by its name: a typo asks nothing.
+            let Reply::Project { info, .. } =
+                c.request(Request::ProjectGet { addr: project }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            let mut q = format!("Forget project {}? {}", info.slug, removal::PROJECT);
             if release {
                 q = format!("{q} {}", removal::PROJECT_RELEASE);
             }
             ask_first(&q, yes)?;
+            let project = info.id;
             let req = Request::ProjectRemove { addr: project.clone(), release };
             let reply = match c.request(req).await {
                 // Its sessions are running: the TUI's and the web's offer, asked here too.
@@ -760,7 +767,17 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WsCmd::Rm { name, yes } => {
-            ask_first(&format!("Remove workspace {name}? {}", removal::WORKSPACE), yes)?;
+            // Found first (main is the daemon's to refuse), then asked about.
+            if name != ptyro_core::model::MAIN_WORKSPACE {
+                let Reply::Workspaces { workspaces } = c.request(Request::WorkspaceList).await?
+                else {
+                    return Err(Error::internal("unexpected reply"));
+                };
+                if !workspaces.iter().any(|w| w.name == name) {
+                    return Err(Error::missing("workspace", &name));
+                }
+                ask_first(&format!("Remove workspace {name}? {}", removal::WORKSPACE), yes)?;
+            }
             c.request(Request::WorkspaceRemove { name }).await?;
             Ok(0)
         }
@@ -1133,8 +1150,13 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::Rm { worktree, force, yes, stop_sessions, keep_branch } => {
+            // Found first, then asked about by its name and branch: a typo asks nothing.
+            let info =
+                worktree_of(c.request(Request::WorktreeGet { addr: worktree.clone() }).await?)?;
             let what = if keep_branch { removal::WORKTREE_KEEP_BRANCH } else { removal::WORKTREE };
-            ask_first(&format!("Remove worktree {worktree}? {what} {}", removal::SAFE), yes)?;
+            let name = format!("{} ({})", info.qualified(), info.branch.as_deref().unwrap_or("-"));
+            ask_first(&format!("Remove worktree {name}? {what} {}", removal::SAFE), yes)?;
+            let worktree = info.id;
             let opts = RemoveOpts { force: false, stop_sessions, keep_branch };
             let req = Request::WorktreeRemove { addr: worktree.clone(), opts };
             let reply = match c.request(req).await {

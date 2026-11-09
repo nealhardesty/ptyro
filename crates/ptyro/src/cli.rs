@@ -1700,6 +1700,14 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
             crate::machines::add(ctx, target, name, force, json).await
         }
         M::Rm { name, yes } => {
+            // Found first, then asked about: a typo asks nothing.
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let Reply::Machines { machines } = c.request(Request::MachineList).await? else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            if !machines.iter().any(|m| m.name == name) {
+                return Err(Error::missing("machine", &name));
+            }
             ask_first(&format!("Stop mirroring {name}? {}", ptyro_core::removal::MACHINE), yes)?;
             let said = format!("{name} is no longer mirrored here (revoke its token there too)");
             crate::machines::simple(ctx, Request::MachineRemove { name }, said).await

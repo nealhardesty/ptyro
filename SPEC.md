@@ -1142,7 +1142,7 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 false). The daemon resolves its chat by an exact address only (a title is refused, exit 4, its
 matches listed) and, unconfirmed, answers `NeedsConfirmation` with the question every client
 asks ("Delete the chat “T”? It goes from every list…", §12.1). The TUI and the web ask first and
-send it confirmed; `chat rm` asks through `with_confirmation`. An older client's unconfirmed delete
+send it confirmed; `chat rm` asks through `with_confirmation_as`. An older client's unconfirmed delete
 is asked about instead of done.
 
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
@@ -3657,16 +3657,26 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 - **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
   (`chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`; `gc` asks per item) asks on a
+  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
+  item) asks on a
   terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
   (exit 5, `… (no terminal to ask: pass --yes)`) and changes nothing. The TUI and the web always
   ask with a dialog. All three say the same thing, what goes and what stays, from one sentence
-  per kind of removal in `ptyro_core::removal`; the web repeats them word for word (a test reads
-  `web/src` for them). Stopping, killing and removing sessions have their own rule.
+  per kind of removal in `ptyro_core::removal`. `removal::DIALOGS` pairs each question's start
+  with its sentences, and a test checks that the web dialog asking that question (one
+  `confirm(…)` line in `web/src`) says those sentences word for word. Stopping, killing and removing sessions have their own rule.
   - **Never by a fuzzy match.** A destructive command takes an exact address only: a name, an
-    id, a handle of 4 or more characters, `@last`. A chat's title words, `@pinned` or `@unread`
-    are refused (exit 4) with the chats they match listed by handle (`ChatDelete` resolves with
-    `find_chat_as(addr, exact)`; every other kind's lookup is already exact).
+    id, an id suffix (a handle) of 4 or more characters, or `@last`; never words from a title and
+    never a substring. A chat's title words, `@pinned` or `@unread` are refused (exit 4) with the
+    chats they match listed by handle (`ChatDelete` resolves with `find_chat_as(addr, exact)`).
+    Checked for chats, projects, worktrees, workspaces, change sets and devices; runs (`discard`)
+    and archives follow once their lookups match only id suffixes and names (§2.3).
+  - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
+    found" without a question, and the question names what was found (`wt rm`, `ws rm`,
+    `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`;
+    `chat rm`'s question comes from the daemon after it resolves). `profile rm`, `config rm` and
+    `wt archive-rm` have no request that resolves first: they ask naming what was typed, and a
+    name that matches nothing is refused after the question, with nothing changed.
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
     when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
     `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its
@@ -3675,7 +3685,8 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   - **Running sessions don't trap a project.** `project rm` with live sessions is refused with
     both ways through (stop them, or let them go). The CLI's `--release` lets them go (at a
     terminal it offers to), and the TUI and the web offer "Let them go"; they keep running,
-    outside any project.
+    outside any project. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
+    refusal (which all three show) and in `project rm --release`'s question.
 
 ### 12.2 Command tree **[decided]**
 

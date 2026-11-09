@@ -100,7 +100,7 @@ pub enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Remove a comment, or --all
+    /// Remove a comment, or --all (which asks first unless --yes)
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
@@ -108,6 +108,9 @@ pub enum ReviewCmd {
         id: Option<u32>,
         #[arg(long)]
         all: bool,
+        /// With --all: don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Send the comments to the worktree's agent as one prompt (once its turn is over)
     Send {
@@ -539,7 +542,21 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        ReviewCmd::Rm { worktree, id, all } => {
+        ReviewCmd::Rm { worktree, id, all, yes } => {
+            if all {
+                // Found first, then asked about by its name: a typo asks nothing.
+                let Reply::Worktree { info } =
+                    c.request(Request::WorktreeGet { addr: worktree.clone() }).await?
+                else {
+                    return Err(Error::internal("unexpected reply"));
+                };
+                let q = format!(
+                    "Remove every comment on {}? {}",
+                    info.qualified(),
+                    ptyro_core::removal::REVIEW_ALL
+                );
+                crate::cli::ask_first(&q, yes)?;
+            }
             let left = comments_of(
                 c.request(Request::ReviewRemove {
                     addr: worktree,

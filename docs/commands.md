@@ -18,7 +18,7 @@ Conventions:
 - Durations look like `30s`, `10m`, `2h`.
 - Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
   words): `chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`. `-y`/`--yes` doesn't ask; with no
+  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`. `-y`/`--yes` doesn't ask; with no
   terminal to ask and no `--yes`, the command refuses (exit 5) and changes nothing. They act on an
   exact address only: a chat's handle, id or `@last`, never words from its title.
 
@@ -167,7 +167,7 @@ Conventions:
 
 | Command | Does |
 |---|---|
-| `ptyro review add W FILE:LINE TEXT` / `ls [W]` / `rm W [ID\|--all]` | line comments for the agent |
+| `ptyro review add W FILE:LINE TEXT` / `ls [W]` / `rm W [ID\|--all [-y]]` | line comments for the agent (`--all` asks first) |
 | `ptyro review send [W] [--to SESSION] [--note TEXT]` | send every comment as one prompt, once the turn is over |
 | `ptyro review queue` / `done W` | worktrees ready for review, best first / mark one reviewed (until its agent's next turn) |
 | `ptyro pr create [W] [--draft\|--ready] [--title T] [--body B] [--base B]` | push and open a PR through `gh`; ptyro watches it |
