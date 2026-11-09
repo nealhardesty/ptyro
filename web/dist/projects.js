@@ -4,7 +4,7 @@
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 const ACTIONS = {
@@ -422,7 +422,7 @@ function worktreeView(rest) {
     const sess = sessionsIn(w);
     const proj = data.projects.get(w.project);
     const st = w.status;
-    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
+    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
         ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
         ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url), target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],
         ["Merged into main", w.integrated ? w.integrated.slice(0, 8) : null],

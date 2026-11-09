@@ -23,8 +23,20 @@ use serde::Serialize;
 
 use crate::cli::{Ctx, no_daemon, targets, unexpected};
 
-pub const CONDITIONS: [&str; 7] =
-    ["working", "blocked", "idle", "done", "errored", "exit", "any-attention"];
+/// `wait --for`: the status words of `ptyro_core::selector` (`errored` is `error` there too),
+/// plus `exit` and `any-attention`.
+pub fn condition() -> clap::builder::PossibleValuesParser {
+    use clap::builder::PossibleValue as V;
+    clap::builder::PossibleValuesParser::new([
+        V::new("working"),
+        V::new("blocked"),
+        V::new("idle"),
+        V::new("done"),
+        V::new("error").alias("errored"),
+        V::new("exit"),
+        V::new("any-attention"),
+    ])
+}
 
 pub fn duration(s: &str) -> Result<Duration, Error> {
     ptyro_core::config::parse_duration(s).map_err(|e| Error::invalid(format!("{s:?}: {e}")))
@@ -412,7 +424,7 @@ pub async fn send(
     // The turn this prompt starts is over when the agent is idle again, needs you, errs or
     // exits; `report` tells which.
     let o = WaitOpts {
-        conditions: ["idle", "blocked", "errored", "exit"].map(String::from).into(),
+        conditions: ["idle", "blocked", "error", "exit"].map(String::from).into(),
         pattern: None,
         scrollback: false,
         timeout: timeout.as_deref().map(duration).transpose()?,
@@ -421,7 +433,7 @@ pub async fn send(
     };
     let ids: Vec<SessionId> = infos.iter().map(|s| s.id).collect();
     let outcomes = wait_for_lasting(ctx, &mut c, &ids, &o).await?;
-    // Ending on "blocked" or "errored" is a fine answer to "how did the turn end?".
+    // Ending on "blocked" or "error" is a fine answer to "how did the turn end?".
     Ok(report(&outcomes, false, json))
 }
 

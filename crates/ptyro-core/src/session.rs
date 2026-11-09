@@ -459,9 +459,9 @@ fn fresh(s: &SessionInfo) -> bool {
         && s.status.as_ref().is_some_and(|r| r.since_ms >= s.last_prompt_ms.unwrap_or(0))
 }
 
-/// Has `s` reached `cond`: `working`, `blocked`, `idle`, `done`, `errored`, `exit` or
-/// `any-attention`? `idle` and `done` mean "the turn ptyro last typed has ended", so the idle
-/// before a prompt never counts (SPEC §12.2, M5).
+/// Has `s` reached `cond`: `working`, `blocked`, `idle`, `done`, `error` (or `errored`, its
+/// alias in `crate::selector`), `exit` or `any-attention`? `idle` and `done` mean "the turn
+/// ptyro last typed has ended", so the idle before a prompt never counts (SPEC §12.2, M5).
 pub fn reached(s: &SessionInfo, cond: &str) -> bool {
     use crate::status::AgentStatus;
     let st = s.status.as_ref().map(|r| r.status);
@@ -471,7 +471,7 @@ pub fn reached(s: &SessionInfo, cond: &str) -> bool {
         "blocked" => st == Some(AgentStatus::Blocked),
         "idle" => matches!(st, Some(AgentStatus::Idle | AgentStatus::Done)) && fresh(s),
         "done" => st == Some(AgentStatus::Done) && fresh(s),
-        "errored" => st == Some(AgentStatus::Errored) && fresh(s),
+        "error" | "errored" => st == Some(AgentStatus::Errored) && fresh(s),
         "any-attention" => {
             st == Some(AgentStatus::Blocked)
                 || s.attention.as_ref().is_some_and(|a| a.since_ms >= s.last_prompt_ms.unwrap_or(0))
