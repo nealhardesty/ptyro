@@ -306,9 +306,11 @@ fn json_shapes() {
     ] {
         let mut v = w.json(&args);
         // Only inside WSL (SPEC §20.10), so not in a snapshot every platform shares; its shape
-        // is checked where it exists (tests/win2.rs) and written down in docs/cli-json.md.
+        // is checked where it exists (tests/win2.rs) and written down in docs/cli-json.md. The
+        // load average likewise: Windows keeps none.
         if let Some(m) = v.as_object_mut() {
             m.remove("wsl_hold");
+            m.remove("load");
         }
         all.insert(name.into(), shape(&v));
     }
