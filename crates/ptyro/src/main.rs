@@ -221,7 +221,8 @@ enum Cmd {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
     },
-    /// Remove exited sessions from the list
+    /// Remove ended sessions (exited or dormant) from the list; a dormant agent's conversation is
+    /// forgotten
     Rm {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,

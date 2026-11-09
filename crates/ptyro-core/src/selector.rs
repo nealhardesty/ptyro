@@ -78,7 +78,7 @@ const fn sel(
 pub const SELECTORS: &[Selector] = &[
     sel("all", &[], "every session, exited and dormant ones too", None),
     sel("last", &[], "the session started last", None),
-    sel("focused", &[], "the session your terminal shows", None),
+    sel("focused", &[], "the session focused in your most recently used TUI", None),
     sel("live", &["running"], "running now", Some(State::Live)),
     sel(
         "active",

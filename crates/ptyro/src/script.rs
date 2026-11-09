@@ -23,19 +23,18 @@ use serde::Serialize;
 
 use crate::cli::{Ctx, no_daemon, targets, unexpected};
 
-/// `wait --for`: the status words of `ptyro_core::selector` (`errored` is `error` there too),
-/// plus `exit` and `any-attention`.
+/// `wait --for`: the status words of `ptyro_core::selector::SELECTORS` with their aliases
+/// (`errored` is `error`), plus `exit` and `any-attention`.
 pub fn condition() -> clap::builder::PossibleValuesParser {
     use clap::builder::PossibleValue as V;
-    clap::builder::PossibleValuesParser::new([
-        V::new("working"),
-        V::new("blocked"),
-        V::new("idle"),
-        V::new("done"),
-        V::new("error").alias("errored"),
-        V::new("exit"),
-        V::new("any-attention"),
-    ])
+    use ptyro_core::selector::{SELECTORS, State};
+    let words = SELECTORS
+        .iter()
+        .filter(|s| matches!(s.state, Some(State::Status(_))))
+        .map(|s| V::new(s.name).aliases(s.aliases.iter().copied()));
+    clap::builder::PossibleValuesParser::new(
+        words.chain([V::new("exit"), V::new("any-attention")]).collect::<Vec<_>>(),
+    )
 }
 
 pub fn duration(s: &str) -> Result<Duration, Error> {
@@ -721,6 +720,21 @@ mod tests {
         s.status = Some(r);
         s.last_prompt_ms = last_prompt;
         s
+    }
+
+    /// `wait --for` takes every status selector's word and alias (SPEC §2.3), and each works.
+    #[test]
+    fn wait_takes_the_selectors_status_words() {
+        use clap::builder::TypedValueParser;
+        let words: Vec<String> = super::condition()
+            .possible_values()
+            .unwrap()
+            .map(|v| v.get_name().to_owned())
+            .collect();
+        assert_eq!(words, ["working", "blocked", "idle", "done", "error", "exit", "any-attention"]);
+        let err = info(AgentStatus::Errored, 30, Some(20));
+        assert!(reached(&err, "error") && reached(&err, "errored"));
+        assert!(reached(&info(AgentStatus::Working, 10, None), "working"));
     }
 
     #[test]
