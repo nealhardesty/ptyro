@@ -142,6 +142,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `project suggest` | `project.suggest`; a project's first worktree offers it on its own | `project.suggest`: a project's ⋯ menu |
 | `project ls` | shown: the sidebar lists the workspace's projects | `projects`: the Projects tab lists every project with its worktrees; its workspace chips filter them (`workspace.switch`) |
 | `project show` | `project.show` (full sized) | `project.show`: tap a project's name |
+| `project rename` | `project.rename` (a project's row menu, `.`; the palette): the live check flags a taken or bad name as you type | `project.rename`: a project's ⋯ → Rename… |
 | `project rm` | `project.remove` (asks first; with sessions running in it, offers to let them go, as `--release` does) | `project.remove`: a project's ⋯ menu (asks first; offers Let them go, as `--release` does) |
 | `project trust` | `project.trust` | `project.trust`: a project's page: review the scripts, then trust |
 | `project untrust` | `project.untrust` | `project.untrust`: a project's page |
@@ -163,6 +164,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt open` | `worktree.open` (`o`): the installed editors, the file manager, the terminal apps, and `shell` (`!`), a new shell in it | `worktree.open`: a worktree's ⋯ → Open in…: the editors installed on the computer (a terminal editor opens as a session), its file manager and terminal apps, and `shell` (`shell.new`) |
 | `wt lock` | `worktree.lock` | `worktree.lock`: a worktree's ⋯ menu |
 | `wt unlock` | `worktree.unlock` | `worktree.unlock`: a worktree's ⋯ menu |
+| `wt rename` | `worktree.rename` (a worktree's row menu, `.`; the palette): the live check flags a taken or bad name as you type; `C-t` there edits its title | `worktree.rename`: a worktree's ⋯ → Rename… |
 | `wt rename-branch` | `worktree.rename_branch` | `worktree.rename_branch`: a worktree's ⋯ menu |
 | `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
 | `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate | `worktree.finish`: Finish on a worktree's page: a PR, or merge into the main branch |

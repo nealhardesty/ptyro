@@ -166,6 +166,14 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     no project share one scope (owner, 2026-11-09). A bare name two projects share is ambiguous:
     the error lists each `project/name`, except that mail from an agent means the session in
     the sender's own project. Defaults are below.
+  - The renames (owner, 2026-11-09): `rename` (a session), `wt rename` (a worktree) and
+    `project rename` (a project's slug, the `project` in `project/name`), in the CLI, the TUI
+    (`session.rename`, `worktree.rename`, `project.rename`) and the web. A worktree keeps its
+    branch (`wt rename-branch` changes that) and its directory, and a project's worktrees keep
+    theirs: moving a directory under running sessions would break them. A worktree's name is
+    unique among its project's worktrees; a project's slug is unique; `@root`, the main
+    checkout, is never renamed. A running process keeps the `PTYRO_WORKTREE_NAME` and
+    `PTYRO_PROJECT` it started with (§10.6).
   - The **title** is free text for people to read: the task, a PR title. It may change at any
     time (`retitle`), is never an address, and is shown in the sidebar and headers, not used in
     commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.
@@ -1138,12 +1146,17 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
-**[built, 2026-11-09] Protocol 1.38** (additive): `ChatDelete` gains `confirmed` (default
+**[built, 2026-11-09] Protocol 1.39** (additive): `ChatDelete` gains `confirmed` (default
 false). The daemon resolves its chat by an exact address only (a title is refused, exit 4, its
 matches listed) and, unconfirmed, answers `NeedsConfirmation` with the question every client
 asks ("Delete the chat “T”? It goes from every list…", §12.1). The TUI and the web ask first and
 send it confirmed; `chat rm` asks through `with_confirmation_as`. An older client's unconfirmed delete
 is asked about instead of done.
+
+**[built 2026-11-09] Protocol 1.38** (additive): `WorktreeRename{addr, name}` → `Worktree{info}` and
+`ProjectRename{addr, name}` → `Project{info}` (§2.3). Both are `full` scope, like
+`WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a project, one per worktree, carrying
+the new `project_slug`) and `ProjectUpdated`. An older daemon answers "unsupported request".
 
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
@@ -2243,7 +2256,16 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - The main checkout is found through `--git-common-dir`, so `project add` from inside a linked
   worktree registers the real repository.
 - The slug comes from `.ptyro.toml [project] name`, else the directory name; `-2`, `-3` suffixes
-  keep it unique.
+  keep it unique. `ptyro project rename P NEW` changes it (§2.3; `.ptyro.toml` only names a
+  project when it is added). Sessions, workspaces, trust and pins refer to the project by id,
+  so they follow on their own; its worktrees' `project/name` and its archives
+  (`wt restore NEW/name`) follow it. A change set's member keeps the name it was added with:
+  that is the member's directory in the set. A change-set template that names its members by
+  slug doesn't follow either: after a rename, edit the template (or name the project by id).
+  On another machine's project (MM1.B), the clients offer and check the name it has there
+  (`app`, not `laptop2:app`), and the daemon takes the `laptop2:` off a rename's new name where it
+  routes the request. Sessions and workspaces are renamed the same way.
+  A worktree is renamed only while it is ready or missing; one being created is refused.
 - `remote_url` is `origin`'s URL, else the first remote's.
 - Every project gets an `@root` worktree row for its main checkout. It is never locked or
   removable.
@@ -2285,7 +2307,13 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - `.ptyro/worktrees/<name>`.
 
 Symlinks higher up, like a macOS `/var` → `/private/var` or a symlinked home, are fine. An
-existing target path is refused.
+existing target path given with `WorktreeSpec.path` is refused.
+
+**[built 2026-11-09]** The directory is named once, at creation; a rename never moves it (§2.3). A
+renamed worktree stays in its old directory, and a renamed project's worktrees under its old
+slug. New worktrees go under the new slug. When the directory a new worktree's name would get
+is taken (a renamed worktree's, or one left behind), it gets the next free one: `name-2`,
+`name-3`.
 
 ### 10.3 WorktreeSpec and creation
 
@@ -2499,6 +2527,9 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
 | `PTYRO_PORT` | first port of this worktree's block (`PTYRO_PORT`..`PTYRO_PORT+count-1`) |
 | `PTYRO_SESSION_ID` | (sessions only) |
 | `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_WORKSPACE_NAME`, `CONDUCTOR_PORT` | only if `compat.conductor_env = true`, so existing setup scripts run unchanged |
+
+They are set when a process starts: a rename (§2.3) or `rename-branch` doesn't reach a process
+already running, and its next restart gets the new values.
 
 **[built M3]** Also `PTYRO_PORT_COUNT`. These variables, and `PTYRO_PROFILE`, are on the
 child-env strip list, so a daemon started inside a ptyro session can't leak its worktree into
@@ -3713,10 +3744,10 @@ ptyro ws ls|new <name> [--profile <pr>] [--notify all|badge|mute]|rm <name>|rena
          |add <project>|remove <project>|set <name> [--profile <pr>] [--notify …]
 ptyro profile ls|show <pr>|new <pr> [--adopt <agent>=<dir>…]|rm <pr>|rename <a> <b>
               |login <pr> <agent|gh>|env <pr> [--agent <a>]|sync <pr>|doctor [<pr>]
-ptyro project add [<path>]|ls|rm <p>|show <p>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
+ptyro project add [<path>]|ls|rm <p>|show <p>|rename <p> <new>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
 ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>] [--setup run|skip]
          |rm <wt> [--force] [--keep-branch]|status <wt>|diff <wt>|open <wt> [--editor <e>]
-         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename-branch <wt> [<new>]
+         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename <wt> <new>|rename-branch <wt> [<new>]
 ptyro fanout --agents claude,codex --prompt <p> [--base <ref>] [--name <prefix>] [--wait]
 ptyro broadcast <session…> <text>
 ptyro run ls|show <run>|cancel <run>|gate <run> <gate> approve|reject
@@ -8395,7 +8426,7 @@ reset too big for one frame comes as several, the first with `reset`; a subscrip
 chat's full id, so any of its addresses ends it); `ChatSend{chat, text}`; `ChatRetry{chat, node?}`;
 `ChatEdit{chat, node, text}`; `ChatBranch{chat, to}`; `ChatFork{chat, node?, agent?, side,
 confirmed}`; `ChatUpdate{chat, title?, pinned?, archived?, agent?, preset?, keep?, folders?,
-confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.38);
+confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.39);
 `ChatAnswer{chat, decision}`; `ChatStop{chat}`; `ChatSearch{query, chat?, workspace?, agent?,
 pinned, archived, limit?, machines}` → `ChatHits{hits}`; `ChatFind{question, agent?, workspace?}` →
 `Chat{info}` (an incognito chat that answers; the client follows it); `ChatExport{chat, format}` →

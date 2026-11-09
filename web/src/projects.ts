@@ -22,6 +22,7 @@ const ACTIONS = {
   "project.line_endings": "Rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
   "project.config": "The project's configuration, and where each value comes from",
   "project.pin": "Pin the project to a profile (its account)",
+  "project.rename": "Rename the project: its address, which finds its worktrees and sessions (project/name)",
   "project.suggest": "What a first worktree could use: a setup script, files to copy",
   "worktree.new": "A new worktree in this project, with an agent in it if you like",
   "worktree.show": "A worktree's page: status, sessions, changes and what to do next",
@@ -33,6 +34,7 @@ const ACTIONS = {
   "worktree.open": "Open the worktree in an editor installed on the computer, its file manager, a terminal app there, or a new shell",
   "worktree.lock": "Keep the worktree from being removed or cleaned up",
   "worktree.unlock": "Let the worktree be removed again",
+  "worktree.rename": "Rename the worktree: its address (project/name). Its branch and its directory stay",
   "worktree.rename_branch": "Rename the worktree's branch (until it's pushed)",
   "worktree.retitle": "Change what the worktree is titled",
   "worktree.finish": "Finish: commit what's left, then open a PR or merge into the main branch",
@@ -196,6 +198,16 @@ async function suggest(p: Project): Promise<void> {
   ]);
 }
 
+function renameProject(p: Project): void {
+  // Another machine's project is renamed there, by the name it has there (MM1.B).
+  const slug = splitMachine(p.slug)[1];
+  form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "name", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. ${NAME_HINT}` }], "Rename", async (v) => {
+    if (v.name === slug) return;
+    await conn.request({ t: "project_rename", addr: p.id, name: v.name });
+    ui.toast(`Renamed to ${v.name}`);
+  });
+}
+
 // Asks as the CLI's `project rm` and the TUI do (ptyro_core::removal); running sessions in it
 // are offered a way out, as there.
 function removeProject(p: Project): void {
@@ -221,6 +233,7 @@ function projectView(id: string): HTMLElement {
   return h("div", {}, ui.header(p.slug, "#/p", h("button", { class: "icon", "aria-label": "More", onclick: () => menu(p.slug, [
     { title: tip("project.suggest"), label: "Suggestions for new worktrees", run: () => suggest(p) },
     { title: tip("project.config"), label: "Configuration", hint: "And where each value comes from", run: async () => { const r = await ask({ t: "project_config", addr: p.id }); if (r) textSheet(`${p.slug}: configuration`, r.text); } },
+    { title: tip("project.rename"), label: "Rename…", run: () => renameProject(p) },
     { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
     { title: tip("project.line_endings"), label: "Fix scripts' line endings", hint: "Windows (CRLF) endings bash can't run", run: () => void fixLineEndings(p.id, p.slug) },
     { title: tip("radar"), label: "Collision radar", run: () => go(`#/radar/${enc(p.id)}`) },
@@ -301,7 +314,7 @@ function workspacesView(): HTMLElement {
       w.name, `${w.projects.length} project${w.projects.length === 1 ? "" : "s"} · ${w.profile} · notifies ${w.notify}`, null,
       { onclick: () => menu(w.name, [
         { title: tip("workspace.set"), label: "Profile and notifications…", run: () => workspaceForm(w) },
-        { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true, slug: "name", hint: NAME_HINT }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
+        { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: splitMachine(w.name)[1], required: true, slug: "name", hint: NAME_HINT }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
         { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove workspace ${w.name}?`, "Its sessions keep running and move to main, with its chats and the projects no other workspace has.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
       ]) })))));
 }
@@ -389,6 +402,14 @@ async function openIn(w: Worktree): Promise<void> {
   ]);
 }
 
+function renameWorktree(w: Worktree): void {
+  form(`Rename ${w.name}`, [{ key: "name", label: "Name", value: w.name, required: true, slug: "name", hint: `Its address: ${w.project_slug}/name, unique in its project. Its branch and its directory stay, so what runs in it carries on. ${NAME_HINT}` }], "Rename", async (v) => {
+    if (v.name === w.name) return;
+    await conn.request({ t: "worktree_rename", addr: w.id, name: v.name });
+    ui.toast(`Renamed to ${v.name}`);
+  });
+}
+
 function renameBranch(w: Worktree): void {
   form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes -." }], "Rename", async (v) => {
     await conn.request({ t: "worktree_rename_branch", addr: w.id, branch: (v.branch as string) || null });
@@ -412,6 +433,7 @@ function worktreeMenu(w: Worktree): void {
     { title: tip("worktree.pair"), label: "Pair mode: show it in the main checkout", hint: "Run it from the project's own directory", run: () => pairMode(w, false) },
     { title: tip("worktree.unpair"), label: "End pair mode", hint: "Puts the main checkout back, carrying edits over", run: () => pairMode(w, true) },
     !w.is_root && { title: tip("worktree.retitle"), label: "Set title…", run: () => retitleWorktree(w) },
+    !w.is_root && { title: tip("worktree.rename"), label: "Rename…", hint: "Its address; the branch stays", run: () => renameWorktree(w) },
     !w.is_root && { title: tip("worktree.rename_branch"), label: "Rename the branch…", run: () => renameBranch(w) },
     !w.is_root && { title: w.locked ? tip("worktree.unlock") : tip("worktree.lock"), label: w.locked ? "Unlock" : "Lock", hint: w.locked ? "Allow removing it" : "Keep it from being removed", run: async () => { await ask({ t: "worktree_lock", addr: w.id, lock: !w.locked }, w.locked ? "Unlocked" : "Locked"); } },
     !w.is_root && { title: tip("worktree.archive"), label: "Archive", hint: "Keeps its work and branch", run: () => archive(w) },

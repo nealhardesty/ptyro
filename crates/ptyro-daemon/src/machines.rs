@@ -210,13 +210,21 @@ fn addresses(v: &Value) -> Vec<String> {
     out
 }
 
-/// Take `machine:` off a request's addresses, for its own machine.
+/// A rename's new name (`WorkspaceRename`), which isn't an address but may be written like one:
+/// `box:work` renamed `box:play` is `play` on box. (`Rename`, `WorktreeRename` and
+/// `ProjectRename` call theirs `name`, an address key.)
+const NEW_NAME_KEYS: &[&str] = &["new_name"];
+
+/// Take `machine:` off a request's addresses (and a rename's new name), for its own machine.
 pub(crate) fn strip_value(v: &mut Value, machine: &str) {
     let prefix = format!("{machine}:");
     if let Value::Object(o) = v {
         for (k, x) in o.iter_mut() {
             match x {
-                Value::String(s) if ADDRESS_KEYS.contains(&k.as_str()) => {
+                Value::String(s)
+                    if ADDRESS_KEYS.contains(&k.as_str())
+                        || NEW_NAME_KEYS.contains(&k.as_str()) =>
+                {
                     if let Some(rest) = s.strip_prefix(&prefix) {
                         *s = rest.to_owned();
                     }
@@ -1492,6 +1500,17 @@ mod tests {
         let Request::Spawn { spec } = serde_json::from_value(v).unwrap() else { panic!() };
         assert_eq!(spec.worktree.as_deref(), Some("myrepo/feat"));
         assert_eq!(spec.workspace.as_deref(), Some("work"));
+        // A rename's new name loses it too, however the request calls it.
+        for req in [
+            Request::Rename { addr: "laptop2:a".into(), name: "laptop2:b".into() },
+            Request::WorktreeRename { addr: "laptop2:app/a".into(), name: "laptop2:b".into() },
+            Request::ProjectRename { addr: "laptop2:app".into(), name: "laptop2:web".into() },
+            Request::WorkspaceRename { name: "laptop2:work".into(), new_name: "laptop2:b".into() },
+        ] {
+            let mut v = serde_json::to_value(&req).unwrap();
+            strip_value(&mut v, "laptop2");
+            assert!(!v.to_string().contains("laptop2"), "{v}");
+        }
         assert!(here_only(&Request::DevicePair {
             name: "laptop2:x".into(),
             scope: Default::default(),

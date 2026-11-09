@@ -1178,3 +1178,115 @@ async fn session_names_are_unique_per_project() {
     let e = c.request(rename(spare.id.full(), "build")).await.unwrap_err();
     assert!(e.message.contains("in project lib"), "{}", e.message);
 }
+
+/// Worktrees and projects are renamed like sessions (SPEC §2.3): the address changes and the old
+/// one finds nothing; a worktree keeps its branch and its directory, so what runs in it carries
+/// on and is found under the new address; `@root` and a taken name are refused.
+#[tokio::test]
+async fn worktrees_and_projects_are_renamed() {
+    let w = World::new("");
+    for p in ["app", "lib"] {
+        let root = w.repo(p, &[]);
+        w.ok(&["project", "add", root.to_str().unwrap()]);
+    }
+    let c = w.d.client().await.unwrap();
+    let wt = |name: &str| WorktreeSpec {
+        project: "app".into(),
+        name: Some(name.into()),
+        ..WorktreeSpec::default()
+    };
+    for n in ["feat", "other", "old"] {
+        new_wt(&c, wt(n)).await.unwrap();
+    }
+    let before = worktree(&c, "app/feat").await;
+    let job = spawn(&c, SpawnSpec { name: Some("job".into()), ..sh("sleep 30", "app/feat") })
+        .await
+        .unwrap();
+    let rename =
+        |addr: &str, name: &str| Request::WorktreeRename { addr: addr.into(), name: name.into() };
+
+    // The address changes; the branch, the directory and the id don't.
+    let out = w.ok(&["wt", "rename", "app/feat", "login-fix"]);
+    assert!(out.contains("app/login-fix"), "{out}");
+    let after = worktree(&c, "app/login-fix").await;
+    assert_eq!((&after.id, &after.branch, &after.path), (&before.id, &before.branch, &before.path));
+    let e = c.request(Request::WorktreeGet { addr: "app/feat".into() }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    // git's marker follows, so a re-adoption finds the new name.
+    let gitdir = w.git(&after.path, &["rev-parse", "--absolute-git-dir"]);
+    let marker = std::fs::read_to_string(Path::new(gitdir.trim()).join("ptyro.json")).unwrap();
+    assert!(marker.contains("\"name\":\"login-fix\""), "{marker}");
+
+    // Refused: another worktree's name in its project, the main checkout, a bad name.
+    let e = c.request(rename("app/login-fix", "other")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert!(e.message.contains("app/other"), "{}", e.message);
+    let e = c.request(rename("app/@root", "main")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Invalid, "{e:?}");
+    assert!(e.message.contains("@root"), "{}", e.message);
+    let e = c.request(rename("app/other", "Bad Name")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Invalid, "{e:?}");
+    // Two renames to one name at once: one wins, the other is refused, and both sides agree.
+    for n in ["r1", "r2"] {
+        new_wt(&c, wt(n)).await.unwrap();
+    }
+    let c2 = w.d.client().await.unwrap();
+    let (a, b) =
+        tokio::join!(c.request(rename("app/r1", "dup")), c2.request(rename("app/r2", "dup")));
+    assert!(a.is_ok() != b.is_ok(), "exactly one: {a:?} {b:?}");
+    let Reply::Worktrees { worktrees } =
+        c.request(Request::WorktreeList { project: Some("app".into()) }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(worktrees.iter().filter(|w| w.name == "dup").count(), 1);
+    // Another project's worktree may share it.
+    new_wt(&c, WorktreeSpec { project: "lib".into(), ..wt("shared") }).await.unwrap();
+    c.request(rename("app/other", "shared")).await.expect("unique per project only");
+
+    // What runs in it carries on, still in it.
+    let Reply::Session { info } = c.request(Request::Get { addr: "app/job".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(info.state.is_live() && info.worktree.as_deref() == Some(after.id.as_str()));
+
+    // The old name is free again (its branch too, once renamed); its directory isn't, so the
+    // new one gets the next.
+    w.ok(&["wt", "rename-branch", "app/login-fix", "login-fix"]);
+    let Reply::WorktreeCreated { info: again, .. } = new_wt(&c, wt("feat")).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(again.name, "feat");
+    assert!(again.path != before.path && again.path.ends_with("feat-2"), "{again:?}");
+
+    // An archive, to restore under the project's new name.
+    c.request(Request::WorktreeArchive { addr: "app/old".into(), stop_sessions: false })
+        .await
+        .unwrap();
+
+    // A project: the slug changes; sessions, worktrees and archives follow it.
+    let e = c
+        .request(Request::ProjectRename { addr: "app".into(), name: "lib".into() })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    let out = w.ok(&["project", "rename", "app", "web"]);
+    assert!(out.contains("web"), "{out}");
+    let e = c.request(Request::ProjectGet { addr: "app".into() }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    let Reply::Session { info } = c.request(Request::Get { addr: "web/job".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(info.id, job.id);
+    let moved = worktree(&c, "web/login-fix").await;
+    assert_eq!(
+        (&moved.id, moved.project_slug.as_str(), &moved.path),
+        (&after.id, "web", &after.path)
+    );
+    assert!(w.ok(&["wt", "ls"]).contains("web/feat"));
+    let restored = c.request(Request::WorktreeRestore { addr: "web/old".into() }).await;
+    assert!(restored.is_ok(), "{restored:?}");
+    worktree(&c, "web/old").await;
+}

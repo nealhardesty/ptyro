@@ -77,6 +77,13 @@ pub enum ProjectCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a project: its slug, the address its worktrees and sessions are found by
+    /// (`NEW/name`). Its worktrees' directories stay where they are
+    Rename {
+        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
+        project: String,
+        new: String,
+    },
     /// Pin the project to a profile: its sessions run under it
     Pin {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
@@ -373,6 +380,14 @@ pub enum WtCmd {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
     },
+    /// Rename a worktree: its name, its address (`project/NEW`). Its branch stays
+    /// (`rename-branch` changes that) and so does its directory, so what runs in it carries on.
+    /// The main checkout is always `@root`
+    Rename {
+        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
+        worktree: String,
+        new: String,
+    },
     /// Rename its branch (refused once pushed); without NEW, named after the first commit
     RenameBranch {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
@@ -650,6 +665,15 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
                     println!("#   (nothing set: everything is a default)");
                 }
             }
+            Ok(0)
+        }
+        ProjectCmd::Rename { project, new } => {
+            let Reply::Project { info, .. } =
+                c.request(Request::ProjectRename { addr: project, name: new }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            eprintln!("renamed to {}", info.slug);
             Ok(0)
         }
         ProjectCmd::Pin { project, profile } => {
@@ -1288,6 +1312,13 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Unlock { worktree } => {
             c.request(Request::WorktreeLock { addr: worktree, lock: false }).await?;
+            Ok(0)
+        }
+        WtCmd::Rename { worktree, new } => {
+            let info = worktree_of(
+                c.request(Request::WorktreeRename { addr: worktree, name: new }).await?,
+            )?;
+            eprintln!("renamed to {}", info.qualified());
             Ok(0)
         }
         WtCmd::RenameBranch { worktree, new } => {

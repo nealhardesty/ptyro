@@ -62,7 +62,7 @@ function commentsBar(w) {
     const list = comments.get(w.id) ?? [];
     if (!list.length)
         return null;
-    return h("div", { class: "comments-bar", title: tip("review.list") }, h("b", {}, `${list.length} comment${list.length === 1 ? "" : "s"} waiting`), h("button", { class: "small primary", title: tip("review.send"), onclick: () => sendComments(w, list) }, "Send to agent"), h("button", { class: "small", title: tip("review.rm"), onclick: () => confirm("Remove all comments?", "They haven't been sent.", "Remove", async () => { await ask({ t: "review_remove", addr: w.id, id: null }); comments.reload(w.id); }) }, "Clear"));
+    return h("div", { class: "comments-bar", title: tip("review.list") }, h("b", {}, `${list.length} comment${list.length === 1 ? "" : "s"} waiting`), h("button", { class: "small primary", title: tip("review.send"), onclick: () => sendComments(w, list) }, "Send to agent"), h("button", { class: "small", title: tip("review.rm"), onclick: () => confirm(`Remove every comment on ${w.title || w.name}?`, "They haven't been sent to its agent, and what you typed in them can't be brought back.", "Remove", async () => { await ask({ t: "review_remove", addr: w.id, id: null }); comments.reload(w.id); }) }, "Clear"));
 }
 function diffFile(w, f, byLine, open) {
     const det = h("details", { class: "dfile", open }, h("summary", {}, h("span", { class: "dstat" }, h("b", { class: "add" }, `+${f.added}`), " ", h("b", { class: "del" }, `−${f.removed}`)), " ", h("span", { class: "dname" }, f.path), " ", badge(f.status)));

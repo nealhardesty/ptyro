@@ -141,6 +141,7 @@ Conventions:
 | Command | Does |
 |---|---|
 | `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P [--release] [-y]` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again, and its worktrees stay on disk. Sessions running in it block `rm` (at a terminal it offers to let them go); `--release` lets them go on, outside any project |
+| `ptyro project rename P NEW` | rename a project: its slug, the address of its worktrees and sessions (`NEW/name`). Its worktrees' directories stay where they are; new ones go under the new name |
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
 | `ptyro project line-endings [P]` | rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |
@@ -154,6 +155,7 @@ Conventions:
 | `ptyro wt pair W [--refresh]` / `unpair W` | show W's work in the main checkout / give the checkout back, your edits carried to W |
 | `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script / open in an editor |
 | `ptyro wt rm W [--force] [-y] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost. Its directory is deleted, and its branch too if it is merged or the same as its pushed copy, otherwise kept (`--keep-branch`: always kept). Asks unless `-y` (`--force` asks again, after saying what would be lost) |
+| `ptyro wt rename W NEW` | rename a worktree: its name, its address `project/NEW`, unique in its project. Its branch and its directory stay, so what runs in it carries on. The main checkout is always `@root` |
 | `ptyro wt lock\|unlock W` / `rename-branch W [NEW]` | manual lock / rename the branch (never once pushed) |
 | `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
 | `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
