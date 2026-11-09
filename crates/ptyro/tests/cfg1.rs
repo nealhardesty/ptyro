@@ -62,8 +62,8 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
         s.send_when("▾ main", "\x11C")
             // The panel; ⏎ moves to the settings. Down to `clock` and ⏎ turns it off.
             .send_when("Settings — your config", "\rjjjjj\r")
-            // `on_stop` is five below it: pick `stay` from its list.
-            .send_when("ui.clock = off", "jjjjj\rj\r")
+            // `on_stop` is six below it: pick `stay` from its list.
+            .send_when("ui.clock = off", "jjjjjj\rj\r")
             // A number: search for it, jump there, and step it.
             .send_when("ui.on_stop = stay", "/sidebar_width\r+")
             // A list: search, jump, ⏎ opens the box on the current value; clear it and retype.
