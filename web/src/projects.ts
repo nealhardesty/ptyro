@@ -6,7 +6,7 @@ import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
 import type { Project, Worktree, Workspace } from "./data.js";
-import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
@@ -436,7 +436,7 @@ function worktreeView(rest: string): HTMLElement {
       h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")),
     section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(
       h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null),
-      s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")),
+      s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")),
     section("Status", h("div", { title: tip("worktree.status") }, facts([
       ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
       ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url)!, target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],

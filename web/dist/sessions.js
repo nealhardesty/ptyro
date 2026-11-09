@@ -6,7 +6,7 @@ import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
@@ -273,7 +273,7 @@ export function newTask(where, task) {
 const notice = (r, ok) => { if (r)
     ui.toast(ok); };
 export function renameSession(s) {
-    form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: "Its address: what you type to find it. A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
+    form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: "Its address: what you type to find it, unique in its project. A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
         await conn.request({ t: "rename", addr: addr(s), name: v.name });
         ui.toast(`Renamed to ${v.name}`);
     });
@@ -315,7 +315,7 @@ export function verifySession(s) {
 function explainSession(s) {
     conn.request({ t: "status_explain", addr: addr(s) }).then((r) => {
         const lines = r.lines.map((l) => `${new Date(l.at_ms).toLocaleTimeString()}  ${l.applied ? "✓" : "·"} ${l.source}: ${l.signal}\n      ${l.reason}`);
-        textSheet(`Why ${s.name} is ${s.status?.status ?? "like this"}`, lines.join("\n") || "No decisions recorded yet.");
+        textSheet(`Why ${s.name} is ${s.status ? statusWord(s.status.status) : "like this"}`, lines.join("\n") || "No decisions recorded yet.");
     }, (e) => ui.toast(errText(e)));
 }
 async function summarize(s) {
