@@ -995,6 +995,10 @@ impl Daemon {
         }
         let words: String =
             ptyro_core::model::slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
+        // Nothing to name it after (a prompt of only symbols): the branch stays as it is.
+        if words.is_empty() {
+            return;
+        }
         if let Err(e) = self.rename_branch_to(&wt.id, &words).await {
             tracing::debug!("auto-rename skipped: {}", e.message);
         }

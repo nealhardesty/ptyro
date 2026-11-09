@@ -11,7 +11,7 @@ globalThis.localStorage = { getItem: () => { throw new Error("blocked"); }, setI
 globalThis.location = { origin: "http://x", hash: "" };
 globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send() {} close() {} };
 
-const { safeDecode, webHref, once, Cache, slugify } = await import("../dist/kit.js");
+const { safeDecode, webHref, once, Cache, slugify, statusWord, NAME_HINT } = await import("../dist/kit.js");
 const { conn, store, token } = await import("../dist/conn.js");
 
 // A malformed escape in a route is kept as typed instead of throwing.
@@ -21,12 +21,23 @@ assert.equal(safeDecode("%E0%A4%A"), "%E0%A4%A");
 assert.equal(webHref("https://example.com/a?b=1"), "https://example.com/a?b=1");
 assert.equal(webHref("http://example.com/"), "http://example.com/");
 for (const bad of ["javascript:alert(1)", "data:text/html,x", "ptyro://x", "/relative", "", null, undefined, 5]) assert.equal(webHref(bad), null, String(bad));
-// A name field swaps what a name can't hold for _ as it is typed (the same rule as ptyro-core's).
-assert.equal(slugify("name", "My Feat/2"), "my_feat_2");
-assert.equal(slugify("name", "-x"), "_x");
-assert.equal(slugify("name", "x..y"), "x._y");
+// A name field swaps what a name can't hold for - as it is typed, and drops what it can't start
+// with (the same rule as ptyro-core's `names::typed`, whose tests use the same cases).
+assert.equal(slugify("name", "My Feat/2"), "my-feat-2");
+assert.equal(slugify("name", "-x"), "x");
+assert.equal(slugify("name", ".hidden"), "hidden");
+assert.equal(slugify("name", " x"), "x");
+assert.equal(slugify("name", "_x"), "_x");
+assert.equal(slugify("name", "x..y"), "x.-y");
+assert.equal(slugify("name", "héllo"), "h-llo");
+assert.equal(slugify("name", "my_fix"), "my_fix");
 assert.equal(slugify("name", "brisk-rook.v1"), "brisk-rook.v1");
-assert.equal(slugify("branch", "fix this/Now: ok"), "fix_this/Now__ok");
+assert.equal(slugify("branch", "fix this/Now: ok"), "fix-this/Now--ok");
+assert.equal(slugify("branch", "-x"), "x");
+assert.equal(NAME_HINT, "A space or other odd character becomes - (a-z 0-9 . _ -)");
+// A status is shown with the selectors' word: `error`, as `@error` and `ptyro ls --status error` say.
+assert.equal(statusWord("errored"), "error");
+assert.equal(statusWord("idle"), "idle");
 // localStorage that throws is not a crash.
 assert.equal(token(), null);
 store.set("k", "v");

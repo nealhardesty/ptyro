@@ -6,7 +6,7 @@ import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
 import type { Project, Worktree, Workspace } from "./data.js";
-import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
@@ -261,7 +261,7 @@ function projectWorkspaces(p: Project): void {
 function workspaceForm(w?: Workspace): void {
   const machines = [...data.machines.values()];
   const s = form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
-    ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" } as const]),
+    ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: NAME_HINT } as const]),
     // With other machines (MM1.B): which one it's made on.
     ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select" as const, options: [["", "This machine"] as [string, string], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`] as [string, string])], value: "" }]),
     { key: "profile", label: "Profile", type: "select", options: [[w?.profile ?? "default", w?.profile ?? "default"]], hint: "The account its sessions use unless a worktree or project says otherwise" },
@@ -301,7 +301,7 @@ function workspacesView(): HTMLElement {
       w.name, `${w.projects.length} project${w.projects.length === 1 ? "" : "s"} · ${w.profile} · notifies ${w.notify}`, null,
       { onclick: () => menu(w.name, [
         { title: tip("workspace.set"), label: "Profile and notifications…", run: () => workspaceForm(w) },
-        { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
+        { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true, slug: "name", hint: NAME_HINT }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
         { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove workspace ${w.name}?`, "Its sessions keep running and move to main, with its chats and the projects no other workspace has.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
       ]) })))));
 }
@@ -390,7 +390,7 @@ async function openIn(w: Worktree): Promise<void> {
 }
 
 function renameBranch(w: Worktree): void {
-  form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes _." }], "Rename", async (v) => {
+  form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes -." }], "Rename", async (v) => {
     await conn.request({ t: "worktree_rename_branch", addr: w.id, branch: (v.branch as string) || null });
     ui.toast("Branch renamed");
   });
@@ -439,7 +439,7 @@ function worktreeView(rest: string): HTMLElement {
       h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")),
     section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(
       h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null),
-      s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")),
+      s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")),
     section("Status", h("div", { title: tip("worktree.status") }, facts([
       ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
       ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url)!, target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],

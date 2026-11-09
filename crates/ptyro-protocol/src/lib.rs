@@ -488,8 +488,8 @@ pub enum Request {
     ChatGet {
         addr: String,
     },
-    /// Expand a selector (SPEC §2.3): names, handles, globs (`build-*`), `@all`, `@live`,
-    /// `@exited`, `@focused`, `@last`, `@working`/`@blocked`/`@idle`/`@done`; `,` joins several.
+    /// Expand a selector (SPEC §2.3): names, handles, globs (`build-*`), the `@` selectors of
+    /// `ptyro_core::selector::SELECTORS`; `,` joins several.
     Resolve {
         addr: String,
     },

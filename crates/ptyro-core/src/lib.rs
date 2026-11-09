@@ -23,6 +23,7 @@ pub mod removal;
 pub mod scratchpad;
 pub mod screen;
 pub mod secret;
+pub mod selector;
 pub mod session;
 pub mod settings;
 pub mod shell;

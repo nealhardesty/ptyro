@@ -81,6 +81,15 @@ impl LineEdit {
         (start, end)
     }
 
+    /// The text as a name field keeps it ([`ptyro_core::names::typed`]). What it drops is at
+    /// the start, so the cursor moves back by as much.
+    pub(crate) fn as_name(&mut self) {
+        let before = self.text.chars().count();
+        self.text = ptyro_core::names::typed(&self.text);
+        let after = self.text.chars().count();
+        self.at = self.at.saturating_sub(before - after).min(after);
+    }
+
     /// Put `text` in at the cursor, which goes after it.
     pub(crate) fn insert(&mut self, text: &str) {
         let b = self.byte(self.at);
@@ -1859,7 +1868,7 @@ impl Panel {
                 }
                 let edited = edit.key(key);
                 if edited && names_a_table(&then) {
-                    edit.text = ptyro_core::names::typed(&edit.text);
+                    edit.as_name();
                 }
                 self.modal = Some(Modal::Input { title, hint, edit, secret, then, check });
                 if edited {
@@ -2163,7 +2172,7 @@ impl Panel {
                     edit.key(KeyEvent::char(c));
                 }
                 if names_a_table(then) {
-                    edit.text = ptyro_core::names::typed(&edit.text);
+                    edit.as_name();
                 }
                 self.recheck();
             }

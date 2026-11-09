@@ -16,7 +16,7 @@ use ptyro_core::ids::short_handle;
 use ptyro_core::model::MAIN_WORKSPACE;
 use ptyro_core::paths::Paths;
 use ptyro_core::session::{HistoryEntry, SessionInfo, SessionKind, SpawnSpec};
-use ptyro_core::{ClientId, Error, ErrorCode, SessionId, TermSize, names, now_ms};
+use ptyro_core::{ClientId, Error, ErrorCode, SessionId, TermSize, names, now_ms, selector};
 use ptyro_protocol::{DaemonStatus, DomainEvent, PROTO, Reply, Request};
 use ptyro_store::{Registry, Store};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -646,31 +646,37 @@ impl Daemon {
         }
     }
 
-    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus `@all`, `@live`
-    /// (`@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error` (the status engine's
-    /// verdict, whatever its source: hooks, self-reports, the screen), and name globs with `*` and
-    /// `?`. Order follows the session list; duplicates are dropped.
+    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus the `@` selectors of
+    /// `ptyro_core::selector::SELECTORS` (`@all`, `@exited`, `@dormant`, the status engine's
+    /// verdicts, …) and name globs with `*` and `?`. Order follows the session list; duplicates
+    /// are dropped.
     pub fn resolve_many(&self, selector: &str) -> Result<Vec<Arc<Session>>, Error> {
         let sessions = self.sessions();
         let mut picked: Vec<SessionId> = Vec::new();
         for part in selector.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let status_is =
-                |s: &Session, want: &str| s.status().is_some_and(|st| st.label() == want);
             let found: Vec<SessionId> = match part {
-                "@all" => sessions.iter().map(|s| s.id).collect(),
-                "@live" | "@running" => {
-                    sessions.iter().filter(|s| s.is_live()).map(|s| s.id).collect()
-                }
-                "@exited" => sessions.iter().filter(|s| !s.is_live()).map(|s| s.id).collect(),
                 "@last" | "@focused" => vec![self.resolve(part)?.id],
+                "@all" => sessions.iter().map(|s| s.id).collect(),
                 p if p.starts_with('@') => {
-                    let want = &p[1..];
-                    if !["working", "blocked", "idle", "done", "error"].contains(&want) {
+                    let Some(want) = selector::find(p).and_then(|s| s.state) else {
                         return Err(Error::invalid(format!(
-                            "unknown selector {p:?}; try @all, @live, @exited, @focused, @last, @working, @blocked, @idle, @done"
+                            "unknown selector {p:?}; try {}",
+                            selector::list()
                         )));
-                    }
-                    sessions.iter().filter(|s| status_is(s, want)).map(|s| s.id).collect()
+                    };
+                    sessions
+                        .iter()
+                        .filter(|s| {
+                            let state = s
+                                .meta
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .state
+                                .clone();
+                            want.matches(&state, s.status(), || self.info(s).is_active())
+                        })
+                        .map(|s| s.id)
+                        .collect()
                 }
                 p if p.contains(['*', '?']) => sessions
                     .iter()
@@ -727,7 +733,7 @@ impl Daemon {
             return name.to_owned();
         }
         (2..)
-            .map(|k| format!("{name}-{k}"))
+            .map(|k| ptyro_core::names::numbered(name, k))
             .find(|n| !self.name_taken(project, n))
             .expect("infinite")
     }
@@ -929,7 +935,13 @@ impl Daemon {
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let project = target.as_ref().map(|(_, p)| p.id.as_str());
         let name = match spec.name {
-            Some(n) if spec.name_or_next => self.free_name(project, &n),
+            // Composed by ptyro itself (`<set>-<member>`, a step, `judge`), so derived: made a
+            // valid name of at most 64, then a free one.
+            Some(n) if spec.name_or_next => {
+                let n = names::derive(&n)
+                    .ok_or_else(|| Error::invalid(names::validate(&n).err().unwrap_or_default()))?;
+                self.free_name(project, &n)
+            }
             Some(n) => {
                 names::validate(&n).map_err(Error::invalid)?;
                 self.name_free_or_why(project, &n)?;

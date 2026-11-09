@@ -358,6 +358,8 @@ impl Daemon {
                 let base_slug = slugify(&cfg.project.name.clone().unwrap_or_else(|| {
                     root.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
                 }));
+                // A directory with nothing slug-like in its name (`日本`, `...`).
+                let base_slug = if base_slug.is_empty() { "repo".to_owned() } else { base_slug };
                 let slug = {
                     let reg = self.registry.locked();
                     let taken = |s: &str| reg.projects.iter().any(|p| p.slug == s);

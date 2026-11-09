@@ -216,7 +216,8 @@ impl Daemon {
             .unwrap_or_else(|| self.config().worktrees.branch_template);
         let mut vars = BTreeMap::new();
         vars.insert("name", name.to_owned());
-        vars.insert("slug", slugify(name));
+        let slug = slugify(name);
+        vars.insert("slug", if slug.is_empty() { name.to_owned() } else { slug });
         vars.insert("user", std::env::var("USER").unwrap_or_default());
         vars.insert("date", today());
         render_branch(&template, &vars)
@@ -262,7 +263,7 @@ impl Daemon {
                 match spec.title.as_deref().or(spec.prompt.as_deref()).and_then(names::from_text) {
                     Some(n) if !taken(&n) => n,
                     Some(n) => {
-                        (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite")
+                        (2..).map(|k| names::numbered(&n, k)).find(|c| !taken(c)).expect("infinite")
                     }
                     None => names::friendly(SessionId::new().seed(), |n| {
                         taken(n) || self.name_taken(Some(&p.id), n)
@@ -1126,15 +1127,12 @@ impl Daemon {
         let prompt = self.sessions_in(&wt.id).iter().find_map(|s| {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).first_prompt.clone()
         });
+        let words = |text: &str| slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
+        let from_prompt = prompt.as_deref().map(words).filter(|w| !w.is_empty());
         let new = match new {
             Some(n) => n,
-            None if prompt.is_some() => {
-                let slug: String = slugify(prompt.as_deref().unwrap_or_default())
-                    .split('-')
-                    .take(6)
-                    .collect::<Vec<_>>()
-                    .join("-");
-                self.branch_for(&cfg, &slug)
+            None if from_prompt.is_some() => {
+                self.branch_for(&cfg, from_prompt.as_deref().unwrap_or_default())
             }
             None => {
                 let (path, base) =
@@ -1146,7 +1144,12 @@ impl Daemon {
                 let first = first.ok_or_else(|| {
                     Error::invalid("no commits yet to name the branch after; give a name")
                 })?;
-                let slug: String = slugify(&first).split('-').take(6).collect::<Vec<_>>().join("-");
+                let slug = words(&first);
+                if slug.is_empty() {
+                    return Err(Error::invalid(
+                        "the first commit's subject has no words to name the branch after; give a name",
+                    ));
+                }
                 self.branch_for(&cfg, &slug)
             }
         };

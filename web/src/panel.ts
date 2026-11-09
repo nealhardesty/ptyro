@@ -13,7 +13,7 @@ import { APPLY, ORIGIN, article, fieldsOf, fromLines, gist, hexOf, keyLabel, lab
 import type { Binding } from "./cfgkit.js";
 import type { Collection, Entry, Schema, Section, Setting, View } from "./cfgkit.js";
 import { data } from "./data.js";
-import { actions, badge, bar, confirm, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, badge, bar, confirm, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child, Field } from "./kit.js";
 import { cfgChanged, editConfigAt } from "./settings.js";
 
@@ -475,7 +475,7 @@ function addMember(c: Collection, scope: Scope): void {
   const extra = needed(c.path, "");
   // A theme starts as a copy of one that exists.
   const bases = c.path === "themes" ? (view.options.find((o) => o.source === "builtin_themes")?.options ?? []) : [];
-  const fields: Field[] = [{ key: "name", label: "Name", required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }, ...(bases.length ? [{ key: "base", label: "Start from", type: "select" as const, options: bases.map(([v, d]): [string, string] => [v, d ? `${v} — ${d}` : v]), value: c.starter.find(([k]) => k === "base")?.[1] }] : []), ...extra.map((f) => ({ key: f, label: f, required: true })), ...(c.path === "agents" ? [{ key: "command", label: "Command", hint: "optional: the program and its arguments; default, its own name" }] : [])];
+  const fields: Field[] = [{ key: "name", label: "Name", required: true, slug: "name", hint: NAME_HINT }, ...(bases.length ? [{ key: "base", label: "Start from", type: "select" as const, options: bases.map(([v, d]): [string, string] => [v, d ? `${v} — ${d}` : v]), value: c.starter.find(([k]) => k === "base")?.[1] }] : []), ...extra.map((f) => ({ key: f, label: f, required: true })), ...(c.path === "agents" ? [{ key: "command", label: "Command", hint: "optional: the program and its arguments; default, its own name" }] : [])];
   form(`New ${c.noun}`, fields, "Add", async (v) => {
     const { name, ...rest } = v;
     await finish(String(name), Object.fromEntries(Object.entries(rest).filter(([, x]) => typeof x === "string" && x !== "")) as Record<string, string>);
@@ -666,7 +666,7 @@ function build(rest: string): Page {
     const actionsBar = c.path === "profiles"
       ? bar(h("a", { class: "button", href: `#/profile/${enc(name)}` }, "Rename or remove (profile page)"))
       : bar(
-        c.layout !== "array" ? h("button", { title: tip("settings.rename"), onclick: () => form(`Rename ${name}`, [{ key: "to", label: "New name", value: name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
+        c.layout !== "array" ? h("button", { title: tip("settings.rename"), onclick: () => form(`Rename ${name}`, [{ key: "to", label: "New name", value: name, required: true, slug: "name", hint: NAME_HINT }], "Rename", async (v) => {
           let why = "";
           if (!(await changeHeld(scope, { t: "rename", path, from: name, to: String(v.to) }, `${name} is now ${v.to}`, { at: (m) => { why = m; } }))) throw new Error(why);
           go(`#/settings/${path}/${enc(String(v.to))}`);

@@ -376,7 +376,7 @@ impl PromptKind {
         matches!(self, Self::Rename(_) | Self::RenameWorkspace(_))
     }
 
-    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `_`.
+    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `-`.
     pub fn fit(&self, text: &str) -> String {
         match self {
             _ if self.is_name() => ptyro_core::names::typed(text),
@@ -3987,7 +3987,10 @@ impl App {
         let taken = |n: &str| self.worktrees.iter().any(|w| w.project == project && w.name == n);
         match want {
             Some(n) if !taken(n) => n.to_owned(),
-            Some(n) => (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite"),
+            Some(n) => (2..)
+                .map(|k| ptyro_core::names::numbered(n, k))
+                .find(|c| !taken(c))
+                .expect("infinite"),
             None => ptyro_core::names::friendly(SessionId::new().seed(), taken),
         }
     }
@@ -7733,7 +7736,7 @@ mod tests {
         key(&mut app, KeyCode::Tab, Mods::NONE);
         key(&mut app, KeyCode::Char { c: 'j' }, Mods(Mods::CTRL));
         app.on_paste("x\ny".into());
-        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x_y")), Some(true));
+        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x-y")), Some(true));
 
         // Peek's reply, and a broadcast prompt: several lines. A rename: one.
         let id = SessionId::new();
@@ -7753,12 +7756,12 @@ mod tests {
             );
         }
         app.on_paste("b\nc".into());
-        // A name can't hold a space: it becomes _ (the rename prompt is a name).
-        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab_c"));
+        // A name can't hold a space: it becomes - (the rename prompt is a name).
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab-c"));
     }
 
     #[test]
-    fn a_name_prompt_swaps_what_it_cant_hold_for_an_underscore() {
+    fn a_name_prompt_swaps_what_it_cant_hold_for_a_dash() {
         let mut app = app();
         let id = SessionId::new();
         app.overlay = Some(Overlay::Prompt {
@@ -7769,10 +7772,10 @@ mod tests {
         for c in "My Feat/2".chars() {
             key(&mut app, KeyCode::Char { c }, Mods::NONE);
         }
-        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my_feat_2"));
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my-feat-2"));
         app.on_paste(" a b".into());
         assert!(
-            matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my_feat_2_a_b")
+            matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my-feat-2-a-b")
         );
         // Free text isn't touched.
         app.overlay = Some(Overlay::Prompt {
@@ -8253,10 +8256,10 @@ mod tests {
         key(&mut app, KeyCode::Tab, Mods::NONE);
         typed(&mut app, " now");
         assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "the edited name stays");
-        // A space in the name becomes _; what no character fixes says why, and ⏎ keeps the box.
+        // A space in the name becomes -; what no character fixes says why, and ⏎ keeps the box.
         key(&mut app, KeyCode::Tab, Mods::NONE);
         typed(&mut app, " y");
-        assert!(screen(&app).contains("→ fix-flaky-test-x_y ·"), "{}", screen(&app));
+        assert!(screen(&app).contains("→ fix-flaky-test-x-y ·"), "{}", screen(&app));
         typed(&mut app, ".");
         assert!(screen(&app).contains("✗ name:"), "{}", screen(&app));
         key(&mut app, KeyCode::Enter, Mods::NONE);
@@ -8265,7 +8268,7 @@ mod tests {
         key(&mut app, KeyCode::Char { c: 'o' }, Mods(Mods::CTRL));
         let Some(Overlay::Form(f)) = &app.overlay else { panic!("the session form") };
         assert_eq!(f.get("prompt"), "Fix the flaky test in tests/api.rs now");
-        assert_eq!(f.get("name"), "fix-flaky-test-x_y.");
+        assert_eq!(f.get("name"), "fix-flaky-test-x-y.");
         assert_eq!(f.get("agent"), "claude");
         assert_eq!(f.get("where"), "new:p1", "a new worktree of the project in context");
         // The bad name is said on ⏎; fixed, ⏎ creates the worktree with every option.
@@ -8291,7 +8294,7 @@ mod tests {
             }
         }
         let spec = spec.expect("the worktree, asked for");
-        assert_eq!(spec.name.as_deref(), Some("fix-flaky-test-x_y"));
+        assert_eq!(spec.name.as_deref(), Some("fix-flaky-test-x-y"));
         assert_eq!(spec.base.as_deref(), Some("origin/dev"));
         assert_eq!(spec.verify.as_deref(), Some("make test"));
         assert!(!spec.setup, "setup unticked");
@@ -9537,19 +9540,19 @@ mod tests {
         rename(&mut app, &s);
         assert!(screen(&app).contains("⏎ ok (unchanged)"));
 
-        // What it can't hold becomes _, and the dialog says so.
+        // What it can't hold becomes -, and the dialog says so.
         typed(&mut app, "/X");
-        assert_eq!(prompt_text(&app), Some("brisk-rook_x"));
-        assert!(screen(&app).contains("becomes _ (a-z 0-9 . _ -)"), "{}", screen(&app));
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x"));
+        assert!(screen(&app).contains("becomes - (a-z 0-9 . _ -)"), "{}", screen(&app));
         // What no one character fixes is flagged, and ⏎ doesn't throw the typing away.
         typed(&mut app, ".");
         let shown = screen(&app);
         assert!(shown.contains("✗ must not end with . or .lock"), "{shown}");
         typed(&mut app, "\n");
-        assert_eq!(prompt_text(&app), Some("brisk-rook_x."));
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x."));
         typed(&mut app, "\x08");
-        assert_eq!(prompt_text(&app), Some("brisk-rook_x"));
-        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook_x").is_ok());
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x"));
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook-x").is_ok());
         assert!(
             app.prompt_check(&PromptKind::Rename(s.id), "brisk/rook").is_err(),
             "the daemon's rule"

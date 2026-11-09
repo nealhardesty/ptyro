@@ -5,7 +5,7 @@
 import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, ago, ask, confirm, download, errText, form, go, h, menu, patch, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, confirm, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
 import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
 const ACTIONS = {
@@ -596,7 +596,7 @@ function makeTask(c, args = "") {
     form("Make it a task", [
         { key: "project", label: "The project it works in", type: "select", options: here.map((p) => [p.slug, p.slug]), value: guess || here[0].slug },
         { key: "agent", label: "Who works on it", type: "select", options: [["", `${c.agent}@${c.profile} (the chat's)`], ...agentNames().filter((a) => a !== c.agent).map((a) => [a, a])] },
-        { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name" },
+        { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name", hint: NAME_HINT },
     ], "Make it", (v) => go(String(v.project), v.agent || null, v.name?.trim() || null), { intro: "An agent in a new worktree of the project carries out the chat's last answer, starting from its conversation." });
 }
 /// `/task`'s words, as `chat task`'s flags: `[PROJECT] [--agent A] [--name N]`; a string: what's wrong.
@@ -1150,7 +1150,7 @@ function chatView(rest) {
             c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
             // `⎇ 2/3`: where the shown branch last has others (`/branch` picks among them).
             last ? h("button", { class: "link", title: tip("chat.branch"), onclick: () => pickBranch(id) }, ` · ⎇ branch ${last.at}/${last.of}${sibLabel(last) ? ` ${sibLabel(last)}` : ""}`) : "",
-            c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
+            c.status ? ` · ${statusWord(c.status)}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
         : [isNew ? "A new chat: it can search the web, and it is kept." : gone ? "" : "Loading the chat…"];
     const empty = isNew && !state.items.length
         ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))
