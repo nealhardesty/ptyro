@@ -1410,7 +1410,7 @@ impl Daemon {
                         },
                     }
                 }
-                if ptyro_core::session::reached(&info, "errored") {
+                if ptyro_core::session::reached(&info, "error") {
                     let why = info
                         .status
                         .as_ref()

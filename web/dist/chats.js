@@ -5,7 +5,7 @@
 import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, ago, ask, confirm, download, errText, form, go, h, menu, patch, tipOf, ui, views } from "./kit.js";
+import { actions, ago, ask, confirm, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
 import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
 const ACTIONS = {
@@ -1152,7 +1152,7 @@ function chatView(rest) {
             c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
             // `⎇ 2/3`: where the shown branch last has others (`/branch` picks among them).
             last ? h("button", { class: "link", title: tip("chat.branch"), onclick: () => pickBranch(id) }, ` · ⎇ branch ${last.at}/${last.of}${sibLabel(last) ? ` ${sibLabel(last)}` : ""}`) : "",
-            c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
+            c.status ? ` · ${statusWord(c.status)}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
         : [isNew ? "A new chat: it can search the web, and it is kept." : gone ? "" : "Loading the chat…"];
     const empty = isNew && !state.items.length
         ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))

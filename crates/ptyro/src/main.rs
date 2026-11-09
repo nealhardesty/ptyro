@@ -184,10 +184,11 @@ enum Cmd {
         /// Include sessions from earlier daemon runs (from the store)
         #[arg(long)]
         all: bool,
-        /// Only sessions in this state or status: running, active (working, blocked or running
-        /// a command), exited, dormant, working, blocked, idle, done, errored
-        #[arg(long)]
-        status: Option<String>,
+        /// Only sessions in this state or status (the @ selectors' words): live (running), active
+        /// (working, blocked or running a command), exited, dormant, working, blocked, idle,
+        /// done, error (errored)
+        #[arg(long, value_parser = parse_state)]
+        status: Option<ptyro_core::selector::State>,
         /// Only sessions of this project
         #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
@@ -220,7 +221,8 @@ enum Cmd {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
     },
-    /// Remove exited sessions from the list
+    /// Remove ended sessions (exited or dormant) from the list; a dormant agent's conversation is
+    /// forgotten
     Rm {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
@@ -298,9 +300,9 @@ enum Cmd {
     Wait {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
-        /// working, blocked, idle, done, errored, exit, any-attention (idle and done mean the
-        /// turn ptyro last typed has ended)
-        #[arg(long = "for", default_value = "idle", value_parser = script::CONDITIONS)]
+        /// working, blocked, idle, done, error (errored), exit, any-attention (idle and done mean
+        /// the turn ptyro last typed has ended; exit, that it stopped running, hibernating too)
+        #[arg(long = "for", default_value = "idle", value_parser = script::condition())]
         condition: String,
         /// Instead: until this regex appears on the screen
         #[arg(long = "match", value_name = "REGEX")]
@@ -1354,6 +1356,12 @@ enum DaemonCmd {
 /// `123`, `#123` or a GitHub URL ending in the number.
 fn parse_access(s: &str) -> Result<ptyro_core::config::Access, String> {
     s.parse()
+}
+
+/// `--status`: a selector's state word (`ptyro_core::selector`), aliases too.
+fn parse_state(s: &str) -> Result<ptyro_core::selector::State, String> {
+    ptyro_core::selector::State::parse(s.trim().trim_start_matches('@'))
+        .ok_or_else(|| format!("unknown state {s:?}; try {}", ptyro_core::selector::state_words()))
 }
 
 fn parse_number(s: &str) -> Result<u32, String> {

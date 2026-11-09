@@ -53,9 +53,19 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 - **`SESSION`** is a name (`brisk-rook`), `project/name`, a short handle from `ptyro ls`
   (`x7k2`), `@last`, or `@focused` (what your TUI shows). Names are unique per project, so when
   two projects both have a `build`, say which: `myrepo/build`.
-- **`SESSIONS…`**: where several are allowed you can also use a glob (`'build-*'`), `@all`,
-  `@live` (or `@running`), `@exited`, `@working`, `@blocked`, `@idle`, `@done` or `@error`, joined
-  with commas (`ptyro rm @exited`).
+- **`SESSIONS…`**: where several are allowed you can also use a glob (`'build-*'`) or a
+  selector, joined with commas (`ptyro rm @exited`, `ptyro send 'build-*,@idle' …`):
+  - `@all`: every session, exited and dormant ones too (so `ptyro rm @all` forgets hibernated
+    agents as well).
+  - `@last`, `@focused`: as for `SESSION`.
+  - `@live` (or `@running`): running now. `@active`: busy now (working, waiting for you, or
+    running a command).
+  - `@exited`: ended and can't resume (exited or failed). Never a hibernated agent.
+  - `@dormant`: hibernated agents, which resume their conversation.
+  - `@working`, `@blocked`, `@idle`, `@done`, `@error` (or `@errored`): what the agent is doing.
+
+  `ptyro ls --status` takes the same words without the `@` (`ptyro ls --status dormant`), and
+  `ptyro wait --for` the status ones (`working` to `error`).
 - **`W`** (a worktree) is `project/name` (`myrepo/@root` is the main checkout), a unique name, or
   a path. It defaults to the worktree you're in.
 
@@ -129,7 +139,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 |---|---|
 | `ptyro send SESSIONS… TEXT [--no-enter] [--raw] [--wait-ready[=D]] [--wait [--timeout D] [--stall D]] [--json]` | type into sessions. `--wait-ready` waits for the input box (2m, or D). `--wait` reports how the turn ended. `--raw` sends keys as written (`\e`, `\r`, `\t`, `\xHH`) |
 | `ptyro broadcast SESSIONS… TEXT [--no-enter] [--timeout D]` | one prompt to several, each once it's ready |
-| `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|errored\|exit\|any-attention] [--match RE [--scrollback]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
+| `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|error\|exit\|any-attention] [--match RE [--scrollback]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
 | `ptyro read SESSION [--scrollback [N]] [--ansi] [--chat] [--json]` | the screen, scrollback, or a structured session's transcript |
 | `ptyro events [-f] [--session S] [-l N] [--json]` | what happened; `--follow` streams every change as NDJSON |
 | `ptyro status [SESSION] [--explain] [--json]` | what every agent is doing; `--explain`: why ptyro thinks so |

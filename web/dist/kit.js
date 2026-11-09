@@ -402,6 +402,8 @@ export function argWords(line) {
 }
 /// The profile a new workspace starts with: the one named like it, else `default`.
 export const profileFor = (names, workspace) => names.includes(workspace) ? workspace : "default";
+/// The word a status is shown as: the selectors' and the CLI's (`error`; the wire says `errored`).
+export const statusWord = (st) => (st === "errored" ? "error" : st);
 // ── small parts ─────────────────────────────────────────────────────────────────────────────
 export const badge = (text, kind = "") => h("span", { class: `badge ${kind}` }, text);
 /// A titled block on a detail page.

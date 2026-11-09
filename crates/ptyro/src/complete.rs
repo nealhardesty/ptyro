@@ -61,10 +61,8 @@ pub fn sessions() -> Vec<CompletionCandidate> {
             )
         })
         .collect();
-    for sel in
-        ["@all", "@live", "@exited", "@working", "@blocked", "@idle", "@done", "@focused", "@last"]
-    {
-        out.push(candidate(sel.into(), None));
+    for sel in ptyro_core::selector::SELECTORS {
+        out.push(candidate(format!("@{}", sel.name), Some(sel.help.into())));
     }
     out
 }
