@@ -281,6 +281,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             keep: None,
             folders: None,
             confirmed: false,
+            auto_title: false,
         })
         .await
         .unwrap();
@@ -309,6 +310,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             keep: None,
             folders: None,
             confirmed: false,
+            auto_title: false,
         })
         .await
         .unwrap();
@@ -335,6 +337,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
         keep: None,
         folders: None,
         confirmed: false,
+        auto_title: false,
     })
     .await
     .expect("a remote archived chat is routed there");

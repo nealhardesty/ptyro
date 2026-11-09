@@ -45,7 +45,7 @@ pub enum CsCmd {
         #[arg(long)]
         layout: Option<String>,
         /// The goal, for the lead and every member
-        #[arg(short, long, conflicts_with_all = ["prompt_file", "from_issue"])]
+        #[arg(long, conflicts_with_all = ["prompt_file", "from_issue"])]
         prompt: Option<String>,
         #[arg(long)]
         prompt_file: Option<std::path::PathBuf>,
@@ -56,7 +56,7 @@ pub enum CsCmd {
         #[arg(long = "depends", value_name = "MEMBER:DEPS")]
         depends: Vec<String>,
         /// A member's agent: `api=codex` (repeatable)
-        #[arg(long = "agent", value_name = "MEMBER=AGENT")]
+        #[arg(short, long = "agent", value_name = "MEMBER=AGENT")]
         agents: Vec<String>,
         /// A member's base: `web=origin/develop` (repeatable)
         #[arg(long = "base", value_name = "MEMBER=REF")]
@@ -73,7 +73,8 @@ pub enum CsCmd {
         /// Build against siblings: turn on the overlays the manifests suggest
         #[arg(long)]
         overlay: bool,
-        #[arg(long)]
+        /// The workspace it belongs to (default: the first member's)
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::workspaces))]
         workspace: Option<String>,
         /// The fingerprint of a hub template you reviewed
         #[arg(long)]
@@ -209,7 +210,8 @@ pub enum CsCmd {
         set: String,
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: String,
-        #[arg(long)]
+        /// Its agent (default: the project's default agent, else yours)
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::agents))]
         agent: Option<String>,
         #[arg(long, value_delimiter = ',')]
         depends_on: Vec<String>,

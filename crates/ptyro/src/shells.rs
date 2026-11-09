@@ -34,19 +34,22 @@ pub struct LsArgs {
 pub enum ShellsCmd {
     /// The workspace's shells, by number (the default)
     Ls(LsArgs),
-    /// Start a shell in SHELLS (`-- htop`: any command), in the directory you're in
+    /// Start a shell in SHELLS (`-- htop`: any command), in the directory you're in, and attach
+    /// to it (unless -d)
     New {
         /// The command to run instead of your shell
         #[arg(last = true)]
         command: Vec<String>,
         /// Where it starts (default: here)
-        #[arg(short = 'C', long, value_hint = clap::ValueHint::DirPath)]
+        #[arg(short = 'C', long = "cwd", visible_alias = "dir", value_hint = clap::ValueHint::DirPath)]
         dir: Option<std::path::PathBuf>,
         /// The number to give it (refused when taken; default: the lowest free)
         #[arg(long)]
         slot: Option<u32>,
-        #[arg(long)]
+        /// Session name (default: a friendly random name)
+        #[arg(short, long)]
         name: Option<String>,
+        /// What it's for, for people to read; the name stays its address
         #[arg(long)]
         title: Option<String>,
         /// In a new, empty directory of its own, which goes with it
@@ -54,9 +57,13 @@ pub enum ShellsCmd {
         scratch: bool,
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
-        /// Attach to it once it starts
-        #[arg(long)]
+        /// Don't attach; print its number and name
+        #[arg(short, long)]
+        detach: bool,
+        /// (Attaching is the default in a terminal)
+        #[arg(long, hide = true, conflicts_with = "detach")]
         attach: bool,
+        /// Print the session as JSON (doesn't attach)
         #[arg(long)]
         json: bool,
     },
@@ -74,7 +81,8 @@ pub enum ShellsCmd {
         workspace: Option<String>,
     },
     /// Split a shell's window with a copy of it: a shell in the same directory, a pane of the
-    /// same number (`%3.2`); beside it, or below with --down
+    /// same number (`%3.2`); beside it, or below with --down. Attaches unless -d (inside a
+    /// session, the TUI shows it)
     Split {
         /// The shell to copy (`%3`, `%3.2`, a name; default: the one you're in)
         #[arg(add = ArgValueCandidates::new(complete::sessions))]
@@ -82,9 +90,13 @@ pub enum ShellsCmd {
         /// Below it instead of beside it
         #[arg(long)]
         down: bool,
-        /// Attach to the window once the pane starts
-        #[arg(long)]
+        /// Don't attach; print the new pane
+        #[arg(short, long)]
+        detach: bool,
+        /// (Attaching is the default in a terminal)
+        #[arg(long, hide = true, conflicts_with = "detach")]
         attach: bool,
+        /// Print the session as JSON (doesn't attach)
         #[arg(long)]
         json: bool,
     },
@@ -122,8 +134,8 @@ pub enum ShellsCmd {
         /// When its running command ends, however short (once)
         #[arg(long, group = "what")]
         done: bool,
-        /// When new output arrives while nobody looks
-        #[arg(long, group = "what")]
+        /// When new output arrives while nobody looks (tmux's activity)
+        #[arg(long = "activity", group = "what")]
         output: bool,
         /// When it has printed nothing for this long (`30s`, `5m`)
         #[arg(long, group = "what", value_name = "TIME")]
@@ -162,7 +174,19 @@ struct Row<'a> {
 pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32, Error> {
     match cmd.unwrap_or(ShellsCmd::Ls(plain)) {
         ShellsCmd::Ls(a) => ls(ctx, a).await,
-        ShellsCmd::New { command, dir, slot, name, title, scratch, workspace, attach, json } => {
+        ShellsCmd::New {
+            command,
+            dir,
+            slot,
+            name,
+            title,
+            scratch,
+            workspace,
+            detach,
+            attach,
+            json,
+        } => {
+            let attach = attach || crate::cli::attaches(detach || json);
             if attach {
                 check_attachable()?;
             }
@@ -216,7 +240,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32
             println!("{} is shell {to} now", info.name);
             Ok(0)
         }
-        ShellsCmd::Split { session, down, attach, json } => {
+        ShellsCmd::Split { session, down, detach, attach, json } => {
+            let attach = attach || crate::cli::attaches(detach || json);
             if attach {
                 check_attachable()?;
             }

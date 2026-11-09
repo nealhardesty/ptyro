@@ -64,7 +64,7 @@ pub enum PadCmd {
         /// Its line number, or words from one open item
         item: String,
         /// The agent (default: yours)
-        #[arg(long)]
+        #[arg(short, long, add = clap_complete::ArgValueCandidates::new(crate::complete::agents))]
         agent: Option<String>,
         /// Just print what it would be told
         #[arg(long)]

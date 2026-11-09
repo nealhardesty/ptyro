@@ -220,6 +220,12 @@ fn titles_pins_archive_export_and_delete() {
     assert_eq!(w.chats()[0]["title"], "Dinner ideas");
     w.ok(&["chat", "retitle", "@last", "Cooking"]);
     assert_eq!(w.chats()[0]["title"], "Cooking");
+    // No title clears it, as for a session or a worktree; --auto asks for a new one.
+    w.ok(&["chat", "retitle", "@last"]);
+    assert!(w.chats()[0]["title"].is_null(), "{}", w.chats()[0]);
+    w.ok(&["chat", "retitle", "@last", "--auto"]);
+    w.until("an automatic title", || w.chats()[0]["title"].is_string());
+    w.ok(&["chat", "retitle", "@last", "Cooking"]);
     w.ok(&["chat", "pin", &addr]);
     assert_eq!(w.chats()[0]["pinned"], true);
     let md = w.ok(&["chat", "export", &addr]);

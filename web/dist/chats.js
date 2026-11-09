@@ -15,7 +15,8 @@ const ACTIONS = {
     "chat.send": "Send the message; the answer streams in (Enter sends, Shift+Enter starts a new line)",
     "chat.answer": "Answer what the chat's agent asks: allow once, always, or deny",
     "chat.stop": "Stop the answer being written",
-    "chat.retitle": "Change the chat's title (empty: a new automatic one)",
+    "chat.retitle": "Change the chat's title (empty clears it)",
+    "chat.autotitle": "A new automatic title for the chat, made from the conversation",
     "chat.pin": "Pin the chat to the top, or unpin it",
     "chat.archive": "Archive the chat (Archived shows them; again brings it back)",
     "chat.delete": "Delete the chat",
@@ -453,6 +454,7 @@ function chatMenu(c) {
         !c.incognito && { title: tip("chat.side"), label: "Side chat", hint: "ask about it without changing it", run: () => void sideChat(c) },
         find,
         { title: tip("chat.retitle"), label: "Rename", run: () => retitle(c) },
+        { title: tip("chat.autotitle"), label: "New automatic title", hint: "made from the conversation", run: () => update(c, { title: "", auto_title: true }, "A new title is on its way") },
         { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
         { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
         { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
@@ -521,7 +523,7 @@ function findInChat(c) {
     });
 }
 function retitle(c) {
-    form("Rename the chat", [{ key: "title", label: "Title (empty: a new automatic one)", value: c.title ?? "" }], "Save", async (v) => {
+    form("Rename the chat", [{ key: "title", label: "Title", value: c.title ?? "", hint: "Empty clears it (New automatic title makes one)." }], "Save", async (v) => {
         await conn.request({ t: "chat_update", chat: c.id, title: v.title ?? "" });
         ui.toast("Renamed");
     });

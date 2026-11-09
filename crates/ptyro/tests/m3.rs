@@ -744,7 +744,7 @@ async fn workspaces_reconcile_and_gc() {
     let out = w.ok(&["ws", "ls"]);
     assert!(out.lines().any(|l| l.starts_with("side") && l.contains("lib")), "{out}");
     assert!(out.lines().any(|l| l.starts_with("main")), "main always exists: {out}");
-    w.ok(&["ws", "add", "main", "lib"]);
+    w.ok(&["ws", "add-project", "main", "lib"]);
     w.ok(&["ws", "rename", "side", "aside"]);
     assert!(w.cli(&["ws", "rm", "-y", "main"]).status.code() == Some(2));
     let c = w.d.client().await.unwrap();

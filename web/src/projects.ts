@@ -418,7 +418,7 @@ function renameBranch(w: Worktree): void {
 }
 
 function retitleWorktree(w: Worktree): void {
-  form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for. Empty goes back to the default." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: (v.title as string) || null, worktree: true }));
+  form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for, for people to read. Empty clears it." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: (v.title as string) || null, worktree: true }));
 }
 
 async function pairMode(w: Worktree, off: boolean): Promise<void> {

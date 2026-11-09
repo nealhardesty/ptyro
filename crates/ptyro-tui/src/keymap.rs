@@ -320,7 +320,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Chats: this workspace's (Tab: every one), searchable; open, pin, archive, delete",
     ),
     a("chat.open", "Open this chat"),
-    a("chat.retitle", "Change this chat's title (empty: a new automatic one)"),
+    a("chat.retitle", "Change this chat's title (empty clears it)"),
+    a("chat.autotitle", "A new automatic title for this chat, made from the conversation"),
     a("chat.pin", "Pin this chat to the top of CHATS, or unpin it"),
     a(
         "chat.archive",

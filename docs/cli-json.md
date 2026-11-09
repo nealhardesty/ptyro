@@ -264,7 +264,7 @@ Pinned by `crates/ptyro/tests/m11.rs`.
 
 ## Remote (M9)
 
-- `ptyro pair NAME --json` → `{device: DeviceInfo, url, expires_ms, ca, machine, warning, replaces, notes}`.
+- `ptyro pair -n NAME --json` → `{device: DeviceInfo, url, expires_ms, ca, machine, warning, replaces, notes}`.
   `url` always has its port. `warning` is the plain-words warning when the default scope (`full`)
   was used, null when `--scope` was named; `replaces` is the `DeviceInfo` of the existing device
   of that name that opening the link replaces (null otherwise); `notes` are fixes for a `--url`

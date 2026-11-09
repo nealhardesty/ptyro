@@ -415,7 +415,7 @@ function renameBranch(w) {
     });
 }
 function retitleWorktree(w) {
-    form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for. Empty goes back to the default." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: v.title || null, worktree: true }));
+    form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for, for people to read. Empty clears it." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: v.title || null, worktree: true }));
 }
 async function pairMode(w, off) {
     const r = await ask({ t: "worktree_pair", addr: w.id, off, refresh: false });

@@ -3,7 +3,7 @@
 //! (`O`) sends the same requests.
 //!
 //! ```sh
-//! ptyro fanout --agents claude,codex,gemini --prompt-file task.md --test --wait
+//! ptyro fanout --agent claude,codex,gemini --prompt-file task.md --test --wait
 //! ptyro compare @last && ptyro pick @last claude
 //! ptyro recipe run implement-and-review --var task="add --json to ls"
 //! ptyro gate resolve g-7f3a approve
@@ -79,9 +79,11 @@ pub enum RunCmd {
     Lead {
         #[arg(add = ArgValueCandidates::new(crate::complete::sessions))]
         session: String,
+        /// Live workers at once (default 4)
         #[arg(long)]
         max_workers: Option<u32>,
-        #[arg(long = "agent")]
+        /// The agents it may start (repeatable; default: any)
+        #[arg(short, long = "agent", add = ArgValueCandidates::new(crate::complete::agents))]
         agents: Vec<String>,
     },
 }
@@ -90,7 +92,7 @@ pub enum RunCmd {
 pub enum RecipeCmd {
     /// Built-in, your own (~/.config/ptyro/recipes) and the project's (.ptyro/recipes)
     Ls {
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -98,7 +100,7 @@ pub enum RecipeCmd {
     /// A recipe's source
     Show {
         name: String,
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
     },
     /// Check a recipe file (every mistake at once, with where)
@@ -109,7 +111,7 @@ pub enum RecipeCmd {
         recipe: String,
         #[arg(long, default_value = "mermaid")]
         format: String,
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
     },
     /// Start a recipe (a name or a .toml file)
@@ -118,7 +120,7 @@ pub enum RecipeCmd {
         /// `--var task="…"` (repeatable)
         #[arg(long = "var", value_parser = parse_kv)]
         vars: Vec<(String, String)>,
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         /// Base for new worktrees (default: the project's)
         #[arg(long)]
@@ -192,7 +194,8 @@ pub enum MsgCmd {
     Ls {
         #[arg(long)]
         run: Option<String>,
-        #[arg(short = 'n', long, default_value_t = 100)]
+        /// At most N
+        #[arg(short, long, default_value_t = 100)]
         limit: u32,
         #[arg(long)]
         json: bool,
@@ -279,7 +282,7 @@ fn duration(s: &str) -> Result<Duration, Error> {
 /// The project for a new run: the one asked for, else the repository you're in.
 fn project_or_here(p: Option<String>) -> Result<Option<String>, Error> {
     Ok(match p {
-        Some(p) => Some(p),
+        Some(p) => Some(crate::cli::addr_here(p)?),
         None => Some(current_dir()?.to_string_lossy().into_owned()),
     })
 }
@@ -816,7 +819,7 @@ pub async fn fanout(
         .map(str::to_owned)
         .collect();
     if let Some(n) = n {
-        // `-n 3 --agents claude`: three of the same; `-n 4 --agents claude,codex`: alternate.
+        // `--count 3 --agent claude`: three of the same; `--count 4 --agent claude,codex`: alternate.
         let pool = if list.is_empty() { vec!["claude".to_owned()] } else { list.clone() };
         list = (0..n as usize).map(|i| pool[i % pool.len()].clone()).collect();
     }

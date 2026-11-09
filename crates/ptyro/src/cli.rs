@@ -511,12 +511,12 @@ async fn dispatch(
         Some(Cmd::Recipe { cmd }) => crate::orch::recipe(&ctx, cmd).await,
         Some(Cmd::Fanout {
             agents,
-            n,
+            count,
             prompt,
             prompt_file,
             project,
             base,
-            name,
+            prefix,
             test,
             verify,
             judge,
@@ -530,14 +530,14 @@ async fn dispatch(
                 prompt: String::new(),
                 project,
                 base,
-                name,
+                name: prefix,
                 test,
                 verify,
                 judge,
                 timeout,
                 structured,
             };
-            crate::orch::fanout(&ctx, spec, n, prompt, prompt_file, wait, json).await
+            crate::orch::fanout(&ctx, spec, count, prompt, prompt_file, wait, json).await
         }
         Some(Cmd::Compare { run, refresh, json }) => {
             crate::orch::compare(&ctx, run, refresh, json).await
@@ -642,9 +642,11 @@ async fn dispatch(
         Some(Cmd::Web { action, access, pair, json }) => {
             crate::webapp::run(&ctx, &action, access, json, pair).await
         }
-        Some(Cmd::Pair { name, scope, url, json, open }) => {
+        Some(Cmd::Pair { name, name_arg, scope, url, json, open }) => {
             // "phone" is the default name; a browser on this computer is a "browser".
-            let name = if open && name == "phone" { "browser".to_owned() } else { name };
+            let name = name
+                .or(name_arg)
+                .unwrap_or_else(|| if open { "browser" } else { "phone" }.to_owned());
             crate::remote::pair(&ctx, name, scope.as_deref(), url, json, open).await
         }
         Some(Cmd::Devices { cmd }) => crate::remote::devices(&ctx, cmd).await,
@@ -997,7 +999,30 @@ static DAEMON_ELSEWHERE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
-    let cwd = cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))?;
+    daemon_path(&cwd)
+}
+
+/// An address the daemon reads (SPEC §2.3), with a relative path (`.`, `../app`) made this
+/// client's: the daemon would read it against its own directory. Names, ids, `~` and absolute
+/// paths go as they are. Every `--project` and worktree argument goes through it.
+pub fn addr_here(addr: String) -> Result<String, Error> {
+    if !addr.starts_with('.') {
+        return Ok(addr);
+    }
+    let cwd =
+        std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
+    Ok(daemon_path(&cwd.join(&addr))?.to_string_lossy().into_owned())
+}
+
+/// `addr_here` for an optional address.
+pub fn addr_here_opt(addr: Option<String>) -> Result<Option<String>, Error> {
+    addr.map(addr_here).transpose()
+}
+
+/// A folder on this computer as the daemon names it: canonical, and on Windows translated as
+/// `current_dir` says.
+fn daemon_path(p: &std::path::Path) -> Result<std::path::PathBuf, Error> {
+    let cwd = p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?;
     if cfg!(windows) && !DAEMON_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
         return Ok(plain_windows_path(&cwd));
     }
@@ -1100,7 +1125,8 @@ where
 }
 
 pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
-    let attaching = !a.detach;
+    // `ptyro` alone opens the TUI, so it says why it can't instead of starting a shell.
+    let attaching = a.welcome || attaches(a.detach || a.json);
     if attaching {
         check_attachable()?;
     }
@@ -1159,6 +1185,17 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         );
     }
     Ok(0)
+}
+
+/// Whether a command that starts an interactive session attaches to it (owner, 2026-11-09):
+/// yes in a terminal of its own, unless `-d`. Without a terminal (a script), or inside a ptyro
+/// session (whose TUI shows the new one), it starts detached and says so.
+pub fn attaches(detach: bool) -> bool {
+    !detach
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && (std::env::var_os("PTYRO_SESSION_ID").is_none()
+            || std::env::var_os("PTYRO_ALLOW_NESTED").is_some())
 }
 
 pub fn check_attachable() -> Result<(), Error> {
@@ -1392,7 +1429,7 @@ impl Filter {
     }
 }
 
-async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
+async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
     let (all, worktrees) = match ctx.connect(false).await {
         Ok(client) => {
             let worktrees = match client.request(Request::WorktreeList { project: None }).await? {
@@ -1403,6 +1440,13 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
                 Reply::Projects { projects } => projects,
                 _ => Vec::new(),
             };
+            // `-p .` (a path): the project it is in, by id.
+            if let Some(p) = filter.project.clone().filter(|p| ptyro_core::os::looks_like_path(p))
+                && let Reply::Project { info, .. } =
+                    client.request(Request::ProjectGet { addr: addr_here(p)? }).await?
+            {
+                filter.project = Some(info.id);
+            }
             let mut all = sessions(&client).await?;
             all.retain(|s| filter.keeps(s, &projects));
             (all, worktrees)
@@ -1761,6 +1805,19 @@ const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
 mod path_tests {
     use super::plain_windows_path;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_relative_path_is_this_clients_and_a_name_stays_a_name() {
+        use super::{addr_here, current_dir};
+        let here = current_dir().unwrap().to_string_lossy().into_owned();
+        assert_eq!(addr_here(".".into()).unwrap(), here);
+        let up = current_dir().unwrap().parent().unwrap().to_string_lossy().into_owned();
+        assert_eq!(addr_here("..".into()).unwrap(), up);
+        for name in ["myrepo", "myrepo/brisk-rook", "/abs/path", "~/src/app", "c:7f3k"] {
+            assert_eq!(addr_here(name.into()).unwrap(), name, "a name, id or absolute path");
+        }
+        assert!(addr_here("./no-such-folder-here".into()).is_err(), "a missing path says so");
+    }
 
     #[test]
     fn a_verbatim_windows_path_is_written_the_usual_way() {

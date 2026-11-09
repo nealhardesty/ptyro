@@ -148,7 +148,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
         (vec!["config", "set", "ui.on_stop", "never"], "isn't one of next, stay"),
         (vec!["config", "set", "ui.thme", "x"], "Did you mean ui.theme"),
         (vec!["config", "set", "ui.theme", "nonesuch"], "unknown theme"),
-        (vec!["config", "set", "scripts.setup", "x"], "--project"),
+        (vec!["config", "set", "scripts.setup", "x"], "-p ."),
     ] {
         let o = ptyro(&args);
         assert!(!o.status.success() && text(&o).contains(why), "{args:?}: {}", text(&o));
@@ -261,7 +261,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
 
     // The repository's settings: --project goes to .ptyro.local.toml; --shared to .ptyro.toml.
     assert!(ptyro(&["project", "add", "."]).status.success());
-    let o = ptyro(&["config", "set", "scripts.setup", "make deps", "--project"]);
+    let o = ptyro(&["config", "set", "scripts.setup", "make deps", "--project", "."]);
     assert!(o.status.success(), "{}", text(&o));
     assert!(text(&o).contains("trust"), "scripts changing asks for trust again: {}", text(&o));
     let local = std::fs::read_to_string(repo.join(".ptyro.local.toml")).unwrap();
@@ -271,7 +271,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
             .unwrap()
             .contains(".ptyro.local.toml")
     );
-    let o = ptyro(&["config", "set", "project.base", "origin/main", "--project", "--shared"]);
+    let o = ptyro(&["config", "set", "project.base", "origin/main", "--project", ".", "--shared"]);
     assert!(o.status.success() && text(&o).contains("committed"), "{}", text(&o));
     assert!(
         std::fs::read_to_string(repo.join(".ptyro.toml"))
@@ -279,14 +279,22 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
             .contains("base = \"origin/main\"")
     );
     assert_eq!(
-        String::from_utf8_lossy(&ptyro(&["config", "get", "scripts.setup", "--project"]).stdout),
+        String::from_utf8_lossy(
+            &ptyro(&["config", "get", "scripts.setup", "--project", "."]).stdout
+        ),
         "make deps\n"
     );
-    let o = ptyro(&["config", "list", "scripts", "--project", "--changed"]);
+    let o = ptyro(&["config", "list", "scripts", "--project", ".", "--changed"]);
     assert!(text(&o).contains("← .ptyro.local.toml"), "{}", text(&o));
     // Agents can't be set in a repository.
-    let o = ptyro(&["config", "add", "agents", "x", "--project"]);
+    let o = ptyro(&["config", "add", "agents", "x", "--project", "."]);
     assert!(!o.status.success(), "{}", text(&o));
+    // `-p .` is the repository you're in for every command, not the daemon's directory.
+    let o = ptyro(&["wt", "ls", "-p", ".", "--json"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("@root"), "{}", text(&o));
+    let o = ptyro(&["ls", "-p", ".", "--json"]);
+    assert!(o.status.success(), "{}", text(&o));
     // The schema, for tools.
     let o = ptyro(&["config", "schema"]);
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();

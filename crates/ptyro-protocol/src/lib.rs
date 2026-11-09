@@ -1329,7 +1329,7 @@ pub enum Request {
     ChatStop {
         chat: String,
     },
-    /// Change a chat: its title (empty: a new automatic one), pin, archive, agent, preset.
+    /// Change a chat: its title (empty: none), pin, archive, agent, preset.
     ChatUpdate {
         chat: String,
         #[serde(default)]
@@ -1351,6 +1351,10 @@ pub enum Request {
         /// As `ChatFork.confirmed`, for `agent` (1.25).
         #[serde(default)]
         confirmed: bool,
+        /// A new automatic title instead of `title` (1.39). Before 1.39 an empty `title` asked
+        /// for one; now it clears the title, as `Retitle` does for a session or a worktree.
+        #[serde(default)]
+        auto_title: bool,
     },
     /// `chat` is an exact address (a handle, an id, `@last`): never a title (1.39). Unconfirmed,
     /// the daemon asks first: `NeedsConfirmation`, naming the chat and what goes (1.39).

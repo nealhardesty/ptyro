@@ -72,8 +72,8 @@ pub enum PrCmd {
     },
     /// Reply on a review thread (`--comment ID`) or on the PR, marked "via ptyro"
     Reply {
-        /// Default: the worktree you're in
-        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::worktrees))]
+        /// The worktree (default: the one you're in)
+        #[arg(long = "wt", alias = "worktree", add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: Option<String>,
         #[arg(long)]
         comment: Option<u64>,
@@ -137,7 +137,7 @@ pub enum ReviewCmd {
 
 fn here(w: Option<String>) -> Result<String, Error> {
     match w {
-        Some(w) => Ok(w),
+        Some(w) => crate::cli::addr_here(w),
         None => Ok(current_dir()?.to_string_lossy().into_owned()),
     }
 }
@@ -500,6 +500,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     match cmd {
         ReviewCmd::Add { worktree, at, text } => {
+            let worktree = crate::cli::addr_here(worktree)?;
             let (path, line) = at
                 .rsplit_once(':')
                 .and_then(|(p, l)| Some((p.to_owned(), l.parse::<u32>().ok()?)))
@@ -559,7 +560,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             }
             let left = comments_of(
                 c.request(Request::ReviewRemove {
-                    addr: worktree,
+                    addr: crate::cli::addr_here(worktree)?,
                     id: if all { None } else { id },
                 })
                 .await?,
@@ -600,7 +601,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ReviewCmd::Done { worktree } => {
-            c.request(Request::ReviewDone { addr: worktree }).await?;
+            c.request(Request::ReviewDone { addr: crate::cli::addr_here(worktree)? }).await?;
             Ok(0)
         }
     }

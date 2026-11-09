@@ -338,7 +338,7 @@ pub enum PromptKind {
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
     Sets(crate::sets::SetsInput),
-    /// A chat's title (by id); empty asks for a new automatic one.
+    /// A chat's title (by id); empty clears it (`chat.autotitle` makes a new one).
     ChatRetitle(String),
     /// One more folder this chat (`None`: the new chat being written) may read (`none`: none).
     ChatFolder(Option<String>),
@@ -6264,6 +6264,7 @@ impl App {
                         keep: None,
                         folders: None,
                         confirmed: false,
+                        auto_title: false,
                     },
                 );
             }

@@ -326,7 +326,7 @@ async fn done_when_a_phone_approves_a_blocked_agent() {
         std::thread::sleep(Duration::from_millis(100));
     }
     // The answer is in a1's event log, with the device.
-    let events = w.ok(&["events", "-s", "a1", "--json", "-n", "200"]);
+    let events = w.ok(&["events", "--session", "a1", "--json", "-l", "200"]);
     assert!(events.lines().any(|l| l.contains("\"remote\"") && l.contains("phone")), "{events}");
 
     // Unauthenticated: no token, a wrong token, or claiming to be a local client.

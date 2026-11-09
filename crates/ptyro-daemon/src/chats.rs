@@ -581,9 +581,8 @@ impl Daemon {
             return Err(Error::invalid("which chat? (its handle, like 7f3k, or @last)"));
         }
         let lower = a.to_lowercase();
-        let by_id = || -> Vec<&ChatInfo> {
-            all.iter().filter(|c| lookup::id_matches(&c.id, a)).collect()
-        };
+        let by_id =
+            || -> Vec<&ChatInfo> { all.iter().filter(|c| lookup::id_matches(&c.id, a)).collect() };
         if exact && a != "@last" && by_id().is_empty() {
             let near: Vec<&ChatInfo> = match a {
                 "@pinned" => all.iter().filter(|c| c.pinned).collect(),
@@ -1029,6 +1028,7 @@ impl Daemon {
                 keep,
                 folders,
                 confirmed,
+                auto_title,
             } => {
                 let info = self.find_chat(&chat).await?;
                 let folders = folders.map(|f| chat_folders(&f)).transpose()?;
@@ -1055,6 +1055,17 @@ impl Daemon {
                     self.busy_check(&live, &info)?;
                 }
                 if info.incognito {
+                    // Nothing of an incognito chat goes to a titler: its automatic title is its
+                    // first line.
+                    let title = match auto_title {
+                        true => self.chats.get_live(&info.id).and_then(|l| {
+                            l.items.locked().items.iter().find_map(|i| match &i.body {
+                                ChatBody::User { text } => Some(chats::first_line_title(text)),
+                                _ => None,
+                            })
+                        }),
+                        false => title,
+                    };
                     return self
                         .update_incognito(&info, title, pinned, archived, agent, preset, folders)
                         .await;
@@ -1082,23 +1093,21 @@ impl Daemon {
                         .map_err(store_err)?;
                     }
                 }
-                if let Some(t) = title {
-                    let t = t.trim().to_owned();
-                    if t.is_empty() {
-                        // An empty title asks for a new automatic one.
-                        db.set_title(info.id.clone(), None, "auto".into())
-                            .await
-                            .map_err(store_err)?;
-                        self.title_chat(&info.id, true);
-                    } else {
-                        db.set_title(
-                            info.id.clone(),
-                            Some(chats::first_line_title(&t)),
-                            "user".into(),
-                        )
-                        .await
-                        .map_err(store_err)?;
+                if auto_title {
+                    // A new automatic title: the titler's, as for a new chat. It is made from
+                    // the first message, so a chat without one keeps the title it has.
+                    let branch = db.branch(info.id.clone(), None).await.map_err(store_err)?;
+                    if !branch.iter().any(|n| matches!(n.body, ChatBody::User { .. })) {
+                        return Err(Error::invalid(
+                            "nothing to make a title from yet: the chat's first message gives it one",
+                        ));
                     }
+                    db.reset_title(info.id.clone()).await.map_err(store_err)?;
+                    self.title_chat(&info.id, true);
+                } else if let Some(t) = title {
+                    // An empty title clears it, and no automatic one takes its place.
+                    let t = Some(chats::first_line_title(t.trim())).filter(|t| !t.is_empty());
+                    db.set_title(info.id.clone(), t, "user".into()).await.map_err(store_err)?;
                 }
                 if let Some(p) = pinned {
                     db.set_pinned(info.id.clone(), p).await.map_err(store_err)?;

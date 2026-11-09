@@ -282,7 +282,7 @@ export function renameSession(s) {
     });
 }
 export function retitleSession(s) {
-    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty goes back to the default." }], "Save", async (v) => {
+    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty clears it." }], "Save", async (v) => {
         await conn.request({ t: "retitle", addr: addr(s), title: v.title || null, worktree: false });
     });
 }
