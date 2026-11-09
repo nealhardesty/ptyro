@@ -17,13 +17,13 @@ use std::time::Duration;
 use clap::Subcommand;
 use clap_complete::ArgValueCandidates;
 use ptyro_client::Client;
-use ptyro_core::{Error, ErrorCode};
+use ptyro_core::{Error, ErrorCode, removal};
 use ptyro_protocol::{Reply, Request};
 use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, age, client_env, confirm, no_daemon, unexpected};
+use crate::cli::{Ctx, age, ask_first, client_env, confirm, no_daemon, unexpected};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -214,14 +214,18 @@ pub enum CsCmd {
         #[arg(long, value_delimiter = ',')]
         depends_on: Vec<String>,
     },
-    /// Drop a member (its worktree is removed safely)
+    /// Drop a member (its worktree is removed safely). Asks first unless --yes
     Drop {
         set: String,
         member: String,
         #[arg(long)]
         force: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
-    /// Remove the set: every member's worktree, safely (one with unshipped work blocks all)
+    /// Remove the set: every member's worktree, safely (one with unshipped work blocks all).
+    /// Asks first unless --yes
     Rm {
         set: String,
         /// Keep this member's worktree (repeatable)
@@ -229,6 +233,9 @@ pub enum CsCmd {
         keep: Vec<String>,
         #[arg(long)]
         force: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Change-set templates: yours and trusted hub repositories'
     Templates {
@@ -802,13 +809,29 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             );
             Ok(0)
         }
-        CsCmd::Drop { set, member, force } => {
-            op(&c, CsOp::Drop { set, member: member.clone(), force }).await?;
+        CsCmd::Drop { set, member, force, yes } => {
+            // Found first, then asked about by name: a typo asks nothing.
+            let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            if !i.set.members.iter().any(|m| m.name == member) {
+                return Err(Error::missing("member", &member));
+            }
+            let (what, safety) = (removal::SET_MEMBER, removal::safety(force));
+            let name = &i.set.name;
+            ask_first(&format!("Drop {member} from change set {name}? {what} {safety}"), yes)?;
+            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force }).await?;
             eprintln!("dropped {member}");
             Ok(0)
         }
-        CsCmd::Rm { set, keep, force } => {
-            let v = op(&c, CsOp::Rm { set, keep, force }).await?;
+        CsCmd::Rm { set, keep, force, yes } => {
+            // Found first, then asked about by name: a typo asks nothing.
+            let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            let (what, safety) = (removal::SET, removal::safety(force));
+            let mut q = format!("Remove change set {}? {what} {safety}", i.set.name);
+            if !keep.is_empty() {
+                q = format!("{q} Kept: {}.", keep.join(", "));
+            }
+            ask_first(&q, yes)?;
+            let v = op(&c, CsOp::Rm { set: i.run, keep, force }).await?;
             eprintln!(
                 "removed {}",
                 v["removed"]

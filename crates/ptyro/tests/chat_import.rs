@@ -271,7 +271,12 @@ fn histories_become_searchable_read_only_chats() {
     assert_eq!(forks.len(), 1, "{forks:?}");
     assert!(w.ok(&["chat", "show", &fork_addr]).contains("and a second?"));
     // A chat you delete stays deleted, whatever the next import finds.
-    w.ok(&["chat", "rm", &format!("c:{}", w.by_source("gemini:")["handle"].as_str().unwrap())]);
+    w.ok(&[
+        "chat",
+        "rm",
+        "-y",
+        &format!("c:{}", w.by_source("gemini:")["handle"].as_str().unwrap()),
+    ]);
     let after = w.json(&["chat", "import", "--json"]);
     assert_eq!(counts(&after, "gemini"), (0, 0, 0, 1, 0), "{after}");
     assert!(w.imported().iter().all(|c| !c["source"].as_str().unwrap().starts_with("gemini:")));

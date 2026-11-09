@@ -181,7 +181,7 @@ fn gemini_gets_an_admin_policy_no_extensions_and_ptyros_mcp_server() {
             std::fs::write(d.join(".project_root"), root).unwrap();
         }
     }
-    w.ok(&["chat", "rm", &addr]);
+    w.ok(&["chat", "rm", "-y", &addr]);
     w.until("gemini's copy removed", || {
         !gem.join("tmp/c1").exists() && !gem.join("history/c1").exists()
     });

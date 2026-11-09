@@ -75,7 +75,7 @@ function commentsBar(w: Worktree): HTMLElement | null {
   return h("div", { class: "comments-bar", title: tip("review.list") },
     h("b", {}, `${list.length} comment${list.length === 1 ? "" : "s"} waiting`),
     h("button", { class: "small primary", title: tip("review.send"), onclick: () => sendComments(w, list) }, "Send to agent"),
-    h("button", { class: "small", title: tip("review.rm"), onclick: () => confirm("Remove all comments?", "They haven't been sent.", "Remove", async () => { await ask({ t: "review_remove", addr: w.id, id: null }); comments.reload(w.id); }) }, "Clear"));
+    h("button", { class: "small", title: tip("review.rm"), onclick: () => confirm(`Remove every comment on ${w.title || w.name}?`, "They haven't been sent to its agent, and what you typed in them can't be brought back.", "Remove", async () => { await ask({ t: "review_remove", addr: w.id, id: null }); comments.reload(w.id); }) }, "Clear"));
 }
 
 function diffFile(w: Worktree, f: any, byLine: Map<string, any[]>, open: boolean): HTMLElement {

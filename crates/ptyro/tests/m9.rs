@@ -415,7 +415,7 @@ async fn scopes_revocation_and_lockout() {
     assert_eq!(o["t"], "err", "{o}");
 
     // Revoke: the live connection gets a goodbye, and the token stops working.
-    w.ok(&["devices", "revoke", &ctl_id]);
+    w.ok(&["devices", "revoke", "-y", &ctl_id]);
     let bye = tab.until("goodbye", |m| m["t"] == "goodbye").await;
     assert!(bye["reason"].as_str().unwrap().contains("revoked"), "{bye}");
     let (p, _) =

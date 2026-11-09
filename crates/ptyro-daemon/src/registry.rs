@@ -467,9 +467,10 @@ impl Daemon {
             }
         } else if !live.is_empty() {
             return Err(Error::conflict(format!(
-                "{} has running sessions ({}); stop them first",
+                "{} has running sessions ({}): stop them first, or let them go. {}",
                 p.slug,
-                live.join(", ")
+                live.join(", "),
+                ptyro_core::removal::PROJECT_RELEASE
             )));
         }
         {

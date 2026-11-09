@@ -433,7 +433,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("worktree.rename_branch", "Rename this worktree's branch (never once it's pushed)"),
     a("workspace.rename", "Rename this workspace"),
-    a("workspace.remove", "Remove this workspace (its projects stay registered)"),
+    a(
+        "workspace.remove",
+        "Remove this workspace (its sessions, chats and only-here projects move to main)",
+    ),
     a("workspace.profile", "Which profile this workspace runs as"),
     a("workspace.notify", "How this workspace notifies you: all, badge or mute"),
     a(

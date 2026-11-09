@@ -541,8 +541,8 @@ async fn dispatch(
             crate::orch::pick(&ctx, run, candidate, cherry_pick, pr, apply, into, paths, hunks)
                 .await
         }
-        Some(Cmd::Discard { run, candidate, force }) => {
-            crate::orch::discard(&ctx, run, candidate, force).await
+        Some(Cmd::Discard { run, candidate, force, yes }) => {
+            crate::orch::discard(&ctx, run, candidate, force, yes).await
         }
         Some(Cmd::Iterate { run, args }) => crate::orch::iterate(&ctx, run, args).await,
         Some(Cmd::Gate { cmd }) => crate::orch::gate(&ctx, cmd).await,
@@ -1009,6 +1009,28 @@ pub fn confirm(question: &str) -> bool {
     matches!(line.trim(), "y" | "Y" | "yes")
 }
 
+/// A destructive command's question (SPEC §12.1, owner 2026-11-09): asked on a terminal unless
+/// `yes`; with no terminal to ask, refused with an error that offers `--yes`.
+pub fn ask_first(question: &str, yes: bool) -> Result<(), Error> {
+    if yes || confirm(question) {
+        return Ok(());
+    }
+    Err(not_agreed(question, "pass --yes"))
+}
+
+/// Why a question wasn't agreed to: a "no" on the terminal, or no terminal to ask (`flags`
+/// says what to pass instead).
+fn not_agreed(question: &str, flags: &str) -> Error {
+    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        Error::new(ErrorCode::NeedsConfirmation, "cancelled: nothing was changed")
+    } else {
+        Error::new(
+            ErrorCode::NeedsConfirmation,
+            format!("{question} (no terminal to ask: {flags})"),
+        )
+    }
+}
+
 /// Send a request that may need the user's confirmation (SPEC §10.10 guards): ask on a TTY and
 /// resend with `agree` applied; without a TTY, explain the flags.
 pub async fn with_confirmation<F>(
@@ -1042,10 +1064,8 @@ where
             if confirm(&e.message) {
                 agree(&mut req);
                 client.request(req).await
-            } else if std::io::stdin().is_terminal() {
-                Err(Error::new(ErrorCode::NeedsConfirmation, "cancelled"))
             } else {
-                Err(Error::new(e.code, format!("{} (no terminal to ask: {flags})", e.message)))
+                Err(not_agreed(&e.message, flags))
             }
         }
         other => other,
@@ -1679,7 +1699,16 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
         M::Add { target, name, force, json } => {
             crate::machines::add(ctx, target, name, force, json).await
         }
-        M::Rm { name } => {
+        M::Rm { name, yes } => {
+            // Found first, then asked about: a typo asks nothing.
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let Reply::Machines { machines } = c.request(Request::MachineList).await? else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            if !machines.iter().any(|m| m.name == name) {
+                return Err(Error::missing("machine", &name));
+            }
+            ask_first(&format!("Stop mirroring {name}? {}", ptyro_core::removal::MACHINE), yes)?;
             let said = format!("{name} is no longer mirrored here (revoke its token there too)");
             crate::machines::simple(ctx, Request::MachineRemove { name }, said).await
         }

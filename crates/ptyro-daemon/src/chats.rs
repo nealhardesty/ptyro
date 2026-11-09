@@ -552,12 +552,12 @@ impl Daemon {
     /// `@pinned` or `@unread` (when one chat is), or, last, a title substring that matches one
     /// chat.
     pub(crate) async fn find_chat(&self, addr: &str) -> Result<ChatInfo, Error> {
-        self.find_chat_by(addr, true).await
+        self.find_chat_as(addr, false).await
     }
 
-    /// `find_chat`; with `titles` false, never by its title: what a destructive request takes,
-    /// so a word that happens to be in a title can't pick a chat to delete.
-    pub(crate) async fn find_chat_by(&self, addr: &str, titles: bool) -> Result<ChatInfo, Error> {
+    /// `find_chat`; `exact`: only a handle, an id or `@last`, as a destructive request takes
+    /// (SPEC §12.1). A title, `@pinned` or `@unread` is refused there, its chats listed.
+    pub(crate) async fn find_chat_as(&self, addr: &str, exact: bool) -> Result<ChatInfo, Error> {
         let db = self.chat_db()?;
         let all = db
             .list(ListFilter { sides: true, ..ListFilter::default() })
@@ -580,6 +580,40 @@ impl Daemon {
         if a.is_empty() {
             return Err(Error::invalid("which chat? (its handle, like 7f3k, or @last)"));
         }
+        let lower = a.to_lowercase();
+        let by_id = || -> Vec<&ChatInfo> {
+            all.iter().filter(|c| lookup::id_matches(&c.id, a)).collect()
+        };
+        if exact && a != "@last" && by_id().is_empty() {
+            let near: Vec<&ChatInfo> = match a {
+                "@pinned" => all.iter().filter(|c| c.pinned).collect(),
+                "@unread" => all.iter().filter(|c| c.unread > 0).collect(),
+                _ => all
+                    .iter()
+                    .filter(|c| {
+                        c.title.as_deref().is_some_and(|t| t.to_lowercase().contains(&lower))
+                    })
+                    .collect(),
+            };
+            if near.is_empty() {
+                return Err(Error::missing("chat", addr));
+            }
+            return Err(Error::new(
+                ErrorCode::Ambiguous,
+                format!(
+                    "{addr:?} isn't a chat's address, so nothing was deleted: name it by its handle ({})",
+                    near.iter()
+                        .take(5)
+                        .map(|c| format!(
+                            "c:{} ({})",
+                            lookup::handle(&c.id, all.iter().map(|x| x.id.as_str())),
+                            c.label()
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ));
+        }
         let found: Vec<&ChatInfo> = if a == "@last" {
             all.iter().max_by_key(|c| c.last_ms).into_iter().collect()
         } else if a == "@pinned" || a == "@unread" {
@@ -591,9 +625,8 @@ impl Daemon {
             v.sort_by_key(|c| std::cmp::Reverse(c.last_ms));
             v
         } else {
-            let by_id: Vec<&ChatInfo> =
-                all.iter().filter(|c| lookup::id_matches(&c.id, a)).collect();
-            if !by_id.is_empty() || handle || !titles {
+            let by_id = by_id();
+            if !by_id.is_empty() || handle || exact {
                 by_id
             } else {
                 // Titles aren't addresses; a word of one is the last resort.
@@ -1090,8 +1123,18 @@ impl Daemon {
                 self.chat_changed(&info.id).await;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
-            Request::ChatDelete { chat } => {
-                let info = self.find_chat(&chat).await?;
+            Request::ChatDelete { chat, confirmed } => {
+                let info = self.find_chat_as(&chat, true).await?;
+                if !confirmed {
+                    return Err(Error::new(
+                        ErrorCode::NeedsConfirmation,
+                        format!(
+                            "Delete the chat “{}”? {}",
+                            info.label(),
+                            ptyro_core::removal::CHAT
+                        ),
+                    ));
+                }
                 // Its side chats go with it: they were questions about it.
                 for side in self
                     .side_chats()

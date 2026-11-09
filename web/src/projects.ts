@@ -208,17 +208,20 @@ function renameProject(p: Project): void {
   });
 }
 
-function removeProject(p: Project, release = false): void {
-  confirm(`Forget ${p.slug}?`, release ? "Its running sessions keep going, outside any project. Its worktrees stay on disk." : "Its worktrees stay on disk. ptyro won't register it on its own again.", "Forget it", async () => {
+// Asks as the CLI's `project rm` and the TUI do (ptyro_core::removal); running sessions in it
+// are offered a way out, as there.
+function removeProject(p: Project): void {
+  const forget = async (release: boolean): Promise<void> => {
     try {
       await conn.request({ t: "project_remove", addr: p.id, release });
       ui.toast(`Forgot ${p.slug}`);
       go("#/p");
     } catch (e) {
-      if (!release && (e as { code?: string }).code === "conflict") confirm("Sessions are running", errText(e), "Let them go", () => removeProject(p, true));
+      if (!release && (e as { code?: string }).code === "conflict") confirm("Sessions are running", `${errText(e)} Let them go?`, "Let them go", () => forget(true));
       else ui.toast(errText(e));
     }
-  });
+  };
+  confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", () => forget(false));
 }
 
 function projectView(id: string): HTMLElement {
@@ -312,7 +315,7 @@ function workspacesView(): HTMLElement {
       { onclick: () => menu(w.name, [
         { title: tip("workspace.set"), label: "Profile and notifications…", run: () => workspaceForm(w) },
         { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: splitMachine(w.name)[1], required: true, slug: "name", hint: NAME_HINT }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
-        { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove ${w.name}?`, "Its projects stay; they just leave this workspace.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
+        { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove workspace ${w.name}?`, "Its sessions keep running and move to main, with its chats and the projects no other workspace has.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
       ]) })))));
 }
 
@@ -352,7 +355,7 @@ function archive(w: Worktree): void {
 
 function remove(w: Worktree, force = false): void {
   const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
-  confirm(`Remove ${w.title || w.name}?`, force ? "This throws away work that isn't saved anywhere else." : `The worktree's directory is deleted; its branch is kept.${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
+  confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
     try {
       const r = await conn.request({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } });
       for (const note of r.notes ?? []) ui.toast(note);

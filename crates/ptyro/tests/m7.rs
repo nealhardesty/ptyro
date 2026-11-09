@@ -236,9 +236,9 @@ fn done_when_fanout_compare_and_merge_the_best() {
             .contains(&format!("claude from run {id}"))
     );
     // Discarding refuses to lose the others' (untracked) work without --force…
-    let kept = w.ok(&["discard", &id]);
+    let kept = w.ok(&["discard", "-y", &id]);
     assert!(kept.contains("kept"), "{kept}");
-    w.ok(&["discard", &id, "--force"]);
+    w.ok(&["discard", "-y", &id, "--force"]);
     let wts = w.json(&["wt", "ls", "--project", "app", "--json"]);
     let names: Vec<&str> =
         wts.as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();

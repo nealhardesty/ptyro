@@ -1172,6 +1172,13 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built, 2026-11-09] Protocol 1.39** (additive): `ChatDelete` gains `confirmed` (default
+false). The daemon resolves its chat by an exact address only (a title is refused, exit 4, its
+matches listed) and, unconfirmed, answers `NeedsConfirmation` with the question every client
+asks ("Delete the chat “T”? It goes from every list…", §12.1). The TUI and the web ask first and
+send it confirmed; `chat rm` asks through `with_confirmation_as`. An older client's unconfirmed delete
+is asked about instead of done.
+
 **[built 2026-11-09] Protocol 1.38** (additive): `WorktreeRename{addr, name}` → `Worktree{info}` and
 `ProjectRename{addr, name}` → `Project{info}` (§2.3). Both are `full` scope, like
 `WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a project, one per worktree, carrying
@@ -2305,7 +2312,7 @@ modes, other-workspace badges and the per-workspace inbox tabs.
   Not registered: your home directory (a dotfiles repository would claim everything), anything
   under ptyro's data directory, and **declined** roots. `project rm` declines its root (kv
   `autoreg:declined`), and adding it by hand lifts that. `ProjectRemove{release: true}` (the
-  TUI's undo) lets the project's running sessions go first, instead of refusing; they keep
+  TUI's undo, `project rm --release`, every client's "Let them go") lets the project's running sessions go first, instead of refusing; they keep
   running outside any project. Clients hear `ProjectAutoAdded{info, workspace, notes}`.
   `[discover] auto_register = false` turns it off. **[proposed SH, §23.2]** A loose session (one in
   a workspace's SHELLS) is never moved: its repository may be registered, the shell stays put. `project add` without `--workspace` uses the
@@ -3710,6 +3717,38 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   and `--format` templates later.
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
+- **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
+  (`chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
+  item) asks on a
+  terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
+  (exit 5, `… (no terminal to ask: pass --yes)`) and changes nothing. The TUI and the web always
+  ask with a dialog. All three say the same thing, what goes and what stays, from one sentence
+  per kind of removal in `ptyro_core::removal`. `removal::DIALOGS` pairs each question's start
+  with its sentences, and a test checks that the web dialog asking that question (one
+  `confirm(…)` line in `web/src`) says those sentences word for word. Stopping, killing and removing sessions have their own rule.
+  - **Never by a fuzzy match.** A destructive command takes an exact address only: a name, an
+    id, an id suffix (a handle) of 4 or more characters, or `@last`; never words from a title and
+    never a substring. A chat's title words, `@pinned` or `@unread` are refused (exit 4) with the
+    chats they match listed by handle (`ChatDelete` resolves with `find_chat_as(addr, exact)`).
+    This holds for every kind: they all resolve by the one policy of §2.3 (runs by the end of
+    their id, archives by name or handle, several of one name listed, never picked).
+  - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
+    found" without a question, and the question names what was found (`wt rm`, `ws rm`,
+    `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`;
+    `chat rm`'s question comes from the daemon after it resolves). `profile rm`, `config rm` and
+    `wt archive-rm` have no request that resolves first: they ask naming what was typed, and a
+    name that matches nothing is refused after the question, with nothing changed.
+  - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
+    when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
+    `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its
+    chats and the projects no other workspace has to main. Forgetting a project drops its trust,
+    pin and place in workspaces; its worktrees stay on disk.
+  - **Running sessions don't trap a project.** `project rm` with live sessions is refused with
+    both ways through (stop them, or let them go). The CLI's `--release` lets them go (at a
+    terminal it offers to), and the TUI and the web offer "Let them go"; they keep running,
+    outside any project. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
+    refusal (which all three show) and in `project rm --release`'s question.
 
 ### 12.2 Command tree **[decided]**
 
@@ -8420,7 +8459,7 @@ reset too big for one frame comes as several, the first with `reset`; a subscrip
 chat's full id, so any of its addresses ends it); `ChatSend{chat, text}`; `ChatRetry{chat, node?}`;
 `ChatEdit{chat, node, text}`; `ChatBranch{chat, to}`; `ChatFork{chat, node?, agent?, side,
 confirmed}`; `ChatUpdate{chat, title?, pinned?, archived?, agent?, preset?, keep?, folders?,
-confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat}`;
+confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.39);
 `ChatAnswer{chat, decision}`; `ChatStop{chat}`; `ChatSearch{query, chat?, workspace?, agent?,
 pinned, archived, limit?, machines}` → `ChatHits{hits}`; `ChatFind{question, agent?, workspace?}` →
 `Chat{info}` (an incognito chat that answers; the client follows it); `ChatExport{chat, format}` →

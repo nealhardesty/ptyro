@@ -252,7 +252,9 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
             )?;
             Ok(0)
         }
-        ConfigCmd::Rm { collection, name, project, shared } => {
+        ConfigCmd::Rm { collection, name, project, shared, yes } => {
+            let q = format!("Remove {collection} {name}? {}", ptyro_core::removal::CONFIG_ENTRY);
+            crate::cli::ask_first(&q, yes)?;
             let layer = layer(ctx, project.as_deref(), shared).await?;
             change(
                 &layer,

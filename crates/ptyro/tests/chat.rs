@@ -228,7 +228,19 @@ fn titles_pins_archive_export_and_delete() {
     assert!(w.chats().is_empty());
     let archived = w.json(&["chat", "ls", "--archived", "--json"]);
     assert_eq!(archived.as_array().unwrap().len(), 1);
-    w.ok(&["chat", "rm", &addr]);
+    // Deleting never goes by a title (SPEC §12.1): refused, the chat named by its handle.
+    let out = w.cli(&["chat", "rm", "-y", "cook"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.contains(&addr) && err.contains("Cooking"), "lists it: {err}");
+    // No terminal to ask and no --yes: refused, saying what it would lose and offering --yes.
+    let out = w.cli(&["chat", "rm", &addr]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains("Delete the chat \u{201c}Cooking\u{201d}?"), "{err}");
+    assert!(err.contains(ptyro_core::removal::CHAT) && err.contains("--yes"), "{err}");
+    assert_eq!(w.json(&["chat", "ls", "--archived", "--json"]).as_array().unwrap().len(), 1);
+    w.ok(&["chat", "rm", "-y", &addr]);
     let archived = w.json(&["chat", "ls", "--archived", "--json"]);
     assert!(archived.as_array().unwrap().is_empty());
     let out = w.cli(&["chat", "show", &addr]);

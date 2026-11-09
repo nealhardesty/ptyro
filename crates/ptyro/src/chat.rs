@@ -370,11 +370,15 @@ pub enum ChatCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Delete chats (gone at once from every list)
+    /// Delete chats for good, with their side chats: each by its handle, id or @last (never a
+    /// title). Asks first unless --yes
     #[command(alias = "delete")]
     Rm {
         #[arg(required = true, add = ArgValueCandidates::new(complete::chats))]
         chats: Vec<String>,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Ask several agents the same question: each answer is a branch of the chat, labelled with
     /// its agent (`‹ 2/3 codex ›`); with no TEXT the last message is asked again of the agents
@@ -564,7 +568,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             }
             // (It is incognito: it goes with its agent; this makes sure.)
             if let Ok(c) = ctx.connect(false).await {
-                let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
+                let _ =
+                    c.request(Request::ChatDelete { chat: info.id.clone(), confirmed: true }).await;
             }
             answered.map(|a| if a.ok { 0 } else { 1 })
         }
@@ -697,10 +702,12 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
         ChatCmd::Task { chat, project, agent, name, yes, json } => {
             task(ctx, chat, project, agent, name, yes, json).await
         }
-        ChatCmd::Rm { chats } => {
+        ChatCmd::Rm { chats, yes } => {
             let c = ctx.connect(true).await?;
             for chat in chats {
-                c.request(Request::ChatDelete { chat: chat.clone() }).await?;
+                // An exact address only (never a title), asked first (SPEC §12.1).
+                confirmed(&c, Request::ChatDelete { chat: chat.clone(), confirmed: false }, yes)
+                    .await?;
                 eprintln!("deleted {chat}");
             }
             Ok(0)
@@ -777,7 +784,8 @@ fn agree(r: &mut Request) {
     | Request::ChatCompare { confirmed, .. }
     | Request::ChatNew { confirmed, .. }
     | Request::ChatUpdate { confirmed, .. }
-    | Request::ChatFork { confirmed, .. } = r
+    | Request::ChatFork { confirmed, .. }
+    | Request::ChatDelete { confirmed, .. } = r
     {
         *confirmed = true;
     }
@@ -966,7 +974,7 @@ async fn ask(
     if keep {
         eprintln!("kept as {addr}");
     } else if let Ok(c) = ctx.connect(false).await {
-        let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
+        let _ = c.request(Request::ChatDelete { chat: info.id.clone(), confirmed: true }).await;
     }
     answered.map(|a| if a.ok { 0 } else { 1 })
 }
@@ -1668,7 +1676,7 @@ async fn fork(ctx: &Ctx, chat: String, f: Fork, prompt: String, json: bool) -> R
         && !no_wait
         && let Ok(c) = ctx.connect(false).await
     {
-        let _ = c.request(Request::ChatDelete { chat: info.id.clone() }).await;
+        let _ = c.request(Request::ChatDelete { chat: info.id.clone(), confirmed: true }).await;
     }
     code
 }

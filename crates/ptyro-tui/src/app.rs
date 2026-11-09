@@ -427,6 +427,11 @@ pub enum Confirmed {
     Append(std::path::PathBuf, String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
+    /// Forget this project; `release`: its running sessions go on outside it.
+    Forget {
+        id: String,
+        release: bool,
+    },
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
     /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
@@ -537,6 +542,8 @@ pub enum Pending {
     TrustDialog(AfterTrust),
     Trusted(AfterTrust),
     Removed(String),
+    /// A project forgotten (`ProjectRemove`): running sessions in it are offered a way out.
+    Forget(String),
     ProjectAdded(Option<AfterAdd>),
     Discovered(Option<AfterAdd>),
     Scripts(String),
@@ -2434,12 +2441,22 @@ impl App {
                     });
                 }
             }
-            (Pending::Removed(_), Ok(Reply::Removed { notes })) => self.toast(notes.join(" · ")),
+            (Pending::Removed(_) | Pending::Forget(_), Ok(Reply::Removed { notes })) => {
+                self.toast(notes.join(" · "))
+            }
+            // Its sessions are running: let them go on, outside any project (as the web offers).
+            (Pending::Forget(id), Err(e)) if e.code == ErrorCode::Conflict => {
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!("{} Let them go? [y/N]", e.message),
+                    action: Confirmed::Forget { id, release: true },
+                });
+            }
             (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
-                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: discard that work and remove it · n: neither",
-                        e.message
+                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: remove it anyway ({}) · n: neither",
+                        e.message,
+                        ptyro_core::removal::FORCED
                     ),
                     action: Confirmed::RemoveWorktree { id, force: true },
                 });
@@ -4202,13 +4219,11 @@ impl App {
                     "project.remove" => {
                         self.overlay = Some(Overlay::Confirm {
                             text: format!(
-                                "Forget project {}? Its worktrees stay on disk, and it won't register on its own again. [y/N]",
-                                p.slug
+                                "Forget project {}? {} [y/N]",
+                                p.slug,
+                                ptyro_core::removal::PROJECT
                             ),
-                            action: Confirmed::Send(
-                                Box::new(Request::ProjectRemove { addr: p.id, release: false }),
-                                "forgotten".into(),
-                            ),
+                            action: Confirmed::Forget { id: p.id, release: false },
                         });
                     }
                     "project.rename" => {
@@ -4323,7 +4338,10 @@ impl App {
             "workspace.remove" => {
                 let name = self.workspace.clone();
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!("Remove workspace {name}? Its projects stay registered. [y/N]"),
+                    text: format!(
+                        "Remove workspace {name}? {} [y/N]",
+                        ptyro_core::removal::WORKSPACE
+                    ),
                     action: Confirmed::Send(
                         Box::new(Request::WorkspaceRemove { name }),
                         "workspace removed".into(),
@@ -5243,9 +5261,7 @@ impl App {
     /// Deleting an archive can't be undone: asked first.
     fn confirm_archive_delete(&mut self, addr: &str, label: &str) {
         self.overlay = Some(Overlay::Confirm {
-            text: format!(
-                "Delete the archive of {label} for good? Its saved files go, and its branch if merged or pushed. [y/N]"
-            ),
+            text: format!("Delete the archive of {label}? {} [y/N]", ptyro_core::removal::ARCHIVE),
             action: Confirmed::Send(
                 Box::new(Request::WorktreeArchiveDelete { addr: addr.to_owned() }),
                 "archive deleted".into(),
@@ -5266,9 +5282,11 @@ impl App {
         };
         self.overlay = Some(Overlay::Confirm {
             text: format!(
-                "Remove worktree {} ({})?{note} [y/N]",
+                "Remove worktree {} ({})? {} {}{note} [y/N]",
                 w.qualified(),
-                w.branch.as_deref().unwrap_or("-")
+                w.branch.as_deref().unwrap_or("-"),
+                ptyro_core::removal::WORKTREE,
+                ptyro_core::removal::SAFE,
             ),
             action: Confirmed::RemoveWorktree { id: w.id.clone(), force: false },
         });
@@ -5772,6 +5790,8 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::Forget { id, release } => self
+                .request(Pending::Forget(id.clone()), Request::ProjectRemove { addr: id, release }),
             Confirmed::Again(mut req, then) => {
                 if let Request::ChatTask { confirmed, .. }
                 | Request::ChatCompare { confirmed, .. }
@@ -12289,5 +12309,39 @@ mod tests {
         app.learn_alt(KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT)));
         assert!(app.alt_seen && app.alt_digits_reach());
         assert!(app.health.findings.is_empty(), "it works after all: no finding");
+    }
+
+    #[test]
+    fn forgetting_a_project_with_running_sessions_offers_to_let_them_go() {
+        let mut app = app();
+        app.projects = vec![project("p1", "app")];
+        app.context_hint = Some("p1".into());
+        app.run(&Command { action: "project.remove", arg: None });
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("asks first") };
+        assert!(text.contains(ptyro_core::removal::PROJECT), "says what goes: {text}");
+        app.overlay_key(KeyEvent::char('y'));
+        let Ok(AppMsg::Reply(Pending::Forget(id), _)) = app.rx.try_recv() else {
+            panic!("the project was asked to go")
+        };
+        // The daemon refuses: sessions run in it. The same way through as the web and the CLI.
+        let e = ptyro_core::Error::new(ErrorCode::Conflict, "app has running sessions (a).");
+        app.handle_reply(Pending::Forget(id), Err(e));
+        let Some(Overlay::Confirm { text, action: Confirmed::Forget { id, release: true } }) =
+            &app.overlay
+        else {
+            panic!("offers to let them go")
+        };
+        assert!(text.contains("Let them go?") && id == "p1", "{text}");
+        app.overlay_key(KeyEvent::char('y'));
+        assert!(matches!(app.rx.try_recv(), Ok(AppMsg::Reply(Pending::Forget(_), _))));
+    }
+
+    #[test]
+    fn removing_a_workspace_says_what_the_daemon_does() {
+        let mut app = app();
+        app.workspace = "side".into();
+        app.run(&Command { action: "workspace.remove", arg: None });
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("asks first") };
+        assert!(text.contains(ptyro_core::removal::WORKSPACE), "{text}");
     }
 }

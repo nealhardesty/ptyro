@@ -442,8 +442,10 @@ impl App {
                             self.orch = Some(o);
                             self.overlay = Some(Overlay::Confirm {
                                 text: format!(
-                                    "Discard {} (stop its agent, remove its worktree; refused if work would be lost)? [y/N]",
-                                    c.step
+                                    "Discard candidate {}? {} {} [y/N]",
+                                    c.step,
+                                    ptyro_core::removal::DISCARD,
+                                    ptyro_core::removal::SAFE
                                 ),
                                 action: Confirmed::Send(
                                     Box::new(Request::Discard {
@@ -460,7 +462,11 @@ impl App {
                     (_, Some('X')) => {
                         self.orch = Some(o);
                         self.overlay = Some(Overlay::Confirm {
-                            text: "Discard every candidate you didn't pick? [y/N]".into(),
+                            text: format!(
+                                "Discard every candidate you didn't pick? {} {} [y/N]",
+                                ptyro_core::removal::DISCARD_REST,
+                                ptyro_core::removal::SAFE
+                            ),
                             action: Confirmed::Send(
                                 Box::new(Request::Discard {
                                     run: id.clone(),

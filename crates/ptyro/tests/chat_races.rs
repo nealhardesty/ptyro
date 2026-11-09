@@ -268,7 +268,7 @@ fn a_deleted_chat_leaves_no_agent_behind() {
     let dir = w.d.paths.data.join("chat").join(chat["id"].as_str().unwrap());
     // Deleted just after a message: whatever engine the message starts is stopped with it.
     w.ok(&["chat", "send", "--no-wait", &addr, "work 30 slowly"]);
-    w.ok(&["chat", "rm", &addr]);
+    w.ok(&["chat", "rm", "-y", &addr]);
     w.until("no engine", || {
         w.json(&["ls", "--chats", "--json"]).as_array().is_none_or(|a| a.is_empty())
     });

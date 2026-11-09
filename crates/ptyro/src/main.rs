@@ -438,12 +438,16 @@ enum Cmd {
         #[arg(long = "hunk")]
         hunks: Vec<String>,
     },
-    /// Remove candidates' worktrees (every one not picked, or one); refuses to lose work
+    /// Remove candidates' worktrees (every one not picked, or one); refuses to lose work. Asks
+    /// first unless --yes
     Discard {
         run: String,
         candidate: Option<String>,
         #[arg(long)]
         force: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// A follow-up for a candidate's agent (or all of them): `ptyro iterate @last codex "also …"`
     Iterate {
@@ -1174,7 +1178,7 @@ enum ConfigCmd {
         #[arg(long, requires = "project")]
         shared: bool,
     },
-    /// Remove one of those, and everything in it
+    /// Remove one of those, and everything in it. Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(complete::collections))]
         collection: String,
@@ -1184,6 +1188,9 @@ enum ConfigCmd {
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Give one of those another name
     Rename {
@@ -1223,10 +1230,13 @@ enum MachineCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Stop mirroring it (nothing changes on it)
+    /// Stop mirroring it (nothing changes on it). Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(complete::machines))]
         name: String,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Don't show one of its workspaces here (nothing changes on it)
     Hide {
@@ -1262,8 +1272,14 @@ enum DevicesCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Revoke a device: its token stops working at once, connections close
-    Revoke { id: String },
+    /// Revoke a device: its token stops working at once, connections close. Asks first unless
+    /// --yes
+    Revoke {
+        id: String,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Send a test push notification to every subscribed device
     PushTest,
 }

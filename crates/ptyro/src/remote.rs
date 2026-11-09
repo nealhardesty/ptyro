@@ -570,7 +570,22 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        DevicesCmd::Revoke { id } => {
+        DevicesCmd::Revoke { id, yes } => {
+            // Found first, then asked about by its name: a typo asks nothing.
+            let devices = match c.request(Request::DeviceList).await? {
+                Reply::Devices { devices } => devices,
+                r => return Err(unexpected(r)),
+            };
+            let found: Vec<_> = devices.iter().filter(|d| d.id == id || d.name == id).collect();
+            let name = match found.as_slice() {
+                [] => return Err(Error::missing("device", &id)),
+                [d] => format!("{} ({})", d.name, d.id),
+                _ => id.clone(),
+            };
+            crate::cli::ask_first(
+                &format!("Revoke device {name}? {}", ptyro_core::removal::DEVICE),
+                yes,
+            )?;
             c.request(Request::DeviceRevoke { id: id.clone() }).await?;
             eprintln!("revoked {id}: its token no longer works and its connections closed");
             Ok(0)
