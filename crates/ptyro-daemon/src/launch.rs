@@ -727,7 +727,7 @@ impl Daemon {
 struct Claim<'a> {
     daemon: &'a Daemon,
     id: Option<ptyro_core::SessionId>,
-    name: Option<String>,
+    name: Option<(Option<String>, String)>,
 }
 
 impl<'a> Claim<'a> {
@@ -742,10 +742,11 @@ impl<'a> Claim<'a> {
             }
             return Ok(Self { daemon, id: Some(l.id), name: None });
         }
-        if !c.1.insert(l.name.clone()) {
+        let key = (l.place.project.clone(), l.name.clone());
+        if !c.1.insert(key.clone()) {
             return Err(Error::conflict(format!("a session named {:?} is being started", l.name)));
         }
-        Ok(Self { daemon, id: None, name: Some(l.name.clone()) })
+        Ok(Self { daemon, id: None, name: Some(key) })
     }
 }
 

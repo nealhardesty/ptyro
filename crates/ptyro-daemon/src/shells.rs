@@ -1276,7 +1276,7 @@ impl Daemon {
             let cwd =
                 if k.cwd.is_dir() { k.cwd.clone() } else { ptyro_core::config::expand_home("~") };
             let spec = crate::session::DormantSpec {
-                name: self.free_name(&k.name),
+                name: self.free_name(None, &k.name),
                 kind: k.kind,
                 argv: k.argv.clone(),
                 cwd: cwd.clone(),

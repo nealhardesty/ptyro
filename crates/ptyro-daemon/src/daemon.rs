@@ -151,9 +151,13 @@ pub struct Daemon {
     // ── change sets (M11) ──
     /// Per set name: its actor's memory and the push or land in progress.
     pub(crate) cs: Mutex<HashMap<String, crate::changesets::CsLive>>,
-    /// Launches in flight: sessions relaunching, names being started (`launch.rs` `Claim`).
-    pub(crate) launching:
-        Mutex<(std::collections::HashSet<SessionId>, std::collections::HashSet<String>)>,
+    /// Launches in flight: sessions relaunching, and the (project, name) of sessions being
+    /// started (`launch.rs` `Claim`).
+    #[allow(clippy::type_complexity)]
+    pub(crate) launching: Mutex<(
+        std::collections::HashSet<SessionId>,
+        std::collections::HashSet<(Option<String>, String)>,
+    )>,
     /// Snapshot writes (`save_kv`): the latest generation per key, and one writer at a time.
     pub(crate) kv_gens: Arc<Mutex<HashMap<String, u64>>>,
     pub(crate) kv_writer: Arc<tokio::sync::Mutex<()>>,
@@ -450,11 +454,7 @@ impl Daemon {
             }
             let adapter = r.agent.as_deref().map(|a| ptyro_agents::adapter_name(&self.config(), a));
             let spec = crate::session::DormantSpec {
-                name: if self.name_taken(&r.name) {
-                    self.free_name(&r.name)
-                } else {
-                    r.name.clone()
-                },
+                name: self.free_name(r.project.as_deref(), &r.name),
                 kind: r.kind,
                 argv: r.argv.clone(),
                 cwd: r.cwd.clone().into(),
@@ -552,8 +552,19 @@ impl Daemon {
     /// One session (SPEC §2.3): `@last`, `@focused`, a full id, `s:<handle>`, an exact name,
     /// `project/name`, or a handle (id suffix). Exact names win over handles. Selectors that can
     /// match several sessions are an error here unless they match exactly one; use
-    /// `resolve_many`.
+    /// `resolve_many`. Names are unique per project, so a bare name two projects share is
+    /// ambiguous, and the error names each `project/name`.
     pub fn resolve(&self, addr: &str) -> Result<Arc<Session>, Error> {
+        self.resolve_near(addr, None)
+    }
+
+    /// `resolve`, where a bare name several projects share means the one in `near` (the
+    /// project of whoever asks: an agent writing to `reviewer` means its own project's).
+    pub(crate) fn resolve_near(
+        &self,
+        addr: &str,
+        near: Option<&str>,
+    ) -> Result<Arc<Session>, Error> {
         let sessions = self.sessions();
         let addr = addr.trim();
         // `%3`, `work%3`: a shell of SHELLS by its number (SPEC §23.5).
@@ -578,11 +589,36 @@ impl Daemon {
                 )),
             };
         }
-        if let Some(s) = sessions
+        let named: Vec<&Arc<Session>> = sessions
             .iter()
-            .find(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == addr)
-        {
-            return Ok(Arc::clone(s));
+            .filter(|s| {
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == addr
+            })
+            .collect();
+        let project_of = |s: &Session| {
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone()
+        };
+        match named.as_slice() {
+            [] => {}
+            [one] => return Ok(Arc::clone(one)),
+            many => {
+                let here: Vec<_> = many
+                    .iter()
+                    .filter(|s| near.is_some() && project_of(s).as_deref() == near)
+                    .collect();
+                if let [one] = here.as_slice() {
+                    return Ok(Arc::clone(one));
+                }
+                let which: Vec<String> = many.iter().map(|s| self.session_addr(s)).collect();
+                return Err(Error::new(
+                    ErrorCode::Ambiguous,
+                    format!(
+                        "{} sessions are named {addr:?}: say which, {}",
+                        many.len(),
+                        which.join(" or ")
+                    ),
+                ));
+            }
         }
         if let Some((project, name)) = addr.split_once('/') {
             let project = self.find_project(project)?;
@@ -660,19 +696,63 @@ impl Daemon {
         Ok(sessions.into_iter().filter(|s| picked.contains(&s.id)).collect())
     }
 
-    pub(crate) fn name_taken(&self, name: &str) -> bool {
-        self.launching.locked().1.contains(name)
+    /// Session names are unique per project (SPEC §2.3); sessions in no project share one scope.
+    pub(crate) fn name_taken(&self, project: Option<&str>, name: &str) -> bool {
+        self.launching.locked().1.iter().any(|(p, n)| p.as_deref() == project && n == name)
             || self.sessions().iter().any(|s| {
-                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == name
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                m.name == name && m.place.project.as_deref() == project
             })
     }
 
-    /// `name`, or `name-2`, `name-3`… whichever is free.
-    pub(crate) fn free_name(&self, name: &str) -> String {
-        if !self.name_taken(name) {
+    /// `Ok` when `name` is free in `project`; else a conflict that says where it's taken and
+    /// offers a free one.
+    pub(crate) fn name_free_or_why(&self, project: Option<&str>, name: &str) -> Result<(), Error> {
+        if !self.name_taken(project, name) {
+            return Ok(());
+        }
+        let place = match project.and_then(|p| self.find_project(p).ok()) {
+            Some(p) => format!("in project {}", p.slug),
+            None => "outside any project".to_owned(),
+        };
+        Err(Error::conflict(format!(
+            "a session named {name:?} exists {place}; try {:?}",
+            self.free_name(project, name)
+        )))
+    }
+
+    /// `name`, or `name-2`, `name-3`… whichever is free in `project`.
+    pub(crate) fn free_name(&self, project: Option<&str>, name: &str) -> String {
+        if !self.name_taken(project, name) {
             return name.to_owned();
         }
-        (2..).map(|k| format!("{name}-{k}")).find(|n| !self.name_taken(n)).expect("infinite")
+        (2..)
+            .map(|k| format!("{name}-{k}"))
+            .find(|n| !self.name_taken(project, n))
+            .expect("infinite")
+    }
+
+    /// A session's name as an address that finds it alone: `name` when no other session has
+    /// it, else `project/name`, else (a loose session sharing its name) its handle.
+    pub(crate) fn session_addr(&self, s: &Session) -> String {
+        let (name, project) = {
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            (m.name.clone(), m.place.project.clone())
+        };
+        let shared = self.sessions().iter().any(|o| {
+            o.id != s.id
+                && o.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == name
+        });
+        if !shared {
+            return name;
+        }
+        match project.and_then(|p| self.find_project(&p).ok()) {
+            Some(p) => format!("{}/{name}", p.slug),
+            None => {
+                let ids: Vec<SessionId> = self.sessions().iter().map(|s| s.id).collect();
+                format!("s:{}", short_handle(&s.id, &ids))
+            }
+        }
     }
 
     /// Sessions running (or exited) in a worktree.
@@ -847,22 +927,22 @@ impl Daemon {
         };
         // What it's for (UX1.24): `--title`, else the prompt it starts with.
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
+        let project = target.as_ref().map(|(_, p)| p.id.as_str());
         let name = match spec.name {
+            Some(n) if spec.name_or_next => self.free_name(project, &n),
             Some(n) => {
                 names::validate(&n).map_err(Error::invalid)?;
-                if self.name_taken(&n) {
-                    return Err(Error::conflict(format!("a session named {n:?} exists")));
-                }
+                self.name_free_or_why(project, &n)?;
                 n
             }
             // A name says what it's for: from its title or prompt (`fix-flaky-test`), else the
             // agent and a corvid (`claude-rook`, never `claude-2`), else a friendly pair.
             None => match (wording.as_deref().and_then(names::from_text), &agent) {
-                (Some(n), _) => self.free_name(&n),
+                (Some(n), _) => self.free_name(project, &n),
                 (None, Some(a)) if names::validate(a).is_ok() => {
-                    names::corvid(id.seed(), a, |n| self.name_taken(n))
+                    names::corvid(id.seed(), a, |n| self.name_taken(project, n))
                 }
-                _ => names::friendly(id.seed(), |n| self.name_taken(n)),
+                _ => names::friendly(id.seed(), |n| self.name_taken(project, n)),
             },
         };
         let place = Place {
@@ -1304,8 +1384,12 @@ impl Daemon {
             Request::Rename { addr, name } => {
                 let s = self.resolve(&addr)?;
                 names::validate(&name).map_err(Error::invalid)?;
-                if self.name_taken(&name) {
-                    return Err(Error::conflict(format!("a session named {name:?} exists")));
+                let (current, project) = {
+                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    (m.name.clone(), m.place.project.clone())
+                };
+                if current != name {
+                    self.name_free_or_why(project.as_deref(), &name)?;
                 }
                 s.rename(name);
                 let info = self.info(&s);

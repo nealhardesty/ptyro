@@ -264,9 +264,9 @@ impl Daemon {
                     Some(n) => {
                         (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite")
                     }
-                    None => {
-                        names::friendly(SessionId::new().seed(), |n| taken(n) || self.name_taken(n))
-                    }
+                    None => names::friendly(SessionId::new().seed(), |n| {
+                        taken(n) || self.name_taken(Some(&p.id), n)
+                    }),
                 }
             }
         };
@@ -650,7 +650,8 @@ impl Daemon {
         // Scripts can't ask questions; a refusing guard still refuses.
         let res = self.resolve_profile(None, Some(&target), &workspace, false, true)?;
         let label = role.strip_prefix("run:").unwrap_or(&role);
-        let name = self.free_name(&format!("{}.{label}", wt.name.trim_start_matches('@')));
+        let name =
+            self.free_name(Some(&p.id), &format!("{}.{label}", wt.name.trim_start_matches('@')));
         self.launch(Launch {
             id: SessionId::new(),
             argv,

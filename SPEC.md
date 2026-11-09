@@ -162,8 +162,10 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   computed as the shortest unambiguous lowercase Crockford-base32 suffix (min 4 chars).
 - Sessions and worktrees also get a **name** and a **title** (**[built UX1.24]**):
   - The **name** is the address: `[a-z0-9._-]`, 1–64 characters, chosen at creation and changed
-    only by an explicit rename. Session names are globally unique; worktree names are unique per
-    project. Defaults are below.
+    only by an explicit rename. Session and worktree names are unique per project; sessions in
+    no project share one scope (owner, 2026-11-09). A bare name two projects share is ambiguous:
+    the error lists each `project/name`, except that mail from an agent means the session in
+    the sender's own project. Defaults are below.
   - The **title** is free text for people to read: the task, a PR title. It may change at any
     time (`retitle`), is never an address, and is shown in the sidebar and headers, not used in
     commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.

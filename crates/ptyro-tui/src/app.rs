@@ -6016,8 +6016,14 @@ impl App {
                     return Ok(Some("unchanged".into()));
                 }
                 name(t)?;
-                if self.sessions.iter().any(|s| s.id != *id && s.name == t) {
-                    return Err(format!("a session named {t} exists"));
+                // Unique per project (SPEC §2.3): another project's session may share it.
+                let project = self.session(*id).and_then(|s| s.project.clone());
+                if self.sessions.iter().any(|s| s.id != *id && s.name == t && s.project == project)
+                {
+                    return Err(match project.as_deref().and_then(|p| self.project(p)) {
+                        Some(p) => format!("a session named {t} exists in {}", p.slug),
+                        None => format!("a session named {t} exists"),
+                    });
                 }
             }
             PromptKind::RenameWorkspace(old) => {
@@ -9535,6 +9541,12 @@ mod tests {
             Err("a session named quiet-jay exists".into())
         );
         assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook").is_ok());
+
+        // Names are unique per project: another project's session may share it.
+        let mut elsewhere = session("calm-crow");
+        elsewhere.project = Some("p9".into());
+        app.sessions.push(elsewhere);
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "calm-crow").is_ok());
     }
 
     #[test]

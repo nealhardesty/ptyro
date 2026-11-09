@@ -1076,3 +1076,59 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
     let Reply::Session { info } = c.request(run("crlf")).await.unwrap() else { panic!() };
     screen_with(&w.d, &c, &info.name, "crlf-ran").await;
 }
+
+/// Session names are unique per project (SPEC §2.3): two projects may both have a `build`, a bare
+/// `build` is then ambiguous and the error says which to type, and `project/name` finds each.
+#[tokio::test]
+async fn session_names_are_unique_per_project() {
+    let w = World::new("");
+    for p in ["app", "lib"] {
+        let root = w.repo(p, &[]);
+        w.ok(&["project", "add", root.to_str().unwrap()]);
+    }
+    let c = w.d.client().await.unwrap();
+    let named = |wt: &str, name: &str| SpawnSpec { name: Some(name.into()), ..sh("sleep 30", wt) };
+    let app = spawn(&c, named("app/@root", "build")).await.unwrap();
+    let lib = spawn(&c, named("lib/@root", "build")).await.expect("another project may share it");
+
+    // Taken in its own project: refused, with where and a free one to try.
+    let e = spawn(&c, named("app/@root", "build")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert!(e.message.contains("in project app") && e.message.contains("build-2"), "{}", e.message);
+
+    // A bare name two projects share: ambiguous, naming each; `project/name` finds each.
+    let e = c.request(Request::Get { addr: "build".into() }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+    assert!(e.message.contains("app/build") && e.message.contains("lib/build"), "{}", e.message);
+    for (addr, want) in [("app/build", &app), ("lib/build", &lib)] {
+        let Reply::Session { info } = c.request(Request::Get { addr: addr.into() }).await.unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(info.id, want.id, "{addr}");
+    }
+
+    // Rename follows the same rule: into another project's name is fine, into its own isn't.
+    let loose = spawn(
+        &c,
+        SpawnSpec {
+            argv: vec!["sleep".into(), "30".into()],
+            cwd: w.home(),
+            ..SpawnSpec::default()
+        },
+    )
+    .await
+    .unwrap();
+    let rename = |addr: String, name: &str| Request::Rename { addr, name: name.into() };
+    c.request(rename(loose.id.full(), "build")).await.expect("no loose session is named build");
+    let e = c.request(rename("lib/build".into(), "build")).await;
+    assert!(e.is_ok(), "renaming to its own name changes nothing: {e:?}");
+    let e = w.cli(&["rename", "app/build", "build"]);
+    assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
+    // Three now: the loose one is offered by its handle.
+    let e = c.request(Request::Get { addr: "build".into() }).await.unwrap_err();
+    assert!(e.message.starts_with("3 sessions") && e.message.contains("s:"), "{}", e.message);
+    let spare = spawn(&c, named("lib/@root", "spare")).await.unwrap();
+    let e = c.request(rename(spare.id.full(), "build")).await.unwrap_err();
+    assert!(e.message.contains("in project lib"), "{}", e.message);
+}

@@ -442,7 +442,8 @@ impl Daemon {
             agent: Some(agent.to_owned()),
             cwd: dir.clone(),
             prompt: Some(prompt),
-            name: Some(self.free_name("judge")),
+            name: Some("judge".into()),
+            name_or_next: true,
             confirmed: true,
             unqueued: true,
             ..Default::default()

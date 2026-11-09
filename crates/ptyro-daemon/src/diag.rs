@@ -70,7 +70,7 @@ impl Daemon {
         let dir = self.paths.data.join("selftest");
         std::fs::create_dir_all(&dir).map_err(|e| Error::internal(e.to_string()))?;
         let id = SessionId::new();
-        let name = self.free_name(&format!("selftest-{adapter}"));
+        let name = self.free_name(None, &format!("selftest-{adapter}"));
         let s = self
             .launch(Launch {
                 id,

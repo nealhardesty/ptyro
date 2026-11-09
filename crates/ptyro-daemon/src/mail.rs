@@ -425,7 +425,12 @@ impl Daemon {
                 }
                 v
             }
-            t => vec![self.resolve(t)?.id.full()],
+            // A bare name another project shares means the sender's own project's.
+            t => {
+                let near =
+                    self.resolve(sender).ok().and_then(|s| s.meta.locked().place.project.clone());
+                vec![self.resolve_near(t, near.as_deref())?.id.full()]
+            }
         })
     }
 
@@ -1368,7 +1373,8 @@ impl Daemon {
                     prompt: Some(format!(
                         "{prompt}\n\n(You were started by {lead_name}, the lead agent of run {run}. Report back with `ptyro msg send @lead \"…\"` when you have something.)"
                     )),
-                    name: name.map(|n| self.free_name(&ptyro_core::model::slugify(&n))),
+                    name: name.map(|n| ptyro_core::model::slugify(&n)),
+                    name_or_next: true,
                     env,
                     confirmed: true,
                     unqueued: true,

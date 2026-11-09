@@ -20,7 +20,8 @@ Conventions:
 ## Naming sessions and worktrees
 
 - **`SESSION`** is a name (`brisk-rook`), `project/name`, a short handle from `ptyro ls`
-  (`x7k2`), `@last`, or `@focused` (what your TUI shows).
+  (`x7k2`), `@last`, or `@focused` (what your TUI shows). Names are unique per project, so when
+  two projects both have a `build`, say which: `myrepo/build`.
 - **`SESSIONS…`**: where several are allowed you can also use a glob (`'build-*'`), `@all`,
   `@live` (or `@running`), `@exited`, `@working`, `@blocked`, `@idle`, `@done` or `@error`, joined
   with commas (`ptyro rm @exited`).

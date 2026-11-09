@@ -65,7 +65,8 @@ impl Daemon {
         let spec = SpawnSpec {
             worktree: wt,
             cwd,
-            name: Some(self.free_name(&format!("{base}.shell"))),
+            name: Some(format!("{base}.shell")),
+            name_or_next: true,
             env,
             size,
             workspace,

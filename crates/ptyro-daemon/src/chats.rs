@@ -2166,7 +2166,7 @@ impl Daemon {
                 id: session_id,
                 argv: args,
                 kind: SessionKind::Agent,
-                name: self.free_name(&format!("chat-{handle}")),
+                name: self.free_name(None, &format!("chat-{handle}")),
                 cwd: dir,
                 size: TermSize::new(100, 30),
                 client_env: Default::default(),

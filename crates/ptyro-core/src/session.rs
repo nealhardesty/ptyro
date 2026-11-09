@@ -539,6 +539,10 @@ pub struct SpawnSpec {
     pub prompt: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    /// The daemon's own starts (`scratchpad`, `judge`, a run's steps): a `name` taken in the
+    /// project it lands in becomes `name-2`, … instead of being refused. Never from a client.
+    #[serde(skip)]
+    pub name_or_next: bool,
     /// Extra variables from the requesting client (SPEC §5.1 `client_env`).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -672,6 +676,19 @@ impl Show {
 }
 
 impl SessionInfo {
+    /// Its name as an address that finds it alone among `all` (names are unique per project,
+    /// SPEC §2.3): `name`, else `project/name` (`slug` gives a project id's slug), else its
+    /// handle.
+    pub fn address(&self, all: &[SessionInfo], slug: impl Fn(&str) -> Option<String>) -> String {
+        if !all.iter().any(|o| o.id != self.id && o.name == self.name) {
+            return self.name.clone();
+        }
+        match self.project.as_deref().and_then(slug) {
+            Some(p) => format!("{p}/{}", self.name),
+            None => format!("s:{}", self.handle),
+        }
+    }
+
     /// A session of its own: not a worktree's quick terminal, not the scratchpad's editor.
     pub fn is_real(&self) -> bool {
         !self.quick && !self.pad

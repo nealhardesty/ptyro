@@ -1087,7 +1087,7 @@ impl Daemon {
             .as_deref()
             .map(|n| ptyro_run::template::render(n, ctx))
             .unwrap_or_else(|| def.id.clone());
-        let name = self.free_name(&ptyro_core::model::slugify(&name));
+        let name = ptyro_core::model::slugify(&name);
         let mut env = self.step_env(run, &def.id);
         let out = PathBuf::from(&env["PTYRO_STEP_OUT"]);
         let _ = std::fs::remove_file(&out);
@@ -1103,6 +1103,7 @@ impl Daemon {
             profile: sp.profile.as_deref().map(|x| ptyro_run::template::render(x, ctx)),
             prompt: Some(prompt),
             name: Some(name),
+            name_or_next: true,
             env,
             confirmed: true,
             unqueued: true,

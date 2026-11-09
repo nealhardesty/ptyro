@@ -336,7 +336,8 @@ impl Daemon {
         let spec = SpawnSpec {
             cwd,
             argv,
-            name: Some(self.free_name("scratchpad")),
+            name: Some("scratchpad".into()),
+            name_or_next: true,
             env,
             size,
             workspace,

@@ -149,7 +149,8 @@ impl App {
             (crate::app::Focus::Sidebar, Some(Row::Session(id) | Row::Quick(id))) => Some(id),
             _ => self.focused_session(),
         };
-        id.and_then(|id| self.session(id)).map(|s| s.name.clone())
+        id.and_then(|id| self.session(id))
+            .map(|s| s.address(&self.sessions, |p| self.project(p).map(|p| p.slug.clone())))
     }
 
     /// Resolve words until one needs asking; then ask (a picker or a prompt) and come back.
