@@ -415,6 +415,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         "project.line_endings",
         "Rewrite this project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
     ),
+    a("project.rename", "Rename this project: its slug, the address of its worktrees and sessions"),
     a("project.pin", "Pin this project to a profile (its sessions run as it)"),
     a("project.unpin", "Unpin this project from its profile"),
     a("project.leave", "Take this project out of this workspace (it stays registered)"),
@@ -426,6 +427,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Show this worktree's work in the main checkout (for your IDE and dev server)",
     ),
     a("worktree.unpair", "Give the main checkout back, your edits carried to the worktree"),
+    a(
+        "worktree.rename",
+        "Rename this worktree: its address (its branch and directory stay; C-t: its title)",
+    ),
     a("worktree.rename_branch", "Rename this worktree's branch (never once it's pushed)"),
     a("workspace.rename", "Rename this workspace"),
     a("workspace.remove", "Remove this workspace (its projects stay registered)"),

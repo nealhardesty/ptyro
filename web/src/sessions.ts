@@ -250,7 +250,8 @@ export function newTask(where?: string, task?: string): void {
 const notice = (r: any, ok: string): void => { if (r) ui.toast(ok); };
 
 export function renameSession(s: Session): void {
-  form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: `Its address: what you type to find it, unique in its project. ${NAME_HINT}` }], "Rename", async (v) => {
+  // Another machine's session is renamed there, by the name it has there (MM1.B).
+  form("Rename", [{ key: "name", label: "Name", value: splitMachine(s.name)[1], required: true, slug: "name", hint: `Its address: what you type to find it, unique in its project. ${NAME_HINT}` }], "Rename", async (v) => {
     await conn.request({ t: "rename", addr: addr(s), name: v.name });
     ui.toast(`Renamed to ${v.name}`);
   });
