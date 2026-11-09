@@ -759,6 +759,8 @@ pub struct App {
     pub usage: HashMap<(String, String), Usage>,
     /// The short name of the machine the daemon runs on (a remote daemon's, not ours).
     pub machine: Option<String>,
+    /// Its computer's load average (`[ui] load`), as the daemon last said.
+    pub host_load: Option<ptyro_protocol::HostLoad>,
     /// Runs (M7), newest first, kept current by `RunUpdated`.
     pub runs: Vec<ptyro_run::wire::RunInfo>,
     /// Whether our outer terminal window has focus (a watched session raises no attention).
@@ -908,6 +910,7 @@ impl App {
             inbox: Vec::new(),
             usage: HashMap::new(),
             machine: None,
+            host_load: None,
             runs: Vec::new(),
             terminal_focused: true,
             sidebar: config.ui.sidebar && !opts.raw,
@@ -1052,6 +1055,7 @@ impl App {
         }
         if let Ok(Reply::Status { status }) = client.request(Request::Status).await {
             self.machine = status.machine;
+            self.host_load = status.load;
         }
         if self.config.chat.enabled
             && let Ok(Reply::Chats { chats }) = client
@@ -1836,6 +1840,7 @@ impl App {
             DomainEvent::UsageUpdated { usage } => {
                 self.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
             }
+            DomainEvent::HostLoad { load } => self.host_load = load,
             DomainEvent::RunUpdated { run } => self.run_updated(run),
             // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
             DomainEvent::SetupProgress { .. } => {}
@@ -10127,6 +10132,20 @@ mod tests {
             by: Some("file".into()),
         });
         assert!(!screen(&app).contains("✎"));
+    }
+
+    #[test]
+    fn the_load_average_is_on_the_status_bar_while_the_daemon_sends_it() {
+        let mut app = app();
+        app.config.ui.status_bar = true;
+        let load = ptyro_protocol::HostLoad { avg: [52, 148, 1240], cpus: 8 };
+        app.on_event(DomainEvent::HostLoad { load: Some(load) });
+        assert!(screen(&app).contains("0.52 1.48 12.40"), "{}", screen(&app));
+        app.config.ui.load = false;
+        assert!(!screen(&app).contains("0.52"), "off here hides it at once");
+        app.config.ui.load = true;
+        app.on_event(DomainEvent::HostLoad { load: None });
+        assert!(!screen(&app).contains("0.52"), "off in the daemon: gone");
     }
 
     #[test]

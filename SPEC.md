@@ -1087,6 +1087,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
+when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
+`HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
+client ignores both.
+
 **[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
 entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
 `keeps`) unless `updates.keep_installer` keeps it, and its state `system` when its folder is an
@@ -2848,7 +2853,11 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   glyphs, diffstat, ports, attention badges; inbox below.
 - **Main area**: one or more panes (each showing one session), with a header line: status, agent,
   branch, diffstat, ports, controller/size badge.
-- **Status bar**: global counts, mode indicator, key hints, clock.
+- **Status bar**: global counts, mode indicator, key hints, clock. **[built SH.14]** The load
+  average of the daemon's computer (`0.52 0.48 0.40`, from `/proc/loadavg` or `getloadavg`; none
+  on Windows), first on the right so it is the first to go on a narrow terminal; amber once the
+  1-minute load reaches the CPU count, red at twice it. `[ui] load = false` stops the daemon
+  sampling it, for every client. The web shows it beside the machine's name in its header.
 - Status glyphs: `●` working (animated pulse), `◉` blocked (colour: warning), `○` idle, `✓` done,
   `✗` errored, `■` exited, `☾` dormant, `◌` low-confidence. Colours are theme tokens; respects
   `NO_COLOR`.

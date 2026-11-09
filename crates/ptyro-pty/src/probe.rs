@@ -191,6 +191,31 @@ pub fn exec_env_var(_pid: u32, _name: &str) -> Option<String> {
     None
 }
 
+/// The system's load average over 1, 5 and 15 minutes: `/proc/loadavg` on Linux (WSL too),
+/// `getloadavg` on macOS; Windows keeps none.
+#[cfg(target_os = "linux")]
+pub fn load_average() -> Option<[f64; 3]> {
+    parse_loadavg(&std::fs::read_to_string("/proc/loadavg").ok()?)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_loadavg(s: &str) -> Option<[f64; 3]> {
+    let mut it = s.split_ascii_whitespace().map(str::parse::<f64>);
+    Some([it.next()?.ok()?, it.next()?.ok()?, it.next()?.ok()?])
+}
+
+#[cfg(target_os = "macos")]
+pub fn load_average() -> Option<[f64; 3]> {
+    let mut avg = [0f64; 3];
+    // SAFETY: `avg` holds the three samples asked for.
+    (unsafe { libc::getloadavg(avg.as_mut_ptr(), 3) } == 3).then_some(avg)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn load_average() -> Option<[f64; 3]> {
+    None
+}
+
 /// Local wall-clock hour and minute (for the TUI's clock), honouring `TZ`.
 pub fn local_time_hm() -> Option<(u8, u8)> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
@@ -291,6 +316,12 @@ pub fn others_in_group(_pgid: u32) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_load_average_is_the_first_three_numbers_of_proc_loadavg() {
+        assert_eq!(super::parse_loadavg("0.52 0.48 0.40 2/1234 5678\n"), Some([0.52, 0.48, 0.40]));
+        assert_eq!(super::parse_loadavg("0.52 0.48"), None);
+    }
+
     #[test]
     fn versions_are_recognised() {
         for v in ["2.1.309", "v1.4", "0.143.0"] {

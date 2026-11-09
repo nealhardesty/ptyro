@@ -602,7 +602,7 @@ function daemonView(): HTMLElement {
   poll("daemon", () => status.refresh(""), 5000);
   const s = status.get("");
   const body = pending(status, "") ?? h("div", { class: "stack-in", title: tip("daemon.status") },
-    facts([["Version", `${s.version} (protocol ${s.proto.major}.${s.proto.minor})`], ["Process", String(s.pid)], ["Up for", ago(s.started_ms)], ["Sessions", `${s.sessions} (${s.live_sessions} running)`], ["Clients", String(s.clients)],
+    facts([["Version", `${s.version} (protocol ${s.proto.major}.${s.proto.minor})`], ["Process", String(s.pid)], ["Up for", ago(s.started_ms)], ["Load", s.load ? `${(s.load.avg as number[]).map((a) => (a / 100).toFixed(2)).join(" ")} (${s.load.cpus} CPUs)` : null], ["Sessions", `${s.sessions} (${s.live_sessions} running)`], ["Clients", String(s.clients)],
       ["Upgrades", s.generation ? `${s.generation}${s.rolled_back ? " (the last was rolled back)" : ""}` : null],
       ["Holds WSL", s.wsl_hold ? aboutDoc(null, s).daemon.holds_wsl : null],
       ["Memory", s.metrics ? `${Math.round(s.metrics.rss_kib / 1024)} MB · ${s.metrics.open_fds} fds · lag ${s.metrics.loop_lag_ms_max} ms` : null], ["Socket", s.socket], ["Logs", s.log_dir]]),

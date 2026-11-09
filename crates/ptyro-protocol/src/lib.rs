@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 36 };
+pub const PROTO: Version = Version { major: 1, minor: 37 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1482,6 +1482,36 @@ pub struct DaemonStatus {
     /// `None` outside WSL (and from a daemon older than 0.0.48).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl_hold: Option<WslHold>,
+    /// The computer's load average (1.37), while `[ui] load` is on and the system has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<HostLoad>,
+}
+
+/// The load average of the computer the daemon runs on (tmux users keep it in their status bar):
+/// runnable processes averaged over 1, 5 and 15 minutes, in hundredths, and how many CPUs share
+/// them (a load at or above that many is a machine that is busy).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostLoad {
+    pub avg: [u32; 3],
+    pub cpus: u32,
+}
+
+impl HostLoad {
+    /// `0.52 0.48 0.40`.
+    pub fn text(&self) -> String {
+        let f = |h: u32| format!("{}.{:02}", h / 100, h % 100);
+        self.avg.map(f).join(" ")
+    }
+
+    /// How busy: 0 under one runnable process per CPU, 1 from there, 2 from twice that.
+    pub fn level(&self) -> u8 {
+        let per = self.cpus.max(1) * 100;
+        match self.avg[0] {
+            a if a >= 2 * per => 2,
+            a if a >= per => 1,
+            _ => 0,
+        }
+    }
 }
 
 /// The daemon's hold on WSL: a `wsl.exe` back into its own distro, so WSL doesn't stop the distro
@@ -2156,6 +2186,11 @@ pub enum DomainEvent {
     },
     UsageUpdated {
         usage: Usage,
+    },
+    /// The daemon's computer's load average changed (1.37; `[ui] load`): `None` once it is off.
+    HostLoad {
+        #[serde(default)]
+        load: Option<HostLoad>,
     },
     /// A run changed (a step started or ended, a gate opened or closed).
     RunUpdated {
