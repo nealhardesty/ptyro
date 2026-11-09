@@ -108,6 +108,12 @@ Status markers used below:
     lists them, while one is being worked on). ROADMAP WEB1 closed them all.
   - Waivers are for commands that are another program's tool (agents' own mail, hooks, shell
     completions), never for "not built yet".
+  - **Creating shows every option.** *(owner, 2026-11-09)* Whatever a client creates (a
+    workspace, profile, session, worktree, project, shell, change set, fan-out, recipe run,
+    PR, device, machine…), its form shows every option the CLI's command takes, each with its
+    default visible and, wherever the answers are known (profiles, agents, projects,
+    workspaces, recipes), as a pick rather than free text. The quick path stays quick: ⏎ (or
+    the button) takes the defaults. In the TUI that is the creation form (§11.5a).
 - **Boring persistence, sharp terminal.** SQLite + plain files for state; all the cleverness goes
   into terminal fidelity and the attach experience.
 - **Small surface, deep quality.** Fewer features, each one polished, before breadth.
@@ -3421,8 +3427,8 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   machine's first in the daemon's order, then each other machine's (`● laptop2 / work`, the dot in
   the machine's colour, then `offline 14:02`, `other version` with its fix, or `connecting…`, then
   its profile badge), each folding (`ws:<name>` in `collapsed`), with its projects → worktrees →
-  sessions and its other sessions under it. A project in several workspaces shows once, under the
-  first. A session whose workspace isn't shown sits under its machine's `main`. Rows of another
+  sessions and its other sessions under it. A project in several workspaces shows under each (since 2026-11-09, §11.5a), its
+  sessions under the one they started in. A session whose workspace isn't shown sits under its machine's `main`. Rows of another
   machine's sessions show their names without the machine (the header says it).
 - **The workspace you're in** is the selected row's in the sidebar, else the focused pane's
   session's (`enter_workspace`): `n`, `C-n`, `N`, the status bar, quick new's label and new
@@ -3537,6 +3543,35 @@ mouse), drag to select (copy mode), drag split borders.
 - **Inspector** (M6): Diff (file list + side-by-side/unified hunks, syntax highlighted via
   `syntect` optional), Commits, Checks, Ports, Events (status timeline — "why is it blocked?").
 - **Fan-out compare** (M7): N worktrees side by side: diffstat, test result, agent summary, pick.
+
+### 11.5a The creation form **[decided 2026-11-09 (owner); built 2026-11-09]**
+
+Everything the TUI creates opens one form (`crates/ptyro-tui/src/form.rs`, `Overlay::Form`)
+holding every option of the matching CLI command (§1.3, "Creating shows every option"):
+
+- **Fields.** Text (a name field holds itself to `[a-z0-9._-]` as it's typed, a dimmed
+  placeholder says what empty means), a choice (`‹ value ›`, ←→ or a letter changes it), or
+  ticks (space ticks, ←→ moves, `a` all). The selected field's hint is under the fields.
+- **Keys.** ⏎ creates from any field, so typing a name and ⏎ is still the whole quick path;
+  Tab/↑↓ move; `C-u` clears; Esc cancels. A field that is needed or wrong is selected and
+  said in red; the form stays.
+- **What it makes.** Native requests where the TUI had them (workspace, PR, fan-out, chat
+  import, project, its workspaces, a SHELLS shell, a session or worktree), else the CLI's own
+  command run full sized (`Make::Cli`: each field is a positional word, `--flag value`,
+  repeated flags from a comma list, a switch, or a subset such as `--gates`/`--no-gates`).
+- **Where.** `+ new workspace` (name, profile (the one named like it chosen) or
+  `+ new profile…`, which makes it and comes back to this form, notifications);
+  `profile.new` (name, label, colour, each agent's directory to adopt, git identity, SSH
+  key, matching remotes, then a login); the task box's `C-o` and `N` (task, agent, shell or
+  command, profile, where, start from, base, name, title, verify, structured, setup,
+  fetch); `project.add` and `project.workspaces`; `shells.command`; `sets.new`, `set.add`,
+  `recipe.run` (a field per variable), `session.lead`, fan-out (`F` in the runs view), `P`
+  in the inspector, `remote.pair`, `machine.add`, `machine.pair`, `chat.import`.
+- **Quick creates stay quick.** `n` ⏎ (the task box), `C-q C-c` (a shell, at once) and
+  `Alt-N` keep their one-key paths; their form is one key away (`C-o`, `shells.command`).
+- **A project in several workspaces** shows under each in the sidebar; a session is listed
+  under one: its home workspace when that has the project, else the first that does
+  (`tree::Inputs::home`). Selection keeps to the copy of a row nearest where it was.
 
 ---
 

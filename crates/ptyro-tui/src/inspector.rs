@@ -241,20 +241,8 @@ impl App {
                 self.inspector_load();
                 return;
             }
-            (_, Some('P')) => {
-                let draft = self.config.github.draft;
-                self.request(
-                    Pending::Done(String::new()),
-                    Request::PrCreate {
-                        addr: i.worktree.clone(),
-                        draft,
-                        title: None,
-                        body: None,
-                        base: None,
-                    },
-                );
-                self.toast("pushing and opening a PR…");
-            }
+            // Every option of `ptyro pr create` (SPEC §11.5a).
+            (_, Some('P')) => self.open_pr_form(i.worktree.clone()),
             (_, Some('I')) => {
                 let name = self
                     .worktree(&i.worktree)

@@ -3,6 +3,7 @@
 // a shell's page has the strip (tmux's status line: tap a number, swipe on a phone); its ⋯ menu
 // moves it to another number, watches it, or adopts it into a worktree. The web has no Alt it
 // can count on, so the strip and the digits on the list are its keys.
+import { data } from "./data.js";
 import { startSession } from "./flow.js";
 import { shellLabel } from "./shellkit.js";
 import { actions, ask, enc, form, go, h, menu, ui } from "./kit.js";
@@ -81,16 +82,26 @@ export function newShellMenu(workspace) {
     menu("New in SHELLS", [
         { title: tip("shells.new"), label: "A shell", hint: "The next free number", run: () => newLooseShell({ workspace }) },
         { title: tip("shells.scratch"), label: "A scratch shell", hint: "A new, empty directory that goes with it", run: () => newLooseShell({ workspace, scratch: true }) },
-        { title: tip("shells.new"), label: "A command…", hint: "htop, ssh prod, a dev server", run: () => commandForm(workspace) },
+        { title: tip("shells.new"), label: "A command, or with options…", hint: "htop, ssh prod, a dev server; its directory, number, name", run: () => commandForm(workspace) },
     ]);
 }
+/// Everything `ptyro shells new` takes: a command (else a shell), where, its number, name, title,
+/// a scratch directory, and the workspace.
 function commandForm(workspace) {
-    form("A command in SHELLS", [
-        { key: "cmd", label: "Command", placeholder: "htop", required: true },
-        { key: "slot", label: "Number (empty: the next free one)", type: "number" },
+    const wss = [...new Set(["main", ...[...data.workspaces.values()].map((w) => w.name)])];
+    const ws = workspace ?? listWorkspace();
+    form("New in SHELLS", [
+        { key: "cmd", label: "Command", placeholder: "empty: your shell", hint: "e.g. htop, ssh prod, npm run dev" },
+        { key: "dir", label: "Directory", placeholder: "~", hint: "Where it starts (default: your home directory)" },
+        { key: "slot", label: "Number", type: "number", placeholder: "the next free one", hint: "A number that's taken is refused" },
+        { key: "workspace", label: "Workspace", type: "select", options: wss.includes(ws) ? wss : [ws, ...wss], value: ws, more: true },
+        { key: "name", label: "Name", slug: "name", placeholder: "a friendly name is picked for you", hint: "Its address", more: true },
+        { key: "title", label: "Title", placeholder: "what it's for", hint: "For people to read", more: true },
+        { key: "scratch", label: "In a scratch directory", type: "check", hint: "A new, empty directory of its own, which goes with it (instead of Directory)", more: true },
     ], "Start", async (v) => {
         const slot = v.slot ? Number(v.slot) : undefined;
-        await startSession({ cwd: "~", argv: [], command: String(v.cmd), loose: true, slot: slot ?? null, workspace: workspace ?? null });
+        await startSession({ cwd: v.dir || "~", argv: [], command: v.cmd || undefined, loose: true, slot: slot ?? null, workspace: v.workspace || null,
+            name: v.name || undefined, title: v.title || undefined, scratch: !!v.scratch });
     });
 }
 /// The SHELLS group of the session list: numbered cards, or `＋ new shell`.

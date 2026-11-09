@@ -136,5 +136,22 @@ store.set("k", "v");
   assert.equal(setupSides({ entries: [e("windows", true, {}), e("windows", true, null, "no way")] }), 1);
   assert.equal(setupSides({ entries: [e("windows", true, {}), e("wsl", false, {}), e("wsl", true, null, null)] }), 1);
 }
+{
+  // Creation forms' pickers: fan-out candidates cycle through the ticked agents (`fanout -n`),
+  // a profile select lists the machine's own profiles by their bare names, a new workspace
+  // starts with the profile named like it, and agent arguments split as a shell would.
+  const { cycle, profileChoices, profileFor, argWords } = await import("../dist/kit.js");
+  assert.deepEqual(cycle(["claude"], 2), ["claude", "claude"]);
+  assert.deepEqual(cycle(["claude", "codex"], 3), ["claude", "codex", "claude"]);
+  assert.deepEqual(cycle(["claude", "codex"], 0), ["claude", "codex"]);
+  assert.deepEqual(cycle([], 3), []);
+  const ps = [{ name: "default", label: "default" }, { name: "work", label: "Acme" }, { name: "lap:home", label: "home", machine: "lap" }];
+  assert.deepEqual(profileChoices(ps, null), [["default", "default"], ["work", "work (Acme)"]]);
+  assert.deepEqual(profileChoices(ps, "lap"), [["home", "home"]]);
+  assert.equal(profileFor(["default", "work"], "work"), "work");
+  assert.equal(profileFor(["default", "work"], "play"), "default");
+  assert.deepEqual(argWords(`--model opus  --name "a b" 'c d'`), ["--model", "opus", "--name", "a b", "c d"]);
+  assert.deepEqual(argWords("   "), []);
+}
 console.log("ok");
 process.exit(0);

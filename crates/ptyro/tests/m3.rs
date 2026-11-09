@@ -1007,20 +1007,23 @@ async fn tui_new_worktree_wizard() {
     let root = w.repo("tool", &[]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
     w.cli(&["new", "-d", "--wt", "tool/@root", "-n", "sh0", "--", "sh", "-c", "sleep 60"]);
-    // N, a name, ⏎, then the agent picker: ⏎ takes the default (claude).
+    // N: the form (SPEC §11.5a), its name selected with a free one in it; C-u, a name, ⏎:
+    // the default agent (claude) in a new worktree.
     let r = run(w
         .tui(&["attach", "sh0"])
         .send(1.5, "\\x11N")
         .snapshot(1.9)
-        .send(2.1, "spike")
-        .send(2.3, "\\r")
-        .snapshot(2.7)
-        .send(2.9, "\\r")
+        .send(2.1, "\\x15spike")
+        .snapshot(2.5)
+        .send(2.7, "\\r")
         .snapshot(4.5)
         .send(5.0, "\\x11d"))
     .await;
-    assert!(r.at(1.9).contains("New worktree in tool (new worktree)"), "{}", r.at(1.9));
-    assert!(r.at(2.7).contains("claude") && r.at(2.7).contains("no agent"), "{}", r.at(2.7));
+    let form = r.at(1.9);
+    assert!(form.contains("New worktree in tool (new worktree)"), "{form}");
+    assert!(form.contains("a new worktree of tool") && form.contains("claude (default)"), "{form}");
+    assert!(form.contains("Profile") && form.contains("Setup script"), "every option: {form}");
+    assert!(r.at(2.5).contains("› Name") && r.at(2.5).contains("spike"), "{}", r.at(2.5));
     let done = r.at(4.5);
     assert!(done.contains("fake-claude wt=spike"), "{done}");
     assert!(done.contains("▾ spike"), "{done}");

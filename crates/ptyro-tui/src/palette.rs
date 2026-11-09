@@ -24,6 +24,8 @@ pub enum Target {
     Here,
     Workspace(String),
     NewWorkspace,
+    /// `+ another path…` when adding a project: the form asks for it.
+    NewProjectPath,
     /// A machine, by name (MM1.B); empty: this one.
     Machine(String),
     Editor(String),

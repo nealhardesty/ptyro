@@ -9,6 +9,7 @@ mod chats;
 mod cli_actions;
 mod clock;
 pub mod copy;
+mod form;
 mod health;
 mod inspector;
 pub mod keymap;

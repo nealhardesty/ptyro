@@ -3,7 +3,7 @@
 // checks, checkpoints and merge train.
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, form, go, h, menu, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "runs": "Runs: recipes, fan-outs and leads, with the gates waiting for you",
@@ -88,18 +88,26 @@ function fanoutForm() {
         ui.toast("Add a project first");
         return;
     }
+    if (!agents.length) {
+        ui.toast("Install an agent first");
+        return;
+    }
     form("Fan out", [
         { key: "prompt", label: "Prompt", type: "textarea", rows: 4, required: true, placeholder: "The task every candidate gets" },
-        { key: "agents", label: "Agents", value: `${data.defaultAgent}, ${data.defaultAgent}`, required: true, hint: `Comma separated, repeats allowed: ${agents.join(", ")}` },
+        { key: "agents", label: "Agents", type: "checks", options: agents, value: [agents.includes(data.defaultAgent) ? data.defaultAgent : agents[0]], required: true, hint: "The candidates take turns through the ticked agents" },
+        { key: "n", label: "Candidates", type: "number", value: 2, hint: "How many worktrees, each with its own agent" },
         { key: "project", label: "Project", type: "select", options: projects.map((p) => [p.id, p.slug]) },
-        { key: "test", label: "Test command", placeholder: "e.g. cargo test", hint: "Run in each candidate when its agent finishes" },
-        { key: "verify", label: "Done when", placeholder: "e.g. cargo test", hint: "A candidate only counts as done once this passes" },
-        { key: "judge", label: "Judge", placeholder: "an agent, e.g. claude", hint: "Scores the candidates, advisory" },
-        { key: "structured", label: "Chat mode (full tool-call visibility)", type: "check" },
+        { key: "test", label: "Test command", placeholder: "e.g. cargo test, or scripts.run.test", hint: "Run in each candidate when its agent finishes, to rank them" },
+        { key: "verify", label: "Done when", placeholder: "e.g. cargo test", hint: "A candidate only counts as done once this passes", more: true },
+        { key: "judge", label: "Judge", type: "select", options: [["", "No judge"], ...agents], hint: "An agent that scores the candidates' diffs, advisory", more: true },
+        { key: "base", label: "Base", placeholder: "default: the project's base, e.g. origin/main", hint: "The ref every candidate's branch starts from", more: true },
+        { key: "name", label: "Name prefix", slug: "name", placeholder: "default: from the prompt", hint: "The worktrees are called this, numbered", more: true },
+        { key: "timeout", label: "Time limit", placeholder: "e.g. 45m", hint: "Per candidate", more: true },
+        { key: "structured", label: "Chat mode (full tool-call visibility)", type: "check", more: true },
     ], "Start", async (v) => {
         const r = await conn.request({ t: "fanout", spec: {
-                agents: v.agents.split(",").map((s) => s.trim()).filter(Boolean), prompt: v.prompt, project: v.project,
-                test: v.test || null, verify: v.verify || null, judge: v.judge || null, structured: !!v.structured, base: null, name: null, timeout: null
+                agents: cycle(v.agents, Number(v.n) || 2), prompt: v.prompt, project: v.project,
+                test: v.test || null, verify: v.verify || null, judge: v.judge || null, structured: !!v.structured, base: v.base || null, name: v.name || null, timeout: v.timeout || null
             } });
         go(`#/run/${enc(r.run.state.id)}`);
     });
@@ -235,28 +243,32 @@ function recipeVar(v) {
 }
 function runRecipe(info) {
     const project = [...data.projects.values()];
-    const go1 = async (vars, trust, projectId) => {
-        const r = await conn.request({ t: "recipe_run", name: info.name, src: null, vars, project: projectId, base: null, trust });
+    const go1 = async (vars, trust, projectId, base) => {
+        const r = await conn.request({ t: "recipe_run", name: info.name, src: null, vars, project: projectId, base, trust });
         go(`#/run/${enc(r.run.state.id)}`);
     };
     form(`Run ${info.name}`, [
         ...info.vars.map(recipeVar),
         ...(project.length ? [{ key: "@project", label: "Project", type: "select", options: [["", "(none)"], ...project.map((p) => [p.id, p.slug])] }] : []),
+        { key: "@base", label: "Base", placeholder: "default: the project's base, e.g. origin/main", hint: "The ref its new worktrees start from", more: true },
     ], "Run", async (v) => {
         const vars = {};
         let projectId = null;
+        let base = null;
         for (const [k, val] of Object.entries(v)) {
             if (k === "@project")
                 projectId = val || null;
+            else if (k === "@base")
+                base = val || null;
             else if (val !== "")
                 vars[k] = String(val);
         }
         try {
-            await go1(vars, null, projectId);
+            await go1(vars, null, projectId, base);
         }
         catch (e) {
             if (info.untrusted) {
-                await new Promise((ok, bad) => { confirm("Trust this recipe?", `${errText(e)} It's from the repository, and runs commands on your computer.`, "Trust and run", () => go1(vars, info.untrusted, projectId).then(ok, bad), false); });
+                await new Promise((ok, bad) => { confirm("Trust this recipe?", `${errText(e)} It's from the repository, and runs commands on your computer.`, "Trust and run", () => go1(vars, info.untrusted, projectId, base).then(ok, bad), false); });
             }
             else
                 throw e;
@@ -284,20 +296,61 @@ const headline = (i) => {
 };
 function newSet() {
     const projects = [...data.projects.values()];
-    const picks = new Map();
+    const agents = data.agents.filter((a) => a.installed).map((a) => a.name);
+    const agentSel = (first) => h("select", {}, h("option", { value: "" }, first), ...agents.map((a) => h("option", { value: a }, a)));
+    const check = (label, on = false, value = "") => { const c = h("input", { type: "checkbox", value }); c.checked = on; return [c, h("label", { class: "field check" }, c, h("span", {}, label))]; };
+    const fold = (title, ...kids) => h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, title), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, ...kids));
+    // A member each: ticked, and its own agent, base and dependencies (`--agent`, `--base`, `--depends`).
+    const members = projects.map((p) => {
+        const [pick, pickRow] = check(p.slug);
+        const agent = agentSel("the layout's default");
+        const base = h("input", { placeholder: "default: the project's base", autocapitalize: "off", spellcheck: "false" });
+        const deps = h("div", { class: "field", role: "group", "aria-label": `${p.slug} depends on` });
+        const opts = h("div", { style: "display: grid; gap: 8px; padding-left: 28px" }, h("label", { class: "field" }, h("span", {}, "Agent"), agent), h("label", { class: "field" }, h("span", {}, "Base"), base), deps);
+        return { p, pick, pickRow, agent, base, deps, opts, on: new Set() };
+    });
+    const syncMembers = () => {
+        const chosen = members.filter((m) => m.pick.checked);
+        for (const m of members) {
+            m.opts.hidden = !m.pick.checked;
+            const others = chosen.filter((o) => o !== m);
+            m.deps.replaceChildren(...(others.length ? [h("span", {}, "Depends on"), ...others.map((o) => {
+                    const [c, r] = check(o.p.slug, m.on.has(o.p.slug), o.p.slug);
+                    c.addEventListener("change", () => { if (c.checked)
+                        m.on.add(o.p.slug);
+                    else
+                        m.on.delete(o.p.slug); });
+                    return r;
+                }), h("small", {}, "None ticked: the template's, else what the manifests suggest")] : []));
+        }
+    };
+    for (const m of members)
+        m.pick.addEventListener("change", syncMembers);
+    syncMembers();
     const name = h("input", { placeholder: "e.g. add-user-tier", autocapitalize: "off", spellcheck: "false" });
     const goal = h("textarea", { rows: 3, placeholder: "What the change is, across the repositories" });
+    const fromIssue = h("input", { placeholder: "a number in the first member's repository, or a URL", autocapitalize: "off", spellcheck: "false" });
     const tpl = h("select", {}, h("option", { value: "" }, "No template"));
     const layout = h("select", {}, ...[["lead", "A lead agent drafts the contract"], ["solo", "One agent, every member"], ["manual", "Nobody: you drive"]].map(([v, l]) => h("option", { value: v }, l)));
+    const lead = agentSel(`default (${data.defaultAgent})`);
+    const leadRow = h("label", { class: "field" }, h("span", {}, "Lead agent"), lead);
+    layout.addEventListener("change", () => { leadRow.hidden = layout.value === "manual"; });
+    const gates = ["contract", "push", "land"].map((g) => check({ contract: "Approve the contract", push: "Approve pushing", land: "Approve landing (the merge train)" }[g], true, g));
+    const integration = h("textarea", { rows: 2, placeholder: "e.g. make e2e — one command per line", autocapitalize: "off", spellcheck: "false" });
+    const [overlay, overlayRow] = check("Build against siblings' in-progress code (the overlays the manifests suggest)");
+    const wsNames = [...data.workspaces.values()].map((w) => w.name);
+    const workspace = h("select", {}, h("option", { value: "" }, "default"), ...wsNames.map((w) => h("option", { value: w }, w)));
     const err = h("p", { class: "form-err" });
     const s = sheet("New change set", [
         h("label", { class: "field" }, h("span", {}, "Name"), name),
-        h("div", { class: "field" }, h("span", {}, "Projects"), ...projects.map((p) => { const c = h("input", { type: "checkbox" }); picks.set(p.id, c); return h("label", { class: "field check" }, c, h("span", {}, p.slug)); })),
+        h("div", { class: "field" }, h("span", {}, "Projects"), ...members.flatMap((m) => [m.pickRow, m.opts])),
         h("label", { class: "field" }, h("span", {}, "Goal"), goal),
         h("label", { class: "field" }, h("span", {}, "Template"), tpl),
-        h("label", { class: "field" }, h("span", {}, "Layout"), layout), err,
+        h("label", { class: "field" }, h("span", {}, "Layout"), layout), leadRow,
+        fold("More options", h("label", { class: "field" }, h("span", {}, "Goal from an issue"), fromIssue, h("small", {}, "Instead of writing the goal")), h("div", { class: "field", role: "group", "aria-label": "Gates" }, h("span", {}, "Where you approve"), ...gates.map(([, r]) => r), h("small", {}, "Untick all for no approvals")), h("label", { class: "field" }, h("span", {}, "Integration checks"), integration, h("small", {}, "Run in the set's root")), overlayRow, h("label", { class: "field" }, h("span", {}, "Workspace"), workspace)),
+        err,
     ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
-                const chosen = [...picks].filter(([, c]) => c.checked).map(([p]) => p);
+                const chosen = members.filter((m) => m.pick.checked);
                 if (!name.value.trim()) {
                     err.textContent = "Name it.";
                     return;
@@ -306,7 +359,16 @@ function newSet() {
                     err.textContent = "Pick the projects, or a template.";
                     return;
                 }
-                const spec = (trust) => ({ name: name.value.trim(), projects: chosen, template: tpl.value || null, lead: null, layout: layout.value, goal: goal.value.trim() || null, from_issue: null, depends: {}, agents: {}, bases: {}, gates: null, integration: [], workspace: null, overlay: false, env: {}, trust });
+                const on = gates.filter(([c]) => c.checked).map(([c]) => c.value);
+                const map = (f) => Object.fromEntries(chosen.map((m) => [m.p.slug, f(m).trim()]).filter(([, v]) => v));
+                const depends = Object.fromEntries(chosen.filter((m) => m.on.size).map((m) => [m.p.slug, [...m.on].filter((d) => chosen.some((o) => o.p.slug === d))]));
+                const spec = (trust) => ({
+                    name: name.value.trim(), projects: chosen.map((m) => m.p.id), template: tpl.value || null, lead: (layout.value !== "manual" && lead.value) || null, layout: layout.value,
+                    goal: goal.value.trim() || null, from_issue: fromIssue.value.trim() || null, depends, agents: map((m) => m.agent.value), bases: map((m) => m.base.value),
+                    // All three ticked: the default (the template's, else all three); none: no approvals.
+                    gates: on.length === gates.length ? null : on,
+                    integration: integration.value.split("\n").map((l) => l.trim()).filter(Boolean), workspace: workspace.value || null, overlay: overlay.checked, env: {}, trust
+                });
                 try {
                     let r;
                     try {

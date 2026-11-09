@@ -1,6 +1,7 @@
 //! The sidebar tree (SPEC §11.1, M3.12; stacked in MM1.B, §16.4b): every workspace, this
 //! machine's first and then each other machine's, as a header with its projects → worktrees →
-//! sessions under it and then its other sessions. Pure: built from what the daemon reported, so it
+//! sessions under it and then its other sessions. A project in several workspaces shows under
+//! each; a session under one, the workspace it started in. Pure: built from what the daemon reported, so it
 //! is unit-tested.
 
 use std::collections::HashSet;
@@ -117,13 +118,21 @@ impl Inputs<'_> {
         v
     }
 
-    /// The workspace a session is listed under: its project's (the first that lists it), else
-    /// its home, else its machine's `main` (or this one's).
+    /// The workspace a session is listed under: its home when that has its project (a project
+    /// in several workspaces shows under each, its sessions under the one they started in),
+    /// else the first workspace with its project, else its home, else its machine's `main` (or
+    /// this one's).
     pub fn home(&self, s: &SessionInfo) -> String {
-        if let Some(p) = &s.project
-            && let Some(w) = self.order().into_iter().find(|w| w.projects.contains(p))
-        {
-            return w.name.clone();
+        if let Some(p) = &s.project {
+            let with: Vec<&WorkspaceInfo> =
+                self.order().into_iter().filter(|w| w.projects.contains(p)).collect();
+            if let Some(w) = with
+                .iter()
+                .find(|w| Some(w.name.as_str()) == s.workspace.as_deref())
+                .or_else(|| with.first())
+            {
+                return w.name.clone();
+            }
         }
         let names: Vec<&str> = self.workspaces.iter().map(|w| w.name.as_str()).collect();
         if let Some(h) = s.workspace.as_deref().filter(|h| names.contains(h)) {
@@ -262,11 +271,10 @@ impl Inputs<'_> {
             );
             return rows;
         }
-        // A project shows once, under the first workspace that has it.
-        let mut placed: HashSet<&str> = HashSet::new();
+        // A project shows under every workspace that has it; each session under one (`home`).
         for ws in self.order() {
             let folded = honour_collapse && self.collapsed.contains(&fold_key(&ws.name));
-            let (mut body, others, any_project) = self.body(ws, &mut placed, honour_collapse);
+            let (mut body, others, any_project) = self.body(ws, honour_collapse);
             body.extend(self.shell_rows(&ws.name, others, any_project, honour_collapse));
             if self.filtering() && body.is_empty() {
                 continue;
@@ -285,7 +293,6 @@ impl Inputs<'_> {
     fn body<'b>(
         &'b self,
         ws: &'b WorkspaceInfo,
-        placed: &mut HashSet<&'b str>,
         honour_collapse: bool,
     ) -> (Vec<Row>, Vec<&'b SessionInfo>, bool) {
         let mut rows = Vec::new();
@@ -293,7 +300,6 @@ impl Inputs<'_> {
             .projects
             .iter()
             .filter_map(|id| self.projects.iter().find(|p| p.id == *id))
-            .filter(|p| placed.insert(p.id.as_str()))
             .collect();
         for p in &projects {
             let mut inner = Vec::new();
@@ -304,6 +310,8 @@ impl Inputs<'_> {
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
                     // A change set's lead has its row under the set, not twice.
                     .filter(|s| !self.led(s))
+                    // In another workspace that has this project too: listed there.
+                    .filter(|s| self.home(s) == ws.name)
                     .filter(|s| self.show.keeps(s))
                     .partition(|s| s.quick);
                 if self.filtering() && sessions.is_empty() {
@@ -808,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn another_machines_workspaces_come_after_ours_and_a_project_shows_once() {
+    fn another_machines_workspaces_come_after_ours_and_a_project_shows_under_each_of_its() {
         let wss =
             vec![ws("r", "laptop2:main", &["q"]), ws("w", "main", &["p"]), ws("x", "side", &["p"])];
         let projects = vec![project("p"), project("q")];
@@ -842,8 +850,10 @@ mod tests {
                 Row::Workspace("main".into()),
                 Row::Project("p".into()),
                 Row::Worktree("pr".into()),
-                Row::Session(sessions[0].id),
                 Row::Workspace("side".into()),
+                Row::Project("p".into()),
+                Row::Worktree("pr".into()),
+                Row::Session(sessions[0].id),
                 Row::Workspace("laptop2:main".into()),
                 Row::Project("q".into()),
                 Row::Worktree("qr".into()),
@@ -851,7 +861,8 @@ mod tests {
                 Row::Group("other sessions".into()),
                 Row::Session(loose.id),
             ],
-            "ours first; `p` once, under the first workspace with it; a remote session whose \
+            "ours first; `p` under both workspaces with it, its session under the one it started in \
+             (side); a remote session whose \
              workspace isn't shown sits under its machine's main"
         );
         assert_eq!(i.home(&loose), "laptop2:main");

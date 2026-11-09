@@ -705,9 +705,23 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WsCmd::New { name, profile, notify } => {
+            // No --profile: a profile with the workspace's name is the one meant (`ws new work`).
+            let named = match &profile {
+                Some(_) => None,
+                None => match c.request(Request::ProfileList).await? {
+                    Reply::Profiles { profiles } => profiles
+                        .iter()
+                        .any(|p| p.name == name && p.machine.is_none())
+                        .then(|| name.clone()),
+                    _ => None,
+                },
+            };
+            let profile = profile.or_else(|| named.clone());
+            let shown = profile.clone().unwrap_or_else(|| "default".into());
             c.request(Request::WorkspaceNew { name: name.clone(), profile, notify }).await?;
+            let why = if named.is_some() { ", named like it" } else { "" };
             eprintln!(
-                "workspace {name} created; add projects with `ptyro ws add {name} <project>`"
+                "workspace {name} created with profile {shown}{why} (`ptyro ws set {name} --profile P` changes it); add projects with `ptyro ws add {name} <project>`"
             );
             Ok(0)
         }

@@ -4,7 +4,7 @@
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
@@ -362,8 +362,9 @@ async function profileLogin(name, target) {
         go(`#/s/${enc(r.session)}`);
     }
 }
-function profileForm() {
-    form("New profile", [
+/// `made`: told the new profile's name (a form that offered "new profile…" picks it).
+export function profileForm(made) {
+    return form("New profile", [
         { key: "name", label: "Name", required: true, slug: "name", placeholder: "work", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" },
         { key: "label", label: "Label", placeholder: "shown in the sidebar" },
         { key: "color", label: "Colour", placeholder: "e.g. orange or #ff8800" },
@@ -378,7 +379,44 @@ function profileForm() {
         const r = await host("profile.new", { name: v.name, label: v.label, color: v.color, adopt, git_name: v.git_name, git_email: v.git_email, ssh_key: v.ssh_key, matches: String(v.matches ?? "").split(",").map((s) => s.trim()).filter(Boolean) });
         profiles.reload("");
         showNotes("Profile added", r.notes ?? []);
+        made?.(String(v.name));
     });
+}
+/// Fill a profile select with `machine`'s profiles (`null`: this one's), `want` picked. `first`
+/// goes before them (`["", "automatic…"]`). On this machine "+ new profile…" comes last: it opens
+/// the profile form, and the new profile is picked when it's made (Cancel goes back to the last
+/// pick). Returns the profiles' names.
+export async function fillProfiles(sel, machine, want, first) {
+    let list = [];
+    try {
+        list = (await conn.request({ t: "profile_list" })).profiles ?? [];
+    }
+    catch { /* `default` is always there */ }
+    const choices = profileChoices(list, machine);
+    if (!choices.some(([v]) => v === "default"))
+        choices.unshift(["default", "default"]);
+    const opts = [...(first ? [first] : []), ...choices, ...(machine ? [] : [["@new", "+ new profile…"]])];
+    sel.replaceChildren(...opts.map(([v, l]) => h("option", { value: v }, l)));
+    sel.value = opts.some(([v]) => v === want) ? want : opts[0][0];
+    sel.dataset.last = sel.value;
+    if (!sel.dataset.wired) {
+        sel.dataset.wired = "1";
+        sel.addEventListener("change", () => {
+            if (sel.value !== "@new") {
+                sel.dataset.last = sel.value;
+                return;
+            }
+            const back = sel.dataset.last ?? "";
+            profileForm((name) => {
+                if (![...sel.options].some((o) => o.value === name))
+                    sel.insertBefore(h("option", { value: name }, name), sel.querySelector('option[value="@new"]'));
+                sel.value = sel.dataset.last = name;
+                sel.dispatchEvent(new Event("change"));
+            }).onClose(() => { if (sel.value === "@new")
+                sel.value = back; });
+        });
+    }
+    return choices.map(([v]) => v);
 }
 async function detectProfiles() {
     const r = await doHost("profile.detect");
@@ -415,7 +453,7 @@ async function detectProfiles() {
 }
 function profilesView() {
     const list = profiles.get("");
-    return h("div", {}, ui.header("Profiles", "#/more", h("button", { class: "icon", title: tip("profile.detect"), "aria-label": "Find my accounts", onclick: () => void detectProfiles() }, "🔍"), h("button", { class: "icon plus", title: tip("profile.new"), "aria-label": "New profile", onclick: profileForm }, "＋")), h("main", { class: "stack", title: tip("profile.list") }, pending(profiles, "") ?? h("div", { class: "rows" }, ...list.map((p) => row(h("span", {}, p.label || p.name, p.label && p.label !== p.name ? h("small", {}, ` ${p.name}`) : null, p.defined ? null : badge("implicit")), [p.git_email, p.isolate ? "isolated" : ""].filter(Boolean).join(" · ") || Object.keys(p.dirs).join(", "), "›", { href: `#/profile/${enc(p.name)}` })))));
+    return h("div", {}, ui.header("Profiles", "#/more", h("button", { class: "icon", title: tip("profile.detect"), "aria-label": "Find my accounts", onclick: () => void detectProfiles() }, "🔍"), h("button", { class: "icon plus", title: tip("profile.new"), "aria-label": "New profile", onclick: () => profileForm() }, "＋")), h("main", { class: "stack", title: tip("profile.list") }, pending(profiles, "") ?? h("div", { class: "rows" }, ...list.map((p) => row(h("span", {}, p.label || p.name, p.label && p.label !== p.name ? h("small", {}, ` ${p.name}`) : null, p.defined ? null : badge("implicit")), [p.git_email, p.isolate ? "isolated" : ""].filter(Boolean).join(" · ") || Object.keys(p.dirs).join(", "), "›", { href: `#/profile/${enc(p.name)}` })))));
 }
 function profileView(rest) {
     const name = decodeURIComponent(rest);

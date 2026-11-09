@@ -146,7 +146,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "shells.command",
-        "A command in SHELLS (htop, ssh prod, a dev server), with a number of its own",
+        "A new shell with every option: a command (htop, ssh prod), where, its number, name, title",
     ),
     a("shells.move", "Give this shell another number in SHELLS (one already there swaps)"),
     a(
@@ -418,6 +418,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.pin", "Pin this project to a profile (its sessions run as it)"),
     a("project.unpin", "Unpin this project from its profile"),
     a("project.leave", "Take this project out of this workspace (it stays registered)"),
+    a("project.workspaces", "Which workspaces this project is in: tick them"),
     a("worktree.lock", "Lock this worktree (git worktree lock: nothing prunes it)"),
     a("worktree.unlock", "Unlock this worktree"),
     a(

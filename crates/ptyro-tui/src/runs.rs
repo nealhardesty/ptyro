@@ -36,8 +36,6 @@ pub struct Orch {
 #[derive(Debug, Clone)]
 pub enum OrchInput {
     Iterate { run: String, candidate: Option<String> },
-    FanoutAgents { project: String },
-    FanoutPrompt { project: String, agents: Vec<String> },
     GateNote { gate: String, choice: String },
 }
 
@@ -193,40 +191,6 @@ impl App {
                     );
                 }
             }
-            OrchInput::FanoutAgents { project } => {
-                let agents: Vec<String> = text
-                    .split([',', ' '])
-                    .map(str::trim)
-                    .filter(|a| !a.is_empty())
-                    .map(str::to_owned)
-                    .collect();
-                if agents.is_empty() {
-                    return;
-                }
-                self.overlay = Some(Overlay::Prompt {
-                    title: format!("Fan out to {}: the prompt", agents.join(", ")),
-                    text: String::new(),
-                    kind: PromptKind::Orch(OrchInput::FanoutPrompt { project, agents }),
-                });
-            }
-            OrchInput::FanoutPrompt { project, agents } => {
-                if text.trim().is_empty() {
-                    return;
-                }
-                let spec = ptyro_run::wire::FanoutSpec {
-                    agents,
-                    prompt: text,
-                    project: Some(project),
-                    ..Default::default()
-                };
-                self.request(
-                    Pending::Done(format!(
-                        "fan-out started ({} O)",
-                        ptyro_core::config::key_label(&self.keymap.prefix)
-                    )),
-                    Request::Fanout { spec },
-                );
-            }
             OrchInput::GateNote { gate, choice } => {
                 let note = (!text.trim().is_empty()).then_some(text);
                 self.request(
@@ -292,13 +256,7 @@ impl App {
                     (_, Some('F')) => {
                         self.orch = Some(o);
                         match self.current_project() {
-                            Some(project) => {
-                                self.overlay = Some(Overlay::Prompt {
-                                    title: "Fan out: agents (comma-separated)".into(),
-                                    text: "claude,codex,gemini".into(),
-                                    kind: PromptKind::Orch(OrchInput::FanoutAgents { project }),
-                                })
-                            }
+                            Some(project) => self.open_fanout_form(project),
                             None => self.toast_offer(
                                 "a fan-out needs a project: focus a session in one",
                                 false,

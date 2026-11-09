@@ -561,6 +561,24 @@ git    = { name = "You", email = "you@acme.example", ssh_key = "~/.ssh/id_work" 
 match  = { remotes = ["github.com:acme/*"], paths = ["~/work/**"] }
 ```
 
+**Workspaces and profiles.** A workspace groups projects; each workspace runs as one profile,
+and every session started in it (agents, shells, `claude` typed into a shell) gets that
+profile's accounts. The `[work]` in a session's header is its *profile*, not its workspace. A
+session takes the first of: the profile you picked, its worktree's, its project's pin, its
+workspace's, `default`. A profile is fixed for a session's life: change the workspace's
+profile, then start a new session.
+
+- **TUI:** `w` → `+ new workspace` asks for the name, the profile (the one named like the
+  workspace is chosen; `+ new profile…` makes one, logs it in and comes back) and
+  notifications. `profile.new` in the palette makes a profile with every option. A workspace's
+  menu → `workspace.profile` changes it later.
+- **CLI:** `ptyro profile new work`, `ptyro profile login work claude`, then
+  `ptyro ws new work` (a profile named like the workspace is used; else `--profile P`).
+  `ptyro ws set work --profile work` changes it later.
+- **A project can be in several workspaces** (`ptyro ws add WS PROJECT`, or a project's menu →
+  `project.workspaces` in the TUI). It shows under each one; a session shows under the workspace
+  it started in.
+
 `ptyro profile detect --apply` finds the multi-account setup you already have (aliases,
 `~/.claude-*` dirs). Profiles prevent accidents; they are not a security sandbox. Details:
 [`docs/config.md`](docs/config.md#profiles-one-identity-per-context).

@@ -139,6 +139,8 @@ pub enum Overlay {
     },
     /// Every configuration option, edited in place (CFG1.1).
     Settings(Box<crate::settings::Panel>),
+    /// Something being made, every option of it on one screen (SPEC §11.5a).
+    Form(Box<crate::form::Form>),
     /// About (UX2.1): `ptyro about --json` (`None` while it runs), the picked row of
     /// `about::picks`, and how far it is scrolled.
     About {
@@ -149,7 +151,7 @@ pub enum Overlay {
 }
 
 /// Where a new session or worktree goes, gathered by the wizard (SPEC §11.5, M3.13).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Wizard {
     pub project: Option<String>,
     pub worktree: Option<String>,
@@ -160,8 +162,6 @@ pub struct Wizard {
     pub name: Option<String>,
     /// The first prompt, from the task box (UX1.9); also the title and, slugged, the name.
     pub prompt: Option<String>,
-    /// A name to offer, dimmed, that ⏎ takes when nothing was typed (UX1.24).
-    pub suggested: Option<String>,
     /// Where the work comes from (UX1.10): a PR, an issue, an existing branch, or the main
     /// checkout's uncommitted changes.
     pub pr: Option<u32>,
@@ -170,6 +170,17 @@ pub struct Wizard {
     pub take: bool,
     /// Started from the scratchpad item on this line (NOTE1.3).
     pub pad_item: Option<u32>,
+    /// The rest of `ptyro new`'s options, from the form (SPEC §11.5a): the profile (`None`
+    /// resolves), a new worktree's base, whether it skips setup or fetching, verified-done,
+    /// structured mode, a command line for `@command`, and a title apart from the prompt.
+    pub profile: Option<String>,
+    pub base: Option<String>,
+    pub no_setup: bool,
+    pub no_fetch: bool,
+    pub verify: Option<String>,
+    pub structured: bool,
+    pub command: Option<String>,
+    pub title: Option<String>,
 }
 
 /// A PR or an issue named in text (UX1.10): a GitHub URL, or `pr 12` / `issue 12`.
@@ -228,6 +239,8 @@ pub enum Purpose {
     RowMenu(Row),
     /// What to watch a SHELLS shell for (SPEC §23.9).
     ShellWatch(SessionId),
+    /// `recipe.run`'s recipe; then its form (SPEC §11.5a).
+    Recipe(Vec<ptyro_run::wire::RecipeInfo>),
     /// A chat's agent (`None`: the new chat being written's).
     ChatAgent(Option<String>),
     /// A chat's tool preset.
@@ -279,7 +292,7 @@ pub enum AfterAdd {
     /// Re-run this action, in the new project's main checkout.
     Run(&'static str),
     /// The wizard's second step, in the new project.
-    Targets(Wizard),
+    Targets(Box<Wizard>),
 }
 
 #[derive(Debug, Clone)]
@@ -301,12 +314,8 @@ pub enum PromptKind {
         worktree: String,
         paths: Vec<String>,
     },
-    WorktreeName(Wizard),
     /// A line for the scratchpad, about this session (NOTE1.2).
     PadAdd(Option<SessionId>),
-    /// A name for a new workspace; ⏎ on nothing takes the suggestion. On another machine
-    /// (MM1.B) when the second is its name.
-    NewWorkspace(Option<String>, Option<String>),
     /// A session's title (UX1.24): free text; empty clears it.
     Retitle(SessionId),
     /// A worktree's title (by id).
@@ -319,8 +328,6 @@ pub enum PromptKind {
     RenameBranch(String),
     /// A PR to go to (UX1.21).
     OpenPr,
-    /// Another machine to mirror (MM1.B): `ssh://host`, or the code `machine pair` printed.
-    MachineAdd,
     /// A workspace's new name.
     RenameWorkspace(String),
     /// Typed in the runs view (M7).
@@ -339,16 +346,12 @@ pub enum PromptKind {
     ShellMove(SessionId),
     /// The window a SHELLS shell joins as a pane (SPEC §23.17).
     ShellJoin(SessionId),
-    /// A command to run in SHELLS (SPEC §23.4).
-    ShellCommand,
     /// The pattern a SHELLS shell is watched for (SPEC §23.9).
     ShellMatch(SessionId),
     /// A question for `chat find`.
     ChatFind,
     /// Which agents a chat's last message is asked of (`chat.compare`).
     ChatCompare(String),
-    /// What `chat.import` imports: `chat import`'s flags (empty: everything).
-    ChatImport,
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -370,13 +373,7 @@ impl PromptKind {
 
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
-        matches!(
-            self,
-            Self::Rename(_)
-                | Self::WorktreeName(_)
-                | Self::NewWorkspace(..)
-                | Self::RenameWorkspace(_)
-        )
+        matches!(self, Self::Rename(_) | Self::RenameWorkspace(_))
     }
 
     /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `_`.
@@ -385,15 +382,6 @@ impl PromptKind {
             _ if self.is_name() => ptyro_core::names::typed(text),
             Self::RenameBranch(_) => ptyro_core::names::branch_typed(text),
             _ => text.to_owned(),
-        }
-    }
-
-    /// The name ⏎ takes when nothing was typed (shown dimmed in the field, UX1.24).
-    pub fn suggestion(&self) -> Option<&str> {
-        match self {
-            Self::WorktreeName(w) => w.suggested.as_deref(),
-            Self::NewWorkspace(s, _) => s.as_deref(),
-            _ => None,
         }
     }
 }
@@ -440,6 +428,8 @@ pub enum AfterTrust {
 /// What a background request was for, so its reply can be applied.
 #[derive(Debug, Clone)]
 pub enum Pending {
+    /// The recipes, for `recipe.run`'s picker.
+    RecipeForm,
     Spawned {
         split: Option<Dir>,
         spec: Box<SpawnSpec>,
@@ -570,7 +560,7 @@ pub enum Pending {
     /// Stale worktrees, for the clean-up picker.
     Gc,
     /// The project's branches, for the wizard (UX1.10).
-    Branches(Wizard),
+    Branches(Box<Wizard>),
     /// Setup suggestions before a project's first worktree (UX1.11).
     Suggest(Box<WorktreeSpec>, Option<Dir>),
     /// They were written: check the scripts (trust) again, then create.
@@ -721,6 +711,8 @@ pub struct App {
     pub worktrees: Vec<WorktreeInfo>,
     pub workspaces: Vec<WorkspaceInfo>,
     pub profiles: Vec<ProfileInfo>,
+    /// A profile being made in a split: what happens once it shows up (SPEC §11.5a).
+    pub(crate) after_profile: Option<crate::form::AfterProfile>,
     /// Other machines whose workspaces this daemon mirrors (MM1.B), and how their links stand.
     pub machines: Vec<ptyro_core::model::MachineInfo>,
     /// The workspace on screen (SPEC §2.1).
@@ -889,6 +881,7 @@ impl App {
             worktrees: Vec::new(),
             workspaces: Vec::new(),
             profiles: Vec::new(),
+            after_profile: None,
             machines: Vec::new(),
             workspace,
             collapsed: HashSet::new(),
@@ -2002,11 +1995,12 @@ impl App {
         // held aside while the reply is handled, then put back (and the reply said so).
         // (A peek's own screen arrives into the box it fills in: that one is not held.)
         let held = match &self.overlay {
-            Some(Overlay::Prompt { .. } | Overlay::Task { .. } | Overlay::Peek { .. })
-                if !matches!(pending, Pending::Peek(_)) =>
-            {
-                self.overlay.take()
-            }
+            Some(
+                Overlay::Prompt { .. }
+                | Overlay::Task { .. }
+                | Overlay::Peek { .. }
+                | Overlay::Form(_),
+            ) if !matches!(pending, Pending::Peek(_)) => self.overlay.take(),
             _ => None,
         };
         self.handle_reply(pending, res);
@@ -2101,7 +2095,11 @@ impl App {
                     Err(e) => self.toast_err(format!("{}: {e}", path.display())),
                 }
             }
-            (Pending::Registry, Ok(Reply::Profiles { profiles })) => self.profiles = profiles,
+            (Pending::RecipeForm, Ok(Reply::Recipes { recipes })) => self.recipe_picker(recipes),
+            (Pending::Registry, Ok(Reply::Profiles { profiles })) => {
+                self.profiles = profiles;
+                self.profiles_arrived();
+            }
             (Pending::RemoteEditors(wt), Ok(Reply::Editors { names, default })) => {
                 self.editor_picker(wt, names, &default, true);
             }
@@ -2406,7 +2404,7 @@ impl App {
                         .collect();
                     self.overlay = Some(Overlay::Picker {
                         palette: Palette::new("On which branch?", items),
-                        purpose: Purpose::Branch(w),
+                        purpose: Purpose::Branch(*w),
                     });
                 }
             }
@@ -2757,7 +2755,9 @@ impl App {
         }
         if self.overlay.is_some() {
             // The prefix always works: it closes whatever is open and starts a command.
-            if self.keymap.is_prefix(key) && !matches!(self.overlay, Some(Overlay::Prompt { .. })) {
+            if self.keymap.is_prefix(key)
+                && !matches!(self.overlay, Some(Overlay::Prompt { .. } | Overlay::Form(_)))
+            {
                 self.overlay = None;
                 self.start_prefix(key);
                 return;
@@ -2913,6 +2913,7 @@ impl App {
             }
             Some(Overlay::Peek { reply, .. }) => reply.push_str(&lines),
             Some(Overlay::Settings(p)) => p.paste(&text),
+            Some(Overlay::Form(form)) => form.paste(&text),
             Some(Overlay::Picker { palette, .. }) => palette.paste(&text),
             Some(Overlay::Help { filter, scroll }) => {
                 filter.push_str(&flat());
@@ -3082,22 +3083,13 @@ impl App {
             "worktree.new" => {
                 let (project, _) = self.context();
                 match project {
+                    // Every option on one form, a free name already in it (SPEC §11.5a).
                     Some(project) => {
-                        let suggested = Some(self.free_worktree_name(&project, None));
-                        let w = Wizard { project: Some(project), suggested, ..Wizard::default() };
-                        self.resolve_for(&w);
-                        self.overlay = Some(Overlay::Prompt {
-                            title: format!(
-                                "{} — name",
-                                wizard_title(
-                                    &Wizard { name: Some(String::new()), ..w.clone() },
-                                    &self.projects,
-                                    &self.worktrees,
-                                    None
-                                )
-                            ),
-                            text: String::new(),
-                            kind: PromptKind::WorktreeName(w),
+                        let name = Some(self.free_worktree_name(&project, None));
+                        self.open_session_form(Wizard {
+                            project: Some(project),
+                            name,
+                            ..Wizard::default()
                         });
                     }
                     None => self.pick_project(Some(AfterAdd::Run("worktree.new"))),
@@ -3955,7 +3947,7 @@ impl App {
 
     /// A workspace name to offer: a defined profile's without a workspace yet (`work`), else
     /// `workspace-2`, `-3`… (UX1.24).
-    fn free_workspace_name(&self) -> String {
+    pub(crate) fn free_workspace_name(&self) -> String {
         let taken = |n: &str| self.workspaces.iter().any(|w| w.name == n);
         self.profiles
             .iter()
@@ -4163,6 +4155,7 @@ impl App {
             | "project.pin"
             | "project.unpin"
             | "project.leave"
+            | "project.workspaces"
             | "project.line_endings" => {
                 let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
                     self.pick_project(None);
@@ -4193,6 +4186,7 @@ impl App {
                         Pending::Done("unpinned".into()),
                         Request::ProjectPin { addr: p.id, profile: None },
                     ),
+                    "project.workspaces" => self.open_project_workspaces(&p),
                     "project.leave" => self.request(
                         Pending::Done(format!("{} left {}", p.slug, self.workspace)),
                         Request::WorkspaceMember {
@@ -4272,6 +4266,24 @@ impl App {
                     ),
                 });
             }
+            // Every option `ptyro profile new` takes, on one screen (SPEC §11.5a).
+            "profile.new" => self.open_profile_form("", None),
+            // The CLI's creating commands, every option on one screen (SPEC §11.5a).
+            "sets.new" => self.open_set_form(),
+            "recipe.run" => self.ask_recipes(),
+            "remote.pair" => self.open_pair_form(),
+            "set.add" => match self.current_set() {
+                Some(set) => self.open_set_add_form(set),
+                None => {
+                    self.toast_err("pick a change set first (in the sidebar), then run this again")
+                }
+            },
+            "session.lead" => match self.selected_session_name() {
+                Some(s) => self.open_lead_form(s),
+                None => {
+                    self.toast_err("pick a session first (in the sidebar), then run this again")
+                }
+            },
             "workspace.profile" => {
                 let items = self
                     .profiles
@@ -4468,6 +4480,7 @@ impl App {
                 "shell.drawer",
                 "shell.pane",
                 "project.trust",
+                "project.workspaces",
                 "script.pick",
                 "worktree.open",
             ],
@@ -4602,10 +4615,14 @@ impl App {
                     return;
                 }
             }
-            // The full wizard: pick the agent and where, the prompt carried along.
+            // Every option on one form (SPEC §11.5a), what was typed carried along.
             KeyCode::Char { c: 'o' } if ctrl => {
                 let prompt = (!text.trim().is_empty()).then(|| text.trim().to_owned());
-                self.open_wizard_with(Wizard { prompt, name: None, ..w });
+                self.open_session_form(Wizard {
+                    prompt,
+                    name: name.filter(|n| !n.is_empty()),
+                    ..w
+                });
                 return;
             }
             KeyCode::Tab | KeyCode::BackTab => {
@@ -4640,50 +4657,6 @@ impl App {
             _ => {}
         }
         self.overlay = Some(Overlay::Task { text, name, naming, wizard: w });
-    }
-
-    /// The full wizard, step one: what to run (from the task box's `C-o`). The default agent
-    /// is first.
-    fn open_wizard_with(&mut self, w: Wizard) {
-        self.resolve_for(&w);
-        let default = ptyro_agents::default_agent(&self.config);
-        let mut agents = ptyro_agents::names(&self.config);
-        agents.sort_by_key(|a| *a != default);
-        let mut items: Vec<Item> = agents
-            .iter()
-            .map(|a| Item {
-                label: a.clone(),
-                detail: if *a == default { "agent (default)".into() } else { "agent".into() },
-                key: None,
-                target: Target::Agent(a.clone()),
-            })
-            .collect();
-        items.push(Item {
-            label: "shell".into(),
-            detail: "your $SHELL".into(),
-            key: None,
-            target: Target::Agent("@shell".into()),
-        });
-        items.push(Item {
-            label: "command…".into(),
-            detail: "type a command line".into(),
-            key: None,
-            target: Target::Agent("@command".into()),
-        });
-        // Running as another profile is explicit (and may ask first, SPEC §10.10).
-        for p in self.profiles.iter().filter(|p| p.defined) {
-            items.push(Item {
-                label: format!("{default}@{}", p.name),
-                detail: format!("{default} as profile {}", p.label),
-                key: None,
-                target: Target::Agent(format!("{default}@{}", p.name)),
-            });
-        }
-        let title = wizard_title(&w, &self.projects, &self.worktrees, None);
-        self.overlay = Some(Overlay::Picker {
-            palette: Palette::new(title, items),
-            purpose: Purpose::Agent(w),
-        });
     }
 
     /// Step two: where. A new worktree of the current project first; with no project, after
@@ -4780,7 +4753,7 @@ impl App {
     }
 
     /// Wizard finished: start it.
-    fn wizard_done(&mut self, w: Wizard, target: Target) {
+    pub(crate) fn wizard_done(&mut self, w: Wizard, target: Target) {
         match target {
             Target::NewWorktree(project) => {
                 let spec = worktree_spec(&w, &project);
@@ -4793,12 +4766,34 @@ impl App {
         }
     }
 
-    fn start_in(&mut self, w: Wizard, worktree: Option<String>) {
+    pub(crate) fn start_in(&mut self, w: Wizard, worktree: Option<String>) {
         match w.agent.as_deref() {
+            // The form gave the command line: run it; else ask for one.
+            Some("@command") if w.command.is_some() => {
+                let cwd = if worktree.is_some() { Default::default() } else { self.here() };
+                let spec = SpawnSpec {
+                    command: w.command.clone(),
+                    worktree,
+                    cwd,
+                    profile: w.profile.clone(),
+                    name: w.name.clone().filter(|n| !n.is_empty()),
+                    title: w.title.clone(),
+                    ..SpawnSpec::default()
+                };
+                self.spawn_spec(spec, w.split);
+            }
             Some("@command") => self.prompt_command(Wizard { worktree, ..w }),
             Some("@shell") | None => {
                 let cwd = if worktree.is_some() { Default::default() } else { self.here() };
-                self.spawn_spec(SpawnSpec { cwd, worktree, ..SpawnSpec::default() }, w.split);
+                let spec = SpawnSpec {
+                    cwd,
+                    worktree,
+                    profile: w.profile.clone(),
+                    name: w.name.clone().filter(|n| !n.is_empty()),
+                    title: w.title.clone(),
+                    ..SpawnSpec::default()
+                };
+                self.spawn_spec(spec, w.split);
             }
             Some(a) => {
                 let cwd = if worktree.is_some() { Default::default() } else { self.here() };
@@ -4808,8 +4803,11 @@ impl App {
                         cwd,
                         worktree,
                         prompt: w.prompt.clone(),
-                        title: w.prompt.clone(),
+                        title: w.title.clone().or_else(|| w.prompt.clone()),
                         name: w.name.clone().filter(|n| !n.is_empty()),
+                        profile: w.profile.clone(),
+                        verify: w.verify.clone(),
+                        structured: w.structured,
                         ..SpawnSpec::default()
                     },
                     w.split,
@@ -4882,16 +4880,6 @@ impl App {
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new("New workspace — on which machine?", items),
             purpose: Purpose::NewWorkspaceOn,
-        });
-    }
-
-    fn prompt_new_workspace(&mut self, machine: Option<String>) {
-        let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
-        let suggested = machine.is_none().then(|| self.free_workspace_name());
-        self.overlay = Some(Overlay::Prompt {
-            title: format!("New workspace{on} — name"),
-            text: String::new(),
-            kind: PromptKind::NewWorkspace(suggested, machine),
         });
     }
 
@@ -5087,7 +5075,7 @@ impl App {
             AfterAdd::Run(action) => self.run(&Command { action, arg: None }),
             AfterAdd::Targets(w) => {
                 let root = self.root_of(&project);
-                let w = Wizard { project: Some(project), worktree: root, ..w };
+                let w = Wizard { project: Some(project), worktree: root, ..*w };
                 self.resolve_for(&w);
                 self.open_targets(w);
             }
@@ -5107,6 +5095,14 @@ impl App {
                 detail: here.display().to_string(),
                 key: None,
                 target: Target::Path(here),
+            });
+        }
+        if then.is_none() {
+            items.push(Item {
+                label: "+ another path…".into(),
+                detail: "type where the repository is".into(),
+                key: None,
+                target: Target::NewProjectPath,
             });
         }
         for p in paths.into_iter().filter(|p| !self.projects.iter().any(|x| x.root == *p)) {
@@ -5421,6 +5417,7 @@ impl App {
             Overlay::Task { text, name, naming, wizard } => {
                 self.task_key(key, text, name, naming, wizard)
             }
+            Overlay::Form(form) => self.form_key(form, key),
             Overlay::Suggest { suggestions, spec, split } => match key.code {
                 KeyCode::Char { c: 'y' | 'Y' } | KeyCode::Enter => {
                     // Written (and trusted when they're its only scripts); then the usual check.
@@ -5802,7 +5799,7 @@ impl App {
             }
             (Target::Action(Command { action: "wizard.branch", .. }), Purpose::Target(w)) => {
                 let project = w.project.clone().unwrap_or_default();
-                self.request(Pending::Branches(w), Request::Branches { project });
+                self.request(Pending::Branches(Box::new(w)), Request::Branches { project });
             }
             (Target::Action(Command { action: "wizard.take", .. }), Purpose::Target(w)) => {
                 let project = w.project.clone().unwrap_or_default();
@@ -5823,7 +5820,7 @@ impl App {
             (Target::NewWorkspace, _) if !self.machines.is_empty() => {
                 self.open_new_workspace_where()
             }
-            (Target::NewWorkspace, _) => self.prompt_new_workspace(None),
+            (Target::NewWorkspace, _) => self.open_workspace_form(None),
             (Target::Machine(m), Purpose::MachineUnhide) => {
                 if let Some((name, ws)) = m.split_once(':') {
                     let req = Request::MachineHide {
@@ -5836,7 +5833,7 @@ impl App {
             }
             (Target::Machine(m), Purpose::MachinePick(action)) => self.machine_on(action, m),
             (Target::Machine(m), Purpose::NewWorkspaceOn) => {
-                self.prompt_new_workspace((!m.is_empty()).then_some(m))
+                self.open_workspace_form((!m.is_empty()).then_some(m))
             }
             (Target::Editor(name), Purpose::Editor(wt)) => self.open_editor(&wt, &name),
             (Target::NewShell, Purpose::Editor(wt)) => {
@@ -5863,6 +5860,11 @@ impl App {
             (Target::Path(word), Purpose::CliPick(mut job)) => {
                 job.done.push(word.to_string_lossy().into_owned());
                 self.cli_step(*job);
+            }
+            (Target::Path(name), Purpose::Recipe(recipes)) => {
+                if let Some(r) = recipes.into_iter().find(|r| *r.name == *name.to_string_lossy()) {
+                    self.open_recipe_form(r);
+                }
             }
             (Target::Path(p), Purpose::Pin(project)) => self.request(
                 Pending::Done("pinned".into()),
@@ -5900,6 +5902,8 @@ impl App {
                     Request::WorktreeRestore { addr: addr.to_string_lossy().into_owned() },
                 );
             }
+            // Picked on its own: where it goes, on the form (SPEC §11.5a).
+            (Target::Path(path), Purpose::AddProject(None)) => self.open_project_form(Some(path)),
             (Target::Path(path), purpose) => {
                 let then = match purpose {
                     Purpose::AddProject(then) => then,
@@ -5908,8 +5912,9 @@ impl App {
                 let workspace = Some(self.workspace.clone());
                 self.request(Pending::ProjectAdded(then), Request::ProjectAdd { path, workspace });
             }
+            (Target::NewProjectPath, _) => self.open_project_form(None),
             (Target::AddProject, Purpose::Target(w)) => {
-                self.pick_project(Some(AfterAdd::Targets(w)))
+                self.pick_project(Some(AfterAdd::Targets(Box::new(w))))
             }
             (Target::Action(Command { action, .. }), Purpose::Finish(id)) => {
                 let integrate = action == "integrate";
@@ -6010,23 +6015,6 @@ impl App {
                     return Err(format!("a session named {t} exists"));
                 }
             }
-            PromptKind::WorktreeName(w) if !t.is_empty() => {
-                name(t)?;
-                if let Some(x) = self
-                    .worktrees
-                    .iter()
-                    .find(|x| Some(&x.project) == w.project.as_ref() && x.name == t)
-                {
-                    return Err(format!("{}/{t} exists", x.project_slug));
-                }
-            }
-            PromptKind::NewWorkspace(_, machine) if !t.is_empty() => {
-                name(t)?;
-                let full = machine.as_ref().map_or_else(|| t.to_owned(), |m| format!("{m}:{t}"));
-                if self.workspaces.iter().any(|w| w.name == full) {
-                    return Err(format!("workspace {} exists", crate::ui::workspace_label(&full)));
-                }
-            }
             PromptKind::RenameWorkspace(old) => {
                 if old == "main" {
                     return Err("the main workspace can't be renamed".into());
@@ -6037,17 +6025,6 @@ impl App {
                 name(t)?;
                 if self.workspaces.iter().any(|w| w.name == t) {
                     return Err(format!("workspace {t} exists"));
-                }
-            }
-            PromptKind::Orch(crate::runs::OrchInput::FanoutAgents { .. }) => {
-                for a in t.split([',', ' ']).map(str::trim).filter(|a| !a.is_empty()) {
-                    let (agent, _) = ptyro_agents::split_agent(a);
-                    if ptyro_agents::command(&self.config, agent).is_none() {
-                        return Err(format!(
-                            "unknown agent {agent} (known: {})",
-                            ptyro_agents::names(&self.config).join(", ")
-                        ));
-                    }
                 }
             }
             _ => {}
@@ -6067,39 +6044,6 @@ impl App {
                     SpawnSpec { command, worktree: w.worktree, cwd, ..SpawnSpec::default() },
                     w.split,
                 );
-            }
-            PromptKind::WorktreeName(mut w) => {
-                // Nothing typed: the name it offered (UX1.24).
-                let typed = text.trim().to_owned();
-                w.name = Some(if typed.is_empty() {
-                    w.suggested.clone().unwrap_or_default()
-                } else {
-                    typed
-                });
-                // Then: which agent (shell for none).
-                let mut items: Vec<Item> = ptyro_agents::names(&self.config)
-                    .into_iter()
-                    .map(|a| Item {
-                        label: a.clone(),
-                        detail: "agent".into(),
-                        key: None,
-                        target: Target::Agent(a),
-                    })
-                    .collect();
-                let default = ptyro_agents::default_agent(&self.config);
-                items.sort_by_key(|i| i.label != default);
-                items.push(Item {
-                    label: "no agent".into(),
-                    detail: "just the worktree (and its setup)".into(),
-                    key: None,
-                    target: Target::Agent("@shell".into()),
-                });
-                let title =
-                    wizard_title(&w, &self.projects, &self.worktrees, self.resolved.as_deref());
-                self.overlay = Some(Overlay::Picker {
-                    palette: Palette::new(title, items),
-                    purpose: Purpose::Agent(w),
-                });
             }
             PromptKind::ReviewComment { worktree, path, line, code } => {
                 if !text.trim().is_empty() {
@@ -6137,7 +6081,6 @@ impl App {
             }
             PromptKind::ChatFindIn(chat) => self.find_in_chat(&chat, text.trim()),
             PromptKind::ChatCompare(chat) => self.chat_compare(chat, text.trim()),
-            PromptKind::ChatImport => self.chat_import(&text),
             PromptKind::ChatFind => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -6173,7 +6116,6 @@ impl App {
             }
             PromptKind::ShellMove(id) => self.shell_move_typed(id, &text),
             PromptKind::ShellJoin(id) => self.window_join_typed(id, &text),
-            PromptKind::ShellCommand => self.shell_command_typed(&text),
             PromptKind::ShellMatch(id) => {
                 let re = text.trim().to_owned();
                 if !re.is_empty() {
@@ -6214,12 +6156,6 @@ impl App {
                 }
             }
             PromptKind::OpenPr => self.open_pr(&text),
-            PromptKind::MachineAdd => {
-                let t = text.trim();
-                if !t.is_empty() {
-                    self.run_cli(&["machine".into(), "add".into(), t.to_owned()]);
-                }
-            }
             PromptKind::WorkSource(w) => match work_source(&text) {
                 Some((pr, issue)) => {
                     let project = w.project.clone().unwrap_or_default();
@@ -6234,20 +6170,6 @@ impl App {
                     Pending::Done(done.into()),
                     Request::Retitle { addr: id, title, worktree: true },
                 );
-            }
-            PromptKind::NewWorkspace(suggested, machine) => {
-                let typed = text.trim().to_owned();
-                let name = if typed.is_empty() { suggested.unwrap_or_default() } else { typed };
-                // On another machine: made there (its name carries the machine, MM1.B).
-                let name = match machine {
-                    Some(m) if !name.is_empty() => format!("{m}:{name}"),
-                    _ => name,
-                };
-                if !name.is_empty() {
-                    let req =
-                        Request::WorkspaceNew { name: name.clone(), profile: None, notify: None };
-                    self.request(Pending::WorkspaceMade(name), req);
-                }
             }
             PromptKind::Broadcast(ids) => {
                 if text.trim().is_empty() {
@@ -7200,7 +7122,10 @@ fn neighbour(
 /// Where `anchor` is in `rows`; once it's gone, the selectable row nearest `fallback` (its
 /// index when it was selected).
 fn anchor_index(rows: &[Row], anchor: Option<&Row>, fallback: usize) -> usize {
-    if let Some(i) = anchor.and_then(|a| rows.iter().position(|r| r == a)) {
+    // A project in several workspaces has a row under each: the one nearest where it was.
+    if let Some(i) = anchor.and_then(|a| {
+        (0..rows.len()).filter(|i| rows[*i] == *a).min_by_key(|i| i.abs_diff(fallback))
+    }) {
         return i;
     }
     let at = fallback.min(rows.len().saturating_sub(1));
@@ -7221,10 +7146,15 @@ pub(crate) fn worktree_spec(w: &Wizard, project: &str) -> WorktreeSpec {
     WorktreeSpec {
         project: project.to_owned(),
         name: w.name.clone().filter(|n| !n.is_empty()),
-        setup: true,
+        setup: !w.no_setup,
+        fetch: w.no_fetch.then_some(false),
+        base: w.base.clone(),
+        profile: w.profile.clone(),
+        verify: w.verify.clone().filter(|_| agent.is_some()),
+        structured: w.structured && agent.is_some(),
         // The prompt goes to the agent; with no agent it's still the title.
         prompt: w.prompt.clone().filter(|_| agent.is_some()),
-        title: w.prompt.clone(),
+        title: w.title.clone().or_else(|| w.prompt.clone()),
         agent,
         // Where the work comes from (UX1.10).
         pr: w.pr,
@@ -8209,11 +8139,11 @@ mod tests {
         app.on_event(DomainEvent::WorktreeUpdated { info: root("p1") });
         assert!(app.after_add.is_none());
         match &app.overlay {
-            Some(Overlay::Prompt { kind: PromptKind::WorktreeName(w), title, .. }) => {
-                assert_eq!(w.project.as_deref(), Some("p1"));
-                assert!(title.contains("myrepo"), "{title}");
+            Some(Overlay::Form(f)) => {
+                assert_eq!(f.get("where"), "new:p1");
+                assert!(f.title.contains("myrepo"), "{}", f.title);
             }
-            _ => panic!("the new-worktree prompt, in the new project"),
+            _ => panic!("the new-worktree form, in the new project"),
         }
         // The wizard's "where" offers adding one when there's none (after "here").
         app.overlay = None;
@@ -8300,14 +8230,151 @@ mod tests {
         assert!(screen(&app).contains("✗ name:"), "{}", screen(&app));
         key(&mut app, KeyCode::Enter, Mods::NONE);
         assert!(matches!(app.overlay, Some(Overlay::Task { .. })));
-        // C-o: the full wizard, the prompt carried along.
+        // C-o: every option on one form, what was typed carried along (SPEC §11.5a).
         key(&mut app, KeyCode::Char { c: 'o' }, Mods(Mods::CTRL));
-        match &app.overlay {
-            Some(Overlay::Picker { purpose: Purpose::Agent(w), .. }) => {
-                assert_eq!(w.prompt.as_deref(), Some("Fix the flaky test in tests/api.rs now"));
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the session form") };
+        assert_eq!(f.get("prompt"), "Fix the flaky test in tests/api.rs now");
+        assert_eq!(f.get("name"), "fix-flaky-test-x_y.");
+        assert_eq!(f.get("agent"), "claude");
+        assert_eq!(f.get("where"), "new:p1", "a new worktree of the project in context");
+        // The bad name is said on ⏎; fixed, ⏎ creates the worktree with every option.
+        key(&mut app, KeyCode::Enter, Mods::NONE);
+        assert!(matches!(&app.overlay, Some(Overlay::Form(f)) if f.error.is_some()));
+        typed(&mut app, "\x08");
+        let Some(Overlay::Form(f)) = &mut app.overlay else { panic!() };
+        f.choose("setup", "");
+        for (k, v) in [("base", "origin/dev"), ("verify", "make test")] {
+            if let Some(crate::form::Field {
+                kind: crate::form::Kind::Text { value, .. }, ..
+            }) = f.fields.iter_mut().find(|x| x.key == k)
+            {
+                *value = v.into();
             }
-            _ => panic!("the agent picker"),
         }
+        while app.rx.try_recv().is_ok() {}
+        key(&mut app, KeyCode::Enter, Mods::NONE);
+        let mut spec = None;
+        while let Ok(m) = app.rx.try_recv() {
+            if let AppMsg::Reply(Pending::PreCreate(s, _), _) = m {
+                spec = Some(s);
+            }
+        }
+        let spec = spec.expect("the worktree, asked for");
+        assert_eq!(spec.name.as_deref(), Some("fix-flaky-test-x_y"));
+        assert_eq!(spec.base.as_deref(), Some("origin/dev"));
+        assert_eq!(spec.verify.as_deref(), Some("make test"));
+        assert!(!spec.setup, "setup unticked");
+        assert_eq!(spec.agent.as_deref(), Some("claude"));
+    }
+
+    fn profile_info(name: &str) -> ProfileInfo {
+        serde_json::from_value(serde_json::json!({
+            "name": name, "label": name, "defined": name != "default", "isolate": true,
+            "dirs": {}, "vars": [],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_new_workspace_picks_its_profile_and_can_make_one_on_the_way() {
+        let mut app = app();
+        app.profiles = vec![profile_info("default"), profile_info("cl")];
+        app.picked(Target::NewWorkspace, Purpose::Workspace);
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the form") };
+        // The suggested name is the profile without a workspace, and that profile is chosen.
+        assert_eq!(f.or_suggested("name"), "cl");
+        assert_eq!(f.get("profile"), "cl");
+        assert_eq!(f.get("notify"), "all");
+        // Another name, and a profile that doesn't exist yet: made first, then back here.
+        typed(&mut app, "acme\t");
+        let Some(Overlay::Form(f)) = &mut app.overlay else { panic!() };
+        f.choose("profile", crate::form::NEW_PROFILE);
+        typed(&mut app, "\n");
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the profile form") };
+        assert_eq!(f.title, "New profile");
+        assert_eq!(f.get("name"), "acme", "named like the workspace");
+        typed(&mut app, "\tAcme Corp\n");
+        assert_eq!(
+            app.last_cli.as_deref(),
+            Some(&["profile", "new", "acme", "--label", "Acme Corp"].map(String::from)[..])
+        );
+        assert!(app.after_profile.is_some(), "waits for it to show up");
+        app.overlay = None;
+        app.profiles.push(profile_info("acme"));
+        app.profiles_arrived();
+        assert_eq!(
+            app.last_cli.as_deref(),
+            Some(&["profile", "login", "acme", "claude"].map(String::from)[..]),
+            "then logged in"
+        );
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the workspace form, back") };
+        assert_eq!(f.get("name"), "acme");
+        assert_eq!(f.get("profile"), "acme", "the new profile, chosen");
+        while app.rx.try_recv().is_ok() {}
+        typed(&mut app, "\n");
+        let mut made = None;
+        while let Ok(m) = app.rx.try_recv() {
+            if let AppMsg::Reply(Pending::WorkspaceMade(n), _) = m {
+                made = Some(n);
+            }
+        }
+        assert_eq!(made.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn a_projects_workspaces_are_ticked_and_saved_as_changes() {
+        let mut app = app();
+        with_project(&mut app);
+        let mut side = app.workspaces[0].clone();
+        side.name = "side".into();
+        side.id = "ws-side".into();
+        side.projects.clear();
+        app.workspaces.push(side);
+        let p = app.projects[0].clone();
+        app.open_project_workspaces(&p);
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the form") };
+        assert_eq!(f.get("workspaces"), "main", "ticked where it is");
+        assert_eq!(f.verb, "save");
+        // Tick side too (→ to it, space): one request, to add it there; main is left alone.
+        typed(&mut app, " ");
+        assert!(
+            matches!(&app.overlay, Some(Overlay::Form(f)) if f.get("workspaces").is_empty()),
+            "space unticked main"
+        );
+        typed(&mut app, " ");
+        key(&mut app, KeyCode::Right, Mods::NONE);
+        typed(&mut app, " ");
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!() };
+        assert_eq!(f.get("workspaces"), "main,side");
+        while app.rx.try_recv().is_ok() {}
+        typed(&mut app, "\n");
+        let mut asked = 0;
+        while let Ok(m) = app.rx.try_recv() {
+            if matches!(m, AppMsg::Reply(Pending::Done(_), _)) {
+                asked += 1;
+            }
+        }
+        assert!(app.overlay.is_none());
+        assert_eq!(asked, 1, "only side changed");
+        assert!(
+            app.toast.as_ref().is_some_and(|t| t.text.contains("main, side")),
+            "{:?}",
+            app.toast.as_ref().map(|t| &t.text)
+        );
+    }
+
+    #[test]
+    fn a_row_shown_twice_keeps_the_copy_nearest_where_it_was() {
+        let rows = vec![
+            Row::Workspace("main".into()),
+            Row::Project("p".into()),
+            Row::Workspace("side".into()),
+            Row::Project("p".into()),
+        ];
+        let p = Row::Project("p".into());
+        assert_eq!(anchor_index(&rows, Some(&p), 3), 3);
+        assert_eq!(anchor_index(&rows, Some(&p), 1), 1);
+        assert_eq!(anchor_index(&rows, Some(&p), 0), 1);
     }
 
     #[test]
@@ -8315,22 +8382,12 @@ mod tests {
         let mut app = app();
         with_project(&mut app);
         app.run(&Command { action: "worktree.new", arg: None });
-        let Some(Overlay::Prompt { kind: PromptKind::WorktreeName(w), .. }) = &app.overlay else {
-            panic!("the name prompt")
-        };
-        let offered = w.suggested.clone().unwrap();
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the form") };
+        let offered = f.get("name");
+        assert!(!offered.is_empty(), "a free name, already in it");
+        assert_eq!(f.get("where"), "new:p1");
         let shown = screen(&app);
-        assert!(
-            shown.contains(&offered) && shown.contains(&format!("⏎ takes {offered}")),
-            "{shown}"
-        );
-        typed(&mut app, "\n");
-        match &app.overlay {
-            Some(Overlay::Picker { purpose: Purpose::Agent(w), .. }) => {
-                assert_eq!(w.name.as_deref(), Some(offered.as_str()))
-            }
-            _ => panic!("then the agent"),
-        }
+        assert!(shown.contains(&offered) && shown.contains("⏎ start"), "{shown}");
         // A workspace: a profile's name, else workspace-2.
         app.overlay = None;
         app.picked(Target::NewWorkspace, Purpose::Workspace);
@@ -9382,10 +9439,25 @@ mod tests {
             app.last_cli.as_deref(),
             Some(&["profile", "login", "work", "claude"].map(String::from)[..])
         );
-        // A question and variables.
-        app.run(&Command { action: "recipe.run", arg: None });
-        typed(&mut app, "implement-and-review\n");
-        typed(&mut app, "task=add json, n=2\n");
+        // A recipe's form: one field per variable, the defaults shown, then where.
+        app.recipe_picker(vec![
+            serde_json::from_value(serde_json::json!({
+                "name": "implement-and-review", "source": "builtin",
+                "vars": ["task (required)", "n = 1"], "steps": 3,
+            }))
+            .unwrap(),
+        ]);
+        typed(&mut app, "\n");
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the recipe's form") };
+        assert_eq!(
+            f.fields.iter().map(|f| f.label.as_str()).collect::<Vec<_>>(),
+            ["task", "n", "Project", "Base"]
+        );
+        typed(&mut app, "\n");
+        assert!(
+            matches!(&app.overlay, Some(Overlay::Form(f)) if f.error.as_deref() == Some("task is needed"))
+        );
+        typed(&mut app, "add json\t2\n");
         assert_eq!(
             app.last_cli.clone().unwrap(),
             ["recipe", "run", "implement-and-review", "--var", "task=add json", "--var", "n=2"]
@@ -9461,18 +9533,8 @@ mod tests {
     }
 
     #[test]
-    fn workspace_and_fanout_prompts_are_checked_too() {
+    fn free_text_prompts_take_anything() {
         let app = app();
-        let ws = PromptKind::NewWorkspace(None, None);
-        assert!(app.prompt_check(&ws, "").is_ok(), "empty cancels");
-        assert!(app.prompt_check(&ws, "Side Job").unwrap_err().contains("'S' (uppercase)"));
-        assert!(app.prompt_check(&ws, "side-job").is_ok());
-
-        let fan = PromptKind::Orch(crate::runs::OrchInput::FanoutAgents { project: "p".into() });
-        assert!(app.prompt_check(&fan, "claude, codex@work").is_ok());
-        assert!(
-            app.prompt_check(&fan, "claude,cladue").unwrap_err().contains("unknown agent cladue")
-        );
         // Free text isn't a name: anything goes.
         assert!(app.prompt_check(&PromptKind::Broadcast(Vec::new()), "Fix /it/ now!").is_ok());
     }
@@ -10598,16 +10660,22 @@ mod tests {
         };
         assert_eq!(palette.item(1).label, "laptop2");
         app.picked(Target::Machine("laptop2".into()), Purpose::NewWorkspaceOn);
-        let Some(Overlay::Prompt { title, kind, .. }) = &app.overlay else { panic!() };
-        assert!(title.contains("on laptop2"), "{title}");
-        assert!(matches!(kind, PromptKind::NewWorkspace(None, Some(m)) if m == "laptop2"));
-        // Taken there already: said as it is typed.
-        let kind = PromptKind::NewWorkspace(None, Some("laptop2".into()));
-        assert!(app.prompt_check(&kind, "work").is_err());
-        assert!(app.prompt_check(&kind, "spikes").is_ok());
+        let Some(Overlay::Form(form)) = &app.overlay else { panic!("the form") };
+        assert!(form.title.contains("on laptop2"), "{}", form.title);
+        // Taken there already: said on ⏎, and the form stays.
+        let typed = |app: &mut App, s: &str| {
+            for c in s.chars() {
+                app.overlay_key(KeyEvent::new(KeyCode::Char { c }, Mods::NONE));
+            }
+        };
+        typed(&mut app, "work");
+        app.overlay_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        let Some(Overlay::Form(form)) = &app.overlay else { panic!("still the form") };
+        assert!(form.error.as_deref().unwrap_or("").contains("exists"), "{:?}", form.error);
         while app.rx.try_recv().is_ok() {}
-        app.overlay = None;
-        app.prompt_done("spikes".into(), kind);
+        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'u' }, Mods(Mods::CTRL)));
+        typed(&mut app, "spikes");
+        app.overlay_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
         let mut asked = None;
         while let Ok(m) = app.rx.try_recv() {
             if let AppMsg::Reply(Pending::WorkspaceMade(n), _) = m {

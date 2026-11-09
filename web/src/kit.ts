@@ -255,20 +255,33 @@ export function slugify(kind: "name" | "branch", raw: string): string {
   return out;
 }
 
-export type Field =
+/// `more`: the field goes under "More options", folded, so the quick path stays short.
+export type Field = (
   | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean; slug?: "name" | "branch" }
   | { key: string; label: string; type: "textarea"; value?: string | null; placeholder?: string; hint?: string; rows?: number; required?: boolean }
   | { key: string; label: string; type: "select"; options: ([string, string] | string)[]; value?: string | null; hint?: string }
-  | { key: string; label: string; type: "check"; value?: boolean; hint?: string };
+  | { key: string; label: string; type: "check"; value?: boolean; hint?: string }
+  // A checkbox per option; its value is the ticked ones, in order.
+  | { key: string; label: string; type: "checks"; options: ([string, string] | string)[]; value?: string[]; hint?: string; required?: boolean }
+) & { more?: boolean };
 
-export type Values = Record<string, string | boolean>;
+export type Values = Record<string, string | boolean | string[]>;
+export type Input = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
 /// A form in a sheet. `go` gets the values; if it throws, the message shows in the form and the
 /// sheet stays; if it returns, the sheet closes. Empty text fields are left out of the values.
-export function form(title: string, fields: Field[], label: string, go: (v: Values) => Promise<unknown> | unknown, opts: { danger?: boolean; intro?: Child } = {}): Sheet {
-  const inputs = new Map<string, HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>();
+/// `input(key)` is a field's element, for a form whose fields follow each other.
+export function form(title: string, fields: Field[], label: string, go: (v: Values) => Promise<unknown> | unknown, opts: { danger?: boolean; intro?: Child } = {}): Sheet & { input: (key: string) => Input | undefined } {
+  const inputs = new Map<string, Input>();
+  const groups = new Map<string, HTMLInputElement[]>();
   const rows = fields.map((f) => {
-    let input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    let input: Input;
+    if (f.type === "checks") {
+      const boxes = f.options.map((o) => { const [v, l] = typeof o === "string" ? [o, o] : o; const c = h("input", { type: "checkbox", value: v }); c.checked = !!f.value?.includes(v); return [c, l] as const; });
+      groups.set(f.key, boxes.map(([c]) => c));
+      return h("div", { class: "field", role: "group", "aria-label": f.label }, h("span", {}, f.label),
+        ...boxes.map(([c, l]) => h("label", { class: "field check" }, c, h("span", {}, l))), f.hint ? h("small", {}, f.hint) : null);
+    }
     if (f.type === "textarea") {
       input = h("textarea", { rows: f.rows ?? 4, placeholder: f.placeholder, autocapitalize: "off" });
       input.value = f.value ?? "";
@@ -305,6 +318,12 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
     if (busy) return;
     const v: Values = {};
     for (const f of fields) {
+      if (f.type === "checks") {
+        const on = groups.get(f.key)!.filter((c) => c.checked).map((c) => c.value);
+        if (!on.length && f.required) { err.textContent = `Pick at least one: ${f.label}.`; groups.get(f.key)![0]?.focus(); return; }
+        v[f.key] = on;
+        continue;
+      }
       const i = inputs.get(f.key)!;
       if (f.type === "check") v[f.key] = (i as HTMLInputElement).checked;
       else if (i.value.trim() !== "" || f.type === "select") v[f.key] = i.value.trim();
@@ -324,15 +343,45 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
     }
   };
   submit.addEventListener("click", () => void run());
-  const s = sheet(title, [opts.intro ? h("p", { class: "intro" }, opts.intro) : null, ...rows, err], [h("button", { onclick: () => s.close() }, "Cancel"), submit]);
+  const more = rows.filter((_, i) => fields[i].more);
+  const fold = more.length ? h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"),
+    h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, ...more)) : null;
+  const s = sheet(title, [opts.intro ? h("p", { class: "intro" }, opts.intro) : null, ...rows.filter((_, i) => !fields[i].more), fold, err], [h("button", { onclick: () => s.close() }, "Cancel"), submit]);
   // Enter in a single-line field submits.
   s.el.addEventListener("keydown", (e) => {
     const t = e.target as HTMLElement;
     if (e.key === "Enter" && t instanceof HTMLInputElement && t.type !== "checkbox" && !e.isComposing) { e.preventDefault(); void run(); }
   });
   requestAnimationFrame(() => (s.el.querySelector("input:not([type=checkbox]), textarea") as HTMLElement | null)?.focus());
-  return s;
+  return Object.assign(s, { input: (key: string) => inputs.get(key) });
 }
+
+/// Candidates for a fan-out: `n` of them, cycling through the picked agents (`ptyro fanout -n`).
+export function cycle<T>(picked: T[], n: number): T[] {
+  if (!picked.length) return [];
+  const count = Math.max(n || picked.length, 1);
+  return Array.from({ length: count }, (_, i) => picked[i % picked.length]);
+}
+
+/// A profile select's options: the profiles that live on `machine` (`null`: this one), by the
+/// name their machine knows them by (a request about another machine's workspace or worktree
+/// names its profile bare), labelled with their label.
+export function profileChoices(profiles: { name: string; label?: string; machine?: string | null }[], machine: string | null): [string, string][] {
+  return profiles.filter((p) => (p.machine ?? null) === machine).map((p): [string, string] => {
+    const bare = machine && p.name.startsWith(`${machine}:`) ? p.name.slice(machine.length + 1) : p.name;
+    return [bare, p.label && p.label !== bare ? `${bare} (${p.label})` : bare];
+  });
+}
+
+/// A line of arguments as words: spaces split them, except inside '…' or "…" (`--model "x y"`).
+export function argWords(line: string): string[] {
+  const out: string[] = [];
+  for (const m of line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
+/// The profile a new workspace starts with: the one named like it, else `default`.
+export const profileFor = (names: string[], workspace: string): string => names.includes(workspace) ? workspace : "default";
 
 // ── small parts ─────────────────────────────────────────────────────────────────────────────
 

@@ -1750,6 +1750,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
     };
     match o {
         Overlay::Settings(p) => crate::settings::draw(app, p, f, area),
+        Overlay::Form(form) => crate::form::draw(app, form, f, area),
         Overlay::Help { filter, scroll } => {
             let r = boxed(area, 88, area.height.saturating_sub(4));
             f.render_widget(Clear, r);
@@ -1928,7 +1929,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 preview,
                 Line::styled(
                     format!(
-                        "⏎ start · {} · Tab name · C-o pick agent & where · Esc",
+                        "⏎ start · {} · Tab name · C-o every option (agent, where, profile…) · Esc",
                         newline_hint(app)
                     ),
                     fg(app, t.dim),
@@ -1954,8 +1955,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             // Checked as it's typed: characters a name can't hold are marked where they are.
             let check = app.prompt_check(kind, text);
             let bad = fg(app, t.error).add_modifier(Modifier::UNDERLINED);
-            let simple = !(kind.is_name() && check.is_err())
-                && !(text.is_empty() && kind.suggestion().is_some());
+            let simple = !(kind.is_name() && check.is_err());
             let (rows, cursor) =
                 edit_rows(text, "› ", fit_width(area, 70, 4), (area.height / 3).max(1) as usize);
             let rows_h = if simple { rows.len() as u16 } else { 1 };
@@ -1967,11 +1967,6 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     let style = if ptyro_core::names::allowed(c) { Style::new() } else { bad };
                     Span::styled(c.to_string(), style)
                 }));
-            } else if text.is_empty()
-                && let Some(s) = kind.suggestion()
-            {
-                // The name it offers, dimmed: ⏎ takes it, typing replaces it (UX1.24).
-                field.push(Span::styled(s.to_owned(), fg(app, t.dim)));
             }
             let help = match check {
                 Err(e) => {
@@ -1992,10 +1987,9 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                         String::new()
                     };
                     Line::styled(
-                        match (note, text.is_empty().then(|| kind.suggestion()).flatten()) {
-                            (_, Some(s)) => format!("⏎ takes {s} · or type another · Esc cancel"),
-                            (Some(n), _) => format!("⏎ ok ({n}){nl} · Esc cancel · C-u clear"),
-                            (None, _) => format!("⏎ ok{nl} · Esc cancel · C-u clear"),
+                        match note {
+                            Some(n) => format!("⏎ ok ({n}){nl} · Esc cancel · C-u clear"),
+                            None => format!("⏎ ok{nl} · Esc cancel · C-u clear"),
                         },
                         fg(app, t.dim),
                     )
