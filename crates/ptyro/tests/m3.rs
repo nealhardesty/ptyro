@@ -326,7 +326,7 @@ async fn the_worktree_lifecycle() {
     // … and with work that would be lost, with a precise report (CLI exit code 5).
     std::fs::write(second.path.join("README"), "edited\n").unwrap();
     std::fs::write(second.path.join("notes.md"), "mine\n").unwrap();
-    let out = w.cli(&["wt", "rm", "app/second"]);
+    let out = w.cli(&["wt", "rm", "-y", "app/second"]);
     assert_eq!(out.status.code(), Some(5));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -367,7 +367,7 @@ async fn the_worktree_lifecycle() {
     w.git(&info.path, &["commit", "-q", "--allow-empty", "-m", "feature"]);
     w.git(&root, &["merge", "-q", "--ff-only", "first"]);
     w.git(&root, &["push", "-q", "origin", "main"]);
-    let out = w.ok(&["wt", "rm", "app/first"]);
+    let out = w.ok(&["wt", "rm", "-y", "app/first"]);
     assert!(out.contains("deleted branch first"), "{out}");
     assert!(out.contains("released ports 21000-21004"), "{out}");
     assert!(!w.git(&root, &["branch"]).contains("first"));
@@ -700,7 +700,7 @@ async fn the_profile_cli_edits_the_config() {
 
     // In use → rm refused; rename rewrites the references.
     w.ok(&["ws", "new", "job", "--profile", "work"]);
-    let out = w.cli(&["profile", "rm", "work"]);
+    let out = w.cli(&["profile", "rm", "-y", "work"]);
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("workspace job"),
         "{}",
@@ -739,7 +739,7 @@ async fn workspaces_reconcile_and_gc() {
     assert!(out.lines().any(|l| l.starts_with("main")), "main always exists: {out}");
     w.ok(&["ws", "add", "main", "lib"]);
     w.ok(&["ws", "rename", "side", "aside"]);
-    assert!(w.cli(&["ws", "rm", "main"]).status.code() == Some(2));
+    assert!(w.cli(&["ws", "rm", "-y", "main"]).status.code() == Some(2));
     let c = w.d.client().await.unwrap();
     let Reply::WorktreeCreated { info: gone, .. } = new_wt(
         &c,
@@ -783,8 +783,44 @@ async fn workspaces_reconcile_and_gc() {
     let out = d.ok(&["ws", "ls"]);
     assert!(out.contains("aside"), "{out}");
     // Removing a missing worktree just forgets it.
-    let out = d.ok(&["wt", "rm", "lib/gone"]);
+    let out = d.ok(&["wt", "rm", "-y", "lib/gone"]);
     assert!(out.contains("removed lib/gone"), "{out}");
+}
+
+/// Removals ask first, the same words in every client, and running sessions don't trap a
+/// project: `--release` lets them go (SPEC §12.1).
+#[tokio::test]
+async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
+    let w = World::new("[worktrees]\nfetch = false\n");
+    let root = w.repo("app", &[]);
+    w.ok(&["project", "add", root.to_str().unwrap()]);
+    w.ok(&["ws", "new", "side"]);
+    // No terminal to ask and no --yes: refused, saying what goes and offering --yes.
+    let out = w.cli(&["ws", "rm", "side"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains(ptyro_core::removal::WORKSPACE) && err.contains("--yes"), "{err}");
+    assert!(w.ok(&["ws", "ls"]).contains("side"), "nothing was removed");
+    w.ok(&["ws", "rm", "--yes", "side"]);
+
+    let c = w.d.client().await.unwrap();
+    let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();
+    let out = w.cli(&["project", "rm", "app"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains(ptyro_core::removal::PROJECT), "{err}");
+    // Its session runs: refused, with both ways through.
+    let out = w.cli(&["project", "rm", "-y", "app"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains("let them go") && err.contains("--release"), "{err}");
+    let out = w.ok(&["project", "rm", "-y", "--release", "app"]);
+    assert!(out.contains("forgot app"), "{out}");
+    let Reply::Session { info } = c.request(Request::Get { addr: s.id.full() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(info.state.is_live() && info.project.is_none(), "it runs on, outside: {info:?}");
 }
 
 async fn run(s: Script) -> Report {
@@ -921,7 +957,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     let refused = r.at(3.8);
     assert!(refused.contains("1 untracked file") && refused.contains("scratch.txt"), "{refused}");
     assert!(
-        refused.contains("discard that work") && refused.contains("a: archive it instead"),
+        refused.contains("y: remove it anyway") && refused.contains("a: archive it instead"),
         "{refused}"
     );
     assert!(dirty.path.exists(), "nothing removed without consent");

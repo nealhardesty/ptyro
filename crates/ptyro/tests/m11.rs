@@ -547,7 +547,7 @@ fn every_failure_mode_has_a_state_and_an_action() {
     // Resuming skips what's pushed.
     let out = w.fails(&["cs", "push", "nr", "--yes"]);
     assert!(out.contains("already up to date: api"), "{out}");
-    w.ok(&["cs", "rm", "nr", "--force"]);
+    w.ok(&["cs", "rm", "-y", "nr", "--force"]);
     // ── a member agent that errors out; a contract revised after a member said ready.
     let i = w.json(&["cs", "new", "fm", "--projects", "api,sdk", "--no-gates", "--json"]);
     let root = PathBuf::from(s(&i["set"]["root"]));
@@ -596,7 +596,7 @@ fn every_failure_mode_has_a_state_and_an_action() {
     // Recovers on its next good turn.
     w.ok(&["send", "fm-sdk", "work 0.2 again"]);
     w.until("sdk recovered", || w.member(&w.show("fm"), "sdk")["failed"].is_null());
-    w.ok(&["cs", "rm", "fm", "--force"]);
+    w.ok(&["cs", "rm", "-y", "fm", "--force"]);
     // ── out of order: a human merges sdk before api.
     let i = w.json(&[
         "cs",
@@ -735,7 +735,7 @@ fn a_set_lead_uses_its_tools_and_the_set_survives_a_restart() {
     .unwrap();
     w.ok(&["cs", "contract", "mc", "submit", "-m", "silver"]);
     assert_eq!(w.show("mc")["set"]["contract"].as_array().unwrap().len(), 3);
-    w.ok(&["cs", "rm", "mc", "--force"]);
+    w.ok(&["cs", "rm", "-y", "mc", "--force"]);
     assert!(!root.exists());
 }
 
@@ -900,6 +900,6 @@ fn removing_a_set_calls_off_a_push_waiting_at_its_gate() {
     let out = w.ok(&["cs", "push", "held"]);
     assert!(out.contains("gate") || out.contains("waiting"), "{out}");
     w.until("the push gate", || w.show("held")["gates"].as_array().is_some_and(|g| !g.is_empty()));
-    w.ok(&["cs", "rm", "held", "--force"]);
+    w.ok(&["cs", "rm", "-y", "held", "--force"]);
     assert!(!root.exists(), "removed, not refused as busy");
 }

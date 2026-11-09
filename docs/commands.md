@@ -16,6 +16,11 @@ Conventions:
 - Aliases: `a` (attach), `ls` (list), `runs`, `recipes`, `changeset`, `gates`, `leases`,
   `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
 - Durations look like `30s`, `10m`, `2h`.
+- Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
+  words): `chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`. `-y`/`--yes` doesn't ask; with no
+  terminal to ask and no `--yes`, the command refuses (exit 5) and changes nothing. They act on an
+  exact address only: a chat's handle, id or `@last`, never words from its title.
 
 ## Naming sessions and worktrees
 
@@ -75,7 +80,7 @@ Conventions:
 | `ptyro chat show CHAT [--all] [--format text\|md\|json]` / `open CHAT` | print a chat's shown branch (`--all`: every branch) / open it in the TUI's chat view. CHAT: `c:7f3k`, `7f3k`, a title's words, `@last` |
 | `ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]` | a message; the answer streams here |
 | `ptyro chat answer CHAT allow\|always\|deny` / `stop CHAT` | answer its permission request / stop the answer being written |
-| `ptyro chat retitle CHAT [TITLE…]` / `pin` / `unpin` / `archive` / `unarchive` / `rm CHATS…` | title it (none: a new automatic one) / keep at the top / put away / delete |
+| `ptyro chat retitle CHAT [TITLE…]` / `pin` / `unpin` / `archive` / `unarchive` / `rm CHATS… [-y]` | title it (none: a new automatic one) / keep at the top / put away / delete for good, with its side chats (by handle, id or `@last`, never a title; asks unless `-y`) |
 | `ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]` | switch its agent, its tools or the folders it reads; the next message carries the conversation over |
 | `ptyro chat presets [--json]` | the tool presets, each with what it lets a chat use (⚠ for a shell) |
 | `ptyro chat task CHAT [--project P] [--agent A] [--name N] [--yes]` | make it a task: an agent session in a new worktree whose first prompt is the chat's conversation and last answer (not an incognito chat; asks first when the task's profile isn't the chat's, `--yes` agrees) |
@@ -121,7 +126,7 @@ Conventions:
 
 | Command | Does |
 |---|---|
-| `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again |
+| `ptyro project add [PATH] [--workspace W]` / `ls` / `show [P]` / `rm P [--release] [-y]` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again, and its worktrees stay on disk. Sessions running in it block `rm` (at a terminal it offers to let them go); `--release` lets them go on, outside any project |
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
 | `ptyro project line-endings [P]` | rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |
@@ -134,14 +139,14 @@ Conventions:
 | `ptyro wt integrate W [--into B] [--cherry-pick] [--push]` | rebase onto main and fast-forward it (or cherry-pick) |
 | `ptyro wt pair W [--refresh]` / `unpair W` | show W's work in the main checkout / give the checkout back, your edits carried to W |
 | `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script / open in an editor |
-| `ptyro wt rm W [--force [-y]] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost |
+| `ptyro wt rm W [--force] [-y] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost. Its directory is deleted, and its branch too if it is merged or the same as its pushed copy, otherwise kept (`--keep-branch`: always kept). Asks unless `-y` (`--force` asks again, after saying what would be lost) |
 | `ptyro wt lock\|unlock W` / `rename-branch W [NEW]` | manual lock / rename the branch (never once pushed) |
 | `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
 | `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
 | `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them |
 | `ptyro wt archive-rm [P/]NAME… [-y]` | delete archives for good: the saved files, and each branch if merged or pushed (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
 | `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
-| `ptyro ws ls\|new\|set\|rm\|rename\|add\|remove …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`, `add WS PROJECT` |
+| `ptyro ws ls\|new\|set\|rm\|rename\|add\|remove …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`, `add WS PROJECT`; `rm WS [-y]`: its sessions keep running and move to main, with its chats and the projects no other workspace has |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
 
 ## Review and ship
@@ -164,7 +169,7 @@ Conventions:
 | `ptyro fanout (-a A,B,C \| -n N) (-p P \| --prompt-file F) [--test [CHECK]] [--verify CHECK] [--judge A] [--timeout D] [--name PREFIX] [--base REF] [--project P] [--structured] [--wait] [--json]` | one task, several agents, one worktree each |
 | `ptyro compare R [--refresh] [--json]` | rank candidates by evidence: tests, diff, time |
 | `ptyro pick R C [--cherry-pick \| --pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
-| `ptyro discard R [C] [--force]` / `iterate R [C] TEXT` | remove the others / a follow-up prompt |
+| `ptyro discard R [C] [--force] [-y]` / `iterate R [C] TEXT` | remove the others (asks unless `-y`) / a follow-up prompt |
 | `ptyro recipe ls\|show NAME\|validate FILE\|graph R [--format mermaid\|dot]` (each with `[--project P]`) | recipes: list, read, check, draw |
 | `ptyro recipe run R [--var k=v]… [--project P] [--base REF] [--trust FP] [--wait] [--json]` | start a recipe |
 | `ptyro run ls [--active] [--tree]` / `show R` / `events R` / `wait R [--gate] [--timeout D]` | runs and their steps (`wait`: exit 0 succeeded, 1 failed, 5 cancelled, 7 timeout) |
@@ -191,7 +196,7 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 | `ptyro cs diff SET M` / `check SET` / `overlay SET [auto\|go\|rust\|node\|python\|compose\|off] [--member M]` | a member's changes / integration and contract checks / build against siblings |
 | `ptyro cs checkpoint SET [LABEL]` / `checkpoints SET` / `restore SET N [--force]` | undo across every repo |
 | `ptyro cs commit SET -m MSG` / `push SET [-y]` / `pr SET [--draft]` / `land SET [-y] [--no-wait]` | lockstep git and the merge train |
-| `ptyro cs add SET PROJECT [--agent A] [--depends-on M]` / `drop SET M [--force]` / `rm SET [--keep M] [--force]` / `templates` | membership, removal, templates |
+| `ptyro cs add SET PROJECT [--agent A] [--depends-on M]` / `drop SET M [--force] [-y]` / `rm SET [--keep M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates |
 
 ## Remote and phone
 
@@ -201,8 +206,8 @@ See [`remote.md`](remote.md).
 |---|---|
 | `ptyro serve [--access localhost\|tailscale\|open] [--port N] [--cert PEM --key PEM]` | the web app and the protocol over WebSocket for paired devices, always HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--access` and `--port` default to `[remote] access` and `port`; `--cert`/`--key` use your own certificate |
 | `ptyro pair [NAME] [--scope read\|approve\|control\|full] [--url URL] [--json] [--open]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `full` by default, with a warning; a name that exists is replaced), then waits for the device; `--open` pairs this computer's own browser instead (inside WSL, the Windows one; it offers to have Windows trust ptyro's certificate first) |
-| `ptyro devices [ls \| revoke ID \| push-test]` | paired devices |
-| `ptyro machine [ls \| add (ssh://HOST \| CODE) [--name N] \| rm M \| hide M WS \| unhide M WS \| retry M \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version |
+| `ptyro devices [ls \| revoke ID [-y] \| push-test]` | paired devices |
+| `ptyro machine [ls \| add (ssh://HOST \| CODE) [--name N] \| rm M [-y] \| hide M WS \| unhide M WS \| retry M \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version |
 | `ptyro web [on\|off\|status] [--access localhost\|tailscale\|open] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there; `--remote wsl://[distro]` is the daemon in a WSL distro (what `ptyro.exe` on Windows uses; `client.default_remote` keeps one) |
 
@@ -230,7 +235,7 @@ See [`remote.md`](remote.md).
 | `ptyro config get KEY [--explain] [--project[=NAME]] [--json]` | one value, bare for scripts; `--explain`: what it does, its default, where it is set, when a change applies |
 | `ptyro config set KEY VALUE… [--project[=NAME] [--shared]]` | change a setting: checked first, the file's comments kept, live where it can be; words make a list or a command (after `--` if one starts with a dash); `--project` writes your `.ptyro.local.toml`, `--shared` the committed `.ptyro.toml` |
 | `ptyro config unset KEY… [--project[=NAME] [--shared]]` | back to the default |
-| `ptyro config add COLLECTION [NAME] [FIELD=VALUE…]` / `rm COLLECTION NAME` / `rename COLLECTION FROM TO` | an agent, theme, editor, key binding, notification service (`notifications.sinks`, `type=ntfy url=…`), run script or prompt |
+| `ptyro config add COLLECTION [NAME] [FIELD=VALUE…]` / `rm COLLECTION NAME [-y]` / `rename COLLECTION FROM TO` | an agent, theme, editor, key binding, notification service (`notifications.sinks`, `type=ntfy url=…`), run script or prompt |
 | `ptyro config schema [--project]` | every setting's description as JSON, for tools that build forms |
 | `ptyro daemon start [--foreground]` / `status [--json]` / `logs [-n N] [-f]` | the background daemon (it starts by itself); `status` includes its health |
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |
@@ -247,8 +252,8 @@ See [`remote.md`](remote.md).
 | `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `run wait`: the run failed; `radar`: a predicted conflict; `cs check`: not ok; `daemon upgrade`: rolled back) |
 | `2` | invalid arguments |
 | `3` | not found |
-| `4` | ambiguous: a handle or selector matched several |
-| `5` | conflict: unsaved work, a profile question needing `--yes` / `--override-pin`, (`wait`) the session exited first, (`run wait`) the run was cancelled, or (`lease claim`) refused |
+| `4` | ambiguous: a handle or selector matched several, or a removal was given words from a title instead of an address (the candidates are listed) |
+| `5` | conflict: unsaved work, a question needing `--yes` (a removal, a profile) / `--override-pin`, (`wait`) the session exited first, (`run wait`) the run was cancelled, or (`lease claim`) refused |
 | `6` | untrusted scripts |
 | `7` | timeout (`wait`, `send --wait-ready`), `--stall` saw no output, or (`pr checks`) checks still running |
 | `8` | no daemon |

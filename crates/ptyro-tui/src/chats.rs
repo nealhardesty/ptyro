@@ -743,7 +743,7 @@ impl App {
         if self.chat(id).is_some_and(|c| c.side_of.is_some()) {
             self.request(
                 Pending::Done("side chat closed".into()),
-                Request::ChatDelete { chat: id.to_owned() },
+                Request::ChatDelete { chat: id.to_owned(), confirmed: true },
             );
         }
     }
@@ -960,9 +960,12 @@ impl App {
             }
             "chat.delete" => {
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!("Delete the chat {label:?}? (y/n)"),
+                    text: format!(
+                        "Delete the chat \u{201c}{label}\u{201d}? {} [y/N]",
+                        ptyro_core::removal::CHAT
+                    ),
                     action: Confirmed::Send(
-                        Box::new(Request::ChatDelete { chat: id }),
+                        Box::new(Request::ChatDelete { chat: id, confirmed: true }),
                         "chat deleted".into(),
                     ),
                 });

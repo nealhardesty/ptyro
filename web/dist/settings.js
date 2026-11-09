@@ -328,7 +328,7 @@ function devicesView() {
     poll("devices", () => devices.refresh(""), 10000);
     const list = devices.get("");
     return h("div", {}, ui.header("Devices", "#/more", h("button", { class: "icon plus", title: tip("pair.device"), "aria-label": "Pair another device", onclick: pairAnother }, "＋")), h("main", { class: "stack", title: tip("devices.list") }, conn.scope !== "full" ? h("p", { class: "empty" }, "Listing devices needs a device paired with --scope full.") :
-        pending(devices, "") ?? (list.length ? h("div", { class: "rows" }, ...list.map((d) => row(h("span", {}, d.name, " ", badge(d.scope, d.scope === "full" ? "warn" : ""), d.pending ? badge("waiting to pair", "info") : null), `${d.last_seen_ms ? `seen ${ago(d.last_seen_ms)} ago` : "never seen"}${d.last_via ? ` · ${d.last_via}` : ""}${d.push ? ` · ${d.push} notification${d.push === 1 ? "" : "s"}` : ""}`, null, { onclick: () => menu(d.name, [{ title: tip("devices.revoke"), label: "Revoke", danger: true, hint: "Its token stops working at once", run: () => confirm(`Revoke ${d.name}?`, "It's unpaired now. If it's this device, you'll be signed out.", "Revoke", async () => { await ask({ t: "device_revoke", id: d.id }, "Revoked"); devices.reload(""); }) }]) }))) : h("p", { class: "empty" }, "No devices."))));
+        pending(devices, "") ?? (list.length ? h("div", { class: "rows" }, ...list.map((d) => row(h("span", {}, d.name, " ", badge(d.scope, d.scope === "full" ? "warn" : ""), d.pending ? badge("waiting to pair", "info") : null), `${d.last_seen_ms ? `seen ${ago(d.last_seen_ms)} ago` : "never seen"}${d.last_via ? ` · ${d.last_via}` : ""}${d.push ? ` · ${d.push} notification${d.push === 1 ? "" : "s"}` : ""}`, null, { onclick: () => menu(d.name, [{ title: tip("devices.revoke"), label: "Revoke", danger: true, hint: "Its token stops working at once", run: () => confirm(`Revoke device ${d.name}?`, "Its token stops working at once and its connections close. Pair it again to bring it back. If it's this device, you'll be signed out.", "Revoke", async () => { await ask({ t: "device_revoke", id: d.id }, "Revoked"); devices.reload(""); }) }]) }))) : h("p", { class: "empty" }, "No devices."))));
 }
 // a QR code, drawn here (qr.ts, no library)
 function qrBox(text) {
@@ -465,7 +465,7 @@ function profileView(rest) {
     return h("div", {}, ui.header(p?.label || name, "#/profiles"), h("main", { class: "stack" }, body));
 }
 function removeProfile(name, force = false) {
-    confirm(`Remove ${name}?`, force ? "Whatever uses it falls back to the default profile." : "It leaves your config; its directories aren't touched.", force ? "Remove anyway" : "Remove", async () => {
+    confirm(`Remove profile ${name}?`, `It leaves your config; its directories aren't touched.${force ? " Whatever uses it falls back to the default profile." : ""}`, force ? "Remove anyway" : "Remove", async () => {
         try {
             const r = await host("profile.rm", { name, force });
             profiles.reload("");

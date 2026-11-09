@@ -19,6 +19,7 @@ pub mod open;
 pub mod os;
 pub mod paths;
 pub mod project;
+pub mod removal;
 pub mod scratchpad;
 pub mod screen;
 pub mod secret;

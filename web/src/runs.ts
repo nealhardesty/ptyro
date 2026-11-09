@@ -257,7 +257,7 @@ function candidateCard(id: string, c: any): HTMLElement {
       h("button", { class: "small", title: tip("iterate"), onclick: () => iterateForm(id, c) }, "Follow up"),
       c.worktree ? h("button", { class: "small", onclick: () => go(`#/wt/${enc(c.worktree)}/changes`) }, "Changes") : null,
       sessionId ? h("button", { class: "small", onclick: () => go(`#/s/${enc(sessionId)}`) }, "Session") : null,
-      h("button", { class: "small", title: tip("discard"), onclick: () => confirm(`Discard ${c.step}?`, "Its worktree is removed, if that loses nothing.", "Discard", async () => { await ask({ t: "discard", run: id, candidate: c.step, force: false }, "Discarded"); compare.reload(id); }) }, "Discard")) : null);
+      h("button", { class: "small", title: tip("discard"), onclick: () => confirm(`Discard candidate ${c.step}?`, "Its agent stops and its worktree is removed. Nothing is removed if that would lose work.", "Discard", async () => { await ask({ t: "discard", run: id, candidate: c.step, force: false }, "Discarded"); compare.reload(id); }) }, "Discard")) : null);
 }
 
 function compareView(rest: string): HTMLElement {
@@ -268,7 +268,7 @@ function compareView(rest: string): HTMLElement {
     ...(d.warnings as string[]).map((w) => h("p", { class: "form-err" }, w)),
     h("div", { class: "sub" }, `against ${d.base ?? "the main branch"}${d.base_tests != null ? ` (its tests ${d.base_tests === 0 ? "pass" : "fail"})` : ""}`),
     bar(h("button", { title: tip("iterate"), onclick: () => iterateForm(id) }, "Follow up with all"),
-      h("button", { title: tip("discard"), onclick: () => confirm("Discard the rest?", "Every candidate that wasn't picked has its worktree removed, if that loses nothing.", "Discard them", async () => { await ask({ t: "discard", run: id, candidate: null, force: false }, "Discarded"); compare.reload(id); }) }, "Discard the rest"),
+      h("button", { title: tip("discard"), onclick: () => confirm("Discard every candidate you didn't pick?", "Their agents stop and their worktrees are removed. Nothing is removed if that would lose work.", "Discard them", async () => { await ask({ t: "discard", run: id, candidate: null, force: false }, "Discarded"); compare.reload(id); }) }, "Discard the rest"),
       h("button", { class: "icon", "aria-label": "Run the evidence again", onclick: () => { conn.request({ t: "compare", run: id, refresh: true }).then((r) => { compare.set(id, r.doc); ui.render(); }, (e) => ui.toast(errText(e))); } }, "↻")),
     ...(d.candidates as any[]).map((c) => candidateCard(id, c)),
     d.top_difference ? section("Between the top two", h("pre", { class: "block" }, d.top_difference)) : null);
@@ -456,7 +456,7 @@ function setMemberMenu(i: any, m: any): void {
     { title: tip("set.message"), label: "Message it…", run: () => msgSet(name, m.name) },
     { title: tip("set.overlay"), label: "Wire it to its siblings…", run: () => overlaySet(name, m.name) },
     m.pr_url && { label: `Pull request #${m.pr}`, run: () => openWeb(m.pr_url) },
-    { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name}?`, "It leaves the set; its worktree stays unless it can't.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false }, "Dropped"); set.reload(name); }) },
+    { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name} from change set ${name}?`, "It leaves the set and its worktree is removed. Nothing is removed if that would lose work.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false }, "Dropped"); set.reload(name); }) },
   ]);
 }
 
@@ -527,7 +527,7 @@ function setView(rest: string): HTMLElement {
           { title: tip("set.overlay"), label: "Wire members to each other…", run: () => overlaySet(name) },
           i.lead && { label: "Open the lead", run: () => go(`#/s/${enc(i.lead)}`) },
           { title: tip("set.add"), label: "Add a project…", run: () => addMember(name) },
-          { title: tip("set.remove"), label: "Remove the set", danger: true, run: () => confirm(`Remove ${name}?`, "Its worktrees are removed, unless they hold work: then it says so.", "Remove", async () => { const v = await csOp({ op: "rm", set: name, keep: [], force: false }, "Removed"); if (v) go("#/sets"); }) },
+          { title: tip("set.remove"), label: "Remove the set", danger: true, run: () => confirm(`Remove change set ${name}?`, "Every member's worktree is removed, or none is. Nothing is removed if that would lose work.", "Remove", async () => { const v = await csOp({ op: "rm", set: name, keep: [], force: false }, "Removed"); if (v) go("#/sets"); }) },
         ]) }, "⋯")),
       ...(i.report.issues as any[]).map((x) => h("section", { class: "issue" }, h("b", {}, `✗ ${x.state.replace(/_/g, " ")}${x.member ? ` · ${x.member}` : ""}`), h("div", {}, x.detail), h("div", { class: "sub" }, `→ ${x.action}`))),
       section("Members", h("div", { class: "rows" }, ...(c.members as any[]).map((m) => {

@@ -7,12 +7,12 @@ use clap_complete::ArgValueCandidates;
 use ptyro_client::Client;
 use ptyro_core::model::{ProjectInfo, RemoveOpts, WorktreeInfo, WorktreeSpec, WorktreeState};
 use ptyro_core::session::SpawnSpec;
-use ptyro_core::{Error, ErrorCode};
+use ptyro_core::{Error, ErrorCode, removal};
 use ptyro_protocol::{Reply, Request};
 
 use crate::cli::{
-    Ctx, NewArgs, age, check_attachable, client_env, confirm, current_dir, no_daemon, session_of,
-    truncate, unexpected, with_confirmation,
+    Ctx, NewArgs, age, ask_first, check_attachable, client_env, confirm, current_dir, no_daemon,
+    session_of, truncate, unexpected, with_confirmation,
 };
 
 #[derive(Subcommand)]
@@ -29,10 +29,17 @@ pub enum ProjectCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Forget a project (its worktrees stay on disk)
+    /// Forget a project: its trust, pin and place in workspaces go; its worktrees stay on disk.
+    /// Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: String,
+        /// Its running sessions keep going, outside any project (else they block it)
+        #[arg(long)]
+        release: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Show a project with its worktrees and scripts
     Show {
@@ -129,10 +136,14 @@ pub enum WsCmd {
         #[arg(long)]
         notify: Option<String>,
     },
-    /// Remove a workspace (its sessions move to main)
+    /// Remove a workspace: its sessions keep running and move to main, with its chats and the
+    /// projects no other workspace has. Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::workspaces))]
         name: String,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Rename a workspace
     Rename { name: String, new_name: String },
@@ -244,19 +255,21 @@ pub enum WtCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Remove a worktree, refusing if it would lose work (SPEC §10.8)
+    /// Remove a worktree, refusing if it would lose work (SPEC §10.8): its directory is deleted,
+    /// and its branch too if it is merged or the same as its pushed copy. Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
-        /// Discard uncommitted, untracked, unpushed or stashed work (asks first)
+        /// Discard uncommitted, untracked, unpushed or stashed work (asks again, saying what)
         #[arg(long)]
         force: bool,
-        /// With --force: don't ask
+        /// Don't ask
         #[arg(short, long)]
         yes: bool,
         /// Stop sessions running in it first
         #[arg(long)]
         stop_sessions: bool,
+        /// Keep its branch, even when it is merged
         #[arg(long)]
         keep_branch: bool,
     },
@@ -489,10 +502,27 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        ProjectCmd::Rm { project } => {
-            let Reply::Removed { notes: n } =
-                c.request(Request::ProjectRemove { addr: project, release: false }).await?
-            else {
+        ProjectCmd::Rm { project, release, yes } => {
+            let mut q = format!("Forget project {project}? {}", removal::PROJECT);
+            if release {
+                q = format!("{q} {}", removal::PROJECT_RELEASE);
+            }
+            ask_first(&q, yes)?;
+            let req = Request::ProjectRemove { addr: project.clone(), release };
+            let reply = match c.request(req).await {
+                // Its sessions are running: the TUI's and the web's offer, asked here too.
+                Err(e) if e.code == ErrorCode::Conflict && !release => {
+                    if yes || !confirm(&format!("{} Let them go?", e.message)) {
+                        return Err(Error::new(
+                            e.code,
+                            format!("{} (--release lets them go)", e.message),
+                        ));
+                    }
+                    c.request(Request::ProjectRemove { addr: project, release: true }).await?
+                }
+                other => other?,
+            };
+            let Reply::Removed { notes: n } = reply else {
                 return Err(Error::internal("unexpected reply"));
             };
             notes(&n);
@@ -729,7 +759,8 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             c.request(Request::WorkspaceSet { name, profile, notify }).await?;
             Ok(0)
         }
-        WsCmd::Rm { name } => {
+        WsCmd::Rm { name, yes } => {
+            ask_first(&format!("Remove workspace {name}? {}", removal::WORKSPACE), yes)?;
             c.request(Request::WorkspaceRemove { name }).await?;
             Ok(0)
         }
@@ -974,15 +1005,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::ArchiveRm { worktrees, yes } => {
             let what = worktrees.join(", ");
-            if !yes
-                && !confirm(&format!(
-                    "Delete the archive of {what} for good? Its saved files can't come back."
-                ))
-            {
-                return Err(Error::invalid(format!(
-                    "kept {what} (pass --yes to delete without asking)"
-                )));
-            }
+            ask_first(&format!("Delete the archive of {what}? {}", removal::ARCHIVE), yes)?;
             for addr in worktrees {
                 let Reply::Notes { notes: n } =
                     c.request(Request::WorktreeArchiveDelete { addr }).await?
@@ -1110,14 +1133,15 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::Rm { worktree, force, yes, stop_sessions, keep_branch } => {
+            let what = if keep_branch { removal::WORKTREE_KEEP_BRANCH } else { removal::WORKTREE };
+            ask_first(&format!("Remove worktree {worktree}? {what} {}", removal::SAFE), yes)?;
             let opts = RemoveOpts { force: false, stop_sessions, keep_branch };
             let req = Request::WorktreeRemove { addr: worktree.clone(), opts };
             let reply = match c.request(req).await {
                 Err(e) if e.code == ErrorCode::DirtyWorktree && force => {
                     eprintln!("{}", e.message);
-                    if !yes && !confirm("Discard all of that and remove it anyway?") {
-                        return Err(Error::new(ErrorCode::DirtyWorktree, "kept"));
-                    }
+                    let q = format!("Discard that work and remove it? {}", removal::FORCED);
+                    ask_first(&q, yes)?;
                     let opts = RemoveOpts { force: true, stop_sessions, keep_branch };
                     c.request(Request::WorktreeRemove { addr: worktree, opts }).await?
                 }

@@ -460,7 +460,7 @@ impl Daemon {
             }
         } else if !live.is_empty() {
             return Err(Error::conflict(format!(
-                "{} has running sessions ({}); stop them first",
+                "{} has running sessions ({}). Stop them first, or let them go: they keep running, outside any project.",
                 p.slug,
                 live.join(", ")
             )));

@@ -1443,7 +1443,7 @@ impl Panel {
             _ => "",
         };
         self.modal = Some(Modal::Confirm {
-            text: format!("Remove {what}, and everything set in it?{note}"),
+            text: format!("Remove {what}? {}{note}", ptyro_core::removal::CONFIG_ENTRY),
             then: Confirmed::Remove { path, name: name.to_owned() },
         });
         vec![]

@@ -220,7 +220,7 @@ fn a_side_chat_nobody_follows_goes_and_goes_with_its_chat() {
     let parent = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
     let s2 = side_of(&w.cli(&["chat", "fork", &parent, "--side"]));
     assert!(!gone(&w, &s2));
-    w.ok(&["chat", "rm", &parent]);
+    w.ok(&["chat", "rm", "-y", &parent]);
     assert!(gone(&w, &s2), "it went with its chat");
 }
 

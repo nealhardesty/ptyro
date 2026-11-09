@@ -248,8 +248,8 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
             && c.notifications.sinks.len() == 1
     );
     assert!(ptyro(&["config", "rename", "agents", "aider", "pair"]).status.success());
-    assert!(ptyro(&["config", "rm", "agents", "pair"]).status.success());
-    assert!(ptyro(&["config", "rm", "notifications.sinks", "0"]).status.success());
+    assert!(ptyro(&["config", "rm", "-y", "agents", "pair"]).status.success());
+    assert!(ptyro(&["config", "rm", "-y", "notifications.sinks", "0"]).status.success());
     assert!(ptyro(&["config", "unset", "keys.x"]).status.success());
     let c = ptyro_core::config::Config::parse(&file()).unwrap();
     assert!(

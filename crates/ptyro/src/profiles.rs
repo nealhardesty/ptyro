@@ -50,12 +50,17 @@ pub enum ProfileCmd {
         #[arg(long = "match")]
         matches: Vec<String>,
     },
-    /// Delete a profile from your config (refused while anything uses it)
+    /// Delete a profile from your config (refused while anything uses it); its directories
+    /// aren't touched. Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::profiles))]
         name: String,
+        /// Even while something uses it: that falls back to the default profile
         #[arg(long)]
         force: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Rename a profile everywhere: config, workspaces, pins, worktrees, sessions
     Rename { old: String, new: String },
@@ -240,7 +245,11 @@ pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        ProfileCmd::Rm { name, force } => {
+        ProfileCmd::Rm { name, force, yes } => {
+            use ptyro_core::removal::{PROFILE, PROFILE_FORCE};
+            let q = format!("Remove profile {name}? {PROFILE}");
+            let q = if force { format!("{q} {PROFILE_FORCE}") } else { q };
+            crate::cli::ask_first(&q, yes)?;
             for line in remove(ctx, &name, force).await? {
                 eprintln!("{line}");
             }

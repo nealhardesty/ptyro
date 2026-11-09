@@ -470,8 +470,8 @@ function chatMenu(c) {
                     location.hash = "#/chats";
                 ui.render();
             } },
-        { title: tip("chat.delete"), label: "Delete", danger: true, run: () => confirm(`Delete “${label(c)}”?`, "It goes from every list, on every device.", "Delete", async () => {
-                await ask({ t: "chat_delete", chat: c.id }, "Deleted");
+        { title: tip("chat.delete"), label: "Delete", danger: true, run: () => confirm(`Delete the chat “${label(c)}”?`, "It goes from every list, on every device, with its side chats. This can't be undone.", "Delete", async () => {
+                await ask({ t: "chat_delete", chat: c.id, confirmed: true }, "Deleted");
                 if (state.archived)
                     state.archived = state.archived.filter((x) => x.id !== c.id);
                 if (state.following === c.id)
@@ -647,7 +647,7 @@ window.addEventListener("hashchange", () => {
     // Leaving a side chat that wasn't kept: it goes (SPEC §22.7).
     const left = chatOf(state.following);
     if (left?.side_of && !location.hash.startsWith(`#/c/${encodeURIComponent(left.id)}`))
-        void conn.request({ t: "chat_delete", chat: left.id }).catch(() => { });
+        void conn.request({ t: "chat_delete", chat: left.id, confirmed: true }).catch(() => { });
     if (!/^#\/c\//.test(location.hash))
         follow(null);
     if (location.hash !== `#/c/${atRoute}`)

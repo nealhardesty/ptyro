@@ -907,7 +907,17 @@ pub async fn discard(
     run: String,
     candidate: Option<String>,
     force: bool,
+    yes: bool,
 ) -> Result<i32, Error> {
+    use ptyro_core::removal::{DISCARD, DISCARD_REST, safety};
+    let q = match &candidate {
+        Some(c) => format!("Discard candidate {c} of {run}? {DISCARD} {}", safety(force)),
+        None => format!(
+            "Discard every candidate of {run} you didn't pick? {DISCARD_REST} {}",
+            safety(force)
+        ),
+    };
+    crate::cli::ask_first(&q, yes)?;
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     notes(c.request(Request::Discard { run, candidate, force }).await?)
 }

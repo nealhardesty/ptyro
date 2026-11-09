@@ -570,7 +570,11 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        DevicesCmd::Revoke { id } => {
+        DevicesCmd::Revoke { id, yes } => {
+            crate::cli::ask_first(
+                &format!("Revoke device {id}? {}", ptyro_core::removal::DEVICE),
+                yes,
+            )?;
             c.request(Request::DeviceRevoke { id: id.clone() }).await?;
             eprintln!("revoked {id}: its token no longer works and its connections closed");
             Ok(0)

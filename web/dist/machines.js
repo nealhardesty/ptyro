@@ -55,7 +55,7 @@ function machineMenu(m) {
         { title: tip("machine.retry"), label: "Try its link now", hint: m.state === "online" ? "It is online" : m.fix ?? "", run: async () => { await ask({ t: "machine_retry", name: m.name }, `Trying ${m.name}…`); } },
         ...m.workspaces.filter((w) => !m.hidden.includes(w)).map((w) => ({ title: tip("machine.hide"), label: `Hide ${w} here`, hint: "Nothing changes there", run: async () => { await ask({ t: "machine_hide", name: m.name, workspace: w, hidden: true }, `${m.name} / ${w} is hidden here`); } })),
         ...m.hidden.map((w) => ({ title: tip("machine.unhide"), label: `Show ${w} again`, run: async () => { await ask({ t: "machine_hide", name: m.name, workspace: w, hidden: false }, `${m.name} / ${w} is shown again`); } })),
-        { title: tip("machine.remove"), label: "Stop showing it here", danger: true, hint: "Nothing changes on it", run: () => confirm(`Stop showing ${m.name}?`, "Its workspaces leave this list. Nothing changes on it; revoke this machine's token there too.", "Stop", async () => { await ask({ t: "machine_remove", name: m.name }, `${m.name} is no longer shown here`); }) },
+        { title: tip("machine.remove"), label: "Stop showing it here", danger: true, hint: "Nothing changes on it", run: () => confirm(`Stop mirroring ${m.name}?`, "Its workspaces leave this list. Nothing changes on it, and its pairing stays until you revoke it there.", "Stop", async () => { await ask({ t: "machine_remove", name: m.name }, `${m.name} is no longer shown here`); }) },
     ]);
 }
 function addMachine() {
