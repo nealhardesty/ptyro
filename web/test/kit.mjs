@@ -156,5 +156,17 @@ store.set("k", "v");
   assert.deepEqual(argWords(`--model opus  --name "a b" 'c d'`), ["--model", "opus", "--name", "a b", "c d"]);
   assert.deepEqual(argWords("   "), []);
 }
+// A refusal's way through (SPEC §6.6) becomes the same request with its field said, wherever
+// the request keeps it; a request without that field gets no button.
+{
+  const { withFix, fixOf } = await import("../dist/kit.js");
+  const err = Object.assign(new Error("x is still running: stop it first"), { code: "conflict", fix: { fix: "stop", label: "Stop and remove" } });
+  assert.deepEqual(withFix({ t: "remove", addr: "x", stop: false }, fixOf(err)), { t: "remove", addr: "x", stop: true });
+  assert.deepEqual(withFix({ t: "worktree_remove", addr: "w", opts: { force: false, stop_sessions: false } }, { fix: "force", label: "Remove anyway" }).opts, { force: true, stop_sessions: false });
+  assert.deepEqual(withFix({ t: "cs", op: { op: "rm", set: "s", force: false } }, { fix: "force", label: "Remove the set anyway" }).op.force, true);
+  assert.equal(withFix({ t: "cs", op: { op: "new", spec: { name: "s", trust: null } } }, { fix: "trust", label: "Trust and go on", fingerprint: "ab12" }).op.spec.trust, "ab12");
+  assert.equal(withFix({ t: "kill", addr: "x", signal: null }, { fix: "stop", label: "Stop and remove" }), null);
+  assert.equal(fixOf(new Error("plain")), undefined);
+}
 console.log("ok");
 process.exit(0);

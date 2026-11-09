@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use ptyro_client::Client;
 use ptyro_core::cache::ScreenCache;
+use ptyro_core::error::Again;
 use ptyro_core::input::{InputEvent, KeyCode, KeyEvent, Mods};
 use ptyro_core::session::{ProcessState, SessionInfo, SpawnSpec};
 use ptyro_core::{ErrorCode, TermSize};
@@ -242,6 +243,12 @@ async fn kill_rename_remove_and_addressing() {
     c.request(Request::Rename { addr: info.name.clone(), name: "renamed".into() }).await.unwrap();
     let err = c.request(Request::Remove { addr: "renamed".into(), stop: false }).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict, "live sessions can't be removed");
+    // The way through, for every client to offer (SPEC §6.6): the same request with `stop`.
+    let fix = err.fix.expect("a way through");
+    assert_eq!((fix.again, fix.label.as_str()), (Again::Stop, "Stop and remove"));
+    // A restart has no such way: stopping first is another request.
+    let err = c.request(Request::Restart { addr: "renamed".into() }).await.unwrap_err();
+    assert_eq!((err.code, err.fix), (ErrorCode::Conflict, None), "{}", err.message);
     let killed =
         match c.request(Request::Kill { addr: "renamed".into(), signal: None }).await.unwrap() {
             Reply::Session { info } => info,

@@ -340,7 +340,7 @@ impl Daemon {
         {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "devices are paired and revoked on the machine that runs ptyro, or from a device paired with `--scope full`",
+                "devices are paired and revoked on the machine that runs ptyro, or from a device paired with full scope",
             ));
         }
         let need = needed(req);
@@ -349,7 +349,7 @@ impl Daemon {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
                 format!(
-                    "this device is paired with scope {}; that needs {} (`ptyro pair --scope {}`)",
+                    "this device is paired with scope {}; that needs {}: pair it again with {} on the computer that runs ptyro",
                     g.scope.label(),
                     need.label(),
                     need.label()
@@ -362,7 +362,7 @@ impl Daemon {
         {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "this gate lets code ship: answering it needs control (`ptyro pair --scope control`)",
+                "this gate lets code ship: answering it needs control (pair this device again with control, on the computer that runs ptyro)",
             ));
         }
         if need >= Scope::Approve

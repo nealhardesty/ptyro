@@ -738,7 +738,7 @@ pub async fn recipe(ctx: &Ctx, cmd: RecipeCmd) -> Result<i32, Error> {
             };
             let r = match c.request(req.clone()).await {
                 Err(e) if e.code == ErrorCode::UntrustedProject => {
-                    let fp = e.message.rsplit(' ').next().unwrap_or("").to_owned();
+                    let fp = crate::cli::trust_of(&e).unwrap_or_default();
                     if std::io::stdin().is_terminal() && !fp.is_empty() {
                         eprintln!("{}", e.message);
                         eprint!("Trust it and run? [y/N] ");

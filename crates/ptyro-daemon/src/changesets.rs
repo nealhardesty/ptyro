@@ -490,9 +490,13 @@ impl Daemon {
                         return Err(Error::new(
                             ErrorCode::UntrustedProject,
                             format!(
-                                "template {t} comes from the {} repository and isn't trusted; read {}, then run with --trust {fp}",
+                                "template {t} comes from the {} repository and isn't trusted: read {}, then trust it to go on",
                                 hub.slug, info.path
                             ),
+                        )
+                        .with_fix(
+                            ptyro_core::error::Again::Trust { fingerprint: fp },
+                            "Trust and go on",
                         ));
                     }
                 }
@@ -2406,7 +2410,8 @@ impl Daemon {
                         unrecorded.join(", "),
                         set.name
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Restore anyway"));
             }
             let safety =
                 self.cs_checkpoint(run, Some(format!("before restoring #{n}")), "restore").await?;
@@ -3161,7 +3166,8 @@ impl Daemon {
             return Err(Error::conflict(format!(
                 "{} depend on {member}: drop them first, or drop it anyway",
                 users.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::Force, "Drop it anyway"));
         }
         if let Some(w) = &m.worktree {
             self.remove_worktree(w, RemoveOpts { force, stop_sessions: true, keep_branch: false })
@@ -3230,7 +3236,8 @@ impl Daemon {
                         set.name,
                         unsafe_.join("; ")
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Remove the set anyway"));
             }
         }
         // The agents first.

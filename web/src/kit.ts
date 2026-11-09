@@ -85,14 +85,31 @@ window.addEventListener("hashchange", () => { for (const t of polls.values()) cl
 
 export const errText = (e: unknown): string => (e as Error)?.message || String(e);
 
-/// Run a request; on failure toast why and resolve `undefined`.
+/// A refusal's way through (SPEC §6.6): the same request again with one thing said, and what
+/// its button says.
+export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust"; label: string; fingerprint?: string }
+export const fixOf = (e: unknown): Fix | undefined => (e as { fix?: Fix })?.fix;
+
+/// `req` again with `f` said, where the request keeps that field; `null` when it has none.
+export function withFix(req: any, f: Fix): any {
+  const r = JSON.parse(JSON.stringify(req));
+  for (const o of [r, r.opts, r.op, r.op?.spec]) {
+    if (o && typeof o === "object" && f.fix in o) { o[f.fix] = f.fix === "trust" ? f.fingerprint : true; return r; }
+  }
+  return null;
+}
+
+/// Run a request; on failure toast why and resolve `undefined`. A refusal with a way through
+/// asks whether to take it.
 export async function ask<T = any>(req: object, ok?: string): Promise<T | undefined> {
   try {
     const r = await conn.request(req);
     if (ok) ui.toast(ok);
     return r as T;
   } catch (e) {
-    ui.fail(errText(e));
+    const f = fixOf(e), again = f && withFix(req, f);
+    if (f && again) confirm(f.label, errText(e), f.label, () => ask(again, ok));
+    else ui.fail(errText(e));
     return undefined;
   }
 }

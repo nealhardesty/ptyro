@@ -299,7 +299,8 @@ fn cli_selectors_restart_scrollback_config_and_shell_init() {
     let ls = ok(&["ls"]);
     assert!(ls.contains("keep") && !ls.contains("w2"), "{ls}");
     assert_eq!(run(&["kill", "@nothing-matches-this"]).status.code(), Some(2));
-    ok(&["kill", "@live"]);
+    ok(&["rm", "--stop", "@live"]);
+    assert!(!ok(&["ls"]).contains("keep"), "rm --stop forgot it");
     let all = ok(&["ls", "--all"]);
     assert!(all.contains("keep") && all.contains("w2"), "history lists removed sessions:\n{all}");
 
@@ -371,15 +372,17 @@ fn kill_is_immediate_and_keeps_the_session_and_rm_stop_forgets_one() {
     let took = t.elapsed() + until_ended("stubborn");
     assert!(took < Duration::from_secs(2), "kill waited {took:?}: it should be SIGKILL at once");
     assert_eq!(state("stubborn").as_deref(), Some("exited"), "kill keeps it listed");
-    // The old `--keep` still parses.
-    ok(&["kill", "stubborn", "--keep"]);
+    // The old `--keep` still parses; killing an ended one says so and signals nothing.
+    let out = run(&["kill", "stubborn", "--keep"]);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("stubborn isn't running"));
 
     // rm refuses a running session, says why, and offers the CLI's way through.
     let out = run(&["rm", "plain"]);
     assert_eq!(out.status.code(), Some(5), "a conflict");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("plain is still running: stop it first"), "{err}");
-    assert!(err.contains("ptyro rm --stop plain"), "{err}");
+    assert!(err.contains("(again with `--stop`: stop and remove)"), "{err}");
     assert!(!err.contains("kill"), "the daemon's words are stop and remove: {err}");
     assert_eq!(state("plain").as_deref(), Some("running"));
     // rm --stop: stopped, then forgotten, in one go.

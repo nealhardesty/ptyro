@@ -485,7 +485,9 @@ fn a_failing_check_stops_the_train_with_a_partial_state_report() {
     )
     .unwrap();
     let refused = w.fails(&["cs", "new", "p2", "--template", "pair"]);
-    let fp = refused.rsplit("--trust ").next().unwrap().trim().to_owned();
+    // The CLI says its way through: `--trust FINGERPRINT`, the daemon's fix (SPEC §6.6).
+    let fp = refused.split("again with `--trust ").nth(1).unwrap().split('`').next().unwrap();
+    let fp = fp.to_owned();
     assert!(refused.contains("isn't trusted"), "{refused}");
     w.ok(&["cs", "new", "p2", "--template", "pair", "--trust", &fp]);
 }

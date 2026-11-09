@@ -713,7 +713,8 @@ impl Daemon {
                 wt.qualified(),
                 names.len(),
                 names.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::StopSessions, "Stop them and remove it"));
         }
         let mut notes = Vec::new();
         let exists = wt.path.exists();
@@ -731,7 +732,8 @@ impl Daemon {
                         wt.qualified(),
                         safety.report()
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Remove anyway"));
             }
             if !safety.is_clean() {
                 notes.push(format!("discarded: {}", safety.report().replace("\n  ", "; ")));

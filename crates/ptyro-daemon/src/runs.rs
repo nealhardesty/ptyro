@@ -2318,9 +2318,11 @@ impl Daemon {
                     } else {
                         return Err(Error::new(
                             ErrorCode::UntrustedProject,
-                            format!(
-                                "this recipe comes from the repository and isn't trusted; read it (`ptyro recipe show`), then run with --trust {fp}"
-                            ),
+                            "this recipe comes from the repository and isn't trusted: read it, then trust it to run it",
+                        )
+                        .with_fix(
+                            ptyro_core::error::Again::Trust { fingerprint: fp },
+                            "Trust and run",
                         ));
                     }
                 }

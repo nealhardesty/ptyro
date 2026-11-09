@@ -1374,6 +1374,14 @@ impl Daemon {
                     if self.session(s.id).is_none() {
                         return Ok(Reply::Done);
                     }
+                    // Restarted while it stopped: that one is new, so it stays.
+                    if self.launching.locked().0.contains(&s.id) {
+                        return Err(Error::conflict("the session is restarting; remove it after"));
+                    }
+                }
+                if s.is_live() && !stop {
+                    let again = ptyro_core::error::Again::Stop;
+                    return Err(still_running(&s).with_fix(again, "Stop and remove"));
                 }
                 if s.is_live() {
                     return Err(still_running(&s));
@@ -1593,7 +1601,8 @@ impl Daemon {
                 if live > 0 && !force {
                     return Err(Error::conflict(format!(
                         "{live} session(s) still running: stopping the daemon stops them too"
-                    )));
+                    ))
+                    .with_fix(ptyro_core::error::Again::Force, "Stop them too"));
                 }
                 let _ = self.shutdown.send(true);
                 Ok(Reply::Done)
@@ -1862,6 +1871,9 @@ mod tests {
             "pick \x2d-profile",
             "\x2d-existing needs",
             "\x2d-lead needs",
+            "with \x2d-trust",
+            "pair \x2d-scope",
+            "ptyro\x20machine rm",
         ];
         fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
             for e in std::fs::read_dir(dir).unwrap().flatten() {

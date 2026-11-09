@@ -23,7 +23,7 @@ use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, age, client_env, confirm, no_daemon, offer, unexpected};
+use crate::cli::{Ctx, age, client_env, confirm, no_daemon, trust_of, unexpected};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -514,7 +514,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             if let Err(e) = &v
                 && e.code == ErrorCode::UntrustedProject
                 && std::io::stdin().is_terminal()
-                && let Some(fp) = e.message.rsplit("--trust ").next().map(str::to_owned)
+                && let Some(fp) = trust_of(e)
             {
                 eprintln!("{}", e.message);
                 if confirm("Trust this template and go on?") {
@@ -732,12 +732,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         CsCmd::Restore { set, n, force } => {
-            let how = format!("`ptyro cs checkpoint {set}` first, or `--force`");
-            let v = op(&c, CsOp::Restore { set, n, force }).await;
-            print_notes(&v.map_err(|e| match force {
-                true => e,
-                false => offer(e, ErrorCode::DirtyWorktree, &how),
-            })?);
+            print_notes(&op(&c, CsOp::Restore { set, n, force }).await?);
             Ok(0)
         }
         CsCmd::Overlay { set, mode, member } => {
@@ -808,24 +803,12 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         CsCmd::Drop { set, member, force } => {
-            op(&c, CsOp::Drop { set, member: member.clone(), force }).await.map_err(
-                |e| match force {
-                    true => e,
-                    false => offer(e, ErrorCode::Conflict, "`--force` drops it anyway"),
-                },
-            )?;
+            op(&c, CsOp::Drop { set, member: member.clone(), force }).await?;
             eprintln!("dropped {member}");
             Ok(0)
         }
         CsCmd::Rm { set, keep, force } => {
-            let v = op(&c, CsOp::Rm { set, keep, force }).await.map_err(|e| match force {
-                true => e,
-                false => offer(
-                    e,
-                    ErrorCode::DirtyWorktree,
-                    "`--keep MEMBER` keeps one, `--force` removes it anyway",
-                ),
-            })?;
+            let v = op(&c, CsOp::Rm { set, keep, force }).await?;
             eprintln!(
                 "removed {}",
                 v["removed"]

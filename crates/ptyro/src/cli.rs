@@ -89,7 +89,7 @@ pub async fn run(
     match dispatch(cmd, task, json_wire, remote).await {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("ptyro: {}", e.message);
+            eprintln!("ptyro: {}", said(&e));
             e.code.exit_code()
         }
     }
@@ -414,6 +414,10 @@ async fn dispatch(
         Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
+                if !info.state.is_live() {
+                    eprintln!("{} isn't running", info.name);
+                    continue;
+                }
                 let signal = signal.unwrap_or(9);
                 client
                     .request(Request::Kill { addr: info.id.full(), signal: Some(signal) })
@@ -437,11 +441,7 @@ async fn dispatch(
         Some(Cmd::Rm { sessions, stop }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
-                let how = format!("`ptyro rm --stop {}` stops and removes it", info.name);
-                client
-                    .request(Request::Remove { addr: info.id.full(), stop })
-                    .await
-                    .map_err(|e| if stop { e } else { offer(e, ErrorCode::Conflict, &how) })?;
+                client.request(Request::Remove { addr: info.id.full(), stop }).await?;
                 if stop && info.state.is_live() {
                     eprintln!("stopped and removed {}", info.name);
                 }
@@ -564,12 +564,7 @@ async fn dispatch(
         Some(Cmd::Convert { session, to, force }) => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
             let structured = to == "structured";
-            let convert = c.request(Request::Convert { addr: session, structured, force }).await;
-            let convert = convert.map_err(|e| match force {
-                true => e,
-                false => offer(e, ErrorCode::Conflict, "`--force` interrupts it"),
-            });
-            match convert? {
+            match c.request(Request::Convert { addr: session, structured, force }).await? {
                 Reply::Session { info } => {
                     eprintln!(
                         "{} now runs {} (same conversation) — attach with `ptyro attach {}`",
@@ -807,10 +802,26 @@ async fn tour_here(ctx: &Ctx) -> Result<i32, Error> {
     attach_with(ctx, client, Some(info), tui).await
 }
 
-/// A daemon refusal says what to do in words all three clients share; the CLI adds its own way
-/// of doing it, the flag (SPEC §6.6). Only for a refusal of `code`.
-pub fn offer(e: Error, code: ErrorCode, how: &str) -> Error {
-    if e.code == code { Error::new(e.code, format!("{} ({how})", e.message)) } else { e }
+/// What the CLI prints for an error: the daemon's words, then a refusal's way through the
+/// CLI's way, the flag that says it (SPEC §6.6).
+pub fn said(e: &Error) -> String {
+    use ptyro_core::error::Again;
+    let Some(f) = &e.fix else { return e.message.clone() };
+    let flag = match &f.again {
+        Again::Force => "--force".to_owned(),
+        Again::StopSessions => "--stop-sessions".to_owned(),
+        Again::Stop => "--stop".to_owned(),
+        Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
+    };
+    format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
+}
+
+/// The fingerprint a refusal asks you to trust, if it asks.
+pub fn trust_of(e: &Error) -> Option<String> {
+    match &e.fix.as_ref()?.again {
+        ptyro_core::error::Again::Trust { fingerprint } => Some(fingerprint.clone()),
+        _ => None,
+    }
 }
 
 pub fn no_daemon(e: Error) -> Error {
@@ -1503,9 +1514,7 @@ pub(crate) async fn stop_daemon(ctx: &Ctx, force: bool, hibernate: bool) -> Resu
             }
         }
     }
-    client.request(Request::Shutdown { force }).await.map_err(|e| {
-        if force { e } else { offer(e, ErrorCode::Conflict, "`--force` stops them too") }
-    })?;
+    client.request(Request::Shutdown { force }).await?;
     drop(client);
     // The socket goes first, then the daemon stops its sessions (agents hibernate, which
     // takes a few seconds) and exits: wait for that, so a new daemon can start right away.

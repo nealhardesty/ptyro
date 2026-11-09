@@ -108,7 +108,8 @@ impl Daemon {
                 "{} has running sessions ({}); stop them first",
                 wt.qualified(),
                 live.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::StopSessions, "Stop them and archive it"));
         }
         let p = self
             .project_by_id(&wt.project)

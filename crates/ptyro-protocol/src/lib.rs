@@ -1628,6 +1628,56 @@ pub struct Metrics {
     pub sessions: Vec<(String, u64)>,
 }
 
+impl Request {
+    /// One that a refusal's way through can apply to (see [`Request::with_fix`]).
+    pub fn fixable(&self) -> bool {
+        matches!(
+            self,
+            Request::Remove { .. }
+                | Request::WorktreeRemove { .. }
+                | Request::WorktreeArchive { .. }
+                | Request::Shutdown { .. }
+                | Request::Convert { .. }
+                | Request::Cs { .. }
+                | Request::RecipeRun { .. }
+        )
+    }
+
+    /// This request again with a refusal's way through said (SPEC §6.6), for the TUI's
+    /// button; `None` when it can't say that.
+    pub fn with_fix(&self, again: &ptyro_core::error::Again) -> Option<Request> {
+        use ptyro_core::error::Again as A;
+        use ptyro_run::wire::CsOp;
+        let mut r = self.clone();
+        match (&mut r, again) {
+            (Request::Remove { stop, .. }, A::Stop) => *stop = true,
+            (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
+            (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
+            (Request::WorktreeArchive { stop_sessions, .. }, A::StopSessions) => {
+                *stop_sessions = true
+            }
+            (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
+                *force = true
+            }
+            (
+                Request::Cs {
+                    op:
+                        CsOp::Restore { force, .. } | CsOp::Drop { force, .. } | CsOp::Rm { force, .. },
+                },
+                A::Force,
+            ) => *force = true,
+            (Request::Cs { op: CsOp::New { spec } }, A::Trust { fingerprint }) => {
+                spec.trust = Some(fingerprint.clone())
+            }
+            (Request::RecipeRun { trust, .. }, A::Trust { fingerprint }) => {
+                *trust = Some(fingerprint.clone())
+            }
+            _ => return None,
+        }
+        Some(r)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Short-lived wire messages: boxing the big variant would buy nothing.
 #[allow(clippy::large_enum_variant)]

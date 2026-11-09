@@ -1329,7 +1329,7 @@ impl Daemon {
         if self.links.locked().contains_key(&name) {
             cleanup();
             return Err(Error::conflict(format!(
-                "{name} is already added (`ptyro machine rm {name}` first to add it again)"
+                "{name} is already added: remove it first to add it again"
             )));
         }
         if token.is_some() {

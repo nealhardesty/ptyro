@@ -82,7 +82,20 @@ window.addEventListener("hashchange", () => { for (const t of polls.values())
     clearInterval(t); polls.clear(); });
 // ── asking the daemon ───────────────────────────────────────────────────────────────────────
 export const errText = (e) => e?.message || String(e);
-/// Run a request; on failure toast why and resolve `undefined`.
+export const fixOf = (e) => e?.fix;
+/// `req` again with `f` said, where the request keeps that field; `null` when it has none.
+export function withFix(req, f) {
+    const r = JSON.parse(JSON.stringify(req));
+    for (const o of [r, r.opts, r.op, r.op?.spec]) {
+        if (o && typeof o === "object" && f.fix in o) {
+            o[f.fix] = f.fix === "trust" ? f.fingerprint : true;
+            return r;
+        }
+    }
+    return null;
+}
+/// Run a request; on failure toast why and resolve `undefined`. A refusal with a way through
+/// asks whether to take it.
 export async function ask(req, ok) {
     try {
         const r = await conn.request(req);
@@ -91,7 +104,11 @@ export async function ask(req, ok) {
         return r;
     }
     catch (e) {
-        ui.fail(errText(e));
+        const f = fixOf(e), again = f && withFix(req, f);
+        if (f && again)
+            confirm(f.label, errText(e), f.label, () => ask(again, ok));
+        else
+            ui.fail(errText(e));
         return undefined;
     }
 }

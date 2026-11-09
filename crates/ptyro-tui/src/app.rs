@@ -592,6 +592,8 @@ pub enum CopyStart {
 
 pub enum AppMsg {
     Reply(Pending, Result<Reply, Error>),
+    /// A refusal with a way through, and the request that takes it (SPEC §6.6).
+    Refused(Pending, Error, Box<Request>),
     /// A workspace's saved view, after switching to it.
     View(String, Result<Reply, Error>),
     /// What `ptyro doctor` found (UX1.20).
@@ -829,6 +831,8 @@ pub struct App {
     reported_focus: Option<(SessionId, bool)>,
     /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
     stopping: HashSet<SessionId>,
+    /// While a refusal is handled: the request that takes its way through (SPEC §6.6).
+    retry: Option<Box<Request>>,
     /// A project just added, and what to do in it once its main checkout is known (UX1.6).
     after_add: Option<(String, AfterAdd)>,
     /// The project `context()` answers while an `after_add` runs.
@@ -970,6 +974,7 @@ impl App {
             drag: None,
             reported_focus: None,
             stopping: HashSet::new(),
+            retry: None,
             after_add: None,
             context_hint: None,
             first_run: None,
@@ -1254,9 +1259,18 @@ impl App {
             return;
         };
         let tx = self.tx.clone();
+        // Kept for a refusal's way through (SPEC §6.6): the same request, said again.
+        let again = req.fixable().then(|| req.clone());
         tokio::spawn(async move {
             let res = client.request(req).await;
-            let _ = tx.send(AppMsg::Reply(pending, res));
+            let retry = match (&res, again) {
+                (Err(e), Some(r)) => e.fix.as_ref().and_then(|f| r.with_fix(&f.again)),
+                _ => None,
+            };
+            let _ = tx.send(match (res, retry) {
+                (Err(e), Some(r)) => AppMsg::Refused(pending, e, Box::new(r)),
+                (res, _) => AppMsg::Reply(pending, res),
+            });
         });
     }
 
@@ -1958,8 +1972,9 @@ impl App {
 
     pub fn on_reply(&mut self, msg: AppMsg) {
         self.dirty = true;
-        let (pending, res) = match msg {
-            AppMsg::Reply(p, r) => (p, r),
+        let (pending, res, retry) = match msg {
+            AppMsg::Reply(p, r) => (p, r, None),
+            AppMsg::Refused(p, e, r) => (p, Err(e), Some(r)),
             AppMsg::Health(checks) => {
                 self.got_health(checks);
                 return;
@@ -2012,7 +2027,10 @@ impl App {
             ) if !matches!(pending, Pending::Peek(_)) => self.overlay.take(),
             _ => None,
         };
+        // A refusal's way through, for the reply's error to offer (SPEC §6.6).
+        self.retry = retry;
         self.handle_reply(pending, res);
+        self.retry = None;
         if let Some(h) = held {
             if self.overlay.is_some() {
                 self.toast("a reply arrived while you were typing: ask again when you're done");
@@ -2602,9 +2620,17 @@ impl App {
             }
             // Only a label: a worktree still being made says so elsewhere.
             (Pending::Again(_), Err(_)) => {}
-            (_, Err(e)) => match offer_for(&e.message) {
-                Some(offer) => self.toast_offer(e.message, true, offer),
-                None => self.toast_err(e.message),
+            // A refusal's way through (SPEC §6.6), else what its words suggest.
+            (_, Err(e)) => match (self.retry.take(), &e.fix) {
+                (Some(req), Some(fix)) => {
+                    let label = fix.label.to_lowercase();
+                    let offer = Offer { label: label.clone(), then: Then::Send(req, label) };
+                    self.toast_offer(e.message, true, offer)
+                }
+                _ => match offer_for(&e.message) {
+                    Some(offer) => self.toast_offer(e.message, true, offer),
+                    None => self.toast_err(e.message),
+                },
             },
             _ => {}
         }
@@ -8632,6 +8658,27 @@ mod tests {
         assert!(app.overlay.is_none(), "an ended session is removed without asking");
         let actions = app.row_actions(&Row::Session(gone.id));
         assert!(actions.contains(&"session.remove") && !actions.contains(&"session.stop"));
+    }
+
+    /// A refusal's way through (SPEC §6.6) is a button: the same request with it said.
+    #[test]
+    fn a_refusal_s_fix_becomes_a_button() {
+        use ptyro_core::error::Again;
+        let mut app = app();
+        let req = Request::Remove { addr: "x".into(), stop: false };
+        let e = Error::conflict("x is still running: stop it first")
+            .with_fix(Again::Stop, "Stop and remove");
+        let retry = req.with_fix(&e.fix.as_ref().unwrap().again).unwrap();
+        app.on_reply(AppMsg::Refused(Pending::Done(String::new()), e, Box::new(retry)));
+        let t = app.toast.as_ref().unwrap();
+        assert!(t.text.contains("stop it first"), "{}", t.text);
+        let Some(Offer { label, then: Then::Send(req, _) }) = &t.offer else { panic!("no button") };
+        assert_eq!(label, "stop and remove");
+        assert!(matches!(**req, Request::Remove { stop: true, .. }));
+        // Without one, its words still decide (or nothing is offered).
+        let mut app = self::app();
+        app.on_reply(AppMsg::Reply(Pending::Done(String::new()), Err(Error::conflict("nope"))));
+        assert!(app.toast.as_ref().unwrap().offer.is_none());
     }
 
     #[test]

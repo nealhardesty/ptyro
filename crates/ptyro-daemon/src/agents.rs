@@ -1152,7 +1152,8 @@ impl Daemon {
             if s.status() == Some(AgentStatus::Working) && !force {
                 return Err(Error::conflict(format!(
                     "{name} is in the middle of a turn: wait for it, or switch anyway to interrupt it"
-                )));
+                ))
+                .with_fix(ptyro_core::error::Again::Force, "Switch anyway"));
             }
             s.hibernating.store(true, Ordering::Relaxed);
             self.stop_session(&s).await;
