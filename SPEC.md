@@ -1300,12 +1300,22 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
 and the web all show the daemon's message, so it never names a CLI flag or tells you to run a
 CLI command: "stop them first", "archive it to keep it, or remove it anyway to discard it", not
 "use --stop-sessions" or "use --force". Each client then offers the way through in its own idiom:
-the CLI adds the flag ("(`--force` discards it)", `cli::offer`), the TUI and the web a button
-or a confirmation. A test (`refusals_name_no_cli_flag`) keeps flags out of the daemon's
-refusals. Left as they are: a message to an agent (which drives the CLI), one about another
-computer or the daemon process itself, and the ones the TUI turns into an action today
-(`` `ptyro project trust`` and the rest of `SUGGESTED`) or the web reads a value from (a recipe's
-or template's `--trust FINGERPRINT`); those want a structured hint on `Error` first.
+the CLI adds the flag, the TUI and the web a button or a confirmation. A test
+(`refusals_name_no_cli_flag`) keeps flags out of the daemon's refusals.
+
+**The way through is data, not words** (protocol 1.39). A refusal that has one carries
+`Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
+second time: `force`, `stop_sessions`, `stop`, or `trust` (with the `fingerprint` read). The
+daemon sets it exactly where that way applies (removing a running session: `stop`, "Stop and
+remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn convert,
+a daemon stop with sessions, a change set's restore, drop or remove: `force`; an untrusted recipe
+or template: `trust`), never for a refusal it doesn't undo (removing while it restarts, a
+restart while it runs). The CLI prints "(again with `--force`: remove anyway)" (`cli::said`);
+the TUI turns it into a toast button that resends the request (`Request::with_fix`); the web asks
+with a confirmation (`kit.ts` `withFix`, in `ask()`). Left as words: a message to an agent (which
+drives the CLI), one about another computer or the daemon process itself, and the ones that
+suggest a different action, which the TUI's `SUGGESTED` table still turns into one (`` `ptyro
+project trust` `` and the like).
 
 ---
 

@@ -1305,16 +1305,15 @@ impl Daemon {
                 format!("{} didn't answer, so it wasn't added: {}", transport.label(), e.message),
             ));
         }
-        let name =
-            match name.or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::derive)) {
-                Some(n) => n,
-                None => {
-                    let _ = std::fs::remove_file(self.token_path(&probe));
-                    return Err(Error::invalid(
-                        "give it a name (like laptop2): it didn't say its own",
-                    ));
-                }
-            };
+        let name = match name
+            .or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::derive))
+        {
+            Some(n) => n,
+            None => {
+                let _ = std::fs::remove_file(self.token_path(&probe));
+                return Err(Error::invalid("give it a name (like laptop2): it didn't say its own"));
+            }
+        };
         let cleanup = || {
             let _ = std::fs::remove_file(self.token_path(&probe));
         };
