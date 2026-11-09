@@ -972,7 +972,30 @@ static DAEMON_ELSEWHERE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
-    let cwd = cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))?;
+    daemon_path(&cwd)
+}
+
+/// An address the daemon reads (SPEC §2.3), with a relative path (`.`, `../app`) made this
+/// client's: the daemon would read it against its own directory. Names, ids, `~` and absolute
+/// paths go as they are. Every `--project` and worktree argument goes through it.
+pub fn addr_here(addr: String) -> Result<String, Error> {
+    if !addr.starts_with('.') {
+        return Ok(addr);
+    }
+    let cwd =
+        std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
+    Ok(daemon_path(&cwd.join(&addr))?.to_string_lossy().into_owned())
+}
+
+/// `addr_here` for an optional address.
+pub fn addr_here_opt(addr: Option<String>) -> Result<Option<String>, Error> {
+    addr.map(addr_here).transpose()
+}
+
+/// A folder on this computer as the daemon names it: canonical, and on Windows translated as
+/// `current_dir` says.
+fn daemon_path(p: &std::path::Path) -> Result<std::path::PathBuf, Error> {
+    let cwd = p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?;
     if cfg!(windows) && !DAEMON_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
         return Ok(plain_windows_path(&cwd));
     }
@@ -1359,7 +1382,7 @@ impl Filter {
     }
 }
 
-async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
+async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
     let (all, worktrees) = match ctx.connect(false).await {
         Ok(client) => {
             let worktrees = match client.request(Request::WorktreeList { project: None }).await? {
@@ -1370,6 +1393,13 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
                 Reply::Projects { projects } => projects,
                 _ => Vec::new(),
             };
+            // `-p .` (a path): the project it is in, by id.
+            if let Some(p) = filter.project.clone().filter(|p| ptyro_core::os::looks_like_path(p))
+                && let Reply::Project { info, .. } =
+                    client.request(Request::ProjectGet { addr: addr_here(p)? }).await?
+            {
+                filter.project = Some(info.id);
+            }
             let mut all = sessions(&client).await?;
             all.retain(|s| filter.keeps(s, &projects));
             (all, worktrees)
@@ -1719,6 +1749,19 @@ const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
 mod path_tests {
     use super::plain_windows_path;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_relative_path_is_this_clients_and_a_name_stays_a_name() {
+        use super::{addr_here, current_dir};
+        let here = current_dir().unwrap().to_string_lossy().into_owned();
+        assert_eq!(addr_here(".".into()).unwrap(), here);
+        let up = current_dir().unwrap().parent().unwrap().to_string_lossy().into_owned();
+        assert_eq!(addr_here("..".into()).unwrap(), up);
+        for name in ["myrepo", "myrepo/brisk-rook", "/abs/path", "~/src/app", "c:7f3k"] {
+            assert_eq!(addr_here(name.into()).unwrap(), name, "a name, id or absolute path");
+        }
+        assert!(addr_here("./no-such-folder-here".into()).is_err(), "a missing path says so");
+    }
 
     #[test]
     fn a_verbatim_windows_path_is_written_the_usual_way() {

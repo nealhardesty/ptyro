@@ -3745,7 +3745,7 @@ The proposal as written. Built syntax differs in places (`export --format asciic
 ptyro                                  # TUI
 ptyro attach [<session>] [--raw] [--view-only] [--workspace <ws>]
 ptyro new [--agent <a>[@<profile>]] [--profile <pr>] [--project <p>] [--wt <name>|--new-wt [<name>]|--here|--cwd <dir>]
-          [--name <n>] [--prompt <text>|--prompt-file <f>] [--attach] [--override-pin] [-- <args…>]
+          [--name <n>] [--prompt <text>|--prompt-file <f>] [--detach] [--override-pin] [-- <args…>]
 ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]   # §2.3's words
 ptyro status [<session>] [--explain] [--json]
 ptyro send <session…> <text> [--no-enter] [--raw] [--wait-ready]
@@ -3795,7 +3795,7 @@ action names and the theme; `edit` starts from a commented template and re-opens
 
 **[built M1]** `new [-d] [-n NAME] [-C DIR] [--size CxR] [--json] [-- CMD…]`, `attach [S] [--raw]`,
 `ls [--json]`, `kill S… [--signal N] [--keep]`, `rm S…`, `rename S NAME`, `read S [--ansi]`,
-`send S TEXT [--no-enter]`, `daemon start [--foreground]|stop [--force]|status [--json]|logs [-n N]`,
+`send S TEXT [--no-enter]`, `daemon start [--foreground]|stop [--force]|status [--json]|logs [--lines N]`,
 the hidden `fake-agent` (§18.2), and the global `--json-wire`. `kill` waits for the graceful stop
 and then removes the session unless `--keep`. Still to come from this tree: `--view-only`,
 `status`, `wait`, `events`, and everything project- or worktree-related.
@@ -3841,7 +3841,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `broadcast S… TEXT [--timeout]`;
   - `read S [--screen|--scrollback [N]] [--plain|--ansi] [--json]`;
   - `wait S… [--for C] [--match RE [--scrollback]] [--timeout] [--any|--all] [--stall] [--json]`;
-  - `events [--follow] [-s S] [-n N] [--json]`;
+  - `events [--follow] [--session S] [-l N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removes).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
 - **`attach --tab|--pane`** (WIN3, `ptyro_tui::tab`): open the session in a new tab or pane of
@@ -3969,7 +3969,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `pr fix [W]`;
   - `pr automerge [W] [--method] [--off]`;
   - `pr watch [W] [--off]` (also `watch-pr`);
-  - `pr reply [-w W] [--comment ID] TEXT`;
+  - `pr reply [--wt W] [--comment ID] TEXT`;
   - `pr open N|URL`.
 - **`review`:** `review add W FILE:LINE TEXT`, `review ls [W] [--json]`,
   `review rm W ID|--all`, `review send [W] [--to S] [--note]`, `review queue [--json]`,
@@ -3991,7 +3991,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   `discard R [CANDIDATE] [--force]`; `iterate R [CANDIDATE] TEXT`.
 - **Gates:** `gate ls [--all] [--json]`, `gate resolve ID CHOICE [--note] [--key]`.
 - **Mailbox:** `msg send TO TEXT [--kind] [--run] [--reply-to] [--interrupt] [--key]`,
-  `msg check [--me S] [--since ID] [--wait D] [--json]`, `msg ls [--run] [-n] [--json]`,
+  `msg check [--me S] [--since ID] [--wait D] [--json]`, `msg ls [--run] [-l N] [--json]`,
   `msg ack ID…`. Inside a session the sender is that session.
 - **Leases and radar:** `lease claim PATTERN… [--exclusive] [--ttl] [--reason] [--as S]`
   (exit 5 when refused), `lease release [PATTERN…] [--as S]`, `lease ls [--json]`,
@@ -4686,7 +4686,7 @@ ptyro wait "$s" --for idle --timeout 30m && ptyro wt diff "$s"
 
 ### 15.2 Level 2 — fan-out and compare (M7)
 
-`ptyro fanout --agents claude,codex,gemini --prompt-file task.md`:
+`ptyro fanout -a claude,codex,gemini --prompt-file task.md`:
 
 1. Creates a run; N worktrees from the same base (`<prefix>-claude`, `<prefix>-codex`, …).
 2. Spawns each agent, delivers the prompt when ready.
@@ -5113,7 +5113,7 @@ it. It is answered with `ptyro gate resolve ID CHOICE [--note] [--key]`, from th
 - optional `done_when` (`--verify`) and timeout;
 - then a `rank` step (`join = "all_settled"`, `verify = {candidates, tests, judge}`).
 
-`-n N` cycles through `--agents`.
+`--count N` cycles through `--agent`.
 
 **Evidence** (cached on the verify step; `compare --refresh` gathers it again):
 - **tests** in each candidate, and on the base in a throwaway detached worktree. `broke_tests`

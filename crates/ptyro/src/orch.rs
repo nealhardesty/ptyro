@@ -282,7 +282,7 @@ fn duration(s: &str) -> Result<Duration, Error> {
 /// The project for a new run: the one asked for, else the repository you're in.
 fn project_or_here(p: Option<String>) -> Result<Option<String>, Error> {
     Ok(match p {
-        Some(p) => Some(p),
+        Some(p) => Some(crate::cli::addr_here(p)?),
         None => Some(current_dir()?.to_string_lossy().into_owned()),
     })
 }

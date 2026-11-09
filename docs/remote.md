@@ -223,7 +223,7 @@ gets `421`. That stops DNS rebinding: a web page whose own name is made to resol
 ### 2. Pair the phone
 
 ```bash
-ptyro pair phone                 # a one-time QR code; scan it with the phone's camera
+ptyro pair -n phone              # a one-time QR code; scan it with the phone's camera
                                  # (full control: it warns you; --scope approve for less)
 ptyro pair tablet --scope control
 ptyro devices                    # what's paired, last seen, from where, push on/off
@@ -250,7 +250,7 @@ used).
 `https://box.tail1234.ts.net:443/…`), never `0.0.0.0`. If `--url` names a port ptyro isn't
 listening on, `ptyro pair` says so and prints the `--url` that works.
 
-**Pairing a name again replaces it.** `ptyro pair phone --scope full` when `phone` exists makes a
+**Pairing a name again replaces it.** `ptyro pair -n phone --scope full` when `phone` exists makes a
 new link; when it is opened, the old token stops working, its connections close, and the device
 has the scope you asked for now (higher or lower). `ptyro pair` says "Replacing the existing
 device 'phone' (was approve, now full)". Until the new link is opened, the old one keeps working.
@@ -362,7 +362,7 @@ through their protocol for structured sessions.
 | Strangers steering an agent through a PR | PR review comments reach the agent only from the repository's owner, members and collaborators; anyone else's come to you. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
 | A browser posing as a local client | `ptyro serve` rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
-| A device doing more than intended | Scopes, enforced in the daemon for every request and keystroke. Unknown requests need `full`. Remote actions on a session go to its event log (`ptyro events -s S`) with the device's name. |
+| A device doing more than intended | Scopes, enforced in the daemon for every request and keystroke. Unknown requests need `full`. Remote actions on a session go to its event log (`ptyro events --session S`) with the device's name. |
 | Cross-site WebSocket hijacking | No cookies: authentication is in-band, so a hostile page has nothing to ride on. |
 | DNS rebinding (a page whose name resolves to your machine) | Requests must be addressed to an IP, `localhost`, `public_url`'s host or the tailnet name; others get 421. |
 | Forged `X-Forwarded-For` to dodge the lockout | Only believed from loopback with `trusted_proxy` (or under `tailscale serve`), and only its last entry. |

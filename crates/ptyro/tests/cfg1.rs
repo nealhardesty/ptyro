@@ -148,7 +148,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
         (vec!["config", "set", "ui.on_stop", "never"], "isn't one of next, stay"),
         (vec!["config", "set", "ui.thme", "x"], "Did you mean ui.theme"),
         (vec!["config", "set", "ui.theme", "nonesuch"], "unknown theme"),
-        (vec!["config", "set", "scripts.setup", "x"], "--project"),
+        (vec!["config", "set", "scripts.setup", "x"], "-p ."),
     ] {
         let o = ptyro(&args);
         assert!(!o.status.success() && text(&o).contains(why), "{args:?}: {}", text(&o));
@@ -289,6 +289,12 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
     // Agents can't be set in a repository.
     let o = ptyro(&["config", "add", "agents", "x", "--project", "."]);
     assert!(!o.status.success(), "{}", text(&o));
+    // `-p .` is the repository you're in for every command, not the daemon's directory.
+    let o = ptyro(&["wt", "ls", "-p", ".", "--json"]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(text(&o).contains("@root"), "{}", text(&o));
+    let o = ptyro(&["ls", "-p", ".", "--json"]);
+    assert!(o.status.success(), "{}", text(&o));
     // The schema, for tools.
     let o = ptyro(&["config", "schema"]);
     let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();

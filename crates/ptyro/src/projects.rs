@@ -11,8 +11,8 @@ use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 
 use crate::cli::{
-    Ctx, NewArgs, age, check_attachable, client_env, confirm, current_dir, no_daemon, session_of,
-    truncate, unexpected, with_confirmation,
+    Ctx, NewArgs, addr_here, addr_here_opt, age, check_attachable, client_env, confirm,
+    current_dir, no_daemon, session_of, truncate, unexpected, with_confirmation,
 };
 
 #[derive(Subcommand)]
@@ -444,7 +444,7 @@ fn notes(n: &[String]) {
 /// A project address, defaulting to the one containing the current directory.
 fn project_addr(p: Option<String>) -> Result<String, Error> {
     match p {
-        Some(p) => Ok(p),
+        Some(p) => addr_here(p),
         None => Ok(current_dir()?.to_string_lossy().into_owned()),
     }
 }
@@ -528,8 +528,9 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ProjectCmd::Rm { project } => {
-            let Reply::Removed { notes: n } =
-                c.request(Request::ProjectRemove { addr: project, release: false }).await?
+            let Reply::Removed { notes: n } = c
+                .request(Request::ProjectRemove { addr: addr_here(project)?, release: false })
+                .await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -655,7 +656,7 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
         }
         ProjectCmd::Rename { project, new } => {
             let Reply::Project { info, .. } =
-                c.request(Request::ProjectRename { addr: project, name: new }).await?
+                c.request(Request::ProjectRename { addr: addr_here(project)?, name: new }).await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -664,7 +665,7 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
         }
         ProjectCmd::Pin { project, profile } => {
             c.request(Request::ProjectPin {
-                addr: project.clone(),
+                addr: addr_here(project.clone())?,
                 profile: Some(profile.clone()),
             })
             .await?;
@@ -674,7 +675,7 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ProjectCmd::Unpin { project } => {
-            c.request(Request::ProjectPin { addr: project, profile: None }).await?;
+            c.request(Request::ProjectPin { addr: addr_here(project)?, profile: None }).await?;
             Ok(0)
         }
         ProjectCmd::Suggest { project, apply, decline, json } => {
@@ -865,7 +866,7 @@ pub async fn new_in_new_worktree(
     let c = client(ctx).await?;
     // The project: --project, else the one containing -C, else the current directory's.
     let project = match (project, &a.cwd) {
-        (Some(p), _) => p,
+        (Some(p), _) => addr_here(p)?,
         (None, Some(dir)) => ptyro_core::os::canonicalize(dir)
             .map_err(|e| Error::invalid(format!("{}: {e}", dir.display())))?
             .to_string_lossy()
@@ -949,7 +950,9 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
     let c = client(ctx).await?;
     match cmd {
         WtCmd::Ls { project, json } => {
-            let worktrees = worktrees_of(c.request(Request::WorktreeList { project }).await?)?;
+            let worktrees = worktrees_of(
+                c.request(Request::WorktreeList { project: addr_here_opt(project)? }).await?,
+            )?;
             if json {
                 print_json(&worktrees);
                 return Ok(0);
@@ -1006,7 +1009,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Restore { worktree } => {
             let Reply::Worktree { info } =
-                c.request(Request::WorktreeRestore { addr: worktree }).await?
+                c.request(Request::WorktreeRestore { addr: addr_here(worktree)? }).await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -1041,7 +1044,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Archives { project, json } => {
             let Reply::Archives { entries } =
-                c.request(Request::WorktreeArchives { project }).await?
+                c.request(Request::WorktreeArchives { project: addr_here_opt(project)? }).await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -1068,8 +1071,9 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Retitle { worktree, title } => {
             let title = (!title.is_empty()).then(|| title.join(" "));
-            let Reply::Worktree { info } =
-                c.request(Request::Retitle { addr: worktree, title, worktree: true }).await?
+            let Reply::Worktree { info } = c
+                .request(Request::Retitle { addr: addr_here(worktree)?, title, worktree: true })
+                .await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -1164,6 +1168,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Rm { worktree, force, yes, stop_sessions, keep_branch } => {
             let opts = RemoveOpts { force: false, stop_sessions, keep_branch };
+            let worktree = addr_here(worktree)?;
             let req = Request::WorktreeRemove { addr: worktree.clone(), opts };
             let reply = match c.request(req).await {
                 Err(e) if e.code == ErrorCode::DirtyWorktree && force => {
@@ -1172,7 +1177,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                         return Err(Error::new(ErrorCode::DirtyWorktree, "kept"));
                     }
                     let opts = RemoveOpts { force: true, stop_sessions, keep_branch };
-                    c.request(Request::WorktreeRemove { addr: worktree, opts }).await?
+                    c.request(Request::WorktreeRemove { addr: addr_here(worktree)?, opts }).await?
                 }
                 other => other?,
             };
@@ -1246,7 +1251,12 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Integrate { worktree, into, cherry_pick, push } => {
             let Reply::Notes { notes: n } = c
-                .request(Request::WorktreeIntegrate { addr: worktree, into, cherry_pick, push })
+                .request(Request::WorktreeIntegrate {
+                    addr: addr_here(worktree)?,
+                    into,
+                    cherry_pick,
+                    push,
+                })
                 .await?
             else {
                 return Err(Error::internal("unexpected reply"));
@@ -1255,8 +1265,9 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::Pair { worktree, refresh } => {
-            let Reply::Notes { notes: n } =
-                c.request(Request::WorktreePair { addr: worktree, off: false, refresh }).await?
+            let Reply::Notes { notes: n } = c
+                .request(Request::WorktreePair { addr: addr_here(worktree)?, off: false, refresh })
+                .await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -1265,7 +1276,11 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Unpair { worktree } => {
             let Reply::Notes { notes: n } = c
-                .request(Request::WorktreePair { addr: worktree, off: true, refresh: false })
+                .request(Request::WorktreePair {
+                    addr: addr_here(worktree)?,
+                    off: true,
+                    refresh: false,
+                })
                 .await?
             else {
                 return Err(Error::internal("unexpected reply"));
@@ -1279,7 +1294,8 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             }
             let size = attach.then(|| ptyro_tui::pane_size(&ctx.paths)).flatten();
             let info = session_of(
-                c.request(Request::WorktreeRun { addr: worktree, script, size }).await?,
+                c.request(Request::WorktreeRun { addr: addr_here(worktree)?, script, size })
+                    .await?,
             )?;
             if attach {
                 return crate::cli::attach(ctx, c, Some(info), false, false).await;
@@ -1290,23 +1306,28 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Open { worktree, editor } => open(ctx, c, wt_addr(worktree)?, editor).await,
         WtCmd::Lock { worktree } => {
-            c.request(Request::WorktreeLock { addr: worktree, lock: true }).await?;
+            c.request(Request::WorktreeLock { addr: addr_here(worktree)?, lock: true }).await?;
             Ok(0)
         }
         WtCmd::Unlock { worktree } => {
-            c.request(Request::WorktreeLock { addr: worktree, lock: false }).await?;
+            c.request(Request::WorktreeLock { addr: addr_here(worktree)?, lock: false }).await?;
             Ok(0)
         }
         WtCmd::Rename { worktree, new } => {
             let info = worktree_of(
-                c.request(Request::WorktreeRename { addr: worktree, name: new }).await?,
+                c.request(Request::WorktreeRename { addr: addr_here(worktree)?, name: new })
+                    .await?,
             )?;
             eprintln!("renamed to {}", info.qualified());
             Ok(0)
         }
         WtCmd::RenameBranch { worktree, new } => {
             let info = worktree_of(
-                c.request(Request::WorktreeRenameBranch { addr: worktree, branch: new }).await?,
+                c.request(Request::WorktreeRenameBranch {
+                    addr: addr_here(worktree)?,
+                    branch: new,
+                })
+                .await?,
             )?;
             eprintln!("branch is now {}", info.branch.as_deref().unwrap_or("-"));
             Ok(0)

@@ -50,11 +50,7 @@ fn semantic_config(config: &Config) -> Result<(), String> {
 async fn layer(ctx: &Ctx, project: Option<&str>, shared: bool) -> Result<Layer, Error> {
     let Some(project) = project else { return Ok(Layer::User(Config::path(&ctx.paths))) };
     // `.` is the repository you're in, as the daemon names its folder.
-    let addr = if project == "." {
-        crate::cli::current_dir()?.to_string_lossy().into_owned()
-    } else {
-        project.to_owned()
-    };
+    let addr = crate::cli::addr_here(project.to_owned())?;
     let c = ctx.connect(false).await?;
     let Reply::Project { info, .. } = c.request(Request::ProjectGet { addr }).await? else {
         return Err(Error::internal("unexpected reply"));

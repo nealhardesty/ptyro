@@ -135,7 +135,7 @@ pub enum ShellsCmd {
         #[arg(long, group = "what")]
         done: bool,
         /// When new output arrives while nobody looks (tmux's activity)
-        #[arg(long = "activity", alias = "output", group = "what")]
+        #[arg(long = "activity", group = "what")]
         output: bool,
         /// When it has printed nothing for this long (`30s`, `5m`)
         #[arg(long, group = "what", value_name = "TIME")]

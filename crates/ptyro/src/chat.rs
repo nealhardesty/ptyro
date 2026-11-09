@@ -814,7 +814,7 @@ async fn compare_refusal(c: &ptyro_client::Client, info: &ChatInfo) -> String {
         _ => None,
     };
     format!(
-        "{}: the agents weren't asked ({}); `ptyro chat compare {} --agents A,B \"…\"` asks again, `ptyro chat rm {}` removes it",
+        "{}: the agents weren't asked ({}); `ptyro chat compare {} -a A,B \"…\"` asks again, `ptyro chat rm {}` removes it",
         info.addr(),
         why.as_deref().unwrap_or("the compare didn't start"),
         info.addr(),
@@ -836,6 +836,7 @@ async fn task(
 ) -> Result<i32, Error> {
     let attaching = crate::cli::attaches(detach);
     let c = ctx.connect(true).await?;
+    let project = crate::cli::addr_here_opt(project)?;
     let req = Request::ChatTask { chat, project, agent, name, confirmed: false };
     let r = confirmed(&c, req, yes).await?;
     let Reply::WorktreeCreated { info, agent, agent_pending, notes, .. } = r else {

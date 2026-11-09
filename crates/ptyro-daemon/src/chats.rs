@@ -1062,7 +1062,14 @@ impl Daemon {
                     }
                 }
                 if auto_title {
-                    // A new automatic title: the titler's, as for a new chat.
+                    // A new automatic title: the titler's, as for a new chat. It is made from
+                    // the first message, so a chat without one keeps the title it has.
+                    let branch = db.branch(info.id.clone(), None).await.map_err(store_err)?;
+                    if !branch.iter().any(|n| matches!(n.body, ChatBody::User { .. })) {
+                        return Err(Error::invalid(
+                            "nothing to make a title from yet: the chat's first message gives it one",
+                        ));
+                    }
                     db.reset_title(info.id.clone()).await.map_err(store_err)?;
                     self.title_chat(&info.id, true);
                 } else if let Some(t) = title {

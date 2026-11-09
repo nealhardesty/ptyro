@@ -1472,7 +1472,7 @@ fn target(scope: Scope, key: &str) -> Result<Target, String> {
     if sec.scope != scope {
         return Err(match scope {
             Scope::User => format!(
-                "{key} is a project setting: use `--project` (it lives in the repository's .ptyro.toml)"
+                "{key} is a project setting: use `-p .` (or `-p NAME`; it lives in the repository's .ptyro.toml)"
             ),
             Scope::Project => format!(
                 "{key} is a user setting: agents, profiles, keys and the rest can only be set in your own config, never in a repository (SPEC §13.1)"

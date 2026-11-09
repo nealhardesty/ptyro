@@ -232,7 +232,7 @@ fn send_wait_read_and_events() {
     assert!(r["text"].as_str().unwrap().contains("fake claude"));
     assert_eq!(w.json(&["read", "a1", "--scrollback", "--json"])["view"], "scrollback");
     // Persisted events, oldest first, one JSON per line.
-    let ev = w.ok(&["events", "-s", "a1", "--json", "-n", "200"]);
+    let ev = w.ok(&["events", "--session", "a1", "--json", "-l", "200"]);
     let kinds: Vec<String> = ev
         .lines()
         .map(|l| serde_json::from_str::<Value>(l).unwrap()["kind"].as_str().unwrap().to_owned())
@@ -266,7 +266,7 @@ fn a_prompt_taken_with_slow_hooks_is_entered_once() {
     w.ok(&["answer", "s1", "allow"]);
     let m = w.ok(&["wait", "s1", "--match", "answer: (yes|no)", "--timeout", "20s"]);
     assert!(m.contains("s1 matched \"answer: yes\""), "{m}");
-    let ev = w.ok(&["events", "-s", "s1", "--json", "-n", "200"]);
+    let ev = w.ok(&["events", "--session", "s1", "--json", "-l", "200"]);
     assert!(!ev.contains("prompt_enter_again"), "{ev}");
 }
 
@@ -344,7 +344,7 @@ fn json_shapes() {
     // agent's start-up output can be guessed "working" (detail "output") before its first hook
     // comes, which a slow machine (CI's Windows) shows every time (SPEC §9.3).
     let ev: Value = w
-        .ok(&["events", "-s", "j1", "--json", "-n", "200"])
+        .ok(&["events", "--session", "j1", "--json", "-l", "200"])
         .lines()
         .map(|l| serde_json::from_str::<Value>(l).unwrap())
         .find(|e| e["kind"] == "status" && e["detail"]["source"] == "hook")
