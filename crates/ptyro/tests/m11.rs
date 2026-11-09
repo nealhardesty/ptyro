@@ -903,3 +903,22 @@ fn removing_a_set_calls_off_a_push_waiting_at_its_gate() {
     w.ok(&["cs", "rm", "held", "--force"]);
     assert!(!root.exists(), "removed, not refused as busy");
 }
+
+/// A change set's name is a name like any other (SPEC §2.3, owner 2026-11-09): kept as given
+/// when valid (`my_fix` stays `my_fix`, not `my-fix`), refused with the fix when it isn't, and
+/// an empty one is refused, not turned into a made-up one.
+#[test]
+fn a_change_sets_name_is_checked_never_rewritten() {
+    let w = World::new("");
+    w.project("api", &[], false);
+    let i = w.json(&["cs", "new", "my_fix", "--projects", "api", "--layout", "manual", "--json"]);
+    assert_eq!(i["set"]["name"], "my_fix", "{i:#}");
+    let out = w.fails(&["cs", "new", "My Feature", "--projects", "api", "--layout", "manual"]);
+    assert!(out.contains(r#"invalid name "My Feature""#), "{out}");
+    assert!(out.contains(r#"try "my-feature""#), "{out}");
+    let out = w.fails(&["cs", "new", "", "--projects", "api", "--layout", "manual"]);
+    assert!(out.contains("a change set needs a name"), "{out}");
+    let out = w.fails(&["cs", "new", "!!!", "--projects", "api", "--layout", "manual"]);
+    assert!(out.contains("invalid name") && !out.contains("try"), "{out}");
+    w.ok(&["cs", "rm", "my_fix", "--force"]);
+}

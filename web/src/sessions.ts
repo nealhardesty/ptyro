@@ -9,7 +9,7 @@ import type { Worktree } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
 import type { Frame, Session } from "./screen.js";
-import { actions, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { shellMenuItems } from "./shells.js";
@@ -249,7 +249,7 @@ export function newTask(where?: string, task?: string): void {
 const notice = (r: any, ok: string): void => { if (r) ui.toast(ok); };
 
 export function renameSession(s: Session): void {
-  form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: "Its address: what you type to find it, unique in its project. A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
+  form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: `Its address: what you type to find it, unique in its project. ${NAME_HINT}` }], "Rename", async (v) => {
     await conn.request({ t: "rename", addr: addr(s), name: v.name });
     ui.toast(`Renamed to ${v.name}`);
   });

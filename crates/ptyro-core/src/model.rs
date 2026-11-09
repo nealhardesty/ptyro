@@ -24,20 +24,15 @@ pub fn short_suffix(id: &str, all: &[&str]) -> String {
     id.to_owned()
 }
 
-/// `My Repo.git` → `my-repo`: lowercase `[a-z0-9-]`, at most 40 characters.
+/// `My Repo.git` → `my-repo`: [`crate::names::fold`] to lowercase `[a-z0-9-]`, at most 40
+/// characters, `""` when nothing is left (the caller says what stands in). Narrower than a
+/// name on purpose: a project's slug is derived once, stored, and is the folder its worktrees
+/// and archives live under (`<data>/worktrees/<slug>/`); keeping this fold as it always was
+/// means re-adding a repository finds them again. Words taken from text (a branch from a
+/// prompt) use it too. A name someone gives never goes through it (SPEC §2.3).
 pub fn slugify(s: &str) -> String {
     let s = s.strip_suffix(".git").unwrap_or(s);
-    let mut out = String::new();
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let out: String = out.trim_matches('-').chars().take(40).collect();
-    let out = out.trim_end_matches('-').to_owned();
-    if out.is_empty() { "repo".into() } else { out }
+    crate::names::fold(s, |c| c.is_ascii_alphanumeric(), 40)
 }
 
 const BRANCH_VARS: &[&str] = &["name", "user", "date", "issue", "slug"];
@@ -859,7 +854,9 @@ mod tests {
     fn slugs() {
         assert_eq!(slugify("My Repo.git"), "my-repo");
         assert_eq!(slugify("--x__y--"), "x-y");
-        assert_eq!(slugify("..."), "repo");
+        assert_eq!(slugify("..."), "", "no made-up stand-in: the caller picks one");
+        assert_eq!(slugify("my_fix"), "my-fix");
+        assert_eq!(slugify(&"abc ".repeat(30)).len(), 40 - 1, "40 at most, no - at the end");
     }
 
     #[test]

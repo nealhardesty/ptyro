@@ -254,21 +254,41 @@ export function textSheet(title, text) {
     ]);
 }
 // ── forms ───────────────────────────────────────────────────────────────────────────────────
-/// What a name can't hold becomes `_` as it is typed (the same rule as `names::typed` and
-/// `names::branch_typed` in ptyro-core): "name" for an address, "branch" for a git branch.
+/// What a name field says under itself (`names::TYPED_HINT` in ptyro-core, word for word).
+export const NAME_HINT = "A space or other odd character becomes - (a-z 0-9 . _ -)";
+/// What a name can't hold becomes `-` as it is typed, and what it can't start with is dropped
+/// at the start (the same rule as `names::typed` and `names::branch_typed` in ptyro-core):
+/// "name" for an address, "branch" for a git branch.
 export function slugify(kind, raw) {
     let out = "";
     for (const c of raw) {
         if (kind === "branch") {
-            out += /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c) || (out === "" && c === "-") ? "_" : c;
+            const bad = /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c);
+            if (out === "" && (bad || c === "-"))
+                continue;
+            out += bad ? "-" : c;
         }
         else {
             const l = c.toLowerCase();
-            const bad = !/^[a-z0-9._-]$/.test(l) || (out === "" && (l === "." || l === "-")) || (l === "." && out.endsWith("."));
-            out += bad ? "_" : l;
+            if (out === "" && !/^[a-z0-9_]$/.test(l))
+                continue;
+            const bad = !/^[a-z0-9._-]$/.test(l) || (l === "." && out.endsWith("."));
+            out += bad ? "-" : l;
         }
     }
     return out;
+}
+/// Keep `box` as a name (or branch) while it is typed into. Past the start one character in is
+/// one out; what is dropped at the start moves the cursor back by as much.
+export function slugInput(box, kind) {
+    box.addEventListener("input", () => {
+        const fixed = slugify(kind, box.value);
+        if (fixed === box.value)
+            return;
+        const at = Math.max(0, (box.selectionStart ?? fixed.length) - (box.value.length - fixed.length));
+        box.value = fixed;
+        box.setSelectionRange(at, at);
+    });
 }
 /// A form in a sheet. `go` gets the values; if it throws, the message shows in the form and the
 /// sheet stays; if it returns, the sheet closes. Empty text fields are left out of the values.
@@ -298,19 +318,8 @@ export function form(title, fields, label, go, opts = {}) {
         else {
             input = h("input", { type: f.type ?? "text", placeholder: f.placeholder, autocapitalize: "off", autocomplete: "off", spellcheck: "false", inputmode: f.type === "number" ? "numeric" : undefined });
             input.value = f.value == null ? "" : String(f.value);
-            const slug = f.slug;
-            const box = input;
-            if (slug) {
-                // The cursor stays where it was: one character in, one out.
-                box.addEventListener("input", () => {
-                    const at = box.selectionStart;
-                    const fixed = slugify(slug, box.value);
-                    if (fixed !== box.value) {
-                        box.value = fixed;
-                        box.setSelectionRange(at, at);
-                    }
-                });
-            }
+            if (f.slug)
+                slugInput(input, f.slug);
         }
         inputs.set(f.key, input);
         return f.type === "check"

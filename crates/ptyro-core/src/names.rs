@@ -87,9 +87,16 @@ pub fn allowed(c: char) -> bool {
 }
 
 /// Names are used in addresses and paths, so keep them to `[a-z0-9._-]`, 1–64 chars, not all
-/// digits, not starting with `.`.
+/// digits, not starting with `.`. Every name a person, an agent or a script gives is checked
+/// here and refused when it's wrong, never rewritten (owner, 2026-11-09). The error offers the
+/// fix when there is one: `invalid name "my feature": a space isn't allowed (only a-z 0-9 . _ -);
+/// try "my-feature"`.
 pub fn validate(name: &str) -> Result<(), String> {
-    problem(name).map_or(Ok(()), |p| Err(format!("invalid name {name:?}: {p}")))
+    let Some(p) = problem(name) else { return Ok(()) };
+    Err(match tidy(name) {
+        Some(t) => format!("invalid name {name:?}: {p}; try {t:?}"),
+        None => format!("invalid name {name:?}: {p}"),
+    })
 }
 
 /// Why `name` isn't a valid name, short enough to show while it's being typed: the first
@@ -104,7 +111,7 @@ pub fn problem(name: &str) -> Option<String> {
             c if c.is_ascii_uppercase() => format!("{c:?} (uppercase)"),
             c => format!("{c:?}"),
         };
-        return Some(format!("{what} isn't allowed: use a-z 0-9 . _ -"));
+        return Some(format!("{what} isn't allowed (only a-z 0-9 . _ -)"));
     }
     if name.len() > 64 {
         return Some(format!("too long: {} of at most 64", name.len()));
@@ -130,55 +137,78 @@ pub fn problem(name: &str) -> Option<String> {
     None
 }
 
-/// `raw` as it is typed into a name field: uppercase is lowercased, and any other character a
-/// name can't hold (a space, `/`, an accent) becomes `_`, as does a leading `.` or `-` and the
-/// second `.` of `..`. One character in, one out, so a cursor stays where it was. What no single
-/// character fixes (all digits, `.lock` at the end, too long) is left for [`problem`] to explain.
+/// What a name field says under itself, in the TUI and (the same words) the web.
+pub const TYPED_HINT: &str = "A space or other odd character becomes - (a-z 0-9 . _ -)";
+
+/// `raw` as it is typed into a name field: uppercase is lowercased, any other character a name
+/// can't hold (a space, `/`, an accent) becomes `-`, as does the second `.` of `..`, and what a
+/// name can't start with (`.`, `-`, a space) is dropped at the start. `-` is the one replacement
+/// character everywhere: [`tidy`], [`derive`] and generated names use it too. Past the start one
+/// character in is one out, so a cursor stays where it was. What no single character fixes (all
+/// digits, `.lock` at the end, too long) is left for [`problem`] to explain.
 pub fn typed(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for c in raw.chars().map(|c| c.to_ascii_lowercase()) {
-        let bad = !allowed(c)
-            || (out.is_empty() && matches!(c, '.' | '-'))
-            || (c == '.' && out.ends_with('.'));
-        out.push(if bad { '_' } else { c });
+        if out.is_empty() && !(c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let bad = !allowed(c) || (c == '.' && out.ends_with('.'));
+        out.push(if bad { '-' } else { c });
     }
     out
 }
 
-/// The same for a git branch name: it keeps case and `/`, and swaps what git refuses in a ref
-/// (whitespace, control characters, `~ ^ : ? * [ \`) and a leading `-` for `_`.
+/// The same for a git branch name: it keeps case and `/`, swaps what git refuses in a ref
+/// (whitespace, control characters, `~ ^ : ? * [ \`) for `-`, and drops that, or a `-`, at the
+/// start.
 pub fn branch_typed(raw: &str) -> String {
-    raw.chars()
-        .enumerate()
-        .map(|(i, c)| {
-            let bad = c.is_whitespace()
-                || c.is_control()
-                || "~^:?*[\\".contains(c)
-                || (i == 0 && c == '-');
-            if bad { '_' } else { c }
-        })
-        .collect()
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        let bad = c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c);
+        if out.is_empty() && (bad || c == '-') {
+            continue;
+        }
+        out.push(if bad { '-' } else { c });
+    }
+    out
 }
 
-/// `raw` as a name: itself when valid, else tidied (`Laptop 2` → `laptop-2`).
+/// `raw` as a name: itself when valid, else tidied (`Laptop 2` → `laptop-2`). For a name ptyro
+/// derives (what a machine calls itself); a name someone gives is [`validate`]d instead.
 pub fn as_name(raw: &str) -> Option<String> {
     if problem(raw).is_none() { Some(raw.to_owned()) } else { tidy(raw) }
 }
 
-/// `raw` turned into a valid name (lowercased, anything else folded into `-`), when that
-/// changes it and works: `My Feature/2` → `my-feature-2`.
+/// The fix a refused name's error offers: `raw` turned into a valid name, when that changes it
+/// and works (`My Feature/2` → `my-feature-2`).
 pub fn tidy(raw: &str) -> Option<String> {
+    let out = fold(raw, allowed, 64);
+    (out != raw && problem(&out).is_none()).then_some(out)
+}
+
+/// A name made from text that isn't a name (a title, a directory, a recipe's template), always
+/// valid: [`fold`]ed, or `None` when nothing valid is left. Tidying it silently is fine, since
+/// it isn't anyone's input.
+pub fn derive(raw: &str) -> Option<String> {
+    let out = fold(raw, allowed, 64);
+    problem(&out).is_none().then_some(out)
+}
+
+/// The one way ptyro turns text into a name: lowercased, each run of characters `keep` refuses
+/// becomes one `-`, with no `.` or `-` at either end and at most `max` characters. [`tidy`] and
+/// [`derive`] keep a name's characters; `model::slugify` keeps only `a-z0-9` (project slugs).
+/// It may return `""`: there is no made-up stand-in.
+pub fn fold(raw: &str, keep: impl Fn(char) -> bool, max: usize) -> String {
     let mut out = String::new();
     for c in raw.trim().chars().map(|c| c.to_ascii_lowercase()) {
-        if allowed(c) {
+        if keep(c) {
             out.push(c);
         } else if !out.is_empty() && !out.ends_with('-') {
             out.push('-');
         }
     }
-    let out: String = out.trim_start_matches(['.', '-']).chars().take(64).collect();
-    let out = out.trim_end_matches('-');
-    (out != raw && problem(out).is_none()).then(|| out.to_owned())
+    let out: String = out.trim_start_matches(['.', '-']).chars().take(max).collect();
+    out.trim_end_matches(['.', '-']).to_owned()
 }
 
 #[cfg(test)]
@@ -218,16 +248,67 @@ mod tests {
     }
 
     #[test]
-    fn typing_swaps_what_a_name_cant_hold_for_an_underscore() {
-        assert_eq!(typed("My Feature/2"), "my_feature_2");
-        assert_eq!(typed("-x"), "_x");
-        assert_eq!(typed(".hidden"), "_hidden");
-        assert_eq!(typed("x..y"), "x._y");
-        assert_eq!(typed("héllo"), "h_llo");
+    fn typing_swaps_what_a_name_cant_hold_for_a_dash() {
+        assert_eq!(typed("My Feature/2"), "my-feature-2");
+        assert_eq!(typed("My Feature/2"), tidy("My Feature/2").unwrap(), "the same fix as tidy");
+        assert_eq!(typed("-x"), "x", "a name can't start with -: dropped");
+        assert_eq!(typed(".hidden"), "hidden");
+        assert_eq!(typed(" x"), "x");
+        assert_eq!(typed("_x"), "_x", "_ is a name's own character");
+        assert_eq!(typed("x..y"), "x.-y");
+        assert_eq!(typed("héllo"), "h-llo");
+        assert_eq!(typed("my_fix"), "my_fix", "what a name can hold is kept as typed");
         assert_eq!(typed("brisk-rook.v1"), "brisk-rook.v1", "a valid name is left alone");
         assert_eq!(typed("12"), "12", "all digits is still the name's problem to explain");
-        assert_eq!(branch_typed("fix this/Now: ok"), "fix_this/Now__ok");
-        assert_eq!(branch_typed("-x"), "_x");
+        assert_eq!(branch_typed("fix this/Now: ok"), "fix-this/Now--ok");
+        assert_eq!(branch_typed("-x"), "x");
+        assert_eq!(branch_typed(" x"), "x");
+        // A character at a time ends where all at once does.
+        let mut one = String::new();
+        for c in "  My Feature/2".chars() {
+            one.push(c);
+            one = typed(&one);
+        }
+        assert_eq!(one, typed("  My Feature/2"));
+    }
+
+    #[test]
+    fn refusals_offer_the_fix() {
+        let e = validate("My Feature").unwrap_err();
+        assert!(e.starts_with("invalid name \"My Feature\": "), "{e}");
+        assert!(e.ends_with("; try \"my-feature\""), "{e}");
+        let e = validate("a b").unwrap_err();
+        assert!(e.contains("a space isn't allowed") && e.ends_with("try \"a-b\""), "{e}");
+        // Nothing to offer: no "try".
+        assert!(!validate("!!!").unwrap_err().contains("try"));
+        assert!(!validate("123").unwrap_err().contains("try"));
+        assert!(validate("my_fix").is_ok(), "_ is allowed, and kept");
+        // What it offers is valid, and typing the bad name gives a valid one too.
+        for bad in ["My Feature", " .Hidden ", "a/b c", "x.", "Fix: the THING!", "-lead"] {
+            let t = tidy(bad).unwrap();
+            assert!(validate(&t).is_ok(), "{bad:?} → {t:?}");
+            // `x.` is still flagged as it's typed: no one character fixes it.
+            if bad != "x." {
+                assert!(validate(&typed(bad)).is_ok(), "{bad:?} typed → {:?}", typed(bad));
+            }
+        }
+    }
+
+    #[test]
+    fn derived_names_are_always_valid() {
+        assert_eq!(derive("My Feature/2").as_deref(), Some("my-feature-2"));
+        assert_eq!(derive("01abc-Review step").as_deref(), Some("01abc-review-step"));
+        assert_eq!(derive("ok_name").as_deref(), Some("ok_name"));
+        assert_eq!(derive("v1.").as_deref(), Some("v1"));
+        assert_eq!(derive(""), None, "no made-up stand-in");
+        assert_eq!(derive("!!!"), None);
+        assert_eq!(derive("123"), None);
+        let long = "y".repeat(99);
+        for raw in ["", "...", "a..b", "x.lock", "Ünïcødé", long.as_str(), "--x--", "a .b"] {
+            if let Some(n) = derive(raw) {
+                assert!(validate(&n).is_ok(), "{raw:?} → {n:?}");
+            }
+        }
     }
 
     #[test]
@@ -257,6 +338,13 @@ mod tests {
         assert_eq!(tidy("123"), None, "still all digits");
         assert_eq!(tidy("!!!"), None, "nothing left");
         assert_eq!(tidy(&"x".repeat(80)).map(|s| s.len()), Some(64));
+    }
+
+    #[test]
+    fn the_web_says_what_the_tui_says() {
+        let kit = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/kit.ts");
+        let kit = std::fs::read_to_string(kit).unwrap();
+        assert!(kit.contains(&format!("NAME_HINT = {TYPED_HINT:?}")), "web/src/kit.ts NAME_HINT");
     }
 
     #[test]

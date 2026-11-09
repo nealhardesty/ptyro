@@ -968,7 +968,10 @@ impl Daemon {
                 } else {
                     format!("{}-{n}", run.trim_start_matches("r-"))
                 };
-                let name = self.free_worktree_name(&p.id, &ptyro_core::model::slugify(&want));
+                // Rendered from a template, so derived: tidied, always a valid name.
+                let want = ptyro_core::names::derive(&want)
+                    .unwrap_or_else(|| run.trim_start_matches("r-").to_owned());
+                let name = self.free_worktree_name(&p.id, &want);
                 let base = sp
                     .base
                     .as_deref()
@@ -1087,7 +1090,8 @@ impl Daemon {
             .as_deref()
             .map(|n| ptyro_run::template::render(n, ctx))
             .unwrap_or_else(|| def.id.clone());
-        let name = ptyro_core::model::slugify(&name);
+        // Rendered from a template, so derived: tidied, always a valid name.
+        let name = ptyro_core::names::derive(&name).unwrap_or_else(|| "step".into());
         let mut env = self.step_env(run, &def.id);
         let out = PathBuf::from(&env["PTYRO_STEP_OUT"]);
         let _ = std::fs::remove_file(&out);
@@ -2392,6 +2396,10 @@ impl Daemon {
         }
         if spec.prompt.trim().is_empty() {
             return Err(Error::invalid("the prompt is empty"));
+        }
+        // The prefix someone gave: checked, never rewritten (SPEC §2.3).
+        if let Some(n) = &spec.name {
+            ptyro_core::names::validate(n).map_err(Error::invalid)?;
         }
         let config = self.config();
         for a in &spec.agents {

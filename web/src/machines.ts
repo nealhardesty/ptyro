@@ -8,7 +8,7 @@ import { conn, host } from "./conn.js";
 import { data, splitMachine } from "./data.js";
 import type { Machine } from "./data.js";
 import { accent } from "./machine.js";
-import { actions, ago, ask, badge, bar, confirm, errText, form, h, menu, row, section, sheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, confirm, errText, form, h, menu, row, section, sheet, ui, views } from "./kit.js";
 
 const ACTIONS = {
   "machine.list": "Other machines whose workspaces show here: how each link stands, and its workspaces",
@@ -82,7 +82,7 @@ function machineMenu(m: Machine): void {
 function addMachine(): void {
   form("Add a machine", [
     { key: "target", label: "ssh://HOST, or the code `ptyro machine pair` printed on it", required: true, hint: "Over ssh it needs a key or an agent, no password prompt. A code is claimed once, within 10 minutes." },
-    { key: "name", label: "Name here (optional)", slug: "name", hint: "Default: what it calls itself. A space or other odd character becomes _" },
+    { key: "name", label: "Name here (optional)", slug: "name", hint: `Default: what it calls itself. ${NAME_HINT}` },
     { key: "force", label: "Keep it even if it doesn't answer now", type: "check", value: false },
   ], "Add", async (v) => {
     try {

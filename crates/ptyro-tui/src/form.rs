@@ -539,8 +539,8 @@ mod tests {
         for c in "My Ws".chars() {
             f.key(key(KeyCode::Char { c }));
         }
-        // Typed into a name: what a name can't hold becomes _.
-        assert_eq!(f.get("name"), "my_ws");
+        // Typed into a name: what a name can't hold becomes -.
+        assert_eq!(f.get("name"), "my-ws");
         assert_eq!(f.key(key(KeyCode::Enter)), Outcome::Submit);
     }
 
@@ -714,12 +714,7 @@ impl App {
         let mut form = Form::new(
             format!("New workspace{on}"),
             vec![
-                Field::name(
-                    "name",
-                    "Name",
-                    &suggested,
-                    "A space or other odd character becomes _ (a-z 0-9 . _ -)",
-                ),
+                Field::name("name", "Name", &suggested, ptyro_core::names::TYPED_HINT),
                 self.profile_field(machine.as_deref(), &suggested),
                 Field::choice(
                     "notify",
@@ -1258,8 +1253,13 @@ impl App {
     /// `remote.pair`: a phone or browser, its name and what it may do.
     pub(crate) fn open_pair_form(&mut self) {
         let fields = vec![
-            Field::text("name", "Name", "phone", "What to call it in the devices list")
-                .arg(Arg::Pos),
+            Field::name(
+                "name",
+                "Name",
+                "phone",
+                "What to call it in the devices list (a-z 0-9 . _ -)",
+            )
+            .arg(Arg::Pos),
             Field::choice(
                 "scope",
                 "May",
@@ -1296,11 +1296,11 @@ impl App {
                 "How to reach it",
             )
             .arg(Arg::Pos),
-            Field::text(
+            Field::name(
                 "name",
                 "Name",
                 "(what it calls itself)",
-                "What its names carry here (laptop2:work)",
+                "What its names carry here (laptop2:work; a-z 0-9 . _ -)",
             )
             .arg(Arg::Flag("--name")),
             Field::yes_no(
@@ -1538,11 +1538,11 @@ impl App {
             ),
             Field::choice("project", "Project", projects, sel, "The repository they work in"),
             Field::text("base", "Base", "(the project's)", "What their worktrees branch from"),
-            Field::text(
+            Field::name(
                 "name",
                 "Name prefix",
                 "(from the task)",
-                "Their worktrees' names start with it",
+                "Their worktrees' names start with it (a-z 0-9 . _ -)",
             ),
             Field::text(
                 "test",
@@ -1664,7 +1664,12 @@ impl App {
                 "(the lowest free)",
                 "Its number in SHELLS: Alt-N shows it",
             ),
-            Field::text("name", "Name", "(a random one)", "Its address (ptyro send NAME …)"),
+            Field::name(
+                "name",
+                "Name",
+                "(a random one)",
+                "Its address (ptyro send NAME …; a-z 0-9 . _ -)",
+            ),
             Field::text("title", "Title", "(none)", "What the sidebar says it is"),
             Field::yes_no(
                 "scratch",

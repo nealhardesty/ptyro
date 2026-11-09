@@ -66,10 +66,17 @@ fn alias_suffix(alias: &str) -> Option<String> {
         if let Some((_, suffix)) = alias.split_once(sep)
             && !suffix.is_empty()
         {
-            return Some(ptyro_core::model::slugify(suffix));
+            return profile_name(suffix);
         }
     }
     None
+}
+
+/// A profile's name made from a suffix or a folder's name: a slug that is a valid name, else
+/// none (`claude-2` suggests `claude-2`, not the all-digits `2`).
+fn profile_name(raw: &str) -> Option<String> {
+    let s = ptyro_core::model::slugify(raw);
+    ptyro_core::names::validate(&s).is_ok().then_some(s)
 }
 
 /// The profile an alias or function suggests: its suffix (`claude-work`), else the account
@@ -266,7 +273,9 @@ pub fn detect(home: &Path, config: &Path) -> Vec<Suggestion> {
                 {
                     continue;
                 }
-                let profile = ptyro_core::model::slugify(suffix);
+                let Some(profile) = profile_name(suffix).or_else(|| profile_name(&name)) else {
+                    continue;
+                };
                 let s = by_profile
                     .entry(profile.clone())
                     .or_insert_with(|| Suggestion { profile, ..Suggestion::default() });
@@ -278,7 +287,7 @@ pub fn detect(home: &Path, config: &Path) -> Vec<Suggestion> {
     for (gitdir, name, email, at) in include_if_identities(home) {
         let profile = Path::new(gitdir.trim_end_matches('/'))
             .file_name()
-            .map(|f| ptyro_core::model::slugify(&f.to_string_lossy()))
+            .and_then(|f| profile_name(&f.to_string_lossy()))
             .unwrap_or_else(|| "work".into());
         let s = by_profile
             .entry(profile.clone())
@@ -298,7 +307,7 @@ pub fn detect(home: &Path, config: &Path) -> Vec<Suggestion> {
 fn dir_profile(dir: &str) -> Option<String> {
     let leaf = dir.trim_end_matches('/').rsplit('/').next()?;
     let (_, suffix) = leaf.trim_start_matches('.').split_once(['-', '_'])?;
-    Some(ptyro_core::model::slugify(suffix))
+    profile_name(suffix)
 }
 
 /// `[includeIf "gitdir:~/work/"] path = ~/.gitconfig-work` → the identity in that file.
@@ -435,6 +444,8 @@ mod tests {
         assert_eq!(get("old").dirs["claude"], "~/.claude-old", "unreferenced dir");
         assert!(work.to_toml().contains("[profiles.work]\nclaude = \"~/.claude-work\""));
         assert_eq!(profile_from_alias("claude_Work"), "work");
+        // A profile's name is a valid name: never all digits.
+        assert_eq!(profile_from_alias("claude-2"), "claude-2");
     }
 
     #[test]

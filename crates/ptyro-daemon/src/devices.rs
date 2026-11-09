@@ -387,10 +387,9 @@ impl Daemon {
     ) -> Result<Reply, Error> {
         match req {
             Request::DevicePair { name, scope, machine } => {
-                let name = name.trim();
-                if name.is_empty() || name.len() > 64 {
-                    return Err(Error::invalid("a device name is 1–64 characters"));
-                }
+                // A device's name is how `devices revoke` finds it: a name like any other.
+                let name = name.as_str();
+                ptyro_core::names::validate(name).map_err(Error::invalid)?;
                 let code = token("ptp_").map_err(|e| Error::internal(format!("random: {e}")))?;
                 let id = ptyro_core::secret::random_bytes(6)
                     .map_err(|e| Error::internal(format!("random: {e}")))?
