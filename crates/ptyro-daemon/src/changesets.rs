@@ -460,10 +460,14 @@ impl Daemon {
     }
 
     async fn cs_new(self: &Arc<Self>, spec: CsNewSpec) -> Result<String, Error> {
-        let name = ptyro_core::model::slugify(&spec.name);
-        if name.is_empty() {
+        // A name someone gave: checked, never rewritten (SPEC §2.3).
+        let name = spec.name.clone();
+        if name.trim().is_empty() {
             return Err(Error::invalid("a change set needs a name"));
         }
+        // Kept short because its members' names are appended (`<set>-<member>`).
+        ptyro_core::names::validate_within(&name, 40, ", since its members' names are appended")
+            .map_err(Error::invalid)?;
         if let Ok(r) = self.find_set(&name)
             && self.set_state(&r).is_ok_and(|c| c.phase != Phase::Removed)
         {
@@ -3083,7 +3087,8 @@ impl Daemon {
     ) -> Result<Value, Error> {
         let set = self.set_state(run)?;
         let p = self.find_project(project)?;
-        if set.member(&p.slug).is_some() {
+        // By id too: a project renamed since it joined keeps its member's old name.
+        if set.member(&p.slug).is_some() || set.members.iter().any(|m| m.project == p.id) {
             return Err(Error::conflict(format!("{} is a member already", p.slug)));
         }
         for d in &depends_on {

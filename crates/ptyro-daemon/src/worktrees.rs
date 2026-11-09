@@ -216,7 +216,8 @@ impl Daemon {
             .unwrap_or_else(|| self.config().worktrees.branch_template);
         let mut vars = BTreeMap::new();
         vars.insert("name", name.to_owned());
-        vars.insert("slug", slugify(name));
+        let slug = slugify(name);
+        vars.insert("slug", if slug.is_empty() { name.to_owned() } else { slug });
         vars.insert("user", std::env::var("USER").unwrap_or_default());
         vars.insert("date", today());
         render_branch(&template, &vars)
@@ -262,7 +263,7 @@ impl Daemon {
                 match spec.title.as_deref().or(spec.prompt.as_deref()).and_then(names::from_text) {
                     Some(n) if !taken(&n) => n,
                     Some(n) => {
-                        (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite")
+                        (2..).map(|k| names::numbered(&n, k)).find(|c| !taken(c)).expect("infinite")
                     }
                     None => names::friendly(SessionId::new().seed(), |n| {
                         taken(n) || self.name_taken(Some(&p.id), n)
@@ -350,7 +351,13 @@ impl Daemon {
         };
         let (path, ours) = match &spec.path {
             Some(at) => (at.clone(), at.parent().map(Path::to_path_buf).unwrap_or_default()),
-            None => worktree_path(config.worktrees.location, &self.paths.data, &p, &name),
+            // A renamed worktree keeps its directory, so the one this name would get may be
+            // taken: then the next free one (`name-2`).
+            None => std::iter::once(name.clone())
+                .chain((2..).map(|k| format!("{name}-{k}")))
+                .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
+                .find(|(path, _)| std::fs::symlink_metadata(path).is_err())
+                .expect("infinite"),
         };
         refuse_symlinks(&ours, &path)?;
         if path.exists() {
@@ -1128,15 +1135,12 @@ impl Daemon {
         let prompt = self.sessions_in(&wt.id).iter().find_map(|s| {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).first_prompt.clone()
         });
+        let words = |text: &str| slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
+        let from_prompt = prompt.as_deref().map(words).filter(|w| !w.is_empty());
         let new = match new {
             Some(n) => n,
-            None if prompt.is_some() => {
-                let slug: String = slugify(prompt.as_deref().unwrap_or_default())
-                    .split('-')
-                    .take(6)
-                    .collect::<Vec<_>>()
-                    .join("-");
-                self.branch_for(&cfg, &slug)
+            None if from_prompt.is_some() => {
+                self.branch_for(&cfg, from_prompt.as_deref().unwrap_or_default())
             }
             None => {
                 let (path, base) =
@@ -1148,7 +1152,12 @@ impl Daemon {
                 let first = first.ok_or_else(|| {
                     Error::invalid("no commits yet to name the branch after; give a name")
                 })?;
-                let slug: String = slugify(&first).split('-').take(6).collect::<Vec<_>>().join("-");
+                let slug = words(&first);
+                if slug.is_empty() {
+                    return Err(Error::invalid(
+                        "the first commit's subject has no words to name the branch after; give a name",
+                    ));
+                }
                 self.branch_for(&cfg, &slug)
             }
         };
@@ -1165,6 +1174,69 @@ impl Daemon {
         .await??;
         wt.branch = Some(new);
         self.put_worktree(wt.clone());
+        Ok(Reply::Worktree { info: wt })
+    }
+
+    /// `WorktreeRename` (SPEC §2.3): a new name, the worktree's address `project/name`. Its
+    /// branch stays (`rename-branch` changes that) and so does its directory: sessions running in
+    /// it keep their working directory. The marker git keeps for it follows, so a re-adoption
+    /// finds the new name.
+    async fn rename_worktree(&self, addr: &str, name: &str) -> Result<Reply, Error> {
+        let found = self.find_worktree(addr)?;
+        if found.is_root {
+            return Err(Error::invalid(format!(
+                "{} is the project's main checkout and is always called @root: rename the project, or give it a title",
+                found.qualified()
+            )));
+        }
+        names::validate(name).map_err(Error::invalid)?;
+        // The check and the change in one step on the entry itself: two renames can't both take
+        // a name, and one that a removal overtook doesn't bring the worktree back.
+        let wt = {
+            let mut reg = self.registry.locked();
+            let taken = reg
+                .worktrees
+                .iter()
+                .any(|w| w.project == found.project && w.id != found.id && w.name == name);
+            let wt = reg
+                .worktrees
+                .iter_mut()
+                .find(|w| w.id == found.id)
+                .ok_or_else(|| Error::missing("worktree", addr))?;
+            if wt.name == name {
+                return Ok(Reply::Worktree { info: wt.clone() });
+            }
+            if !matches!(wt.state, WorktreeState::Ready | WorktreeState::Missing) {
+                return Err(Error::conflict(format!(
+                    "{} is {}: only a ready worktree can be renamed",
+                    wt.qualified(),
+                    wt.state.label()
+                )));
+            }
+            if taken {
+                return Err(Error::conflict(format!("{}/{name} exists", wt.project_slug)));
+            }
+            wt.name = name.into();
+            wt.clone()
+        };
+        if let Some(store) = &self.store {
+            store.save_worktree(wt.clone());
+        }
+        let _ = self.events.send(DomainEvent::WorktreeUpdated { info: wt.clone() });
+        let (path, n) = (wt.path.clone(), name.to_owned());
+        blocking(move || {
+            let Ok(dir) = Git::new().git_dir(&path) else { return };
+            let file = dir.join("ptyro.json");
+            let Some(mut marker) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            else {
+                return;
+            };
+            marker["name"] = n.into();
+            let _ = std::fs::write(&file, marker.to_string());
+        })
+        .await?;
         Ok(Reply::Worktree { info: wt })
     }
 
@@ -1277,6 +1349,7 @@ impl Daemon {
                 let info = self.update_worktree(&wt.id, |w| w.locked = lock).unwrap_or(wt);
                 Ok(Reply::Worktree { info })
             }
+            Request::WorktreeRename { addr, name } => self.rename_worktree(&addr, &name).await,
             Request::WorktreeRenameBranch { addr, branch } => {
                 self.rename_branch(&addr, branch).await
             }

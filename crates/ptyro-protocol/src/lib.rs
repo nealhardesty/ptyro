@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 38 };
+pub const PROTO: Version = Version { major: 1, minor: 39 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -187,7 +187,7 @@ pub enum Request {
         #[serde(default)]
         signal: Option<i32>,
     },
-    /// Forget an ended session. A live one is refused, unless `stop` (1.38): stop it, then
+    /// Forget an ended session. A live one is refused, unless `stop` (1.39): stop it, then
     /// forget it.
     Remove {
         addr: String,
@@ -544,6 +544,12 @@ pub enum Request {
         #[serde(default)]
         release: bool,
     },
+    /// Rename a project: its slug, its address (1.38, SPEC §2.3). Its worktrees' directories
+    /// stay where they are.
+    ProjectRename {
+        addr: String,
+        name: String,
+    },
     /// Pin to a profile, or unpin with `None` (SPEC §10.10).
     ProjectPin {
         addr: String,
@@ -638,6 +644,12 @@ pub enum Request {
     WorktreeLock {
         addr: String,
         lock: bool,
+    },
+    /// Rename a worktree: its name, its address `project/name` (1.38, SPEC §2.3). Its branch and
+    /// its directory stay as they are; `@root` can't be renamed.
+    WorktreeRename {
+        addr: String,
+        name: String,
     },
     /// Rename the branch (refused once pushed); `None` derives a name from the first commit.
     WorktreeRenameBranch {

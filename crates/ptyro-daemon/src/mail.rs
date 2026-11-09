@@ -1240,6 +1240,10 @@ impl Daemon {
                 Ok(json!(workers.iter().map(|w| self.worker_info(w)).collect::<Vec<_>>()))
             }
             LeadOp::Spawn { agent, worktree, base, name, prompt, key } => {
+                // The lead's name for its worker: checked, never rewritten (SPEC §2.3).
+                if let Some(n) = &name {
+                    ptyro_core::names::validate(n).map_err(Error::invalid)?;
+                }
                 // One at a time: the limits and the step name (`w<n>`) are check-then-act.
                 let _one = self.lead_spawning.lock().await;
                 let st = self.run_info(&run).ok_or_else(|| Error::missing("run", &run))?.state;
@@ -1297,13 +1301,10 @@ impl Daemon {
                 let wt = match target.as_str() {
                     "new" if allow("new") => {
                         let n = name.clone().unwrap_or_else(|| aname.to_owned());
-                        let wname = self.free_worktree_name(
-                            &project,
-                            &ptyro_core::model::slugify(&format!(
-                                "{}-{n}",
-                                run.trim_start_matches("r-")
-                            )),
-                        );
+                        let run_id = run.trim_start_matches("r-");
+                        let want = ptyro_core::names::derive(&format!("{run_id}-{n}"))
+                            .unwrap_or_else(|| run_id.to_owned());
+                        let wname = self.free_worktree_name(&project, &want);
                         let spec = WorktreeSpec {
                             project: project.clone(),
                             name: Some(wname),
@@ -1373,7 +1374,7 @@ impl Daemon {
                     prompt: Some(format!(
                         "{prompt}\n\n(You were started by {lead_name}, the lead agent of run {run}. Report back with `ptyro msg send @lead \"…\"` when you have something.)"
                     )),
-                    name: name.map(|n| ptyro_core::model::slugify(&n)),
+                    name,
                     name_or_next: true,
                     env,
                     confirmed: true,

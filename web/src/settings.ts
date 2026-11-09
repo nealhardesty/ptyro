@@ -5,7 +5,7 @@
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item, Sheet } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
@@ -302,7 +302,7 @@ const FULL_WARNING = "This device gets FULL control: it can run commands as you,
 
 function pairAnother(): void {
   form("Pair another device", [
-    { key: "name", label: "Name", value: "phone", required: true, hint: "A name that exists is replaced: its old link stops working and it takes the access chosen here." },
+    { key: "name", label: "Name", value: "phone", required: true, slug: "name", hint: `A name that exists is replaced: its old link stops working and it takes the access chosen here. ${NAME_HINT}` },
     { key: "scope", label: "May", type: "select", options: SCOPES.map(([k, l, d]): [string, string] => [k, `${l}: ${d}`]), value: "full" },
   ], "Make a link", async (v) => {
     const r = await conn.request({ t: "device_pair", name: v.name, scope: v.scope });
@@ -375,7 +375,7 @@ async function profileLogin(name: string, target: string): Promise<void> {
 /// `made`: told the new profile's name (a form that offered "new profile…" picks it).
 export function profileForm(made?: (name: string) => void): Sheet {
   return form("New profile", [
-    { key: "name", label: "Name", required: true, slug: "name", placeholder: "work", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" },
+    { key: "name", label: "Name", required: true, slug: "name", placeholder: "work", hint: NAME_HINT },
     { key: "label", label: "Label", placeholder: "shown in the sidebar" },
     { key: "color", label: "Colour", placeholder: "e.g. orange or #ff8800" },
     ...AGENT_DIRS.map((a) => ({ key: `dir_${a}`, label: `${a} directory`, placeholder: `adopt one you have, e.g. ~/.${a}-work`, hint: undefined }) as const),
@@ -459,7 +459,7 @@ function profileView(rest: string): HTMLElement {
     bar(
       h("button", { title: tip("profile.doctor"), onclick: async () => { const r = await doHost("profile.doctor", { name }); if (r) textSheet(`${name}: checks`, (r.checks as any[]).map((c) => `${(LEVEL[c.level] ?? ["·"])[0]} ${c.name}: ${c.text}`).join("\n") || "Nothing to check."); } }, "Check"),
       h("button", { title: tip("profile.sync"), onclick: async () => { const r = await doHost("profile.sync", { name }); if (r) textSheet(`${name}: shared files`, (r.notes as string[]).join("\n")); } }, "Sync shared files"),
-      name !== "default" ? h("button", { title: tip("profile.rename"), onclick: () => form("Rename the profile", [{ key: "new", label: "New name", value: name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => { const r = await host("profile.rename", { old: name, new: v.new }); profiles.reload(""); go(`#/profile/${enc(String(v.new))}`); showNotes("Renamed", r.notes ?? []); }) }, "Rename") : null,
+      name !== "default" ? h("button", { title: tip("profile.rename"), onclick: () => form("Rename the profile", [{ key: "new", label: "New name", value: name, required: true, slug: "name", hint: NAME_HINT }], "Rename", async (v) => { const r = await host("profile.rename", { old: name, new: v.new }); profiles.reload(""); go(`#/profile/${enc(String(v.new))}`); showNotes("Renamed", r.notes ?? []); }) }, "Rename") : null,
       name !== "default" ? h("button", { class: "deny", title: tip("profile.remove"), onclick: () => removeProfile(name) }, "Remove") : null)));
   return h("div", {}, ui.header(p?.label || name, "#/profiles"), h("main", { class: "stack" }, body));
 }

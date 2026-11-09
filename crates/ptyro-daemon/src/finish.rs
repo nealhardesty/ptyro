@@ -62,6 +62,20 @@ impl Daemon {
         }
     }
 
+    /// A renamed project's archives follow it (SPEC §2.3): `wt restore newslug/name` finds them.
+    pub(crate) async fn archives_follow_project(&self, project: &str, slug: &str) {
+        let _one = self.archive_list.lock().await;
+        let Ok(mut list) = self.archives().await else { return };
+        let mut changed = false;
+        for e in list.iter_mut().filter(|e| e.project == project && e.project_slug != slug) {
+            e.project_slug = slug.into();
+            changed = true;
+        }
+        if changed && let Err(e) = self.save_archives(&list).await {
+            tracing::warn!("archives after a project rename: {}", e.message);
+        }
+    }
+
     fn progress(&self, wt: &WorktreeInfo, step: &str) {
         let _ = self
             .events

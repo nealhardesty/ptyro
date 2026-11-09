@@ -3,7 +3,7 @@
 // checks, checkpoints and merge train.
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, fixOf, form, go, h, menu, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "runs": "Runs: recipes, fan-outs and leads, with the gates waiting for you",
@@ -101,7 +101,7 @@ function fanoutForm() {
         { key: "verify", label: "Done when", placeholder: "e.g. cargo test", hint: "A candidate only counts as done once this passes", more: true },
         { key: "judge", label: "Judge", type: "select", options: [["", "No judge"], ...agents], hint: "An agent that scores the candidates' diffs, advisory", more: true },
         { key: "base", label: "Base", placeholder: "default: the project's base, e.g. origin/main", hint: "The ref every candidate's branch starts from", more: true },
-        { key: "name", label: "Name prefix", slug: "name", placeholder: "default: from the prompt", hint: "The worktrees are called this, numbered", more: true },
+        { key: "name", label: "Name prefix", slug: "name", placeholder: "default: from the prompt", hint: `The worktrees are called this, numbered. ${NAME_HINT}`, more: true },
         { key: "timeout", label: "Time limit", placeholder: "e.g. 45m", hint: "Per candidate", more: true },
         { key: "structured", label: "Chat mode (full tool-call visibility)", type: "check", more: true },
     ], "Start", async (v) => {
@@ -328,6 +328,7 @@ function newSet() {
         m.pick.addEventListener("change", syncMembers);
     syncMembers();
     const name = h("input", { placeholder: "e.g. add-user-tier", autocapitalize: "off", spellcheck: "false" });
+    slugInput(name, "name");
     const goal = h("textarea", { rows: 3, placeholder: "What the change is, across the repositories" });
     const fromIssue = h("input", { placeholder: "a number in the first member's repository, or a URL", autocapitalize: "off", spellcheck: "false" });
     const tpl = h("select", {}, h("option", { value: "" }, "No template"));
@@ -342,7 +343,7 @@ function newSet() {
     const workspace = h("select", {}, h("option", { value: "" }, "default"), ...wsNames.map((w) => h("option", { value: w }, w)));
     const err = h("p", { class: "form-err" });
     const s = sheet("New change set", [
-        h("label", { class: "field" }, h("span", {}, "Name"), name),
+        h("label", { class: "field" }, h("span", {}, "Name"), name, h("small", {}, NAME_HINT)),
         h("div", { class: "field" }, h("span", {}, "Projects"), ...members.flatMap((m) => [m.pickRow, m.opts])),
         h("label", { class: "field" }, h("span", {}, "Goal"), goal),
         h("label", { class: "field" }, h("span", {}, "Template"), tpl),
@@ -351,7 +352,7 @@ function newSet() {
         err,
     ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
                 const chosen = members.filter((m) => m.pick.checked);
-                if (!name.value.trim()) {
+                if (!name.value) {
                     err.textContent = "Name it.";
                     return;
                 }
@@ -363,7 +364,7 @@ function newSet() {
                 const map = (f) => Object.fromEntries(chosen.map((m) => [m.p.slug, f(m).trim()]).filter(([, v]) => v));
                 const depends = Object.fromEntries(chosen.filter((m) => m.on.size).map((m) => [m.p.slug, [...m.on].filter((d) => chosen.some((o) => o.p.slug === d))]));
                 const spec = (trust) => ({
-                    name: name.value.trim(), projects: chosen.map((m) => m.p.id), template: tpl.value || null, lead: (layout.value !== "manual" && lead.value) || null, layout: layout.value,
+                    name: name.value, projects: chosen.map((m) => m.p.id), template: tpl.value || null, lead: (layout.value !== "manual" && lead.value) || null, layout: layout.value,
                     goal: goal.value.trim() || null, from_issue: fromIssue.value.trim() || null, depends, agents: map((m) => m.agent.value), bases: map((m) => m.base.value),
                     // All three ticked: the default (the template's, else all three); none: no approvals.
                     gates: on.length === gates.length ? null : on,

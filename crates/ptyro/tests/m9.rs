@@ -571,8 +571,12 @@ async fn pairing_a_name_again_replaces_the_device_and_takes_the_new_scope() {
     let mut p = Phone::signed_in(serve.port, &new).await;
     let o = p.request(json!({ "t": "spawn", "spec": { "argv": ["sh"], "cwd": "/" } })).await;
     assert_ne!(o["t"], "err", "{o}");
+    // A device's name is a name like any other: refused with the fix, never rewritten.
+    let bad = w.cli(&["pair", "Phone", "--scope", "read", "--json"]);
+    let said = String::from_utf8_lossy(&bad.stderr);
+    assert!(!bad.status.success() && said.contains(r#"try "phone""#), "{said}");
     // Downgrade: full to read.
-    let v = w.json(&["pair", "Phone", "--scope", "read", "--json"]);
+    let v = w.json(&["pair", "phone", "--scope", "read", "--json"]);
     assert_eq!(v["replaces"]["scope"], "full", "{v}");
     let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
     let (status, body) = claim(serve.port, &code);

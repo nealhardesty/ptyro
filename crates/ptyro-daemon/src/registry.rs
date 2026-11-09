@@ -138,9 +138,13 @@ impl Daemon {
 
     // ── persistence + events ────────────────────────────────────────────────
 
-    pub(crate) fn put_worktree(&self, w: WorktreeInfo) {
+    pub(crate) fn put_worktree(&self, mut w: WorktreeInfo) {
         {
             let mut reg = self.registry.locked();
+            // The project's slug now: a copy held across a project rename carries the old one.
+            if let Some(p) = reg.projects.iter().find(|p| p.id == w.project) {
+                w.project_slug.clone_from(&p.slug);
+            }
             match reg.worktrees.iter_mut().find(|o| o.id == w.id) {
                 Some(o) => *o = w.clone(),
                 None => reg.worktrees.push(w.clone()),
@@ -358,6 +362,8 @@ impl Daemon {
                 let base_slug = slugify(&cfg.project.name.clone().unwrap_or_else(|| {
                     root.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
                 }));
+                // A directory with nothing slug-like in its name (`日本`, `...`).
+                let base_slug = if base_slug.is_empty() { "repo".to_owned() } else { base_slug };
                 let slug = {
                     let reg = self.registry.locked();
                     let taken = |s: &str| reg.projects.iter().any(|p| p.slug == s);
@@ -487,6 +493,51 @@ impl Daemon {
             notes.push(format!("its worktrees are still on disk: {}", kept.join(", ")));
         }
         Ok(Reply::Removed { notes })
+    }
+
+    /// `ProjectRename` (SPEC §2.3): a new slug, the project's address. Sessions, workspaces and
+    /// trust refer to it by id, so only what carries the slug follows: its worktrees (`newslug/
+    /// name`) and its archives. Worktree directories stay where they are.
+    async fn project_rename(&self, addr: &str, name: &str) -> Result<Reply, Error> {
+        let id = self.find_project(addr)?.id;
+        ptyro_core::names::validate(name).map_err(Error::invalid)?;
+        // The check and the change in one step, so two renames can't both take a name.
+        let (p, worktrees) = {
+            let mut reg = self.registry.locked();
+            if reg.projects.iter().any(|o| o.id != id && o.slug == name) {
+                return Err(Error::conflict(format!("a project named {name} exists")));
+            }
+            let p = reg
+                .projects
+                .iter_mut()
+                .find(|o| o.id == id)
+                .ok_or_else(|| Error::missing("project", addr))?;
+            if p.slug == name {
+                return Ok(Reply::Project { info: p.clone(), notes: Vec::new() });
+            }
+            p.slug = name.into();
+            let p = p.clone();
+            // Stored worktree rows take the slug from the project's row; the copies here carry it.
+            let worktrees: Vec<WorktreeInfo> = reg
+                .worktrees
+                .iter_mut()
+                .filter(|w| w.project == p.id)
+                .map(|w| {
+                    w.project_slug.clone_from(&p.slug);
+                    w.clone()
+                })
+                .collect();
+            (p, worktrees)
+        };
+        if let Some(store) = &self.store {
+            store.save_project(p.clone());
+        }
+        let _ = self.events.send(DomainEvent::ProjectUpdated { info: p.clone() });
+        for w in worktrees {
+            let _ = self.events.send(DomainEvent::WorktreeUpdated { info: w });
+        }
+        self.archives_follow_project(&p.id, &p.slug).await;
+        Ok(Reply::Project { info: p, notes: Vec::new() })
     }
 
     fn project_pin(&self, addr: &str, pin: Option<String>) -> Result<Reply, Error> {
@@ -673,6 +724,7 @@ impl Daemon {
                 Ok(Reply::Project { info: self.find_project(&addr)?, notes: Vec::new() })
             }
             Request::ProjectRemove { addr, release } => self.project_remove(&addr, release),
+            Request::ProjectRename { addr, name } => self.project_rename(&addr, &name).await,
             Request::ProjectPin { addr, profile } => self.project_pin(&addr, profile),
             Request::ProjectScripts { addr, worktree } => {
                 let p = self.find_project(&addr)?;

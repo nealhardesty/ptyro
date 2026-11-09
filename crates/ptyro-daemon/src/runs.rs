@@ -968,7 +968,10 @@ impl Daemon {
                 } else {
                     format!("{}-{n}", run.trim_start_matches("r-"))
                 };
-                let name = self.free_worktree_name(&p.id, &ptyro_core::model::slugify(&want));
+                // Rendered from a template, so derived: tidied, always a valid name.
+                let want = ptyro_core::names::derive(&want)
+                    .unwrap_or_else(|| run.trim_start_matches("r-").to_owned());
+                let name = self.free_worktree_name(&p.id, &want);
                 let base = sp
                     .base
                     .as_deref()
@@ -1029,7 +1032,7 @@ impl Daemon {
         if !taken(want) {
             return want.to_owned();
         }
-        (2..).map(|k| format!("{want}-{k}")).find(|n| !taken(n)).expect("infinite")
+        (2..).map(|k| ptyro_core::names::numbered(want, k)).find(|n| !taken(n)).expect("infinite")
     }
 
     /// `refs/ptyro/runs/<run>/<step>/<n>/<which>` for the worktree as it is now.
@@ -1087,7 +1090,8 @@ impl Daemon {
             .as_deref()
             .map(|n| ptyro_run::template::render(n, ctx))
             .unwrap_or_else(|| def.id.clone());
-        let name = ptyro_core::model::slugify(&name);
+        // Rendered from a template, so derived: tidied, always a valid name.
+        let name = ptyro_core::names::derive(&name).unwrap_or_else(|| "step".into());
         let mut env = self.step_env(run, &def.id);
         let out = PathBuf::from(&env["PTYRO_STEP_OUT"]);
         let _ = std::fs::remove_file(&out);
@@ -2393,6 +2397,12 @@ impl Daemon {
         if spec.prompt.trim().is_empty() {
             return Err(Error::invalid("the prompt is empty"));
         }
+        // The prefix someone gave: checked, never rewritten (SPEC §2.3). Kept short because
+        // each candidate's agent is appended (`<prefix>-<agent>`).
+        if let Some(n) = &spec.name {
+            ptyro_core::names::validate_within(n, 40, ", since each agent's name is appended")
+                .map_err(Error::invalid)?;
+        }
         let config = self.config();
         for a in &spec.agents {
             let (name, _) = ptyro_agents::split_agent(a);
@@ -2423,7 +2433,9 @@ impl Daemon {
         // Candidate ids: the agent's name, numbered on repeats (claude, claude-2).
         let mut ids: Vec<(String, String)> = Vec::new();
         for a in &spec.agents {
+            // A step id in the recipe below, so `[a-z0-9-]` (a `.` would split the TOML key).
             let base = ptyro_core::model::slugify(ptyro_agents::split_agent(a).0);
+            let base = if base.is_empty() { "agent".to_owned() } else { base };
             let id = if ids.iter().any(|(i, _)| *i == base) {
                 (2..)
                     .map(|k| format!("{base}-{k}"))
