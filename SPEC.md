@@ -181,21 +181,38 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   | `@focused` | | the session focused in the most recently active TUI |
   | `@last` | | most recently created session |
   | `@attention` | | oldest session with attention set |
-  | `@blocked` / `@idle` / `@working` | | all sessions in that status (multi) |
-  | `@all` | | all running sessions (multi) |
+  | `@all` | | every session, exited and dormant ones too (multi) |
+  | `@live` (alias `@running`) | | the process runs: starting or running, never dormant (multi) |
+  | `@active` | | busy now: an agent working or blocked, a shell running a command (multi) |
+  | `@exited` | | ended and not resumable: exited or failed, never dormant (multi) |
+  | `@dormant` | | hibernated agents, resumable (§7.4) (multi) |
+  | `@working` / `@blocked` / `@idle` / `@done` / `@error` (alias `@errored`) | | all sessions in that status (multi) |
 | `%N`, `ws%N` | `%3`, `work%3` | shell N of the context (or named) workspace's SHELLS (§23.5; proposed) |
   | `@run:<id>` | | all sessions of a run (multi) |
 
+**One selector vocabulary** (owner, 2026-11-09). `ptyro_core::selector::SELECTORS` is the one
+list of selectors: name, aliases, a line of help, and the state each picks. The daemon's
+`resolve_many`, its "unknown selector; try …" hint, shell completion, `ptyro list --status`
+(the state words without the `@`) and `ptyro wait --for` (the status words, plus `exit` and
+`any-attention`) all read it, so a word means the same thing everywhere. The status words are
+the status engine's own labels (`AgentStatus::label`): `error`, with `errored` accepted as an
+alias in each of those places. The wire keeps `errored` (`AgentStatus`'s serde name), and the
+web shows it as `error`. `@exited` never matches a dormant session, so `ptyro rm @exited` never
+throws away a resumable conversation; `@all` does include dormant ones, so `ptyro rm @all`
+forgets them too. A test fails when docs/commands.md's selector list drifts from `SELECTORS`.
+`wait --for exit` is an event, not the `exited` state: it is reached when the process stops
+running, hibernating included.
+
 **[built M2]** Implemented now: handles (`7f3k`, `s:7f3k`, full id), names, `@last`, `@focused`
-(the session most recently focused in any TUI, reported with `ClientMsg::Focus`), and the multi
-selectors `@all`, `@live` (alias `@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error`
-(the status `ptyro status` shows, whatever its source; until 2026-10-23 only self-reports
-counted, so hook-driven agents never matched), name globs (`build-*`, `a?c`), and `,` to join
-several (`a,b,@blocked`).
+(the session most recently focused in any TUI, reported with `ClientMsg::Focus`), the multi
+selectors in the table above (`@working`/`@blocked`/`@idle`/`@done`/`@error` are the status
+`ptyro status` shows, whatever its source; until 2026-10-23 only self-reports counted, so
+hook-driven agents never matched; `@dormant` and `@active` since 2026-11-09), name globs
+(`build-*`, `a?c`), and `,` to join several (`a,b,@blocked`).
 Results follow the session list's order without duplicates. Single-target requests accept a
 selector only if it matches exactly one session (otherwise `ambiguous`). The CLI expands
 selectors with `Request::Resolve`, so `ptyro stop @live`, `ptyro send 'agent-*' …` and
-`ptyro rm @all` work. `myrepo/name` arrived with projects (M3). `@attention` and `@run:<id>` are
+`ptyro rm @exited` work. `myrepo/name` arrived with projects (M3). `@attention` and `@run:<id>` are
 **not built yet** (`@run:` works only as a mailbox recipient).
 
 **[built M3]** `project/name` resolves a session by project and name. Projects are addressed by
@@ -3645,11 +3662,11 @@ ptyro                                  # TUI
 ptyro attach [<session>] [--raw] [--view-only] [--workspace <ws>]
 ptyro new [--agent <a>[@<profile>]] [--profile <pr>] [--project <p>] [--wt <name>|--new-wt [<name>]|--here|--cwd <dir>]
           [--name <n>] [--prompt <text>|--prompt-file <f>] [--attach] [--override-pin] [-- <args…>]
-ptyro ls [--status running|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]
+ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]   # §2.3's words
 ptyro status [<session>] [--explain] [--json]
 ptyro send <session…> <text> [--no-enter] [--raw] [--wait-ready]
 ptyro read <session> [--screen|--scrollback [N]] [--plain|--ansi] [--json]
-ptyro wait <session…> --for working|blocked|idle|done|exit|any-attention [--timeout 10m] [--any|--all]
+ptyro wait <session…> --for working|blocked|idle|done|error|exit|any-attention [--timeout 10m] [--any|--all]
 ptyro events [--follow] [--session <s>] [--json]       # NDJSON stream of domain events
 ptyro stop|kill|restart|resume|hibernate <session…>
 ptyro rename <session> <name>
@@ -3769,7 +3786,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `any-attention` is blocked, or an attention raised after the last prompt.
   - `exit` is "not running".
   - `--stall D` reports `stalled` when a working session's screen hasn't changed for `D`.
-  - `send --wait` waits for idle, blocked, errored or exit, and prints how the turn ended.
+  - `send --wait` waits for idle, blocked, error or exit, and prints how the turn ended.
   - Events wake the wait at once; a 250 ms tick covers `--match` and stalls.
 - **Completions** use clap_complete's dynamic engine (`=4.6.11`, feature `unstable-dynamic`,
   pinned exactly):

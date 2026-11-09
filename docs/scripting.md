@@ -10,7 +10,7 @@ while the script runs. The building blocks:
 |---|---|
 | `ptyro new -d --agent A [--new-wt NAME] --prompt TEXT` | start an agent detached (in a fresh worktree), prompt typed once it's ready |
 | `ptyro send S… TEXT [--wait-ready] [--wait]` | type into sessions; `--wait` reports how the turn ended |
-| `ptyro wait S… --for idle\|blocked\|done\|errored\|exit\|working\|any-attention` | block until they get there (`--any`, `--timeout`, `--stall`) |
+| `ptyro wait S… --for idle\|blocked\|done\|error\|exit\|working\|any-attention` | block until they get there (`--any`, `--timeout`, `--stall`) |
 | `ptyro wait S --match REGEX [--scrollback]` | block until text appears |
 | `ptyro read S [--scrollback [N]] [--json]` | the screen as text |
 | `ptyro events --follow` | every change, one JSON line each |
@@ -19,7 +19,8 @@ while the script runs. The building blocks:
 | `ptyro broadcast S… TEXT` | one prompt into several sessions |
 | `ptyro stop S…` / `ptyro kill S…` / `ptyro rm S… [--stop]` | stop (interrupt, then signal; kept listed) / kill now (SIGKILL; kept listed) / forget an ended one (`--stop` stops it first) |
 
-Sessions can be selectors: `@working`, `@blocked`, `@idle`, `@live`, `build-*`, `a,b`.
+Sessions can be selectors: `@working`, `@blocked`, `@idle`, `@live`, `build-*`, `a,b` (all of them
+are in [commands.md](commands.md#naming-sessions-and-worktrees)).
 
 `idle` means **the turn ptyro last typed has ended**. ptyro remembers when it typed your prompt,
 and an idle from before that doesn't count, so `new --prompt …` then `wait --for idle` is safe.
