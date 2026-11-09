@@ -43,9 +43,10 @@ Conventions:
 | `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
 | `ptyro list` (alias `ls`) `[-a] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `-a` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
-| `ptyro stop SESSIONS…` | stop gracefully, keeping them listed (agents finish their turn first) |
-| `ptyro kill SESSIONS… [--keep] [-s N]` (a signal number, e.g. `-s 9`) | stop (HUP → TERM → KILL) and remove |
-| `ptyro restart SESSIONS…` / `rm SESSIONS…` / `rename SESSION NAME` | run exited sessions again / forget them / rename (the address) |
+| `ptyro stop SESSIONS…` | stop, keeping them listed: an agent's turn is interrupted and it gets a moment to exit, then the process gets HUP, TERM and KILL |
+| `ptyro kill SESSIONS… [-s N]` | kill now (SIGKILL, no chance to clean up), keeping them listed; `-s N` sends signal N instead |
+| `ptyro rm SESSIONS… [--stop]` | forget ended sessions (they leave the list); a running one is refused, and `--stop` stops it first |
+| `ptyro restart SESSIONS…` / `rename SESSION NAME` | run exited sessions again / rename (the address) |
 | `ptyro retitle SESSION [TITLE…]` | change its title, what people read (none: clear it) |
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
 | `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |

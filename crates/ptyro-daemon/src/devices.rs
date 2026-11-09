@@ -642,7 +642,10 @@ fn req_label(req: &Request) -> &'static str {
         Request::ClearAttention { .. } => "cleared attention",
         Request::Resume { .. } => "resumed",
         Request::Hibernate { .. } => "hibernated",
-        Request::Kill { .. } => "stopped",
+        Request::Kill { signal: None, .. } => "stopped",
+        Request::Kill { .. } => "killed",
+        Request::Remove { stop: true, .. } => "stopped and removed",
+        Request::Remove { .. } => "removed",
         Request::Restart { .. } => "restarted",
         Request::Rename { .. } => "renamed",
         _ => "acted",
@@ -730,7 +733,7 @@ mod tests {
         // Stopping what you started is control's, as the scope's description says; starting any
         // command, making worktrees and shipping aren't.
         assert_eq!(needed(&Request::Kill { addr: "x".into(), signal: None }), Scope::Control);
-        assert_eq!(needed(&Request::Remove { addr: "x".into() }), Scope::Control);
+        assert_eq!(needed(&Request::Remove { addr: "x".into(), stop: false }), Scope::Control);
         assert_eq!(needed(&Request::Agents), Scope::Read);
         assert_eq!(needed(&Request::Replay { addr: "x".into() }), Scope::Read);
         assert_eq!(needed(&Request::Editors), Scope::Read);

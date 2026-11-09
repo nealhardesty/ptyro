@@ -449,7 +449,7 @@ impl Daemon {
                 self.set_state(run)?.member(&n).ok_or_else(|| Error::missing("member", &n))?;
                 Ok(n)
             }
-            (_, None) => Err(Error::invalid("which member? (--member NAME)")),
+            (_, None) => Err(Error::invalid("which member? name one")),
         }
     }
 
@@ -2402,7 +2402,7 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "{} changed since the last set checkpoint: restoring would lose that. `ptyro cs checkpoint {}` first, or --force (which checkpoints the present first)",
+                        "{} changed since the last set checkpoint: restoring would lose that. Checkpoint {} first, or restore anyway (which checkpoints the present first)",
                         unrecorded.join(", "),
                         set.name
                     ),
@@ -3159,7 +3159,7 @@ impl Daemon {
             .collect();
         if !users.is_empty() && !force {
             return Err(Error::conflict(format!(
-                "{} depend on {member}: drop them first, or --force",
+                "{} depend on {member}: drop them first, or drop it anyway",
                 users.join(", ")
             )));
         }
@@ -3226,7 +3226,7 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "refusing to remove {}: work would be lost in {}. Ship it, `--keep <member>`, or --force",
+                        "refusing to remove {}: work would be lost in {}. Ship it, keep that member, or remove the set anyway",
                         set.name,
                         unsafe_.join("; ")
                     ),

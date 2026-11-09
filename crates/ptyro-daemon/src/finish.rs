@@ -105,7 +105,7 @@ impl Daemon {
             .collect();
         if !live.is_empty() && !stop_sessions {
             return Err(Error::conflict(format!(
-                "{} has running sessions ({}); stop them first, or archive with --stop-sessions",
+                "{} has running sessions ({}); stop them first",
                 wt.qualified(),
                 live.join(", ")
             )));
@@ -180,7 +180,7 @@ impl Daemon {
             ))
         })?;
         let mut notes = vec![format!(
-            "archived {}: branch {branch} and a snapshot of its files ({snapshot}) are kept; `ptyro wt restore {}` brings it back",
+            "archived {}: branch {branch} and a snapshot of its files ({snapshot}) are kept; restoring {} brings it back",
             wt.qualified(),
             wt.qualified()
         )];

@@ -23,7 +23,7 @@ use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, age, client_env, confirm, no_daemon, unexpected};
+use crate::cli::{Ctx, age, client_env, confirm, no_daemon, offer, unexpected};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -732,7 +732,12 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         CsCmd::Restore { set, n, force } => {
-            print_notes(&op(&c, CsOp::Restore { set, n, force }).await?);
+            let how = format!("`ptyro cs checkpoint {set}` first, or `--force`");
+            let v = op(&c, CsOp::Restore { set, n, force }).await;
+            print_notes(&v.map_err(|e| match force {
+                true => e,
+                false => offer(e, ErrorCode::DirtyWorktree, &how),
+            })?);
             Ok(0)
         }
         CsCmd::Overlay { set, mode, member } => {
@@ -803,12 +808,24 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         CsCmd::Drop { set, member, force } => {
-            op(&c, CsOp::Drop { set, member: member.clone(), force }).await?;
+            op(&c, CsOp::Drop { set, member: member.clone(), force }).await.map_err(
+                |e| match force {
+                    true => e,
+                    false => offer(e, ErrorCode::Conflict, "`--force` drops it anyway"),
+                },
+            )?;
             eprintln!("dropped {member}");
             Ok(0)
         }
         CsCmd::Rm { set, keep, force } => {
-            let v = op(&c, CsOp::Rm { set, keep, force }).await?;
+            let v = op(&c, CsOp::Rm { set, keep, force }).await.map_err(|e| match force {
+                true => e,
+                false => offer(
+                    e,
+                    ErrorCode::DirtyWorktree,
+                    "`--keep MEMBER` keeps one, `--force` removes it anyway",
+                ),
+            })?;
             eprintln!(
                 "removed {}",
                 v["removed"]

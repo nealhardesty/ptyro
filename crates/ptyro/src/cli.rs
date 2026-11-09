@@ -410,19 +410,17 @@ async fn dispatch(
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
         Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
         Some(Cmd::Tour { here: true }) => tour_here(&ctx).await,
-        Some(Cmd::Kill { sessions, signal, keep }) => {
+        // Kill is immediate and keeps the session listed, as in the TUI and the web (SPEC §7.3).
+        Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
-                let addr = info.id.full();
-                client.request(Request::Kill { addr: addr.clone(), signal }).await?;
-                if signal.is_none() && !keep {
-                    // A quick terminal forgets itself once it exits (UX1.25).
-                    if !info.quick {
-                        client.request(Request::Remove { addr }).await?;
-                    }
-                    eprintln!("killed {}", info.name);
-                } else {
-                    eprintln!("signalled {}", info.name);
+                let signal = signal.unwrap_or(9);
+                client
+                    .request(Request::Kill { addr: info.id.full(), signal: Some(signal) })
+                    .await?;
+                match signal {
+                    9 => eprintln!("killed {}", info.name),
+                    n => eprintln!("sent signal {n} to {}", info.name),
                 }
             }
             Ok(0)
@@ -436,10 +434,17 @@ async fn dispatch(
             }
             Ok(0)
         }
-        Some(Cmd::Rm { sessions }) => {
+        Some(Cmd::Rm { sessions, stop }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
             for info in targets(&client, &sessions).await? {
-                client.request(Request::Remove { addr: info.id.full() }).await?;
+                let how = format!("`ptyro rm --stop {}` stops and removes it", info.name);
+                client
+                    .request(Request::Remove { addr: info.id.full(), stop })
+                    .await
+                    .map_err(|e| if stop { e } else { offer(e, ErrorCode::Conflict, &how) })?;
+                if stop && info.state.is_live() {
+                    eprintln!("stopped and removed {}", info.name);
+                }
             }
             Ok(0)
         }
@@ -559,7 +564,12 @@ async fn dispatch(
         Some(Cmd::Convert { session, to, force }) => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
             let structured = to == "structured";
-            match c.request(Request::Convert { addr: session, structured, force }).await? {
+            let convert = c.request(Request::Convert { addr: session, structured, force }).await;
+            let convert = convert.map_err(|e| match force {
+                true => e,
+                false => offer(e, ErrorCode::Conflict, "`--force` interrupts it"),
+            });
+            match convert? {
                 Reply::Session { info } => {
                     eprintln!(
                         "{} now runs {} (same conversation) — attach with `ptyro attach {}`",
@@ -795,6 +805,12 @@ async fn tour_here(ctx: &Ctx) -> Result<i32, Error> {
     };
     let tui = ptyro_tui::Options { tour: true, ..Default::default() };
     attach_with(ctx, client, Some(info), tui).await
+}
+
+/// A daemon refusal says what to do in words all three clients share; the CLI adds its own way
+/// of doing it, the flag (SPEC §6.6). Only for a refusal of `code`.
+pub fn offer(e: Error, code: ErrorCode, how: &str) -> Error {
+    if e.code == code { Error::new(e.code, format!("{} ({how})", e.message)) } else { e }
 }
 
 pub fn no_daemon(e: Error) -> Error {
@@ -1499,7 +1515,9 @@ pub(crate) async fn stop_daemon(ctx: &Ctx, force: bool, hibernate: bool) -> Resu
             }
         }
     }
-    client.request(Request::Shutdown { force }).await?;
+    client.request(Request::Shutdown { force }).await.map_err(|e| {
+        if force { e } else { offer(e, ErrorCode::Conflict, "`--force` stops them too") }
+    })?;
     drop(client);
     // The socket goes first, then the daemon stops its sessions (agents hibernate, which
     // takes a few seconds) and exits: wait for that, so a new daemon can start right away.

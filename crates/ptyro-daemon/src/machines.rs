@@ -1297,16 +1297,15 @@ impl Daemon {
                 format!("{} didn't answer, so it wasn't added: {}", transport.label(), e.message),
             ));
         }
-        let name =
-            match name.or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::as_name)) {
-                Some(n) => n,
-                None => {
-                    let _ = std::fs::remove_file(self.token_path(&probe));
-                    return Err(Error::invalid(
-                        "give it a name (--name laptop2): it didn't say its own",
-                    ));
-                }
-            };
+        let name = match name
+            .or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::as_name))
+        {
+            Some(n) => n,
+            None => {
+                let _ = std::fs::remove_file(self.token_path(&probe));
+                return Err(Error::invalid("give it a name (like laptop2): it didn't say its own"));
+            }
+        };
         let cleanup = || {
             let _ = std::fs::remove_file(self.token_path(&probe));
         };
@@ -1318,7 +1317,7 @@ impl Daemon {
         if name == "c" {
             cleanup();
             return Err(Error::invalid(
-                "`c` can't name a machine: `c:…` is how chats are addressed. Pick another with --name",
+                "`c` can't name a machine: `c:…` is how chats are addressed. Pick another name",
             ));
         }
         if ptyro_core::names::as_name(&self.machine()).as_deref() == Some(name.as_str()) {

@@ -194,7 +194,7 @@ counted, so hook-driven agents never matched), name globs (`build-*`, `a?c`), an
 several (`a,b,@blocked`).
 Results follow the session list's order without duplicates. Single-target requests accept a
 selector only if it matches exactly one session (otherwise `ambiguous`). The CLI expands
-selectors with `Request::Resolve`, so `ptyro kill @exited`, `ptyro send 'agent-*' …` and
+selectors with `Request::Resolve`, so `ptyro stop @live`, `ptyro send 'agent-*' …` and
 `ptyro rm @all` work. `myrepo/name` arrived with projects (M3). `@attention` and `@run:<id>` are
 **not built yet** (`@run:` works only as a mailbox recipient).
 
@@ -1095,6 +1095,10 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built] Protocol 1.38** (additive): `Request::Remove` adds `stop` (absent: false): stop a
+running session, then forget it (`rm --stop`, Stop and remove; §7.3). An older daemon ignores
+it and refuses a running session as before.
+
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
@@ -1234,6 +1238,17 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
 `permission_denied`, `unsupported`, `timeout`, `busy`, `internal`. CLI exit codes map from these
 (§12.4).
 
+**A refusal says what to do in words every client shares** (owner, 2026-11-09). The CLI, the TUI
+and the web all show the daemon's message, so it never names a CLI flag or tells you to run a
+CLI command: "stop them first", "archive it to keep it, or remove it anyway to discard it", not
+"use --stop-sessions" or "use --force". Each client then offers the way through in its own idiom:
+the CLI adds the flag ("(`--force` discards it)", `cli::offer`), the TUI and the web a button
+or a confirmation. A test (`refusals_name_no_cli_flag`) keeps flags out of the daemon's
+refusals. Left as they are: a message to an agent (which drives the CLI), one about another
+computer or the daemon process itself, and the ones the TUI turns into an action today
+(`` `ptyro project trust`` and the rest of `SUGGESTED`) or the web reads a value from (a recipe's
+or template's `--trust FINGERPRINT`); those want a structured hint on `Error` first.
+
 ---
 
 ## 7. Sessions: lifecycle, persistence, hibernation, resume
@@ -1348,6 +1363,22 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
 ```
 
 - `Running` sessions additionally carry an **agent status** (§9).
+- **Stop, kill, remove** (owner, 2026-11-09): one meaning each, the same in the CLI, the TUI, the
+  web, the help and the daemon's messages.
+  - **stop** (`ptyro stop`, `x`, Stop; `Kill{signal: None}`): an agent's turn in progress is
+    interrupted and it gets a moment to exit (the adapter's `stop()` steps, §7.4); then the
+    process group gets HUP, TERM and KILL. It does not wait for the turn to finish. The session
+    stays listed, `Exited`.
+  - **kill** (`ptyro kill`, `X`, Kill; `Kill{signal: Some(9)}`): SIGKILL at once, no chance to
+    clean up. The session stays listed. `ptyro kill -s N` sends signal N instead. (Until
+    2026-11-09 `ptyro kill` was a stop followed by a remove; `--keep` is now a hidden no-op.)
+  - **rm** (`ptyro rm`, `session.remove`, Remove; `Remove{stop: false}`): forget an ended
+    session. A running one is refused ("NAME is still running: stop it first"); `rm --stop`,
+    the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.38) stop it, then
+    forget it. A removed dormant session never comes back.
+  - `[ui] confirm_kill` (default on) makes Stop, Kill, and Stop and remove ask first, in the TUI
+    and the web alike (the web reads it where the device may read the config, else always asks).
+    Removing an ended session never asks.
 - `Exited` sessions stay visible (greyed, with exit code and final screen) until removed; their
   recorder log remains readable (`ptyro read --scrollback`).
 - `Dormant` = process not running but resumable; the last screen is shown dimmed with a
@@ -3665,7 +3696,7 @@ action names and the theme; `edit` starts from a commented template and re-opens
 `ls [--json]`, `kill S… [--signal N] [--keep]`, `rm S…`, `rename S NAME`, `read S [--ansi]`,
 `send S TEXT [--no-enter]`, `daemon start [--foreground]|stop [--force]|status [--json]|logs [-n N]`,
 the hidden `fake-agent` (§18.2), and the global `--json-wire`. `kill` waits for the graceful stop
-and then removes the session unless `--keep`. Still to come from this tree: `--view-only`,
+and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGKILL and keeps it, §7.3). Still to come from this tree: `--view-only`,
 `status`, `wait`, `events`, and everything project- or worktree-related.
 
 **[built M3]**
@@ -3710,7 +3741,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `read S [--screen|--scrollback [N]] [--plain|--ansi] [--json]`;
   - `wait S… [--for C] [--match RE [--scrollback]] [--timeout] [--any|--all] [--stall] [--json]`;
   - `events [--follow] [-s S] [-n N] [--json]`;
-  - `stop S…` (graceful, kept listed; `kill` also removes).
+  - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
 - **`attach --tab|--pane`** (WIN3, `ptyro_tui::tab`): open the session in a new tab or pane of
   the terminal instead, attached with this ptyro and its `--remote`. The innermost terminal that
@@ -4076,7 +4107,7 @@ prefix = ["C-q", "C-Space"]  # or one key: "C-]"
 theme = "ptyro-dark"
 sidebar_width = 30
 show_ports = true
-confirm_kill = true              # x asks before stopping a session
+confirm_kill = true              # Stop, Kill, and Stop and remove ask first (TUI and web)
 shell_exit = "close"             # a shell that exits: close (disappears; agents stay) | keep
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full

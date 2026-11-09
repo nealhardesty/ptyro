@@ -909,7 +909,7 @@ impl Daemon {
         let since_ms = match since.as_deref().filter(|s| !s.trim().is_empty()) {
             Some(s) => {
                 let d = ptyro_core::config::parse_duration(s)
-                    .map_err(|e| Error::invalid(format!("--since {s}: {e}")))?;
+                    .map_err(|e| Error::invalid(format!("since {s}: {e}")))?;
                 now_ms().saturating_sub(d.as_millis() as u64)
             }
             None => 0,

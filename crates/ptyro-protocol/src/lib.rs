@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 37 };
+pub const PROTO: Version = Version { major: 1, minor: 38 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,15 +179,20 @@ pub enum Request {
     Get {
         addr: String,
     },
-    /// Stop the session's process group (default: the graceful HUP→TERM→KILL sequence).
+    /// `signal: None` stops the session (SPEC §7.3): an agent is interrupted and given a moment
+    /// to exit, then the process group gets HUP, TERM and KILL. `Some(n)` sends that signal at
+    /// once (kill: 9). Either way the session stays listed.
     Kill {
         addr: String,
         #[serde(default)]
         signal: Option<i32>,
     },
-    /// Forget an exited session.
+    /// Forget an ended session. A live one is refused, unless `stop` (1.38): stop it, then
+    /// forget it.
     Remove {
         addr: String,
+        #[serde(default)]
+        stop: bool,
     },
     Rename {
         addr: String,

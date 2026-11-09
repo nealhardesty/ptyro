@@ -11,8 +11,8 @@ use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 
 use crate::cli::{
-    Ctx, NewArgs, age, check_attachable, client_env, confirm, current_dir, no_daemon, session_of,
-    truncate, unexpected, with_confirmation,
+    Ctx, NewArgs, age, check_attachable, client_env, confirm, current_dir, no_daemon, offer,
+    session_of, truncate, unexpected, with_confirmation,
 };
 
 #[derive(Subcommand)]
@@ -950,8 +950,11 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Archive { worktree, stop_sessions } => {
             let addr = wt_addr(worktree)?;
-            let Reply::Notes { notes: n } =
-                c.request(Request::WorktreeArchive { addr, stop_sessions }).await?
+            let r = c.request(Request::WorktreeArchive { addr, stop_sessions }).await;
+            let Reply::Notes { notes: n } = r.map_err(|e| match stop_sessions {
+                true => e,
+                false => offer(e, ErrorCode::Conflict, "`--stop-sessions` stops them"),
+            })?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
@@ -1120,6 +1123,16 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                     }
                     let opts = RemoveOpts { force: true, stop_sessions, keep_branch };
                     c.request(Request::WorktreeRemove { addr: worktree, opts }).await?
+                }
+                Err(e) if e.code == ErrorCode::DirtyWorktree => {
+                    return Err(offer(
+                        e,
+                        ErrorCode::DirtyWorktree,
+                        "`ptyro wt archive` keeps it, `--force` discards it",
+                    ));
+                }
+                Err(e) if !stop_sessions => {
+                    return Err(offer(e, ErrorCode::Conflict, "`--stop-sessions` stops them"));
                 }
                 other => other?,
             };

@@ -389,6 +389,10 @@ impl PromptKind {
 #[derive(Debug, Clone)]
 pub enum Confirmed {
     Stop(SessionId),
+    /// SIGKILL, now.
+    Kill(SessionId),
+    /// Stop it, then forget it (`rm --stop`).
+    StopRemove(SessionId),
     /// Resend with the guard / pin override acknowledged.
     Spawn(Box<SpawnSpec>, Option<Dir>),
     Worktree(Box<WorktreeSpec>, Option<Dir>),
@@ -3251,6 +3255,7 @@ impl App {
             }
             "session.stop"
             | "session.kill"
+            | "session.remove"
             | "session.restart"
             | "session.rename"
             | "session.retitle"
@@ -3781,31 +3786,29 @@ impl App {
         let Some(info) = self.session(id).cloned() else { return };
         let addr = id.full();
         match action {
-            "session.stop" if !info.state.is_live() => {
+            // `x` on an ended session removes it.
+            "session.stop" | "session.remove" if !info.state.is_live() => {
                 self.request(
                     Pending::Done(format!("removed {}", info.name)),
-                    Request::Remove { addr },
+                    Request::Remove { addr, stop: false },
                 );
             }
-            "session.stop" if self.config.ui.confirm_kill => {
-                self.overlay = Some(Overlay::Confirm {
-                    text: format!("Stop {} ({})? [y/N]", info.name, info.argv.join(" ")),
-                    action: Confirmed::Stop(id),
-                });
-            }
-            "session.stop" => {
-                self.stopping.insert(id);
-                self.request(
-                    Pending::Done(format!("stopped {}", info.name)),
-                    Request::Kill { addr, signal: None },
-                );
-            }
-            "session.kill" => {
-                self.stopping.insert(id);
-                self.request(
-                    Pending::Done(format!("killed {}", info.name)),
-                    Request::Kill { addr, signal: Some(9) },
-                );
+            // Stop, kill, and stop and remove all end a running session: `ui.confirm_kill` asks
+            // first for each, as the web does (SPEC §7.3).
+            "session.stop" | "session.kill" | "session.remove" => {
+                let (verb, end) = match action {
+                    "session.stop" => ("Stop", Confirmed::Stop(id)),
+                    "session.kill" => ("Kill", Confirmed::Kill(id)),
+                    _ => ("Stop and remove", Confirmed::StopRemove(id)),
+                };
+                if self.config.ui.confirm_kill {
+                    self.overlay = Some(Overlay::Confirm {
+                        text: format!("{verb} {} ({})? [y/N]", info.name, info.argv.join(" ")),
+                        action: end,
+                    });
+                } else {
+                    self.confirmed(end);
+                }
             }
             "session.restart" if info.state.is_live() => self.toast_offer(
                 format!("{} is still running", info.name),
@@ -4455,9 +4458,8 @@ impl App {
                 }
                 if s.state.is_live() {
                     v.extend(["session.stop", "session.kill"]);
-                } else {
-                    v.push("session.stop");
                 }
+                v.push("session.remove");
                 v
             }
             Row::Worktree(w) => {
@@ -5741,13 +5743,16 @@ impl App {
                     push: false,
                 },
             ),
-            Confirmed::Stop(id) => {
-                self.stopping.insert(id);
+            Confirmed::Stop(id) | Confirmed::Kill(id) | Confirmed::StopRemove(id) => {
                 let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
-                self.request(
-                    Pending::Done(format!("stopped {name}")),
-                    Request::Kill { addr: id.full(), signal: None },
-                );
+                let addr = id.full();
+                let (said, req) = match action {
+                    Confirmed::Stop(_) => ("stopped", Request::Kill { addr, signal: None }),
+                    Confirmed::Kill(_) => ("killed", Request::Kill { addr, signal: Some(9) }),
+                    _ => ("stopped and removed", Request::Remove { addr, stop: true }),
+                };
+                self.stopping.insert(id);
+                self.request(Pending::Done(format!("{said} {name}")), req);
             }
             Confirmed::Spawn(mut spec, split) => {
                 spec.override_pin = true;
@@ -8596,6 +8601,37 @@ mod tests {
         app.panes.get_mut(&1).unwrap().session = Some(live.id);
         app.run(&Command { action: "row.menu", arg: None });
         assert!(screen(&app).contains("Session live"), "in the pane: the focused session's");
+    }
+
+    /// Stop, kill, and stop and remove each ask first while `ui.confirm_kill` is on (the web does
+    /// the same), and none asks once it is off. An ended session is removed without asking.
+    #[test]
+    fn confirm_kill_asks_before_stop_kill_and_stop_and_remove() {
+        for action in ["session.stop", "session.kill", "session.remove"] {
+            let mut app = app();
+            let live = session("live");
+            app.sessions = vec![live.clone()];
+            app.session_action(action, live.id);
+            let Some(Overlay::Confirm { text, .. }) = &app.overlay else {
+                panic!("{action} didn't ask: {:?}", app.overlay.is_some())
+            };
+            assert!(text.contains("live"), "{text}");
+            assert!(!app.stopping.contains(&live.id), "{action} waits for the answer");
+
+            app.overlay = None;
+            app.config.ui.confirm_kill = false;
+            app.session_action(action, live.id);
+            assert!(app.overlay.is_none(), "{action} asked with confirm_kill off");
+            assert!(app.stopping.contains(&live.id), "{action} ran");
+        }
+        let mut app = app();
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(0), signal: None };
+        app.sessions = vec![gone.clone()];
+        app.session_action("session.remove", gone.id);
+        assert!(app.overlay.is_none(), "an ended session is removed without asking");
+        let actions = app.row_actions(&Row::Session(gone.id));
+        assert!(actions.contains(&"session.remove") && !actions.contains(&"session.stop"));
     }
 
     #[test]

@@ -937,7 +937,7 @@ impl Daemon {
         let project = || {
             st.project.clone().ok_or_else(|| {
                 Error::invalid(format!(
-                    "step {} needs a project: run it with --project (or from inside a repository)",
+                    "step {} needs a project: name one (or run it from inside a repository)",
                     def.id
                 ))
             })
@@ -2333,7 +2333,7 @@ impl Daemon {
                     .any(|s| matches!(s.kind(), Some(Kind::Spawn | Kind::Run | Kind::Verify)));
                 if needs_project && p.is_none() {
                     return Err(Error::invalid(
-                        "this recipe starts agents or commands: say where with --project (or run it inside a repository)",
+                        "this recipe starts agents or commands: name the project they run in (or run it inside a repository)",
                     ));
                 }
                 let id = self.create_run(
@@ -2386,9 +2386,7 @@ impl Daemon {
     /// the same base, then a `rank` step that gathers the evidence for the compare view.
     async fn fanout(self: &Arc<Self>, spec: FanoutSpec) -> Result<Reply, Error> {
         if spec.agents.is_empty() {
-            return Err(Error::invalid(
-                "say which agents: --agents claude,codex,gemini (or -n 3 --agents claude)",
-            ));
+            return Err(Error::invalid("say which agents: claude, codex, gemini (or 3 of claude)"));
         }
         if spec.prompt.trim().is_empty() {
             return Err(Error::invalid("the prompt is empty"));
@@ -2407,7 +2405,7 @@ impl Daemon {
             Some(x) => self.find_project(x)?,
             None => {
                 return Err(Error::invalid(
-                    "fanout needs a project: --project (or run it inside a repository)",
+                    "fanout needs a project: name one (or run it inside a repository)",
                 ));
             }
         };

@@ -240,7 +240,7 @@ async fn kill_rename_remove_and_addressing() {
     assert_eq!(get(&c, &info.handle).await.id, info.id);
     assert_eq!(get(&c, &format!("s:{}", info.handle)).await.id, info.id);
     c.request(Request::Rename { addr: info.name.clone(), name: "renamed".into() }).await.unwrap();
-    let err = c.request(Request::Remove { addr: "renamed".into() }).await.unwrap_err();
+    let err = c.request(Request::Remove { addr: "renamed".into(), stop: false }).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Conflict, "live sessions can't be removed");
     let killed =
         match c.request(Request::Kill { addr: "renamed".into(), signal: None }).await.unwrap() {
@@ -248,7 +248,7 @@ async fn kill_rename_remove_and_addressing() {
             other => panic!("{other:?}"),
         };
     assert!(!killed.state.is_live());
-    c.request(Request::Remove { addr: "renamed".into() }).await.unwrap();
+    c.request(Request::Remove { addr: "renamed".into(), stop: false }).await.unwrap();
     let err = c.request(Request::Get { addr: "renamed".into() }).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::NotFound);
     let err = c

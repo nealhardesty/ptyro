@@ -202,13 +202,13 @@ impl Daemon {
             who.retain(|(a, p)| !answered.contains(&chats::agent_label(a, p)));
             if who.is_empty() && cant.is_empty() {
                 return Err(Error::invalid(format!(
-                    "{} answered it already: name others (--agents), or /retry asks one again",
+                    "{} answered it already: name others, or /retry asks one again",
                     if all == 1 { "that agent" } else { "every one of them" }
                 )));
             }
         } else if who.len() + cant.len() < 2 {
             return Err(Error::invalid(
-                "a compare needs two agents or more: name them (--agents claude,codex), or install another",
+                "a compare needs two agents or more: name them (like claude and codex), or install another",
             ));
         }
         let own = who.iter().position(|(a, p)| *a == info.agent && *p == info.profile);

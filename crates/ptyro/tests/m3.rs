@@ -321,6 +321,10 @@ async fn the_worktree_lifecycle() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict);
     assert!(e.message.contains("running"), "{}", e.message);
+    // Seen by every client, so it names no CLI flag; the CLI adds its own.
+    assert!(!e.message.contains("--"), "{}", e.message);
+    let out = w.cli(&["wt", "rm", "app/second"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("`--stop-sessions` stops them"));
     c.request(Request::Kill { addr: s.name.clone(), signal: None }).await.unwrap();
     wait_worktree(&c, "app/second", |w| !w.locked).await;
     // … and with work that would be lost, with a precise report (CLI exit code 5).
@@ -335,6 +339,7 @@ async fn the_worktree_lifecycle() {
             && err.contains("notes.md"),
         "{err}"
     );
+    assert!(err.contains("`--force` discards it"), "{err}");
     assert!(second.path.exists());
     // Committed but not pushed: still refused, and the branch would be kept.
     w.git(&second.path, &["add", "-A"]);
