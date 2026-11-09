@@ -896,14 +896,8 @@ impl Daemon {
                 )));
             }
         };
-        let profiles = match profile {
-            Some(p) if ptyro_agents::profile::exists(&config, &p) => vec![p],
-            Some(p) => {
-                return Err(Error::invalid(format!(
-                    "no profile named {p:?} ({})",
-                    ptyro_agents::profile::names(&config).join(", ")
-                )));
-            }
+        let profiles = match self.check_profile(profile)? {
+            Some(p) => vec![p],
             None => ptyro_agents::profile::names(&config),
         };
         let since_ms = match since.as_deref().filter(|s| !s.trim().is_empty()) {

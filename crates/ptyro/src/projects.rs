@@ -1011,7 +1011,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             for e in &entries {
                 println!(
                     "{:<6} {:<28} {:<8} {:<24} {}",
-                    ptyro_core::model::short_suffix(&e.id, &ids),
+                    ptyro_core::lookup::handle(&e.id, ids.iter().copied()),
                     truncate(&format!("{}/{}", e.project_slug, e.name), 28),
                     age(e.archived_ms),
                     truncate(&e.branch, 24),

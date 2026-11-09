@@ -371,7 +371,7 @@ impl Daemon {
         let ids: Vec<&str> = list.iter().map(|e| e.id.as_str()).collect();
         let label = |i: &usize| {
             let e = &list[*i];
-            let handle = ptyro_core::model::short_suffix(&e.id, &ids);
+            let handle = lookup::handle(&e.id, ids.iter().copied());
             format!("{handle} ({}/{}, archived {} ago)", e.project_slug, e.name, ago(e.archived_ms))
         };
         let key = lookup::key(addr);
@@ -394,7 +394,7 @@ impl Daemon {
         }
         let by_id = (0..list.len()).filter(|i| lookup::id_matches(&list[*i].id, &key)).collect();
         lookup::one("archived worktree", addr, by_id, label)?
-            .ok_or_else(|| lookup::not_found("archived worktree", addr))
+            .ok_or_else(|| lookup::not_found("archived worktree", addr, ids.iter().copied()))
     }
 
     pub(crate) async fn list_archives(&self, project: Option<&str>) -> Result<Reply, Error> {
@@ -650,6 +650,30 @@ fn restore_ignored(from: &std::path::Path, path: &std::path::Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An archive from before ids gets one when the list is read: the same each time, and
+    /// another for another archive (SPEC §2.3).
+    #[tokio::test]
+    async fn an_older_archive_gets_a_stable_id_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = crate::daemon::test_daemon(dir.path(), Default::default());
+        let old = |snap: &str| {
+            serde_json::json!({ "project": "p1", "project_slug": "app", "name": "feat",
+                "branch": "feat", "snapshot": snap, "path": "/x", "archived_ms": 1 })
+        };
+        let list =
+            serde_json::json!([old("refs/ptyro/archive/feat"), old("refs/ptyro/archive/feat-2")]);
+        d.views.locked().insert(ARCHIVES.into(), list);
+        let first = d.archives().await.unwrap();
+        let again = d.archives().await.unwrap();
+        assert!(first.iter().all(|e| e.id.len() >= 4), "{first:?}");
+        assert_eq!(first[0].id, again[0].id, "stable across reads");
+        assert_eq!(first[1].id, again[1].id);
+        assert_ne!(first[0].id, first[1].id, "one of its own");
+        let e = d.archive_index(&first, "feat").unwrap_err();
+        assert_eq!(e.code, ptyro_core::ErrorCode::Ambiguous, "{e:?}");
+        assert_eq!(d.archive_index(&first, &first[1].id).unwrap(), 1);
+    }
 
     #[test]
     fn purging_takes_only_archives_older_than_the_setting() {

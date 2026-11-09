@@ -88,7 +88,7 @@ fn same_name(a: &str, b: &str) -> bool {
 /// The id of the device `addr` names (SPEC §2.3): its name, whatever its case, else its id or
 /// the end of it (at least 4 characters).
 fn find_device(devices: &[DeviceRecord], addr: &str) -> Result<String, Error> {
-    let label = |d: &&DeviceRecord| format!("{} ({})", d.name, d.id);
+    let label = |d: &&DeviceRecord| format!("{} ({})", d.id, d.name);
     let named: Vec<&DeviceRecord> = devices.iter().filter(|d| same_name(&d.name, addr)).collect();
     if named.len() > 1 {
         let which: Vec<String> = named.iter().map(label).collect();
@@ -685,7 +685,7 @@ mod tests {
         assert_eq!(find_device(&list, "A1B2C3D4E5F6").unwrap(), "a1b2c3d4e5f6");
         let e = find_device(&list, "e5f6").unwrap_err();
         assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
-        assert!(e.message.contains("Phone (a1b2c3d4e5f6)") && e.message.contains("laptop"));
+        assert!(e.message.contains("a1b2c3d4e5f6 (Phone)") && e.message.contains("(laptop)"));
         let e = find_device(&list, "tablet").unwrap_err();
         assert_eq!(e.code, ErrorCode::NotFound);
         assert_eq!(e.message, r#"no device matches "tablet"; the devices are Phone and laptop"#);

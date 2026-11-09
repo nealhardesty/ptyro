@@ -177,9 +177,21 @@ impl Daemon {
             .iter()
             .filter(|(id, _, _)| lookup::id_matches(id.trim_start_matches("r-"), bare))
             .collect();
-        lookup::one("change set", addr, by_id, |(id, c, _)| format!("{} ({id})", c.name))?
+        lookup::one("change set", addr, by_id, |(id, c, _)| format!("{id} ({})", c.name))?
             .map(|(id, _, _)| (*id).clone())
-            .ok_or_else(|| lookup::not_found("change set", addr))
+            .ok_or_else(|| {
+                lookup::not_found("change set", addr, sets.iter().map(|(id, _, _)| id.as_str()))
+            })
+    }
+
+    /// Whether a live set has this name (not an id: a new name is checked with this).
+    pub(crate) fn set_named(&self, name: &str) -> bool {
+        self.runs.locked().values().any(|e| {
+            e.state
+                .changeset
+                .as_ref()
+                .is_some_and(|c| c.phase != Phase::Removed && lookup::same(&c.name, name))
+        })
     }
 
     pub(crate) fn set_state(&self, run: &str) -> Result<ChangeSet, Error> {
@@ -473,9 +485,7 @@ impl Daemon {
         if name.is_empty() {
             return Err(Error::invalid("a change set needs a name"));
         }
-        if let Ok(r) = self.find_set(&name)
-            && self.set_state(&r).is_ok_and(|c| c.phase != Phase::Removed)
-        {
+        if self.set_named(&name) {
             return Err(Error::conflict(format!(
                 "change set {name} exists (ptyro cs show {name})"
             )));

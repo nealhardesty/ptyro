@@ -1267,11 +1267,9 @@ impl Daemon {
                 }
                 continue;
             }
-            let ws = if self.find_workspace(&k.workspace).is_ok() {
-                k.workspace.clone()
-            } else {
-                MAIN_WORKSPACE.into()
-            };
+            let ws = self
+                .find_workspace(&k.workspace)
+                .map_or_else(|_| MAIN_WORKSPACE.into(), |w| w.name);
             let Some((slot, r)) = number(self, &ws, &k) else { continue };
             let cwd =
                 if k.cwd.is_dir() { k.cwd.clone() } else { ptyro_core::config::expand_home("~") };

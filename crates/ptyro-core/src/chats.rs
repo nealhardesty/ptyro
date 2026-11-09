@@ -459,17 +459,6 @@ pub fn new_id() -> String {
     crate::SessionId::new().full()
 }
 
-/// The shortest suffix of `id` (at least 4 characters) that no other id shares.
-pub fn handle<'a>(id: &str, all: impl IntoIterator<Item = &'a str> + Clone) -> String {
-    for len in crate::ids::MIN_HANDLE..id.len() {
-        let suffix = &id[id.len() - len..];
-        if !all.clone().into_iter().any(|o| o != id && o.ends_with(suffix)) {
-            return suffix.to_owned();
-        }
-    }
-    id.to_owned()
-}
-
 /// The first `n` bytes of `s`, cut at a character boundary, with `…` when cut.
 pub fn clip(s: &str, n: usize) -> String {
     if s.len() <= n {
@@ -721,8 +710,8 @@ mod tests {
         assert_eq!(first_line_title("\n  hello there\nmore"), "hello there");
         assert!(first_line_title(&"a".repeat(80)).ends_with('…'));
         let ids = ["01aaaa7f3k", "01bbbb7f3k", "01cccc1234"];
-        assert_eq!(handle(ids[0], ids), "a7f3k");
-        assert_eq!(handle(ids[2], ids), "1234");
+        assert_eq!(crate::lookup::handle(ids[0], ids), "a7f3k");
+        assert_eq!(crate::lookup::handle(ids[2], ids), "1234");
         assert_eq!(kind(&ChatBody::User { text: String::new() }), "user");
         assert_eq!(clip("héllo", 2), "h…");
     }

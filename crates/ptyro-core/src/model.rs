@@ -13,17 +13,6 @@ pub fn new_id() -> String {
     ulid::Ulid::generate().to_string().to_ascii_lowercase()
 }
 
-/// Shortest suffix of `id` (≥ 4 characters) that no other id in `all` shares.
-pub fn short_suffix(id: &str, all: &[&str]) -> String {
-    for len in crate::ids::MIN_HANDLE..id.len() {
-        let suffix = &id[id.len() - len..];
-        if !all.iter().any(|o| *o != id && o.ends_with(suffix)) {
-            return suffix.to_owned();
-        }
-    }
-    id.to_owned()
-}
-
 /// `My Repo.git` → `my-repo`: lowercase `[a-z0-9-]`, at most 40 characters.
 pub fn slugify(s: &str) -> String {
     let s = s.strip_suffix(".git").unwrap_or(s);
@@ -916,15 +905,5 @@ mod tests {
         let json = serde_json::to_value(RepoStatus { pushed: true, ..old }).unwrap();
         assert_eq!(json["pushed"], true);
         assert!(json.get("unpushed").is_none());
-    }
-
-    #[test]
-    fn suffixes_are_unique() {
-        let ids: Vec<String> = (0..50).map(|_| new_id()).collect();
-        let all: Vec<&str> = ids.iter().map(String::as_str).collect();
-        for id in &ids {
-            let s = short_suffix(id, &all);
-            assert_eq!(all.iter().filter(|o| o.ends_with(&s)).count(), 1);
-        }
     }
 }

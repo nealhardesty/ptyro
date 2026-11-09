@@ -574,7 +574,10 @@ impl Daemon {
         if let Some(found) = self.resolve_slot(addr) {
             return found;
         }
-        let missing = || lookup::not_found("session", addr);
+        let missing = || {
+            let ids: Vec<String> = sessions.iter().map(|s| s.id.full()).collect();
+            lookup::not_found("session", addr, ids.iter().map(String::as_str))
+        };
         match addr {
             "@last" => return sessions.last().cloned().ok_or_else(missing),
             "@focused" => {
@@ -675,7 +678,7 @@ impl Daemon {
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .name
                             .clone();
-                        glob(p, &name)
+                        glob(&lookup::key(p), &name.to_lowercase())
                     })
                     .map(|s| s.id)
                     .collect(),

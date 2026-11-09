@@ -175,6 +175,11 @@ pub(crate) fn credential_file(agent: &str) -> &'static str {
     }
 }
 
+/// No profile is named `name`: which ones there are, as the daemon says it (SPEC §2.3).
+pub(crate) fn missing(name: &str, known: impl IntoIterator<Item = String>) -> Error {
+    ptyro_core::lookup::not_found_among("profile", name, &known.into_iter().collect::<Vec<_>>())
+}
+
 /// A profile the user names: lowercase, as names are (SPEC §2.3).
 fn addr(s: &str) -> Result<String, String> {
     Ok(ptyro_core::lookup::key(s))
@@ -210,7 +215,7 @@ pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
             let p = all
                 .iter()
                 .find(|p| p.name == name)
-                .ok_or_else(|| Error::missing("profile", &name))?;
+                .ok_or_else(|| missing(&name, all.iter().map(|p| p.name.clone())))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(p).unwrap_or_default());
                 return Ok(0);
@@ -508,7 +513,7 @@ pub(crate) async fn login(
     })?;
     let config = load(ctx)?;
     if !profile::exists(&config, name) {
-        return Err(Error::missing("profile", name));
+        return Err(missing(name, profile::names(&config)));
     }
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into());
     let c = ctx.connect(true).await?;
@@ -531,7 +536,7 @@ pub(crate) async fn login(
 pub(crate) fn sync(ctx: &Ctx, name: &str) -> Result<Vec<String>, Error> {
     let config = load(ctx)?;
     if !config.profiles.contains_key(name) {
-        return Err(Error::missing("profile", name));
+        return Err(missing(name, config.profiles.keys().cloned()));
     }
     let out = profile::sync_shares(&config, name, &ctx.paths.data.join("profiles"));
     if out.is_empty() {

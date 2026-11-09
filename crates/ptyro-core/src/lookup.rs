@@ -15,6 +15,18 @@ pub const MIN_SUFFIX: usize = crate::ids::MIN_HANDLE;
 /// How many candidates an error lists before it says how many more there are.
 const LISTED: usize = 5;
 
+/// The handle of `id`: its shortest suffix, at least [`MIN_SUFFIX`] characters, that no other id
+/// in `all` ends with. The one way handles are made, so what is shown is what resolves.
+pub fn handle<'a>(id: &str, all: impl IntoIterator<Item = &'a str> + Clone) -> String {
+    for len in MIN_SUFFIX..id.len() {
+        let suffix = &id[id.len() - len..];
+        if !all.clone().into_iter().any(|o| o != id && o.ends_with(suffix)) {
+            return suffix.to_owned();
+        }
+    }
+    id.to_owned()
+}
+
 /// What the user typed, ready to compare with names and ids: trimmed and lowercase.
 pub fn key(addr: &str) -> String {
     addr.trim().to_lowercase()
@@ -63,14 +75,23 @@ pub fn ambiguous_name(kind: &str, name: &str, which: &[String]) -> Error {
     )
 }
 
-/// Nothing matches `addr`. When it is too short to be a handle, the message says so.
-pub fn not_found(kind: &str, addr: &str) -> Error {
+/// The prefixes that say "this is a handle" (`s:7f3k`, `r-k3x9`).
+const PREFIXES: &[&str] = &["s:", "w:", "p:", "c:", "r-"];
+
+/// Nothing matches `addr`. When it was meant as a handle but is too short (it has a handle's
+/// prefix, or one of `ids` really ends with it), the message says why; a short name typed by
+/// someone who meant a name gets no such hint.
+pub fn not_found<'a>(kind: &str, addr: &str, ids: impl IntoIterator<Item = &'a str>) -> Error {
     let addr = addr.trim();
-    let handle = addr.split_once(':').map_or(addr, |(_, h)| h);
-    if !handle.is_empty()
+    let k = key(addr);
+    let (handle, prefixed) = match PREFIXES.iter().find_map(|p| k.strip_prefix(p)) {
+        Some(h) => (h, true),
+        None => (k.as_str(), false),
+    };
+    let short = !handle.is_empty()
         && handle.len() < MIN_SUFFIX
-        && handle.chars().all(|c| c.is_ascii_alphanumeric())
-    {
+        && handle.chars().all(|c| c.is_ascii_alphanumeric());
+    if short && (prefixed || ids.into_iter().any(|id| id.ends_with(handle))) {
         return Error::new(
             ErrorCode::NotFound,
             format!(
@@ -120,6 +141,18 @@ mod tests {
     }
 
     #[test]
+    fn handles_are_the_shortest_unique_suffix_of_four_or_more() {
+        let ids: Vec<String> = (0..50).map(|_| crate::model::new_id()).collect();
+        for id in &ids {
+            let h = handle(id, ids.iter().map(String::as_str));
+            assert!(h.len() >= MIN_SUFFIX && id.ends_with(&h));
+            assert_eq!(ids.iter().filter(|o| o.ends_with(&h)).count(), 1, "{h}");
+        }
+        assert_eq!(handle("01jb7f3k", ["01jb7f3k", "01jbaf3k"]), "7f3k");
+        assert_eq!(handle("ab", ["ab"]), "ab", "a short id is its own handle");
+    }
+
+    #[test]
     fn an_id_needs_four_characters_or_all_of_it() {
         let id = "01jb7f3kq9";
         assert!(id_matches(id, "01jb7f3kq9"));
@@ -160,14 +193,18 @@ mod tests {
 
     #[test]
     fn not_found_names_the_kind_and_why_a_short_one_fails() {
-        let e = not_found("run", "zzzz9");
+        let none: [&str; 0] = [];
+        let e = not_found("run", "zzzz9", none);
         assert_eq!(e.code, ErrorCode::NotFound);
         assert_eq!(e.message, r#"no run matches "zzzz9""#);
-        let e = not_found("session", "ab");
+        // Short: the hint only when it was meant as a handle.
+        let e = not_found("session", "ab", ["01jb7f3kab"]);
         assert!(e.message.contains("at least 4 characters"), "{}", e.message);
-        let e = not_found("session", "s:ab");
+        let e = not_found("session", "S:ab", none);
         assert!(e.message.contains("at least 4 characters"), "{}", e.message);
-        assert!(!not_found("session", "@last").message.contains("characters"));
+        let e = not_found("project", "web", ["01jb7f3kab"]);
+        assert_eq!(e.message, r#"no project matches "web""#, "a name, not a handle");
+        assert!(!not_found("session", "@last", ["01jb7f3kab"]).message.contains("characters"));
         let e = not_found_among("device", "phone", &s(&["laptop", "tablet"]));
         assert_eq!(e.message, r#"no device matches "phone"; the devices are laptop and tablet"#);
         let e = not_found_among("device", "phone", &[]);

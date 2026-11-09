@@ -118,9 +118,9 @@ impl Daemon {
         {
             return Ok(None);
         }
-        let workspace = match workspace {
-            Some(w) if self.find_workspace(w).is_ok() => w.to_owned(),
-            _ => self.last_workspace().await,
+        let workspace = match workspace.and_then(|w| self.find_workspace(w).ok()) {
+            Some(w) => w.name,
+            None => self.last_workspace().await,
         };
         match self.project_add(root, Some(workspace.clone())).await {
             Ok(Reply::Project { info, notes }) => {

@@ -240,7 +240,9 @@ uses it, so the rules can't drift apart.
 3. **Ambiguity** is always `ambiguous` (CLI exit 4), and the message lists the candidates as
    they can be addressed, at most 5 and then "and N more": `2 sessions are named "build": say
    which, app/build or lib/build`; `2 runs match "k3x9": say which, r-ak3x9 (fanout) or …`.
-   Several archived worktrees of one name are listed with their handles and ages.
+   Several archived worktrees of one name are listed with their handles and ages. Each
+   candidate reads "address (description)": `r-ef9999 (login)`, `a1b2c3d4e5f6 (Phone)`,
+   `c:7f3k (Fix the build)`, `7f3k (myrepo/feat, archived 3d ago)`.
 4. **Not found names the kind**: `no run matches "zz9q"`, `no device matches "phone"; the
    devices are laptop and tablet`. Where the set is small (devices, workspaces, profiles,
    machines) the message lists what there is.
@@ -2576,10 +2578,11 @@ branches, no sessions for N days.
   keep makes the archive refuse and name it, so nothing is lost silently. The archive list is
   kv `archive:list` (`ArchiveEntry`, newest first; read and written under a lock, errors
   propagated, the entry written after the removal; `WorktreeArchives`, `ptyro wt archives`).
-- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
-  its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the branch
-  has moved since) puts the snapshot back with the changes
-  uncommitted again, untracked files untracked. The entry leaves the list.
+- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name|handle`): the branch checked
+  out at its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the
+  branch has moved since) puts the snapshot back with the changes uncommitted again, untracked
+  files untracked. The entry leaves the list. Several archives of one name are listed (handle
+  and age), never picked between; the handle says which (§2.3, owner, 2026-11-09).
 - **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
   worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
   or 1 min if it never starts); what's left is committed as the worktree's profile with its
@@ -2592,7 +2595,7 @@ branches, no sessions for N days.
   a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
   could both snapshot it and both list it).
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
-- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name…`, asks
+- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name|handle…`, asks
   unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
   couldn't be restored), then the snapshot ref and its `archive-extras/` copies go, and its branch
   by `wt rm`'s rule (deleted when merged into the base, kept in the archive as `ArchiveEntry::base`,
@@ -7833,7 +7836,9 @@ shown in every workspace, including those of linked machines (§16.4b).
   last resort (§2.3), by a title substring that matches one chat. A chat of another machine is `laptop2:c:7f3k`, as sessions are
   (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
   alike).
-- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search hits.
+- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search
+  hits. The web's citation links look for 6 or more characters after the slash: that only finds
+  citations in prose (fewer would catch ordinary words); the daemon resolves the link.
 
 ### 22.4 Storage: `chat.db`
 

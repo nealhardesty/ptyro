@@ -460,17 +460,17 @@ impl Daemon {
             let nodes = self.rec_branch(chat, None).await?;
             let found = nodes.into_iter().filter(|n| lookup::id_matches(&n.id, &key)).collect();
             return lookup::one("message", addr, found, |n: &ChatNode| n.id.clone())?
-                .ok_or_else(|| lookup::not_found("message", addr));
+                .ok_or_else(|| lookup::not_found("message", addr, []));
         }
         let db = self.chat_db()?;
         let ids = db.find_node(chat.to_owned(), key).await.map_err(store_err)?;
         let Some(id) = lookup::one("message", addr, ids, Clone::clone)? else {
-            return Err(lookup::not_found("message", addr));
+            return Err(lookup::not_found("message", addr, []));
         };
         db.node(chat.to_owned(), id)
             .await
             .map_err(store_err)?
-            .ok_or_else(|| lookup::not_found("message", addr))
+            .ok_or_else(|| lookup::not_found("message", addr, []))
     }
 
     /// Ends the chat when it is incognito: its record goes with its agent (SPEC §22.9).
@@ -603,7 +603,11 @@ impl Daemon {
             }
         };
         let label = |c: &&ChatInfo| {
-            format!("c:{} ({})", chats::handle(&c.id, all.iter().map(|x| x.id.as_str())), c.label())
+            format!(
+                "c:{} ({})",
+                lookup::handle(&c.id, all.iter().map(|x| x.id.as_str())),
+                c.label()
+            )
         };
         match lookup::one("chat", addr, found, label)? {
             Some(one) => Ok(self.chat_info(one.clone(), &all)),
@@ -611,13 +615,13 @@ impl Daemon {
             None if a == "@unread" => {
                 Err(Error::new(ErrorCode::NotFound, "no chat has an answer you haven't read"))
             }
-            None => Err(lookup::not_found("chat", addr)),
+            None => Err(lookup::not_found("chat", addr, all.iter().map(|c| c.id.as_str()))),
         }
     }
 
     /// A row as clients see it: its handle, its workspace's name, its engine's status.
     fn chat_info(&self, mut c: ChatInfo, all: &[ChatInfo]) -> ChatInfo {
-        c.handle = chats::handle(&c.id, all.iter().map(|x| x.id.as_str()));
+        c.handle = lookup::handle(&c.id, all.iter().map(|x| x.id.as_str()));
         c.workspace = self.workspace_name(&c.workspace);
         let config = self.config();
         let preset = config.chat.preset(&c.tools).unwrap_or_default();
@@ -637,7 +641,7 @@ impl Daemon {
         let c = self.rec_get(id).await?.ok_or_else(|| Error::missing("chat", id))?;
         let ids = self.rec_ids().await;
         let mut c = self.chat_info(c, &[]);
-        c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+        c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
         Ok(c)
     }
 
@@ -757,7 +761,7 @@ impl Daemon {
                     .filter(|c| scope.sees(c) && scope.itself.as_deref() != Some(c.id.as_str()))
                     .map(|c| {
                         let mut c = self.chat_info(c, &[]);
-                        c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+                        c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
                         c
                     })
                     .collect();
@@ -855,7 +859,7 @@ impl Daemon {
                     .into_iter()
                     .map(|c| {
                         let mut c = self.chat_info(c, &[]);
-                        c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+                        c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
                         c
                     })
                     .collect();
@@ -1500,7 +1504,7 @@ impl Daemon {
             .filter(|(h, _)| scope.is_none_or(|s| s.itself.as_deref() != Some(h.chat.id.as_str())))
             .map(|(h, how)| {
                 let mut c = self.chat_info(h.chat, &[]);
-                c.handle = chats::handle(&c.id, ids.iter().map(String::as_str));
+                c.handle = lookup::handle(&c.id, ids.iter().map(String::as_str));
                 ChatHit {
                     chat: c,
                     node: h.node,
@@ -1611,7 +1615,7 @@ impl Daemon {
                 ErrorCode::Busy,
                 format!(
                     "c:{} is comparing answers: wait for them, or stop it first",
-                    chats::handle(&info.id, [info.id.as_str()])
+                    lookup::handle(&info.id, [info.id.as_str()])
                 ),
             ));
         }
@@ -1622,14 +1626,14 @@ impl Daemon {
                 ErrorCode::Busy,
                 format!(
                     "c:{} is still answering: wait for its answer, or stop it first",
-                    chats::handle(&info.id, [info.id.as_str()])
+                    lookup::handle(&info.id, [info.id.as_str()])
                 ),
             )),
             _ if given => Err(Error::new(
                 ErrorCode::Busy,
                 format!(
                     "c:{} is still answering: wait for its answer, or stop it first",
-                    chats::handle(&info.id, [info.id.as_str()])
+                    lookup::handle(&info.id, [info.id.as_str()])
                 ),
             )),
             Some(AgentStatus::Blocked) => Err(Error::new(
@@ -2155,7 +2159,7 @@ impl Daemon {
         };
         let (args, params) =
             preset_launch(&protocol, &preset, &dir, mcp.unwrap_or_default(), &readable, &extra);
-        let handle = chats::handle(&info.id, self.rec_ids().await.iter().map(String::as_str));
+        let handle = lookup::handle(&info.id, self.rec_ids().await.iter().map(String::as_str));
         let ws = self.workspace_name(&info.workspace);
         let session = self
             .launch(Launch {

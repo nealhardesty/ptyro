@@ -73,9 +73,9 @@ impl Daemon {
             return Ok(p.clone());
         }
         let by_id = reg.projects.iter().filter(|p| lookup::id_matches(&p.id, key)).collect();
-        lookup::one("project", addr, by_id, |p| p.slug.clone())?
-            .cloned()
-            .ok_or_else(|| lookup::not_found("project", addr))
+        lookup::one("project", addr, by_id, |p| p.slug.clone())?.cloned().ok_or_else(|| {
+            lookup::not_found("project", addr, reg.projects.iter().map(|p| p.id.as_str()))
+        })
     }
 
     /// A worktree by `project/name` (`myrepo/@root`), unique name, id (or a ≥4-character id
@@ -113,9 +113,9 @@ impl Daemon {
             }
         }
         let by_id = reg.worktrees.iter().filter(|w| lookup::id_matches(&w.id, key)).collect();
-        lookup::one("worktree", addr, by_id, |w| w.qualified())?
-            .cloned()
-            .ok_or_else(|| lookup::not_found("worktree", addr))
+        lookup::one("worktree", addr, by_id, |w| w.qualified())?.cloned().ok_or_else(|| {
+            lookup::not_found("worktree", addr, reg.worktrees.iter().map(|w| w.id.as_str()))
+        })
     }
 
     /// A workspace by name, id, or a ≥4-character id suffix (SPEC §2.3).
@@ -492,12 +492,7 @@ impl Daemon {
 
     fn project_pin(&self, addr: &str, pin: Option<String>) -> Result<Reply, Error> {
         let mut p = self.find_project(addr)?;
-        if let Some(name) = &pin
-            && !profile::exists(&self.config(), name)
-        {
-            return Err(Error::invalid(format!("no profile named {name:?}")));
-        }
-        p.pin = pin;
+        p.pin = self.check_profile(pin)?;
         self.put_project(p.clone());
         Ok(Reply::Project { info: p, notes: Vec::new() })
     }
@@ -629,7 +624,8 @@ impl Daemon {
         Ok(Reply::Workspace { info: w })
     }
 
-    fn check_profile(&self, p: Option<String>) -> Result<Option<String>, Error> {
+    /// A profile the user named (SPEC §2.3): lowercase, and one that exists.
+    pub(crate) fn check_profile(&self, p: Option<String>) -> Result<Option<String>, Error> {
         let config = self.config();
         match p.map(|n| lookup::key(&n)) {
             Some(n) if !profile::exists(&config, &n) => {
@@ -828,7 +824,10 @@ impl Daemon {
                 Ok(Reply::Workspace { info: w })
             }
             Request::ProfileList => Ok(self.profile_list()),
-            Request::ProfileEnv { name } => self.profile_env(&lookup::key(&name)),
+            Request::ProfileEnv { name } => {
+                let name = self.check_profile(Some(name))?.unwrap_or_default();
+                self.profile_env(&name)
+            }
             Request::ProfileRename { old, new } => {
                 self.profile_rename(&lookup::key(&old), &new).await
             }

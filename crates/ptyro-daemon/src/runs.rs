@@ -234,7 +234,7 @@ impl Daemon {
             .collect();
         lookup::one("run", addr, m, |e| format!("{} ({})", e.state.id, e.state.name))?
             .map(|e| e.state.id.clone())
-            .ok_or_else(|| lookup::not_found("run", addr))
+            .ok_or_else(|| lookup::not_found("run", addr, runs.keys().map(String::as_str)))
     }
 
     // ── creating runs ──────────────────────────────────────────────────────
@@ -2593,6 +2593,8 @@ mod tests {
 
         assert_eq!(d.find_set("LOGIN").unwrap(), "r-ef9999");
         assert_eq!(d.find_set("9999").unwrap(), "r-ef9999");
+        // A new name is checked against names only: `9999` is free though `r-ef9999` exists.
+        assert!(!d.set_named("9999") && d.set_named("Login"));
         let e = d.find_set("nope").unwrap_err();
         assert_eq!(
             (e.code, e.message.as_str()),

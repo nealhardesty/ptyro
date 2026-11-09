@@ -1238,7 +1238,7 @@ pub async fn targets(client: &Client, addrs: &[String]) -> Result<Vec<SessionInf
             return Err(Error::internal("unexpected reply"));
         };
         if sessions.is_empty() {
-            return Err(ptyro_core::lookup::not_found("session", addr));
+            return Err(ptyro_core::lookup::not_found("session", addr, []));
         }
         for s in sessions {
             if !out.iter().any(|o| o.id == s.id) {

@@ -1222,7 +1222,7 @@ impl Daemon {
             Request::MachineHide { name, workspace, hidden } => {
                 let name = self.machine_named(&name)?;
                 let ws = split_machine(&workspace)
-                    .filter(|(m, _)| *m == name)
+                    .filter(|(m, _)| lookup::same(m, &name))
                     .map_or(workspace.clone(), |(_, w)| w.to_owned());
                 let (info, mirror) = {
                     let mut links = self.links.locked();
