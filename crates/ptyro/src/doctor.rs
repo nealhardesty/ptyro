@@ -33,6 +33,10 @@ pub struct Check {
     pub name: String,
     pub level: Level,
     pub text: String,
+    /// What the finding is about, for a client to act on without reading the words (BOOT5: an
+    /// agent out of date, as `updates::Outdated`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Default)]
@@ -40,7 +44,19 @@ pub(crate) struct Report(pub Vec<Check>);
 
 impl Report {
     fn add(&mut self, section: &str, name: &str, level: Level, text: impl Into<String>) {
-        self.0.push(Check { section: section.into(), name: name.into(), level, text: text.into() });
+        self.0.push(Check {
+            section: section.into(),
+            name: name.into(),
+            level,
+            text: text.into(),
+            data: None,
+        });
+    }
+
+    fn add_data(&mut self, data: serde_json::Value) {
+        if let Some(last) = self.0.last_mut() {
+            last.data = Some(data);
+        }
     }
 }
 
@@ -83,14 +99,17 @@ fn first_version(text: &str) -> Option<String> {
 }
 
 pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
-    let r = collect(ctx, quick, true).await;
+    // `doctor` looks for newer versions afresh (BOOT5); `--quick` (the health badge) reads what
+    // was remembered.
+    let r = collect(ctx, quick, true, !quick).await;
     print(&r, json);
     Ok(exit_code(&r))
 }
 
 /// Every check, in order. `terminal`: also the terminal this process runs in (a web page has
-/// none worth checking).
-pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Report {
+/// none worth checking). `fresh`: look up the agents' newest versions now (the network), not
+/// what the daily look remembered.
+pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: bool) -> Report {
     let config_path = Config::path(&ctx.paths);
     let mut r = Report::default();
     let config = match Config::load(&config_path) {
@@ -164,8 +183,163 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool) -> Repor
     }
     git(&mut r).await;
     agents(&config, &mut r).await;
+    updates(ctx, &config, fresh, &mut r).await;
     profiles(ctx, &config, None, &mut r).await;
     r
+}
+
+/// Newer versions of the agents (BOOT5, SPEC §24.7): each one out of date, with its one-step
+/// update and the command it runs (the TUI's health badge and the web's Health page show these
+/// as they are). `fresh` looks them up now; otherwise the daily look's, with each installed
+/// version asked again (an agent that updated itself isn't offered).
+async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
+    use ptyro_agents::updates;
+    const S: &str = "updates";
+    let cfg = config.updates.clone();
+    if cfg.check == ptyro_core::config::UpdateCheck::Off {
+        r.add(
+            S,
+            "check",
+            Level::Note,
+            "off (updates.check): nothing is looked up; `ptyro update --check` looks when you ask",
+        );
+        return;
+    }
+    let (paths, state) = (ctx.paths.clone(), ctx.paths.state.clone());
+    let v = tokio::task::spawn_blocking(move || {
+        let host = ptyro_agents::setup::host(&paths);
+        updates::look_beside(&*host, &state, updates::now(), fresh).0
+    })
+    .await
+    .unwrap_or_default();
+    // A name the ignore list holds that isn't an agent (a typo) skips nothing: say so.
+    for i in &cfg.ignore {
+        let name = i.split_once('@').map_or(i.as_str(), |(n, _)| n);
+        let agent = ptyro_agents::setup::resolve(name)
+            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent)
+            || name.trim().eq_ignore_ascii_case(ptyro_agents::own::ID);
+        if !agent {
+            r.add(
+                S,
+                "ignore",
+                Level::Warn,
+                format!(
+                    "updates.ignore holds {i:?}, which isn't something ptyro updates (claude, codex, agy, opencode, gemini, ptyro): it skips nothing"
+                ),
+            );
+        }
+    }
+    // Installed another way (BOOT7): the move to the recommended installer, offered as a note
+    // (a normal state, so it never counts as a warning), unless kept; one out of date says it
+    // with its update below.
+    for k in &cfg.keep_installer {
+        let agent = ptyro_agents::setup::resolve(k)
+            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent);
+        if !agent {
+            r.add(
+                S,
+                "keep_installer",
+                Level::Warn,
+                format!(
+                    "updates.keep_installer holds {k:?}, which isn't an agent (claude, codex, agy, opencode, gemini): it keeps nothing"
+                ),
+            );
+        }
+    }
+    for m in v.movable.iter().filter(|m| !m.kept(&cfg)) {
+        if v.outdated.iter().any(|o| o.id == m.id && !updates::ignored(&cfg.ignore, o)) {
+            continue;
+        }
+        r.add(S, &m.id, Level::Note, m.finding());
+        r.add_data(serde_json::json!({ "move": m }));
+    }
+    let keep = updates::kept(&cfg);
+    for u in v.unmovable.iter().filter(|u| !keep.contains(&u.id)) {
+        if v.outdated.iter().any(|o| o.id == u.id && !updates::ignored(&cfg.ignore, o)) {
+            continue;
+        }
+        r.add(
+            S,
+            &u.id,
+            Level::Note,
+            format!(
+                "{} is installed with {}; the move to the recommended installer isn't offered: {}",
+                u.name,
+                u.via.words(),
+                u.why
+            ),
+        );
+    }
+    if v.checked == 0 {
+        r.add(
+            S,
+            "agents",
+            Level::Note,
+            "not looked up yet: the daemon looks once a day (`ptyro update --check` looks now)",
+        );
+        return;
+    }
+    let mut any = false;
+    for o in &v.outdated {
+        if updates::ignored(&cfg.ignore, o) {
+            r.add(S, &o.id, Level::Note, format!("{}: skipped (updates.ignore)", o.line()));
+        } else {
+            any = true;
+            // Offered the move too unless `updates.keep_installer` keeps it (BOOT7).
+            let mut o = o.clone();
+            if updates::kept(&cfg).contains(&o.id) {
+                o.move_to = None;
+            }
+            r.add(S, &o.id, Level::Warn, o.finding());
+            let mut data = serde_json::to_value(&o).unwrap_or_default();
+            if o.move_to.is_some()
+                && let Some(m) = v.movable.iter().find(|m| m.id == o.id)
+            {
+                data["move"] = serde_json::to_value(m).unwrap_or_default();
+            }
+            r.add_data(data);
+        }
+    }
+    let all_failed = !v.failed.is_empty() && v.failed.len() == updates::looked_up().len();
+    if all_failed {
+        r.add(
+            S,
+            "lookup",
+            Level::Note,
+            "couldn't look for newer versions (offline?): ptyro looks again tomorrow",
+        );
+    } else if !v.failed.is_empty() {
+        let names: Vec<String> = v
+            .failed
+            .keys()
+            .map(|id| ptyro_agents::catalog::item(id).map_or(id.clone(), |i| i.name.clone()))
+            .collect();
+        r.add(
+            S,
+            "lookup",
+            Level::Note,
+            format!("couldn't look up {}'s newest version: tried again tomorrow", names.join(", ")),
+        );
+    }
+    if !any && !all_failed {
+        r.add(
+            S,
+            "agents",
+            Level::Ok,
+            format!("up to date (looked {})", ago(updates::now().saturating_sub(v.checked))),
+        );
+    }
+}
+
+/// `5 minutes ago`, `3 hours ago`.
+fn ago(ms: u64) -> String {
+    let m = ms / 60_000;
+    match m {
+        0 => "just now".into(),
+        1..=59 => format!("{m} minute(s) ago"),
+        60..=1439 => format!("{} hour(s) ago", m / 60),
+        _ => format!("{} day(s) ago", m / 1440),
+    }
 }
 
 /// Inside WSL (WIN2, SPEC §3.4): which one, whether Windows programs can be started from it,
@@ -1316,13 +1490,27 @@ pub(crate) async fn git(r: &mut Report) {
                 },
             );
         }
-        None => {
-            r.add("git", "version", Level::Problem, "git not found: projects and worktrees need it")
-        }
+        None => r.add(
+            "git",
+            "version",
+            Level::Problem,
+            format!("git not found: projects and worktrees need it{}", fix_for("git")),
+        ),
     }
     if which("gh").is_none() {
-        r.add("git", "gh", Level::Note, "gh not found: `wt new --pr` and PR features need it");
+        r.add(
+            "git",
+            "gh",
+            Level::Note,
+            format!("gh not found: pull requests (`wt new --pr`) need it{}", fix_for("gh")),
+        );
     }
+}
+
+/// The fix for a tool setup installs here (BOOT9), as "; `ptyro install gh` installs it"; else
+/// nothing.
+fn fix_for(program: &str) -> String {
+    ptyro_agents::locate::install_fix(program).map(|f| format!("; {f}")).unwrap_or_default()
 }
 
 pub(crate) async fn agents(config: &Config, r: &mut Report) {
@@ -1334,14 +1522,14 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
         let configured = config.agents.contains_key(&agent);
         let Some(found) = ptyro_agents::locate::find(&argv[0], &path_var) else {
             if configured {
-                let fix = ptyro_agents::locate::install_hint(&argv[0])
-                    .map(|h| format!(": `{h}` installs it"))
+                let fix = ptyro_agents::locate::install_fix(&argv[0])
+                    .map(|f| format!(": {f}"))
                     .unwrap_or_default();
                 r.add(S, &agent, Level::Problem, format!("{} not found{fix}", argv[0]));
             }
             continue;
         };
-        any |= agent != "antigravity";
+        any = true;
         let path = PathBuf::from(found.describe());
         let adapter = ptyro_agents::adapter_name(config, &agent);
         // `fake-agent` and wrappers may not answer --version: only ask real CLIs.
@@ -1377,12 +1565,7 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
         }
     }
     if !any {
-        r.add(
-            S,
-            "agents",
-            Level::Warn,
-            "no agent found: install one, e.g. `npm i -g @google/gemini-cli` (Gemini CLI), `npm i -g @openai/codex` (Codex) or `curl -fsSL https://claude.ai/install.sh | bash` (Claude Code)",
-        );
+        r.add(S, "agents", Level::Warn, ptyro_agents::locate::no_agent());
     }
     // Gemini CLI stopped serving unpaid / Google One accounts on 2026-06-18 (RESEARCH G3).
     let gemini_key = std::env::var_os("GEMINI_API_KEY").is_some()
@@ -1392,11 +1575,18 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
             .values()
             .any(|p| p.gemini.as_ref().and_then(|g| g.def()).is_some_and(|d| d.api_key.is_some()));
     if ptyro_agents::locate::find("gemini", &path_var).is_some() && !gemini_key {
+        // Antigravity offered where it isn't installed yet (BOOT9).
+        let agy = match ptyro_agents::locate::find("agy", &path_var) {
+            Some(_) => String::new(),
+            None => ptyro_agents::locate::install_fix("agy")
+                .map(|f| format!(": {f}"))
+                .unwrap_or_default(),
+        };
         r.add(
             S,
             "gemini",
             Level::Note,
-            "Gemini CLI no longer serves consumer Google accounts (since 2026-06-18); use the Antigravity CLI (`agy`) with a personal account",
+            format!("Gemini CLI no longer serves consumer Google accounts (since 2026-06-18); with a personal Google account, use Antigravity (`agy`){agy}"),
         );
     }
 }
@@ -1553,6 +1743,14 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
 
 #[cfg(test)]
 mod tests {
+    /// BOOT9: git or gh missing offers setup, which the TUI's badge and the web's Health act on.
+    #[test]
+    fn a_missing_tool_offers_setup() {
+        assert_eq!(super::fix_for("git"), "; `ptyro install git` installs it");
+        assert_eq!(super::fix_for("gh"), "; `ptyro install gh` installs it");
+        assert_eq!(super::fix_for("my-own-tool"), "");
+    }
+
     #[test]
     fn codex_says_whether_its_commands_run_in_a_windows_sandbox() {
         use super::{Level, codex_sandbox};

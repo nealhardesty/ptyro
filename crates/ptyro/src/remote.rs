@@ -18,6 +18,8 @@ pub async fn proxy(ctx: &Ctx) -> Result<i32, Error> {
         && let Some(distro) = ctx.remote.as_deref().and_then(ptyro_client::remote::wsl_distro)
     {
         let bin = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
+        // Not hidden: this bridge always runs under ssh's console, and wsl.exe's own errors
+        // belong on ssh's terminal (SPEC §24.11).
         let status = tokio::process::Command::new(ptyro_client::remote::wsl_exe())
             .args(ptyro_client::remote::wsl_args(distro, &bin).map_err(Error::from)?)
             .env("WSL_UTF8", "1")

@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 31 };
+pub const PROTO: Version = Version { major: 1, minor: 37 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -358,6 +358,41 @@ pub enum Request {
     ShellLayout {
         addr: String,
         layout: ptyro_core::window::WindowLayout,
+    },
+    /// Setup (SPEC §24.2, protocol 1.31): the checklist on the daemon's machine: what is
+    /// installed, and what installing `picks` (item ids, `agy` and `github-cli` too) with what
+    /// they need would run; `None`, the defaults. Replies `SetupPlan`.
+    SetupPlan {
+        #[serde(default)]
+        picks: Option<Vec<String>>,
+        /// Protocol 1.32 (BOOT8): on a Windows daemon with a usable WSL, what to tick in WSL's
+        /// distro too (its rows come after Windows', `side: wsl`); `None`, nothing there.
+        #[serde(default)]
+        wsl_picks: Option<Vec<String>>,
+    },
+    /// Setup (protocol 1.31): install `picks` and what they need on the daemon's machine, one
+    /// run at a time. Steps that need administrator rights are never run here (a password never
+    /// goes over the network): each is reported with its command. Progress comes as
+    /// `SetupProgress` events. Replies `SetupStarted`.
+    SetupRun {
+        picks: Vec<String>,
+        /// Protocol 1.32: install these in WSL's distro too, through its ptyro (`wsl.exe`).
+        #[serde(default)]
+        wsl_picks: Option<Vec<String>>,
+        /// Protocol 1.36 (BOOT7): the agents installed another way to move to the recommended
+        /// installer (the person ticked the offer, or chose Move). Every other agent installed
+        /// another way stays as it is (updated its own way), so a client that names none, or
+        /// predates this, never moves anything.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        moves: Vec<String>,
+    },
+    /// The agents out of date on the daemon's machine (BOOT5, protocol 1.35), as its daily look
+    /// remembered them (installed versions asked again, never the network), less what
+    /// `updates.ignore` skips; none with `updates.check = "off"`. `note`: also the start-up
+    /// note's, those not said yet, now marked said (once per new version). Replies `Updates`.
+    Updates {
+        #[serde(default)]
+        note: bool,
     },
     /// The other machines this daemon mirrors (MM1.B). Replies `Machines`.
     MachineList,
@@ -1447,7 +1482,7 @@ pub struct DaemonStatus {
     /// `None` outside WSL (and from a daemon older than 0.0.48).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wsl_hold: Option<WslHold>,
-    /// The computer's load average (1.31), while `[ui] load` is on and the system has one.
+    /// The computer's load average (1.37), while `[ui] load` is on and the system has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load: Option<HostLoad>,
 }
@@ -1898,6 +1933,38 @@ pub enum Reply {
         /// Uncompressed P-256 point, base64url.
         key: String,
     },
+    /// The setup checklist (protocol 1.31).
+    SetupPlan {
+        plan: ptyro_agents::setup::Plan,
+        /// Protocol 1.34 (BOOT3): what the checklist says of each entry, in the TUI's words,
+        /// for a client without the catalog (the web).
+        #[serde(default)]
+        lines: Vec<ptyro_agents::setup::checklist::Line>,
+        /// Protocol 1.34: the agent sessions start with (`agents.default`), marked in Already here.
+        #[serde(default)]
+        default_agent: String,
+        /// Protocol 1.34: the run going now (one at a time), with its progress so far, so a
+        /// client that didn't start it shows it instead of offering a second.
+        #[serde(default)]
+        running: Option<SetupRunning>,
+        /// Protocol 1.34: setup is running on this machine but not as this daemon's run (`ptyro
+        /// install` in a terminal, the TUI's checklist): who holds the machine's setup lock. A
+        /// `SetupRun` now would be refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        held_by: Option<String>,
+    },
+    /// The agents out of date on the daemon's machine (protocol 1.35).
+    Updates {
+        offered: Vec<ptyro_agents::updates::Outdated>,
+        /// With `note`: the start-up note's, said now (a subset of `offered`).
+        #[serde(default)]
+        note: Vec<ptyro_agents::updates::Outdated>,
+    },
+    /// A setup run started: `SetupProgress` events with this `run` follow.
+    SetupStarted {
+        run: String,
+        plan: ptyro_agents::setup::Plan,
+    },
     /// The handoff starts now; the connection will close.
     Upgrading {
         from: String,
@@ -2120,7 +2187,7 @@ pub enum DomainEvent {
     UsageUpdated {
         usage: Usage,
     },
-    /// The daemon's computer's load average changed (1.31; `[ui] load`): `None` once it is off.
+    /// The daemon's computer's load average changed (1.37; `[ui] load`): `None` once it is off.
     HostLoad {
         #[serde(default)]
         load: Option<HostLoad>,
@@ -2142,6 +2209,37 @@ pub enum DomainEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
+    /// A setup run's progress (protocol 1.31): a step started, a line of its output, ✓, ✗ with
+    /// the fix, and at the end the report.
+    SetupProgress {
+        run: String,
+        event: ptyro_agents::setup::Event,
+        /// Protocol 1.32: the side it happened on (`windows` or `wsl` on Windows; each side
+        /// ends with its own `finished`).
+        #[serde(default)]
+        side: ptyro_agents::setup::Side,
+        /// Protocol 1.34: the event's number in its run, from 1 (0: an older daemon's,
+        /// unnumbered), so a client joining a run mid-way can tell what `SetupRunning` held.
+        #[serde(default)]
+        seq: u64,
+    },
+}
+
+/// The setup run going now (protocol 1.34, `Reply::SetupPlan`): its id, the plan it runs (its
+/// sides each end with a `finished`), and its events so far (the latest few hundred).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupRunning {
+    pub run: String,
+    pub plan: ptyro_agents::setup::Plan,
+    pub events: Vec<SetupLogged>,
+}
+
+/// One event of a setup run, as `DomainEvent::SetupProgress` carried it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetupLogged {
+    pub seq: u64,
+    pub side: ptyro_agents::setup::Side,
+    pub event: ptyro_agents::setup::Event,
 }
 
 /// What to do to a scratchpad item (`ScratchMark`).

@@ -9,7 +9,9 @@
 //! - `{profile}`, `{agent}`: picked from a list;
 //! - `{choose:Label:a|b|c}`: picked from those;
 //! - `{ask:Label}`: typed; nothing typed leaves the word out (an optional argument);
-//! - `{vars}`: `k=v, k2=v2` typed, as `--var k=v --var k2=v2`.
+//! - `{vars}`: `k=v, k2=v2` typed, as `--var k=v --var k2=v2`;
+//! - `{where}`: on Windows, WSL, Windows or both (setup's sides, BOOT8): see [`where_runs`];
+//!   elsewhere nothing.
 
 use crate::app::{App, Overlay, PromptKind, Purpose};
 use crate::palette::{Item, Palette, Target};
@@ -107,6 +109,11 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("devices.push_test", &["devices", "push-test"]),
     ("config.show", &["config", "show"]),
     ("app.backup", &["backup"]),
+    // Setup (BOOT1): the checklist in the split's terminal, where sudo can ask for a password.
+    ("app.setup", &["setup", "{where}"]),
+    ("app.install", &["install", "{ask:What to install (e.g. agy, or gemini gh)}", "{where}"]),
+    // Logins (BOOT4): each tool's own sign-in in the split's terminal, where its code shows.
+    ("app.login", &["login", "{where}"]),
     // Detach first: the daemon stops, and this screen with it. It asks in the split.
     ("app.uninstall", &["uninstall"]),
 ];
@@ -193,6 +200,10 @@ impl App {
                         .collect();
                     return self.cli_pick("Which agent?", items, job);
                 }
+                "{where}" => match where_offered(cfg!(windows), self.connect.remote.as_deref()) {
+                    Some(wsl_daemon) => return self.where_pick(wsl_daemon, job),
+                    None => continue,
+                },
                 t if t.starts_with("{choose:") => {
                     let body = t.trim_start_matches("{choose:").trim_end_matches('}');
                     let (label, opts) = body.split_once(':').unwrap_or((body, ""));
@@ -223,7 +234,52 @@ impl App {
                 }
             }
         }
-        self.run_cli(&job.done);
+        let Some(i) = job.done.iter().position(|w| w.starts_with(WHERE)) else {
+            return self.run_cli(&job.done);
+        };
+        let choice = job.done.remove(i)[WHERE.len()..].to_owned();
+        let wsl_daemon = where_offered(cfg!(windows), self.connect.remote.as_deref()) == Some(true);
+        let runs = where_runs(&choice, wsl_daemon, exe_in_wsl().as_deref());
+        if runs.is_empty() {
+            return self.toast_err("this ptyro.exe isn't where WSL can reach it: run `ptyro setup --where windows` in a Windows terminal");
+        }
+        for (bin, extra) in runs {
+            let mut args = job.done.clone();
+            args.extend(extra);
+            match bin {
+                Some(bin) => self.run_cli_with(bin, &args),
+                None => self.run_cli(&args),
+            }
+        }
+    }
+
+    /// Where setup installs, on Windows (BOOT8): the daemon's side first.
+    fn where_pick(&mut self, wsl_daemon: bool, job: CliJob) {
+        let wsl = match self.connect.remote.as_deref().and_then(|r| r.strip_prefix("wsl://")) {
+            Some(d) if !d.is_empty() => format!("WSL ({d})"),
+            _ => "WSL".to_owned(),
+        };
+        let mut choices = vec![
+            ("wsl", wsl, "into the WSL distro (needs ptyro there)"),
+            ("windows", "Windows".to_owned(), "onto Windows itself"),
+            ("both", "both".to_owned(), "into WSL and onto Windows"),
+        ];
+        if !wsl_daemon {
+            choices.swap(0, 1);
+        }
+        let items = choices
+            .into_iter()
+            .map(|(value, label, detail)| Item {
+                label,
+                detail: detail.to_owned(),
+                key: None,
+                target: Target::Path(format!("{WHERE}{value}").into()),
+            })
+            .collect();
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new("Where to install?", items),
+            purpose: Purpose::CliPick(Box::new(job)),
+        });
     }
 
     fn cli_pick(&mut self, title: &str, choices: Vec<(String, String)>, job: CliJob) {
@@ -246,6 +302,56 @@ impl App {
     pub(crate) fn cli_answer(&mut self, mut job: CliJob, text: &str, vars: bool) {
         add_answer(&mut job.done, text, vars);
         self.cli_step(job);
+    }
+}
+
+/// How a `{where}` pick travels through the command until it is run.
+const WHERE: &str = "\0where=";
+
+/// Whether `{where}` asks (Windows, with this computer's daemon or WSL's: `Some(true)` for
+/// WSL's); `None` elsewhere, and for a daemon on another machine, where sides don't apply.
+pub fn where_offered(windows: bool, remote: Option<&str>) -> Option<bool> {
+    if !windows {
+        return None;
+    }
+    match remote {
+        None => Some(false),
+        Some(r) if r.starts_with("wsl://") => Some(true),
+        Some(r) if ptyro_client::is_local(Some(r)) => Some(false),
+        Some(_) => None,
+    }
+}
+
+/// This ptyro.exe as WSL names it (`/mnt/c/…`), for a split in WSL to run it through interop.
+pub fn exe_in_wsl() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| ptyro_core::wsl::path_in_distro(&p.to_string_lossy(), "/mnt/"))
+}
+
+/// What a side choice runs, one split each: `(ptyro to run, None for the daemon's; words to add)`.
+/// With this computer's daemon, Windows' ptyro does both sides itself (`--where`). With WSL's,
+/// a split runs in WSL: `wsl` is its own ptyro (WSL's side natively, sudo in that terminal), and
+/// Windows' is `exe_in_wsl` (this ptyro.exe as WSL names it) through interop, whose console is a
+/// pipe there (`--tty`: a person answers anyway); `both` is the two splits. Empty: Windows'
+/// ptyro can't be reached from WSL.
+pub fn where_runs(
+    choice: &str,
+    wsl_daemon: bool,
+    exe_in_wsl: Option<&str>,
+) -> Vec<(Option<String>, Vec<String>)> {
+    let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    if !wsl_daemon {
+        return vec![(None, words(&["--where", choice]))];
+    }
+    let windows = exe_in_wsl.map(|e| (Some(e.to_owned()), words(&["--where", "windows", "--tty"])));
+    match choice {
+        "wsl" => vec![(None, Vec::new())],
+        "windows" => windows.into_iter().collect(),
+        _ => match windows {
+            Some(w) => vec![(None, Vec::new()), w],
+            None => Vec::new(),
+        },
     }
 }
 
@@ -286,6 +392,25 @@ mod tests {
     }
 
     #[test]
+    fn setups_sides_are_offered_on_windows_and_run_where_they_can() {
+        use super::{where_offered, where_runs};
+        assert_eq!(where_offered(false, None), None, "sides are Windows'");
+        assert_eq!(where_offered(true, None), Some(false));
+        assert_eq!(where_offered(true, Some("wsl://Ubuntu")), Some(true));
+        assert_eq!(where_offered(true, Some("me@box")), None, "another machine's daemon");
+        let w = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        // This computer's daemon: Windows' ptyro does it all.
+        assert_eq!(where_runs("both", false, None), [(None, w(&["--where", "both"]))]);
+        // WSL's: WSL's own ptyro for its side, Windows' through interop for Windows'.
+        let exe = "/mnt/c/Users/me/ptyro.exe";
+        assert_eq!(where_runs("wsl", true, Some(exe)), [(None, vec![])]);
+        let win = (Some(exe.to_owned()), w(&["--where", "windows", "--tty"]));
+        assert_eq!(where_runs("windows", true, Some(exe)), std::slice::from_ref(&win));
+        assert_eq!(where_runs("both", true, Some(exe)), [(None, vec![]), win]);
+        assert!(where_runs("both", true, None).is_empty());
+    }
+
+    #[test]
     fn every_template_is_an_action_and_every_word_is_known() {
         for (action, words) in super::TEMPLATES {
             assert!(crate::keymap::spec(action).is_some(), "{action} isn't in ACTIONS");
@@ -301,6 +426,7 @@ mod tests {
                                 | "{profile}"
                                 | "{agent}"
                                 | "{vars}"
+                                | "{where}"
                         ) || w.starts_with("{ask:")
                             || (w.starts_with("{choose:") && w.contains('|')),
                         "{action}: {w}"

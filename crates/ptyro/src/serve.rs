@@ -81,6 +81,7 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("sessions"),
     js!("shells"),
     js!("shellkit"),
+    js!("setupkit"),
     js!("settings"),
     js!("panel"),
     js!("cfgkit"),
@@ -570,9 +571,17 @@ async fn exit_with_daemon(socket: std::path::PathBuf) {
         else {
             return;
         };
+        // When it started, where the daemon says: a daemon gone before we first looked may have
+        // left its id to another process, which we would otherwise wait on instead.
+        let started =
+            std::env::var("PTYRO_DAEMON_STARTED").ok().and_then(|t| t.parse::<u64>().ok());
         std::thread::spawn(move || {
             loop {
-                if ptyro_pty::wait_for_exit(pid, Duration::from_secs(3600)) {
+                let gone = match started {
+                    Some(t) => ptyro_pty::wait_for_exit_of(pid, t, Duration::from_secs(3600)),
+                    None => ptyro_pty::wait_for_exit(pid, Duration::from_secs(3600)),
+                };
+                if gone {
                     std::process::exit(0);
                 }
             }
@@ -586,9 +595,14 @@ async fn exit_with_daemon(socket: std::path::PathBuf) {
 async fn exit_with_parent(socket: std::path::PathBuf) {
     // The daemon that started us is our parent: when it is gone (killed, crashed, replaced) the
     // next one starts a server of its own, and ours would hold the port for good. A crash leaves
-    // the socket file behind, so the file alone can't say.
+    // the socket file behind, so the file alone can't say. The daemon names itself: one gone
+    // before we first looked already left us to another parent (a server started as the daemon
+    // stopped outlived it, holding the port; m9 on WSL).
     #[cfg(unix)]
-    let parent = std::os::unix::process::parent_id();
+    let parent = std::env::var("PTYRO_DAEMON_PID")
+        .ok()
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or_else(std::os::unix::process::parent_id);
     let mut missing = 0;
     for tick in 0u64.. {
         tokio::time::sleep(Duration::from_secs(1)).await;

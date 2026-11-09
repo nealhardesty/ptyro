@@ -6,7 +6,7 @@ import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
@@ -112,9 +112,19 @@ export function newTask(where, task) {
         el.addEventListener("change", () => { sync(); loadBranches(); });
     sync();
     const go1 = h("button", { class: "primary" }, "Start");
+    // Setup is a tap away (BOOT9): with no agent on the computer, said first.
+    const none = data.agents.length > 0 && !agents.length;
+    // Only a device that can install (full scope) is offered it; others are told where.
+    const full = conn.scope === "full";
+    const setupLink = full
+        ? h("a", { href: "#/setup", title: tipOf("setup.offer"), onclick: () => s.close() }, none ? "Set up agents and tools" : "Install another agent")
+        : h("span", {}, "run ", h("code", {}, "ptyro setup"), " on the computer");
+    const agentHint = none
+        ? h("p", { class: "form-err" }, "No coding agent is installed on the computer yet: ", setupLink, " (Claude Code, Codex, or Antigravity for a Google account).")
+        : full ? h("small", { class: "sub" }, setupLink) : null;
     const s = sheet("New task", [
         h("label", { class: "field" }, h("span", {}, "Task"), prompt),
-        h("label", { class: "field" }, h("span", {}, "Agent"), agent), commandRow,
+        h("label", { class: "field" }, h("span", {}, "Agent"), agent), agentHint, commandRow,
         h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow, err,
     ], [h("button", { onclick: () => s.close() }, "Cancel"), go1]);
     go1.addEventListener("click", async () => {

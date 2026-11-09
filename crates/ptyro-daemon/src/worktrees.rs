@@ -392,7 +392,7 @@ impl Daemon {
                 step: step.into(),
             });
         };
-        let env = plan.apply(self.base_env.iter().cloned());
+        let env = plan.apply(self.base_env().iter().cloned());
         let fetch = spec.fetch.unwrap_or(config.worktrees.fetch);
         let (root, location) = (p.root.clone(), config.worktrees.location);
         progress("checking out");
@@ -669,6 +669,7 @@ impl Daemon {
                 quick: false,
                 pad: false,
                 chat: None,
+                unrecorded: false,
             },
             replace: false,
             agent: None,

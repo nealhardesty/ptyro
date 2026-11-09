@@ -16,7 +16,7 @@ import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
-import { coach } from "./settings.js";
+import { coach, offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
 import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
@@ -272,7 +272,7 @@ function listView() {
     // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
     const aside = chatsShown() ? chatsAside() : null;
     const shells = can("full") || [...app.sessions.values()].some((s) => s.loose) ? shellsGroup(app.sessions.values(), sessionCard) : null;
-    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, shells, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
+    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
 }
 function inboxView() {
     const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` }, h("span", { class: `kind ${e.kind}` }, e.kind), h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)), h("time", {}, ago(e.at_ms))));
@@ -555,6 +555,7 @@ conn.listeners.add((msg) => {
         void refresh();
         void loadAll();
         notesConnected();
+        setupConnected();
         conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => { });
         return;
     }
@@ -634,6 +635,9 @@ conn.listeners.add((msg) => {
         else if (e.t === "scratch_changed") {
             notesEvent(e);
         }
+        else if (e.t === "setup_progress") {
+            setupEvent(e);
+        }
     }
 });
 useSessions(() => app.sessions);
@@ -649,6 +653,8 @@ conn.onDropped = (m) => {
 conn.onTooBig = (m) => toast(m.t === "input" ? "Not sent: that paste is too large (over 4 MiB)" : "Not sent: too large (over 4 MiB)");
 ui.render = render;
 ui.toast = toast;
+ui.fail = (text) => { if (!offerSetup(text))
+    toast(text); };
 ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };

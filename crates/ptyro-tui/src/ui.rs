@@ -298,6 +298,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("app.detach", "detach"),
             ("app.quit", "quit all"),
             ("app.about", "about"),
+            ("app.setup", "set up agents"),
             ("help", "all keys"),
         ],
     ),

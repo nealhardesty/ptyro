@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::app::{App, AppMsg, Confirmed, Overlay, Purpose};
+use crate::app::{App, AppMsg, Confirmed, Overlay, Pending, Purpose};
 use crate::palette::{Item, Palette, Target};
+use ptyro_protocol::Request;
 
 /// How often the doctor runs again.
 const EVERY: Duration = Duration::from_secs(600);
@@ -43,6 +44,13 @@ pub enum Fix {
     /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`,
     /// WSL stopping ptyro with the last terminal opens `daemon.hold_wsl`.
     Setting(&'static str),
+    /// Open the setup checklist (BOOT2) with these ticked (none: the defaults), on the side a
+    /// suggested `--where` names: an agent or git not found, no agent at all, or a doctor line
+    /// that suggests `ptyro setup` / `ptyro install`.
+    Setup { names: Vec<String>, place: Option<String> },
+    /// An agent out of date (BOOT5): `ptyro update <names>` in a split, one at a time like the
+    /// checklist's installs, and the badge looks again once it ends.
+    Update(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +71,14 @@ pub struct Health {
     /// A fresh result that arrived while the mend list was open: its rows point into
     /// `findings`, so it is taken once the list is closed.
     pub deferred: Option<Vec<Check>>,
+    /// Look again as soon as the run in flight is in: what it reports may predate a change
+    /// (the setup checklist's install just ended, BOOT2).
+    pub again: bool,
+    /// The start-up note about newer agent versions was asked for (BOOT5).
+    pub noted: bool,
+    /// The agents out of date on the daemon's machine (`Request::Updates`), as findings: the
+    /// badge shows these, not this process's doctor's (which looked at this computer).
+    pub updates: Vec<Finding>,
 }
 
 /// The command a doctor message suggests: the first `` `ptyro …` `` in it, with a
@@ -97,6 +113,55 @@ fn private_path(text: &str) -> Option<&str> {
     })
 }
 
+/// A finding the setup checklist fixes (BOOT2): what it names to install ticked there.
+/// - a `` `ptyro setup …` `` or `` `ptyro install NAME…` `` the doctor suggests;
+/// - an agent not found (`claude not found: …`), or git (`git not found: …`): that one;
+/// - no agent found at all: the defaults.
+fn setup_fix(c: &Check) -> Option<Fix> {
+    if let Some(words) = suggested_cli(c) {
+        let (first, rest) = words.split_first()?;
+        if first != "setup" && first != "install" {
+            return None;
+        }
+        // Names, and `--where X` (`--where=X`) kept as the side; other flags dropped, with the
+        // value of those that take one (`--agents a,b` names too, as setup's).
+        let (mut names, mut place) = (Vec::new(), None);
+        let mut it = rest.iter();
+        while let Some(w) = it.next() {
+            match w.split_once('=') {
+                Some(("--where", v)) => place = Some(v.to_owned()),
+                Some((f, v)) if f == "--agents" || f == "--tools" => names.extend(
+                    v.split(',').filter(|n| !n.is_empty() && *n != "none").map(str::to_owned),
+                ),
+                _ if w == "--where" => place = it.next().cloned(),
+                _ if w == "--agents" || w == "--tools" => {
+                    if let Some(v) = it.next() {
+                        names.extend(
+                            v.split(',')
+                                .filter(|n| !n.is_empty() && *n != "none")
+                                .map(str::to_owned),
+                        );
+                    }
+                }
+                _ if w.starts_with('-') => {}
+                _ => names.push(w.clone()),
+            }
+        }
+        return Some(Fix::Setup { names, place });
+    }
+    if c.section == "agents" && c.name == "agents" {
+        return Some(Fix::Setup { names: Vec::new(), place: None });
+    }
+    let prog = c
+        .text
+        .strip_suffix("not found")
+        .or_else(|| c.text.split_once(" not found").map(|(p, _)| p))?;
+    let prog = prog.trim();
+    let known = ptyro_agents::setup::resolve(prog).ok()?;
+    matches!(c.section.as_str(), "agents" | "git")
+        .then(|| Fix::Setup { names: vec![known.program.clone()], place: None })
+}
+
 /// A doctor check as a finding: only warnings and problems, with the fix its text implies.
 pub fn finding(c: &Check) -> Option<Finding> {
     let problem = match c.level.as_str() {
@@ -114,12 +179,32 @@ pub fn finding(c: &Check) -> Option<Finding> {
         Some(Fix::Setting("daemon.hold_wsl"))
     } else if c.section == "tmux" {
         Some(Fix::Tmux { name: c.name.clone(), value: "on".into() })
+    } else if c.section == "updates"
+        && let Some(words) = suggested_cli(c).filter(|w| w.first().is_some_and(|f| f == "update"))
+    {
+        Some(Fix::Update(words[1..].to_vec()))
     } else if c.name == "config mode" {
         private_path(&c.text).map(|p| Fix::Private(PathBuf::from(p)))
+    } else if let Some(fix) = setup_fix(c) {
+        Some(fix)
     } else {
         suggested_cli(c).map(Fix::Cli)
     };
     Some(Finding { problem, what: format!("{} {}", c.section, c.name), text: c.text.clone(), fix })
+}
+
+/// A finding about one agent, or ptyro itself, out of date (`updates <agent id>`, `updates
+/// ptyro`), as the daemon's `Updates` gives them (the badge's other `updates` warnings, a typo in
+/// `updates.ignore`, aren't).
+pub(crate) fn agent_update(f: &Finding) -> bool {
+    // The move offered beside an update (BOOT7) is `updates <id> move`.
+    f.what.strip_prefix("updates ").map(|w| w.strip_suffix(" move").unwrap_or(w)).is_some_and(
+        |id| {
+            id == ptyro_agents::own::ID
+                || ptyro_agents::catalog::item(id)
+                    .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
+        },
+    )
 }
 
 /// The shell's rc file and the line that sets up ptyro's integration in it, when it's missing:
@@ -140,6 +225,16 @@ pub fn shell_init_missing(config: &ptyro_core::config::Config) -> Option<(PathBu
 impl App {
     /// Periodically, in the background (from `tick`).
     pub(crate) fn health_tick(&mut self, started: Instant) {
+        // The start-up note, once nothing else is on screen (a dialog, the first run) to hide it.
+        if !self.health.noted
+            && self.client.is_some()
+            && !self.opts.raw
+            && self.overlay.is_none()
+            && self.first_run.is_none()
+        {
+            self.health.noted = true;
+            self.update_note();
+        }
         if !self.health_open()
             && let Some(checks) = self.health.deferred.take()
         {
@@ -157,11 +252,76 @@ impl App {
         }
     }
 
+    /// The start-up note (BOOT5): an agent with a newer version out, said once per new version,
+    /// asked of the daemon this TUI is attached to (its machine's agents are the sessions'; it
+    /// answers from what its daily look remembered, never the network). The reply is toasted with
+    /// the key that updates it (`got_updates`).
+    pub(crate) fn update_note(&mut self) {
+        self.request(Pending::Updates { note: true }, Request::Updates { note: true });
+    }
+
+    /// The daemon's agents out of date: the badge's `updates` findings, each labelled with where
+    /// they are when that isn't this computer; with `note`, the start-up note too.
+    pub(crate) fn got_updates(
+        &mut self,
+        offered: Vec<ptyro_agents::updates::Outdated>,
+        note: Vec<ptyro_agents::updates::Outdated>,
+        noting: bool,
+    ) {
+        let prefix = self.update_place().map(|p| format!("on {p}: ")).unwrap_or_default();
+        self.health.updates = offered
+            .iter()
+            .flat_map(|o| {
+                let update = Finding {
+                    problem: false,
+                    what: format!("updates {}", o.id),
+                    text: format!("{prefix}{}", o.finding()),
+                    fix: Some(Fix::Update(vec![o.program.clone()])),
+                };
+                // Installed another way (BOOT7): the move too, through the setup checklist,
+                // where it is a row (and `K` keeps it as installed).
+                let moving = o.via.zip(o.move_to).map(|(from, to)| Finding {
+                    problem: false,
+                    what: format!("updates {} move", o.id),
+                    text: format!(
+                        "{prefix}{} is installed with {}: moving it to {}, the recommended way, also brings it up to date (settings and logins stay)",
+                        o.name,
+                        from.words(),
+                        to.words()
+                    ),
+                    fix: Some(Fix::Setup { names: vec![o.program.clone()], place: None }),
+                });
+                std::iter::once(update).chain(moving)
+            })
+            .collect();
+        if !self.health_open() {
+            self.health.findings.retain(|f| !agent_update(f));
+            self.health.findings.extend(self.health.updates.iter().cloned());
+            self.health.announced = self.health.announced.min(self.health.findings.len());
+        }
+        if noting && let Some(line) = ptyro_agents::updates::note_line(&note) {
+            let label = if note.len() == 1 { "updates it" } else { "updates them" };
+            let names = note.iter().map(|o| o.program.clone()).collect::<Vec<_>>().join(" ");
+            let then = crate::app::Then::Run(crate::keymap::Command {
+                action: "app.update",
+                arg: Some(names),
+            });
+            self.toast_offer(
+                format!("{prefix}{line}"),
+                false,
+                crate::app::Offer { label: label.into(), then },
+            );
+        }
+        self.dirty = true;
+    }
+
     /// Run `ptyro doctor --quick --json` now.
     pub fn check_health(&mut self) {
         let Ok(exe) = std::env::current_exe() else { return };
         self.health.running = true;
         self.health.last = Some(Instant::now());
+        // The agents out of date are the daemon's (its machine runs the sessions).
+        self.request(Pending::Updates { note: false }, Request::Updates { note: false });
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let out = tokio::process::Command::new(exe)
@@ -184,13 +344,39 @@ impl App {
         )
     }
 
+    /// Look again now, or once the run in flight is in.
+    pub(crate) fn health_again(&mut self) {
+        if self.health.running {
+            self.health.again = true;
+        } else {
+            self.check_health();
+        }
+    }
+
     pub(crate) fn got_health(&mut self, checks: Vec<Check>) {
         self.health.running = false;
+        if std::mem::take(&mut self.health.again) {
+            // What this run found may be from before the change: the next one says.
+            self.check_health();
+        }
         if self.health_open() {
             self.health.deferred = Some(checks);
             return;
         }
-        let mut findings: Vec<Finding> = checks.iter().filter_map(finding).collect();
+        // This process's doctor looked at this computer's agents; the daemon's are the ones the
+        // sessions run (`got_updates`).
+        // Only its per-agent findings are dropped: its other `updates` warnings (a typo in
+        // `updates.ignore`) stay.
+        let agent = |n: &str| {
+            ptyro_agents::catalog::item(n)
+                .is_some_and(|i| i.kind == ptyro_agents::catalog::Kind::Agent)
+        };
+        let mut findings: Vec<Finding> = checks
+            .iter()
+            .filter(|c| c.section != "updates" || !agent(&c.name))
+            .filter_map(finding)
+            .collect();
+        findings.extend(self.health.updates.iter().cloned());
         if let Some((rc, line)) = shell_init_missing(&self.config) {
             findings.push(Finding {
                 problem: false,
@@ -264,6 +450,12 @@ impl App {
                     }
                     Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
                     Some(Fix::Setting(key)) => format!("{} · ⏎ opens the setting {key}", f.text),
+                    Some(Fix::Setup { .. }) => format!("{} · ⏎ opens the setup checklist", f.text),
+                    Some(Fix::Update(names)) => format!(
+                        "{} · ⏎ runs `ptyro update {}` in a split (it asks first)",
+                        f.text,
+                        names.join(" ")
+                    ),
                     None => f.text.clone(),
                 },
                 key: None,
@@ -294,6 +486,10 @@ impl App {
             Some(Fix::Cli(args)) => self.run_cli(&args),
             Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
             Some(Fix::Setting(key)) => self.open_settings(Some(key)),
+            Some(Fix::Setup { names, place }) => {
+                self.open_setup((!names.is_empty()).then_some(names), place)
+            }
+            Some(Fix::Update(names)) => self.update_agents(names),
             Some(Fix::Append { file, line }) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
@@ -365,15 +561,20 @@ impl App {
     /// back. The CLI's long tail reaches the TUI this way (UX1.20, UX1.21), interactive ones
     /// included.
     pub fn run_cli(&mut self, args: &[String]) {
+        self.run_cli_with(self.daemon_ptyro(), args);
+    }
+
+    /// [`App::run_cli`] with another ptyro: Windows' ptyro.exe from a split in WSL (BOOT8).
+    pub fn run_cli_with(&mut self, bin: String, args: &[String]) {
         self.last_cli = Some(args.to_vec());
-        let argv: Vec<String> =
-            std::iter::once(self.daemon_ptyro()).chain(args.iter().cloned()).collect();
+        let argv: Vec<String> = std::iter::once(bin).chain(args.iter().cloned()).collect();
         let base = format!("ptyro-{}", args.first().map_or("cli", String::as_str));
         let base = ptyro_core::names::tidy(&base).unwrap_or(base);
         let name = std::iter::once(base.clone())
             .chain((2..).map(|k| format!("{base}-{k}")))
             .find(|n| self.sessions.iter().all(|s| s.name != *n))
             .expect("infinite");
+        self.last_split = Some(name.clone());
         self.spawn_tool(argv, Some(name), false);
     }
 }
@@ -384,6 +585,60 @@ mod tests {
 
     fn check(section: &str, name: &str, level: &str, text: &str) -> Check {
         Check { section: section.into(), name: name.into(), level: level.into(), text: text.into() }
+    }
+
+    #[test]
+    fn an_agent_or_tool_not_found_opens_the_setup_checklist() {
+        let fix = |section: &str, name: &str, level: &str, text: &str| {
+            finding(&check(section, name, level, text)).unwrap().fix
+        };
+        let s = |v: &[&str]| {
+            Some(Fix::Setup { names: v.iter().map(|s| (*s).to_owned()).collect(), place: None })
+        };
+        // The doctor's words (BOOT9): each offers setup, which the badge's ⏎ opens.
+        assert_eq!(
+            fix(
+                "agents",
+                "claude",
+                "problem",
+                "claude not found: `ptyro install claude` installs it"
+            ),
+            s(&["claude"])
+        );
+        assert_eq!(fix("agents", "antigravity", "problem", "agy not found"), s(&["agy"]));
+        assert_eq!(
+            fix(
+                "git",
+                "version",
+                "problem",
+                "git not found: projects and worktrees need it; `ptyro install git` installs it"
+            ),
+            s(&["git"])
+        );
+        assert_eq!(
+            fix("git", "version", "problem", "git not found: projects need it"),
+            s(&["git"])
+        );
+        assert_eq!(fix("agents", "agents", "warn", &ptyro_agents::locate::no_agent()), s(&[]));
+        assert_eq!(
+            fix("agents", "x", "warn", "run `ptyro install agy gh` to add them"),
+            s(&["agy", "gh"])
+        );
+        assert_eq!(fix("agents", "x", "warn", "`ptyro setup` installs them"), s(&[]));
+        // The side a line names is kept; a flag's value is never a name.
+        assert_eq!(
+            fix("agents", "x", "warn", "`ptyro install gh --where wsl` installs it there"),
+            Some(Fix::Setup { names: vec!["gh".into()], place: Some("wsl".into()) })
+        );
+        assert_eq!(
+            fix("agents", "x", "warn", "`ptyro setup --agents claude,codex --where=both`"),
+            Some(Fix::Setup {
+                names: vec!["claude".into(), "codex".into()],
+                place: Some("both".into())
+            })
+        );
+        // Something setup doesn't install keeps its own fix.
+        assert_eq!(fix("agents", "mine", "problem", "my-agent not found"), None);
     }
 
     #[test]

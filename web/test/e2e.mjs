@@ -5,8 +5,8 @@
 //   E2E='{"bin":..,"env":{..},"config":..,"repo":..}' node web/test/e2e.mjs CHROME BASE CODE [scenario...]
 // A scenario that needs the server restarted prints "@@serve down" / "@@serve up" and waits for
 // a line on stdin from the Rust test.
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -215,6 +215,171 @@ const scenarios = {
     await tab.waitFor("the banner to go", `!document.querySelector(".offline")`, 60_000);
     ptyro("new", "-d", "-n", "after-offline", "--", "sh", "-c", "cat");
     await tab.waitFor("a session started while away", card("after-offline"));
+  },
+
+  // The first-run banner (BOOT3): no agent on the computer (the fake machine has none yet), so
+  // the Sessions tab offers the checklist, and its button opens it.
+  async banner() {
+    await fresh("#/");
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    await tab.waitFor("the banner", text("No coding agent is installed on this computer yet"), 30_000);
+    await tab.eval(`[...document.querySelectorAll(".setup-banner a")].find(a => a.textContent === "Set up agents and tools").click()`);
+    await tab.waitFor("the checklist", `location.hash === "#/setup" && document.body.innerText.includes("Antigravity")`, 30_000);
+  },
+
+  // Settings → Agents and tools: the daemon's checklist (a fake machine) in the TUI's shape,
+  // Agents and Tools with each one's line; the administrator steps (apt) shown with the command
+  // to run on the computer and the TUI's way, never run from here; Install runs the rest, with
+  // its lines and report (BOOT1, BOOT3).
+  async setup() {
+    await fresh("#/settings");
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    await tab.waitFor("the Settings entry", `!!document.querySelector('a[href="#/setup/settings"]')`, 30_000);
+    await tab.eval(`document.querySelector('a.setup-link').click()`);
+    await tab.waitFor("the checklist", text("Antigravity"), 30_000);
+    for (const t of ["AGENTS", "TOOLS", "Anthropic", "then log in", "asks for admin"]) await tab.waitFor(t, `document.body.innerText.toUpperCase().includes(${JSON.stringify(t.toUpperCase())})`);
+    await tab.waitFor("the admin note", text("Administrator rights are asked for only on the computer itself"));
+    await tab.waitFor("the admin command", `[...document.querySelectorAll(".setup-admin code")].some(c => c.textContent === "ptyro install git gh")`);
+    await tab.waitFor("the TUI's way", text("then U"));
+    await tab.waitFor("the back arrow to Settings", `!!document.querySelector('header a[href="#/settings"]')`);
+    await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 2").click()`);
+    await tab.waitFor("the run's report", text("2 installed. git and GitHub CLI are left for the computer (administrator rights): run ptyro install git gh there."), 30_000);
+    await tab.waitFor("the admin skips' lines", text("git: left for the computer"));
+    await tab.waitFor("its lines", text("fake vendor: install claude"));
+    await tab.waitFor("Already here", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Claude Code") && e.innerText.includes("your default agent"))`, 30_000);
+  },
+
+  // One setup at a time, on the web too (BOOT3): a run started here (Antigravity, whose fake
+  // installer waits) is still going when the page opens again; the new page says so, shows its
+  // lines and offers no second Install; once it ends, the report shows there.
+  async setupRunning() {
+    const world = join(E.fake, "world.json");
+    const go = join(E.fake, "go");
+    rmSync(go, { force: true });
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], outcomes: { antigravity: "wait", opencode: "wait" } }));
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    const install = async (name) => {
+      await tab.waitFor("the checklist", `!!document.querySelector('input[aria-label=${JSON.stringify(name)}]')`, 30_000);
+      await tab.eval(`document.querySelector('input[aria-label=${JSON.stringify(name)}]').click()`);
+      await tab.waitFor(`${name} ticked`, `[...document.querySelectorAll("button")].some(b => b.textContent === "Install 1" && !b.disabled)`, 30_000);
+      await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 1").click()`);
+      await tab.waitFor("its installer waiting", text("fake vendor: waiting for go"), 30_000);
+    };
+    try {
+      await fresh("#/setup");
+      await install("Antigravity");
+      // A page that didn't start it (this one, opened again).
+      await fresh("#/setup");
+      await tab.waitFor("the run going already", text("Setup is already running on the computer"), 30_000);
+      await tab.waitFor("its lines so far", text("fake vendor: waiting for go"));
+      await tab.waitFor("no second install", `[...document.querySelectorAll("button")].some(b => b.textContent === "Installing…" && b.disabled)`);
+      writeFileSync(go, "");
+      await tab.waitFor("its report", text("1 installed. git and GitHub CLI are left for the computer"), 30_000);
+      await tab.waitFor("the checklist after it", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Antigravity"))`, 30_000);
+
+      // Setup running from a terminal (the machine's lock, not the daemon's run): the page says
+      // who instead of offering Install, and offers it again on its own once that ends.
+      rmSync(go, { force: true });
+      const cli = spawn(E.bin, ["install", "opencode", "--yes"], { env: { ...process.env, ...E.env, PTYRO_TEST_SETUP: E.fake }, cwd: E.repo, stdio: "ignore" });
+      await until("the terminal's install to start", () => existsSync(join(E.env.PTYRO_HOME, "state", "setup.who")));
+      await fresh("#/setup");
+      await tab.waitFor("who is installing", text("Setup is already running on the computer (from `ptyro install`"), 30_000);
+      await tab.waitFor("no Install meanwhile", `[...document.querySelectorAll("button")].some(b => b.textContent === "Waiting for the other setup" && b.disabled)`);
+      writeFileSync(go, "");
+      await new Promise((ok) => cli.on("exit", ok));
+      await tab.waitFor("Install offered again", `!document.body.innerText.includes("Setup is already running") && [...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("OpenCode"))`, 30_000);
+      // (The fake machine forgets it, for the next step.)
+      rmSync(join(E.fake, "installed", "opencode"), { force: true });
+
+      // Away and back: the page's connection drops mid-run (the server goes), the run ends
+      // meanwhile, and the page, back, says so and shows the checklist as it is now.
+      rmSync(go, { force: true });
+      await fresh("#/setup");
+      await install("OpenCode");
+      await hostOp("down");
+      await tab.waitFor("the offline banner", `!!document.querySelector(".offline")`, 30_000);
+      writeFileSync(go, "");
+      // The run has let go of the machine's lock (after its last event): nothing is running.
+      await until("the run to end in the daemon", () => existsSync(join(E.fake, "installed", "opencode")) && !existsSync(join(E.env.PTYRO_HOME, "state", "setup.who")));
+      await hostOp("up");
+      await tab.waitFor("the note that it finished away", text("It finished while this page was away"), 60_000);
+      await tab.waitFor("the checklist as it is now", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("OpenCode"))`, 30_000);
+      await tab.waitFor("Install free again", `![...document.querySelectorAll("button")].some(b => b.textContent === "Installing…")`);
+    } finally {
+      // Never leave a fake installer holding the run for the scenarios after this one.
+      writeFileSync(go, "");
+      writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
+    }
+  },
+
+  // Out of date, offered (BOOT5): on Health, an `updates` finding's "Look for newer versions
+  // now" finds Claude Code's newer version (a test registry, never the network); its Update says
+  // what runs, then runs it through the daemon, the setup page following it to "1 updated.";
+  // Health then offers nothing for it.
+  async update() {
+    const world = join(E.fake, "world.json");
+    const reg = E.env.PTYRO_TEST_LATEST;
+    mkdirSync(reg, { recursive: true });
+    mkdirSync(join(E.fake, "installed"), { recursive: true });
+    writeFileSync(join(reg, "claude"), "2.1.400");
+    writeFileSync(join(E.fake, "installed", "claude"), "2.1.300");
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], versions: { claude: "2.1.400" } }));
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    const sec = `[...document.querySelectorAll("section.block-sec")].find(s => s.querySelector("h3")?.textContent === "updates")`;
+    const tapIn = (what) => tab.eval(`[...${sec}.querySelectorAll(".row")].find(r => r.innerText.includes(${JSON.stringify(what)})).click()`);
+    const choose = (label) => tab.eval(`[...document.querySelectorAll(".menu button")].find(b => b.innerText.startsWith(${JSON.stringify(label)})).click()`);
+    try {
+      await fresh("#/health");
+      await tab.waitFor("the updates section", `!!${sec}`, 60_000);
+      await tab.eval(`${sec}.querySelector(".row").click()`);
+      await tab.waitFor("its menu", `!!document.querySelector(".menu button")`);
+      await choose("Look for newer versions now");
+      await tab.waitFor("Claude Code's newer version", `!!${sec} && ${sec}.innerText.includes("Claude Code 2.1.400 is out (you have 2.1.300)")`, 60_000);
+      await tab.waitFor("its command", text("it runs `claude update`"));
+      await tapIn("Claude Code 2.1.400 is out");
+      await tab.waitFor("the Update choice", `!!document.querySelector(".menu button")`);
+      await choose("Update Claude Code to 2.1.400");
+      await tab.waitFor("what it runs, asked first", `!!document.querySelector(".sheet") && document.querySelector(".sheet").innerText.includes("Claude Code 2.1.300 → 2.1.400")`);
+      await tab.eval(`[...document.querySelectorAll(".sheet-foot button")].find(b => b.textContent === "Update").click()`);
+      await tab.waitFor("the setup page following it", `location.hash === "#/setup"`, 30_000);
+      await tab.waitFor("its report", text("1 updated."), 60_000);
+      await tab.waitFor("its line", text("fake vendor: update claude"));
+      await until("Claude Code updated on the computer", () => readFileSync(join(E.fake, "installed", "claude"), "utf8").trim() === "2.1.400");
+      await fresh("#/health");
+      await tab.waitFor("the updates section again", `!!${sec}`, 60_000);
+      await tab.waitFor("nothing offered for it", `!${sec}.innerText.includes("Claude Code 2.1.400 is out")`, 30_000);
+    } finally {
+      rmSync(join(reg, "claude"), { force: true });
+      writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
+    }
+  },
+
+  // Moves to the recommended installer (BOOT7): Claude Code and Codex installed with npm are rows
+  // offering the move; Keep npm keeps Claude Code (it goes to Already here, not offered again);
+  // Codex ticked moves: the vendor's installer, then npm's copy removed, "1 moved…".
+  async move() {
+    const world = join(E.fake, "world.json");
+    mkdirSync(join(E.fake, "installed"), { recursive: true });
+    writeFileSync(join(E.fake, "installed", "codex"), "0.162.1");
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], other: { claude: "npm", codex: "npm" } }));
+    const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
+    try {
+      await fresh("#/setup");
+      await tab.waitFor("Codex offered the move", `!!document.querySelector('input[aria-label="Codex"]') && ${text("installed with npm · move to the recommended installer?")}`, 30_000);
+      await tab.waitFor("Claude Code offered it too", `!!document.querySelector('input[aria-label="Claude Code"]')`);
+      await tab.eval(`[...document.querySelectorAll(".setup-item-row")].find(r => r.innerText.includes("Claude Code")).querySelector("button.setup-keep").click()`);
+      await tab.waitFor("Claude Code kept", `!document.querySelector('input[aria-label="Claude Code"]') && [...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Claude Code"))`, 30_000);
+      await tab.eval(`document.querySelector('input[aria-label="Codex"]').click()`);
+      await tab.waitFor("Codex ticked", `[...document.querySelectorAll("button")].some(b => b.textContent === "Install 1" && !b.disabled)`, 30_000);
+      await tab.eval(`[...document.querySelectorAll("button")].find(b => b.textContent === "Install 1").click()`);
+      await tab.waitFor("its report", text("1 moved to the recommended installer."), 60_000);
+      await tab.waitFor("the new one first", text("fake vendor: install codex"));
+      await tab.waitFor("then npm's copy removed", text("fake npm: removed codex"));
+      await tab.waitFor("Codex here, the recommended way", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Codex"))`, 30_000);
+    } finally {
+      for (const f of ["installed/codex", "new/codex", "removed/codex"]) rmSync(join(E.fake, f), { force: true });
+      writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
+    }
   },
 };
 

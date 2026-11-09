@@ -1,0 +1,21 @@
+{
+ "name": "opencode-ai",
+ "version": "1.19.5",
+ "bin": {
+  "opencode": "bin/opencode.exe"
+ },
+ "os": [
+  "darwin",
+  "linux",
+  "win32"
+ ],
+ "cpu": [
+  "arm64",
+  "x64"
+ ],
+ "dist": {
+  "tarball": "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.19.5.tgz",
+  "integrity": "sha512-tEqMvQahfhdDj8vceYpXtoIrvjPXm5XRfetWnPN5YISueU7adNx9JcUA3zZ+2GKuDVgDpGdQe1ZLtCZDjqodvA==",
+  "shasum": "4fb49717dfc8ca5fa97ab9823dadf4be3e244e82"
+ }
+}

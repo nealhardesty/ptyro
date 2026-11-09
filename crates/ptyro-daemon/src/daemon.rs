@@ -35,8 +35,12 @@ pub struct Daemon {
     pub clients: AtomicU32,
     /// Set once shutdown starts; connections send `Goodbye` and close.
     pub shutdown: watch::Sender<bool>,
-    /// The environment the daemon started with: the base for every child (SPEC §5.1).
-    pub(crate) base_env: Vec<(OsString, OsString)>,
+    /// The environment the daemon started with: the base for every child (SPEC §5.1). Its
+    /// `PATH` follows what installers store on Windows ([`Self::refresh_path`]); read it with
+    /// [`Self::base_env`].
+    env: Mutex<Vec<(OsString, OsString)>>,
+    /// ptyro's tools folders' program directories, kept first on `PATH` (BOOT1).
+    tools_path: Vec<PathBuf>,
     pub store: Option<Store>,
     pub config: RwLock<Config>,
     /// The session most recently focused in any TUI (`@focused`).
@@ -183,6 +187,7 @@ impl Daemon {
         let (io_pause, pause_rx) = watch::channel(false);
         let (run_id, started_ms) = identity.unwrap_or_else(|| (SessionId::new().full(), now_ms()));
         let chats = crate::chats::Chats::open(&paths.data.join("chat.db"));
+        let tools_path = ptyro_agents::setup::path_dirs(&paths);
         Arc::new(Self {
             paths,
             started_ms,
@@ -194,11 +199,24 @@ impl Daemon {
             shutdown: watch::Sender::new(false),
             // The handoff's own variables are for this process, never its children; nor the
             // session of whichever client started us (it would place checks in it, M7.6).
-            base_env: std::env::vars_os()
-                .filter(|(k, _)| {
-                    !k.to_string_lossy().starts_with("PTYRO_HANDOFF_") && k != "PTYRO_SESSION_ID"
-                })
-                .collect(),
+            env: Mutex::new(
+                std::env::vars_os()
+                    .filter(|(k, _)| {
+                        !k.to_string_lossy().starts_with("PTYRO_HANDOFF_")
+                            && k != "PTYRO_SESSION_ID"
+                    })
+                    .map(|(k, v)| {
+                        // The tools `ptyro setup` puts in ptyro's own folder come first on every
+                        // child's PATH (BOOT1), even when installed after the daemon started.
+                        if k.eq_ignore_ascii_case("PATH") {
+                            (k, ptyro_agents::setup::path_with(&tools_path, &v))
+                        } else {
+                            (k, v)
+                        }
+                    })
+                    .collect(),
+            ),
+            tools_path,
             store,
             config: RwLock::new(config),
             focused: Mutex::new(None),
@@ -274,6 +292,32 @@ impl Daemon {
         })
     }
 
+    /// The environment every child starts from (SPEC §5.1), its `PATH` as last refreshed.
+    pub(crate) fn base_env(&self) -> Vec<(OsString, OsString)> {
+        self.env.locked().clone()
+    }
+
+    /// Take into the daemon's `PATH` the folders installers stored since it started (SPEC
+    /// §24.2): on Windows the registry's `Path`, which `ptyro setup`, WinGet and the vendors'
+    /// installers write and a running process never sees otherwise; nothing elsewhere. Called
+    /// when a setup run or a session ends and before an agent or gh is looked for, so what setup
+    /// just installed starts without a daemon restart (the final review's I1). On Windows the
+    /// daemon's own `PATH` follows too, for the programs it runs without a child environment
+    /// (git).
+    pub(crate) fn refresh_path(&self) {
+        let Some(stored) = ptyro_agents::setup::stored_path() else { return };
+        let mut env = self.env.locked();
+        let Some((_, path)) = env.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("PATH")) else {
+            return;
+        };
+        let fresh = ptyro_agents::setup::refreshed_path(path, &stored, &self.tools_path);
+        if fresh != *path {
+            #[cfg(windows)]
+            ptyro_pty::winreg::set_process_path(&fresh);
+            *path = fresh;
+        }
+    }
+
     pub(crate) fn hub(&self) -> crate::session::Hub {
         crate::session::Hub {
             events: self.events.clone(),
@@ -294,7 +338,7 @@ impl Daemon {
     ) -> Option<(PathBuf, u64)> {
         let config = self.config();
         let agent = place.agent.as_deref();
-        if !config.recorder.enabled || place.chat.is_some() {
+        if !config.recorder.enabled || place.chat.is_some() || place.unrecorded {
             return None;
         }
         if agent.is_some_and(|a| ptyro_agents::def(&config, a).record == Some(false)) {
@@ -424,6 +468,9 @@ impl Daemon {
                     quick: false,
                     pad: false,
                     chat: None,
+                    // Not in the store: a login session restarted after the daemon itself restarted is
+                    // recorded as usual (it has ended by then).
+                    unrecorded: false,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -828,6 +875,7 @@ impl Daemon {
             quick: spec.quick && agent.is_none(),
             pad: spec.pad && agent.is_none(),
             chat: None,
+            unrecorded: spec.unrecorded,
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -1184,6 +1232,11 @@ impl Daemon {
             | Request::MachineRemove { .. }
             | Request::MachineHide { .. }
             | Request::MachineRetry { .. }) => self.handle_machines(req).await,
+            Request::SetupPlan { picks, wsl_picks } => self.setup_plan(picks, wsl_picks).await,
+            Request::Updates { note } => self.updates(note).await,
+            Request::SetupRun { picks, wsl_picks, moves } => {
+                self.setup_run(picks, wsl_picks, moves).await
+            }
             Request::LastLaunch { worktree, .. } => {
                 Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }

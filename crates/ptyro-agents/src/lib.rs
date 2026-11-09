@@ -6,13 +6,17 @@
 //! detection of existing multi-account setups. Adapters proper (hooks, status, resume) are M4.
 
 pub mod adapter;
+pub mod catalog;
 pub mod claude;
 pub mod codex;
 pub mod detect;
 pub mod glob;
 pub mod locate;
 pub mod others;
+pub mod own;
 pub mod profile;
+pub mod setup;
+pub mod updates;
 
 use std::path::PathBuf;
 

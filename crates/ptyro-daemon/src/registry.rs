@@ -28,7 +28,10 @@ pub(crate) fn git_err(e: ptyro_git::GitError) -> Error {
     match e {
         ptyro_git::GitError::Invalid(m) => Error::invalid(m),
         ptyro_git::GitError::Missing => {
-            Error::new(ErrorCode::Unsupported, "git is not installed or not on PATH")
+            let fix = ptyro_agents::locate::install_fix("git")
+                .map(|f| format!(": {f}"))
+                .unwrap_or_default();
+            Error::new(ErrorCode::Unsupported, format!("git is not installed or not on PATH{fix}"))
         }
         other => Error::new(ErrorCode::Conflict, other.to_string()),
     }

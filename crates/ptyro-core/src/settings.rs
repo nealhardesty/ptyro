@@ -274,6 +274,12 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
+        id: "updates",
+        title: "Updates",
+        blurb: "Newer versions of your agents: looked for once a day and offered, never installed without you.",
+        scope: Scope::User,
+    },
+    Section {
         id: "profiles",
         title: "Profiles",
         blurb: "Accounts and identities, one per context.",
@@ -566,6 +572,10 @@ const RESTORE: &[Choice] = &[
     c("resume", "resumed right away, three at a time"),
     c("none", "not restored"),
 ];
+const UPDATE_CHECK: &[Choice] = &[
+    c("daily", "look once a day, in the background, and offer what's newer"),
+    c("off", "never look (`ptyro update --check` still looks when you ask)"),
+];
 const SCOPE: &[Choice] = &[
     c("current-first", "this workspace first, then the others"),
     c("current", "this workspace only"),
@@ -817,6 +827,10 @@ pub const SETTINGS: &[Setting] = &[
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),
     // ── Agents ──
     s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice, and what quick new (`C-n`) starts in a worktree that hasn't run one yet. A project's own default agent wins there.").or("claude").also("default agent claude codex gemini opencode quick new"),
+    // ── Updates ──
+    s("updates.check", "updates", pick(UPDATE_CHECK), "Look for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) and of ptyro itself once a day. A newer one is offered with its one-step update at start-up, in the health badge (M), on the web's Health page and in `ptyro doctor`; nothing is downloaded or updated without you (ptyro's own update checks the release against its SHA256SUMS, then upgrades the daemon live). Offline, it stays quiet and looks again the next day.").also("update upgrade new version out of date outdated newer check latest self-update release"),
+    s("updates.ignore", "updates", Kind::List, "Updates not to offer: an agent's name (or `ptyro`) to skip all of its updates (`codex`), or a name and version to skip just that one (`codex@0.170.0`, `ptyro@0.0.70`).").also("skip mute dismiss update version outdated self-update").or("none").eg("codex@0.170.0"),
+    s("updates.keep_installer", "updates", Kind::List, "Agents to keep the way you installed them (`codex`): ptyro stops offering to move them to the vendor's recommended installer (from npm, Homebrew or WinGet), and updates them the way they are installed. The setup checklist's Keep, and the CLI's `k` when it asks, add one here.").also("move installer npm homebrew brew winget keep dismiss migrate native vendor recommended").or("none").eg("codex"),
     s("agents.*.adapter", "agents", pick(ADAPTERS), "Which kind of agent it is.").new_only().or("the name, if it is a known agent, else generic"),
     s("agents.*.command", "agents", Kind::Argv, "The program to run.").new_only().or("the agent's own name"),
     s("agents.*.args", "agents", Kind::List, "Arguments added to every start.").new_only(),

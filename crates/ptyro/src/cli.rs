@@ -113,7 +113,9 @@ impl Ctx {
 
     fn options(&self, kind: ClientKind, autospawn: bool) -> ConnectOptions {
         let mut o = ConnectOptions::new(self.paths.clone(), kind);
-        o.autospawn = autospawn;
+        // `PTYRO_NO_AUTOSPAWN=1` (tests, scripts) wins over every command that would start one
+        // (`doctor`, `new`…), so nothing leaves a daemon running its caller didn't ask for.
+        o.autospawn = autospawn && o.autospawn;
         o.encoding = self.encoding;
         if self.remote.is_some() {
             o.remote.clone_from(&self.remote);
@@ -144,6 +146,10 @@ async fn dispatch(
                 | Cmd::Completions { .. }
                 | Cmd::ShellInit { .. }
                 | Cmd::Init { .. }
+                | Cmd::Setup { .. }
+                | Cmd::Install { .. }
+                | Cmd::Update { .. }
+                | Cmd::Login { .. }
                 | Cmd::Uninstall { .. }
                 | Cmd::Backup { .. }
                 | Cmd::Daemon { .. }
@@ -161,6 +167,34 @@ async fn dispatch(
         if let Some(r) = remote {
             return Err(Error::invalid(format!(
                 "uninstall removes ptyro from this computer, not from {r}: run `ptyro uninstall` there"
+            )));
+        }
+        None
+    } else if matches!(
+        cmd,
+        Some(Cmd::Setup { .. } | Cmd::Install { .. } | Cmd::Login { .. } | Cmd::Update { .. })
+    ) {
+        // Setup installs on this computer, with no daemon (BOOT1); logins too (BOOT4), and
+        // updates (BOOT5).
+        if let Some(r) = remote.filter(|r| !ptyro_client::is_local(Some(r))) {
+            if matches!(cmd, Some(Cmd::Update { .. })) {
+                let there = match r.strip_prefix("wsl://") {
+                    Some(d) if !d.is_empty() => format!("`wsl -d {d} -- ptyro update`"),
+                    Some(_) => "`wsl ptyro update`".to_owned(),
+                    None => format!("`ptyro update` on {r}"),
+                };
+                return Err(Error::invalid(format!(
+                    "update is about this computer's agents, not {r}'s: run {there}"
+                )));
+            }
+            let what = if matches!(cmd, Some(Cmd::Login { .. })) { "login" } else { "setup" };
+            if r.starts_with("wsl://") {
+                return Err(Error::invalid(format!(
+                    "{what} reaches WSL itself: `ptyro {what} --where wsl` (or both), not --remote {r}"
+                )));
+            }
+            return Err(Error::invalid(format!(
+                "{what} is about this computer, not {r}: run `ptyro {what}` there"
             )));
         }
         None
@@ -324,6 +358,54 @@ async fn dispatch(
             Ok(0)
         }
         Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
+        Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, survey, move_, tty }) => {
+            let a = crate::setup::SetupArgs {
+                yes,
+                agents,
+                tools,
+                dry_run,
+                json,
+                place,
+                survey,
+                tty,
+                move_,
+            };
+            crate::setup::setup(&ctx, a).await
+        }
+        Some(Cmd::Install {
+            names,
+            yes,
+            dry_run,
+            json,
+            place,
+            admin,
+            tty,
+            confirmed,
+            move_,
+            moves,
+        }) => {
+            let a = crate::setup::InstallArgs {
+                names,
+                yes,
+                dry_run,
+                json,
+                place,
+                admin,
+                tty,
+                confirmed,
+                move_,
+                moves,
+            };
+            crate::setup::install(&ctx, a).await
+        }
+        Some(Cmd::Update { names, check, yes, json, tty }) => {
+            let a = crate::setup::UpdateArgs { names, check, yes, json, tty };
+            crate::setup::update(&ctx, a).await
+        }
+        Some(Cmd::Login { names, check, json, place, tty, installed }) => {
+            let a = crate::logins::LoginArgs { names, check, json, place, tty, installed };
+            crate::logins::login(&ctx, a).await
+        }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
         Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
@@ -614,18 +696,24 @@ async fn dispatch(
             unreachable!("handled in main")
         }
         Some(Cmd::ShellInit { shell }) => {
-            print!("{}", shell_init(shell));
+            print!("{}", shell_init(shell, &ctx.paths));
             Ok(0)
         }
         Some(Cmd::Daemon { cmd }) => daemon(&ctx, cmd).await,
         Some(Cmd::FakeAgent { .. }) => unreachable!("handled in main"),
         #[cfg(debug_assertions)]
-        Some(Cmd::FakeGh { .. }) => unreachable!("handled in main"),
+        Some(Cmd::FakeGh { .. } | Cmd::FakeInstaller { .. } | Cmd::FakeWsl { .. }) => {
+            unreachable!("handled in main")
+        }
     }
 }
 
 /// `ptyro daemon upgrade`: hand off, then wait for the new image to answer.
-async fn upgrade(ctx: &Ctx, binary: Option<std::path::PathBuf>, json: bool) -> Result<i32, Error> {
+pub(crate) async fn upgrade(
+    ctx: &Ctx,
+    binary: Option<std::path::PathBuf>,
+    json: bool,
+) -> Result<i32, Error> {
     let client = ctx.connect(false).await.map_err(no_daemon)?;
     let Reply::Status { status: before } = client.request(Request::Status).await? else {
         return Err(Error::internal("unexpected reply"));
@@ -1224,8 +1312,13 @@ impl Shell {
 /// Shell integration (SPEC §5.7, `ptyro_core::shell`): OSC 133 prompt marks (copy-mode prompt
 /// jumps, last exit status) and the directory. Each snippet does nothing outside ptyro (`$PTYRO`
 /// unset).
-pub fn shell_init(shell: Shell) -> &'static str {
-    shell.kind().snippet()
+/// The snippet, after the lines that put the tools `ptyro setup` installed on `PATH` (only the
+/// folders that exist: nothing for a machine that never needed them).
+pub fn shell_init(shell: Shell, paths: &Paths) -> String {
+    let dirs: Vec<_> =
+        ptyro_agents::setup::path_dirs(paths).into_iter().filter(|d| d.is_dir()).collect();
+    let kind = shell.kind();
+    format!("{}{}", ptyro_core::shell::path_lines(kind, &dirs), kind.snippet())
 }
 
 /// `ls --status/--project/--workspace`.

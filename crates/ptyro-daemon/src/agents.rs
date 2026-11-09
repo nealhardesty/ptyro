@@ -645,7 +645,12 @@ impl Daemon {
         // first prompt, after OSC 7501 has said working, and its idle ended the turn at once
         // (`wait --for idle` returned before the turn did; WIN8). What else it says (the
         // conversation, the model) still counts.
-        if event == "SessionStart" && s.status() == Some(AgentStatus::Working) {
+        let in_turn = {
+            let last_prompt =
+                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).last_prompt_ms;
+            start_holds_off_idle(s.engine.locked().record.as_ref(), last_prompt)
+        };
+        if event == "SessionStart" && in_turn {
             signals
                 .retain(|x| !matches!(x.signal, Signal::Status { status: AgentStatus::Idle, .. }));
         }
@@ -778,7 +783,7 @@ impl Daemon {
 
     /// Type a prompt (text + Enter) and remember when, so `ptyro wait --for idle` waits for
     /// the turn it starts rather than the idle before it.
-    pub(crate) async fn type_prompt(&self, s: &Session, text: &str, enter: bool) {
+    pub(crate) async fn type_prompt(self: &Arc<Self>, s: &Session, text: &str, enter: bool) {
         // A moment for the input box to take focus.
         tokio::time::sleep(Duration::from_millis(200)).await;
         // A trailing newline (a prompt file's last line) would submit before our Enter does.
@@ -800,48 +805,110 @@ impl Daemon {
         }
     }
 
-    /// After a prompt is typed: if it still sits in the input box, its Enter was dropped (Codex
-    /// 0.166 is busy for a moment after it first says idle, and an Enter then is lost), so press
-    /// Enter again once the agent is idle. Twice at most, within ~10 s; only while the screen
-    /// shows this very prompt unsent, so nothing is ever sent twice (WIN8).
-    fn check_taken(&self, s: &Session, text: &str) {
+    /// After a prompt is typed, ptyro watches the input box for ~10 s (WIN8, SPEC §8.2). A prompt
+    /// that leaves it was taken. One that stays is pressed Enter again only for an agent known to
+    /// drop an Enter (`drops_enter`: Codex 0.166), and only on every sign it never took it
+    /// ([`look_at_box`]); twice at most. Otherwise, and whenever a press isn't safe, nothing is
+    /// pressed and the send is reported unconfirmed: a `prompt_unconfirmed` event, and attention
+    /// that says to look.
+    fn check_taken(self: &Arc<Self>, s: &Session, text: &str) {
         let Some(adapter) = s.adapter() else { return };
         let Some(s) = self.session(s.id) else { return };
-        let want: String = text.chars().take(40).collect();
-        let want = want.trim().to_owned();
+        let me = Arc::clone(self);
+        let want = text.trim().to_owned();
+        let mut entered = now_ms();
         tokio::spawn(async move {
             let a = ptyro_agents::adapter(&adapter);
             let mut presses = 0;
+            // The last look that found this prompt unsent and the agent waiting: when, and what
+            // the screen was.
+            let mut seen: Option<(u64, String)> = None;
+            let unconfirmed = |why: &'static str| {
+                tracing::warn!(session = %s.id, "a typed prompt isn't confirmed: {why}");
+                s.record_event("prompt_unconfirmed", serde_json::json!({ "why": why }));
+                let (me, s) = (Arc::clone(&me), Arc::clone(&s));
+                async move {
+                    me.raise(
+                        &s,
+                        AttentionKind::Notification,
+                        format!("its prompt may not have been sent ({why}): look, and press Enter in it if not"),
+                    )
+                    .await;
+                }
+            };
+            let spoke_since = |since: u64| {
+                let now = now_ms();
+                s.engine.locked().high_quiet_ms(now) <= now.saturating_sub(since)
+            };
             for _ in 0..20 {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 if !s.is_live() {
                     return;
                 }
+                let now = now_ms();
                 let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
-                let pending = a.pending_input(&screen).is_some_and(|p| p.starts_with(&want));
-                if !pending {
-                    return;
+                let status = s.status();
+                let blocked = status == Some(AgentStatus::Blocked)
+                    || [a.on_screen(&screen), a.screen_status(&screen)].into_iter().any(|x| {
+                        matches!(x, Some(Signal::Status { status: AgentStatus::Blocked, .. }))
+                    });
+                let still = seen.as_ref().is_some_and(|(at, before)| {
+                    *before == screen && s.last_output_ms.load(Ordering::Relaxed) < *at
+                });
+                let step = look_at_box(&BoxLook {
+                    in_box: in_box(a.pending_input(&screen).as_deref(), &want),
+                    spoke: spoke_since(entered),
+                    dialog: blocked,
+                    waiting: matches!(
+                        status,
+                        None | Some(AgentStatus::Idle | AgentStatus::Done | AgentStatus::Starting)
+                    ),
+                    still,
+                    drops_enter: a.drops_enter(),
+                    presses,
+                });
+                match step {
+                    BoxStep::Taken => return,
+                    BoxStep::Unconfirmed(why) => return unconfirmed(why).await,
+                    BoxStep::Reset => seen = None,
+                    BoxStep::Keep => seen = Some((now, screen)),
+                    BoxStep::Press => {
+                        // Looked at again just before the key: nothing written, said or ended
+                        // since the look that found it still.
+                        let at = seen.as_ref().map_or(0, |(at, _)| *at);
+                        if !s.is_live()
+                            || s.last_output_ms.load(Ordering::Relaxed) >= at
+                            || spoke_since(entered)
+                        {
+                            seen = None;
+                            continue;
+                        }
+                        let key = ptyro_core::input::KeyEvent::new(
+                            ptyro_core::input::KeyCode::Enter,
+                            ptyro_core::input::Mods::NONE,
+                        );
+                        s.input(&ptyro_core::input::InputEvent::Key { key }).await;
+                        presses += 1;
+                        s.record_event(
+                            "prompt_enter_again",
+                            serde_json::json!({ "press": presses }),
+                        );
+                        entered = now_ms();
+                        seen = None;
+                        tokio::time::sleep(Duration::from_millis(1000)).await;
+                    }
                 }
-                // Only while it waits for input (or hasn't said anything yet): busy, an Enter now
-                // would be dropped too; blocked, it would answer the question on screen (Enter is
-                // "Yes" in Claude's dialogs). The box holding our prompt is never a dialog.
-                if !matches!(
-                    s.status(),
-                    None | Some(AgentStatus::Idle | AgentStatus::Done | AgentStatus::Starting)
-                ) {
-                    continue;
-                }
-                if presses == 2 {
-                    return;
-                }
-                presses += 1;
-                s.record_event("prompt_enter_again", serde_json::json!({ "press": presses }));
-                let key = ptyro_core::input::KeyEvent::new(
-                    ptyro_core::input::KeyCode::Enter,
-                    ptyro_core::input::Mods::NONE,
-                );
-                s.input(&ptyro_core::input::InputEvent::Key { key }).await;
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
+            let screen = s.read_screen(ptyro_protocol::ScreenFormat::Plain);
+            if s.is_live() && in_box(a.pending_input(&screen).as_deref(), &want) {
+                unconfirmed(if spoke_since(entered) {
+                    "the agent answered, yet it still shows in its input box"
+                } else if a.drops_enter() {
+                    "it still shows in its input box, and pressing Enter again wasn't safe"
+                } else {
+                    "it still shows in its input box, and this agent isn't known to drop an Enter, so ptyro doesn't press it again"
+                })
+                .await;
             }
         });
     }
@@ -1498,7 +1565,7 @@ impl Daemon {
         }
         for (profile, sessions) in by_profile {
             let Ok(plan) = self.profile_plan(&profile).await else { continue };
-            let env = plan.apply(self.base_env.iter().cloned());
+            let env = plan.apply(self.base_env().iter().cloned());
             let argv = self.agent_program("claude").unwrap_or_else(|| vec!["claude".into()]);
             // Bounded: a hung `claude agents` must not stall every session's ticks.
             let out = tokio::task::spawn_blocking(move || {
@@ -1545,10 +1612,168 @@ impl Daemon {
     }
 }
 
+/// Whether the input box shows this prompt, unsent: all of it, or (wrapped over the box's
+/// lines, of which `pending_input` reads the first) its start.
+fn in_box(pending: Option<&str>, want: &str) -> bool {
+    pending.map(str::trim).is_some_and(|p| !p.is_empty() && want.starts_with(p))
+}
+
+/// One look at a typed prompt's input box (WIN8, SPEC §8.2).
+struct BoxLook {
+    /// The box shows this prompt, unsent ([`in_box`]).
+    in_box: bool,
+    /// A hook or OSC 7501 report came since the Enter: the agent took something.
+    spoke: bool,
+    /// Blocked, or a dialog its adapter recognises is on screen.
+    dialog: bool,
+    /// It says it waits for input: idle, done, or nothing yet.
+    waiting: bool,
+    /// The screen is as the last look saw it, with no output since.
+    still: bool,
+    /// Its adapter is known to drop an Enter (`Adapter::drops_enter`).
+    drops_enter: bool,
+    /// Enter pressed again so far.
+    presses: u32,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BoxStep {
+    /// It left the box: taken.
+    Taken,
+    /// Press nothing, and say the send isn't confirmed (why).
+    Unconfirmed(&'static str),
+    /// Look again; this look is the one the next must match to count as still.
+    Keep,
+    /// Look again from scratch.
+    Reset,
+    /// Every sign says the Enter was dropped: press it again (checked once more just before).
+    Press,
+}
+
+/// What a look decides. Any doubt is no press: an Enter on a dialog answers it ("Yes" in
+/// Claude's), so a prompt still in the box is entered again only for an agent known to drop an
+/// Enter, only while it waits for input with no dialog, and only once two looks 500 ms apart saw
+/// the same still screen (an agent that took the prompt redraws; a dropped Enter leaves the screen
+/// still). A prompt still in the box that won't be pressed is reported.
+fn look_at_box(l: &BoxLook) -> BoxStep {
+    if !l.in_box {
+        return BoxStep::Taken;
+    }
+    // A dialog first: it is on screen until answered, whenever the agent's hooks come, so the
+    // report says so however late this look is (Task F re-review's R1).
+    if l.dialog {
+        return BoxStep::Unconfirmed("a dialog is on screen while it still shows in its input box");
+    }
+    if l.spoke {
+        // It took something: never pressed. A hook comes by socket and the box's redraw through
+        // the terminal, so a lagging screen can still show a prompt that was taken: watched to
+        // the end, and reported only if it stays (R2).
+        return BoxStep::Keep;
+    }
+    if !l.drops_enter {
+        // Watched to the end, then reported if it stays (it may yet leave: a redraw that lags).
+        return BoxStep::Keep;
+    }
+    if !l.waiting {
+        return BoxStep::Reset;
+    }
+    if !l.still {
+        return BoxStep::Keep;
+    }
+    if l.presses >= 2 {
+        return BoxStep::Unconfirmed(
+            "it still shows in its input box after Enter was pressed again twice",
+        );
+    }
+    BoxStep::Press
+}
+
+/// Whether a turn is going, so a `SessionStart` hook's idle mustn't end it (WIN8): the status
+/// says working, reliably (a hook, OSC 7501, a title or the screen), or as the output heuristic's
+/// guess made after a prompt was typed (the agent at work on it). A guess from before any prompt
+/// is start-up output, no turn: the start's idle replaces it [2026-11-07]. When the first hook
+/// was slow (CI's Windows and WSL), that guess stood for 5 m, and Codex never got its prompt.
+fn start_holds_off_idle(
+    record: Option<&ptyro_core::status::StatusRecord>,
+    last_prompt_ms: Option<u64>,
+) -> bool {
+    record.is_some_and(|r| {
+        r.status == AgentStatus::Working
+            && (r.confidence > Confidence::Low || last_prompt_ms.is_some_and(|p| r.since_ms >= p))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ptyro_core::status::StatusRecord;
+
+    #[test]
+    fn a_wrapped_prompt_is_still_in_the_box() {
+        let want = "work 0.2 a prompt long enough to wrap in the box";
+        assert!(in_box(Some(want), want));
+        assert!(in_box(Some("work 0.2 a prompt long "), want), "its first line, wrapped");
+        assert!(!in_box(Some(""), want));
+        assert!(!in_box(None, want));
+        assert!(!in_box(Some("something else"), want));
+    }
+
+    #[test]
+    fn a_second_enter_only_where_an_enter_is_dropped_and_never_in_doubt() {
+        let codex = BoxLook {
+            in_box: true,
+            spoke: false,
+            dialog: false,
+            waiting: true,
+            still: true,
+            drops_enter: true,
+            presses: 0,
+        };
+        assert_eq!(look_at_box(&codex), BoxStep::Press, "every sign of a dropped Enter");
+        assert_eq!(look_at_box(&BoxLook { in_box: false, ..codex }), BoxStep::Taken);
+        // It answered: never pressed, watched on (a lagging redraw), reported at the end.
+        assert_eq!(look_at_box(&BoxLook { spoke: true, ..codex }), BoxStep::Keep);
+        assert!(matches!(look_at_box(&BoxLook { dialog: true, ..codex }), BoxStep::Unconfirmed(_)));
+        // A dialog is said as a dialog, whether or not a hook came first.
+        assert_eq!(
+            look_at_box(&BoxLook { dialog: true, spoke: true, ..codex }),
+            BoxStep::Unconfirmed("a dialog is on screen while it still shows in its input box")
+        );
+        assert_eq!(look_at_box(&BoxLook { still: false, ..codex }), BoxStep::Keep);
+        assert_eq!(look_at_box(&BoxLook { waiting: false, ..codex }), BoxStep::Reset);
+        assert!(matches!(look_at_box(&BoxLook { presses: 2, ..codex }), BoxStep::Unconfirmed(_)));
+        // Claude: never pressed, whatever it looks like; watched, then reported.
+        let claude = BoxLook { drops_enter: false, ..codex };
+        assert_eq!(look_at_box(&claude), BoxStep::Keep);
+        assert!(matches!(
+            look_at_box(&BoxLook { dialog: true, ..claude }),
+            BoxStep::Unconfirmed(_)
+        ));
+        assert_eq!(look_at_box(&BoxLook { spoke: true, ..claude }), BoxStep::Keep);
+    }
+
+    #[test]
+    fn a_session_start_ends_a_start_up_guess_but_never_a_turn() {
+        let rec = |status, confidence, source, since_ms| StatusRecord {
+            status,
+            kind: None,
+            detail: None,
+            confidence,
+            source,
+            since_ms,
+            progress: None,
+        };
+        let guess = rec(AgentStatus::Working, Confidence::Low, SignalSource::Heuristic, 100);
+        let osc = rec(AgentStatus::Working, Confidence::High, SignalSource::Osc, 100);
+        let idle = rec(AgentStatus::Idle, Confidence::High, SignalSource::Hook, 100);
+        assert!(!start_holds_off_idle(None, None), "nothing said yet");
+        assert!(!start_holds_off_idle(Some(&guess), None), "start-up output, no prompt yet");
+        assert!(!start_holds_off_idle(Some(&guess), Some(150)), "guessed before the prompt");
+        assert!(start_holds_off_idle(Some(&guess), Some(100)), "guessed after the prompt");
+        assert!(start_holds_off_idle(Some(&guess), Some(50)), "guessed after the prompt");
+        assert!(start_holds_off_idle(Some(&osc), None), "Codex 0.166's own working");
+        assert!(!start_holds_off_idle(Some(&idle), Some(150)), "idle already");
+    }
 
     #[test]
     fn working_clears_only_what_the_agent_wanted() {

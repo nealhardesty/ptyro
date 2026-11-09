@@ -60,8 +60,13 @@ Google, or any other tool named here; their names and trademarks belong to their
   `sh scripts/rust-install.sh`).
 - **git 2.40 or later**, and **GNU make** for building from a checkout.
 - **At least one agent CLI:** [Claude Code](https://code.claude.com) (the best supported),
-  [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-  or [OpenCode](https://opencode.ai). Any other program runs too, with less status detail.
+  [Codex CLI](https://github.com/openai/codex),
+  [Antigravity CLI](https://antigravity.google) (`agy`, Google's agent for a Google account),
+  [OpenCode](https://opencode.ai), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)
+  (for Gemini API-key and enterprise accounts). Any other program runs too, with less status detail.
+  `ptyro setup` installs them for you ([below](#agents-and-tools-ptyro-setup)), each its
+  vendor's recommended way for your platform, from a table checked against each vendor's
+  documentation (SPEC §24.1).
 - **A modern terminal:** Ghostty, kitty, WezTerm, Alacritty, iTerm2, foot… Inside tmux works too.
 - **Optional:** the [GitHub CLI](https://cli.github.com) (`gh`) for PRs and checks;
   [Tailscale](https://tailscale.com) for the phone app.
@@ -119,12 +124,174 @@ refuses them: run `xattr -d com.apple.quarantine ptyro` once, or use the install
 doesn't set the mark). Then let ptyro look around:
 
 ```bash
-ptyro init       # finds your agents, accounts and repositories; asks a few questions
+ptyro setup      # installs the coding agents and the tools they need (a checklist)
+ptyro init       # finds your agents, accounts and repositories; asks a few questions (and offers setup)
 ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 ```
 
-**Upgrading** while agents run: install the new binary (run the install script again), then
-`ptyro daemon upgrade`. Every session keeps running.
+**Upgrading** while agents run: `ptyro update ptyro` (below) downloads the new release, checks it,
+puts it in place and upgrades the daemon live; every session keeps running. Running the install
+script again, then `ptyro daemon upgrade`, does the same by hand.
+
+### Agents and tools: `ptyro setup`
+
+A new machine needs only ptyro: `ptyro setup` installs the rest. It shows one checklist of the
+coding agents (Claude Code, Codex, Antigravity, OpenCode, and Gemini CLI for Gemini API-key and
+enterprise accounts) and the tools (git, the GitHub CLI, Node.js), with what is already here.
+Claude Code, Codex, git and the GitHub CLI are ticked unless you have them. Type the numbers to
+tick or untick, then press Enter: each one installs with its output as it runs, ends ✓ or ✗ with
+the fix, and one failure doesn't stop the rest. Then it logs you in to each one (below).
+
+```bash
+ptyro setup                                   # the checklist
+ptyro install agy                             # one by name (agy, gemini, gh, node…), any time later
+ptyro install gemini --dry-run                # what it would run, changing nothing
+ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, a fresh VM
+ptyro login                                   # log in to each agent and gh that isn't yet
+ptyro login --check                           # where each login stands, changing nothing
+```
+
+- **The vendors' own ways.** Each install command is the vendor's recommended one for your
+  platform (Claude Code's native installer, Codex's and Antigravity's installers, npm for Gemini
+  CLI, apt, dnf, Homebrew or WinGet for git and the GitHub CLI), from a table checked against
+  their documentation (SPEC §24.1). Nothing is guessed.
+- **Prerequisites come along.** Ticking Gemini CLI ticks Node.js. When your package manager's
+  Node.js is too old for it (Ubuntu 24.04's is 18), ptyro puts nodejs.org's build, checked
+  against its published checksums, in a folder of its own (`~/.local/share/ptyro-tools`), with no
+  admin rights and no `sudo npm`. It then offers to add `ptyro shell-init`'s line to your shell's
+  rc file so new terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
+  already. `ptyro uninstall` leaves that folder alone, and on PATH: the tools are yours.
+- **Admin rights only after asking, once.** apt, dnf and WinGet's machine-wide installers need
+  them: sudo asks for your password once, in your terminal, before the first of them (on Windows
+  each installer raises its own UAC prompt). ptyro never sees the password. `--yes` asks nothing:
+  a step that would need a password is skipped and its command printed for you to run.
+- **No daemon needed**, so it works on a machine where ptyro has never run.
+- **On the web, too.** The web app has the same checklist under Settings → Agents and tools (and
+  More → Set up ptyro): Agents, Tools and Already here, each with the same line as the TUI's.
+  Tick what you want and tap Install: it runs on the computer, with its output on the page. While
+  no agent is installed, the Sessions tab shows a banner that opens it ("Not now" hides it on that
+  device). Steps that need admin rights never run from the web, where a password or a Windows
+  prompt would go over the network: the page shows the command to run on the computer (with Copy),
+  and the TUI's way (`Ctrl-Q U`) or `ptyro setup`, which ask for the password there; the button
+  counts only what will run from the page, and the result says what was left for the computer.
+- **One install at a time on a machine**, whoever starts it: a second `ptyro install`, `ptyro
+  setup`, TUI checklist or web install while one runs says "setup is already running (from …)"
+  before you choose anything, and installs nothing. A web page opened while one is going (from another device, or before a
+  reload) says so and shows its progress; one that was away while it ended says so too.
+- **In the TUI, it's the first thing you see.** The first `ptyro` on a new machine opens with the
+  same checklist at the top of the first-run screen: Agents, Tools and Already here, each with a
+  line saying what it is, how it installs and whether it asks for admin rights or a login.
+  Something ticked for another says so ("ticked because Gemini CLI needs it"). `Space` ticks,
+  `j`/`k` move, `⏎` installs what's ticked (and keeps the rest of the first run's choices), `s`
+  is "not now". The install runs in a split: its live output, sudo's password prompt, then each
+  login and the line about profiles, exactly as `ptyro setup` does in a terminal. Any time later,
+  `Ctrl-Q U` (or `app.setup` in the palette) opens the checklist again on its own, the health
+  badge's fixes (`Ctrl-Q M`) open it for a missing agent or git, and `ptyro init` offers it too.
+  `app.install` installs one by name.
+- **Windows: WSL, Windows, or both.** On Windows each agent and tool can go into your WSL
+  distro, onto Windows itself, or both: the checklist has a column each, a number ticks it on
+  the side your daemon runs on (WSL's when ptyro works with ptyro in WSL), and `3:wsl`,
+  `3:windows` or `3:both` puts item 3 there. Unattended, `--where wsl|windows|both`
+  (`ptyro install gh --where both`). WSL's half is done by the ptyro inside the distro, through
+  `wsl.exe`, so its sudo prompt is in your terminal too. WSL is yours to bring: setup never
+  installs WSL, a distro, or ptyro in one. Without them it sets up Windows and says what's
+  missing, with the line to fix it (ptyro in WSL is
+  `wsl -- sh -c "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh"`);
+  run setup again afterwards for WSL's side. The TUI's checklist has the same two columns
+  (`←`/`→` picks one, `Space` ticks it there); the web app shows both when its daemon runs on
+  Windows.
+- **Logins, one account each.** After installing, setup logs you in to each agent and the GitHub
+  CLI it installed, one after another, through the tool's own sign-in: a page in your browser,
+  or a link and a code to enter, right there in your terminal (Ctrl+C skips one). ptyro never
+  sees a credential: whether it worked is the tool's own status command saying so (`claude auth
+  status`, `codex login status`, `gh auth status`). Antigravity, Gemini CLI and OpenCode name no
+  such command, so they sign in when they start; `ptyro login agy` starts one now. Later,
+  `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
+  `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
+  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there (on Windows with WSL, WSL's logins are listed there too). With `--yes`,
+  setup only says which aren't logged in.
+- **Installed another way? Move it, or keep it.** An agent you installed with npm, Homebrew or
+  WinGet (Codex through `npm install -g @openai/codex`, say) shows in the checklist as "installed
+  with npm · move to the recommended installer?". Tick it (or `ptyro install codex`, which asks
+  first; unattended, `ptyro install codex --yes --move`) and ptyro moves it: it installs the vendor's recommended way first, checks the new one answers
+  `--version`, and only then removes the old copy with that tool's own uninstall (`npm uninstall
+  -g` in the prefix the old copy is in). Your settings and logins (`~/.codex`, `~/.claude`…) live in your home,
+  where neither installer looks, so they stay: you're still logged in afterwards. If the new
+  install fails, the old one stays as it was; if removing the old one fails, ptyro says the
+  command that finishes it; and if the old copy would still run first on your `PATH`, it says
+  so, with the fix. `--yes` alone never moves anything (`--move` opts in, on `ptyro setup` too). Rather keep it as it is? Answer `k` when `ptyro install` asks, press `K` on
+  its row in the TUI's checklist, or tap Keep on the web: it's added to `updates.keep_installer`
+  (Settings → Updates), it updates the way it's installed, and the move isn't offered again. A
+  move whose old copy only an administrator can remove (a system npm prefix) runs from a terminal
+  or the TUI; the web shows the command. `ptyro doctor`, the health badge and the web's Health
+  page offer the move too.
+- **Something missing? It says so, with the fix.** Anything that finds no agent, or an agent
+  or tool that isn't installed (a new chat, a session of an agent you don't have, `ptyro
+  doctor`, the health badge, a pull request without `gh`), offers setup rather than a command to
+  copy: in a terminal, `ptyro setup` or `ptyro install codex`; in the TUI, `Ctrl-Q u` on its
+  message opens the checklist with it ticked; on the web, a Set up button does the same. With a
+  Google account, the agent to pick is Antigravity (Gemini CLI now serves only Gemini API keys and
+  some enterprise accounts).
+- **More accounts are profiles.** Setup logs in one account each. For a second (work and
+  personal), make a profile and log it in: `ptyro profile new work`, then
+  `ptyro profile login work claude`. Each profile keeps its own logins.
+
+### Keeping your agents, and ptyro, up to date: `ptyro update`
+
+ptyro looks for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
+CLI), and of ptyro itself, once a day, in the background, and tells you when one is out: once per new version when
+`ptyro` starts ("Codex 0.170.0 is out (you have 0.162.1)": press `Ctrl-Q u` while the note shows,
+or use the palette's `app.update`), in the health badge (`Ctrl-Q M`), on the web app's Health
+page, and in `ptyro doctor`, which always looks afresh. Each says what the update runs. Nothing
+is ever updated without you. The TUI shows the agents of the computer its daemon runs on (with
+WSL's daemon, WSL's; with a remote one, that computer's, named), since those are what your
+sessions run; `ptyro doctor` on a computer covers that computer's own.
+
+```bash
+ptyro update              # update every agent that has a newer version (it shows each command and asks)
+ptyro update codex        # just one
+ptyro update ptyro        # ptyro itself
+ptyro update --check      # only look now, and say what's out of date
+```
+
+- **ptyro itself.** Its newer release is downloaded only once you say yes, checked against the
+  release's `SHA256SUMS` (and its signed provenance when the GitHub CLI is installed), exactly as
+  the install scripts do, and put in place of the old binary; the old one is kept until the new
+  one runs, and put back if it doesn't. A download that fails its checksum is refused, and
+  nothing is replaced. Then the daemon is upgraded live: every session keeps running. On Windows
+  with WSL, Windows' `ptyro.exe` and the ptyro in your distro are updated together, so the two
+  always match. Installed with Homebrew, it runs `brew upgrade ptyro`; installed another way
+  (cargo, a system package, Nix or Guix), ptyro says how to update it and never replaces it. In a folder only
+  an administrator can write (`/usr/local/bin`), `ptyro update ptyro` in a terminal asks for your
+  password (sudo); the web app shows the command to run there instead.
+- **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's
+  installer again), or for an agent you installed with npm or Homebrew, that tool's
+  (`npm install -g @openai/codex@latest`), with the move to the vendor's installer offered beside
+  it (above); `ptyro update` itself never moves anything. git, the GitHub CLI and Node.js stay
+  with their own updaters.
+- **Sessions keep running.** An agent can be updated while sessions use it; ptyro names the
+  sessions that keep the old version until you restart them. On Windows, a program can't be
+  replaced while it runs: ptyro says so, names the sessions running it, and offers to try again
+  once you've closed them.
+- **In the TUI and on the web, too.** In the TUI, `Enter` on the badge's finding (or the
+  palette's `app.update`) runs `ptyro update` in a split, where the daemon is. On the web, Health →
+  the finding → Update shows what it runs, then runs it on the computer with its progress on the
+  setup page (an update refused because the agent is running offers "Try again" there); ptyro's
+  own "Update ptyro" opens its progress in a session, and the page reconnects once the daemon has
+  upgraded; "Look for newer versions now" looks at once.
+- **Quiet offline.** A look that can't reach the internet says nothing and tries again the next
+  day; it never slows `ptyro` down (start-up never touches the network: it asks the daemon, which
+  answers from what the last look remembered, in `versions.json` in ptyro's state folder).
+- **Your choice.** Settings → Updates (TUI and web): `updates.check = "off"` stops the looking,
+  and `updates.ignore` skips an agent (`"codex"`, or `"ptyro"`) or one version of it
+  (`"codex@0.170.0"`):
+
+  ```toml
+  [updates]
+  check = "daily"            # or "off"
+  ignore = ["codex@0.170.0"]
+  keep_installer = ["codex"] # keep these the way you installed them: no move offered
+  ```
 
 ### Removing ptyro
 
@@ -226,8 +393,9 @@ cd ~/dev/myrepo
 ptyro                   # open the TUI (a shell session to start with)
 ```
 
-The very first time, with no config yet, ptyro shows what it found (your agents, the accounts in
-your shell setup, your repositories) as a list to tick, and writes the config from that. Outside a
+The very first time, with no config yet, ptyro shows what it found as a list to tick: the agents
+and tools to install (the setup checklist, [above](#agents-and-tools-ptyro-setup)), the accounts
+in your shell setup and your repositories, and writes the config from that. Outside a
 repository, it opens **home**: who needs you, PRs, recent projects and repositories found, each a
 `⏎` away from a task (`Ctrl-Q H` brings it back).
 
@@ -520,7 +688,7 @@ nothing else, and a preset of your own can add a shell (shown with `⚠`) or you
 incognito chat's, which keeps nothing; ptyro asks first when the project runs under another profile
 than the chat). Gemini CLI
 works even when it is only an `npx` alias: ptyro finds it in npm's cache, nvm or the npm prefix
-(`ptyro doctor` shows where, and offers `npm i -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
+(`ptyro doctor` shows where, and offers `npm install -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
 after a restart too. A linked machine's chats show under its workspaces and are used from here
 (they run there, on its agents). In a chat, `Alt-←`/`Alt-→` flips between answers, `C-f` finds in
 it, `/` in the composer lists commands (`/retry`, `/edit`, `/fork`, `/side`, `/agent`…) and `C-q C-g`
@@ -826,9 +994,10 @@ WSL works meanwhile.
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
+| `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's and Antigravity's feeds, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
-| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes; needs Node) |
+| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes, the setup checklist; needs Node) |
 | `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, going offline. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |

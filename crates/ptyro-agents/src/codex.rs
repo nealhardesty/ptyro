@@ -309,6 +309,12 @@ impl Adapter for Codex {
         })
     }
 
+    fn drops_enter(&self) -> bool {
+        // 0.166 says idle as it starts, then is busy for a moment: the first prompt's Enter landed
+        // then and was dropped, every time (WIN8, verified 2026-11-05).
+        true
+    }
+
     fn pending_input(&self, screen: &str) -> Option<String> {
         // The composer is the last `›` line (the conversation's prompts above it have one too).
         if trust_dialog(screen) {

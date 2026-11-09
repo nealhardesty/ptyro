@@ -48,6 +48,7 @@ Status markers used below:
 21. Open questions
 22. Chat: general-purpose conversations
 23. Shells: a workspace's numbered terminals
+24. Bootstrap: agents, tools and updates
 
 ---
 
@@ -1086,10 +1087,52 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
-**[built SH.14] Protocol 1.31** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
+**[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
 client ignores both.
+
+**[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
+entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
+`keeps`) unless `updates.keep_installer` keeps it, and its state `system` when its folder is an
+administrator's (and `prefix`, npm's); a ticked one's `action.moving` is the move.
+`Request::SetupRun` adds `moves`: the agents installed another way to move (ticked where offered,
+or Move on Health). Every other one stays as it is, so a client that names none, or predates 1.36,
+never moves anything (its update runs that installer's own). `updates::Outdated` adds `move_to`.
+An older daemon sends no `moves` (nothing is offered) and ignores the field; an older client
+ignores them.
+
+**[built BOOT5] Protocol 1.35** (additive): out of date, offered (§24.7). A setup entry in the
+`other` state (installed another way: npm, Homebrew) adds `latest` when a newer version is out,
+and ticking it plans that installer's own update; `outdated` entries now arrive whenever the
+daemon remembers a newer version (`<state>/versions.json`), and ticking one runs its update.
+`Request::Updates{note}` → `Reply::Updates{offered, note}` (`read` scope): the agents out of date
+on the daemon's machine, and with `note` the start-up note's, marked said (`note: true` needs
+`full` scope: it uses up the owner's once-per-version note; `note: false` is `read`). `setup::Event::Failed`
+adds `in_use` (an update refused because the program runs: a client offers to try again). An
+older daemon sends no `latest` or `in_use` and refuses `Updates` (the TUI then offers nothing); an
+older client ignores them.
+
+**[built BOOT3] Protocol 1.34** (additive): the web's setup checklist (§24.6). `Reply::SetupPlan`
+adds `lines` (each entry's words, `checklist::Line`: `about`, `how`, `why`, `state`, as the TUI
+says them), `default_agent`, `running` (`SetupRunning{run, plan, events}`: the run going now
+and its latest 500 events, each `SetupLogged{seq, side, event}`), and `held_by` (who holds the
+machine's setup lock when it isn't the daemon's run: a terminal's or the TUI's install); `DomainEvent::SetupProgress`
+adds `seq` (from 1 in its run). An older daemon sends none of them (no lines, nothing running,
+`seq` 0: every event counts); an older client ignores them.
+
+**[built BOOT4] Protocol 1.33** (additive): `SpawnSpec.unrecorded` (§7.6): a session that is never
+recorded to disk, for logins (§24.4). An older daemon ignores the field and records as before.
+
+**[built BOOT8] Protocol 1.32** (additive): setup's sides (§24.3). `SetupPlan` and `SetupRun`
+take `wsl_picks?` (what to tick in WSL's distro, on a Windows daemon); `Plan.wsl` says what WSL
+is (usable, unusable with why and the fix, or "this is WSL"); each entry's `side` is `windows`,
+`wsl` or `local`; `SetupProgress` carries `side`, and each side ends with its own `finished`. An
+older client sends neither and gets this computer's side only.
+
+**[built BOOT1] Protocol 1.31** (additive): setup (§24.2). `SetupPlan{picks?}` → `SetupPlan{plan}`
+(`read`), `SetupRun{picks}` → `SetupStarted{run, plan}` (`full`), and the event
+`SetupProgress{run, event}` to every watcher. An older daemon refuses the new requests.
 
 **[built SH.13] Protocol 1.30** (additive): SHELLS windows (§23.17). `ShellSplit{addr, dir,
 env, size?}`, `ShellJoin{addr, into?, dir}`, `ShellLayout{addr, layout}` → `Session`.
@@ -1356,6 +1399,10 @@ Without a recorder (M8) a dormant pane shows a "☾ dormant: ⏎ resumes" card, 
   emulator bugs from real-world byte streams (attach the log to an issue).
 - Per-agent opt-out (`record = false`) and global `recorder.enabled`. Logs may contain secrets that
   scrolled through the terminal: files are `0600`, and `ptyro gc` prunes logs of removed sessions.
+- Per session, `SpawnSpec.unrecorded` (protocol 1.33, BOOT4): never recorded. Logins use it
+  (`profile login`, the web's Log in, §24.4), so a code the sign-in prints or the person pastes
+  never reaches disk. It is kept across `restart`, but not in the store: a login session
+  restarted after the daemon itself restarted is recorded as usual.
 
 **[built M8]** The format grew resize and keyframe records:
 - **Header and records.** The file starts `PTYROREC\x01`. Each record is
@@ -1553,9 +1600,63 @@ Verified against Claude Code **2.1.304** (§20).
     presses Enter again, twice at most within ~10 s; never while working (that Enter would be lost
     too) or blocked (Enter would answer the dialog). Codex 0.166 says idle as it starts and is
     then busy for a moment: the first prompt's Enter landed then and was dropped, every time.
+    It relies on an agent emptying its box as it takes a prompt, as Claude and Codex do; the
+    fake agent does too since 2026-11-07 (§18.2: it didn't, and a second Enter answered a
+    permission dialog "no").
+  - **[2026-11-07] Enter is pressed again only where an Enter is known to be dropped.**
+    Each adapter says whether it drops one (`Adapter::drops_enter`): only Codex does (0.166,
+    above). For every other agent, Claude included (Enter on its dialogs is "Yes", and its box
+    has never been seen to drop an Enter), a prompt that still sits in the box is never pressed
+    again: it is reported. So a second Enter can't land on a Claude dialog.
+  - For Codex, a press needs every sign that it never took the prompt; any doubt is no press:
+    - the box shows this prompt, unsent: all of it, or its start when it wraps (the box's
+      first line);
+    - no hook or OSC 7501 report has come since the Enter;
+    - the status is idle, done or not yet said, never blocked, and no dialog its adapter
+      recognises (`on_screen`, `screen_status`) is on screen;
+    - two looks 500 ms apart saw the same screen, with no output between them (an agent that
+      took the prompt redraws; a dropped Enter leaves the screen still);
+    - just before the key is written, no output and no report came since that second look, and
+      the session still runs.
+
+    What is left for Codex: a Codex that took the prompt, then froze its screen for over a
+    second, then showed a dialog it doesn't recognise as one, could read that Enter. Its own
+    dialogs are recognised, and none has been seen to come that way.
+  - **Reported, never silently dropped.** Whenever the prompt still sits in the box and nothing
+    is pressed (a dialog on screen while it still shows, said at once; at the end of the ~10 s
+    watch, any agent but Codex, an agent that spoke since the Enter, and Codex when no press was
+    safe; Codex after two presses), the session gets a `prompt_unconfirmed` event with why, and
+    attention: "its prompt may not have been sent (…): look, and press Enter in it if not".
+    **[2026-11-07]** A dialog is looked for before a report: it stays on screen until answered,
+    so the report says "a dialog" however late the look. An agent that spoke (a hook, OSC 7501)
+    is no longer reported at once: hooks come by socket and the box's redraw through the
+    terminal, so a lagging screen can still show a prompt it took; it is watched to the end and
+    reported only if the prompt is still there.
+  - **Tests.** m4, with a Claude whose redraw lags (`PTYRO_FAKE_LAGGY_BOX`: the taken prompt
+    stays in its box, its slow hooks leave the status idle):
+    - `a_claude_prompt_left_in_its_box_is_reported_not_entered_again` (the dialog at once);
+    - `a_dialog_drawn_between_two_looks_is_reported_not_answered` (the dialog 700 ms later);
+    - `a_dialog_no_adapter_recognises_is_never_answered` (`PTYRO_FAKE_PLAIN_DIALOG`);
+    - `a_wrapped_claude_prompt_left_in_its_box_is_reported`.
+
+    For Codex: `a_prompt_whose_enter_was_lost_is_sent` and
+    `a_wrapped_prompt_whose_enter_was_lost_is_sent`. The decision itself is `look_at_box`, with
+    table tests. The four Claude tests and the wrapped Codex one fail against the guard of the
+    first review round, which still pressed Enter for Claude, reported nothing when a dialog came
+    and lost a wrapped prompt; `a_prompt_whose_enter_was_lost_is_sent` is older, and passes
+    against it. The Claude tests assert the report and that nothing was pressed, not its
+    reason: which look sees the prompt first moves with a runner's load.
 - **A session starting doesn't end a turn [WIN8]:** a `SessionStart` hook that comes while the
   session is working moves nothing to idle (its conversation and model still count). Codex 0.166
   sends it only with the first prompt, after OSC 7501's working (verified live, 2026-11-05).
+  Only a turn holds it off: a *reliable* working (above low confidence: a hook, OSC 7501, a
+  title or the screen), or the output heuristic's guess made after a prompt was typed (the agent
+  at work on it). A working guessed from the agent's start-up output, before any prompt, is no
+  turn: `SessionStart`'s idle replaces it **[fixed 2026-11-07]**. When the first hook is slow
+  (CI's Windows and WSL runners, a loaded laptop), the heuristic guessed working before it came,
+  and the start's idle was dropped; the guess then stood until it went stale (5 m). An agent
+  whose input box ptyro doesn't read (Codex) never got its prompt meanwhile, since delivery
+  waits for a reliable idle (the m7 "fake Codex never gets its prompt" flake on Windows).
 - **Folder trust:** `on_screen` recognises the trust dialog and reports blocked(question)
   "trust this folder?". `ready()` is false while it shows, so ptyro never types into it. So is
   the first-run "Claude in Chrome extension detected" question (2.1.318), blocked(question)
@@ -3145,14 +3246,16 @@ learning anything up front.
   upgrade|service|unservice` and `integrations[.install|.uninstall]`.
 - **The first run and home** (UX1.19, `crates/ptyro-tui/src/onboard.rs`). When `ptyro` had to
   start the first session itself (`Options::welcome`):
-  - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. Agents
-    found on `PATH` (the default marked), accounts `detect()` finds in your shell setup (ticked),
+  - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. First
+    the setup checklist (BOOT2, §24.5: agents and tools to install, what's here already with the
+    default agent marked), then accounts `detect()` finds in your shell setup (ticked),
     repositories under `[discover] roots` (the one you're in ticked; it registers on its own
     anyway), desktop notifications (not ticked). Space ticks, ⏎ writes `config.toml` (0600,
     created only if absent, checked before writing) and registers the ticked repositories in
-    the current workspace, then offers the tour; Esc writes an empty config so it never comes
+    the current workspace (and installs what the checklist ticks, §24.5), then offers the
+    tour; `s` does the same without installing; Esc writes an empty config so it never comes
     back. `first.run` opens it again; `ptyro init` stays the terminal's version, with the
-    terminal checks and shell extras;
+    terminal checks and shell extras (and the CLI's checklist offered);
   - else, when the workspace has no project: **home** (`home`, `H`), one list of who needs you,
     worktrees with PRs and their checks, projects (most recently used first; ⏎ starts a task
     there), repositories found (⏎ adds one, then the task box), and a shell here.
@@ -3508,6 +3611,8 @@ ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
 ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
+ptyro setup [-y] [--agents A,B] [--tools T,U] [--where W] [--dry-run] [--json]   # the setup checklist (§24.2, §24.3)
+ptyro install NAME… [-y] [--where W] [--dry-run] [--json]             # install agents/tools by name; W: wsl|windows|both (Windows)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
 ptyro mcp                              # MCP server exposing ptyro to agents (§15.4)
@@ -5352,7 +5457,17 @@ is "the web is up when the daemon is".
 - **No orphans.** A managed `ptyro serve` leaves within a second of its parent daemon going
   (`getppid` changes), however it went: a crash leaves the socket file behind, so the file alone
   can't say, and the next daemon's server would never get the port (`m9`: the daemon is killed
-  with SIGKILL and its replacement's server comes up).
+  with SIGKILL and its replacement's server comes up). **[fixed 2026-11-07]** The parent it
+  compares with is the daemon's own pid (`PTYRO_DAEMON_PID`), not the parent it saw first: a
+  daemon gone before the server first looked had already left it to another parent, so the
+  change never came. And the daemon starts no server once it is stopping (checked under the lock
+  its stop's kill takes): a server started just after that kill outlived the daemon and held the
+  port from the next one (`m9` on WSL; tested by
+  `a_managed_server_whose_daemon_is_already_gone_leaves`). Nor while it hands over to a new
+  image: the exec keeps the daemon's pid, so a server started then would never notice (a
+  handover called off starts it again). On Windows the daemon names its start time too
+  (`PTYRO_DAEMON_STARTED`), and a process with its id that started at another time is another
+  one: the daemon is gone.
 - **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
   `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
@@ -5546,7 +5661,8 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
   the device list, and `serve` must not be `--remote`): `config.get|check|save|show` (checked as
   `ptyro config check` does, written 0600 atomically, the daemon told to reload), `doctor`, `about`,
   `profile.new|rm|rename|sync|detect|detect_apply|login|doctor`, `integrations.ls|install|
-  uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`. The work
+  uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`,
+  `login.list|start` (BOOT4, §24.4). The work
   is the CLI's own (`profiles.rs`, `doctor.rs`, `config.rs` expose it as functions; the rest runs
   the CLI as a subprocess), so the two cannot drift.
 - **The web tour:** `tour.start` makes what `ptyro tour` makes (a throwaway directory with its own
@@ -5840,6 +5956,30 @@ command): ptyro doesn't confine that.
 | Git | temp repos; worktree create/remove safety matrix (dirty, untracked, unpushed, stash, locked) |
 | End-to-end | scripted TUI runs in a headless PTY (the testkit attaches a client, sends keys, asserts on cell cache). **Built in M1:** `ptyro-headless` (dev tool in `ptyro-testkit`) runs a program, even the ptyro TUI itself, inside the emulator with timed `--send`/`--resize`/`--snapshot`/`--expect`/`--record`; `make smoke` runs it in CI. `crates/ptyro/tests/e2e.rs` drives a real daemon in a temp `PTYRO_HOME` with the built-in fake agent. |
 | Manual compatibility matrix | `docs/compat.md`: Claude Code, Codex, Gemini, OpenCode, nvim, vim, htop/btop, less, fzf, lazygit, tig, bash/zsh/fish readline, `vttest` sections — checked per release in Ghostty, kitty, WezTerm, Alacritty, iTerm2, Terminal.app, and inside tmux |
+
+**The fake agent behaves as the real ones do where ptyro looks [2026-11-07, the flakes task]:**
+- As Claude does, the fake Claude empties its input box when it takes a prompt (the prompt
+  moves up into the conversation), and draws what it took itself: its terminal doesn't echo,
+  as Claude's raw one doesn't, so a line typed ahead while it works can't land where the box is
+  redrawn. It used to leave the prompt in the box, so ptyro's WIN8 check ("this very prompt
+  still sits there unsent", §8.2) saw it unsent while a slow hook still left the status idle,
+  and pressed Enter again; the permission dialog that came next took that Enter as "no". This
+  was the `send --wait` flake of ROADMAP WIN13 (m5 on macOS: "a1 isn't waiting on a prompt",
+  "a1 matched answer: no"). The product's guard against it is in §8.2.
+- So the fake Claude never shows a typed-but-unsent draft: a dropped Enter on Claude's box
+  isn't modelled (Codex's is, `PTYRO_FAKE_DROP_FIRST_ENTER`). A test that needs one would draw
+  the draft from a raw-mode reader.
+- `PTYRO_FAKE_LAGGY_BOX=1` is a Claude whose redraw lags: a prompt it took stays in its box,
+  and `ask` shows its permission dialog at once, before its hooks.
+- `PTYRO_FAKE_HOOK_DELAY_MS=N` makes each of its hooks take N ms to start, as on a loaded
+  machine, so what ptyro does before a hook arrives is tested on every machine, not only on a
+  slow CI runner (m5 `a_prompt_taken_with_slow_hooks_is_entered_once`, and the m4 tests above).
+  `PTYRO_FAKE_START_GATE=<path>` keeps it loading, with output, until the file exists: m4
+  `a_slow_session_start_replaces_a_guessed_working` waits for the heuristic's guess before it
+  lets the first hook go. These, `PTYRO_FAKE_LAGGY_BOX` and `PTYRO_FAKE_PLAIN_DIALOG` are test
+  knobs (`ptyro_core::test_knob`: a release build ignores them).
+- A test that asserts which source a status came from first waits for the agent's first
+  reliable word: before it, the output heuristic may guess "working" from start-up output (§9.3).
 
 CI: GitHub Actions on Linux + macOS runs `make check` (fmt-check, clippy `-D warnings`, tests,
 spike smoke) plus cargo-deny (`deny.toml`: licenses, advisories, bans, sources); release artifacts
@@ -7220,6 +7360,50 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   program but names stay (ptyro's name is an address, §2.3); the pane's directory by default;
   long-command notifications on by default, told by OSC 133 exit codes instead of output guesses.
 
+### 20.15 Installers and newest-version feeds (BOOT0) **[V/S 2026-11-06: read from each vendor's docs and installer scripts; the version table §24.1 holds the per-value marks]**
+
+- **Claude Code:** the native installer (`curl -fsSL https://claude.ai/install.sh | bash`;
+  `irm https://claude.ai/install.ps1 | iex`) is the recommended way on every platform, x64 and
+  ARM64, and needs no admin. It updates itself in the background; `claude update` applies one now.
+  Its newest version is the plain-text body of
+  `https://downloads.claude.ai/claude-code-releases/latest` (what `install.sh` reads; `stable` is
+  beside it). `claude auth status` exits 1 when logged out. The npm package needs Node.js 22+.
+- **Codex:** the docs now lead with a standalone installer (`curl -fsSL
+  https://chatgpt.com/codex/install.sh | sh`; `irm https://chatgpt.com/codex/install.ps1 | iex`),
+  which needs no Node.js and installs into `~/.local/bin` (`~/.codex/packages/standalone`) or
+  `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`. Updating is running it again (`codex update` exists
+  too). Its feed, `https://releases.openai.com/codex/channels/latest`, is GitHub-release JSON with
+  `tag_name` = `rust-v<version>`. `codex login status` exits 1 when logged out.
+- **Antigravity (`agy`):** its installer (`…/cli/install.sh | bash`, `…/cli/install.ps1 | iex`) puts
+  `agy` in `~/.local/bin` or `%LOCALAPPDATA%\agy\bin` and it updates itself in the background
+  (`AGY_CLI_DISABLE_AUTO_UPDATE=true` stops that). The installers read
+  `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<os>_<arch>.json`
+  (`linux_amd64`, `darwin_arm64`, `windows_arm64`, `linux_amd64_musl`…): `{version, url, sha512}`.
+  Sign-in happens when `agy` starts; no status command is documented.
+- **OpenCode:** OpenCode 2 (`@opencode/cli`, `opencode.ai/v2/install`, beta) replaced the server
+  API ptyro's adapter speaks (§8.6) and shares the `opencode` command, so the table installs
+  OpenCode 1: `curl -fsSL https://opencode.ai/install | bash` (into `~/.opencode/bin`), or
+  `npm install -g opencode-ai` on Windows (the docs recommend WSL there). Its newest version is
+  the npm registry's `opencode-ai/latest`; `opencode upgrade` updates it.
+- **Gemini CLI:** `npm install -g @google/gemini-cli`, Node.js 20+ (its `engines`, and the docs).
+  No login status command.
+- **GitHub CLI:** the docs warn off Debian's and Ubuntu's own `gh` (2.45.x/2.46.x broken); its
+  own apt and dnf repositories, Homebrew, and `winget install --id GitHub.cli --source winget`.
+  `gh auth status` exits 1 when logged out.
+- **Node.js:** `https://nodejs.org/dist/index.json` lists releases newest first, each with `lts`
+  (`false` or the line's name); 26.13.0 was the newest LTS on 2026-11-06, above a 27.0.0 alpha.
+  Builds are `node-v<v>-<linux|darwin|win>-<x64|arm64>.<tar.xz|zip>`, with `SHASUMS256.txt`.
+  WinGet's `OpenJS.NodeJS.LTS` is in winget-pkgs; nodejs.org names no winget command.
+- **Moving between installers keeps settings and logins (BOOT7, 2026-11-07):** each agent keeps
+  them in the home, apart from the program: Claude Code `~/.claude` and `~/.claude.json` (its setup
+  page removes them in a step of its own, after any uninstall; uninstalls are `npm uninstall -g
+  @anthropic-ai/claude-code`, `brew uninstall --cask claude-code`, `winget uninstall
+  Anthropic.ClaudeCode`) [V]; Codex `~/.codex/config.toml` [V config-basic], its `auth.json` in the
+  same `CODEX_HOME` [S]; Gemini CLI `~/.gemini` [S]; OpenCode `~/.config/opencode` and
+  `~/.local/share/opencode` [S]. Claude Code's npm package installs the same native binary as the
+  native installer [V]. If `claude` still runs after an uninstall, the docs point at a second
+  installation or a leftover alias [V]: the reason a move checks what runs afterwards (§24.9).
+
 ## 21. Open questions
 
 1. ~~**License**~~ — **decided 2026-10-20: MIT** ("for now"; `LICENSE` at repo root, `license =
@@ -7400,8 +7584,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   that package, and a `bin` script inside it: relative, no `..`), running a Node script with the `node`
   beside it when none is on `PATH`; ptyro never downloads one. Sessions, chats, `doctor`
   (where, and how: `(nvm)`, `(npx cache)` with a note to `npm i -g`), `AgentChoice.found` (web and
-  TUI agent pickers) and the first-run screen use it; "No agent found" and an asked-for agent that
-  isn't installed offer the install command. **On Windows (WIN8):** a program is found by
+  TUI agent pickers) and the first-run screen use it; no agent at all and an asked-for agent that
+  isn't installed offer setup (`ptyro setup`, `ptyro install <program>`; BOOT9, §24.10). **On Windows (WIN8):** a program is found by
   `PATHEXT` (`claude.exe`, `codex.cmd`; never npm's extensionless `sh` shim beside the `.cmd`),
   with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
   `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
@@ -7413,7 +7597,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   first, as cmd-shim picks), anything else as it is. Through the shim, `cmd.exe` would stand
   between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's
   program. A shim that can't be read runs as itself (WIN5 wraps it in `cmd.exe /d /c`). Claude's
-  install hint is `irm https://claude.ai/install.ps1 | iex` there. **Not built:** an `@` completion of the folders' files
+  install hint is `irm https://claude.ai/install.ps1 | iex` there (every hint is the version table's, §24.1). **Not built:** an `@` completion of the folders' files
   in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
   (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
   try; its permission rules for `<server>_*` are written [S]).
@@ -7644,7 +7828,8 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   (default `2m`) idle, as sessions do (§7.4).
 - **Which agent.** `[chat] agent`, else the workspace's default agent, else the first of claude,
   codex, gemini, opencode that is installed and has a structured protocol (§7.1). With none: the new
-  chat says "No agent found" and offers `ptyro doctor`'s fix. An agent without a structured
+  chat says no agent that can chat is installed and offers setup (BOOT9, §24.10: the TUI's
+  checklist, the web's setup page, `ptyro setup`). An agent without a structured
   protocol is not offered (a `protocol = "acp"` entry makes it one). `agent@profile` works as it
   does for sessions. The agent of a chat can be changed at any time (§22.7).
 - **Permissions.** Tools the chat's preset allows are approved at launch where the agent can
@@ -8742,3 +8927,1447 @@ strip, and a split is always a shell.
   window's later panes as indented `.2` cards. The web still shows one pane at a time (§23.14).
 - **Not here:** splitting a worktree's sessions into windows (their splits stay a TUI layout,
   §11.2i), a desktop split view on the web, and more than four panes.
+
+## 24. Bootstrap: agents, tools and updates **[decided 2026-11-06 (owner, ROADMAP BOOT); BOOT0 and BOOT1 built 2026-11-06; BOOT8, BOOT4, BOOT2, BOOT3, BOOT5, BOOT6, BOOT7 and BOOT9 built 2026-11-07: the feature is complete]**
+
+The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-design.md`: one setup checklist
+that installs the coding agents, git, the GitHub CLI and their prerequisites, walks through the
+logins, and later offers updates. Each phase below records what it built and what the builder
+decided where the design left it open.
+
+### 24.1 The version table (BOOT0) **[built 2026-11-06]**
+
+**Where it lives:** `crates/ptyro-agents/src/catalog.toml`, embedded with `include_str!` and read
+by `ptyro_agents::catalog` (typed, `serde`, `deny_unknown_fields`; a table that failed to load would be empty, so nothing breaks, and the tests load it). Data, not code, so a fact can be
+corrected without touching the logic, and the tests check every row on every load. Every value is
+from the vendor's documentation (or, where marked, the vendor's installer script or the program
+itself) on the row's `checked` date, and RESEARCH segment G records the same, with sources.
+
+**Rows:** the agents Claude Code (`claude`), Codex, Antigravity (`agy`), OpenCode and Gemini CLI
+(labelled "for Gemini API-key and enterprise accounts (others: Antigravity)"), and the tools
+git, the GitHub CLI (`gh`) and Node.js (`node`). An agent's row id is its built-in name (§8.1).
+
+**Per row:** `doc` (the vendor page) and `checked` (the date); `version` (the argv that prints the
+installed version); `login` (`start`, and `check`, which exits 0 when logged in, absent when the
+vendor documents none); `latest` (the newest-version source); `prereqs` (an item, its minimum
+version when one is named, required or only recommended, and on which platforms); `methods` (in
+order of preference) and `others` (other ways it may already be installed, with how each updates:
+for BOOT5's updates and BOOT7's moves).
+
+**Per method:** `platforms` (`linux`, `macos`, `wsl`, `windows-x64`, `windows-arm64`), `via`
+(`vendor`, `npm`, `brew`, `winget`, `apt`, `dnf`, `xcode`, `node-dist`), `shell` (`sh`, or `powershell`
+on Windows), `needs` (a program that must be on `PATH`, such as `apt-get`), `install`, `update`,
+`auto_update`, `admin`, and for `node-dist` the `url` and `sums` templates. `Item::method(platform,
+has)` picks the first method whose `needs` is present, so a Mac without Homebrew gets nodejs.org's
+build and Linux gets apt or dnf by what is there.
+
+**Marks:** every method, login and source carries `V`, `S` or `U` (§20 style), and anything not `V`
+carries a `note` saying what is second-hand or missing. A value nobody documents is left out:
+Antigravity's, Gemini CLI's and OpenCode's logins have no `check` (OpenCode's `auth list` was one until BOOT4: it lists providers, and nothing documents that it fails when none is logged in), and the tests insist such a login says why.
+
+**Newest versions, without the network:** `Latest::url(platform, arch)` names what to fetch and
+`Latest::parse(body)` reads the reply. Sources: `npm` (`{"version"}`), `github-release`
+(`tag_name` less a prefix: `v` for gh, `rust-v` for Codex's channel), `plain-text` (Claude's
+`latest`), `agy-manifest` (`{"version"}`, per `<os>_<arch>`) and `node-dist` (the newest LTS in
+`index.json`). The tests parse replies recorded on 2026-11-06 in
+`crates/ptyro-agents/tests/fixtures/catalog/` (trimmed to the fields that matter; `make catalog-fixtures` records them again) and reject a
+reply that isn't a version (an HTML error page, the wrong tag prefix). git has no source: the
+design checks only agents and ptyro. `catalog::Version` reads `2.1.319 (Claude Code)`,
+`codex-cli 0.162.1`, `v24.13.0`, `gh version 2.57.0 (…)` and Git for Windows' `git version 2.51.0.windows.1` (2.51.0), and orders them (a pre-release before
+its release); `at_least` checks a minimum.
+
+**Decided by the builder** (the design's "verified when built"):
+- **Codex installs with its standalone installer, not npm:** the vendor's docs now lead with it
+  on every platform. So Codex no longer needs Node.js, and the design's "Node.js, because Codex
+  needs it" default tick no longer follows. npm and Homebrew are `others`.
+- **OpenCode is OpenCode 1** (`opencode-ai`): OpenCode 2 is beta and changed the server API the
+  adapter speaks. On Windows it installs with npm (the docs recommend WSL), so it needs Node.js
+  there.
+- **Antigravity and Claude Code update themselves**; their `update` is the manual form.
+  Antigravity's `agy update` is [S] (third-party guides, not the docs).
+- **Admin:** no agent's recommended method needs it. apt, dnf, Xcode's tools and WinGet's
+  machine-wide Git, gh and Node.js installers do (`admin = true`); the tests require any `sudo`
+  command to say so.
+- **Not handled:** musl Linux for Antigravity's manifest (its installer picks `_musl` builds);
+  Alpine generally.
+
+**Uses:** `locate::install_hint` is the table's first method for the platform (`doctor`'s note
+for an agent run from npx's cache); BOOT1 builds the plan engine on the rest. A missing agent's fix
+was `install_hint`'s command to copy until BOOT9 made it `ptyro install <program>`
+(`locate::install_fix`, §24.10), the table deciding which programs setup installs here.
+
+### 24.2 The plan engine, `ptyro setup` and `ptyro install` (BOOT1) **[built 2026-11-06]**
+
+**One engine:** `ptyro_agents::setup` (`crates/ptyro-agents/src/setup.rs`, with `setup/host.rs`,
+`run.rs`, `fake.rs`). A library, so the CLI runs it with no daemon (a fresh machine has none),
+the daemon runs it for the web, and the TUI shows its own checklist on it, then installs through the CLI in a split (§24.5). Three steps:
+
+1. **`survey(host, latest)`** looks at every row of the table through a `Host`: the item's
+   program found (`locate::find`, so npm's, nvm's and the vendors' folders count, with ptyro's
+   tools folders first on `PATH`), its `version` argv run (15 s at most) and read with
+   `catalog::Version`; the methods' `needs` (and `sudo`, `curl`) present; and the Node.js apt or
+   dnf would install (`apt-cache policy nodejs`'s `Candidate:`, `dnf -q -C info nodejs`'s
+   `Version`, cache only, never the network; an epoch and the distro's revision dropped).
+2. **`plan(survey, picks)`** gives one `Entry` per row: its `State`, `ticked` (picked, or needed),
+   `picked`, `needed_by`, its `Action` (`via`, the command as typed, `admin`, `update`, `after`)
+   or why there's none here (`blocked`: the programs its methods need, and the vendor's page).
+   `Plan::steps()` orders the steps so each comes after what it needs (else the table's order:
+   agents, then tools); `Plan::admin()` lists those needing administrator rights.
+3. **`run(plan, host, admin, on)`** runs the steps, each event to `on`; a failure never stops
+   the rest, only what needs the failed item (`Skipped`, "it needs Node.js, which didn't install").
+
+**States** (the design left the model to the builder): `missing`; `installed`; `outdated`
+(installed older than a newest version passed in: BOOT5 passes them, the engine then runs the
+method's `update`); `other` (installed through one of the row's `others`, by its folder:
+`node_modules`/`npm`/`_npx`, Homebrew's `Cellar`/`Caskroom`, WinGet's links, read where the file
+really is (a link in `~/.npm-global/bin` names npm's folder); offered the move to the recommended
+installer unless kept, BOOT7, §24.9); `too_old` (older than a minimum something ticked needs:
+Node.js 18 for Gemini CLI's 20). Each entry has a `side`, only `local` until BOOT8 adds WSL's and
+Windows'.
+
+**Prerequisites:** only *required* ones tick (Node.js for Gemini CLI everywhere and for OpenCode
+on Windows); recommended ones (git for Codex's PR helpers, Git for Windows for Claude) don't, but
+git is a default tick. A ticked prerequisite can't be unticked while what needs it is ticked.
+`npm` counts as present when Node.js is installed or about to be, so Gemini CLI plans through npm
+on a machine with no Node.js yet.
+
+**Node.js, the design's rule** (and BOOT0's review's open note): methods in the table's order,
+skipping those whose `needs` is absent. apt's and dnf's are used only when the candidate version
+is known and meets the highest minimum of what needs it (and, for one too old already, is newer);
+an unknown candidate is not trusted. Homebrew and WinGet ship the newest, so they are used as they
+are (`update` for one too old). Else **nodejs.org's build** (`node-dist`): the newest LTS from
+`index.json`, the archive for the platform and architecture, its SHA-256 checked against
+`SHASUMS256.txt` (a mismatch is refused and deleted), unpacked with `tar` (Windows 10's
+`tar.exe` reads the zip), and moved into place only once unpacked (the old one kept until then).
+Downloads use `curl` (Windows 10 has `curl.exe`), so ptyro carries no HTTP client for this.
+
+**ptyro's tools folder:** `Paths::tools()`, beside the data directory, not in it:
+`~/.local/share/ptyro-tools` (XDG), `%LOCALAPPDATA%\ptyro-tools`, `$PTYRO_HOME/ptyro-tools`.
+`ptyro uninstall` leaves it, because the tools are the user's (the design's "`ptyro uninstall`
+leaves installed agents and tools alone"). In it: `node` (nodejs.org's build) and `npm` (the npm
+prefix used when npm's own global prefix isn't writable, as with a distro's Node.js: never `sudo
+npm`; on Windows npm's prefix is the user's `%APPDATA%\npm` already). `setup::path_dirs` names
+their program folders (`bin` under each, except on Windows):
+- **`ptyro shell-init`** prints `ptyro_core::shell::path_lines` first, for the folders that
+  exist, before the snippet's `PTYRO` guard, so every shell gets them, not only ptyro's: each
+  added at the front of `PATH` once (bash/zsh `case ":$PATH:"`, fish `contains`, PowerShell
+  `-notcontains`). A machine that never needed them prints nothing new.
+- **The daemon's environment:** `base_env`'s `PATH` gets them in front at start-up, existing or
+  not, so a session finds a tool installed after the daemon started.
+- **After a run that used the folder,** the CLI offers to add `ptyro shell-init`'s line to the
+  shell's rc file (`ShellKind::rc_line`, with a `# ptyro …` comment above it: exactly the form
+  `ptyro uninstall` takes out), or says it's there already. On Windows it offers to put the
+  folders in the user's `PATH` (`[Environment]::SetEnvironmentVariable(…, 'User')`, each once).
+  `--yes` only says what to add, as `ptyro init --yes` leaves rc files alone.
+
+**Administrator rights:** asked for once, before the first step that needs them, never through
+ptyro. `Admin::Ask` (the CLI at a terminal): sudo's own `sudo -v` in the real terminal, then each
+step's `sudo` finds it remembered; on Windows nothing is asked ahead, since WinGet's installers
+raise their own UAC prompt. `Admin::Silent` (`--yes`): only when no prompt is needed (root, sudo's
+remembered password or a `NOPASSWD` rule: `sudo -n true`; an elevated Windows terminal: `net
+session` succeeds); otherwise each admin step is `Skipped` with its command to run. `Admin::Never`
+(the daemon, for the web): never, whatever it could do, and the fix names the computer: "on the
+computer itself: `ptyro install gh`". As root with no sudo (a fresh container), a command's
+`sudo` runs through `sudo() { "$@"; }`.
+
+**Running a step:** the method's `shell` argv (`sh -c`, PowerShell with `-ExecutionPolicy
+Bypass`), stdin empty, stdout and stderr read line by line as they come (a progress bar's `\r`
+keeps its last state), with ptyro's tools folders first on `PATH`, and on Windows
+`CREATE_NO_WINDOW` (§20.12). An `Err` is the exit code and the last three lines. Afterwards the
+item is looked for again, and `Done` carries the version found (none: "a new terminal may be
+needed").
+
+**Events** (`setup::Event`, JSON-tagged `event`): `elevating{ids}`, `blocked{id, reason, fix}`,
+`started{id, name, command, admin}`, `line{id, text}`, `done{id, version?}`, `failed{id, error,
+fix}`, `skipped{id, reason, fix}`, `logins{ids}`, `finished{report}` (`done`, `failed`, `skipped`,
+`blocked`, `tools`). **Fixes:** a failure offers `ptyro install <program>`
+again, the command to run yourself and the vendor's page; nodejs.org's build, the connection and
+the page. **Logins:** after the installs, `logins` names what was installed, or picked and here
+already, that has a login (`setup::login::after`); the CLI then walks through them (BOOT4, §24.4).
+
+**`ptyro setup [-y] [--agents A,B] [--tools T,U] [--dry-run] [--json]`:** the checklist in a
+terminal (stderr): Agents and Tools numbered (`[x]` picked, `[+]` needed by something picked,
+with the method and "as administrator"), then Already here (✓ with version and path). Typing
+numbers (or names) ticks and unticks, Enter installs, `q` or end of input quits. Defaults: the
+design's ticks less what is installed (Claude Code, Codex, git, GitHub CLI; Codex needs no Node.js
+since BOOT0). With `--agents`/`--tools`, exactly those (`none` for none; an agent in `--tools` is
+an error naming the right flag); with neither, the defaults. `--yes` asks nothing; without it and
+without a terminal it refuses and says to pass `--yes`. `--dry-run` prints the checklist and each
+step's command (`--json`: the `Plan`); `--json` on a run prints each event as a JSON line on
+stdout. `--where` is BOOT8's (§24.3), `--move` BOOT7's (§24.9).
+**`ptyro install NAME… [-y] [--dry-run] [--json]`:** names as people say them (`setup::resolve`:
+the id, the program or the name, any case, without spaces or dots: `agy`, `github-cli`,
+`"Claude Code"`, `nodejs`); an unknown one exits 3 listing the known. It shows the steps and asks
+`Install? [Y/n]` (end of input is no). Already installed: "✓ GitHub CLI is here already". Both
+exit 0 when everything ran, 1 when anything failed or was skipped, and never talk to a daemon (an
+explicit `--remote` elsewhere is refused: setup is about this computer).
+
+**TUI:** `app.install` (palette) runs `ptyro install` in a split (UX1.21's `cli_actions`), a
+real terminal where sudo can ask. `app.setup` was the same with `ptyro setup` until BOOT2 made it
+the checklist on screen (§24.5).
+**Web:** More → Set up ptyro → "Install agents and tools" (`setup.plan`, `setup.install` in
+`web/src/settings.ts`): the plan with checkboxes (re-planned on each tick, so prerequisites tick
+themselves), Install, and the run's lines from `setup_progress` events; administrator steps are
+shown with `ptyro install …` to run on the computer. BOOT3 gave it its full place (Settings, a
+first-run banner, §24.6).
+
+**Protocol 1.31** (§6.4): `SetupPlan{picks?}` → `SetupPlan{plan}` (`read` scope: it only looks,
+but runs each agent's `--version`); `SetupRun{picks}` → `SetupStarted{run, plan}` (`full`), then
+`DomainEvent::SetupProgress{run, event}` to every watcher. One run at a time (two package
+managers fight over their locks): a second is a conflict. An unknown name is `not_found` before
+anything runs.
+
+**Tests, without the network or real installers:** the engine's logic in
+`crates/ptyro-agents/src/setup/tests.rs` (an in-process `Host`: defaults, ordering, the Node.js
+rule, too old, other and outdated, admin per mode, a failure's skips, names, the plan as JSON);
+the CLI end to end in `crates/ptyro/tests/boot1.rs` through the **fake machine**:
+`PTYRO_TEST_SETUP=<dir>` (debug builds, `ptyro_core::test_knob`) makes `setup::host` a fake that
+reads `<dir>/world.json` (platform, programs, installed versions, other installers, apt's or dnf's
+Node.js, `elevation` ready/prompt/unavailable, whether `elevate` succeeds, per-item outcomes
+`ok`/`fail`/`slow`/`quiet`) and runs each step as `ptyro fake-installer` (hidden, debug builds), a
+real child whose output streams like an installer's and which "installs" by writing
+`<dir>/installed/<id>`; `<dir>/calls.log` records each step and each elevation asked. They cover
+success, a failure with its fix, live output (lines 300 ms apart arrive 300 ms apart), admin asked
+once / never with `--yes` / refused, the checklist's ticks and quitting, the Node.js rule with the
+tools folder on `PATH` through a real `bash`, the rc line `ptyro uninstall` removes again, and the
+daemon's `SetupPlan`/`SetupRun` with its events and its never-admin rule. With the knob set, the
+checklist reads its answers from stdin even when it isn't a terminal.
+
+**Review fixes (2026-11-07):**
+- **Blocked items count.** A ticked item with no way here (Linux without apt or dnf for git)
+  gets `Event::Blocked{id, reason, fix}` before the steps and is in `Report::blocked`. `ok()` is
+  false, so `ptyro setup`/`install` exit 1. The CLI, `--json` and the web all show it, and a step
+  that needs a blocked item is skipped.
+- **Windows' PATH follows installers.** After each successful step, `RealHost` rebuilds its `PATH`
+  from the stored machine and user `Path` (read raw through `ptyro_pty::winreg::get_raw`,
+  `%VAR%` expanded) with `refreshed_path`: every entry it had, then the new ones, with the tools
+  folders in front. WinGet's Node.js adds `C:\Program Files\nodejs` only to the registry, and the
+  next step's `npm` then finds it. The fake models it with `path_adds`/`path_needs` and a
+  `stored-path` file. **The daemon follows too [final fix wave, 2026-11-07]:** a daemon started
+  before the install read `PATH` once, so on Windows Codex (its `install.ps1` adds its folder to
+  the user's `Path`), git and gh (WinGet, the machine's) stayed invisible to it until it
+  restarted: "codex isn't installed", and an offer to install it again. Now
+  `Daemon::refresh_path` merges `setup::stored_path()` (the registry's `Path` on Windows; the
+  fake's `stored-path` under `PTYRO_TEST_SETUP`; nothing on Unix, whose `PATH` is the shell's)
+  into the daemon's base environment with `refreshed_path`: when its own setup run finishes
+  (before `finished` is sent), when any session starts or ends (a split's `ptyro install`, the
+  person's own `winget`), and before it looks for an agent (`daemon_path`: the agent list, a
+  spawn's program, the "isn't installed" check) or for gh. On Windows it sets the daemon's own
+  `PATH` too (`winreg::set_process_path`; `set_var` is documented safe there in a threaded
+  program), for what runs with the process environment (git). Test:
+  `boot1::an_agent_setup_installed_starts_without_a_daemon_restart` (the daemon lists codex as
+  not installed and refuses its session; its `SetupRun` installs codex into a folder only the
+  stored Path names; then codex is listed from that folder and its session starts).
+- **The user's `Path` is written as stored.** `add_user_path` reads `HKCU\Environment\Path` raw,
+  puts the tools folders in front with `prepend_entries` (nothing else changed or expanded), keeps
+  REG_EXPAND_SZ (`set_raw`), then broadcasts `WM_SETTINGCHANGE`. PowerShell's
+  `[Environment]::SetEnvironmentVariable` would have expanded `%VAR%` entries for good and written
+  REG_SZ.
+- **Git Bash's PATH form.** For bash, zsh and fish, `path_lines` writes a Windows folder as MSYS
+  writes it (`shell::msys_form`: `C:\Users\x` → `/c/Users/x`). `PATH` there is `:`-separated, so
+  the drive's colon would split it. PowerShell keeps the native form.
+- **A step ends when its program does.** `pump` stops reading 1 s after the program exits, so a
+  background process left holding stdout (a daemon an installer started) can't hang it.
+  `capture` kills at its limit.
+- **WinGet runs with no input.** The table's WinGet commands carry `--source winget
+  --accept-source-agreements --accept-package-agreements` (BOOT0's tests require them). Claude
+  Code's WinGet line gained `--id … -e` too, the same package written exactly.
+- **The daemon's one-run guard** is a drop guard, so a panicking run frees it.
+- **Uninstall keeps the tools working.** The plan lists `ptyro-tools` under Kept, and on Windows
+  the user `Path` entries in it. When it removes `ptyro shell-init`'s line from an rc file while
+  the tools folder exists, it writes `path_lines` for that shell in its place (`rewrite_rc`, shown
+  in the plan). If the file can't be written, the error gives the exact lines.
+
+**Decided by the builder** (the design's "Left to the builder"): the states above; elevation per
+mode as above; the engine in `ptyro-agents` (beside the table it reads; the protocol crate now
+depends on it for the wire types); the tools folder beside the data directory; `curl` and `tar`
+for nodejs.org's build; required prerequisites tick, recommended ones don't; outdated ones update
+through the recommended method's `update`.
+
+### 24.3 Windows: WSL, Windows, or both (BOOT8) **[built 2026-11-07]**
+
+The design's goal 4: on Windows each agent and tool can go into the WSL distro, onto Windows
+itself, or both; WSL is the user's to bring.
+
+**Sides.** `setup::Side` is `local` (this computer: Linux, macOS, and WSL seen from inside),
+`windows` or `wsl`. `setup::plan` labels a Windows machine's rows `windows`. A two-sided `Plan`
+holds Windows' rows, then WSL's (`Plan::merge`; `side()`, `entry_on()`, `sides()`), and
+`Plan::steps()` orders each item after what it needs on its own side. `Plan.wsl` is a
+`WslStatus`: `usable{distro, version}`, `unusable{reason, fix}`, or `inside{distro}` (the engine
+runs in WSL: the Windows side is set up from Windows, and the plan says how).
+
+**Usable WSL** (`ptyro_client::wsl_setup::probe`): `wsl.exe -l -q` answers, it lists a distro
+(tools' own, `docker-desktop` and the like, and anything that isn't a distro's name are left
+out, as is a line starting with `-`; first run's WSL search uses the same filter), and `ptyro --version` answers in it (`remote::version_in`, the bridge's `PATH`). The
+distro of `client.default_remote` (`wsl://<distro>`) is asked first, then the others in WSL's
+order. Setup never runs `wsl --install`, installs a distro, or puts ptyro in one. Without a
+usable WSL only Windows' side is offered, and the plan says why with the fix: `wsl --install`
+for no WSL or no distro ("WSL isn't installed or has no distro" when `wsl -l -q` fails, as
+Windows 11's inbox `wsl.exe` does without WSL; "WSL has no Linux distro" when it lists only
+tools' own); for no ptyro, `wsl -d <distro> -- sh -c "<README's install line>"` (double quotes:
+cmd.exe doesn't quote with `'`)
+(`wsl_setup::install_line`); for a ptyro too old to answer `setup --survey`, the same line to
+update it. Setup run again afterwards offers WSL's side (the design's "added later").
+
+**WSL's half is done by WSL's ptyro**, through `wsl.exe` with the bridge's `PATH` and the
+arguments passed as `"$@"` (`wsl_setup::ptyro_args`), so the two engines can't drift:
+- what is there: `ptyro setup --survey` (hidden) prints its `Survey` as JSON; Windows' ptyro plans
+  WSL's side from it with its own engine, so the checklist re-plans on every tick without asking
+  WSL again;
+- a run: `ptyro install --json <ids>` with the hidden `--admin=ask` (the person said yes
+  already: run, and let sudo ask in this terminal, `wsl.exe` passing the terminal through),
+  `--admin=silent` (`--yes`: only what needs no prompt) or `--admin=never` (a daemon, for the
+  web). Its JSON events come back line
+  by line and go out as Windows' own (`wsl_setup::run`); if it ends without its report, each step
+  it didn't get to is reported failed with why and the command to run there.
+- `ptyro install --admin=…`, in each of the three modes, also keeps WSL's ptyro quiet about what
+  Windows' says already ("Looking…", "here already").
+
+**CLI.** `--where wsl|windows|both` on `setup` and `install`. The default is the side the user's
+daemon runs on: WSL's when `client.default_remote` (or `PTYRO_REMOTE`) is `wsl://<distro>` and
+that distro is the usable one (`wsl://`, the default distro: any), else Windows'. When the
+daemon's distro can't be reached but another has ptyro, the default is Windows and a line says
+so (`--where wsl` installs into that other one). `--where windows` doesn't look at WSL at all; `--where wsl` without a
+usable WSL exits 1 with the reason and fix; `--where both` without one says so and sets up
+Windows. On Linux and macOS only `--where local` is accepted (exit 2 otherwise, saying sides are
+Windows'); inside WSL the message says to run `ptyro setup --where windows` in a Windows
+terminal. `--remote wsl://…` on setup is refused with a pointer to `--where wsl`. The checklist
+shows a column each (`Windows`, `WSL (<distro>)`: `[x] WinGet`, `[+] apt (admin)`, `✓ 2.43.0`),
+with each side's notes under the row; a number ticks it on the default side(s), and `3:wsl`,
+`3:windows`, `3:both` puts item 3 exactly there. A run does Windows' side, then WSL's, under a
+heading each; with `--json` on Windows each line is a `setup::Sided` (the event with `side`).
+The exit code covers both sides.
+
+**TUI.** `app.setup` and `app.install` gain the `{where}` template word (`cli_actions`): on
+Windows a picker (WSL, Windows, both; the daemon's side first). With this computer's daemon the
+split runs `ptyro.exe … --where X`. With WSL's daemon, splits run inside WSL: `wsl` runs WSL's own
+ptyro (its side natively, sudo in that terminal); `windows` runs this `ptyro.exe` through interop
+(its path as WSL names it, `/mnt/c/…`) with `--where windows --tty`, the hidden `--tty` saying a
+person answers although the console is a pipe there (Windows' admin prompts are UAC dialogs, not
+the terminal); `both` opens the two splits.
+
+**Web, daemon.** Protocol 1.32 (additive, §6.4): `SetupPlan` and `SetupRun` carry `wsl_picks`
+beside `picks`, and each entry its `side`. A daemon on Windows probes WSL like the CLI (the result kept a minute, as the
+page re-plans on every tick; forgotten after a run) and plans `wsl_picks` beside its own; its
+run does both sides with `Admin::Never` on each, so WSL's admin steps show their command too. The
+page shows a Windows and a WSL checkbox per item when WSL is usable (`setup.where`), the reason
+and fix when it isn't, and with the WSL daemon most Windows users run, "this is WSL" with the
+Windows command. Its log tags lines `WSL:`/`Windows:` and its summary waits for both reports.
+
+**Tests, with no WSL:** `ptyro fake-wsl` (hidden, debug builds; `ptyro_testkit::fake_wsl`) stands
+in for `wsl.exe` through `PTYRO_WSL` (a script on Unix, a `.shim` stand-in on Windows):
+`PTYRO_FAKE_WSL=<dir>` holds `distros`, and per distro `ptyro/` (present: ptyro is installed),
+`fake/` (its own fake machine), `old` (a pre-setup ptyro); it runs this same ptyro as the
+distro's and logs each call. `crates/ptyro/tests/boot8.rs` covers no WSL / no distro / no ptyro
+/ an old ptyro (Windows only, with the fix, never installed), the default side following
+`client.default_remote`, one plan of both sides, both sides installing with sided JSON events and
+a failure in WSL, sudo asked in the terminal through `wsl.exe` (and not with `--yes`), the
+two-column checklist's `N:side` ticks, sides refused on Linux and inside WSL, a Windows
+daemon's both-sided run with no admin, and one test with no platform faked that checks the real
+sides on Windows (CI's `windows` job) and the refusal elsewhere. `boot1.rs` points `PTYRO_WSL` at
+nothing so a faked Windows never reaches a real WSL.
+
+**Decided by the builder:** WSL's side is planned from its survey by Windows' engine (re-planning
+without a `wsl.exe` round trip per tick), then run by WSL's own `ptyro install`; the run order is
+Windows then WSL; each side reports its own `finished`; a Windows daemon keeps the WSL probe a
+minute; a daemon inside WSL doesn't reach Windows' side (it has no Windows ptyro it can rely on):
+the page names the command instead.
+
+### 24.4 Logins (BOOT4) **[built 2026-11-07]**
+
+The design's goal 5: each installed agent and the GitHub CLI logged in once, to the default
+profile, through the tool's own flow; setup ends by saying how to add more accounts.
+
+**The engine** (`ptyro_agents::setup::login`): `status(host, item)` is `logged_in`, `logged_out`,
+`unconfirmed` (the table names no `check`: Antigravity, Gemini CLI, OpenCode) or `missing`;
+`rows(host, ids)` lists them (`LoginRow`: id, name, side, state, the `start` command as typed,
+the `check`, the table's note); `log_in(host, item)` runs `start` in the person's terminal, then
+asks `check` again; `after(plan, report)` is what a run walks through. Two `Host` methods:
+`status(argv)` (the exit code, at most 20 s, then killed) and `interact(argv)` (stdin, stdout
+and stderr the person's own, to its end). Programs are found as the survey finds them
+(`locate::find`: npm's, nvm's and the vendors' folders).
+
+**Credentials never pass through ptyro.** "Logged in" is the `check` command's exit code alone:
+its stdout and stderr go to the null device, unread (`gh auth status` prints the account and a
+masked token; none of it reaches ptyro). The login itself is the tool's, in a terminal ptyro
+doesn't read. No pattern matching on output: no row needs it, and not reading is the stronger
+promise. A row's `check` must exit 0 only when logged in; OpenCode's `auth list` couldn't be shown
+to, so it was taken out of the table (§24.1) and OpenCode is `unconfirmed`.
+
+**Where a login runs** (the design's "where the user sees a browser or device code"):
+- **The CLI:** in the terminal it was typed in, with no daemon (a fresh machine has none). On
+  Windows the child shares the console (no `CREATE_NO_WINDOW`, which would take the console
+  away; no window opens either). While it runs, Ctrl+C is the login's (an agent quits with it, a
+  flow gives up), not ptyro's: a handler (a thread with its own Tokio runtime, from the first
+  login) ignores it during a login and exits 130 otherwise, so Ctrl+C at any other moment still
+  ends ptyro.
+- **The TUI:** `app.login` runs `ptyro login {where}` in a split, a real terminal.
+- **The web:** More → Set up ptyro → Log in. `login.list` (`POST /api/host`, `full` scope) is
+  `ptyro login --check --json --where local`; Log in (`login.start`) spawns a session on the
+  daemon running `ptyro login --where local <name>` under the default profile, in the home
+  folder, unrecorded (§7.6: what the sign-in prints, or a code pasted into it, never reaches
+  disk; `profile login`'s session is unrecorded too), and opens it. `--where local` keeps both
+  on the daemon machine's side, with no WSL probe. The tool's
+  link and code show in that terminal. A browser the tool opens opens on the computer running
+  ptyro, which helps only someone sitting there, so the page says to follow the link and enter
+  the code. Check again asks the status commands. No new daemon request; the one protocol change
+  is 1.33's `SpawnSpec.unrecorded`. **[final fix wave, 2026-11-07]** Both ops take `where`
+  (`local`, the default, or `wsl`): on a Windows daemon with a usable WSL the page lists WSL's
+  logins under their own heading (`--where wsl`, WSL's own ptyro through `wsl.exe`), and its Log
+  in runs `ptyro login --where wsl <name>` in the session, so WSL's side is logged in from the
+  page too. The session runs this ptyro's installed name (`own::installed_name`, as the
+  self-update's session does): after `ptyro update ptyro`, `current_exe` can be `…/ptyro
+  (deleted)` or `ptyro.exe.old`.
+- **WSL's side** (from Windows): `wsl -d <distro> -- ptyro login <ids>` with the terminal passed
+  through (`wsl_setup::interact`), so the login runs in that distro, by its own ptyro; `--check
+  --json` there comes back as rows marked `side: wsl` (`wsl_setup::logins`). Windows' ptyro waits
+  on it with Ctrl+C held off as for its own logins (Windows' console sends Ctrl+C to every
+  process on it), so a Ctrl+C there skips that login and never ends ptyro.exe. Setup's walk there
+  passes the hidden `--installed=<ids>` (setup's list, not names asked for: what it just
+  installed) and `--tty` (a person is at this terminal).
+
+**`ptyro login [NAME…] [--check] [--json] [--where wsl|windows|both]`:** no names, every item with
+a login that is installed. Each logged in says ✓; each logged out runs its login ("▸ Logging in to
+GitHub CLI: `gh auth login --web`", then a line saying the sign-in is the tool's and Ctrl+C skips
+it) and ends ✓, or ✗ with the fix (`ptyro login gh` tries again, or the command to run yourself).
+One that can't be checked runs only when named (`ptyro login agy` starts Antigravity: "sign in,
+then quit it to come back here") and ends "?", saying it can't be confirmed; quit non-zero (Ctrl+C,
+or however the agent quits) it says "skipped", not a failure. A login ending non-zero for a tool
+that can be checked says how it ended, with the fix. A named one not
+installed says `ptyro install …`; one without a login (git) is refused (exit 2); an unknown name
+exits 3. It needs a terminal (the TUI's split and a web session are terminals); without one it
+refuses and points at `--check`. `--check` only says where each stands (what isn't installed only
+when named); `--json` (implies `--check`) prints the rows. Exit 1 when any ends logged out (or a
+named one isn't installed). `--where` and its default are setup's (§24.3); `--remote` is refused,
+as for setup: logins are this computer's.
+
+**Setup's end:** after every side's run, `ptyro setup` and `ptyro install` walk through
+`login::after` per side, under a heading each (WSL's in WSL, as above), asking nothing more: the
+person chose these by ticking them, and Ctrl+C skips any one. One that can be checked runs when
+logged out; one that can't runs only if this run just installed it (it can't have signed in yet),
+so Antigravity already here isn't started on every setup. One just installed but not found from
+this terminal yet says to open a new terminal, then `ptyro login <name>`. With `--yes` (no person) they only
+say where each stands and that `ptyro login` logs them in; with `--json` nothing is said (the
+`logins` event is in the stream); WSL's ptyro running for Windows' (`--admin=…`) leaves them to
+Windows'. When there were logins, setup's last line is `login::PROFILES_HINT`: more accounts are
+profiles, each with its own logins (`ptyro profile new work`, then `ptyro profile login work
+claude`). The exit code stays the installs': a login not done is said with its fix, never a
+failed setup.
+
+**Tests, with no real login and no credential:** the fake machine's `world.json` gains
+`logged_in` (ids logged in already) and `logins` (per id: `ok`, `fail` (exit 1), `nothing` (exit
+0, still logged out), `slow` (two seconds before it logs in)). `interact` runs `ptyro fake-installer login ID` in the terminal, a real
+child that prints a device code and writes `logged-in/<id>`; `status` answers for the rows'
+`check` argv from those files; both log to `logins.log` (not `calls.log`, whose steps BOOT1's
+tests count). `crates/ptyro/tests/boot4.rs` covers setup's walk after the installs with the
+profiles line last; `--yes` running none; a failed and a "nothing done" login with their fixes;
+the unconfirmed one only when named; `--check`/`--json` asking only the status commands; WSL's
+side logged in in the distro through `ptyro fake-wsl`, and both sides' rows; the web's
+`login.list`, and a `login.start` session showing the code, ending logged in, and leaving no
+recording; the web's WSL side (`the_web_lists_and_runs_wsls_logins_too`: `where: "wsl"` lists
+and logs in the distro's, never Windows'); an unconfirmed agent started only when just installed or named, and quitting it a
+skip; a just-installed one not found yet pointing at a new terminal; the `--where` refusal's
+words; and (Unix) SIGINT to ptyro during a login, its own and WSL's through `fake-wsl` (the
+fake's `slow` login), leaving it running to the end. The engine's rules are in `setup/tests.rs`.
+
+**Decided by the builder:** the exit code alone decides (no output read, so no patterns);
+OpenCode's `check` dropped; the CLI runs logins in its own terminal and the web in a daemon
+session running `ptyro login`, so both confirm the same way; setup walks without a question per
+login; an unconfirmed login runs only when named or just installed (never because it was picked
+and was here already), and quitting it is a skip; login sessions are unrecorded (protocol 1.33); the web shows the daemon's
+side (`--where local`), naming WSL's command on a Windows daemon.
+
+### 24.5 The TUI checklist (BOOT2) **[built 2026-11-07]**
+
+The design's "where the checklist lives": the first part of the onboarding screen
+(`crates/ptyro-tui/src/onboard.rs`, UX1.19), and the same screen with only that part any time
+later. The owner chose one checklist screen (option A); the approved mockup's shape is kept:
+Agents, Tools and Already here, a line per item, prerequisites ticked with the reason, and
+"⏎ install N · Space toggle · s not now".
+
+**One set of ticking rules.** The CLI's checklist and the TUI's share
+`ptyro_agents::setup::checklist` (moved out of `crates/ptyro/src/setup.rs`): `Sides` (this
+computer's survey, WSL's, and WSL's status), `Picks` (what each side has ticked), `rows` (what can
+be ticked: not here on some side), `already` (here on every side), `toggle` (picked → unticked;
+else ticked where it can be; a prerequisite something ticked needs stays, saying "untick that
+first"; what's here can't be), `default_place` (BOOT8's default side) and the `mark`/`cell` words.
+The plan is still `setup::plan`; the TUI has no plan or run logic of its own.
+
+**Where it looks** (`crates/ptyro-tui/src/setup_list.rs`): in the TUI's own process, as `ptyro
+setup` does: `setup::host` + `setup::survey` on a blocking thread, and on Windows
+`wsl_setup::probe` and `survey` for the distro, the daemon's (`wsl://<distro>`, the TUI's
+connection) asked first. It arrives as `AppMsg::SetupFound`; until then the part says "looking at
+what's installed…". The default side is the daemon's (`checklist::default_place`), with the
+reason when it isn't. A daemon on another computer (`--remote`, not this Windows' WSL) is set up
+there: the first run says so, and `app.setup` runs that computer's `ptyro setup` in a split, as
+before.
+
+**On screen:** under Agents and Tools, each row is `[x]` picked, `[+]` ticked for something
+picked, `[ ]` not, then its name and one line, parts joined by ` · ` and wrapped between parts:
+the catalog's new `about` (one line per row, `catalog.toml`; Gemini CLI's label takes its place),
+the method it would use (`through` the action's when ticked, else the table's first method whose
+`needs` is present), "asks for admin", "needs Node.js" (required prerequisites), "ticked because
+Gemini CLI needs it", an outdated or too-old state, "can't here: …" for a blocked one, and "then
+log in" for an item with a login. On Windows with a usable WSL each row has a cell per side
+(`Windows`, `WSL (Ubuntu)`: `[x] WinGet (admin)`, `[ ]`, `✓ 2.43.0`), the cursor's cell
+reversed, and a line under the row per side for what a cell can't say (why it can't, what needs
+it). Already here lists each item with its version and path (each side's, named, on two), the
+default agent marked "your default agent". It fits 80 columns: a cell is 26 wide (an ellipsis
+ends a longer one), and when the cells leave less than 30 columns beside them the row's line goes
+under it, indented, wrapped between parts like the rest. The per-side lines under a row, WSL's
+state, the default side's reason and what a tick said wrap between words (a word longer than a
+line, a URL, breaks where the line ends, so all of it stays on screen). Then WSL's state when it is unusable or this is WSL, the
+default side's reason, and what the last tick said.
+
+**Keys:** `j`/`k` (arrows) move over the checklist's rows, then the first run's choices; `Space`
+ticks the row (on the cursor's side) or the choice; `←`/`→` (`h`/`l`) pick the side; `⏎` installs
+what's ticked and, in the first run, writes the config and registers the repositories as before;
+`s` is "not now": no installs (the first run's other choices still count; alone, it closes and
+says the key that brings it back); `Esc` skips the first run (an empty config) or closes the
+checklist. The footer counts the steps: "⏎ install 5 and use these" (first run), "⏎ install 4 ·
+Space toggle · j/k move · s not now" (alone; `· ←/→ side` with two sides).
+
+**⏎ runs the CLI.** What the person picked (not what ticked itself: the engine ticks
+prerequisites again) goes to `ptyro install <names…> --confirmed` in a split (`run_cli`), a real
+terminal, so everything the CLI does happens there unchanged: the order, live output, ✓/✗ with
+the fix, administrator rights asked once (sudo's prompt in that terminal, or each installer's
+UAC), the tools-folder `PATH` offer, the logins walked one by one (Ctrl+C skips one), and
+`PROFILES_HINT` last. `--confirmed` (hidden, `ptyro install` only) skips the `Install? [Y/n]` the
+checklist already asked; nothing else changes. On Windows (`cli_actions::where_runs`): with this
+computer's daemon, the same picks on both sides are one `--where both`, different picks a split per
+side (`--where windows`, then `--where wsl`); with WSL's daemon, WSL's side runs WSL's own ptyro in
+its split and Windows' this `ptyro.exe` through interop with `--where windows --tty`. **One split
+at a time** (`setup_list::SetupRun`, `App::setup_tick`): the next side's split starts once the one
+before it ends, so two package managers, sudo and UAC prompts, or two sets of sign-ins never
+overlap. **While it runs, the checklist doesn't open again**: `U`, the palette's `app.setup` and
+`first.run`, and a health fix show the running split instead and say "setup is still running in
+<split>: the checklist opens again once it's done" (no second install beside the first). That
+guard is this TUI client's (`App::setup_run`): another TUI attached at the same time, or this one
+after a reattach, doesn't know of the split and opens the checklist; but the machine's setup lock
+(§24.6) is under every install, so that checklist says setup is already running (and from where)
+and ⏎ starts nothing, and the web's runs are refused the same way. A split
+is running from its spawn's reply on (it is in the session list from then); a failed spawn frees
+the checklist at once, and a split closed or ended (its session gone, or not live) frees it on the
+next tick, then the next side's starts. When the last split ends, the health badge looks again
+(`health_again`): now, or, with a doctor run already in flight (whose answer may predate the
+install), as soon as that one is in, so it stops offering what was just installed. Nothing ticked, still looking, `s`
+or Esc: nothing installs, and the first run's message (or, alone, the checklist's) ends with how
+to open it again (`C-q U opens the setup checklist (agents and tools) any time`).
+
+**Where it opens:**
+- **The first run** (no config): at the top of the first-run screen (`first.run` reopens the whole
+  screen).
+- **`app.setup`**: `U` (after the prefix, and in the sidebar; in the prefix-pause menu as "set up
+  agents") and the palette: the checklist alone (" Setup ", "Set up this computer: …"), which writes no config.
+- **The health badge** (`M`): `health::Fix::Setup(names)` for a doctor line suggesting `` `ptyro
+  setup` `` or `` `ptyro install NAME…` ``, an agent not found (`claude not found: …`, in
+  `agents`), git not found, and no agent at all: ⏎ opens the checklist with those ticked (none:
+  the defaults), on the side a suggested `--where` names; flags' values are never names
+  (`--agents`/`--tools` lists are). With a daemon on another computer, the fix runs that
+  computer's `ptyro install <names> [--where …]` in a split (`ptyro setup` when it names none).
+  The doctor's lines offer setup in BOOT9's words (§24.10): "No coding agent is installed:
+  `ptyro setup` installs one (…)", "codex not found: `ptyro install codex` installs it".
+- **`ptyro init`** (the CLI): its agents step asks "open the setup checklist, to install agents
+  and tools?" (yes by default when no agent is found) and runs `ptyro setup`'s checklist in that
+  terminal, then carries on; never with `--yes` or `--dry-run`.
+
+**Tests, with no real installer:** the ticking rules and Windows' commands in
+`setup_list.rs` (defaults and `install … --confirmed`, a prerequisite ticked with its reason and
+kept, two columns and `--where both` vs. a split per side with WSL's daemon, Windows' ptyro out of
+WSL's reach, a daemon elsewhere); the screen in `app.rs`'s tests (the first run's sections, lines
+and footer count, Space on Gemini CLI ticking Node.js, ⏎'s `install` words and the config; the
+checklist alone and `s`); `health.rs` (which findings open it, with what ticked);
+`crates/ptyro/tests/boot2.rs`, `ptyro` in a PTY (`ptyro_testkit::headless`, `send_when`/`until`)
+on BOOT1's fake machine: the first run's ⏎ installing the defaults in a split with sudo asked once
+and each login, then the profiles line and the config; `C-q U` once while that install runs,
+saying setup is still running, each item installed once; `C-q U` later, `s` installing nothing, and
+Space then ⏎ installing only Antigravity (and its sign-in, just installed); `ptyro init` offering
+the checklist. UX1.19's tour test now leaves the first run with `s`, so it installs nothing, and
+both UX1.19 tests point `PTYRO_TEST_SETUP` at an empty fake machine, so the checklist never looks
+at the machine running the tests. The unit tests add: a running install refused a second, and the
+next side started only once the first ends; a failed spawn, a closed split and a died one each
+freeing it, and the badge looking again after a doctor run in flight; the 80-column screens (two
+sides with a per-side line, and Windows without WSL with its reason, fix and the default side's
+note); a fix's `--where`. The headless test of a running install asserts the "still running"
+message, then (once the split finishes in the daemon) that one install split ran and each item
+installed once.
+
+**Decided by the builder:** the checklist surveys in the TUI's process like the CLI (a daemon may
+not exist yet, and WSL's side needs Windows' ptyro), not through `SetupPlan`; installs run as the
+CLI in a split rather than through `SetupRun`, which never runs admin steps (the owner's
+exception keeps those to the TUI and the CLI on the computer); `--confirmed` for the question
+already asked; `U` for `app.setup`; the catalog's `about` lines; `s` keeps the first run's other
+choices; the health badge opens it for missing agents and git (BOOT9 then rewrote the doctor's
+lines to offer setup, §24.10).
+
+### 24.6 The web checklist (BOOT3) **[built 2026-11-07]**
+
+The design's "the web has it under Settings, and as a first-run banner when no agent is
+installed", with the owner's parity exception: a step that needs administrator rights never runs
+from the web (a sudo password or a UAC prompt would go through it, over the network); the page
+shows the command to run on the computer, and the TUI's and the CLI's ways that do it. Recorded
+as a waiver in the web cells of `setup` and `install` in `docs/parity.md`.
+
+**One page, reached three ways.** BOOT1's More → Set up ptyro became the checklist page
+(`setupView` in `web/src/settings.ts`, `#/setup`), not a second one beside it:
+- **Settings → Agents and tools**: the first link of the settings panel's sections (wide
+  screens) and a card at the top of its home (narrow ones), `#/setup/settings` (its back arrow
+  returns to Settings).
+- **More → Set up ptyro**, as before.
+- **The first-run banner** (`setupBanner`, `setup.banner`) at the top of the Sessions tab while no
+  coding agent is installed on any side (`noAgent`: every agent's state `missing`; an outdated
+  one counts as there): "Set up agents and tools" opens the page; "Not now" hides it on that
+  device (`ptyro.setup.later` in its storage). Only a device paired with `full` scope sees it
+  (`bannerWants`): another could only reach a page saying it can't install. It asks the daemon's
+  `SetupPlan` (the defaults, the same cache the page uses: one survey) once per page load, a
+  failed ask tried again after 5 s, then twice as long each time up to five minutes; once any
+  plan has shown this device an agent (`ptyro.setup.agent` in its storage), the banner stops
+  asking at all. A plan that shows no agent (the setup page's) clears that again.
+
+**The page:** the checklist first, then Log in (BOOT4's, with the profiles line), then the first
+run's accounts and repositories. The doctor's "Your agents" list went: Already here says the same,
+with versions and paths. The checklist is the TUI's shape (§24.5): Agents, Tools and Already
+here; each row a checkbox, the name, and the TUI's own line under it; a prerequisite ticked for
+something is checked and locked (untick that first); on Windows with WSL a box per side with that
+side's cell ("WinGet (admin)", "✓ 2.43.0") and what it can't say. Already here: each item's
+state and path (each side's on two), the default agent marked. The button counts what the web
+will run ("Install 2": ticked, with an action that needs no administrator rights), or says
+"Nothing to install from here".
+
+**The words come from the engine.** The page has no catalog, so the daemon sends each entry's
+line with the plan (protocol 1.34's `lines`, `checklist::lines`): `about` (what the TUI shows after
+the name: the catalog's `about` or the label, the method, "asks for admin", "needs Node.js",
+"ticked because …", an outdated state, "then log in"; without the method on two sides), `how` (a
+side's cell without its mark), `why` (what a cell can't say) and `state` (in words). `about` and
+`why` moved from the TUI (`setup_list.rs`, `onboard.rs`) into `ptyro_agents::setup::checklist`,
+which both use, so the two can't drift. The page reads the plan's own fields (ticked, picked,
+side, action) only for its checkboxes and counts.
+
+**Administrator steps** (`setup.admin`, `adminSteps` in `web/src/setupkit.ts`): what is left for
+the computer (`leftForComputer`): each ticked step that needs administrator rights, and each
+ticked item that waits for one on its side (`action.after`, transitively: Gemini CLI after Node.js
+from apt). A box per side gives the command to run on the computer, `ptyro install <ids>`
+(`--where windows|wsl` when there are two sides), with Copy, the items it covers ("left for the
+computer"), why a waiting one is in it ("Gemini CLI needs Node.js first, so it's in that command
+too"), and the TUI's way ("press the prefix … then U", `app.setup`, which asks for the password
+once) or `ptyro setup`. The run still gets every pick (so its plan is the one shown, and a
+prerequisite the plan re-ticks is skipped the same either way); the daemon skips what is left,
+with its fix (`Admin::Never`, §24.2). The page words it so: Install counts only what will run
+(`webSteps`: "Install 1", or "Nothing to install from here"); a skipped line of the log reads
+"git: left for the computer: …"; and the report keeps those apart from what wasn't run for other
+reasons: "1 installed. git and GitHub CLI are left for the computer (administrator rights): run
+ptyro install git gh there."
+
+**One install at a time on a machine, from any client** (the review's ruling, 2026-11-07). The
+guard is where every path meets: `ptyro_agents::setup::lock`, an exclusive lock on
+`<state>/setup.lock` (the operating system's, `File::try_lock`: `flock` on Unix, `LockFileEx` on
+Windows, so it is let go however the holder ends). `ptyro install` and `ptyro setup` take it
+first, before the checklist is walked or `Install? [Y/n]` is asked (holding it across those
+questions), and keep it through their installs (`go` in `crates/ptyro/src/setup.rs`; the logins
+after them run without it; `--dry-run` takes none); the TUI's splits, which run them, do too.
+The daemon's `SetupRun` takes it with its own flag (`Running`). The holder writes who it is to `<state>/setup.who` (a file of its own, since
+Windows' locks keep others from reading the locked one): "`ptyro install`", "`ptyro setup`",
+"the TUI's setup checklist", "`ptyro install`, for Windows' ptyro", "the web app, through the
+daemon", each with its process id. A second run on that machine side stops before installing
+anything there: "setup is already running (from the web app, through the daemon (process 4242)):
+wait for it to finish, then try again" (the CLI's error, exit 5, `conflict`; on the web a toast).
+Each machine side has its own: Windows' ptyro and WSL's keep their state apart, as their package
+managers are apart. So a run of both sides checks WSL's lock only when it gets to WSL's half (WSL's
+own `ptyro install` takes it): with WSL's held, Windows' half installs and WSL's is reported failed
+with that message. A filesystem that can't lock doesn't stop an install (it goes ahead unguarded,
+as before).
+
+**Said up front, everywhere.** Who holds it is asked before anyone chooses
+(`Lock::held_by`: only the operating system's lock decides, by a non-blocking probe that takes
+the lock *shared*, so two probes at once never see each other as a holder [fixed 2026-11-07: an
+exclusive probe made a checklist say setup was running when another one was only looking]. The
+probe opens the file for reading as well: where `flock` is emulated with POSIX locks (NFS), a
+shared lock is a read lock, which a file open only for writing can't take; held,
+`setup.who` names who; free, a `setup.who` a holder left behind (Ctrl-C, a closed window, power
+lost) is removed while the probe holds the lock, whatever process now has its id; the holding
+process itself answers from its own set of held locks without probing, since a POSIX lock (NFS's
+`flock` emulation) belongs to the process and a probe would let go of it; BOOT5 review):
+- **the CLI** takes the lock before its checklist or question, so it refuses at once;
+- **the TUI's checklist** looks when the survey is in (`Setup::check_busy`): it says "setup is
+  already running on this computer (from …): ⏎ installs nothing now; open the checklist again
+  once it's done", ⏎ counts nothing, and ⏎ looks again before opening a split (a toast with the
+  refusal instead);
+- **the daemon's `SetupRun`** refuses at once when another holds the lock, and takes it off the
+  runtime's workers (the take waits out a probe's instant);
+- **the web**: `SetupPlan.held_by` (protocol 1.34) names a holder that isn't the daemon's own run
+  (while `running` is empty). The page says "Setup is already running on the computer (from
+  `ptyro install` (process 4242)): Install waits until it's done", disables the boxes and Install
+  ("Waiting for the other setup"), and asks again every 10 s while it is open (such a run sends it
+  no events), offering Install once it is free. When the daemon's own run is the holder, `running`
+  names it and the page joins it (below); a refused `SetupRun` asks for the plan, so the page then
+  shows either.
+
+Asking can't make a run starting that instant be refused: `Lock::take` tries again for 400 ms
+while the lock is held (a probe holds it for microseconds, a run for minutes) before it refuses.
+For an instant after a holder locks and before it writes `setup.who`, a refusal may name "another
+ptyro": cosmetic.
+
+**Following a run on the web.** The daemon's guard already refused a second `SetupRun`; a page
+that hadn't started the run didn't know of it. Now the daemon keeps the run
+going (`CURRENT` in `crates/ptyro-daemon/src/setup.rs`: its id, the plan it runs, its latest 500
+events), numbers each event (`seq`, from 1), and every `SetupPlan` carries it as `running`. The
+page follows it (`SetupLog.adopt`, `web/src/setupkit.ts`): "Setup is already running on the
+computer …: its progress is below" at the top, its lines so far, every box and Install disabled
+("Installing…") until it ends, then its report. Events of a run the page doesn't follow are kept
+(the latest 600) and the first one makes the page ask for the plan again, so a run started
+elsewhere while the page is open is joined too; joining adds what came between, by `seq`, once. A
+refused `SetupRun` (started elsewhere a moment before) asks for the plan too, and an ask made
+while one is out is made again when it lands (its survey may be from before the run), so a run
+started just as the page opens is joined as well. A join that finds the run finished already, or a
+run ending while the page was away, refreshes the checklist and the logins.
+
+**Away and back** (a phone's socket drops; `setupConnected` on every new connection): a page
+following a run, or showing the checklist, asks for the plan again. The same run still going: what
+the page missed is added from `running.events` (beyond the last `seq` it had); a jump in `seq`
+while connected (`"gap"`) holds the later events and asks too; when the daemon no longer has the
+earliest missed ones, the log says how many aren't shown. Nothing running, asked for after the run
+was known: it ended while the page was away, so the page says "It finished while this page was
+away: the checklist below is how the computer is now", frees Install and refreshes the checklist
+(the report itself is gone). A plan asked for before this page's own run was known never ends it. Its sides are counted
+from the run's own plan (`SetupStarted`'s, or `running.plan`), never a cached one. Recording an
+event and sending it happen under one lock, so a plan holds an event or comes before it. `CURRENT`
+is cleared when the run lets go of its place (`Running`'s `Drop`, a panic included). The TUI's
+splits run the CLI, which takes the machine's lock, so they and the web's runs exclude each other
+too (the TUI keeps its own guard as well, §24.5, so it doesn't open a second split).
+
+**Tests, with no real installer:** the logic without a browser, `web/test/setup.mjs` (`make
+web-test`): the banner's rule and who it asks for (`full` only, not after "Not now" or an agent
+seen); what is left for the computer per side, its commands, and Install's count; the report's
+"left for the computer"; a run that ended while away (and not one asked before the run was known);
+a gap filled from `running`, and what the daemon no longer has said; a run's
+own events (early ones, sides from its plan, a duplicate shown once, an older daemon's unnumbered
+ones); joining a run going already from `running` with what came between, once and in order; a
+finish that arrives before the plan that names the run; not joining its own run while starting
+it. `checklist::lines` in `setup/tests.rs` (one side and two). The daemon, `boot1.rs`
+(`the_daemon_says_a_run_is_going_with_its_progress`): the lines and default agent; a run going
+(the fake machine's new `wait` outcome: an installer that waits for a file `go`) shows in every
+plan with its events exactly as sent, numbered from 1; a second run refused, and `ptyro install`
+on the same machine refused with "from the web app, through the daemon"; gone after the report.
+`two_installs_at_once_the_second_is_refused` (`boot1.rs`): two CLI installs on the fake machine,
+the second refused saying `ptyro install`, `ptyro setup` refused before its checklist, nothing of
+them installed, the lock free afterwards; `the_daemon_says_and_refuses_while_a_terminal_installs`:
+a terminal's install named in `SetupPlan.held_by` and refusing the daemon's `SetupRun` (whose own
+flag is let go, so the next starts); the TUI's `the_setup_checklist_says_when_setup_runs_elsewhere`;
+`setup::lock`'s own tests (a second holder refused and told who, then free again; a stale
+`setup.who` naming a live, unrelated process never blocking and tidied away; a probe racing 200
+takes never refusing one; asking in the holding process showing the holder and keeping the lock)
+and boot5's `a_stale_note_of_who_holds_setup_blocks_nothing` (a real lock taken and let go, then
+a stale note: `doctor`'s look and `ptyro update` both proceed). In a real browser (`make web-e2e`, `web/test/e2e.mjs`): the banner opening the page;
+Settings → Agents and tools with the TUI's lines, the admin command and the TUI's way, Install 2's
+report and Already here with the default agent; a page opened again while a run waits saying it is
+already running, with its lines and no second Install, then its report and Already here; a
+terminal's `ptyro install` named on the page with Install held back, then offered again once it
+ends; then the server stopped mid-run, the run ending meanwhile, and the page, reconnected, saying it finished
+away, with the checklist as it is now.
+
+**Decided by the builder:** the words travel with the plan (not a catalog in the web, nor rules
+re-written in TypeScript); the running run rides on `SetupPlan` rather than a request of its own,
+since the page always asks for the plan first; the run's events are numbered so a page can join
+mid-way without losing or repeating one; the banner hides per device; the button counts only what
+the web runs.
+
+### 24.7 Out of date, offered (BOOT5) **[built 2026-11-07]**
+
+The design's goals 6 and 8 (the owner: "tell us how to update on startup when it's detected out
+of date. on 'doctor' as well"; "once a day, remembered in between, or with doctor"): an installed
+agent with a newer version is reported with a one-step update and the command shown, never
+updated silently; newest versions are fetched at most once a day, remembered, and fetched afresh
+by `doctor`. What is checked is the agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
+CLI): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself is one more row (BOOT6, §24.8).
+
+**The engine** (`ptyro_agents::updates`, beside the version table and the plan engine):
+- `sources()`: each agent row with a `latest` source (§24.1); `looked_up()` adds ptyro's own
+  (BOOT6, §24.8) as one more source and finding under the id `ptyro`.
+- `lookup(host)`: every source at once (a scoped thread each), each reply through
+  `Host::latest_reply(url)` (the real host: `curl -fsSL --connect-timeout 5 --max-time 10`, as the
+  rest of setup downloads; the fake machine: offline), read by `Latest::parse`. A dead network
+  costs one wait of a few seconds, not one per agent. Found versions, and per source why it
+  couldn't be had.
+- `check(host, state, now)`: lookup, then `setup::survey` with the newest versions (an older
+  agent is `outdated`; one installed another way is `other` with `latest`), and remember it.
+  A failed lookup keeps the version found before, so offline changes nothing but the time.
+- `refresh(host, state, now)`: the survey again against what is remembered, no network, by the
+  holder of the setup lock after an install or update. Between the daily looks the same is done
+  beside the installs (`look_beside`, below), so an agent that updated itself (Claude Code and
+  Antigravity do) stops being offered. Refreshes ask the agents only (`setup::survey_agents`: no
+  git, GitHub CLI or Node.js versions, no package manager's candidate).
+- `remember(host, state, now, since, looked, full)`: what a lookup found, written with the survey
+  (all rows when it is to plan with, the agents otherwise); `since` is the install count read
+  before the survey (below).
+- `setup::other_update(item, platform, via)`: an agent installed another way updates through that
+  installer's `others` row with an `update`; the findings and the plan both use it, so a row
+  without one is neither offered nor planned.
+- `outdated(survey)`: each out-of-date agent as `Outdated{id, name, program, version, latest,
+  command, via, admin, doc}`: `command` is what the update runs, as typed (the recommended
+  method's `update`, or for one installed another way that installer's own `update` from
+  `others`: `npm install -g @openai/codex@latest`). Its `finding()` is the words every place
+  shows: "Codex 0.170.0 is out (you have 0.162.1): `ptyro update codex` updates it (it runs
+  `curl -fsSL https://chatgpt.com/codex/install.sh | sh`)".
+
+**Remembered: `<state>/versions.json`** (state, not database content: the design's database
+rule): `checked` (when the newest versions were last looked up, ms, whether that worked or not:
+a failed look waits a day too), `latest` (by item id), `failed` (why each couldn't be had, said
+only by `doctor`), `surveyed` and `outdated` (the last survey's findings), `noted` (per agent,
+the newest version the start-up note said) and `generation` (below). It is changed only under
+`<state>/versions.lock` (the OS's file lock), read whole, changed, written to a temporary file and
+moved into place, so the daemon's look, a `ptyro update` and the start-up note never undo each
+other. `due(v, now)`: never looked, a day (`DAY_MS`) since `checked`, or the clock went back.
+
+**Who looks** (decided by the builder, as the coordinator asked): the daemon, in the background,
+so the TUI's badge, the web's Health page and the start-up note all read one result.
+`start_updates` (`crates/ptyro-daemon/src/setup.rs`) waits a minute after the daemon starts
+(never on its start-up path), then every hour: with `updates.check = "daily"` and no install
+running, it looks if a day has passed, else only refreshes. `ptyro doctor`, `ptyro update` and
+`ptyro update --check` look afresh; `ptyro doctor --quick`, the web's Health page and the daemon's
+`Updates` request refresh (installed versions asked again, newest versions as remembered).
+Start-up never touches the network: the TUI asks its daemon, which answers from what the last
+look remembered (asking each agent's version again, beside the installs). Each machine side checks its own: Windows' ptyro and WSL's
+keep their own state (§24.6), so a finding belongs to its side's file, its side's daemon and its
+side's `ptyro update`.
+
+**A TUI shows its daemon's machine** (the coordinator's ruling, the review's I1 and I2): its
+badge's `updates` findings and its start-up note come from the daemon it is attached to
+(`Request::Updates`), whose machine runs the sessions, never from this computer's file when the
+daemon is elsewhere; its own `doctor --quick`'s per-agent `updates` findings are dropped (its other `updates` warnings,
+such as a typo in `updates.ignore`, stay). The fix runs there
+too: `ptyro update` in a split the daemon starts (this computer's ptyro; WSL's own in WSL, as
+setup's WSL side runs; or the remote computer's). With an ssh daemon each finding and the note say
+where ("on box: Codex 0.170.0 is out …"); with WSL's daemon, "on WSL: …". Windows' own agents,
+when WSL's daemon is the attached one, are `ptyro doctor`'s (and `ptyro update`'s) on Windows.
+
+**A look beside an install** (the review lessons: no race where a second action starts while one
+runs, no stale view after one): every install and update takes the machine's setup lock (§24.6),
+and taking it bumps `generation` (`updates::started`). Every write of `versions.json` by someone
+not holding the lock goes through `look_beside` (the daemon's hourly look, `doctor`, `ptyro update
+--check`, the web's "look now", the `Updates` request): it reads `generation`, then whether the
+lock is held (`held_by`'s probe); while held it writes nothing and answers from
+memory; and its write keeps the newest versions it found but drops its view of what is installed
+if `generation` moved meanwhile. An install or update refreshes while it still holds the lock. So
+a look that began before an update never writes the old version back over it (unit-tested:
+`a_look_that_began_before_an_update_never_writes_the_old_version_back`).
+
+**Offline is quiet.** A failed lookup never prints at start-up, never blocks it (start-up never
+touches the network: the daemon answers from what the last look remembered), and is tried again the next day. Only `doctor` says so, as a note: "couldn't look for
+newer versions (offline?): ptyro looks again tomorrow" (or which agents' sources couldn't be
+reached). `ptyro update` offline says the same and exits 0.
+
+**Protocol 1.35** (additive, §6.4): `Request::Updates{note}` → `Reply::Updates{offered, note}`,
+the daemon machine's `Outdated` findings (less what is skipped; none when off), and with `note`
+those the start-up note says now, marked said.
+
+**The four places a finding shows:**
+1. **The start-up note**, once per new version: when the TUI starts (its first tick with no
+   dialog or first run on screen to hide it), it asks its daemon `Updates{note: true}`, whose
+   `updates::note` returns what is offered and not said yet and marks it said in `noted`, under
+   the lock (said once, however many TUIs start).
+   The TUI shows it as a message with an offer: "Codex 0.170.0 is out (you have 0.162.1) · C-q u
+   updates it" (`toast.act` runs `app.update` for it); several: "2 agents have newer versions:
+   Codex 0.170.0, Claude Code 2.1.400 · C-q u updates them". A newer version still is said again,
+   once. With a daemon on another computer it says which ("on box: …").
+2. **The TUI's health badge** (`M`): the daemon's `Updates` (asked with each doctor run),
+   `Fix::Update(names)`:
+   ⏎ runs `ptyro update <names>` in a split, tracked as the checklist's installs are (§24.5: one
+   at a time, never beside a running install, and the badge looks again when the split ends).
+3. **The web's Health page** (`#/health`): the same findings (each check carries the engine's
+   `Outdated` as `data`, which the page reads instead of the words); a finding's menu offers
+   "Update <name> to <version>" (`updates.update`), "Look for newer versions now" (`updates.check`) and
+   Update settings (`#/settings/updates`).
+4. **`ptyro doctor`**: section `updates`, looked up afresh: per agent out of date a warning with
+   the words above, one skipped by `updates.ignore` a note, "up to date (looked 5 minutes ago)"
+   when nothing is, "off (updates.check)" when off, and a warning for an `updates.ignore` entry
+   that names no agent (a typo skips nothing).
+
+**The update itself, `ptyro update [NAME…] [--check] [-y] [--json]`:** names as `ptyro install`
+takes them, agents only (a tool is refused, exit 2: "ptyro updates the agents; git updates the way
+you installed it"; an unknown name exits 3). Another run holding the machine's setup lock is said at once ("setup is already running (from …)",
+exit 5). It looks afresh first (offline: what is remembered), without the lock (a slow network
+never holds it), then takes the lock, writes what it found with a full survey, and plans each agent to update (those named, else every one out of date that
+`updates.ignore` doesn't skip; named ones are updated even when skipped) with the plan engine:
+an `outdated` entry runs its method's `update`, an `other` one with `latest` that installer's own
+(`setup::plan`; `setup::run` finds the method among `others` for an update). It shows each "Codex
+0.162.1 → 0.170.0: `…`", with the sessions running it, and asks `Update? [Y/n]` (`--yes` asks
+nothing and runs only what needs no password; without a terminal and without `--yes` it refuses).
+The steps run with live output, ✓ or ✗ with the fix ("`ptyro update codex` tries again; or run
+it yourself to see why: …"); then it refreshes `versions.json` (still under the lock), says "N
+updated", and what else is out of date. A named agent with nothing to do says so: "✓ Claude Code
+2.1.400 is the newest", "isn't installed: `ptyro install …`", or that its newest version couldn't
+be looked up. `--check` only looks (afresh, even with `updates.check = "off"`: the person asked)
+and says where each installed agent stands; `--json` prints `{outdated, ignored, failed,
+checked}`. `--remote` is refused, as for setup (the agents are this computer's; a `wsl://` one
+says to run `wsl ptyro update`). The hidden `--tty` is setup's (the TUI's split through interop).
+
+**An agent in use** (the design's call): the update goes ahead, and ptyro names the sessions that
+still run the old version until they restart: before the question ("2 sessions still run Codex
+0.162.1 until they restart: brisk-rook, calm-fox") and after the update. Sessions are this
+computer's daemon's live ones whose agent is that item (or whose program is its command); with no
+daemon running there are none. On the web the question names them from the page's session list.
+
+**Windows won't replace a running program.** An update failing with Windows', npm's or an
+installer's words for it ("being used by another process", `EBUSY`, "resource busy or locked",
+"text file busy", os error 32, "sharing violation": `setup::in_use`) gets the fix "Codex is
+running, and Windows won't replace a program while it runs: end the sessions running it (or quit
+it wherever it runs), then `ptyro update codex` again" (on every client: the web's log shows it).
+`ptyro update` at a terminal on Windows then names the sessions running it and asks "Try again
+now? [Y/n]", and tries those again on a yes (as often as asked); one that updated itself meanwhile
+counts as done ("✓ Claude Code is up to date now"); `--yes` and `--json` don't ask. The event
+carries `in_use`, and the web's setup page shows "<name> is still running (sessions…)" with "Try
+updating <name> again" (`updates.retry`), which runs it again. Elsewhere (Linux's and macOS's
+"text file busy") the words don't blame Windows: "its file couldn't be replaced while it runs".
+
+**The TUI** (`app.update`, the palette; the badge's fix; the note's offer): `ptyro update
+[names]` in a split where the daemon is, as above, one at a time with setup's splits (`setup_run`,
+`setup_tick`; a running one shows instead, saying "an update is still running in …" or "setup is
+still running in …"); with this computer's daemon, the machine's lock held elsewhere is said
+before any split opens. The setup checklist (TUI, CLI and web) plans
+with the remembered newest versions (`updates::known`: less what is skipped, none when off), so
+an outdated agent is a row there too ("2.1.300; 2.1.400 is out"), and ticking it updates it.
+
+**The web:** Health's "Update <name> to <version>" asks first (the update's command; if it needs
+administrator rights, that the next page gives the command to run on the computer; the sessions
+that keep the old version), then runs the daemon's `SetupRun` of that agent (an outdated agent's
+action is its update) and opens the setup page, which follows the run (§24.6) to its report, "1
+updated." (`SetupLog.summary` tells updates from installs by the plan's `action.update`). The
+setup page's Already here gives an agent installed another way and out of date its own "Update to
+<version>" button. "Look for newer versions now" is the host operation `updates.check` (`ptyro
+update --check --json` in `ptyro serve`), then Health and the checklist reload. The daemon's run
+refreshes `versions.json` before it lets go of the lock. An update needing administrator rights is
+the owner's parity exception (§24.6): the page shows the command to run on the computer.
+
+**Settings** (`[updates]`, the panel's new Updates section, both screens; `settings.rs`):
+`updates.check = "daily" | "off"` (default `daily`; the design's form) and `updates.ignore` (a
+list: `codex` skips every Codex update, `codex@0.170.0` only that version; names as people say
+them, any case). The config checks each entry's shape (`name` or `name@version`, no spaces).
+With `off`, nothing is fetched (the daemon, `doctor`) and nothing offered (the note, the badge, the
+checklists); only `ptyro update` and `--check`, asked for, still look.
+
+**Tests, never the network:** the knob `PTYRO_TEST_LATEST=<dir>` (debug builds,
+`ptyro_core::test_knob`) makes `lookup` read `<dir>/<id>` (each source's reply, in BOOT0's
+fixtures' shapes; a missing one is offline) and log each to `<dir>/asked.log`; the testkit sets
+it to an empty folder for every daemon and command it starts, so no `doctor` in a test reaches
+the network. `PTYRO_TEST_NOW` sets the clock (ms, or `@file` so a test moves it under a running
+daemon); `PTYRO_TEST_UPDATES_FIRST_MS` and `PTYRO_TEST_UPDATES_EVERY_MS` the daemon's waits. The
+fake machine's new `busy` outcome fails once as Windows does. The engine in `setup/tests.rs`
+(found, remembered, due, offline keeping the last versions; one installed through npm updating
+through npm; `updates.ignore` by name and version, `off`; the note once per version; refresh asking
+no source; Windows' refusal's fix); the CLI and daemon in `crates/ptyro/tests/boot5.rs` (doctor
+afresh vs. `--quick` remembered, `--check --json`; offline quiet and `off` fetching nothing; the
+question, `n`, the ignore list, named ones; the lock held refusing it; npm's update; Windows' retry
+and its refusal; the daemon looking once a day by the moved clock, refreshing hourly, and the web's
+update as a `SetupRun` with the daemon's hourly look running beside it never writing the old view
+back); the TUI's note once and its fix's split one at a time (`app.rs`); the web's finding parsing,
+running sessions and "1 updated." (`web/test/setup.mjs`); and in a real browser (`make web-e2e`):
+Health → Look for newer versions now → Update → the setup page's "1 updated." → nothing offered.
+
+**Decided by the builder:** the daemon looks (the badge, the note and the web share one result) and
+the CLI note is the TUI's start; a TUI shows its daemon's machine (the coordinator's ruling); refreshes between looks and after every install keep findings true without
+the network; `generation` instead of holding the setup lock while looking (a daily look must never
+make `ptyro install` wait or be refused); `ptyro update --check` and `ptyro update` look even when
+off (asked for); an agent installed another way updates through its own installer, and BOOT7
+offers the move beside it (§24.9); protocol 1.35 (above).
+
+### 24.8 ptyro updates itself (BOOT6) **[built 2026-11-07]**
+
+The design's goal 7 (the owner: "download, and offer to install and upgrade"): install ptyro from
+its binary once, and from then on ptyro keeps itself current the way it keeps the agents current.
+It is **one more row of §24.7's machinery**, under the id `ptyro`, not a system beside it: the same
+daily look and `versions.json`, the same `Outdated` finding in the same four places (the start-up
+note, the health badge, the web's Health page, `doctor`), the same `ptyro update`, the same
+machine setup lock (§24.6) and `updates.check` / `updates.ignore` (`ptyro`, `ptyro@0.0.70`).
+
+**The engine** (`ptyro_agents::own`):
+- **The newest version:** GitHub's latest release of `nealhardesty/ptyro`
+  (`https://api.github.com/repos/nealhardesty/ptyro/releases/latest`, `tag_name` = `v<version>`,
+  what `install.sh` reads), as a `github-release` source (`Latest::new`). `updates::looked_up()`
+  adds it to the agents' sources, so it is fetched in the same concurrent look, with the same
+  timeouts, and offline is just as quiet. A test's `PTYRO_TEST_LATEST/ptyro` holds the reply.
+- **What is installed:** `Install::here()`: this ptyro's binary (`current_exe`, on Linux with a
+  replaced file's ` (deleted)` dropped, on Windows an image an update renamed aside,
+  `ptyro.exe.old[.<pid>]`, named as `ptyro.exe`, so a daemon whose upgrade didn't happen never
+  writes under the aside name; a debug build's `PTYRO_TEST_SELF_EXE` names another), **resolved
+  to the file itself** (macOS's `current_exe` is the path that was run: on an Intel Mac Homebrew's
+  `/usr/local/bin/ptyro`, a link into its keg in a folder the user owns), and how it updates, by
+  where that file is (`classify`, as `ptyro uninstall` tells; a link in Homebrew's `bin` counts as
+  Homebrew's). An update replaces the file, never a link to it, so a link someone made keeps
+  pointing at the new binary:
+  - `Release`: a folder the user can write (`~/.local/bin`, `%LOCALAPPDATA%\Programs\ptyro\bin`,
+    or anywhere copied by hand): downloaded, checked and replaced here.
+  - `Admin`: the same in a folder only an administrator can write (`/usr/local/bin` owned by
+    root): replaced with sudo, at a terminal only.
+  - `Brew`: `/Cellar/`, `/homebrew/`, `/linuxbrew/`: `brew upgrade ptyro`, never overwritten.
+  - `Managed`: cargo (`~/.cargo`), a system package (`/usr/bin`, `/bin`, `/snap`), WinGet, Scoop:
+    said, with how it updates ("it was installed with cargo, so update it that way"), never
+    replaced; `ptyro update` (all) passes over it, `ptyro update ptyro` says so (exit 1).
+  - `Build`: a cargo `target/{debug,release}` (or `target/<triple>/…`): never offered, never
+    looked up (so a developer's build and every test of another feature never reach the network
+    for it).
+  Its version is what the binary answers to `--version` (the file on disk, not the process: a
+  daemon still running the old image after an install by hand isn't "outdated", it is `daemon
+  upgrade`'s finding).
+- **The finding:** `own::finding(install, latest)`: an `Outdated` with `id`/`program` `ptyro`,
+  plus two optional fields (`path`: the binary it replaces; `managed`: who owns it instead; wire
+  compatible, so no protocol bump). Its words: "ptyro 0.0.64 is out (you have 0.0.63): `ptyro
+  update ptyro` updates it (it downloads the release, checks it against SHA256SUMS, replaces
+  /home/me/.local/bin/ptyro and upgrades the daemon live)"; Homebrew's "(it runs `brew upgrade
+  ptyro`, then upgrades the daemon live)"; an administrator's "`ptyro update ptyro` in a terminal
+  on the computer updates it (it replaces /usr/local/bin/ptyro as administrator …)", whose
+  `command` is the installer line to run there instead (`curl -fsSL
+  …/releases/download/v<v>/install.sh | sudo env PTYRO_PREFIX='/usr/local' PTYRO_VERSION=<v> sh`; on
+  Windows install.ps1 in an administrator PowerShell). The start-up note with ptyro among others
+  says "2 newer versions are out: ptyro 0.0.64, Codex 0.170.0".
+- **The update** (`own::update`, only after the person's yes, under the setup lock), reporting
+  setup's events under the id `ptyro`, exactly as `install.sh` / `install.ps1` check a release. The
+  version must be a plain release version (`1.2.3`, `1.2.3-rc.1`: `own::valid_version`) before it
+  goes into a URL or a path; the finding isn't offered otherwise.
+  1. `ptyro-<v>-<triple>.tar.gz` (Windows: `.zip`) and `SHA256SUMS` downloaded with curl from
+     `https://github.com/nealhardesty/ptyro/releases/download/v<v>` (a debug build's
+     `PTYRO_TEST_RELEASE_URL`, as `install.sh`'s `PTYRO_RELEASE_URL`) into a temporary folder of
+     its own (`tempfile`: created exclusively, private; untrusted until checked; removed
+     afterwards, whatever happens). curl is held to HTTPS (`--proto =https --proto-redir =https
+     --tlsv1.2`; plain HTTP only for a debug build's test knob), 10 s to connect, and gives up on
+     a download under 1 KB/s for a minute or past 30 minutes, so a stalled one ends with its error
+     and lets go of the setup lock. The triple is this build's (`own::triple`).
+  2. Its SHA-256 against its `SHA256SUMS` line (either mode). **A mismatch is refused** and
+     nothing is replaced: "the download's checksum is …, but the release's SHA256SUMS says …: it
+     was changed or broken on the way, so it isn't installed", fix "nothing was replaced; `ptyro
+     update ptyro` tries again (if it keeps failing, don't install it by hand either: tell the
+     maintainers …)". No line for the file is refused the same way.
+  3. With `gh` on `PATH`, the signed build provenance: `gh attestation verify <file> --repo
+     nealhardesty/ptyro`. As in the installers: not verifiable (not logged in, an old release) is a
+     note, the checksum having matched; `PTYRO_VERIFY=0` skips it; `PTYRO_REQUIRE_ATTESTATION=1`
+     refuses without it.
+  4. Unpacked with `tar -xf` (Windows: System32's bsdtar, which reads a zip; Git's GNU tar can't),
+     `ptyro-<v>-<triple>/ptyro[.exe]` required. Its list (`tar -tf`) is checked first (no
+     absolute path, no `..`), and what was unpacked must be plain files and folders: a symbolic
+     link, or on Unix a file linked twice (a hard link in the archive), is refused.
+  5. **Swapped in atomically, the old kept until the new one runs** (`own::swap`): each new file
+     copied beside its place (the same folder, so the move is atomic); the old one kept aside
+     (elsewhere hard-linked to `.ptyro.old.<pid>`, so the name is never missing; on Windows
+     renamed to `ptyro.exe.old.<pid>`, since a running exe can't be overwritten but can be
+     renamed);
+     the new one renamed into place; then **`<path> --version` must say `ptyro <v>`**. If it
+     doesn't (it won't run, Smart App Control, the wrong version), every file is put back: "the
+     new ptyro <v> didn't run (…), so the old one is back in place" (a file that couldn't be put
+     back is said instead, with where the old one is). On success the old file is removed (on
+     Windows, while the old image still runs — the daemon, a TUI — it can't be: every ptyro start
+     sweeps install.ps1's `ptyro.exe.old` and an update's `ptyro.exe.old.<pid>` once that `<pid>`
+     no longer runs, so an update still going keeps what its rollback needs; beside the file
+     itself, canonical, as the update put them there even when ptyro is reached through a link;
+     the same for the
+     zip's `ptyrow.exe`, `conpty.dll`, `OpenConsole.exe`, which are swapped with it, as
+     install.ps1 puts them). The release's shell completions are copied over `<prefix>/share/ptyro/completions` when
+     that folder exists (as install.sh puts them).
+  6. An administrator's binary (Unix, at a terminal: `Admin::Ask`): the same, with the place,
+     put-back and removal done by `sudo sh -c SCRIPT sh PATHS…` (the paths are arguments, never
+     in the script; sudo asks for the password in the terminal, never through ptyro). A put-back
+     sudo refuses is said with where the old binary is and the `sudo mv` that restores it. With `--yes`, from the web, or on Windows, it isn't attempted: the
+     command above is the fix.
+  Homebrew's: `brew upgrade ptyro` live, then the version Homebrew's `bin/ptyro` link answers (the
+  keg's folder changes with each version, so the daemon is upgraded onto the link). One still
+  older than the release (the formula behind it, or Homebrew's auto-update off) isn't an update:
+  "Homebrew's formula isn't at <v> yet", fix `brew update && brew upgrade ptyro`, and no daemon
+  upgrade or other half follows.
+
+**`ptyro update`** (§24.7's, extended): `ptyro update ptyro` names it (`ptyro update` covers it
+with the agents, ptyro last; `--check` and `--json` include it). Whether it will be updated is
+known from the lookup's newest release, else the remembered one (as `updates::remember` builds the
+update list: GitHub's API may be out of requests while the download still works, and the halves
+are decided on the same view), so on Windows with WSL the other half is looked at then, before the
+setup lock is taken (a cold distro takes seconds; the lock is never held across a probe). The question shows it as "ptyro
+0.0.63 → 0.0.64: download ptyro 0.0.64 (ptyro-0.0.64-x86_64-unknown-linux-gnu.tar.gz), check it
+against SHA256SUMS, and replace /home/me/.local/bin/ptyro / then the daemon is upgraded live: every
+session carries on". After the swap, still under the lock, `versions.json` is refreshed (the
+finding goes); then, the lock released:
+- **The daemon, live:** when this computer's daemon answers, `daemon upgrade --binary <the new
+  binary>` (§4.5): every session carries on, in `daemon upgrade`'s own words ("upgraded
+  in 41 ms: daemon … N session(s)"). No daemon: "the next one starts as ptyro 0.0.64". A failed
+  upgrade leaves the new binary installed and says the fix (`ptyro daemon upgrade`).
+- **On Windows with WSL, both halves** (the design's call): the two ptyros are kept at one version,
+  so Windows never passes flags to an older WSL ptyro that rejects them. Each half updates
+  itself; the half that updated asks the other, when it says another version, to run `ptyro update
+  ptyro --yes`:
+  - Windows → WSL: the distro of `client.default_remote` (else WSL's others in WSL's order) whose
+    ptyro answers `--version` through `wsl.exe` (`ptyro_args`, as setup's WSL side): it updates its
+    binary and live-upgrades WSL's daemon. No WSL, no distro, or no ptyro in any (the distro's
+    shell can't find it: exit 127) is a normal state with no other half, and says nothing. A ptyro
+    that is there but doesn't answer (another exit, or no answer in 20 s) is said on stderr before
+    the question: "note: WSL's ptyro (Ubuntu) couldn't be checked (…), so it isn't updated with
+    this one: `wsl -d Ubuntu -- ptyro update ptyro` once it answers", so one half is never updated
+    without a word about the other.
+  - WSL → Windows: Windows' `ptyro.exe` on `PATH` (WSL appends Windows' own), else where
+    install.ps1 puts it (`%USERPROFILE%\AppData\Local\Programs\ptyro\bin`), through interop.
+  It stops by itself: the other half, updated, sees this one at its version and doesn't ask back.
+  The question names it ("and WSL's ptyro (Ubuntu) 0.0.62 → 0.0.64 too, so both halves agree"),
+  the result is "✓ WSL's ptyro (Ubuntu) 0.0.64", and `ptyro update ptyro` when this half is the
+  newest still brings the other along ("✓ … is 0.0.64 too"). A half too old to update itself (from
+  before BOOT6, which doesn't know `ptyro update ptyro`) is "✗ … wasn't updated" with the fix: its
+  installer (`wsl -d <distro> -- sh -c "curl … install.sh | sh"`, then `ptyro daemon upgrade`
+  there; or install.ps1 in PowerShell). So the TUI on Windows attached to WSL's daemon, whose fix
+  runs `ptyro update ptyro` in WSL, updates Windows' `ptyro.exe` too.
+
+**The four places**, unchanged in shape: the TUI's start-up note (`C-q u`) and badge (⏎: `ptyro
+update ptyro` in a split where the daemon is, tracked as §24.7's), and `app.update` in the palette;
+`doctor`'s `updates` section; the web's Health page, whose finding for ptyro offers "Update ptyro
+to <v>" (`updates.self`): asked first (what it does, that the daemon upgrades live and the page
+reconnects, that on Windows with WSL the other half comes along), then the host operation
+`updates.self` starts `ptyro update ptyro --yes` in a session on the daemon (refused at once while
+setup runs; the setup lock is one-at-a-time) and the page opens it: its progress live, and the
+daemon's live upgrade at its end keeps that session. Installing from the web replaces the daemon's
+own binary on the computer, which isn't an administrator's step for a user-owned install. For one
+only an administrator can replace (the owner's parity exception, §24.6), the page shows the command
+to run on the computer, with Copy, and `ptyro update ptyro` / `C-q u` there; the host operation
+refuses it too. A package manager's says how it updates.
+
+**Decided by the builder:**
+- **Nothing is downloaded before the yes.** The daily look fetches the release's metadata only (a
+  small JSON, as for the agents); the binary (tens of MB) is fetched by the update the person said
+  yes to. Downloading ahead would make the yes quicker by seconds but would spend the network
+  unasked on every machine, every release, against the anti-goal (no network install or update
+  without the user's yes).
+- `ptyro update ptyro` rather than a separate `self-update` command: ptyro is a row like the
+  agents, and `ptyro update` (everything) covers it.
+- The version is the file's (`--version`), not the process's; a build in `target/` is never a row.
+- The halves are kept in step by each updating itself, asked by the other only when the versions
+  differ (no new hidden flag an older half would reject).
+- After a swap the daemon is upgraded onto the binary just installed (`--binary`), so a daemon
+  started from elsewhere (a build) still ends up on it.
+
+**Tests, never the network** (`crates/ptyro/tests/boot6.rs`): a fake release server on 127.0.0.1
+(a thread serving a folder, each request logged) with the archive (`tar`; on Windows System32's,
+`-a` for the zip) and `SHA256SUMS`; the registry's `ptyro`; the installed binary is the test's own
+(`PTYRO_TEST_SELF_EXE`), never the build. Offered in `--check --json` and `doctor` (with `data`),
+the question answered no fetching nothing, `updates.ignore = ["ptyro"]` skipping it; **a tampered
+download refused** (the sums say another file's: exit 1, nothing replaced, nothing left beside it);
+**a new binary that doesn't run rolled back** (the old one answers again, still offered); a build
+never looked up; a yes installing it and **the daemon upgraded live with a session kept** (its
+generation moves, the session's process alive, the finding gone); the web's `updates.self` running
+it in a session whose daemon is upgraded under it; on "Windows" (the fake machine's platform)
+WSL's half brought along through `ptyro fake-wsl` (whose distro now has its own installed binary,
+`<distro>/bin/ptyro`, which answers its `--version` and is what its update replaces); in "WSL"
+Windows' half (`PTYRO_TEST_WINDOWS_PTYRO`, a stand-in) brought along, and one too old to know how
+given its fix; Homebrew's through a stand-in `brew` with its keg never overwritten; cargo's said and
+never replaced. The success paths use shell-script stand-ins (Unix); the refusals and the rollback
+run on Windows too, with this build hard-linked as the installed one. Unit tests: `classify`,
+`checksum_for`, the administrator's command, `swap` keeping and restoring (with an injected check,
+on every platform), `sweep` removing only leftovers (`own.rs`); the TUI's finding and note
+(`app.rs`); the web's `selfUpdate` (`web/test/setup.mjs`).
+
+### 24.9 Moves to the recommended installer (BOOT7) **[built 2026-11-07]**
+
+The design's goal 9 (the owner: "offer to move it to the recommended installer"): an agent
+installed some way other than the version table's recommended one (Codex through npm, Claude Code
+through npm, Homebrew or WinGet) is offered the move; the offer can be dismissed per agent, after
+which it updates the way it is installed. In all three clients.
+
+**Detected** as before (§24.2's `other` state, by where the program's file really is: Homebrew's
+`Cellar`/`Caskroom` first, since Homebrew's Gemini CLI is an npm install inside its keg; then
+`npm`'s `node_modules`; then `homebrew`, WinGet's links), now through the canonical path, so a
+link in `~/.npm-global/bin` or `/usr/local/bin` counts as npm's. `Installed.system`: the file's
+folder is neither the user's nor writable by everyone (a system npm prefix,
+`/usr/lib/node_modules`), so removing it needs administrator rights. `Installed.prefix`: npm's
+global prefix the copy is in (the folder above `lib/node_modules`; on Windows above
+`node_modules`, chosen by the path's own shape: a drive letter or share is Windows'), `None` for another tool's store (`Installed.store`: Bun's
+global folder, mise's `npm:` backend, pnpm's, an asdf plugin's), which npm doesn't manage: no move,
+and `doctor` names that tool's command (`mise uninstall npm:@openai/codex`, `bun remove -g …`). A
+Node.js that mise or asdf installed is a real npm prefix and moves as any. A prefix ptyro won't
+quote (a `'` in it) offers no move, and `doctor` says that, with `npm uninstall -g` to run there. `Installed.file` and `Installed.real`: the bare file found and where it really is (links
+followed).
+
+**The vendor's copy is known by its path.** A vendor installer's method names its `places`, where
+its copy really is: Claude Code `~/.local/share/claude` (the launcher `~/.local/bin/claude` links
+into its `versions/`) [V 2026-11-07, the setup page], on Windows `~/.local/bin/claude.exe` and
+`~/.local/share/claude` [V, its Windows uninstall]; Codex `~/.codex/packages/standalone` (install.sh
+links `~/.local/bin/codex` into `…/current`; `$CODEX_HOME` first when set, as the installers
+follow it; on Windows install.ps1's junctions, also `%CODEX_INSTALL_DIR%` or
+`%LOCALAPPDATA%/Programs/OpenAI/Codex`) [S 2026-11-07, the vendor's install.sh and install.ps1];
+OpenCode `~/.opencode` [V, its docs]. A place naming an unset variable is skipped; `~` is the home
+the platform's installers use (`USERPROFILE` on Windows, whatever Git Bash's `HOME` says).
+`setup::installed_by(copy, method)`: a package manager's copy
+by its folder (`via`); a vendor's only when its file (or where it really is) is under one of those
+places. A copy from an installer nothing classifies (Nix's store, Scoop's shims, mise or asdf
+shims, pipx, a wrapper script in `~/bin`) never counts. A vendor method with no `places` (not
+known) offers no move, and the table's tests require them wherever another way exists.
+
+**The offer** (`setup::offer`, `setup::Moving`): for an `other` agent that `Survey.keep` doesn't
+name, when the platform's recommended method is usable here (its `needs` present; Gemini CLI's npm
+needs Node.js) and the old installer's `others` row has an `uninstall`. Each `others` row in the
+table now carries `uninstall` (the vendor's documented one for Claude Code [V 2026-11-07, the setup
+page's "Uninstall Claude Code"]; npm's and Homebrew's own forms for Codex, OpenCode and Gemini CLI
+[S], marked in the row's note), never with `sudo` (the tests insist): ptyro adds `sudo ` for a
+`system` copy on Unix, and the whole move is then an administrator's step. Never for Homebrew,
+which refuses to run as root: a keg that isn't the user's isn't offered the move. npm's removal acts
+on the old copy's own prefix, `npm uninstall -g --prefix '<prefix>' <package>` (npm's documented
+`prefix` setting [S]), never npm's prefix of the moment (another nvm Node.js's, ptyro's own); a copy
+with no npm prefix (Bun's) isn't offered the move. `Entry.moves` carries
+the offer whether ticked or not; ticked, `Action{via: recommended, command: install + "\n" +
+uninstall, admin: either, moving: true}`. Each agent row gains `keeps`, where its settings and
+logins live, said in every offer.
+
+**Nothing is lost** (the ruling's checks, recorded in RESEARCH G18):
+- **Settings and logins stay.** They live in the home, which neither installer touches: Claude
+  Code `~/.claude` and `~/.claude.json` [V 2026-11-07: the docs remove them in a step of their own,
+  apart from every uninstall]; Codex `~/.codex` (`config.toml` [V 2026-11-07, config-basic];
+  `auth.json` there [S: the binary, §10.10]); Gemini CLI `~/.gemini` [S]; OpenCode
+  `~/.config/opencode` and `~/.local/share/opencode` [S]. Antigravity has no other way in the table,
+  so it is never offered a move. The tests confirm the login holds across a move (the fake
+  machine's `logged_in`: setup's login walk after the move says ✓).
+- **The new one first** (`setup/moving.rs`): the recommended method's install runs; then
+  `Host::copies` (every copy of the program, `PATH` first, then npm's, nvm's and the vendors'
+  folders: `locate::find_all`) must show a copy the recommended method installed
+  (`installed_by`: in the vendor's places; npm's for Gemini CLI) that answers `--version`. Any
+  other copy (Homebrew's beside npm's, Nix's) never counts; then the install runs.
+  A failed install, or one whose new copy can't be found answering, is `failed` with "nothing was
+  removed: Codex through npm is still installed and works" and the fix; the old copy is untouched.
+- **Then the old one goes**, with its installer's `uninstall` (`Host::uninstall`, the row's shell,
+  `sudo` as above). A failure is `failed` with what works and where ("Codex 0.170.0 through the
+  vendor's installer works (~/.local/bin/codex), but removing npm's copy … failed") and the fix
+  "finish the move by removing it yourself: `npm uninstall -g --prefix … @openai/codex`". Tried
+  again, a new copy already here is said and only the removal runs.
+- **The old one must be gone.** Its copy still there after a removal that said it worked (npm
+  acting elsewhere: "removed 0 packages") is `failed`, "npm's copy (…) is still there after `…`",
+  with the fix to delete that file, ready to paste (`rm '<file>'`; on Windows `Remove-Item
+  -LiteralPath`; an npm copy on Windows by its prefix's shims, `codex`, `codex.cmd`, `codex.ps1`,
+  and its package folder, never the script inside it, which would leave the shim on `PATH`), never
+  "run it again", which would do the same. Every message after the
+  removal looks for the new copy again before saying it works (or says it no longer runs, with
+  the install command).
+- **The new one must still run.** A removal can take the new install's link with it (an npm prefix
+  of `~/.local` shares `~/.local/bin` with the native installer): the recommended copy is looked
+  for again, and if it is gone it is installed again at once ("the removal took the new copy too,
+  installing it again"). If that fails, the move is `failed`: "npm's copy is removed, but the
+  removal took the new codex with it … no Codex runs now", fix: `ptyro install codex` or the
+  install command. A move never ends ✓ with nothing to run.
+- **The new one must be what runs.** Afterwards `Host::installed` (what `locate::find` picks: `PATH`
+  first) must be the recommended copy and answer `--version`. If another comes first (a second npm
+  prefix, a third installer), the move is `failed` (the vendor's own copy not answering is
+  `failed` with the install command to repair it, never a delete): "npm's codex (…) comes first on PATH, so it is the one that
+  runs", fix: delete it (or uninstall it with the tool that put it there), or put the new one's
+  folder ahead of it on `PATH`.
+- Each half is a `Started` event of its own (`Codex: installing it through the vendor's
+  installer`, `Codex: removing npm's copy`) with its command, so the CLI, the TUI's split and the
+  web's log show both. A move holds the machine's setup lock like every install (§24.6), and what is
+  remembered (`versions.json`) is refreshed afterwards even when it failed half way (it changed
+  what is installed).
+
+**Dismissed for good: `updates.keep_installer`** (a list of agent names, `["codex"]`; `[updates]`,
+in both settings screens with its schema entry; the config checks each is a bare name). Kept
+agents are `Survey.keep` (filled by `updates::survey` from each side's own config, so WSL's comes
+from WSL's ptyro): no `moves`, the row is "Already here", and ticking an out-of-date one runs its
+own installer's update (BOOT5). `ptyro update` never moves (it plans with every agent kept); the
+move is `ptyro install`'s.
+
+**Where it shows:**
+- **The checklists** (CLI, TUI, web; `checklist::here_already` and `about`): an offered agent is a
+  row, not Already here: "OpenAI's coding agent · installed with npm · move to the recommended
+  installer?"; ticked, "… · moves to the vendor's installer, then removes npm's copy · your
+  settings and logins (~/.codex) stay". The CLI's checklist note: "installed 0.162.1 through npm;
+  move to the recommended installer?". A two-sided cell: `npm: move?`, ticked `move to the vendor's
+  installer`.
+- **`ptyro install codex`** (the CLI's form: ticking it by name is the move) shows "Codex: move
+  from npm to the vendor's installer (path): install it through the vendor's installer, check it
+  runs, then `npm uninstall -g @openai/codex`; your settings and logins (~/.codex) stay" and asks
+  "Install? [Y/n, or k to keep Codex with npm and not be asked again]". `k` adds it to this
+  computer's `updates.keep_installer` and runs nothing for it this time. **A move is offered, never
+  done unasked** (the design): `--yes` alone leaves an agent installed another way as it is (its
+  own update when out of date, else nothing) and says "Codex is installed with npm: moving it to the
+  recommended installer needs a yes (`ptyro install codex` in a terminal, or --move); left as it
+  is"; `--move` (with `--yes`) is the unattended opt-in, on `ptyro setup` as on `ptyro install`
+  (`setup --yes` without it says the same for each ticked one it passes over). The TUI's
+  `--confirmed` moves (its row was ticked). A move on WSL's side (`--where wsl`) runs in WSL's
+  ptyro under the Windows question's yes, which passes the moves it covers (hidden `--moves`), so
+  WSL's ptyro asks nothing; keeping one of WSL's as installed is done in WSL (its step line says so).
+- **The TUI checklist**: `Space` ticks the row (⏎ runs `ptyro install codex --confirmed` in a
+  split as for any install); `K` keeps it (this computer's side; on WSL's it says how to keep it
+  there), written with the settings panel's own writer; the footer adds "K keep as installed" when
+  any row is offered the move.
+- **The web checklist**: the row's checkbox (`setup.move`), and "Keep npm" beside it (`setup.keep`,
+  the host operation `updates.keep`, which writes the computer's `updates.keep_installer` with the
+  CLI's own writer; the daemon reads the config live). An administrator's move is left for the
+  computer like any administrator step (§24.6: `ptyro install codex` to run there).
+- **The update findings** (§24.7's four places): `updates::Versions.movable` (each offered move,
+  kept ones included) is remembered with the survey; `Outdated.move_to` names the recommended
+  installer for one out of date, cleared by `updates::offered` (and `doctor`) when kept. Its words
+  add "; or `ptyro install codex` moves it from npm to the vendor's installer, the recommended way
+  (to keep npm, add codex to updates.keep_installer)". **`doctor`**: that warning, with `data.move`
+  (the `Movable`); an agent up to date but installed another way is a **note**, never a warning (a
+  normal state): "Codex is installed with npm: `ptyro install codex` moves it to the vendor's
+  installer …"; an `updates.keep_installer` entry naming no agent is a warning. **The badge**: beside
+  the update finding, `updates codex move` ("Codex is installed with npm: moving it to the vendor's
+  installer, the recommended way, also brings it up to date"), whose ⏎ opens the setup checklist
+  with it ticked (`Fix::Setup`). **The start-up note**: "Codex 0.170.0 is out (you have 0.162.1)
+  (installed with npm; the move to the vendor's installer is offered too)". **The web's Health
+  page**: a finding with `data.move` offers "Move Codex to the vendor's installer" (asked first, with
+  what it installs, removes and keeps; then the daemon's `SetupRun` of it on the setup page, whose
+  report says "1 moved to the recommended installer."; an administrator's shows `ptyro install codex`
+  to run on the computer) and "Keep Codex with npm"; its Update names no `moves`, so it updates
+  through npm and never moves. The checklist's Install sends `moves` for the rows ticked where the
+  move is offered.
+
+**Tests, never the network or a real installer:** the fake machine gains two copies for an `other`
+item (`new/<id>`, written when a step installs it the recommended way; `removed/<id>`, written by
+`ptyro fake-installer ID VIA uninstall ADMIN`), the old first on `PATH` until removed, and
+`world.json`'s `system` (copies in an administrator's folder) and `uninstalls` (`ok`, `fail`,
+`leftover`: exits 0 but the copy stays; `both`: takes the new copy too), `second` (another copy of
+the old installer, ahead of the new one), `third` (a third installer's copy), `no_prefix` (npm's
+copy in no prefix) and outcome `once` (installs once, then fails); each removal's command goes to
+`uninstall.log`. `crates/ptyro/tests/boot7.rs`: a successful move (the question's words, both
+commands in order, the removal against the old copy's prefix, the login still there, nothing
+offered afterwards); a new install that fails leaving the old one (and still offered); a removal
+that fails, its fix, and the retry running only the removal; a removal that leaves the old copy,
+said with the exact fix and no loop; another old copy first on `PATH`; a removal that takes the new
+copy, put back at once, or (put back failing) said plainly with no ✓; a third installer's copy not
+counted; `--yes` alone and `setup --yes` moving nothing; no move offered without a prefix; `k`
+written to the config, nothing run, never offered again, and the kept agent updating with npm; an
+up-to-date one a note in `doctor` and `ptyro update` never moving; the daemon's plan offering it,
+the Health page's update (no `moves`) running npm's update, and the checklist's tick moving it while
+an administrator's move is left for the computer. Unit tests: the engine's offer, plan, run, a
+failed install, a failed removal and its retry, kept, `system`'s sudo and `Admin::Never`, the
+findings with and without keep (`setup/tests.rs`); the catalog's `uninstall` and `keeps`
+(`catalog.rs`); the TUI's `K` and its tick (`setup_list.rs`) and the badge's move finding
+(`app.rs`); the web's `isHere`, `moveOffer`, `moveWords` and the moved summary
+(`web/test/setup.mjs`); in a real browser (`make web-e2e`'s `move`): Claude Code and Codex through
+npm offered, Keep npm moving Claude Code to Already here (the host operation also asks the daemon to
+`ReloadConfig`, so the plan asked for next already keeps it), and Codex ticked, "1 moved to the
+recommended installer." with both installers' lines.
+
+**Decided by the builder:** `ptyro install NAME` at a terminal offers the move in its question
+(`--move` with `--yes` unattended), and `k` there is the CLI's dismissal; `updates.keep_installer` as the setting's name, beside `updates.ignore`; the new copy is
+installed even when the old one shadows it and found through every copy (`locate::find_all`), so
+the old is removed only after the new one answered; a move counts as failed when the old copy still
+runs first (the goal is the new one running); `system` by the file's folder not being writable;
+`ptyro update` never moves; protocol 1.36's `SetupRun.moves` (absent: nothing moves).
+`PTYRO_NO_AUTOSPAWN=1` wins in the CLI's shared `Ctx::connect`, so no command (`doctor`'s check
+included) starts a daemon when it is set and no test leaves one running; the tests of autospawn
+itself (`e2e.rs`'s `cli_autospawns_and_maps_errors_to_exit_codes` and
+`only_one_daemon_per_home_and_stale_sockets_are_recovered`, `hardening.rs`) clear it. `doctor` notes an agent installed another way that isn't offered the
+move, and why (`updates::Versions.unmovable`: the vendor's place unknown, no npm prefix,
+someone else's Homebrew).
+
+### 24.10 The stale suggestions (BOOT9) **[built 2026-11-07]**
+
+The design's last call: the "no agent found" and "isn't installed" messages, which put Gemini CLI
+first with npm commands to copy, become offers of setup that name Antigravity for Google. Every
+such message now offers the fix, in one set of words shared by the CLI, the TUI and the web.
+
+**The words** (`ptyro_agents::locate`, so no client writes its own):
+- `no_agent()`: "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex, or
+  Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts)"
+  (`WHICH_AGENT`; Gemini CLI kept, labelled as the checklist labels it, never first).
+- `no_chat_agent()`: "No agent that can chat is installed: `ptyro setup` installs one (Claude
+  Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account,
+  runs in sessions but can't chat)". Antigravity has no structured mode (§22.5), so a chat never
+  offers it as the fix.
+- `install_fix(program)`: "`ptyro install codex` installs it", for a program the version table
+  knows and can install on this platform (`None` otherwise: an agent of your own keeps "install
+  it, or set [agents.NAME] command to its full path").
+- `not_installed(agent, program)`: "codex isn't installed (codex is nowhere ptyro looks): `ptyro
+  install codex` installs it".
+- `setup_offer(text)`: what a message's offer installs, read back by the clients that act on it:
+  "`ptyro setup` installs" → the checklist's defaults, "`ptyro install codex agy` installs" →
+  those names. Only that form: a lock held by "`ptyro install`" or a move ("`ptyro install codex`
+  moves it") is something else. The web's `setupOffer` (`web/src/setupkit.ts`) is the same rule.
+
+**Where they are said:**
+- **`doctor`** (`agents` and `git`): no agent at all is `no_agent()` (Antigravity now counts as an
+  agent: it runs sessions, and with only it installed "no agent" would be wrong); a configured
+  agent not found, "claude not found: `ptyro install claude` installs it"; git, "git not found:
+  projects and worktrees need it; `ptyro install git` installs it"; gh, "gh not found: pull
+  requests (`wt new --pr`) need it; `ptyro install gh` installs it"; Gemini CLI without an API
+  key, "… with a personal Google account, use Antigravity (`agy`): `ptyro install agy` installs
+  it" when agy isn't installed.
+- **The daemon:** a chat with no agent that can chat (`no_chat_agent()`) or with a named one not
+  installed (`not_installed`, also a compare's note for that agent); a session whose agent's
+  program isn't anywhere ptyro looks (`not_installed`, instead of "cannot start session: No such
+  file or directory"; a missing working folder still gives the OS's words); `gh` missing for PR
+  features and git missing for a project, each with `install_fix`.
+- **The CLI:** the messages as they are: a command to run, which is the CLI's way. `ptyro update`
+  with no agent says `no_agent()`. `ptyro init` now notices the no-agent line (it never did: the
+  line made the report non-empty) and asks to open the checklist with yes as the default.
+- **The TUI:** any refused request whose message carries an offer (a session's spawn, a new
+  worktree's agent, a chat made or sent) shows it with `toast.act`: "… · C-q u set it up (the
+  checklist)", which runs `app.setup` with that one ticked (`app.setup`'s argument: names), or
+  "set up agents (the checklist)" for the defaults (`offer_for`, UX1.17's mechanism). The health
+  badge's findings already opened the checklist (§24.5) and now read the same words. The chat's
+  agent picker says "not installed: ⏎ sets it up" on an agent setup can install, and ⏎ there
+  opens the checklist with it ticked (`app.setup <program>`, as the toast's offer; final fix
+  wave).
+- **The web:** a refused request (`ui.fail`, which `ask`, `withConfirm` and the chat composer
+  use) whose message carries an offer opens a sheet with its words and "Set up codex" (or "Set up
+  agents and tools"), which opens the checklist with it ticked (`offerSetup`, `openSetup`,
+  `setup.offer`); any other is a toast as before. The button names each by the checklist's
+  name ("Set up Antigravity", never its program `agy`: `setupLabel`, through the daemon's agent
+  list and the plan's entries). Only a device paired with full scope is offered setup (the sheet,
+  Health's item, the new-task link and the chat picker's); others get the message as a toast, and
+  the new-task sheet says to run `ptyro setup` on the computer. Health's findings in `agents` and `git` with an
+  offer get the same item in their menu. The new-task sheet links "Install another agent", or,
+  with none installed, says "No coding agent is installed on the computer yet: Set up agents and
+  tools (Claude Code, Codex, or Antigravity for a Google account)"; the chat's agent picker ends
+  with "Install another agent…".
+
+**Tests:** `locate.rs` (the words, Gemini CLI never first, Antigravity named, `setup_offer` and
+what it refuses); `doctor.rs` (`fix_for`); the TUI's `a_missing_agent_offers_the_setup_checklist`
+(a refused spawn and a chat not made, with the offer and its `app.setup` argument) and
+`health.rs` (the doctor's new lines opening the checklist); `crates/ptyro/tests/chat_compare.rs`'s
+`a_missing_agent_offers_setup_not_the_os_error` (a chat with no agent, and `ptyro new --agent`
+of one that isn't there, against a real daemon); `web/test/setup.mjs` (`setupOffer`).
+
+**Decided by the builder:** the daemon's errors carry the CLI's words (a command, which every
+client can show), and the TUI and the web act on them through `setup_offer` rather than each
+error growing a field; offers are recognised only in their "`…` installs" form, so a message
+merely naming `ptyro install` never turns into a setup button; the chat's no-agent words name
+Antigravity as what can't chat rather than as the fix.
+
+### 24.11 The final fix wave **[built 2026-11-07]**
+
+What the whole-feature review found, and the rulings carried into one change (PR #87):
+- **The daemon's PATH follows installers on Windows** (§24.2, the review's I1).
+- **`locate` searches the version table's vendor folders.** Each vendor method names its `bin`,
+  the folders its installer puts the program in (`~/.local/bin` for Claude and Codex's
+  install.sh, `~/.opencode/bin`, `%CODEX_INSTALL_DIR%` then `%LOCALAPPDATA%\Programs\OpenAI\Codex`,
+  `%LOCALAPPDATA%\agy\bin`), and `locate::places` adds them for this platform (`vendor_bins`,
+  expanded by `expand_place`; one unset variable skips that entry). OpenCode's
+  `~/.opencode/bin` and Codex's Windows folder were missing, so a fresh install was "nowhere
+  ptyro looks", and BOOT7's move of OpenCode from Homebrew never found its new copy (`fresh()`
+  reads `find_all` over the same places; the copy in `~/.opencode/bin` is OpenCode's by its
+  `places`). The catalog's test requires a `bin` of every vendor method with `places`, and
+  `locate::vendor_tests::every_vendor_bin_in_the_table_is_searched` requires each to be
+  searched, so the two can't drift.
+- **The web's Log in** runs the installed name, and logs WSL's side in too (§24.4).
+- **The administrator's update command quotes its prefix** in each shell's single quotes
+  (`PTYRO_PREFIX='/Users/Jane Doe'`), a quote in it escaped.
+- **A ptyro in Nix's or Guix's store is theirs** (`How::Managed`, "update it with Nix (`nix
+  profile upgrade`, or your Nix configuration)"), never a sudo swap into a read-only store.
+- **`wsl.exe` in the background has no window.** `ptyro_core::os::no_window` (`CREATE_NO_WINDOW`
+  on Windows, nothing elsewhere) for every `wsl.exe` run whose output is read or is a pipe: the
+  probe and its `-l -q`, `--version` in a distro, setup's survey and its daemon run, the logins'
+  `--check --json`, the self-update's version questions and the client's proxy bridge
+  (`remote::wsl`), through `remote::hidden_wsl`. `ptyro proxy`'s own bridge keeps ssh's console,
+  so wsl.exe's errors reach ssh's terminal. Those that share the
+  person's terminal keep its console (a login through `wsl_setup::interact`, setup's run that
+  asks for sudo's password, first run's install in a distro, starting WSL's daemon from a
+  terminal, the self-update of the other half). The holder that keeps a WSL distro open starts
+  `wsl.exe` from inside WSL, through interop, where no Windows flag applies.
+- **The setup lock is airtight on NFS.** `Lock::take` claims its path in this process before it
+  opens the file (a second take here is refused without touching it: closing any descriptor of
+  the file lets go of an fcntl-emulated lock), gives the claim up on every way out without the
+  lock, and `Drop` closes the file before the claim goes. Tests:
+  `a_second_take_here_never_opens_the_lock_file` (a folder where the lock file was: opening it
+  would let the take through), `a_refused_take_leaves_no_claim_behind`.
+- **The TUI's setup guard** stays while a spawn asks to be confirmed first (`NeedsConfirmation`:
+  a `y` still starts the split), and goes when that is declined.
+- **A once-only shell watch clears before its attention is raised.** `raise` sends the
+  attention, then awaits the desktop notification (slow inside WSL, through interop); a client
+  between the two saw a fired `match` or `done` watch still set (WSL CI's
+  `shells::long_commands_and_watches_say_so`, twice in run 42409928325).
+- **The prompt watch** looks for a dialog before anything else, and keeps watching an agent that
+  spoke (§8.2).
+- **Smaller:** the repair line after a move says "install it again" once; `sh_quote`'s doc
+  comment is back on it; `docs/config.md`'s sample has `updates.keep_installer`; boot4's Ctrl+C
+  test waits for the login's line and no longer sleeps after it (the handler is in place before
+  the login starts); the web offers setup only to a full-scope device and names each item by the
+  checklist's name (§24.10); the chat picker's missing agent sets itself up on ⏎; `ptyro init`'s
+  default-yes is tested (`boot2::init_offers_the_setup_checklist`, Enter alone opens it).

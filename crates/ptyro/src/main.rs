@@ -11,9 +11,11 @@ mod cs;
 mod doctor;
 mod host;
 mod init;
+mod logins;
 mod machines;
 mod mcp;
 mod orch;
+mod own;
 mod pad;
 #[cfg(test)]
 mod parity;
@@ -25,6 +27,7 @@ mod remote;
 mod script;
 mod serve;
 mod service;
+mod setup;
 mod shells;
 mod ship;
 mod tls;
@@ -750,6 +753,131 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
+    /// The setup checklist: install coding agents (Claude Code, Codex, Antigravity, OpenCode,
+    /// Gemini CLI) and the tools they need (git, the GitHub CLI, Node.js) on this computer
+    Setup {
+        /// Ask nothing: install what --agents and --tools name (with neither, the defaults: Claude
+        /// Code, Codex, git, GitHub CLI). A step that needs administrator rights runs only if it
+        /// can without a password prompt; otherwise it is reported with its command
+        #[arg(short, long)]
+        yes: bool,
+        /// The agents to tick: claude, codex, agy, opencode, gemini (comma-separated; `none`)
+        #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+        agents: Option<Vec<String>>,
+        /// The tools to tick: git, gh, node (comma-separated; `none`)
+        #[arg(long, value_delimiter = ',', value_name = "NAMES")]
+        tools: Option<Vec<String>>,
+        /// Show the checklist and what would run; change nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
+        #[arg(long)]
+        json: bool,
+        /// On Windows: install into WSL, onto Windows, or both (wsl, windows, both). The default
+        /// is the side your daemon runs on (WSL's when client.default_remote is wsl://…)
+        #[arg(long = "where", value_name = "WHERE")]
+        place: Option<String>,
+        /// What is installed, as JSON (for Windows' ptyro, asking a WSL distro's)
+        #[arg(long, hide = true)]
+        survey: bool,
+        /// With --yes, move a ticked agent installed another way (npm, Homebrew, WinGet) to the
+        /// recommended installer; without it, --yes leaves such an agent as it is
+        #[arg(long = "move")]
+        move_: bool,
+        /// A person answers on stdin though it isn't a terminal (Windows' ptyro started from a
+        /// split in WSL, whose console is a pipe there)
+        #[arg(long, hide = true)]
+        tty: bool,
+    },
+    /// Install agents or tools by name, with what they need first: `ptyro install agy`,
+    /// `ptyro install gemini gh`. An agent installed another way (npm, Homebrew, WinGet) is
+    /// offered the move to the recommended installer, which asks first; with --yes it is left as
+    /// it is (updated the way it's installed) unless --move
+    Install {
+        /// claude, codex, agy, opencode, gemini, git, gh, node
+        #[arg(required = true, value_name = "NAME")]
+        names: Vec<String>,
+        /// Don't ask first; a step that needs administrator rights runs only if it can without a
+        /// password prompt
+        #[arg(short, long)]
+        yes: bool,
+        /// Show what would run; change nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
+        #[arg(long)]
+        json: bool,
+        /// On Windows: install into WSL, onto Windows, or both (wsl, windows, both). The default
+        /// is the side your daemon runs on
+        #[arg(long = "where", value_name = "WHERE")]
+        place: Option<String>,
+        /// Asked already by Windows' ptyro: ask (sudo may prompt here), silent (only without
+        /// a prompt: --yes) or never (BOOT8)
+        #[arg(long, hide = true, value_name = "ask|silent|never")]
+        admin: Option<String>,
+        /// A person answers on stdin though it isn't a terminal (as for setup)
+        #[arg(long, hide = true)]
+        tty: bool,
+        /// The person said yes already, in the TUI's checklist (BOOT2): no question first;
+        /// administrator rights are still asked for here, and the logins walked through
+        #[arg(long, hide = true)]
+        confirmed: bool,
+        /// Move a named agent installed another way (npm, Homebrew, WinGet) to the recommended
+        /// installer without asking (with --yes): the new one is installed and checked first,
+        /// then the old copy removed; settings and logins stay
+        #[arg(long = "move")]
+        move_: bool,
+        /// Asked already by Windows' ptyro: the agents it may move (BOOT7)
+        #[arg(long, hide = true, value_name = "IDS", value_delimiter = ',')]
+        moves: Vec<String>,
+    },
+    /// Update agents, and ptyro itself, when a newer version is out (or those named), each the
+    /// way it was installed: `ptyro update`, `ptyro update codex`, `ptyro update ptyro`;
+    /// `--check` only looks
+    Update {
+        /// claude, codex, agy, opencode, gemini, ptyro (default: every one with a newer version,
+        /// less what `updates.ignore` skips)
+        #[arg(value_name = "NAME")]
+        names: Vec<String>,
+        /// Only look for newer versions now and say what's out of date (changes nothing)
+        #[arg(long)]
+        check: bool,
+        /// Don't ask first
+        #[arg(short, long)]
+        yes: bool,
+        /// With --check, what's out of date as JSON; otherwise each step's progress as a JSON
+        /// line
+        #[arg(long)]
+        json: bool,
+        /// A person answers on stdin though it isn't a terminal (as for setup)
+        #[arg(long, hide = true)]
+        tty: bool,
+    },
+    /// Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in
+    /// this terminal, confirmed by its own status command (ptyro never sees a credential)
+    Login {
+        /// claude, codex, agy, opencode, gemini, gh (default: every one installed that isn't
+        /// logged in)
+        #[arg(value_name = "NAME")]
+        names: Vec<String>,
+        /// Only say where each stands (exit 1 when one is logged out)
+        #[arg(long)]
+        check: bool,
+        /// Where each stands, as JSON (implies --check)
+        #[arg(long)]
+        json: bool,
+        /// On Windows: log in on WSL's side, Windows', or both (wsl, windows, both). The default
+        /// is the side your daemon runs on
+        #[arg(long = "where", value_name = "WHERE")]
+        place: Option<String>,
+        /// A person answers on stdin though it isn't a terminal (as for setup)
+        #[arg(long, hide = true)]
+        tty: bool,
+        /// Setup's list of what to log in (from Windows' ptyro, for WSL's side): the names
+        /// aren't asked for by name, and these (comma-separated, maybe none) were just installed
+        #[arg(long, hide = true, value_name = "IDS")]
+        installed: Option<String>,
+    },
     /// Which ptyro this is: version, repository, licence, build, where things live, whether the
     /// daemon and the web app run, and a block to paste into a bug report
     About {
@@ -931,6 +1059,20 @@ enum Cmd {
     #[cfg(debug_assertions)]
     #[command(hide = true)]
     FakeGh {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Built-in fake installer for setup's tests (BOOT1); debug builds only
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    FakeInstaller {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Built-in fake wsl.exe for setup's WSL side in tests (BOOT8); debug builds only
+    #[cfg(debug_assertions)]
+    #[command(hide = true)]
+    FakeWsl {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1216,6 +1358,11 @@ fn main() {
     // A shell asking for completions: answer and exit before anything else happens.
     complete::handle(Cli::command);
     let cli = Cli::parse();
+    // Windows: what an update renamed aside while it ran (`ptyro.exe.old`), once it doesn't
+    // (BOOT6). Not on the hooks' path, which runs inside agents on every event.
+    if cfg!(windows) && !matches!(cli.cmd, Some(Cmd::Hook { .. } | Cmd::StatuslineRelay)) {
+        ptyro_agents::own::sweep(&ptyro_agents::own::binary());
+    }
     let code = match cli.cmd {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
             winclient::start_in_wsl(cli.remote.as_deref())
@@ -1224,6 +1371,10 @@ fn main() {
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
         #[cfg(debug_assertions)]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
+        #[cfg(debug_assertions)]
+        Some(Cmd::FakeInstaller { args }) => ptyro_agents::setup::fake_installer(&args),
+        #[cfg(debug_assertions)]
+        Some(Cmd::FakeWsl { args }) => ptyro_testkit::fake_wsl::main(&args),
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),

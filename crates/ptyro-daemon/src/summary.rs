@@ -94,7 +94,7 @@ impl Daemon {
         self.count_summary(profile, cfg.daily_cap)?;
         let plan = self.profile_plan(profile).await?;
         let prompt = redact(&self.summary_prompt(s), &secrets(&plan));
-        let env = plan.apply(self.base_env.iter().cloned());
+        let env = plan.apply(self.base_env().iter().cloned());
         let dir = self.paths.data.join("summaries");
         let argv = cfg.command.clone();
         let out = tokio::task::spawn_blocking(move || {

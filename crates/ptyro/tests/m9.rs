@@ -1136,6 +1136,40 @@ fn the_web_app_is_a_setting_the_daemon_keeps() {
     let _ = by_hand.wait();
 }
 
+/// A managed server whose daemon was gone before it first looked leaves: it is someone else's
+/// child by then, so "my parent changed" never fired. One started as the daemon stopped held the
+/// port from the next daemon's (the test above, on WSL).
+#[test]
+fn a_managed_server_whose_daemon_is_already_gone_leaves() {
+    let w = World::new("", &[]);
+    let mut gone = std::process::Command::new(BIN).arg("--version").spawn().unwrap();
+    gone.wait().unwrap();
+    let mut server =
+        w.d.cmd()
+            .args(["serve", "--managed", "--loopback-http", "--port", "0"])
+            .env("HOME", w.home())
+            .env("PTYRO_DAEMON_PID", gone.id().to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+    let deadline = Instant::now() + WAIT;
+    let status = loop {
+        if let Some(s) = server.try_wait().unwrap() {
+            break s;
+        }
+        if Instant::now() > deadline {
+            let _ = server.kill();
+            let _ = server.wait();
+            panic!("the orphaned server stayed");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let mut err = String::new();
+    std::io::Read::read_to_string(&mut server.stderr.take().unwrap(), &mut err).unwrap();
+    assert!(status.success(), "it left for its own reason: {status}: {err}");
+}
+
 /// The web app's TypeScript screen model (web/dist/screen.js), fed live frames through
 /// `ptyro serve`, shows exactly what the daemon's own screen does: colours, wide characters,
 /// combining marks and wrapped lines included. Skipped without Node.

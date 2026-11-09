@@ -285,6 +285,126 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     assert!(!get(&c, "cl").await.state.is_live());
 }
 
+/// An agent whose first hook is slow (a loaded runner): its start-up output is guessed
+/// "working", and the start's idle replaces the guess, so its prompt is typed. The idle used to
+/// be dropped as "a session starting can't end a turn": the guess stayed for 5 minutes, and a
+/// Codex, which shows no input box ptyro reads, never got its prompt (CI's Windows, m7).
+#[tokio::test]
+async fn a_slow_session_start_replaces_a_guessed_working() {
+    // Its first hook waits for a file (it loads, with output, meanwhile): the guess certainly
+    // comes first, whatever the machine's load.
+    let gate = tempfile::tempdir().unwrap();
+    let go = gate.path().join("go");
+    let w =
+        World::new(&format!("[agents.codex.env]\nPTYRO_FAKE_START_GATE = '{}'\n", go.display()));
+    let c = w.d.client().await.unwrap();
+    agent(&c, "cx", "codex", Some("work 0.1 hi")).await;
+    wait_for(&c, "cx", "the heuristic's guess", |s| {
+        is(s, AgentStatus::Working)
+            && s.status.as_ref().is_some_and(|r| r.source == SignalSource::Heuristic)
+    })
+    .await;
+    std::fs::write(&go, "").unwrap();
+    let s = wait_for(&c, "cx", "a turn, idle from its hook", |s| {
+        s.turns >= 1
+            && is(s, AgentStatus::Idle)
+            && s.status.as_ref().is_some_and(|r| r.source == SignalSource::Hook)
+    })
+    .await;
+    assert_eq!(s.status.unwrap().confidence, Confidence::High);
+    // The start's idle replaced the guess.
+    let ev = w.ok(&["events", "-s", "cx", "--json", "-n", "200"]);
+    let statuses: Vec<serde_json::Value> = ev
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|e| e["kind"] == "status")
+        .map(|e| e["detail"].clone())
+        .collect();
+    assert_eq!(
+        (&statuses[0]["source"], &statuses[0]["to"]),
+        (&"heuristic".into(), &"working".into()),
+        "{ev}"
+    );
+    assert_eq!(
+        (&statuses[1]["source"], &statuses[1]["to"]),
+        (&"hook".into(), &"idle".into()),
+        "{ev}"
+    );
+}
+
+/// A Claude whose redraw lags (`PTYRO_FAKE_LAGGY_BOX`, with `extra` fake knobs): its slow hooks
+/// leave the status idle while a prompt it took stays in its box and its permission dialog comes,
+/// as a dropped Enter would look. `prompt` is typed once it's ready, as `send --wait-ready` and a
+/// first prompt are (what ptyro then watches), and the dialog is answered "allow". Returns the
+/// session's events.
+async fn laggy_claude_asks(extra: &str, prompt: &str) -> String {
+    let w =
+        World::new(&format!("[agents.claude.env]\nPTYRO_FAKE_HOOK_DELAY_MS = \"1500\"\n{extra}"));
+    let c = w.d.client().await.unwrap();
+    agent(&c, "lag", "claude", None).await;
+    wait_for(&c, "lag", "a reliable idle", |s| {
+        is(s, AgentStatus::Idle)
+            && s.status.as_ref().is_some_and(|r| r.confidence == Confidence::High)
+    })
+    .await;
+    c.request(Request::SendText {
+        addr: "lag".into(),
+        text: prompt.into(),
+        enter: true,
+        wait_ready_ms: Some(30_000),
+    })
+    .await
+    .unwrap();
+    wait_for(&c, "lag", "blocked", |s| is(s, AgentStatus::Blocked)).await;
+    w.ok(&["answer", "lag", "allow"]);
+    let screen = w.d.wait_for_text(&c, "lag", "answer: ", WAIT).await.unwrap();
+    assert!(screen.contains("answer: yes"), "nothing but the answer answered it: {screen}");
+    // The send is reported, however long the watch takes to end.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let ev = w.ok(&["events", "-s", "lag", "--json", "-n", "200"]);
+        if ev.contains("prompt_unconfirmed") {
+            assert!(!ev.contains("prompt_enter_again"), "{ev}");
+            return ev;
+        }
+        assert!(Instant::now() < deadline, "never reported unconfirmed: {ev}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Claude's box never drops an Enter, and Enter on its dialog is "Yes": a prompt that stays in
+/// its box while a dialog comes at once is reported, never entered again.
+#[tokio::test]
+async fn a_claude_prompt_left_in_its_box_is_reported_not_entered_again() {
+    // Reported, never entered again (the helper's checks); why it was reported depends on which
+    // look saw it first, which a loaded runner moves, so it isn't asserted.
+    laggy_claude_asks("PTYRO_FAKE_LAGGY_BOX = \"1\"\n", "ask rm -rf build").await;
+}
+
+/// A dialog that comes between ptyro's two looks at the box (one at ~0.5 s, the next at ~1 s).
+#[tokio::test]
+async fn a_dialog_drawn_between_two_looks_is_reported_not_answered() {
+    laggy_claude_asks("PTYRO_FAKE_LAGGY_BOX = \"700\"\n", "ask rm -rf build").await;
+}
+
+/// A dialog in words no adapter recognises, with the screen otherwise still: still no Enter.
+#[tokio::test]
+async fn a_dialog_no_adapter_recognises_is_never_answered() {
+    laggy_claude_asks(
+        "PTYRO_FAKE_LAGGY_BOX = \"1\"\nPTYRO_FAKE_PLAIN_DIALOG = \"1\"\n",
+        "ask rm -rf build",
+    )
+    .await;
+}
+
+/// A prompt that wraps in Claude's box (wider than its 100 columns) is reported too, not lost
+/// for not matching the box's first line.
+#[tokio::test]
+async fn a_wrapped_claude_prompt_left_in_its_box_is_reported() {
+    let long = format!("ask rm -rf {}", "build/".repeat(25));
+    laggy_claude_asks("PTYRO_FAKE_LAGGY_BOX = \"1\"\n", &long).await;
+}
+
 #[tokio::test]
 async fn codex_gemini_antigravity_and_opencode_adapters() {
     let w = World::new("");
@@ -306,6 +426,13 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     {
         let s = agent(&c, name, adapter, None).await;
         w.d.wait_for_text(&c, name, &format!("fake {adapter}"), WAIT).await.unwrap();
+        // Its first reliable word (a hook, OSC 7501 or the sidecar) before the prompt: until it
+        // comes, its start-up output can be guessed "working" (SPEC §9.3), which the wait for
+        // the prompt's working below would take (a slow WSL runner, every time).
+        wait_for(&c, name, "a reliable status", |s| {
+            s.status.as_ref().is_some_and(|r| r.confidence == Confidence::High)
+        })
+        .await;
         // Codex and Antigravity learn their conversation id at start; OpenCode with its first event.
         if adapter != "opencode" {
             wait_for(&c, name, "conversation", |s| s.conversation.is_some()).await;
@@ -791,6 +918,29 @@ async fn a_late_session_start_does_not_end_the_turn() {
     let idle_between =
         lines[start..stop].iter().any(|l| l["kind"] == "status" && l["detail"]["to"] == "idle");
     assert!(!idle_between, "SessionStart ended the turn: {lines:#?}");
+}
+
+/// A prompt wider than the box (100 columns here) whose Enter is lost: it wraps, the box's first
+/// line holds its start, and it is still pressed again, once.
+#[tokio::test]
+async fn a_wrapped_prompt_whose_enter_was_lost_is_sent() {
+    let w = World::new(
+        "[agents.codex.env]\nPTYRO_FAKE_LATE_SESSION_START = \"1\"\nPTYRO_FAKE_DROP_FIRST_ENTER = \"1\"\n",
+    );
+    let c = w.d.client().await.unwrap();
+    agent(&c, "cx", "codex", None).await;
+    let long = format!("work 0.2 {}", "a long prompt ".repeat(10));
+    let out = w.cli(&["send", "cx", &long, "--wait-ready", "--wait", "--timeout", "30s", "--json"]);
+    let o = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success() && o.contains("\"idle\""),
+        "{o}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ev = String::from_utf8_lossy(&w.cli(&["events", "-s", "cx", "--json", "-n", "200"]).stdout)
+        .into_owned();
+    assert_eq!(ev.lines().filter(|l| l.contains("prompt_enter_again")).count(), 1, "{ev}");
+    assert!(ev.contains("\"Stop\""), "the turn ran: {ev}");
 }
 
 /// A prompt whose Enter is lost (Codex 0.166, busy just after it says idle) is still in the

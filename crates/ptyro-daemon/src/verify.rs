@@ -113,7 +113,7 @@ impl Daemon {
         let mut c = ptyro_pty::command(&check.argv);
         c.current_dir(dir)
             .env_clear()
-            .envs(self.base_env.iter().map(|(k, v)| (k, v)))
+            .envs(self.base_env().iter().map(|(k, v)| (k, v)))
             .envs(env)
             .envs(extra.unwrap_or_default())
             .env("PTYRO_CHECK", "1")

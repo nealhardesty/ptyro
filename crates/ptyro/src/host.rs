@@ -20,6 +20,15 @@ fn opt(a: &Value, k: &str) -> Option<String> {
     a[k].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
+/// A login op's side: `local` (the default) or `wsl`.
+fn login_place(a: &Value) -> Result<&'static str, Error> {
+    match opt(a, "where").as_deref() {
+        None | Some("local") => Ok("local"),
+        Some("wsl") => Ok("wsl"),
+        Some(w) => Err(Error::invalid(format!("where: {w}? local or wsl"))),
+    }
+}
+
 /// Run ptyro itself with `args` (the CLI's own non-interactive commands) and say what it did.
 async fn cli(args: &[&str]) -> Result<Value, Error> {
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
@@ -171,9 +180,42 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
 
         // ── health ──
         "doctor" => Ok(checks(
-            &crate::doctor::collect(ctx, a["quick"].as_bool().unwrap_or(false), false).await,
+            // The agents' newest versions as the daemon's daily look remembered them (BOOT5):
+            // `updates.check` (the page's "Look for newer versions now") looks afresh.
+            &crate::doctor::collect(ctx, a["quick"].as_bool().unwrap_or(false), false, false).await,
         )),
         "profile.doctor" => Ok(checks(&crate::doctor::profile_checks(ctx, opt(a, "name")).await?)),
+        // Newer versions of the agents, looked up now (BOOT5): `ptyro update --check --json`.
+        "updates.check" => {
+            let r = cli(&["update", "--check", "--json"]).await?;
+            let out = r["out"].as_str().unwrap_or_default();
+            serde_json::from_str(out).map_err(|_| {
+                Error::internal(format!("ptyro update --check: {}", notes(&r).join("; ")))
+            })
+        }
+
+        // Keep an agent installed another way as it is (BOOT7): added to the computer's
+        // `updates.keep_installer`, so the move isn't offered again; the daemon reads it live.
+        "updates.keep" => {
+            let name = str_of(a, "name")?;
+            let item = ptyro_agents::setup::resolve(name)
+                .map_err(|e| Error::new(ptyro_core::ErrorCode::NotFound, e))?;
+            crate::setup::keep_installer(&ctx.paths, std::slice::from_ref(&item.id))
+                .map_err(Error::invalid)?;
+            // The daemon reads it now, not when its watcher next looks: the page asks for the
+            // plan again at once.
+            if let Ok(c) = ctx.connect(false).await {
+                let _ = c.request(ptyro_protocol::Request::ReloadConfig).await;
+            }
+            Ok(json!({ "kept": item.id }))
+        }
+
+        // ptyro itself (BOOT6): `ptyro update ptyro --yes` in a session on the daemon, which the
+        // page opens; an administrator's binary is refused with the command to run there.
+        "updates.self" => {
+            let info = crate::own::spawn_update(ctx).await?;
+            Ok(json!({ "session": info.id.full() }))
+        }
 
         // ── profiles ──
         "profile.new" => {
@@ -224,6 +266,23 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             let (_c, info) =
                 crate::profiles::login(ctx, str_of(a, "name")?, str_of(a, "target")?, false)
                     .await?;
+            Ok(json!({ "session": info.id.full() }))
+        }
+
+        // ── logins (BOOT4): where each stands, and one run in a session the web shows ──
+        // `where`: `local` (default, the daemon's computer) or `wsl` (a Windows daemon's WSL
+        // distro, through WSL's own ptyro).
+        "login.list" => {
+            let place = login_place(a)?;
+            let r = cli(&["login", "--check", "--json", "--where", place]).await?;
+            let rows: Value =
+                serde_json::from_str(r["out"].as_str().unwrap_or("")).map_err(|_| {
+                    Error::internal(format!("ptyro login --check: {}", notes(&r).join("; ")))
+                })?;
+            Ok(json!({ "logins": rows, "profiles": ptyro_agents::setup::login::PROFILES_HINT }))
+        }
+        "login.start" => {
+            let info = crate::logins::spawn(ctx, str_of(a, "id")?, login_place(a)?).await?;
             Ok(json!({ "session": info.id.full() }))
         }
 

@@ -36,6 +36,8 @@ fn serve(d: &TempDaemon, home: &Path, port: u16) -> Child {
         .cmd()
         .args(["serve", "--loopback-http", "--port", &port.to_string()])
         .env("HOME", home)
+        // Its host operations (`updates.check`, the logins) look at the same fake machine.
+        .env("PTYRO_TEST_SETUP", home.join("fake-setup"))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -70,9 +72,21 @@ fn the_web_app_works_in_a_real_browser() {
     let config = format!(
         "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[ui]\n# e2e: keep this comment\n"
     );
-    let d =
-        TempDaemon::start_with(BIN, &[("HOME", hs.as_str()), ("SHELL", "/bin/sh")], Some(&config))
-            .unwrap();
+    // Setup's fake machine (BOOT1): the page installs through `ptyro fake-installer`, never for real.
+    let fake = hp.join("fake-setup");
+    std::fs::create_dir_all(&fake).unwrap();
+    std::fs::write(
+        fake.join("world.json"),
+        r#"{"platform":"linux","programs":["apt-get","sudo"]}"#,
+    )
+    .unwrap();
+    let fs = fake.to_string_lossy().into_owned();
+    let d = TempDaemon::start_with(
+        BIN,
+        &[("HOME", hs.as_str()), ("SHELL", "/bin/sh"), ("PTYRO_TEST_SETUP", fs.as_str())],
+        Some(&config),
+    )
+    .unwrap();
 
     let repo = hp.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
@@ -104,6 +118,7 @@ fn the_web_app_works_in_a_real_browser() {
         .collect();
     let e2e = serde_json::json!({
         "bin": BIN, "env": env, "repo": repo, "config": d.paths.config.join("config.toml"),
+        "fake": fake,
     });
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/test/e2e.mjs");
     let mut js = Command::new(node)

@@ -516,6 +516,10 @@ pub enum Pending {
     ChatPicked,
     /// What quick-new would start in this workspace (UX3.2), for its label.
     Again(Option<String>),
+    /// The daemon's agents out of date (BOOT5); `note`: the start-up note's too.
+    Updates {
+        note: bool,
+    },
     /// Wizard title: the profile a spawn would get and why.
     Resolved,
     /// Show the trust dialog for these scripts, then do `then`.
@@ -600,7 +604,14 @@ pub enum AppMsg {
     Health(Vec<crate::health::Check>),
     /// What `ptyro about --json` said (UX2.1); `None` if it could not run.
     About(Option<serde_json::Value>),
+    /// What the setup checklist found (BOOT2): the sides, the default place, and why that
+    /// isn't the daemon's side; `None` if looking failed.
+    SetupFound(Option<Box<SetupLook>>),
 }
+
+/// What [`crate::setup_list::look`] found.
+pub type SetupLook =
+    (ptyro_agents::setup::checklist::Sides, ptyro_agents::setup::Where, Option<String>);
 
 /// One pane's live state.
 #[derive(Default)]
@@ -663,8 +674,18 @@ const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro config edit", "config.edit", "edit the config"),
 ];
 
-/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]).
+/// What a message suggests doing, as a TUI action (see [`SUGGESTED`]). A missing agent or tool
+/// (`` `ptyro install codex` installs it ``, `` `ptyro setup` installs one ``) opens the setup
+/// checklist with it ticked (BOOT9).
 pub fn offer_for(message: &str) -> Option<Offer> {
+    if let Some(names) = ptyro_agents::locate::setup_offer(message) {
+        let arg = Some(names.join(" ")).filter(|a| !a.is_empty());
+        let label = if names.is_empty() { "set up agents" } else { "set it up" };
+        return Some(Offer {
+            label: format!("{label} (the checklist)"),
+            then: Then::Run(Command { action: "app.setup", arg }),
+        });
+    }
     SUGGESTED
         .iter()
         .find(|(cli, _, _)| message.contains(cli))
@@ -822,6 +843,10 @@ pub struct App {
     pub health: crate::health::Health,
     /// The last `ptyro …` command run in a split (`run_cli`).
     pub last_cli: Option<Vec<String>>,
+    /// The name of the split that command runs in.
+    pub last_split: Option<String>,
+    /// The setup checklist's install running in a split, and what runs after it (BOOT2).
+    pub setup_run: Option<crate::setup_list::SetupRun>,
     /// Addresses drawn on screen this frame, for the terminal to make links (OSC 8, UX2.1).
     pub links: std::cell::RefCell<Vec<crate::about::Link>>,
     /// Where the pane headers' SHELLS strips were drawn this frame, for clicks (SPEC §23.6).
@@ -953,6 +978,8 @@ impl App {
             first_run: None,
             health: crate::health::Health::default(),
             last_cli: None,
+            last_split: None,
+            setup_run: None,
             links: std::cell::RefCell::new(Vec::new()),
             strip_hits: std::cell::RefCell::new(Vec::new()),
             alt_seen: false,
@@ -1219,6 +1246,7 @@ impl App {
                     | Pending::Registry
                     | Pending::Resolved
                     | Pending::PadItems { .. }
+                    | Pending::Updates { .. }
             ) {
                 let why = "not connected: waiting for the daemon to come back";
                 let _ = self.tx.send(AppMsg::Reply(
@@ -1533,6 +1561,7 @@ impl App {
             self.refresh_again();
         }
         self.health_tick(self.started);
+        self.setup_tick();
         self.sync_window();
     }
 
@@ -1813,6 +1842,8 @@ impl App {
             }
             DomainEvent::HostLoad { load } => self.host_load = load,
             DomainEvent::RunUpdated { run } => self.run_updated(run),
+            // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
+            DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
             DomainEvent::ProjectUpdated { info } => {
@@ -1936,6 +1967,10 @@ impl App {
                 self.got_health(checks);
                 return;
             }
+            AppMsg::SetupFound(found) => {
+                self.setup_found(found);
+                return;
+            }
             AppMsg::About(doc) => {
                 if let Some(Overlay::About { doc: slot, .. }) = &mut self.overlay {
                     *slot = Some(doc.unwrap_or_else(|| serde_json::json!({ "failed": true })));
@@ -1956,6 +1991,18 @@ impl App {
                 return;
             }
         };
+        // The setup checklist's split started, or couldn't (BOOT2).
+        if let Pending::Spawned { spec, .. } = &pending
+            && self.setup_run.is_some()
+        {
+            let name = spec.name.clone();
+            // Asked to agree first: the Confirm overlay may still start it (a `y`), so the run
+            // is kept until it does, or the person declines (BOOT2's M2).
+            let asked = matches!(&res, Err(e) if e.code == ErrorCode::NeedsConfirmation);
+            if !asked {
+                self.setup_spawned(name.as_deref(), res.is_ok());
+            }
+        }
         // A reply that opens a dialog must not replace the box someone is typing in: it is
         // held aside while the reply is handled, then put back (and the reply said so).
         // (A peek's own screen arrives into the box it fills in: that one is not held.)
@@ -1999,6 +2046,11 @@ impl App {
                 r,
             ) => self.pad_reply(p, r),
             (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
+            (Pending::Updates { note: noting }, Ok(Reply::Updates { offered, note })) => {
+                self.got_updates(offered, note, noting)
+            }
+            // An older daemon (before protocol 1.35) can't say: nothing to offer.
+            (Pending::Updates { .. }, _) => {}
             (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
             (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
             (Pending::ChatMade { token, .. }, Ok(Reply::Chat { info })) => {
@@ -3323,6 +3375,14 @@ impl App {
                 );
             }
             "first.run" => self.open_first_run(),
+            // With names: those ticked (a message's offer, BOOT9).
+            "app.setup" => self.open_setup(
+                cmd.arg.as_deref().map(|a| a.split_whitespace().map(str::to_owned).collect()),
+                None,
+            ),
+            "app.update" => self.update_agents(
+                cmd.arg.as_deref().unwrap_or("").split_whitespace().map(str::to_owned).collect(),
+            ),
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
@@ -5500,6 +5560,14 @@ impl App {
                         let why = "not sent: no chat was made (the message is back to edit)";
                         self.chat_not_made(*token, text.clone(), why.into());
                     }
+                }
+                // The setup checklist's split declined: it never starts, so the run is over.
+                (
+                    KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter,
+                    Confirmed::Spawn(spec, _),
+                ) => {
+                    let name = spec.name.clone();
+                    self.setup_spawned(name.as_deref(), false);
                 }
                 (KeyCode::Char { c: 'n' | 'N' } | KeyCode::Esc | KeyCode::Enter, _) => {}
                 _ => self.overlay = Some(Overlay::Confirm { action, text }),
@@ -8325,6 +8393,33 @@ mod tests {
         assert_eq!(app.focus, Focus::Sidebar);
     }
 
+    /// BOOT9: an agent that isn't installed (a session or a chat refused for it) offers the setup
+    /// checklist with it ticked, on `toast.act`; no agent at all offers the checklist's defaults.
+    #[test]
+    fn a_missing_agent_offers_the_setup_checklist() {
+        let mut app = app();
+        let missing = ptyro_agents::locate::not_installed("codex", "codex");
+        let refused = ptyro_core::Error::new(ErrorCode::NotFound, missing.clone());
+        app.handle_reply(
+            Pending::Spawned { split: None, spec: Box::default(), back: false },
+            Err(refused),
+        );
+        let toast = app.toast.take().unwrap();
+        assert_eq!(toast.text, format!("{missing} · C-q u set it up (the checklist)"));
+        let Some(Offer { then: Then::Run(cmd), .. }) = toast.offer else {
+            panic!("{}", toast.text)
+        };
+        assert_eq!((cmd.action, cmd.arg.as_deref()), ("app.setup", Some("codex")));
+        // A chat with no agent to answer it: the checklist as it opens by itself.
+        app.chat_not_made(0, "hello".into(), ptyro_agents::locate::no_chat_agent());
+        let toast = app.toast.take().unwrap();
+        assert!(toast.text.ends_with("· C-q u set up agents (the checklist)"), "{}", toast.text);
+        let Some(Offer { then: Then::Run(cmd), .. }) = toast.offer else {
+            panic!("{}", toast.text)
+        };
+        assert_eq!((cmd.action, cmd.arg), ("app.setup", None));
+    }
+
     /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.
     #[test]
     fn no_toast_names_a_command_to_type() {
@@ -8676,10 +8771,8 @@ mod tests {
         );
         use crate::onboard::{Choice, ChoiceKind, FirstRun};
         app.first_run = Some(FirstRun {
-            agents: vec![
-                ("claude".into(), "claude".into(), true),
-                ("codex".into(), "codex".into(), false),
-            ],
+            setup: crate::setup_list::Setup::looking(None),
+            only_setup: false,
             choices: vec![
                 Choice {
                     section: "accounts",
@@ -8703,7 +8796,7 @@ mod tests {
         app.first_run_repos(vec!["/src/alpha".into()]);
         let shown = screen(&app);
         assert!(shown.contains("Welcome to ptyro"), "{shown}");
-        assert!(shown.contains("✓ claude (default)") && !shown.contains("✓ codex"), "{shown}");
+        assert!(shown.contains("agents and tools: looking at what's installed…"), "{shown}");
         assert!(shown.contains("[x] profile work") && shown.contains("[ ] alpha"), "{shown}");
         // j j: past the repository to notifications; Space ticks it; ⏎ writes the config.
         let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
@@ -8716,6 +8809,476 @@ mod tests {
         assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
         assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
         assert!(app.toast.as_ref().unwrap().text.contains("take the tour"));
+        // Still looking, so nothing installed: it says how to come back to the checklist.
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
+    }
+
+    /// BOOT2: the setup checklist is the first part of the first run: Agents, Tools and Already
+    /// here, each with its line; a prerequisite ticks itself with the reason; ⏎ installs what's
+    /// ticked in a split (`ptyro install … --confirmed`) and keeps the other choices.
+    #[test]
+    fn the_first_run_starts_with_the_setup_checklist_and_enter_installs_in_a_split() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let mut app = App::new(
+            Options::default(),
+            connect,
+            paths,
+            Config::default(),
+            false,
+            Rect::new(0, 0, 160, 40),
+        );
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[("claude", "2.1.319")]),
+            ..FirstRun::default()
+        });
+        let shown = screen_at(&app, 140);
+        for want in [
+            " Agents",
+            "[x] Codex",
+            "OpenAI's coding agent",
+            "then log in",
+            "[ ] Gemini CLI",
+            "for Gemini API-key and enterprise accounts (others: Antigravity)",
+            " Tools",
+            "[x] git",
+            "asks for admin",
+            " Already here",
+            "✓ Claude Code",
+            "your default agent",
+            "⏎ install 3 and use these",
+            "s not now",
+        ] {
+            assert!(shown.contains(want), "{want:?}:\n{shown}");
+        }
+        let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
+        // Down to Gemini CLI (Codex, Antigravity, OpenCode, Gemini CLI), Space ticks it, and
+        // Node.js with it.
+        for _ in 0..3 {
+            k(&mut app, KeyCode::Char { c: 'j' });
+        }
+        k(&mut app, KeyCode::Char { c: ' ' });
+        let shown = screen_at(&app, 140);
+        assert!(shown.contains("[+] Node.js"), "{shown}");
+        assert!(shown.contains("ticked because Gemini CLI needs it"), "{shown}");
+        assert!(shown.contains("⏎ install 5 and use these"), "{shown}");
+        k(&mut app, KeyCode::Enter);
+        assert!(app.first_run.is_none());
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            app.last_cli,
+            Some(words(&["install", "codex", "gemini", "git", "gh", "--confirmed"])),
+            "Node.js comes with Gemini CLI, as the CLI plans it"
+        );
+        assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
+    }
+
+    /// BOOT5: the daemon's agents out of date (`Request::Updates`) are the badge's findings and
+    /// the start-up note, with the key that updates them; the fix runs `ptyro update` in a split
+    /// where the daemon is, one at a time like the checklist's installs; a daemon on another
+    /// computer is named.
+    #[tokio::test]
+    async fn the_daemons_agents_out_of_date_are_noted_and_fixed_in_a_split() {
+        use ptyro_agents::updates;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut app =
+            App::new(Options::default(), connect, paths.clone(), Config::default(), false, area);
+        let codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            version: "0.162.1".into(),
+            latest: "0.170.0".into(),
+            command: Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh".into()),
+            via: None,
+            admin: false,
+            doc: String::new(),
+            path: None,
+            managed: None,
+            move_to: None,
+        };
+        // The badge's own ask: findings, no note.
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        assert!(app.toast.is_none());
+        // The start-up note's: the line, with the key.
+        app.got_updates(vec![codex.clone()], vec![codex.clone()], true);
+        let t = app.toast.take().expect("the note");
+        assert_eq!(t.text, "Codex 0.170.0 is out (you have 0.162.1) · C-q u updates it");
+        // The doctor's run (this computer) keeps the daemon's finding, never its own `updates`.
+        let local = crate::health::Check {
+            section: "updates".into(),
+            name: "claude".into(),
+            level: "warn".into(),
+            text: "Claude Code 2.1.400 is out (you have 2.1.300): `ptyro update claude` updates it"
+                .into(),
+        };
+        let typo = crate::health::Check {
+            section: "updates".into(),
+            name: "ignore".into(),
+            level: "warn".into(),
+            text: "updates.ignore holds \"codx\", which isn't an agent ptyro updates".into(),
+        };
+        app.got_health(vec![local, typo]);
+        assert!(
+            app.health.findings.iter().any(|f| f.what == "updates ignore"),
+            "the local doctor's other updates warnings stay"
+        );
+        app.got_updates(Vec::new(), Vec::new(), false);
+        assert!(
+            app.health.findings.iter().any(|f| f.what == "updates ignore"),
+            "and stay when the daemon's answer comes"
+        );
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        let ups: Vec<&crate::health::Finding> =
+            app.health.findings.iter().filter(|f| crate::health::agent_update(f)).collect();
+        assert_eq!(ups.len(), 1, "only the daemon's");
+        assert_eq!(ups[0].fix, Some(crate::health::Fix::Update(vec!["codex".into()])));
+        assert!(ups[0].text.starts_with("Codex 0.170.0 is out"), "{}", ups[0].text);
+        let i = app.health.findings.iter().position(|f| f.what == "updates codex").unwrap();
+        app.fix(i);
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(app.last_cli, Some(words(&["update", "codex"])));
+        assert!(app.setup_run.is_some(), "tracked like the checklist's installs");
+        // One at a time: a second update shows the running one, in an update's words.
+        app.last_cli = None;
+        app.update_agents(Vec::new());
+        assert!(app.last_cli.is_none());
+        let said = &app.toast.as_ref().unwrap().text;
+        assert!(said.contains("an update is still running in ptyro-update"), "{said}");
+        // A daemon on another computer: its agents, named so.
+        app.setup_run = None;
+        app.connect.remote = Some("ssh://me@box".into());
+        app.got_updates(vec![codex.clone()], vec![codex], true);
+        let t = app.toast.take().unwrap();
+        assert!(t.text.starts_with("on box: Codex 0.170.0 is out"), "{}", t.text);
+        assert!(app.health.updates[0].text.starts_with("on box: "));
+    }
+
+    /// BOOT7: an agent installed another way and out of date: the badge offers its update and,
+    /// beside it, the move (which opens the setup checklist with it ticked); kept, only the update.
+    #[tokio::test]
+    async fn an_agent_installed_another_way_is_offered_the_move_beside_its_update() {
+        use ptyro_agents::updates;
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut app =
+            App::new(Options::default(), connect, paths.clone(), Config::default(), false, area);
+        let mut codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            version: "0.162.1".into(),
+            latest: "0.170.0".into(),
+            command: Some("npm install -g @openai/codex@latest".into()),
+            via: Some(ptyro_agents::catalog::Via::Npm),
+            admin: false,
+            doc: String::new(),
+            path: None,
+            managed: None,
+            move_to: Some(ptyro_agents::catalog::Via::Vendor),
+        };
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        let mv = app.health.findings.iter().find(|f| f.what == "updates codex move").unwrap();
+        assert!(
+            mv.text.contains("Codex is installed with npm: moving it to the vendor's installer")
+        );
+        assert_eq!(
+            mv.fix,
+            Some(crate::health::Fix::Setup { names: vec!["codex".into()], place: None })
+        );
+        // Asked again: replaced, never piled up.
+        app.got_updates(vec![codex.clone()], Vec::new(), false);
+        assert_eq!(app.health.findings.iter().filter(|f| f.what.ends_with(" move")).count(), 1);
+        // Kept (the daemon clears `move_to`): the update alone.
+        codex.move_to = None;
+        app.got_updates(vec![codex], Vec::new(), false);
+        assert!(!app.health.findings.iter().any(|f| f.what.ends_with(" move")));
+        assert!(app.health.findings.iter().any(|f| f.what == "updates codex"));
+    }
+
+    /// BOOT6: ptyro itself is one more row: the badge's finding updates it with `ptyro update
+    /// ptyro` in a split where the daemon is, and the note names it among the agents.
+    #[tokio::test]
+    async fn ptyro_itself_is_noted_and_fixed_like_an_agent() {
+        use ptyro_agents::updates;
+        let mut app = app();
+        let me = updates::Outdated {
+            id: "ptyro".into(),
+            name: "ptyro".into(),
+            program: "ptyro".into(),
+            version: "0.0.63".into(),
+            latest: "0.0.64".into(),
+            command: None,
+            via: None,
+            admin: false,
+            doc: String::new(),
+            path: Some("/home/me/.local/bin/ptyro".into()),
+            managed: None,
+            move_to: None,
+        };
+        let codex = updates::Outdated {
+            id: "codex".into(),
+            name: "Codex".into(),
+            program: "codex".into(),
+            latest: "0.170.0".into(),
+            version: "0.162.1".into(),
+            path: None,
+            ..me.clone()
+        };
+        app.got_updates(vec![me.clone(), codex.clone()], vec![me.clone(), codex], true);
+        let t = app.toast.take().expect("the note");
+        assert_eq!(
+            t.text,
+            "2 newer versions are out: ptyro 0.0.64, Codex 0.170.0 · C-q u updates them"
+        );
+        let f = app.health.findings.iter().find(|f| f.what == "updates ptyro").expect("found");
+        assert!(f.text.contains("replaces /home/me/.local/bin/ptyro"), "{}", f.text);
+        assert!(f.text.contains("upgrades the daemon live"), "{}", f.text);
+        assert_eq!(f.fix, Some(crate::health::Fix::Update(vec!["ptyro".into()])));
+        let i = app.health.findings.iter().position(|f| f.what == "updates ptyro").unwrap();
+        app.fix(i);
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(app.last_cli, Some(words(&["update", "ptyro"])));
+    }
+
+    /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never
+    /// opens another: it says so. Each side's split starts once the one before it ends.
+    #[tokio::test]
+    async fn a_running_setup_is_never_joined_by_a_second_and_sides_run_in_turn() {
+        let mut app = app();
+        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        app.setup_run = Some(crate::setup_list::SetupRun {
+            split: "ptyro-install".into(),
+            seen: false,
+            queue: vec![(None, words(&["install", "codex", "--confirmed", "--where", "wsl"]))],
+        });
+        app.open_setup(None, None);
+        assert!(app.first_run.is_none(), "no second checklist");
+        assert!(app.last_cli.is_none(), "no second install");
+        assert!(
+            app.toast.as_ref().unwrap().text.contains("setup is still running in ptyro-install")
+        );
+        app.open_first_run();
+        assert!(app.first_run.is_none());
+        // Still starting (not in the list yet): it waits.
+        app.setup_tick();
+        assert!(app.last_cli.is_none());
+        // Seen, then gone: WSL's side starts now, and is the one running.
+        app.setup_run.as_mut().unwrap().seen = true;
+        app.setup_tick();
+        assert_eq!(
+            app.last_cli,
+            Some(words(&["install", "codex", "--confirmed", "--where", "wsl"]))
+        );
+        let run = app.setup_run.as_ref().expect("WSL's side runs");
+        assert!(run.queue.is_empty());
+        app.setup_run.as_mut().unwrap().seen = true;
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "done: the checklist can open again");
+    }
+
+    /// BOOT2: the checklist's split frees it as soon as it can't start, is closed, or ends;
+    /// then the health badge looks again, after a run already in flight rather than not at all.
+    #[tokio::test]
+    async fn a_setup_split_that_fails_closes_or_dies_frees_the_checklist_and_the_badge_looks_again()
+    {
+        let mut app = app();
+        let run = || {
+            Some(crate::setup_list::SetupRun {
+                split: "ptyro-install".into(),
+                seen: false,
+                queue: Vec::new(),
+            })
+        };
+        let spawned = || Pending::Spawned {
+            split: None,
+            spec: Box::new(SpawnSpec {
+                name: Some("ptyro-install".into()),
+                ..SpawnSpec::default()
+            }),
+            back: false,
+        };
+        // A doctor run is in flight, from before the install.
+        app.health.running = true;
+        // 1. The spawn failed: freed at once, no half-minute wait.
+        app.setup_run = run();
+        app.on_reply(AppMsg::Reply(
+            spawned(),
+            Err(ptyro_core::Error::new(ErrorCode::Internal, "no pty")),
+        ));
+        assert!(app.setup_run.is_none(), "a failed spawn frees it");
+        // 1b. Asked to agree first: kept while the question is up (a `y` still starts it); a
+        // `n` means it never starts, which frees it.
+        app.setup_run = run();
+        app.on_reply(AppMsg::Reply(
+            spawned(),
+            Err(ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?")),
+        ));
+        assert!(app.setup_run.is_some(), "kept while the question is up");
+        assert!(matches!(app.overlay, Some(Overlay::Confirm { action: Confirmed::Spawn(..), .. })));
+        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'n' }, Mods::NONE));
+        assert!(app.setup_run.is_none(), "declined: freed");
+        // 2. Started, then closed by the person before the list ever showed it running.
+        app.setup_run = run();
+        let s = session("ptyro-install");
+        app.on_reply(AppMsg::Reply(spawned(), Ok(Reply::Session { info: s.clone() })));
+        assert!(app.setup_run.as_ref().unwrap().seen, "started");
+        app.setup_tick();
+        assert!(app.setup_run.is_some(), "still running");
+        app.on_event(DomainEvent::SessionRemoved { id: s.id });
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "closed: freed");
+        assert!(app.health.again, "the badge looks again once the run in flight is in");
+        // 3. Started, then its program died.
+        app.setup_run = run();
+        let mut s = session("ptyro-install");
+        app.on_reply(AppMsg::Reply(spawned(), Ok(Reply::Session { info: s.clone() })));
+        s.state = ProcessState::Exited { code: Some(1), signal: None };
+        app.upsert(s);
+        app.setup_tick();
+        assert!(app.setup_run.is_none(), "ended: freed");
+        // The badge: the run in flight answers with what it saw before the install (claude
+        // missing); it is looked at again, and that answer clears it.
+        let stale = crate::health::Check {
+            section: "agents".into(),
+            name: "claude".into(),
+            level: "problem".into(),
+            text: "claude not found".into(),
+        };
+        app.got_health(vec![stale]);
+        assert_eq!(app.health.findings.len(), 1);
+        assert!(app.health.running && !app.health.again, "looking again now");
+        app.got_health(Vec::new());
+        assert!(app.health.findings.is_empty(), "the badge shows the install's result");
+    }
+
+    /// BOOT2: two sides fit an 80-column terminal: the cells beside the name, the line under it.
+    #[test]
+    fn a_two_sided_checklist_fits_80_columns() {
+        use crate::onboard::FirstRun;
+        // 80 columns, tall enough to show everything.
+        let draw = |app: &App| {
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 60)).unwrap();
+            t.draw(|f| crate::ui::draw(app, f)).unwrap();
+            let buf = t.backend().buffer();
+            buf.content.chunks(80).fold(String::new(), |mut s, row| {
+                s.extend(row.iter().map(|c| c.symbol()));
+                s.push('\n');
+                s
+            })
+        };
+        // The box's lines (`│` at both edges): nothing runs into its right edge, where a cut
+        // line would end.
+        let fits = |shown: &str| {
+            for line in shown.lines() {
+                let c: Vec<char> = line.chars().collect();
+                let Some(left) = c.iter().position(|ch| *ch == '│') else { continue };
+                let Some(right) = c.iter().rposition(|ch| *ch == '│').filter(|r| *r > left + 10)
+                else {
+                    continue;
+                };
+                assert_eq!(c[right - 1], ' ', "cut off:\n{shown}");
+            }
+        };
+        let mut app = app();
+        let mut setup = crate::setup_list::tests::two();
+        // Gemini CLI on WSL's side: Node.js there, with the line saying why under its row.
+        setup.side_step(1);
+        let gemini = setup.rows().iter().position(|e| e.id == "gemini").unwrap();
+        setup.toggle(gemini);
+        app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
+        let shown = draw(&app);
+        assert!(shown.contains("WSL (Ubuntu)"), "{shown}");
+        assert!(shown.contains("[x] the vendor's installer"), "{shown}");
+        assert!(shown.contains("then log in"), "{shown}");
+        assert!(shown.contains("WSL (Ubuntu): ticked because Gemini CLI needs it"), "{shown}");
+        fits(&shown);
+        // Windows without a usable WSL: its reason and fix, and the default side's, wrap.
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::unusable(),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = draw(&app);
+        assert!(shown.contains("WSL: WSL isn't installed or has no distro"), "{shown}");
+        assert!(shown.contains("By default this sets up Windows"), "{shown}");
+        fits(&shown);
+    }
+
+    /// BOOT2: `app.setup` (`U`) is the checklist alone; `s` (not now) installs nothing and says
+    /// how to come back.
+    #[test]
+    fn the_setup_checklist_alone_closes_with_not_now() {
+        let mut app = app();
+        assert_eq!(app.keymap.key_for("app.setup").as_deref(), Some("C-q U"));
+        use crate::onboard::FirstRun;
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[]),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        let shown = screen(&app);
+        assert!(shown.contains("Set up this computer"), "{shown}");
+        assert!(shown.contains("⏎ install 4 · Space toggle"), "{shown}");
+        assert!(!shown.contains("repositories"), "{shown}");
+        app.first_run_key(KeyEvent::new(KeyCode::Char { c: 's' }, Mods::NONE));
+        assert!(app.first_run.is_none());
+        assert!(app.last_cli.is_none(), "nothing installed");
+        assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
+        assert!(!Config::path(&app.paths).exists(), "the checklist alone writes no config");
+    }
+
+    /// Setup running elsewhere (the machine's lock, held here as the web's run would): the
+    /// checklist says so before anything is ticked, ⏎ counts nothing, and ⏎ starts no split.
+    #[test]
+    fn the_setup_checklist_says_when_setup_runs_elsewhere() {
+        let mut app = app();
+        // Its own state folder: the lock it holds would make every other test's checklist (all
+        // in `app()`'s one folder, as are other test runs on this computer) see a setup running.
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        app.paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        use crate::onboard::FirstRun;
+        let held = ptyro_agents::setup::lock::Lock::take(&app.paths.state, "the web app").unwrap();
+        let mut setup = crate::setup_list::tests::one(&[]);
+        assert!(setup.check_busy(&app.paths.state));
+        app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
+        let shown = screen(&app);
+        assert!(
+            shown.contains("setup is already running on this computer (from the web app"),
+            "{shown}"
+        );
+        assert!(shown.contains("⏎ done · Space toggle"), "{shown}");
+        app.first_run_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        assert!(app.last_cli.is_none(), "no split");
+        assert!(
+            app.toast.as_ref().unwrap().text.contains("setup is already running (from the web app")
+        );
+        // Let go: the checklist installs again. Another test thread's fork can hold a copy of the
+        // lock's descriptor until its exec, so wait for the lock to be free, not just dropped.
+        drop(held);
+        let free_by = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while ptyro_agents::setup::lock::Lock::held_by(&app.paths.state).is_some() {
+            assert!(std::time::Instant::now() < free_by, "the lock never came free");
+            std::thread::yield_now();
+        }
+        app.first_run = Some(FirstRun {
+            setup: crate::setup_list::tests::one(&[]),
+            only_setup: true,
+            ..FirstRun::default()
+        });
+        app.first_run_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
+        assert!(app.last_cli.is_some(), "a split once it's free");
     }
 
     #[test]

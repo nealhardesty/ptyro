@@ -58,6 +58,9 @@ export const tipOf = (k) => tips[k] ?? "";
 export const ui = {
     render: () => { },
     toast: (_text) => { },
+    /// A request refused: its message, with what fixes it where there is one (BOOT9: an agent that
+    /// isn't installed offers setup), else a toast.
+    fail: (text) => ui.toast(text),
     /// A page's top bar: the title, a back arrow, and extra controls on its right.
     header: (title, _back, ..._extra) => h("header", {}, h("h1", {}, title)),
     /// Turn notifications on for this device.
@@ -88,7 +91,7 @@ export async function ask(req, ok) {
         return r;
     }
     catch (e) {
-        ui.toast(errText(e));
+        ui.fail(errText(e));
         return undefined;
     }
 }
@@ -385,6 +388,8 @@ export function download(name, text, type = "text/plain") {
 }
 /// Go to a route.
 export const go = (hash) => { location.hash = hash; };
+/// How many sides a setup run reports on (BOOT8): in setupkit.ts, with the rest of setup's logic.
+export { setupSides } from "./setupkit.js";
 export const enc = encodeURIComponent;
 /// `decodeURIComponent` that never throws: a malformed escape in a route (`%E0%A4%A`) is kept as typed.
 export function safeDecode(s) {

@@ -37,6 +37,30 @@ impl RawInput {
         Self { saved }
     }
 
+    /// Lines as typed, but unechoed, until dropped (`ECHO` off; Windows: `ENABLE_ECHO_INPUT`):
+    /// for a program that draws what it took itself, as an agent's input box does.
+    #[cfg(unix)]
+    pub fn unechoed() -> Self {
+        use rustix::termios::{self, LocalModes, OptionalActions};
+        let fd = rustix::stdio::stdin();
+        let saved = termios::tcgetattr(fd).ok();
+        if let Some(s) = &saved {
+            let mut quiet = s.clone();
+            quiet.local_modes.remove(LocalModes::ECHO);
+            let _ = termios::tcsetattr(fd, OptionalActions::Now, &quiet);
+        }
+        Self { saved }
+    }
+
+    #[cfg(windows)]
+    pub fn unechoed() -> Self {
+        let saved = windows::input_mode();
+        if let Some(mode) = saved {
+            windows::set_input_mode(windows::unechoed(mode));
+        }
+        Self { saved }
+    }
+
     /// Whether stdin is a terminal it could change.
     pub fn is_raw(&self) -> bool {
         self.saved.is_some()
@@ -131,6 +155,11 @@ mod windows {
     /// (`ENABLE_PROCESSED_INPUT` kept), as `ISIG` does on Unix.
     pub fn raw(mode: u32) -> u32 {
         (mode & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT)) | ENABLE_VIRTUAL_TERMINAL_INPUT
+    }
+
+    /// Line editing kept, echo off.
+    pub fn unechoed(mode: u32) -> u32 {
+        mode & !ENABLE_ECHO_INPUT
     }
 
     pub fn size() -> io::Result<(u16, u16)> {
