@@ -31,7 +31,7 @@ use ptyro_core::model::{
 use ptyro_core::session::SessionInfo;
 use ptyro_core::status::{InboxEntry, Usage};
 use ptyro_core::sync::MutexExt;
-use ptyro_core::{ClientId, Error, ErrorCode, SessionId, now_ms};
+use ptyro_core::{ClientId, Error, ErrorCode, SessionId, lookup, now_ms};
 use ptyro_protocol::{ClientKind, ClientMsg, DomainEvent, Reply, Request, ServerMsg};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -210,13 +210,21 @@ fn addresses(v: &Value) -> Vec<String> {
     out
 }
 
-/// Take `machine:` off a request's addresses, for its own machine.
+/// A rename's new name (`WorkspaceRename`), which isn't an address but may be written like one:
+/// `box:work` renamed `box:play` is `play` on box. (`Rename`, `WorktreeRename` and
+/// `ProjectRename` call theirs `name`, an address key.)
+const NEW_NAME_KEYS: &[&str] = &["new_name"];
+
+/// Take `machine:` off a request's addresses (and a rename's new name), for its own machine.
 pub(crate) fn strip_value(v: &mut Value, machine: &str) {
     let prefix = format!("{machine}:");
     if let Value::Object(o) = v {
         for (k, x) in o.iter_mut() {
             match x {
-                Value::String(s) if ADDRESS_KEYS.contains(&k.as_str()) => {
+                Value::String(s)
+                    if ADDRESS_KEYS.contains(&k.as_str())
+                        || NEW_NAME_KEYS.contains(&k.as_str()) =>
+                {
                     if let Some(rest) = s.strip_prefix(&prefix) {
                         *s = rest.to_owned();
                     }
@@ -956,11 +964,22 @@ impl Daemon {
         match hits.as_slice() {
             [] => Ok(None),
             [m] => Ok(Some(m.clone())),
-            many => Err(Error::invalid(format!(
-                "{a} is on several machines: say which ({})",
-                many.iter().map(|m| qualify(m, &a)).collect::<Vec<_>>().join(", ")
-            ))),
+            many => Err(lookup::ambiguous(
+                "machine",
+                &a,
+                &many.iter().map(|m| qualify(m, &a)).collect::<Vec<_>>(),
+            )),
         }
+    }
+
+    /// The machine `name` names, whatever its case (SPEC §2.3).
+    fn machine_named(&self, name: &str) -> Result<String, Error> {
+        let links = self.links.locked();
+        if let Some(m) = links.keys().find(|m| lookup::same(m, name)) {
+            return Ok(m.clone());
+        }
+        let known: Vec<String> = links.keys().cloned().collect();
+        Err(lookup::not_found_among("machine", name, &known))
     }
 
     /// Send a request to its machine, its names taken off; its reply with them put back.
@@ -1181,6 +1200,7 @@ impl Daemon {
                 self.add_machine(name, transport, token, force).await
             }
             Request::MachineRemove { name } => {
+                let name = self.machine_named(&name)?;
                 let gone = self.links.locked().remove(&name);
                 let Some(link) = gone else { return Err(Error::missing("machine", &name)) };
                 let _ = std::fs::remove_file(self.token_path(&name));
@@ -1208,8 +1228,9 @@ impl Daemon {
                 Ok(Reply::Done)
             }
             Request::MachineHide { name, workspace, hidden } => {
+                let name = self.machine_named(&name)?;
                 let ws = split_machine(&workspace)
-                    .filter(|(m, _)| *m == name)
+                    .filter(|(m, _)| lookup::same(m, &name))
                     .map_or(workspace.clone(), |(_, w)| w.to_owned());
                 let (info, mirror) = {
                     let mut links = self.links.locked();
@@ -1244,6 +1265,7 @@ impl Daemon {
                 Ok(Reply::Machine { info })
             }
             Request::MachineRetry { name } => {
+                let name = self.machine_named(&name)?;
                 let info = {
                     let links = self.links.locked();
                     let l = links.get(&name).ok_or_else(|| Error::missing("machine", &name))?;
@@ -1298,7 +1320,7 @@ impl Daemon {
             ));
         }
         let name =
-            match name.or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::as_name)) {
+            match name.or_else(|| calls_itself.as_deref().and_then(ptyro_core::names::derive)) {
                 Some(n) => n,
                 None => {
                     let _ = std::fs::remove_file(self.token_path(&probe));
@@ -1321,7 +1343,7 @@ impl Daemon {
                 "`c` can't name a machine: `c:…` is how chats are addressed. Pick another with --name",
             ));
         }
-        if ptyro_core::names::as_name(&self.machine()).as_deref() == Some(name.as_str()) {
+        if ptyro_core::names::derive(&self.machine()).as_deref() == Some(name.as_str()) {
             cleanup();
             return Err(Error::invalid(format!(
                 "{name} is this machine's own name: a machine can't mirror itself"
@@ -1492,6 +1514,17 @@ mod tests {
         let Request::Spawn { spec } = serde_json::from_value(v).unwrap() else { panic!() };
         assert_eq!(spec.worktree.as_deref(), Some("myrepo/feat"));
         assert_eq!(spec.workspace.as_deref(), Some("work"));
+        // A rename's new name loses it too, however the request calls it.
+        for req in [
+            Request::Rename { addr: "laptop2:a".into(), name: "laptop2:b".into() },
+            Request::WorktreeRename { addr: "laptop2:app/a".into(), name: "laptop2:b".into() },
+            Request::ProjectRename { addr: "laptop2:app".into(), name: "laptop2:web".into() },
+            Request::WorkspaceRename { name: "laptop2:work".into(), new_name: "laptop2:b".into() },
+        ] {
+            let mut v = serde_json::to_value(&req).unwrap();
+            strip_value(&mut v, "laptop2");
+            assert!(!v.to_string().contains("laptop2"), "{v}");
+        }
         assert!(here_only(&Request::DevicePair {
             name: "laptop2:x".into(),
             scope: Default::default(),

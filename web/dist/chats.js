@@ -5,7 +5,7 @@
 import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, ago, ask, confirm, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, confirm, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
 import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
 const ACTIONS = {
@@ -598,7 +598,7 @@ function makeTask(c, args = "") {
     form("Make it a task", [
         { key: "project", label: "The project it works in", type: "select", options: here.map((p) => [p.slug, p.slug]), value: guess || here[0].slug },
         { key: "agent", label: "Who works on it", type: "select", options: [["", `${c.agent}@${c.profile} (the chat's)`], ...agentNames().filter((a) => a !== c.agent).map((a) => [a, a])] },
-        { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name" },
+        { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name", hint: NAME_HINT },
     ], "Make it", (v) => go(String(v.project), v.agent || null, v.name?.trim() || null), { intro: "An agent in a new worktree of the project carries out the chat's last answer, starting from its conversation." });
 }
 /// `/task`'s words, as `chat task`'s flags: `[PROJECT] [--agent A] [--name N]`; a string: what's wrong.

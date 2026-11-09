@@ -17,7 +17,7 @@ use std::time::Duration;
 use ptyro_core::model::{WorktreeInfo, WorktreeSpec};
 use ptyro_core::session::{ProcessState, SpawnSpec};
 use ptyro_core::status::{AgentStatus, AttentionKind, InboxEntry};
-use ptyro_core::{Error, ErrorCode, now_ms};
+use ptyro_core::{Error, ErrorCode, lookup, now_ms};
 use ptyro_protocol::{DomainEvent, Reply, Request};
 use ptyro_run::recipe::{Kind, OnRestart, RetryMode, Timeout, TimeoutFull, WaitFor};
 use ptyro_run::wire::{FanoutSpec, GateInfo, RecipeInfo, RunInfo};
@@ -208,32 +208,33 @@ impl Daemon {
         self.runs.locked().get(id).and_then(|e| e.recipe.clone())
     }
 
-    /// Resolve a run address: an id, a unique id prefix/suffix, or `@last`.
+    /// Resolve a run address (SPEC §2.3): `@last`, its id (`r-k3x9q2`), or the end of it, at
+    /// least 4 characters, with or without the `r-`.
     pub(crate) fn find_run(&self, addr: &str) -> Result<String, Error> {
         let runs = self.runs.locked();
+        let addr = addr.trim();
         if addr == "@last" {
             return runs
                 .values()
                 .max_by_key(|e| e.state.created_ms)
                 .map(|e| e.state.id.clone())
-                .ok_or_else(|| Error::not_found("no runs yet"));
+                .ok_or_else(|| Error::new(ErrorCode::NotFound, "there are no runs yet"));
         }
-        if runs.contains_key(addr) {
-            return Ok(addr.to_owned());
+        let key = lookup::key(addr);
+        if runs.contains_key(&key) {
+            return Ok(key);
         }
-        let bare = addr.trim_start_matches("r-");
+        let bare = key.strip_prefix("r-").unwrap_or(&key);
         if bare.is_empty() {
-            return Err(Error::invalid("name the run: its id, or a part of it that only it has"));
+            return Err(Error::invalid("which run? (its id, like r-k3x9q2, or @last)"));
         }
-        let m: Vec<&String> =
-            runs.keys().filter(|k| k.trim_start_matches("r-").contains(bare)).collect();
-        match m.as_slice() {
-            [one] => Ok((*one).clone()),
-            [] => Err(Error::missing("run", addr)),
-            _ => {
-                Err(Error::new(ErrorCode::Ambiguous, format!("{addr:?} matches {} runs", m.len())))
-            }
-        }
+        let m: Vec<&RunEntry> = runs
+            .values()
+            .filter(|e| lookup::id_matches(e.state.id.trim_start_matches("r-"), bare))
+            .collect();
+        lookup::one("run", addr, m, |e| format!("{} ({})", e.state.id, e.state.name))?
+            .map(|e| e.state.id.clone())
+            .ok_or_else(|| lookup::not_found("run", addr, runs.keys().map(String::as_str)))
     }
 
     // ── creating runs ──────────────────────────────────────────────────────
@@ -968,7 +969,10 @@ impl Daemon {
                 } else {
                     format!("{}-{n}", run.trim_start_matches("r-"))
                 };
-                let name = self.free_worktree_name(&p.id, &ptyro_core::model::slugify(&want));
+                // Rendered from a template, so derived: tidied, always a valid name.
+                let want = ptyro_core::names::derive(&want)
+                    .unwrap_or_else(|| run.trim_start_matches("r-").to_owned());
+                let name = self.free_worktree_name(&p.id, &want);
                 let base = sp
                     .base
                     .as_deref()
@@ -1029,7 +1033,7 @@ impl Daemon {
         if !taken(want) {
             return want.to_owned();
         }
-        (2..).map(|k| format!("{want}-{k}")).find(|n| !taken(n)).expect("infinite")
+        (2..).map(|k| ptyro_core::names::numbered(want, k)).find(|n| !taken(n)).expect("infinite")
     }
 
     /// `refs/ptyro/runs/<run>/<step>/<n>/<which>` for the worktree as it is now.
@@ -1087,7 +1091,8 @@ impl Daemon {
             .as_deref()
             .map(|n| ptyro_run::template::render(n, ctx))
             .unwrap_or_else(|| def.id.clone());
-        let name = ptyro_core::model::slugify(&name);
+        // Rendered from a template, so derived: tidied, always a valid name.
+        let name = ptyro_core::names::derive(&name).unwrap_or_else(|| "step".into());
         let mut env = self.step_env(run, &def.id);
         let out = PathBuf::from(&env["PTYRO_STEP_OUT"]);
         let _ = std::fs::remove_file(&out);
@@ -2393,6 +2398,12 @@ impl Daemon {
         if spec.prompt.trim().is_empty() {
             return Err(Error::invalid("the prompt is empty"));
         }
+        // The prefix someone gave: checked, never rewritten (SPEC §2.3). Kept short because
+        // each candidate's agent is appended (`<prefix>-<agent>`).
+        if let Some(n) = &spec.name {
+            ptyro_core::names::validate_within(n, 40, ", since each agent's name is appended")
+                .map_err(Error::invalid)?;
+        }
         let config = self.config();
         for a in &spec.agents {
             let (name, _) = ptyro_agents::split_agent(a);
@@ -2423,7 +2434,9 @@ impl Daemon {
         // Candidate ids: the agent's name, numbered on repeats (claude, claude-2).
         let mut ids: Vec<(String, String)> = Vec::new();
         for a in &spec.agents {
+            // A step id in the recipe below, so `[a-z0-9-]` (a `.` would split the TOML key).
             let base = ptyro_core::model::slugify(ptyro_agents::split_agent(a).0);
+            let base = if base.is_empty() { "agent".to_owned() } else { base };
             let id = if ids.iter().any(|(i, _)| *i == base) {
                 (2..)
                     .map(|k| format!("{base}-{k}"))
@@ -2538,5 +2551,66 @@ impl Daemon {
                 (e.policy.is_some(), e.state.lead.as_deref() == Some(id), e.state.created_ms)
             })
             .map(|e| (e.state.id.clone(), e.policy.clone(), e.state.lead.as_deref() == Some(id)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, name: &str, set: Option<&str>) -> RunEntry {
+        let changeset =
+            set.map(|n| ptyro_run::changeset::ChangeSet { name: n.into(), ..Default::default() });
+        RunEntry {
+            state: RunState { id: id.into(), name: name.into(), changeset, ..Default::default() },
+            recipe: None,
+            src: None,
+            policy: None,
+            tasks: HashMap::new(),
+            wake: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Runs and change sets resolve like everything else (SPEC §2.3): the end of an id, 4
+    /// characters or more, never a part of the middle; several are listed by id.
+    #[tokio::test]
+    async fn runs_and_change_sets_match_the_end_of_their_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = crate::daemon::test_daemon(dir.path(), Default::default());
+        let e = d.find_run("@last").unwrap_err();
+        assert_eq!((e.code, e.message.as_str()), (ErrorCode::NotFound, "there are no runs yet"));
+        for (id, name, set) in [
+            ("r-ab1234", "fanout", None),
+            ("r-cd1234", "review", None),
+            ("r-ef9999", "changeset", Some("login")),
+        ] {
+            d.runs.locked().insert(id.into(), entry(id, name, set));
+        }
+        assert_eq!(d.find_run("R-AB1234").unwrap(), "r-ab1234");
+        assert_eq!(d.find_run("b1234").unwrap(), "r-ab1234");
+        let e = d.find_run("1234").unwrap_err();
+        assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+        assert!(
+            e.message.starts_with(r#"2 runs match "1234": say which, "#)
+                && e.message.contains("r-ab1234 (fanout)")
+                && e.message.contains("r-cd1234 (review)"),
+            "{}",
+            e.message
+        );
+        let e = d.find_run("ab12").unwrap_err();
+        assert_eq!(e.code, ErrorCode::NotFound, "a part of the middle isn't an address: {e:?}");
+        assert_eq!(e.message, r#"no run matches "ab12""#);
+        let e = d.find_run("234").unwrap_err();
+        assert!(e.message.contains("at least 4 characters"), "{}", e.message);
+
+        assert_eq!(d.find_set("LOGIN").unwrap(), "r-ef9999");
+        assert_eq!(d.find_set("9999").unwrap(), "r-ef9999");
+        // A new name is checked against names only: `9999` is free though `r-ef9999` exists.
+        assert!(!d.set_named("9999") && d.set_named("Login"));
+        let e = d.find_set("nope").unwrap_err();
+        assert_eq!(
+            (e.code, e.message.as_str()),
+            (ErrorCode::NotFound, r#"no change set matches "nope""#)
+        );
     }
 }

@@ -70,6 +70,13 @@ pub enum ProjectCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a project: its slug, the address its worktrees and sessions are found by
+    /// (`NEW/name`). Its worktrees' directories stay where they are
+    Rename {
+        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
+        project: String,
+        new: String,
+    },
     /// Pin the project to a profile: its sessions run under it
     Pin {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
@@ -172,10 +179,10 @@ pub enum WtCmd {
         #[arg(long)]
         stop_sessions: bool,
     },
-    /// Bring an archived worktree back as it was (`name` or `project/name`)
+    /// Bring an archived worktree back as it was (`name`, `project/name` or its handle)
     Restore { worktree: String },
-    /// Delete archived worktrees for good (`name` or `project/name`): the saved files go, and
-    /// the branch too when it is merged or pushed. Asks first unless --yes
+    /// Delete archived worktrees for good (`name`, `project/name` or its handle): the saved
+    /// files go, and the branch too when it is merged or pushed. Asks first unless --yes
     ArchiveRm {
         #[arg(required = true)]
         worktrees: Vec<String>,
@@ -382,6 +389,14 @@ pub enum WtCmd {
     Unlock {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
+    },
+    /// Rename a worktree: its name, its address (`project/NEW`). Its branch stays
+    /// (`rename-branch` changes that) and so does its directory, so what runs in it carries on.
+    /// The main checkout is always `@root`
+    Rename {
+        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
+        worktree: String,
+        new: String,
     },
     /// Rename its branch (refused once pushed); without NEW, named after the first commit
     RenameBranch {
@@ -636,6 +651,15 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
                     println!("#   (nothing set: everything is a default)");
                 }
             }
+            Ok(0)
+        }
+        ProjectCmd::Rename { project, new } => {
+            let Reply::Project { info, .. } =
+                c.request(Request::ProjectRename { addr: project, name: new }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            eprintln!("renamed to {}", info.slug);
             Ok(0)
         }
         ProjectCmd::Pin { project, profile } => {
@@ -1028,9 +1052,12 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             if entries.is_empty() {
                 eprintln!("nothing archived");
             }
+            // Its handle tells apart archives that share a name (`wt restore 7f3k`).
+            let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
             for e in &entries {
                 println!(
-                    "{:<28} {:<8} {:<24} {}",
+                    "{:<6} {:<28} {:<8} {:<24} {}",
+                    ptyro_core::lookup::handle(&e.id, ids.iter().copied()),
                     truncate(&format!("{}/{}", e.project_slug, e.name), 28),
                     age(e.archived_ms),
                     truncate(&e.branch, 24),
@@ -1268,6 +1295,13 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
         }
         WtCmd::Unlock { worktree } => {
             c.request(Request::WorktreeLock { addr: worktree, lock: false }).await?;
+            Ok(0)
+        }
+        WtCmd::Rename { worktree, new } => {
+            let info = worktree_of(
+                c.request(Request::WorktreeRename { addr: worktree, name: new }).await?,
+            )?;
+            eprintln!("renamed to {}", info.qualified());
             Ok(0)
         }
         WtCmd::RenameBranch { worktree, new } => {

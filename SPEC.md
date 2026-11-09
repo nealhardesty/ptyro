@@ -166,11 +166,45 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     no project share one scope (owner, 2026-11-09). A bare name two projects share is ambiguous:
     the error lists each `project/name`, except that mail from an agent means the session in
     the sender's own project. Defaults are below.
+  - The renames (owner, 2026-11-09): `rename` (a session), `wt rename` (a worktree) and
+    `project rename` (a project's slug, the `project` in `project/name`), in the CLI, the TUI
+    (`session.rename`, `worktree.rename`, `project.rename`) and the web. A worktree keeps its
+    branch (`wt rename-branch` changes that) and its directory, and a project's worktrees keep
+    theirs: moving a directory under running sessions would break them. A worktree's name is
+    unique among its project's worktrees; a project's slug is unique; `@root`, the main
+    checkout, is never renamed. A running process keeps the `PTYRO_WORKTREE_NAME` and
+    `PTYRO_PROJECT` it started with (§10.6).
   - The **title** is free text for people to read: the task, a PR title. It may change at any
     time (`retitle`), is never an address, and is shown in the sidebar and headers, not used in
     commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.
   - The friendly-name generator draws from a corvid-themed word list (`brisk-rook`,
     `quiet-jackdaw`, `sly-magpie`; `ptyro_core::names`).
+- **One name policy** (owner, 2026-11-09). Every name a person, an agent or a script gives
+  follows the same rule, `names::validate`: `[a-z0-9._-]`, 1–64 characters, not all digits, not
+  starting with `.` or `-`, no `..`, not ending in `.` or `.lock`. That covers sessions (and
+  shells), worktrees, workspaces, profiles, change sets, a fan-out's name prefix, a lead's name
+  for its worker, machines, paired devices, and the config panel's named members (agents,
+  tools, …). A change set's name and a fan-out's prefix are at most 40 characters, kept short
+  because member names are appended (`<set>-<member>`, `<prefix>-<agent>`); the fix offered
+  then fits in 40 too (`names::validate_within`).
+  - **Given names are refused, never rewritten.** `cs new my_fix` makes `my_fix`. A bad one is an
+    error that offers the fix: `invalid name "My Feature": 'M' (uppercase) isn't allowed (only
+    a-z 0-9 . _ -); try "my-feature"` (`names::tidy`). An empty name is refused, never replaced
+    by a stand-in.
+  - **`-` is the one replacement character.** The suggestion, generated names and the TUI's and
+    web's live name fields all use it. As a name is typed (`names::typed`, the web's `slugify`)
+    a character it can't hold becomes `-`, and what a name can't start with is dropped at the
+    start. The fields say so: "A space or other odd character becomes - (a-z 0-9 . _ -)".
+  - **Derived names may be tidied silently**, since they are no one's input: names made from a
+    title, a prompt, a directory, a recipe's template (`names::derive`, always valid, or none so
+    the caller picks its own fallback), a machine's name from what it calls itself, and names
+    ptyro composes itself (`<set>-<member>`, a step's agent, `judge`). A taken name gets `-2`,
+    `-3` (`names::numbered`), its base cut so the whole stays within 64.
+  - **Project slugs** fold to the narrower `[a-z0-9-]`, at most 40 (`model::slugify`, built on the
+    same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
+    its worktrees and archives, so this fold stays as it was: re-adding a repository finds them
+    again, and stored slugs keep working. A directory with nothing slug-like in its name gets
+    `repo`; nothing else falls back to it.
 - **Address syntax** used across CLI and protocol (resolved by the daemon):
 
   | Form | Example | Resolves to |
@@ -223,6 +257,32 @@ inside them, so CLI commands default to the worktree you're standing in. Ids are
 (`fix-flaky-test`, made unique), else for an agent session the agent and a corvid
 (`claude-rook`), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
 show the suggestion before ⏎ (§11.2h).
+
+**One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
+way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, runs, change
+sets, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
+uses it, so the rules can't drift apart.
+
+1. **Order**: an exact name (a project's slug) → the qualified form where the kind has one
+   (`project/name`) → the full id → a handle: the end of the id, **at least 4 characters**,
+   with or without its prefix (`s:`, `w:`, `p:`, `c:`, `r-`). A shorter one never matches, and
+   the not-found message says why. Runs match the end of their id, never a part of the middle.
+2. **Case**: names and ids are lowercase, so the input is lowercased before names, ids and
+   handles are compared (`Build` finds `build`; device and machine names likewise). Titles are
+   not addresses. Chats still take a word of a title, as the last resort; a destructive request
+   doesn't (`find_chat_by(addr, false)`).
+3. **Ambiguity** is always `ambiguous` (CLI exit 4), and the message lists the candidates as
+   they can be addressed, at most 5 and then "and N more": `2 sessions are named "build": say
+   which, app/build or lib/build`; `2 runs match "k3x9": say which, r-ak3x9 (fanout) or …`.
+   Several archived worktrees of one name are listed with their handles and ages. Each
+   candidate reads "address (description)": `r-ef9999 (login)`, `a1b2c3d4e5f6 (Phone)`,
+   `c:7f3k (Fix the build)`, `7f3k (myrepo/feat, archived 3d ago)`.
+4. **Not found names the kind**: `no run matches "zz9q"`, `no device matches "phone"; the
+   devices are laptop and tablet`. Where the set is small (devices, workspaces, profiles,
+   machines) the message lists what there is.
+5. **Archived worktrees** have an id (protocol 1.38; earlier ones get a stable one when the list
+   is read) and resolve by name, `project/name` (the project by slug, id or path, as anywhere),
+   or handle. `ptyro wt archives` shows the handle; the TUI and the web send the id.
 
 ---
 
@@ -1112,16 +1172,25 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
-**[built] Protocol 1.38**: `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An
-empty `title` now clears a chat's title (before 1.38 it asked for an automatic one), as `Retitle`
+**[built] Protocol 1.39**: `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An
+empty `title` now clears a chat's title (before 1.39 it asked for an automatic one), as `Retitle`
 does for a session or a worktree. Clients send `auto_title` with an empty `title`, so a daemon older
-than 1.38 (which ignores `auto_title`) still makes a new one; an older client's empty title now
+than 1.39 (which ignores `auto_title`) still makes a new one; an older client's empty title now
 clears it.
+
+**[built 2026-11-09] Protocol 1.38** (additive): `WorktreeRename{addr, name}` → `Worktree{info}` and
+`ProjectRename{addr, name}` → `Project{info}` (§2.3). Both are `full` scope, like
+`WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a project, one per worktree, carrying
+the new `project_slug`) and `ProjectUpdated`. An older daemon answers "unsupported request".
 
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
 client ignores both.
+
+**Protocol 1.38** (additive): `ArchiveEntry.id`, so archived worktrees that share a name can be
+told apart (§2.3). Clients send it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's
+entries have none (empty), and the clients then send `project/name` as before.
 
 **[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
 entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
@@ -2216,7 +2285,16 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - The main checkout is found through `--git-common-dir`, so `project add` from inside a linked
   worktree registers the real repository.
 - The slug comes from `.ptyro.toml [project] name`, else the directory name; `-2`, `-3` suffixes
-  keep it unique.
+  keep it unique. `ptyro project rename P NEW` changes it (§2.3; `.ptyro.toml` only names a
+  project when it is added). Sessions, workspaces, trust and pins refer to the project by id,
+  so they follow on their own; its worktrees' `project/name` and its archives
+  (`wt restore NEW/name`) follow it. A change set's member keeps the name it was added with:
+  that is the member's directory in the set. A change-set template that names its members by
+  slug doesn't follow either: after a rename, edit the template (or name the project by id).
+  On another machine's project (MM1.B), the clients offer and check the name it has there
+  (`app`, not `laptop2:app`), and the daemon takes the `laptop2:` off a rename's new name where it
+  routes the request. Sessions and workspaces are renamed the same way.
+  A worktree is renamed only while it is ready or missing; one being created is refused.
 - `remote_url` is `origin`'s URL, else the first remote's.
 - Every project gets an `@root` worktree row for its main checkout. It is never locked or
   removable.
@@ -2258,7 +2336,13 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - `.ptyro/worktrees/<name>`.
 
 Symlinks higher up, like a macOS `/var` → `/private/var` or a symlinked home, are fine. An
-existing target path is refused.
+existing target path given with `WorktreeSpec.path` is refused.
+
+**[built 2026-11-09]** The directory is named once, at creation; a rename never moves it (§2.3). A
+renamed worktree stays in its old directory, and a renamed project's worktrees under its old
+slug. New worktrees go under the new slug. When the directory a new worktree's name would get
+is taken (a renamed worktree's, or one left behind), it gets the next free one: `name-2`,
+`name-3`.
 
 ### 10.3 WorktreeSpec and creation
 
@@ -2473,6 +2557,9 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
 | `PTYRO_SESSION_ID` | (sessions only) |
 | `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_WORKSPACE_NAME`, `CONDUCTOR_PORT` | only if `compat.conductor_env = true`, so existing setup scripts run unchanged |
 
+They are set when a process starts: a rename (§2.3) or `rename-branch` doesn't reach a process
+already running, and its next restart gets the new values.
+
 **[built M3]** Also `PTYRO_PORT_COUNT`. These variables, and `PTYRO_PROFILE`, are on the
 child-env strip list, so a daemon started inside a ptyro session can't leak its worktree into
 others.
@@ -2554,10 +2641,11 @@ branches, no sessions for N days.
   keep makes the archive refuse and name it, so nothing is lost silently. The archive list is
   kv `archive:list` (`ArchiveEntry`, newest first; read and written under a lock, errors
   propagated, the entry written after the removal; `WorktreeArchives`, `ptyro wt archives`).
-- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
-  its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the branch
-  has moved since) puts the snapshot back with the changes
-  uncommitted again, untracked files untracked. The entry leaves the list.
+- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name|handle`): the branch checked
+  out at its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the
+  branch has moved since) puts the snapshot back with the changes uncommitted again, untracked
+  files untracked. The entry leaves the list. Several archives of one name are listed (handle
+  and age), never picked between; the handle says which (§2.3, owner, 2026-11-09).
 - **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
   worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
   or 1 min if it never starts); what's left is committed as the worktree's profile with its
@@ -2570,7 +2658,7 @@ branches, no sessions for N days.
   a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
   could both snapshot it and both list it).
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
-- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name…`, asks
+- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name|handle…`, asks
   unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
   couldn't be restored), then the snapshot ref and its `archive-extras/` copies go, and its branch
   by `wt rm`'s rule (deleted when merged into the base, kept in the archive as `ArchiveEntry::base`,
@@ -2933,13 +3021,16 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   nothing.
 - **Name fields swap, they don't refuse** (`names::typed`, `names::branch_typed`): as a name is
   typed or pasted, uppercase is lowercased and any other character outside `[a-z0-9._-]` (a
-  space, `/`, an accent) becomes `_`, as does a leading `.` or `-` and the second `.` of `..`
-  (`My Feat/2` → `my_feat_2`). The dialog says so. What no one character fixes (all digits,
-  ending in `.` or `.lock`, over 64) is still flagged with its reason, and Tab applies the
-  suggested fix. A branch name keeps case and `/` and swaps whitespace, `~ ^ : ? * [ \` and a
-  leading `-`. It applies to every interactive name field in the TUI and the web (`slug` on a
-  form field): session rename, the task box's name, new worktree, workspace new and rename,
-  profile new and rename, config-panel members, machine names, and the branch rename. The CLI
+  space, `/`, an accent) becomes `-`, as does the second `.` of `..`; a leading `.`, `-` or
+  space is dropped (`My Feat/2` → `my-feat-2`; owner, 2026-11-09: `-`, not `_`, the same
+  character as the suggestion and generated names, §2.3). The dialog says so. What no one
+  character fixes (all digits, ending in `.` or `.lock`, over 64) is still flagged with its
+  reason, and Tab applies the suggested fix. A branch name keeps case and `/`, swaps
+  whitespace and `~ ^ : ? * [ \` for `-`, and drops them or a `-` at the start. It applies to
+  every interactive name field in the TUI and the web (`slug` on a form field): session rename,
+  the task box's name, new session, shell and worktree, workspace new and rename, profile new
+  and rename, a change set's and a fan-out's name, a paired device's, config-panel members,
+  machine names, and the branch rename. The CLI
   and the daemon stay strict: a bad name given as an argument is an error, so a script never
   gets a name it didn't write.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
@@ -3669,10 +3760,10 @@ ptyro ws ls|new <name> [--profile <pr>] [--notify all|badge|mute]|rm <name>|rena
          |add-project <ws> <project>|remove-project <ws> <project>|set <name> [--profile <pr>] [--notify …]
 ptyro profile ls|show <pr>|new <pr> [--adopt <agent>=<dir>…]|rm <pr>|rename <a> <b>
               |login <pr> <agent|gh>|env <pr> [--agent <a>]|sync <pr>|doctor [<pr>]
-ptyro project add [<path>]|ls|rm <p>|show <p>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
+ptyro project add [<path>]|ls|rm <p>|show <p>|rename <p> <new>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
 ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>] [--setup run|skip]
          |rm <wt> [--force] [--keep-branch]|status <wt>|diff <wt>|open <wt> [--editor <e>]
-         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename-branch <wt> [<new>]
+         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename <wt> <new>|rename-branch <wt> [<new>]
 ptyro fanout --agent claude,codex --prompt <p> [--base <ref>] [--prefix <prefix>] [--wait]
 ptyro broadcast <session…> <text>
 ptyro run ls|show <run>|cancel <run>|gate <run> <gate> approve|reject
@@ -7824,12 +7915,14 @@ shown in every workspace, including those of linked machines (§16.4b).
 
 - A chat and a node have a **ULID** (§2.3); the human handle of a chat is `c:7f3k`.
 - A chat has a **title** (free text) and no name. It is addressed by handle (`7f3k`, `c:7f3k`),
-  by a title substring that matches one chat, or by `@last` (the chat most recently used), `@pinned`
-  and `@unread` (the one pinned chat, or the one with answers not read; when several are, the
-  error lists them, newest first). A chat of another machine is `laptop2:c:7f3k`, as sessions are
+  by `@last` (the chat most recently used), `@pinned` and `@unread` (the one pinned chat, or the
+  one with answers not read; when several are, the error lists them, newest first), and, as the
+  last resort (§2.3), by a title substring that matches one chat. A chat of another machine is `laptop2:c:7f3k`, as sessions are
   (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
   alike).
-- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 6), for `fork --at` and search hits.
+- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search
+  hits. The web's citation links look for 6 or more characters after the slash: that only finds
+  citations in prose (fewer would catch ordinary words); the daemon resolves the link.
 
 ### 22.4 Storage: `chat.db`
 

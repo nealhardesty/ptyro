@@ -130,9 +130,9 @@ async fn chat_call(client: &Client, name: &str, a: &Value) -> Result<Value, Erro
                     let by_id: std::collections::HashMap<&str, &ptyro_core::chats::ChatNode> =
                         nodes.iter().map(|x| (x.id.as_str(), x)).collect();
                     let mut p = Vec::new();
-                    let mut at = nodes
-                        .iter()
-                        .find(|x| x.id == *n || (n.len() >= 6 && x.id.ends_with(n.as_str())));
+                    let mut at = nodes.iter().find(|x| {
+                        ptyro_core::lookup::id_matches(&x.id, &ptyro_core::lookup::key(n))
+                    });
                     while let Some(x) = at {
                         p.push(x);
                         at = x.parent.as_deref().and_then(|q| by_id.get(q).copied());

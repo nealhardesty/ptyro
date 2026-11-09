@@ -403,7 +403,7 @@ impl CsEvent {
 
 impl ChangeSet {
     pub fn member(&self, name: &str) -> Option<&Member> {
-        self.members.iter().find(|m| m.name == name)
+        self.members.iter().find(|m| ptyro_core::lookup::same(&m.name, name))
     }
 
     fn member_mut(&mut self, name: &str) -> Option<&mut Member> {

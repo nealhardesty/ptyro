@@ -427,7 +427,8 @@ ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.r
 
 Every session and worktree has a **name** (its address: `ptyro send fix-flaky-test …`) and a
 **title** (what people read, the task by default). `ptyro retitle` and `ptyro wt retitle` change
-the title (no title clears it), `ptyro rename` the name.
+the title (no title clears it), `ptyro rename` and `ptyro wt rename` the name (a worktree keeps
+its branch and its directory), and `ptyro project rename` a project's.
 
 **4. See who needs you.** The sidebar shows each session's status. `⚑` means it wants you.
 

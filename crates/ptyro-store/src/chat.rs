@@ -847,12 +847,12 @@ impl ChatDb {
         .await
     }
 
-    /// A node by its id or the end of it (at least 6 characters, SPEC §22.3).
+    /// A node by its id or the end of it (at least 4 characters, SPEC §2.3).
     pub async fn find_node(&self, chat: String, addr: String) -> Result<Vec<String>> {
         self.call(move |db| {
             let a = addr.trim().to_lowercase();
             let mut st = db.prepare(
-                "SELECT id FROM node WHERE chat = ?1 AND deleted_at IS NULL AND (id = ?2 OR (length(?2) >= 6 AND id LIKE '%' || ?2))",
+                "SELECT id FROM node WHERE chat = ?1 AND deleted_at IS NULL AND (id = ?2 OR (length(?2) >= 4 AND id LIKE '%' || ?2))",
             )?;
             Ok(st.query_map(params![chat, a], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
         })
