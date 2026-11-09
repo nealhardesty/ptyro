@@ -3,10 +3,11 @@
 // scripts, ports, pair mode, locks, leases, the collision radar, checkpoints and the clean-up.
 
 import { conn } from "./conn.js";
-import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, wsLabel, wtTabs } from "./data.js";
+import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
 import type { Project, Worktree, Workspace } from "./data.js";
-import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 import type { Session } from "./screen.js";
@@ -138,14 +139,21 @@ function projectsView(): HTMLElement {
 function addProject(): void {
   const list = h("div", { class: "rows" }, h("p", { class: "empty" }, "Looking for repositories…"));
   const path = h("input", { placeholder: "/path/to/a/repository", autocapitalize: "off", spellcheck: "false" });
+  // This machine's workspaces (a path is on this machine); the one the list shows is picked.
+  const wss = [...data.workspaces.values()].filter((w) => !splitMachine(w.name)[0]).map((w) => w.name);
+  if (!wss.includes("main")) wss.unshift("main");
+  const ws = h("select", {}, ...wss.map((n) => h("option", { value: n }, n)));
+  ws.value = wss.includes(wsFilter) ? wsFilter : "main";
   const add = async (p: string) => {
-    const r = await ask({ t: "project_add", path: p, workspace: wsFilter || null });
+    const r = await ask({ t: "project_add", path: p, workspace: ws.value || null });
     if (r) { s.close(); for (const n of r.notes ?? []) ui.toast(n); go(`#/proj/${enc(r.info.id)}`); }
   };
   const s = sheet("Add a project", [
+    h("label", { class: "field" }, h("span", {}, "Add to the workspace"), ws),
     h("p", { class: "intro" }, "Repositories found on this computer:"), list,
     h("label", { class: "field" }, h("span", {}, "Or a path"), path),
   ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: () => path.value.trim() && void add(path.value.trim()) }, "Add")]);
+  requestAnimationFrame(() => path.focus());
   conn.request({ t: "discover", refresh: false }).then((r) => {
     const known = new Set([...data.projects.values()].map((p) => p.root));
     const paths = (r.paths as string[]).filter((p) => !known.has(p));
@@ -249,13 +257,14 @@ function projectWorkspaces(p: Project): void {
 
 function workspaceForm(w?: Workspace): void {
   const machines = [...data.machines.values()];
-  form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
+  const s = form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
     ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" } as const]),
     // With other machines (MM1.B): which one it's made on.
     ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select" as const, options: [["", "This machine"] as [string, string], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`] as [string, string])], value: "" }]),
-    { key: "profile", label: "Profile", value: w?.profile ?? "", placeholder: "default", hint: "The account its sessions use unless a worktree or project says otherwise" },
+    { key: "profile", label: "Profile", type: "select", options: [[w?.profile ?? "default", w?.profile ?? "default"]], hint: "The account its sessions use unless a worktree or project says otherwise" },
     { key: "notify", label: "Notifications", type: "select", options: [["all", "Everything"], ["badge", "A badge only"], ["mute", "Muted"]], value: w?.notify ?? "all" },
   ], w ? "Save" : "Create", async (v) => {
+    if (v.profile === "@new") throw new Error("Pick a profile.");
     if (w) await conn.request({ t: "workspace_set", name: w.name, profile: (v.profile as string) || null, notify: v.notify });
     else {
       // Known at once, not when its event arrives (UX3.3).
@@ -264,6 +273,22 @@ function workspaceForm(w?: Workspace): void {
       if (r?.info) { data.workspaces.set(r.info.id, r.info); ui.render(); }
     }
   });
+  // The profiles of the machine it's on; a new one starts with the profile named like it, if
+  // any, until a profile is picked by hand.
+  const prof = s.input("profile") as HTMLSelectElement;
+  const nameBox = s.input("name");
+  const machineSel = s.input("machine");
+  const onMachine = () => (w ? splitMachine(w.name)[0] : machineSel?.value || null);
+  let names: string[] = [];
+  let picked = !!w;
+  const fill = async () => {
+    names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : prof.value);
+    if (!picked) prof.value = profileFor(names, nameBox?.value.trim() ?? "");
+  };
+  void fill();
+  prof.addEventListener("change", () => { if (prof.value !== "@new") picked = true; });
+  nameBox?.addEventListener("input", () => { if (!picked) prof.value = profileFor(names, nameBox.value.trim()); });
+  machineSel?.addEventListener("change", () => void fill());
 }
 
 function workspacesView(): HTMLElement {

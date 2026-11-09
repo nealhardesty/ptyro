@@ -219,12 +219,7 @@ impl App {
             return self.shells_new(None, true);
         }
         if action == "shells.command" {
-            self.overlay = Some(Overlay::Prompt {
-                title: "A command in SHELLS (htop, ssh prod…; it gets the next free number)".into(),
-                text: String::new(),
-                kind: PromptKind::ShellCommand,
-            });
-            return;
+            return self.open_shell_form();
         }
         let Some(s) = self.shell_target().cloned() else {
             return self.toast("pick a session first");
@@ -309,24 +304,6 @@ impl App {
             .as_ref()
             .map_or_else(|| "not watched".into(), |w| format!("watching: {}", w.label()));
         self.request(Pending::Done(msg), Request::ShellWatch { addr: id.full(), watch });
-    }
-
-    /// What was typed for a command in SHELLS: it runs through the daemon's shell, here.
-    pub(crate) fn shell_command_typed(&mut self, text: &str) {
-        let line = text.trim();
-        if line.is_empty() {
-            return self.shells_new(None, false);
-        }
-        let ws = self.shells_ws();
-        let cwd = self.shell_dir(&ws);
-        let spec = SpawnSpec {
-            cwd,
-            command: Some(line.to_owned()),
-            loose: true,
-            workspace: Some(ws),
-            ..SpawnSpec::default()
-        };
-        self.spawn_spec(spec, None);
     }
 
     /// What was typed for `shells.move`.

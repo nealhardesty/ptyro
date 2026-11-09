@@ -889,14 +889,9 @@ impl App {
                 return self.open_chat_list(Some(self.chat_workspace()));
             }
             "chat.import" => {
-                // It copies coding history into chat.db: asked first (SPEC §22.10), and narrowed
-                // there as `chat import`'s flags do.
-                self.overlay = Some(Overlay::Prompt {
-                    title: "Import your agents' own histories as read-only, searchable chats (their text is copied into chat.db)? ⏎ every agent's and profile's; or narrow it: codex --since 30d --profile work --dry-run (counts only). Esc: no".into(),
-                    text: String::new(),
-                    kind: PromptKind::ChatImport,
-                });
-                return;
+                // It copies coding history into chat.db: asked first (SPEC §22.10), with every
+                // flag of `chat import` on the form.
+                return self.open_chat_import_form();
             }
             "chat.list_search" | "chat.list_all" | "chat.list_archived" | "chat.list_imported"
             | "chat.list_state" => return self.chat_list_action(action),
@@ -1579,20 +1574,15 @@ impl App {
         self.compare_request(c, agents, Some(text).filter(|t| !t.is_empty()));
     }
 
-    /// `chat.import`'s answer: what to import (empty: everything), then the import.
-    pub(crate) fn chat_import(&mut self, text: &str) {
-        match import_request(text) {
-            Ok(req) => {
-                let dry = matches!(req, Request::ChatImport { dry_run: true, .. });
-                self.toast(if dry {
-                    "counting what your agents' histories would bring…"
-                } else {
-                    "importing your agents' histories…"
-                });
-                self.request(Pending::ChatImport, req);
-            }
-            Err(e) => self.toast_err(e),
-        }
+    /// `chat.import`'s answer (its form): the import.
+    pub(crate) fn chat_import_request(&mut self, req: Request) {
+        let dry = matches!(req, Request::ChatImport { dry_run: true, .. });
+        self.toast(if dry {
+            "counting what your agents' histories would bring…"
+        } else {
+            "importing your agents' histories…"
+        });
+        self.request(Pending::ChatImport, req);
     }
 
     /// `chat.compare`'s answer: the agents typed (empty: every installed one).
@@ -2969,41 +2959,6 @@ impl TaskArgs {
     }
 }
 
-/// `chat.import`'s line as `chat import`'s flags: `[claude|codex|gemini|all] [--profile P]
-/// [--since 30d] [--dry-run]` (`profile:P`, `since:30d` and `dry-run` too). Empty: everything.
-fn import_request(text: &str) -> Result<Request, String> {
-    let (mut agent, mut profile, mut since, mut dry_run) = (None, None, None, false);
-    let mut words = text.split_whitespace();
-    while let Some(w) = words.next() {
-        let (name, inline) = match w.split_once(['=', ':']) {
-            Some((n, v)) => (n.trim_start_matches('-'), Some(v.to_owned())),
-            None => (w.trim_start_matches('-'), None),
-        };
-        let mut value = || {
-            inline
-                .clone()
-                .or_else(|| words.next().map(str::to_owned))
-                .filter(|v| !v.is_empty())
-                .ok_or_else(|| format!("{name} needs a value: --{name} …"))
-        };
-        match name {
-            "claude" | "codex" | "gemini" | "all" if inline.is_none() => {
-                agent = Some(name.to_owned())
-            }
-            "agent" => agent = Some(value()?),
-            "profile" => profile = Some(value()?),
-            "since" => since = Some(value()?),
-            "dry-run" | "dry" => dry_run = true,
-            _ => {
-                return Err(format!(
-                    "{w}: import takes claude, codex, gemini or all, --profile P, --since 30d, --dry-run"
-                ));
-            }
-        }
-    }
-    Ok(Request::ChatImport { agent, profile, since, dry_run })
-}
-
 /// The list's search box as a title filter: the search's operators (`by:meaning`, `since:7d`,
 /// `workspace:w`, `-word`) are the message search's, not title text; `agent:x` narrows by agent.
 /// Lowercased: (the title text, the agent asked for).
@@ -3096,26 +3051,6 @@ mod tests {
         assert!(TaskArgs::parse("web api").is_err());
         assert!(TaskArgs::parse("--agent").is_err());
         assert!(TaskArgs::parse("--yes").is_err());
-    }
-
-    #[test]
-    fn an_import_is_narrowed_as_the_cli_does() {
-        let r = |t: &str| import_request(t).map_err(|e| e.to_string());
-        assert_eq!(
-            r(""),
-            Ok(Request::ChatImport { agent: None, profile: None, since: None, dry_run: false })
-        );
-        let want = Request::ChatImport {
-            agent: Some("codex".into()),
-            profile: Some("work".into()),
-            since: Some("30d".into()),
-            dry_run: true,
-        };
-        assert_eq!(r("codex --since 30d --profile work --dry-run"), Ok(want.clone()));
-        assert_eq!(r("codex since:30d profile:work dry-run"), Ok(want.clone()));
-        assert_eq!(r("--agent=codex --since=30d --profile=work --dry-run"), Ok(want));
-        assert!(r("cursor").is_err());
-        assert!(r("--since").is_err());
     }
 
     #[test]

@@ -443,19 +443,12 @@ impl App {
     }
 
     pub(crate) fn machine_action(&mut self, action: &'static str) {
-        use crate::app::{Overlay, PromptKind, Purpose};
+        use crate::app::{Overlay, Purpose};
         use crate::palette::{Item, Palette, Target};
         match action {
             "machine.list" => self.run_cli(&["machine".into(), "ls".into()]),
-            "machine.pair" => self.run_cli(&["machine".into(), "pair".into()]),
-            "machine.add" => {
-                self.overlay = Some(Overlay::Prompt {
-                    title: "Add a machine: ssh://HOST, or the code `machine pair` printed on it"
-                        .into(),
-                    text: String::new(),
-                    kind: PromptKind::MachineAdd,
-                });
-            }
+            "machine.pair" => self.open_machine_pair_form(),
+            "machine.add" => self.open_machine_form(),
             "machine.unhide" => {
                 let items: Vec<Item> = self
                     .machines

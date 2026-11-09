@@ -425,6 +425,9 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             if let Some(n) = name.as_deref() {
                 args.extend(["--name", n]);
             }
+            if a["force"].as_bool().unwrap_or(false) {
+                args.push("--force");
+            }
             let r = cli(&args).await?;
             if r["ok"] != true {
                 return Err(Error::invalid(notes(&r).join(" ")));
@@ -432,7 +435,12 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(serde_json::from_str(r["out"].as_str().unwrap_or("{}")).unwrap_or(r))
         }
         "machine.pair" => {
-            let r = cli(&["machine", "pair", "--json"]).await?;
+            let url = opt(a, "url");
+            let mut args = vec!["machine", "pair", "--json"];
+            if let Some(u) = url.as_deref() {
+                args.extend(["--url", u]);
+            }
+            let r = cli(&args).await?;
             if r["ok"] != true {
                 return Err(Error::invalid(notes(&r).join(" ")));
             }

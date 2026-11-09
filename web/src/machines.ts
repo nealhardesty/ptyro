@@ -83,17 +83,24 @@ function addMachine(): void {
   form("Add a machine", [
     { key: "target", label: "ssh://HOST, or the code `ptyro machine pair` printed on it", required: true, hint: "Over ssh it needs a key or an agent, no password prompt. A code is claimed once, within 10 minutes." },
     { key: "name", label: "Name here (optional)", slug: "name", hint: "Default: what it calls itself. A space or other odd character becomes _" },
+    { key: "force", label: "Keep it even if it doesn't answer now", type: "check", value: false },
   ], "Add", async (v) => {
     try {
-      const r = await host("machine.add", { target: (v.target as string).trim(), name: (v.name as string)?.trim() || null });
+      const r = await host("machine.add", { target: (v.target as string).trim(), name: (v.name as string)?.trim() || null, force: !!v.force });
       ui.toast(r?.state === "online" || r?.state === "connecting" ? `Added ${r.name}` : `Added ${r?.name ?? "it"}: ${r?.fix ?? r?.state ?? ""}`);
     } catch (e) { ui.toast(errText(e)); }
   });
 }
 
-async function pairMachine(): Promise<void> {
+function pairMachine(): void {
+  form("A code for another machine", [
+    { key: "url", label: "The address it reaches this machine at (optional)", placeholder: "this web app server's", hint: "Default: this web app server's address" },
+  ], "Make the code", async (v) => showPairCode((v.url as string)?.trim() || null));
+}
+
+async function showPairCode(url: string | null): Promise<void> {
   try {
-    const r = await host("machine.pair", {});
+    const r = await host("machine.pair", { url });
     const code = r.code as string;
     sheet("Add this machine on another", [
       h("p", { class: "intro" }, "On the other machine, within 10 minutes, once:"),

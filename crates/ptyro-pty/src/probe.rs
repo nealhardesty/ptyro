@@ -205,6 +205,7 @@ fn parse_loadavg(s: &str) -> Option<[f64; 3]> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // getloadavg has no safe wrapper; it writes at most the 3 samples asked for.
 pub fn load_average() -> Option<[f64; 3]> {
     let mut avg = [0f64; 3];
     // SAFETY: `avg` holds the three samples asked for.

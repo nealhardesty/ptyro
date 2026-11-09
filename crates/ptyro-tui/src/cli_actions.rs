@@ -40,7 +40,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
         ],
     ),
     ("session.message", &["msg", "send", "{session}", "{ask:Message}"]),
-    ("session.lead", &["run", "lead", "{session}"]),
     ("checkpoint.list", &["checkpoint", "ls", "{session}"]),
     (
         "checkpoint.diff",
@@ -55,29 +54,15 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("project.config", &["project", "config", "{project}", "--explain"]),
     ("profile.list", &["profile", "ls"]),
     ("profile.show", &["profile", "show", "{profile}"]),
-    ("profile.new", &["profile", "new", "{ask:New profile's name (e.g. work)}"]),
     ("profile.remove", &["profile", "rm", "{profile}"]),
     ("profile.rename", &["profile", "rename", "{profile}", "{ask:New name}"]),
     ("profile.login", &["profile", "login", "{profile}", "{agent}"]),
     ("profile.sync", &["profile", "sync", "{profile}"]),
     ("recipe.list", &["recipe", "ls"]),
     ("recipe.show", &["recipe", "show", "{ask:Recipe's name (recipe.list lists them)}"]),
-    ("recipe.run", &["recipe", "run", "{ask:Recipe's name (e.g. implement-and-review)}", "{vars}"]),
     ("run.fork", &["run", "fork", "{ask:Run id (r-…)}", "--from", "{ask:From which step}"]),
     ("leases", &["lease", "ls"]),
     ("radar", &["radar", "--project", "{project}"]),
-    (
-        "sets.new",
-        &[
-            "cs",
-            "new",
-            "{ask:Change set's name}",
-            "--projects",
-            "{ask:Its projects (a,b,c)}",
-            "-p",
-            "{ask:The goal}",
-        ],
-    ),
     ("sets.templates", &["cs", "templates"]),
     ("set.checkpoints", &["cs", "checkpoints", "{set}"]),
     ("set.restore", &["cs", "restore", "{set}", "{ask:Back to which set checkpoint (its number)}"]),
@@ -95,14 +80,12 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("set.push", &["cs", "push", "{set}"]),
     ("set.pr", &["cs", "pr", "{set}"]),
     ("set.land", &["cs", "land", "{set}"]),
-    ("set.add", &["cs", "add", "{set}", "{ask:Project to add}"]),
     ("set.drop", &["cs", "drop", "{set}", "{ask:Member to drop}"]),
     ("set.remove", &["cs", "rm", "{set}"]),
     ("remote.serve", &["serve"]),
     ("remote.web", &["web", "status"]),
     ("remote.web_on", &["web", "on"]),
     ("remote.web_off", &["web", "off"]),
-    ("remote.pair", &["pair"]),
     ("remote.pair.browser", &["pair", "--open"]),
     ("devices.list", &["devices", "ls"]),
     ("devices.revoke", &["devices", "revoke", "{ask:Device id (devices.list shows them)}"]),
@@ -137,7 +120,7 @@ impl App {
     }
 
     /// The selected change set's name: the open set view's, else the sidebar's set row.
-    fn current_set(&self) -> Option<String> {
+    pub(crate) fn current_set(&self) -> Option<String> {
         let run = self.sets_view.as_ref().and_then(|v| v.run.clone()).or_else(|| {
             match self.selected_row() {
                 Some(Row::Set(r)) => Some(r),
@@ -161,7 +144,7 @@ impl App {
         })
     }
 
-    fn selected_session_name(&self) -> Option<String> {
+    pub(crate) fn selected_session_name(&self) -> Option<String> {
         let id = match (self.focus, self.selected_row()) {
             (crate::app::Focus::Sidebar, Some(Row::Session(id) | Row::Quick(id))) => Some(id),
             _ => self.focused_session(),

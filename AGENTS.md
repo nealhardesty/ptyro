@@ -39,6 +39,11 @@ work completely, and be discoverable, in each before it counts as done.
   and the web. A new option gets its schema entry (type, default, help) in the same change.
 - Out of the box comes first: sensible defaults, no setup the user must know
   about, and errors that offer the fix instead of naming a command to type.
+- **Creating shows every option** (owner, 2026-11-09; SPEC §1.3, §11.5a). Whatever the TUI
+  or the web creates, its form shows every option the CLI's command takes, defaults visible,
+  as a pick wherever the answers are known (profiles, agents, projects, workspaces). ⏎ still
+  takes the defaults. In the TUI use the creation form (`crates/ptyro-tui/src/form.rs`); a new
+  flag on a creating command gets its field in the same change.
 
 **Automation: everything has a `make` target.** The owner drives the project
 through the root `Makefile`.

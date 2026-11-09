@@ -3455,6 +3455,24 @@ ptyro installed from its release (`install.sh` / `install.ps1`), signed in to re
   web's new task each say what is missing and offer setup (the TUI's `C-q u`, the web's Set up
   button), naming Antigravity for a Google account.
 
+## CF — Creating shows every option (decided 2026-11-09 by the owner; built 2026-11-09)
+
+The owner: "whenever anything in the TUI is created, it should make all of the options as
+obvious and selectable as possible." The rule is in AGENTS.md and SPEC §1.3; the TUI's
+creation form is SPEC §11.5a.
+
+- [x] **CF1 The creation form, and every creating flow on it** **L**. Workspace (profile, with
+  `+ new profile…`), profile (every `profile new` option, then a login), session and worktree
+  (the task box's `C-o`, `N`), project add and a project's workspaces, SHELLS, change sets,
+  `set.add`, recipes, lead, fan-out, PR, pair, machine add and pair, chat import. The web's
+  forms gained the same options (a folded "More options" keeps them quick). `ws new` without
+  `--profile` takes the profile named like the workspace. A project in several workspaces
+  shows under each in the sidebar.
+- [ ] **CF2 Agent arguments for a new worktree's agent** **S**. `ptyro new --new-wt -a claude
+  -- <args>` has no counterpart in `WorktreeSpec`, so neither the TUI nor the web can offer
+  extra agent arguments for a new worktree (the web offers them for an existing one). Add
+  `argv` to `WorktreeSpec`, then the field to both forms.
+
 ## Backlog (unscheduled; ideas welcome)
 
 Back-burnered by the owner:

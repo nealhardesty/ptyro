@@ -272,10 +272,17 @@ export function slugify(kind, raw) {
 }
 /// A form in a sheet. `go` gets the values; if it throws, the message shows in the form and the
 /// sheet stays; if it returns, the sheet closes. Empty text fields are left out of the values.
+/// `input(key)` is a field's element, for a form whose fields follow each other.
 export function form(title, fields, label, go, opts = {}) {
     const inputs = new Map();
+    const groups = new Map();
     const rows = fields.map((f) => {
         let input;
+        if (f.type === "checks") {
+            const boxes = f.options.map((o) => { const [v, l] = typeof o === "string" ? [o, o] : o; const c = h("input", { type: "checkbox", value: v }); c.checked = !!f.value?.includes(v); return [c, l]; });
+            groups.set(f.key, boxes.map(([c]) => c));
+            return h("div", { class: "field", role: "group", "aria-label": f.label }, h("span", {}, f.label), ...boxes.map(([c, l]) => h("label", { class: "field check" }, c, h("span", {}, l))), f.hint ? h("small", {}, f.hint) : null);
+        }
         if (f.type === "textarea") {
             input = h("textarea", { rows: f.rows ?? 4, placeholder: f.placeholder, autocapitalize: "off" });
             input.value = f.value ?? "";
@@ -319,6 +326,16 @@ export function form(title, fields, label, go, opts = {}) {
             return;
         const v = {};
         for (const f of fields) {
+            if (f.type === "checks") {
+                const on = groups.get(f.key).filter((c) => c.checked).map((c) => c.value);
+                if (!on.length && f.required) {
+                    err.textContent = `Pick at least one: ${f.label}.`;
+                    groups.get(f.key)[0]?.focus();
+                    return;
+                }
+                v[f.key] = on;
+                continue;
+            }
             const i = inputs.get(f.key);
             if (f.type === "check")
                 v[f.key] = i.checked;
@@ -346,7 +363,9 @@ export function form(title, fields, label, go, opts = {}) {
         }
     };
     submit.addEventListener("click", () => void run());
-    const s = sheet(title, [opts.intro ? h("p", { class: "intro" }, opts.intro) : null, ...rows, err], [h("button", { onclick: () => s.close() }, "Cancel"), submit]);
+    const more = rows.filter((_, i) => fields[i].more);
+    const fold = more.length ? h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, ...more)) : null;
+    const s = sheet(title, [opts.intro ? h("p", { class: "intro" }, opts.intro) : null, ...rows.filter((_, i) => !fields[i].more), fold, err], [h("button", { onclick: () => s.close() }, "Cancel"), submit]);
     // Enter in a single-line field submits.
     s.el.addEventListener("keydown", (e) => {
         const t = e.target;
@@ -356,8 +375,33 @@ export function form(title, fields, label, go, opts = {}) {
         }
     });
     requestAnimationFrame(() => s.el.querySelector("input:not([type=checkbox]), textarea")?.focus());
-    return s;
+    return Object.assign(s, { input: (key) => inputs.get(key) });
 }
+/// Candidates for a fan-out: `n` of them, cycling through the picked agents (`ptyro fanout -n`).
+export function cycle(picked, n) {
+    if (!picked.length)
+        return [];
+    const count = Math.max(n || picked.length, 1);
+    return Array.from({ length: count }, (_, i) => picked[i % picked.length]);
+}
+/// A profile select's options: the profiles that live on `machine` (`null`: this one), by the
+/// name their machine knows them by (a request about another machine's workspace or worktree
+/// names its profile bare), labelled with their label.
+export function profileChoices(profiles, machine) {
+    return profiles.filter((p) => (p.machine ?? null) === machine).map((p) => {
+        const bare = machine && p.name.startsWith(`${machine}:`) ? p.name.slice(machine.length + 1) : p.name;
+        return [bare, p.label && p.label !== bare ? `${bare} (${p.label})` : bare];
+    });
+}
+/// A line of arguments as words: spaces split them, except inside '…' or "…" (`--model "x y"`).
+export function argWords(line) {
+    const out = [];
+    for (const m of line.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g))
+        out.push(m[1] ?? m[2] ?? m[3]);
+    return out;
+}
+/// The profile a new workspace starts with: the one named like it, else `default`.
+export const profileFor = (names, workspace) => names.includes(workspace) ? workspace : "default";
 // ── small parts ─────────────────────────────────────────────────────────────────────────────
 export const badge = (text, kind = "") => h("span", { class: `badge ${kind}` }, text);
 /// A titled block on a detail page.

@@ -3,10 +3,11 @@
 // export, and talking to several at once.
 import { conn, host } from "./conn.js";
 import { css, F } from "./color.js";
-import { againLabel, can, data, liveWorktrees, refreshLaunch } from "./data.js";
+import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, ago, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
+import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
@@ -56,6 +57,7 @@ const numberIn = (t) => {
     const m = t.match(/(\d+)\s*$/) ?? t.match(/\/(?:pull|issues)\/(\d+)/);
     return m ? Number(m[1]) : undefined;
 };
+const AUTO_PROFILE = "automatic (worktree → project pin → workspace)";
 /// The new-task sheet (UX1.9): what to do, which agent, and where. `where` preselects a
 /// project (`p:<id>`) or a worktree (`w:<id>`).
 export function newTask(where, task) {
@@ -89,27 +91,72 @@ export function newTask(where, task) {
     const names = h("datalist", { id: "branch-names" });
     which.setAttribute("list", "branch-names");
     const name = input(h("input", { placeholder: "a friendly name is picked for you", autocapitalize: "off", spellcheck: "false" }));
+    // More options (`ptyro new`'s and `ptyro wt new`'s other flags), folded: the quick path stays short.
+    const profile = input(h("select", {}, h("option", { value: "" }, AUTO_PROFILE)));
+    const title = input(h("input", { placeholder: "default: the task", autocapitalize: "sentences" }));
+    const base = input(h("input", { placeholder: "default: the project's base, e.g. origin/main", autocapitalize: "off", spellcheck: "false" }));
+    base.setAttribute("list", "branch-names");
+    const verify = input(h("input", { placeholder: "e.g. cargo test, or a run script's name", autocapitalize: "off", spellcheck: "false" }));
+    const args = input(h("input", { placeholder: "e.g. --model opus", autocapitalize: "off", spellcheck: "false" }));
+    const box = () => input(h("input", { type: "checkbox" }));
+    const structured = box(), noSetup = box(), noFetch = box(), lead = box();
+    const maxWorkers = input(h("input", { type: "number", inputmode: "numeric", placeholder: "4" }));
+    const leadAgents = agents.map((a) => { const c = box(); c.value = a.name; return c; });
+    const check = (c, label, hint) => h("label", { class: "field check" }, c, h("span", {}, label), h("small", {}, hint));
     const err = h("p", { class: "form-err" });
     const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
     const sourceRow = h("label", { class: "field" }, h("span", {}, "Start from"), source);
     const whichRow = h("label", { class: "field" }, h("span", {}, "Which one?"), which);
     const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name);
+    const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
+    const verifyRow = h("label", { class: "field" }, h("span", {}, "Done when"), verify, h("small", {}, "Verified-done: a turn counts as done only once this passes; failures go back to the agent"));
+    const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
+    const leadRows = h("div", { style: "display: grid; gap: 12px" }, h("label", { class: "field" }, h("span", {}, "Workers at once"), maxWorkers), h("div", { class: "field", role: "group", "aria-label": "Agents it may start" }, h("span", {}, "Agents it may start"), ...leadAgents.map((c) => h("label", { class: "field check" }, c, h("span", {}, c.value))), h("small", {}, "None ticked: any")));
+    const agentOnly = [verifyRow, argsRow, check(structured, "Chat mode (full tool-call visibility)", "Drive the agent over its structured protocol and show a chat view"), check(lead, "Make it a lead", "It gets `ptyro mcp` to start and coordinate workers, within limits"), leadRows];
+    const freshOnly = [baseRow, check(noSetup, "Skip setup scripts", "Don't run the project's setup script"), check(noFetch, "Don't fetch", "Don't fetch the base first")];
+    const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, "The account it runs under")), h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What it's for, for people to read; its name stays its address")), ...freshOnly, ...agentOnly));
+    // The profiles of the machine the place is on.
+    const machineOfPlace = () => {
+        const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
+        const slug = kind === "p" ? data.projects.get(id)?.slug : data.worktrees.get(id)?.project_slug;
+        return slug ? splitMachine(slug)[0] : null;
+    };
+    let profileMachine;
+    const loadProfiles = () => {
+        const m = machineOfPlace();
+        if (m === profileMachine)
+            return;
+        profileMachine = m;
+        void fillProfiles(profile, m, profile.value, ["", AUTO_PROFILE]);
+    };
     const sync = () => {
         const fresh = placeSel.value.startsWith("p:");
+        const isAgent = !agent.value.startsWith("@");
         commandRow.hidden = agent.value !== "@command";
         sourceRow.hidden = !fresh;
-        nameRow.hidden = !fresh;
         whichRow.hidden = !fresh || !["pr", "issue", "branch"].includes(source.value);
         which.placeholder = source.value === "pr" ? "number or URL" : source.value === "issue" ? "number or URL" : "branch name";
         prompt.hidden = agent.value === "@shell" || agent.value === "@command";
+        for (const r of freshOnly)
+            r.hidden = !fresh;
+        for (const r of agentOnly)
+            r.hidden = !isAgent;
+        // A new worktree's agent takes no extra arguments (`worktree_new` has none).
+        argsRow.hidden = !isAgent || fresh;
+        leadRows.hidden = !isAgent || !lead.checked;
+        name.placeholder = fresh ? "a friendly name is picked for you" : "the session's name; a friendly one is picked for you";
+        loadProfiles();
     };
     const loadBranches = () => {
-        if (source.value !== "branch" || !placeSel.value.startsWith("p:"))
+        if (!placeSel.value.startsWith("p:"))
             return;
         conn.request({ t: "branches", project: placeSel.value.slice(2) }).then((r) => names.replaceChildren(...r.names.map((n) => h("option", { value: n }))), () => { });
     };
     for (const el of [agent, placeSel, source])
-        el.addEventListener("change", () => { sync(); loadBranches(); });
+        el.addEventListener("change", () => { sync(); if (source.value === "branch")
+            loadBranches(); });
+    base.addEventListener("focus", loadBranches);
+    lead.addEventListener("change", sync);
     sync();
     const go1 = h("button", { class: "primary" }, "Start");
     // Setup is a tap away (BOOT9): with no agent on the computer, said first.
@@ -125,7 +172,7 @@ export function newTask(where, task) {
     const s = sheet("New task", [
         h("label", { class: "field" }, h("span", {}, "Task"), prompt),
         h("label", { class: "field" }, h("span", {}, "Agent"), agent), agentHint, commandRow,
-        h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow, err,
+        h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow, more, err,
     ], [h("button", { onclick: () => s.close() }, "Cancel"), go1]);
     go1.addEventListener("click", async () => {
         err.textContent = "";
@@ -142,21 +189,45 @@ export function newTask(where, task) {
             command.focus();
             return;
         }
+        if (profile.value === "@new") {
+            err.textContent = "Pick a profile.";
+            profile.focus();
+            return;
+        }
         go1.disabled = true;
         const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
+        const prof = profile.value || undefined;
+        const label = title.value.trim() || text || undefined;
+        // For an agent: verified-done, chat mode and lead (`ptyro new --verify --structured --lead`).
+        const leadPolicy = () => {
+            if (!lead.checked)
+                return undefined;
+            const p = {};
+            if (maxWorkers.value.trim())
+                p.max_sessions = Number(maxWorkers.value);
+            const may = leadAgents.filter((c) => c.checked).map((c) => c.value);
+            if (may.length)
+                p.agents = may;
+            return p;
+        };
+        const agentBits = () => isAgent ? { verify: verify.value.trim() || undefined, structured: structured.checked, lead: leadPolicy() } : {};
         try {
             if (kind === "w") {
                 const w = data.worktrees.get(id);
-                const spec = { worktree: w.id, cwd: "" };
+                const spec = { worktree: w.id, cwd: "", profile: prof, name: name.value.trim() || undefined, title: label };
                 if (isAgent)
-                    Object.assign(spec, { agent: a, prompt: text, title: text });
+                    Object.assign(spec, { agent: a, prompt: text, argv: argWords(args.value) }, agentBits());
                 else if (a === "@command")
                     spec.command = command.value.trim();
                 s.close();
                 await startSession(spec);
             }
             else {
-                const wt = { project: id, name: name.value.trim() || undefined, agent: isAgent ? a : undefined, prompt: isAgent ? text : undefined, title: text || undefined };
+                const wt = { project: id, name: name.value.trim() || undefined, agent: isAgent ? a : undefined, prompt: isAgent ? text : undefined, title: label, profile: prof, base: base.value.trim() || undefined, ...agentBits() };
+                if (noSetup.checked)
+                    wt.setup = false;
+                if (noFetch.checked)
+                    wt.fetch = false;
                 const src = source.value;
                 if (src === "pr" || src === "issue") {
                     const n = numberIn(which.value);
@@ -184,7 +255,7 @@ export function newTask(where, task) {
                 const r = await createWorktree(wt);
                 // A shell or command in a new worktree: start it once the worktree exists.
                 if (r && !isAgent) {
-                    const spec = { worktree: r.info.id, cwd: "" };
+                    const spec = { worktree: r.info.id, cwd: "", profile: prof };
                     if (a === "@command")
                         spec.command = command.value.trim();
                     await startSession(spec);

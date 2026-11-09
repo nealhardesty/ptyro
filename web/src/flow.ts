@@ -6,9 +6,10 @@ import { conn } from "./conn.js";
 import { confirm, enc, errText, go, h, sheet, ui } from "./kit.js";
 
 /// Ask for `req`, and when the daemon wants the user to confirm (a profile guard) show its
-/// question and send it again with `confirmed`.
+/// question and send it again with `confirmed`. The yes also covers a profile picked against the
+/// worktree's or the project's pin (`override_pin`), which is the question then (as `-y` does).
 export async function withConfirm(req: any, key: string): Promise<any | undefined> {
-  const send = (confirmed: boolean) => conn.request({ ...req, [key]: { ...req[key], confirmed } });
+  const send = (confirmed: boolean) => conn.request({ ...req, [key]: { ...req[key], confirmed, ...(confirmed ? { override_pin: true } : {}) } });
   try {
     return await send(false);
   } catch (e) {
