@@ -6,7 +6,7 @@ import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
 import type { Project, Worktree, Workspace } from "./data.js";
-import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
@@ -353,8 +353,8 @@ function remove(w: Worktree, force = false): void {
       for (const note of r.notes ?? []) ui.toast(note);
       go("#/p");
     } catch (e) {
-      const code = (e as { code?: string }).code;
-      if (code === "dirty_worktree") {
+      // Work would be lost: its way through, offered beside archiving it instead.
+      if (fixOf(e)?.fix === "force") {
         menu("It has work that isn't saved", [
           { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
           { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true) },

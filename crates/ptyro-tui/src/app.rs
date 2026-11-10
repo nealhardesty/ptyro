@@ -2463,7 +2463,9 @@ impl App {
             (Pending::Removed(_) | Pending::Forget(_), Ok(Reply::Removed { notes })) => {
                 self.toast(notes.join(" · "))
             }
-            (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
+            (Pending::Removed(id), Err(e))
+                if e.fix.as_ref().is_some_and(|f| f.again == ptyro_core::error::Again::Force) =>
+            {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
                         "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: remove it anyway ({}) · n: neither",
@@ -9036,7 +9038,8 @@ mod tests {
         app.overlay = None;
         app.on_reply(AppMsg::Reply(
             Pending::Removed(w.id.clone()),
-            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")),
+            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")
+                .with_fix(ptyro_core::error::Again::Force, "Remove anyway")),
         ));
         assert!(screen(&app).contains("a: archive it instead"));
         key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
