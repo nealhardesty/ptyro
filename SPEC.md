@@ -3800,6 +3800,10 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     `a_short_flag_means_one_thing_everywhere` walks the command tree and fails on a clash.
   - A value follows a flag after a space or an `=`, for every flag: none insists on `=`
     (`no_flag_insists_on_an_equals_sign`). `config … -p .` is the repository you're in.
+  - A project or worktree address that starts with `.` (`.`, `../api`) is a path from the
+    directory you run the command in, never the daemon's, in every command that takes one
+    (`cli::addr_here`: `ws add-project`, `cs add`, `cs new --projects`, `new --wt`, `shell`,
+    `shells adopt` as much as `wt`/`project` commands).
   - A command that starts a session you'd work in (`new`, `wt new --agent`, `shells new`,
     `shells split`, `chat task`) attaches in a terminal unless `-d/--detach`; `--json` prints
     instead. Without a terminal, or inside a ptyro session (whose TUI shows the new one), it

@@ -749,6 +749,21 @@ async fn workspaces_reconcile_and_gc() {
     assert!(out.lines().any(|l| l.starts_with("side") && l.contains("lib")), "{out}");
     assert!(out.lines().any(|l| l.starts_with("main")), "main always exists: {out}");
     w.ok(&["ws", "add-project", "main", "lib"]);
+    // `.` is the client's directory, never the daemon's.
+    let in_lib = |args: &[&str]| {
+        let out = w.d.cmd().args(args).env("HOME", w.home()).current_dir(&root).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    let main_has_lib =
+        || w.ok(&["ws", "ls"]).lines().any(|l| l.starts_with("main") && l.contains("lib"));
+    in_lib(&["ws", "remove-project", "main", "."]);
+    assert!(!main_has_lib(), "{}", w.ok(&["ws", "ls"]));
+    in_lib(&["ws", "add-project", "main", "."]);
+    assert!(main_has_lib(), "{}", w.ok(&["ws", "ls"]));
+    // `-p` once meant `--prompt`: `new -p X` without a new worktree is refused, never ignored.
+    let out = w.cli(&["new", "-d", "-p", "fix the bug"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--new-wt"));
     w.ok(&["ws", "rename", "side", "aside"]);
     assert!(w.cli(&["ws", "rm", "-y", "main"]).status.code() == Some(2));
     let c = w.d.client().await.unwrap();

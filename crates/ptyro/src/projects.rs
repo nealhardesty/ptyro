@@ -834,10 +834,12 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WsCmd::AddProject { name, project } => {
+            let project = addr_here(project)?;
             c.request(Request::WorkspaceMember { name, project, remove: false }).await?;
             Ok(0)
         }
         WsCmd::RemoveProject { name, project } => {
+            let project = addr_here(project)?;
             c.request(Request::WorkspaceMember { name, project, remove: true }).await?;
             Ok(0)
         }

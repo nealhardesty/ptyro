@@ -23,7 +23,9 @@ use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, ago, ask_first, client_env, confirm, no_daemon, trust_of, unexpected};
+use crate::cli::{
+    Ctx, addr_here, ago, ask_first, client_env, confirm, no_daemon, trust_of, unexpected,
+};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -504,6 +506,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                     )
                 })
                 .collect();
+            let projects = projects.into_iter().map(addr_here).collect::<Result<_, _>>()?;
             let spec = CsNewSpec {
                 name,
                 projects,
@@ -807,6 +810,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
         }
         CsCmd::Land { set, yes, no_wait } => land(&c, set, yes, no_wait).await,
         CsCmd::Add { set, project, agent, depends_on } => {
+            let project = addr_here(project)?;
             let v = op(&c, CsOp::Add { set, project, agent, depends_on }).await?;
             eprintln!(
                 "{} joined ({})",
