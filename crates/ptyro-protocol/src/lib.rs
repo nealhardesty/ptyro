@@ -688,6 +688,11 @@ pub enum Request {
     WorktreeArchiveDelete {
         addr: String,
     },
+    /// The one archived worktree `addr` names, resolved as restoring and deleting resolve it
+    /// (`Reply::Archives` with that entry), so a client can ask about it by its name first.
+    WorktreeArchiveGet {
+        addr: String,
+    },
     /// Archived worktrees, newest first.
     WorktreeArchives {
         #[serde(default)]

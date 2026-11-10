@@ -177,6 +177,7 @@ pub fn needed(req: &Request) -> Scope {
         | CheckpointList { .. }
         | CheckpointDiff { .. }
         | WorktreeArchives { .. }
+        | WorktreeArchiveGet { .. }
         | Branches { .. }
         | ProfileList
         | Agents

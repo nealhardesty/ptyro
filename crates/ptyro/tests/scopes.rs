@@ -103,6 +103,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"setup_run","picks":[a]}), FULL, true),
         s(json!({"t":"checkpoint_diff","addr":a,"n":1,"to":null}), READ, true),
         s(json!({"t":"worktree_archives","project":null}), READ, true),
+        s(json!({"t":"worktree_archive_get","addr":a}), READ, true),
         s(json!({"t":"branches","project":a}), READ, true),
         s(json!({"t":"profile_list"}), READ, true),
         s(json!({"t":"agents"}), READ, true),

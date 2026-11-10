@@ -1069,11 +1069,20 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::ArchiveRm { worktrees, yes } => {
-            let what = worktrees.join(", ");
-            ask_first(&format!("Delete the archive of {what}? {}", removal::ARCHIVE), yes)?;
+            // Found first, then asked about by their names: a typo asks nothing.
+            let mut found = Vec::new();
             for addr in worktrees {
+                let reply = c.request(Request::WorktreeArchiveGet { addr }).await?;
+                let Reply::Archives { entries } = reply else { return Err(unexpected(reply)) };
+                found.extend(entries);
+            }
+            let what: Vec<String> =
+                found.iter().map(|e| format!("{}/{}", e.project_slug, e.name)).collect();
+            let q = format!("Delete the archive of {}? {}", what.join(", "), removal::ARCHIVE);
+            ask_first(&q, yes)?;
+            for e in found {
                 let Reply::Notes { notes: n } =
-                    c.request(Request::WorktreeArchiveDelete { addr }).await?
+                    c.request(Request::WorktreeArchiveDelete { addr: e.id }).await?
                 else {
                     return Err(Error::internal("unexpected reply"));
                 };

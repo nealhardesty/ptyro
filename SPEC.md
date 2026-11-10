@@ -3814,10 +3814,11 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     their id, archives by name or handle, several of one name listed, never picked).
   - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
     found" without a question, and the question names what was found (`wt rm`, `ws rm`,
-    `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`;
-    `chat rm`'s question comes from the daemon after it resolves). `profile rm`, `config rm` and
-    `wt archive-rm` have no request that resolves first: they ask naming what was typed, and a
-    name that matches nothing is refused after the question, with nothing changed.
+    `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`,
+    `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
+    `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
+    resolves). `config rm` asks naming what was typed, and a name that matches nothing is refused
+    after the question, with nothing changed.
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
     when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
     `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its

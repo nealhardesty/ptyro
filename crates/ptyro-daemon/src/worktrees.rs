@@ -1282,6 +1282,7 @@ impl Daemon {
             }
             Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
             Request::WorktreeArchiveDelete { addr } => self.delete_archive(&addr).await,
+            Request::WorktreeArchiveGet { addr } => self.get_archive(&addr).await,
             Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
             Request::ProjectSuggest { addr, apply } => self.project_suggest(&addr, apply).await,
             Request::Branches { project } => {

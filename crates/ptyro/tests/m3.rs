@@ -809,7 +809,13 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     assert!(w.ok(&["ws", "ls"]).contains("side"), "nothing was removed");
     w.ok(&["ws", "rm", "--yes", "side"]);
     // Found first, then asked: a typo is "not found" (exit 3), not a question.
-    for args in [&["ws", "rm", "sdie"][..], &["project", "rm", "ap"], &["wt", "rm", "app/nope"]] {
+    for args in [
+        &["ws", "rm", "sdie"][..],
+        &["project", "rm", "ap"],
+        &["wt", "rm", "app/nope"],
+        &["wt", "archive-rm", "app/nope"],
+        &["profile", "rm", "nope"],
+    ] {
         let out = w.cli(args);
         assert_eq!(
             out.status.code(),
@@ -818,6 +824,14 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    // An archive is found by its name (or handle) and asked about by its full name.
+    w.ok(&["wt", "new", "gone", "--project", "app"]);
+    w.ok(&["wt", "archive", "app/gone"]);
+    let out = w.cli(&["wt", "archive-rm", "gone"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("archive of app/gone?"), "{err}");
+    w.ok(&["wt", "archive-rm", "-y", "gone"]);
+    assert!(!w.ok(&["wt", "archives"]).contains("gone"), "deleted");
 
     let c = w.d.client().await.unwrap();
     let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();

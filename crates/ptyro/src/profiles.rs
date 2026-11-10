@@ -261,6 +261,11 @@ pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
         }
         ProfileCmd::Rm { name, force, yes } => {
             use ptyro_core::removal::{PROFILE, PROFILE_FORCE};
+            // Found first: a typo asks nothing.
+            let known = load(ctx)?.profiles;
+            if name != DEFAULT_PROFILE && !known.contains_key(&name) {
+                return Err(missing(&name, known.into_keys()));
+            }
             let q = format!("Remove profile {name}? {PROFILE}");
             let q = if force { format!("{q} {PROFILE_FORCE}") } else { q };
             crate::cli::ask_first(&q, yes)?;

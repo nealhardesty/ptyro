@@ -277,6 +277,13 @@ impl Daemon {
 
     /// Delete an archived worktree for good: off the list, then its snapshot, its kept files
     /// and its branch (only when merged or pushed, as `wt rm` decides).
+    /// The archive `addr` names, as `delete_archive` and restoring find it.
+    pub(crate) async fn get_archive(&self, addr: &str) -> Result<Reply, Error> {
+        let mut list = self.archives().await?;
+        let e = list.swap_remove(self.archive_index(&list, addr)?);
+        Ok(Reply::Archives { entries: vec![e] })
+    }
+
     pub(crate) async fn delete_archive(&self, addr: &str) -> Result<Reply, Error> {
         let _one = self.archive_list.lock().await;
         let mut list = self.archives().await?;
