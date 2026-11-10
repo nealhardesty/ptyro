@@ -352,12 +352,19 @@ impl Daemon {
         let (path, ours) = match &spec.path {
             Some(at) => (at.clone(), at.parent().map(Path::to_path_buf).unwrap_or_default()),
             // A renamed worktree keeps its directory, so the one this name would get may be
-            // taken: then the next free one (`name-2`).
-            None => std::iter::once(name.clone())
-                .chain((2..).map(|k| format!("{name}-{k}")))
-                .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
-                .find(|(path, _)| std::fs::symlink_metadata(path).is_err())
-                .expect("infinite"),
+            // taken: then the next free one (`name-2`). Free means no worktree we know of uses it
+            // either, even one whose directory is gone for now.
+            None => {
+                let used: Vec<PathBuf> =
+                    self.registry.locked().worktrees.iter().map(|w| w.path.clone()).collect();
+                std::iter::once(name.clone())
+                    .chain((2..).map(|k| format!("{name}-{k}")))
+                    .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
+                    .find(|(path, _)| {
+                        std::fs::symlink_metadata(path).is_err() && !used.contains(path)
+                    })
+                    .expect("infinite")
+            }
         };
         refuse_symlinks(&ours, &path)?;
         if path.exists() {
@@ -1233,6 +1240,7 @@ impl Daemon {
             store.save_worktree(wt.clone());
         }
         let _ = self.events.send(DomainEvent::WorktreeUpdated { info: wt.clone() });
+        self.pad_renamed(&[(found.qualified(), wt.qualified())]);
         let (path, n) = (wt.path.clone(), name.to_owned());
         blocking(move || {
             let Ok(dir) = Git::new().git_dir(&path) else { return };

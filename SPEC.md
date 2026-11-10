@@ -3854,7 +3854,10 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     terminal it offers to), and the TUI and the web offer "Let them go"; they keep running,
     outside any project. The refusal carries that way through as `fix: release` (§6.6), which
     is what each client acts on. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
-    refusal (which all three show) and in `project rm --release`'s question.
+    refusal (which all three show) and in `project rm --release`'s question. Names stay unique
+    outside any project too (§2.3): a session let go whose name a loose session already has takes
+    the next free one (`name-2`, as a restored session does), and the reply's notes say so, which
+    every client shows (owner, 2026-11-09).
 
 ### 12.2 Command tree **[decided]**
 

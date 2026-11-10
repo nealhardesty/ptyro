@@ -460,9 +460,21 @@ impl Daemon {
             .iter()
             .map(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone())
             .collect();
+        let mut notes = Vec::new();
         if release {
-            // They keep running, outside any project.
+            // They keep running, outside any project, where names are unique too: one whose name
+            // a loose session has takes the next free one (as a restored session does), and the
+            // reply says so.
             for s in &in_it {
+                let name =
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
+                let free = self.free_name(None, &name);
+                if free != name {
+                    s.rename(free.clone());
+                    notes.push(format!(
+                        "{name} is {free} now: a session outside any project has its name"
+                    ));
+                }
                 self.place_session(s, None);
             }
         } else if !live.is_empty() {
@@ -491,7 +503,7 @@ impl Daemon {
         self.decline(&p.root);
         let kept: Vec<String> =
             worktrees.iter().filter(|w| !w.is_root).map(|w| w.path.display().to_string()).collect();
-        let mut notes = vec![format!("forgot {}", p.slug)];
+        notes.insert(0, format!("forgot {}", p.slug));
         if !kept.is_empty() {
             notes.push(format!("its worktrees are still on disk: {}", kept.join(", ")));
         }
@@ -521,13 +533,14 @@ impl Daemon {
             p.slug = name.into();
             let p = p.clone();
             // Stored worktree rows take the slug from the project's row; the copies here carry it.
-            let worktrees: Vec<WorktreeInfo> = reg
+            let worktrees: Vec<(String, WorktreeInfo)> = reg
                 .worktrees
                 .iter_mut()
                 .filter(|w| w.project == p.id)
                 .map(|w| {
+                    let old = w.qualified();
                     w.project_slug.clone_from(&p.slug);
-                    w.clone()
+                    (old, w.clone())
                 })
                 .collect();
             (p, worktrees)
@@ -536,7 +549,11 @@ impl Daemon {
             store.save_project(p.clone());
         }
         let _ = self.events.send(DomainEvent::ProjectUpdated { info: p.clone() });
-        for w in worktrees {
+        // The scratchpad's `[wt:project/name]` links follow.
+        self.pad_renamed(
+            &worktrees.iter().map(|(old, w)| (old.clone(), w.qualified())).collect::<Vec<_>>(),
+        );
+        for (_, w) in worktrees {
             let _ = self.events.send(DomainEvent::WorktreeUpdated { info: w });
         }
         self.archives_follow_project(&p.id, &p.slug).await;

@@ -873,13 +873,25 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(5), "{err}");
     assert!(err.contains("let them go") && err.contains("--release"), "{err}");
+    // A loose session already has its name: let go, it takes the next free one, and says so.
+    let loose = SpawnSpec {
+        name: Some(s.name.clone()),
+        worktree: None,
+        cwd: "/".into(),
+        ..sh("sleep 60", "app/@root")
+    };
+    let loose = spawn(&c, loose).await.unwrap();
+    assert!(loose.project.is_none(), "{loose:?}");
     let out = w.ok(&["project", "rm", "-y", "--release", "app"]);
     assert!(out.contains("forgot app"), "{out}");
+    let free = format!("{}-2", s.name);
+    assert!(out.contains(&format!("{} is {free} now", s.name)), "{out}");
     let Reply::Session { info } = c.request(Request::Get { addr: s.id.full() }).await.unwrap()
     else {
         panic!()
     };
     assert!(info.state.is_live() && info.project.is_none(), "it runs on, outside: {info:?}");
+    assert_eq!(info.name, free);
 }
 
 async fn run(s: Script) -> Report {
@@ -1336,6 +1348,18 @@ async fn worktrees_and_projects_are_renamed() {
     };
     assert_eq!(again.name, "feat");
     assert!(again.path != before.path && again.path.ends_with("feat-2"), "{again:?}");
+    // Nor a directory a worktree we know of uses while it's gone from disk for now.
+    let Reply::WorktreeCreated { info: tmp, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
+        panic!()
+    };
+    w.ok(&["wt", "rename", "app/tmp", "tmp-moved"]);
+    w.ok(&["wt", "rename-branch", "app/tmp-moved", "tmp-moved"]);
+    std::fs::rename(&tmp.path, tmp.path.with_extension("away")).unwrap();
+    let Reply::WorktreeCreated { info: tmp2, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
+        panic!()
+    };
+    assert!(tmp2.path != tmp.path && tmp2.path.ends_with("tmp-2"), "{tmp2:?}");
+    std::fs::rename(tmp.path.with_extension("away"), &tmp.path).unwrap();
 
     // An archive, to restore under the project's new name.
     c.request(Request::WorktreeArchive { addr: "app/old".into(), stop_sessions: false })
