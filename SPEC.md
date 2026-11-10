@@ -3858,7 +3858,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     refusal (which all three show) and in `project rm --release`'s question. Names stay unique
     outside any project too (§2.3): a session let go whose name a loose session already has takes
     the next free one (`name-2`, as a restored session does), and the reply's notes say so, which
-    every client shows (owner, 2026-11-09).
+    every client shows.
 
 ### 12.2 Command tree **[decided]**
 
