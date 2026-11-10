@@ -178,5 +178,16 @@ store.set("k", "v");
   assert.equal(withFix({ t: "kill", addr: "x", signal: null }, { fix: "stop", label: "Stop and remove" }), null);
   assert.equal(fixOf(new Error("plain")), undefined);
 }
+// `[ui] confirm_kill` (default on) decides whether Stop, Kill, and Stop and remove ask, as in
+// the TUI; a device that can't read the config always asks.
+{
+  const { confirmsKill } = await import("../dist/kit.js");
+  assert.equal(confirmsKill("full", [{ key: "ui.confirm_kill", value: false }]), false);
+  assert.equal(confirmsKill("full", [{ key: "ui.confirm_kill", value: "false" }]), false);
+  assert.equal(confirmsKill("full", [{ key: "ui.confirm_kill", value: true }]), true);
+  assert.equal(confirmsKill("full", []), true, "unset: the default, on");
+  assert.equal(confirmsKill("full", null), true, "unread: asks");
+  assert.equal(confirmsKill("control", [{ key: "ui.confirm_kill", value: false }]), true);
+}
 console.log("ok");
 process.exit(0);

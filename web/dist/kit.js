@@ -273,9 +273,19 @@ export function textSheet(title, text) {
 // ── forms ───────────────────────────────────────────────────────────────────────────────────
 /// What a name field says under itself (`names::TYPED_HINT` in ptyro-core, word for word).
 export const NAME_HINT = "A space or other odd character becomes - (a-z 0-9 . _ -)";
+/// `[ui] confirm_kill` (default on), from the user settings' entries: whether Stop, Kill, and
+/// Stop and remove ask first. A device that may not read the config always asks.
+export function confirmsKill(scope, entries) {
+    if (scope !== "full")
+        return true;
+    const e = entries?.find((x) => x.key === "ui.confirm_kill");
+    return !e || String(e.value) !== "false";
+}
+/// What a project-name field says under itself (`names::SLUG_HINT`, word for word).
+export const SLUG_HINT = "A space or other odd character becomes - (a-z 0-9 -)";
 /// What a name can't hold becomes `-` as it is typed, and what it can't start with is dropped
-/// at the start (the same rule as `names::typed` and `names::branch_typed` in ptyro-core):
-/// "name" for an address, "branch" for a git branch.
+/// at the start (the same rule as `names::typed`, `names::slug_typed` and
+/// `names::branch_typed` in ptyro-core).
 export function slugify(kind, raw) {
     let out = "";
     for (const c of raw) {
@@ -284,6 +294,12 @@ export function slugify(kind, raw) {
             if (out === "" && (bad || c === "-"))
                 continue;
             out += bad ? "-" : c;
+        }
+        else if (kind === "project") {
+            const l = c.toLowerCase();
+            if (out === "" && !/^[a-z0-9]$/.test(l))
+                continue;
+            out += /^[a-z0-9-]$/.test(l) ? l : "-";
         }
         else {
             const l = c.toLowerCase();

@@ -9,7 +9,7 @@ import type { Worktree } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
 import type { Frame, Session } from "./screen.js";
-import { actions, NAME_HINT, slugInput, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, fixOf, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, ago, confirmsKill, argWords, ask, badge, Cache, confirm, download, enc, errText, fixOf, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { shellMenuItems } from "./shells.js";
@@ -348,8 +348,7 @@ export async function openQuickShell(w: Worktree | undefined, cwd = ""): Promise
 async function asksFirst(): Promise<boolean> {
   if (conn.scope !== "full") return true;
   const v = await host("settings.view", { scope: "user" }).catch(() => null);
-  const e = v?.entries?.find((x: { key: string }) => x.key === "ui.confirm_kill");
-  return !e || String(e.value) !== "false";
+  return confirmsKill(conn.scope, v?.entries);
 }
 
 /// Leave its page once it's gone from the list.
@@ -372,6 +371,15 @@ function end(s: Session, how: keyof typeof ENDS): void {
 /// Forget an ended session; a running one is stopped first.
 async function remove(s: Session): Promise<void> {
   if (live(s)) return end(s, "remove");
+  // A dormant agent could still be resumed: forgetting it asks, as `ptyro rm` and the TUI do.
+  if (s.state.t === "dormant") {
+    confirm(`Remove the dormant session ${s.name}?`, "Its agent's conversation, which it could resume, is forgotten. This can't be undone.", "Remove", () => forget(s));
+    return;
+  }
+  await forget(s);
+}
+
+async function forget(s: Session): Promise<void> {
   try {
     await conn.request({ t: "remove", addr: addr(s), stop: false });
     ui.toast(`Removed ${s.name}`);

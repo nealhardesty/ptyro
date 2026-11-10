@@ -6,7 +6,7 @@ import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, NAME_HINT, slugInput, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, fixOf, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, ago, confirmsKill, argWords, ask, badge, Cache, confirm, download, enc, errText, fixOf, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
@@ -369,8 +369,7 @@ async function asksFirst() {
     if (conn.scope !== "full")
         return true;
     const v = await host("settings.view", { scope: "user" }).catch(() => null);
-    const e = v?.entries?.find((x) => x.key === "ui.confirm_kill");
-    return !e || String(e.value) !== "false";
+    return confirmsKill(conn.scope, v?.entries);
 }
 /// Leave its page once it's gone from the list.
 const left = () => { if (location.hash.startsWith("#/s/"))
@@ -395,6 +394,14 @@ function end(s, how) {
 async function remove(s) {
     if (live(s))
         return end(s, "remove");
+    // A dormant agent could still be resumed: forgetting it asks, as `ptyro rm` and the TUI do.
+    if (s.state.t === "dormant") {
+        confirm(`Remove the dormant session ${s.name}?`, "Its agent's conversation, which it could resume, is forgotten. This can't be undone.", "Remove", () => forget(s));
+        return;
+    }
+    await forget(s);
+}
+async function forget(s) {
     try {
         await conn.request({ t: "remove", addr: addr(s), stop: false });
         ui.toast(`Removed ${s.name}`);

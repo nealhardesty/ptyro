@@ -40,7 +40,7 @@ const ACTIONS = {
   "daemon.status": "The daemon: version, uptime, sessions, health",
   "daemon.logs": "The daemon's log, the latest lines",
   "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
-  "daemon.restart": "Stop and start the daemon (sessions are stopped; agents hibernate)",
+  "daemon.restart": "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
   "daemon.stop": "Stop every session and the daemon",
   "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
   "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
@@ -625,7 +625,7 @@ function upgradeDaemon(): void {
 }
 
 function restartDaemon(): void {
-  confirm("Restart the daemon?", "Running sessions are stopped (agents hibernate and can be resumed). The app reconnects when it's back.", "Restart", async () => { if (await doHost("daemon.restart", {}, "Restarting…")) setTimeout(() => status.reload(""), 4000); });
+  confirm("Restart the daemon?", "Running sessions are stopped; agents hibernate and come back resumable. Clients reconnect.", "Restart", async () => { if (await doHost("daemon.restart", {}, "Restarting…")) setTimeout(() => status.reload(""), 4000); });
 }
 
 function daemonView(): HTMLElement {

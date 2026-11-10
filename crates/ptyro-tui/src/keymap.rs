@@ -76,7 +76,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "worktree.archive_delete",
-        "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
+        "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
     ),
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
     a("shell.new", "New shell: another one of its own in this worktree, full sized"),
@@ -187,12 +187,12 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "session.stop",
-        "Stop the session, kept listed: an agent's turn is interrupted and it gets a moment to exit, then HUP, TERM, KILL. On an ended one: remove it",
+        "Stop the session, kept listed: an agent's turn is interrupted and it gets a moment to exit, then HUP, TERM, KILL. An ended one isn't running: it offers to remove it",
     ),
     a("session.kill", "Kill the session now (SIGKILL, no chance to clean up), kept listed"),
     a(
         "session.remove",
-        "Remove the session from the list: an ended one, or stop a running one first",
+        "Remove the session from the list: an ended one (a dormant one asks first: its conversation is forgotten), or stop a running one first",
     ),
     a("session.restart", "Run an exited session's command again"),
     a("session.rename", "Rename the session: its address (C-t in the dialog: its title)"),
@@ -219,7 +219,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("daemon.status", "The daemon's status and health, in a split"),
     a(
         "daemon.restart",
-        "Restart the daemon (agents come back dormant, resumable); this TUI reconnects",
+        "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
     ),
     a("daemon.upgrade", "Switch the daemon to the installed binary, live (sessions keep running)"),
     a(

@@ -193,7 +193,8 @@ pub enum WtCmd {
     /// Bring an archived worktree back as it was (`name`, `project/name` or its handle)
     Restore { worktree: String },
     /// Delete archived worktrees for good (`name`, `project/name` or its handle): the saved
-    /// files go, and the branch too when it is merged or pushed. Asks first unless --yes
+    /// files go, and the branch too when it is merged into its base or the same as its pushed
+    /// copy. Asks first unless --yes
     ArchiveRm {
         #[arg(required = true)]
         worktrees: Vec<String>,
@@ -286,7 +287,8 @@ pub enum WtCmd {
         json: bool,
     },
     /// Remove a worktree, refusing if it would lose work (SPEC §10.8): its directory is deleted,
-    /// and its branch too if it is merged or the same as its pushed copy. Asks first unless --yes
+    /// and its branch too if it is merged into its base or the same as its pushed copy. Asks first
+    /// unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
@@ -1568,7 +1570,12 @@ async fn clean_scratch(c: &ptyro_client::Client, list: &[ptyro_core::model::Scra
         return;
     }
     for l in list {
-        eprint!("{}: d delete it and its {} files · ⏎ keep ", l.path.display(), l.files);
+        eprint!(
+            "Delete the scratch directory {} ({} files)? {} d delete · ⏎ keep ",
+            l.path.display(),
+            l.files,
+            removal::SCRATCH
+        );
         let _ = std::io::stderr().flush();
         let mut line = String::new();
         let _ = std::io::stdin().lock().read_line(&mut line);

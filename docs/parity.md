@@ -35,7 +35,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `stop` | `session.stop` (`x`; asks first unless `[ui] confirm_kill = false`) | `session.stop`: the session's ⋯ menu → Stop (asks first unless `[ui] confirm_kill = false`) |
 | `kill` | `session.kill` (`X`; asks first unless `[ui] confirm_kill = false`) | `session.kill`: the session's ⋯ menu → Kill (asks the same way) |
 | `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | `session.restart`: the session's ⋯ menu |
-| `rm` | `session.remove`: the row menu, or `x` on an ended session; `--stop` is `session.remove` on a running one (Stop and remove, asking as stop does) | `session.remove`: the session's ⋯ menu → Remove; `--stop` is Remove on a running one (Stop and remove, asking as stop does) |
+| `rm` | `session.remove`: the row menu, the palette, or the "remove it" offer of `x` on an ended session; a dormant one asks first (`-y`); `--stop` is `session.remove` on a running one (Stop and remove, asking as stop does) | `session.remove`: the session's ⋯ menu → Remove (a dormant one asks first); `--stop` is Remove on a running one (Stop and remove, asking as stop does) |
 | `rename` | `session.rename` (`,`) | `session.rename`: the session's ⋯ menu |
 | `retitle` | `session.retitle` (`,` then `C-t`) | `session.retitle`: the session's ⋯ menu |
 | `resume` | `session.resume` (or `⏎` on a dormant pane) | `session.resume`: the session's ⋯ menu |
@@ -340,7 +340,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `shell-init` | `health` (`M`): with `shell.integration` off (Settings → Shells), a finding whose fix adds the line to your rc file; on (the default), every shell session ptyro starts has it already | waived: a line in the computer's shell rc file, for its shells; the setting is in More → Settings → Shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
-| `daemon restart` | `daemon.restart` (full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
+| `daemon restart` | `daemon.restart` (asks first, as the web does, then runs `daemon restart --force` full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
 | `daemon status` | `daemon.status` (its `load` line is the computer's load average, also on the status bar's right; its `machine` line shows the computer's name; the sidebar title and the terminal title carry it too); `remote.web` is the web app's line; the health badge has its warnings | `daemon.status`: More → Daemon (its Load line; `host.load` beside the machine in the header; the machine is in the page title, the header and More); More → Web app (`web.status`) is the web app's line |
 | `daemon logs` | `daemon.logs` (followed, full sized) | `daemon.logs`: More → Daemon → Logs |
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |

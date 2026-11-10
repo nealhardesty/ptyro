@@ -674,7 +674,7 @@ function build(rest) {
         if (st.error)
             kids.push(h("div", { class: "banner bad" }, st.error, " ", h("button", { class: "small", onclick: () => { st.error = ""; void load(); } }, "Retry")));
         if (st.restart.size)
-            kids.push(h("div", { class: "banner warn" }, `⟳ ${[...st.restart].join(", ")} needs the daemon restarted. `, h("button", { class: "small", title: tip("settings.restart"), onclick: () => confirm("Restart the daemon?", "Sessions are stopped; agents hibernate and come back resumable. This page reconnects.", "Restart", async () => { try {
+            kids.push(h("div", { class: "banner warn" }, `⟳ ${[...st.restart].join(", ")} needs the daemon restarted. `, h("button", { class: "small", title: tip("settings.restart"), onclick: () => confirm("Restart the daemon?", "Running sessions are stopped; agents hibernate and come back resumable. Clients reconnect.", "Restart", async () => { try {
                     await host("daemon.restart");
                     st.restart.clear();
                     paintBanners();

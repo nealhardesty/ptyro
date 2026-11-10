@@ -584,7 +584,7 @@ function build(rest: string): Page {
     if (st.user?.problem) kids.push(h("div", { class: "banner bad" }, h("b", {}, "Your config doesn't load, so defaults show: "), st.user.problem, " ", h("button", { class: "small", onclick: () => editConfigAt(0) }, "Fix it in the file")));
     if (st.project?.problem) kids.push(h("div", { class: "banner bad" }, h("b", {}, `${projectName()}'s config doesn't load: `), st.project.problem));
     if (st.error) kids.push(h("div", { class: "banner bad" }, st.error, " ", h("button", { class: "small", onclick: () => { st.error = ""; void load(); } }, "Retry")));
-    if (st.restart.size) kids.push(h("div", { class: "banner warn" }, `⟳ ${[...st.restart].join(", ")} needs the daemon restarted. `, h("button", { class: "small", title: tip("settings.restart"), onclick: () => confirm("Restart the daemon?", "Sessions are stopped; agents hibernate and come back resumable. This page reconnects.", "Restart", async () => { try { await host("daemon.restart"); st.restart.clear(); paintBanners(); ui.toast("Restarting…"); } catch (e) { ui.toast(errText(e)); } }) }, "Restart now")));
+    if (st.restart.size) kids.push(h("div", { class: "banner warn" }, `⟳ ${[...st.restart].join(", ")} needs the daemon restarted. `, h("button", { class: "small", title: tip("settings.restart"), onclick: () => confirm("Restart the daemon?", "Running sessions are stopped; agents hibernate and come back resumable. Clients reconnect.", "Restart", async () => { try { await host("daemon.restart"); st.restart.clear(); paintBanners(); ui.toast("Restarting…"); } catch (e) { ui.toast(errText(e)); } }) }, "Restart now")));
     banners.replaceChildren(...(kids.filter(Boolean) as Node[]));
   }
 

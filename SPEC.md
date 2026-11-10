@@ -1493,9 +1493,19 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
     session. A running one is refused ("NAME is still running: stop it first"); `rm --stop`,
     the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.38) stop it, then
     forget it. A removed dormant session never comes back.
+  - Stop means stop everywhere: on an ended session `ptyro stop`, `kill`, the TUI's `x`/`X` and
+    the web say it isn't running and change nothing; remove is the way to forget it (the TUI's
+    toast offers it). Over several sessions (`rm @all`, `stop`, `kill`) each is tried: a
+    refusal is said (`ptyro: NAME: …`), the rest go on, and the exit code is the first
+    refusal's.
   - `[ui] confirm_kill` (default on) makes Stop, Kill, and Stop and remove ask first, in the TUI
-    and the web alike (the web reads it where the device may read the config, else always asks).
-    Removing an ended session never asks.
+    and the web alike (the web reads it where the device may read the config, else always asks),
+    in the same words (`removal::STOP`, `KILL`, `STOP_REMOVE`); a refusal's "Stop and remove"
+    button asks the same way. Removing an exited session never asks.
+  - **Removing a dormant session asks** (owner, 2026-11-09), as `chat rm` does: its agent could
+    still resume its conversation. `ptyro rm` asks at a terminal (once for all of them), `-y`
+    doesn't ask, and with no terminal it refuses (exit 5) and changes nothing; the TUI and the
+    web ask with a dialog. All say `Remove the dormant session NAME?` and `removal::DORMANT`.
 - `Exited` sessions stay visible (greyed, with exit code and final screen) until removed; their
   recorder log remains readable (`ptyro read --scrollback`).
 - `Dormant` = process not running but resumable; the last screen is shown dimmed with a
@@ -3791,7 +3801,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 - **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
-  (`chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
   `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
   item) asks on a
   terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
@@ -3809,7 +3819,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
     found" without a question, and the question names what was found (`wt rm`, `ws rm`,
     `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`;
-    `chat rm`'s question comes from the daemon after it resolves). `profile rm`, `config rm` and
+    `chat rm`'s question comes from the daemon after it resolves). What is removed after the yes is what was asked about, by its id or exact name, never the typed address again (`chat rm @last` can't delete a newer chat). `profile rm`, `config rm` and
     `wt archive-rm` have no request that resolves first: they ask naming what was typed, and a
     name that matches nothing is refused after the question, with nothing changed.
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too

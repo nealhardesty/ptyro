@@ -259,6 +259,14 @@ export function textSheet(title: string, text: string): Sheet {
 /// What a name field says under itself (`names::TYPED_HINT` in ptyro-core, word for word).
 export const NAME_HINT = "A space or other odd character becomes - (a-z 0-9 . _ -)";
 
+/// `[ui] confirm_kill` (default on), from the user settings' entries: whether Stop, Kill, and
+/// Stop and remove ask first. A device that may not read the config always asks.
+export function confirmsKill(scope: string, entries?: { key: string; value: unknown }[] | null): boolean {
+  if (scope !== "full") return true;
+  const e = entries?.find((x) => x.key === "ui.confirm_kill");
+  return !e || String(e.value) !== "false";
+}
+
 /// What a project-name field says under itself (`names::SLUG_HINT`, word for word).
 export const SLUG_HINT = "A space or other odd character becomes - (a-z 0-9 -)";
 

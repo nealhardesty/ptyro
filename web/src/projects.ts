@@ -40,7 +40,7 @@ const ACTIONS = {
   "worktree.finish": "Finish: commit what's left, then open a PR or merge into the main branch",
   "worktree.archive": "Archive: keep its work and its branch, remove the worktree",
   "worktree.restore": "Bring an archived worktree back as it was",
-  "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
+  "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
   "worktree.gc": "Stale worktrees: merged, abandoned or missing; archive or remove them",
   "workspace.switch": "Show one workspace's projects, or all of them",
   "workspace.new": "A new workspace",
@@ -355,7 +355,7 @@ function archive(w: Worktree): void {
 
 function remove(w: Worktree, force = false): void {
   const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
-  confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
+  confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
     try {
       const r = await conn.request({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } });
       for (const note of r.notes ?? []) ui.toast(note);
@@ -519,7 +519,7 @@ function gcView(): HTMLElement {
     h("div", { class: "rows" }, ...scratch.map((l) => {
       const name = String(l.path).split("/").pop() ?? l.path;
       return row(name, `${l.files} files · changed ${ago(l.modified_ms)} ago`, bytes(l.bytes), {
-        onclick: () => confirm(`Delete ${name}?`, `${l.path} and the ${l.files} files in it go for good.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
+        onclick: () => confirm(`Delete the scratch directory ${name}?`, `${l.path}, ${l.files} files. A scratch shell left it behind. It is deleted with everything in it; this can't be undone.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
       });
     }))) : null;
   return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")),
@@ -538,7 +538,7 @@ function archivesView(): HTMLElement {
               const r = await ask({ t: "worktree_restore", addr }, "Restored");
               if (r?.info) go(`#/wt/${enc(r.info.id)}`);
             }, false) },
-            { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted, and its branch too if it is merged or pushed. This can't be undone.", "Delete", async () => {
+            { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. This can't be undone.", "Delete", async () => {
               const r = await ask({ t: "worktree_archive_delete", addr }, "Deleted");
               if (r) showNotes("Archive deleted", r.notes ?? []);
               archives.reload("");

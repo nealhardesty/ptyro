@@ -61,7 +61,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 - **`SESSIONS…`**: where several are allowed you can also use a glob (`'build-*'`) or a
   selector, joined with commas (`ptyro rm @exited`, `ptyro send 'build-*,@idle' …`):
   - `@all`: every session, exited and dormant ones too (so `ptyro rm @all` forgets hibernated
-    agents as well).
+    agents as well, after asking).
   - `@last`, `@focused`: as for `SESSION`.
   - `@live` (or `@running`): running now. `@active`: busy now (working, waiting for you, or
     running a command).
@@ -100,7 +100,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 | `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop, keeping them listed: an agent's turn is interrupted and it gets a moment to exit, then the process gets HUP, TERM and KILL |
 | `ptyro kill SESSIONS… [-s N]` | kill now (SIGKILL, no chance to clean up), keeping them listed; `-s N` sends signal N instead |
-| `ptyro rm SESSIONS… [--stop]` | forget ended sessions (they leave the list); a running one is refused, and `--stop` stops it first |
+| `ptyro rm SESSIONS… [--stop] [-y]` | forget ended sessions (they leave the list); a dormant agent asks first, its conversation forgotten (`-y` doesn't ask); a running one is refused, and `--stop` stops it first. Each is tried: a refusal is said, the rest go on, and the exit code is the first refusal's |
 | `ptyro restart SESSIONS…` / `rename SESSION NAME` | run exited sessions again / rename (the address) |
 | `ptyro retitle SESSION [TITLE…]` | change its title, what people read (none: clear it; `wt retitle` and `chat retitle` alike) |
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
@@ -197,7 +197,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 | `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
 | `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
 | `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME\|HANDLE` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them, each with the handle that tells apart archives of one name |
-| `ptyro wt archive-rm [P/]NAME\|HANDLE… [-y]` | delete archives for good: the saved files, and each branch if merged or pushed (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
+| `ptyro wt archive-rm [P/]NAME\|HANDLE… [-y]` | delete archives for good: the saved files, and each branch if merged into its base or the same as its pushed copy (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
 | `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add-project\|remove-project …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`; `rm WS [-y]`: its sessions keep running and move to main, with its chats and the projects no other workspace has; `add-project WS PROJECT` / `remove-project WS PROJECT` put a project in one or take it out (it stays registered) |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
