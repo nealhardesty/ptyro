@@ -1609,16 +1609,14 @@ mod tests {
     }
 
     /// A long flag is a switch everywhere or takes a value everywhere: `--x V` never means a
-    /// switch plus a word in another command. These were so before the rule and wait for the
-    /// owner's word on new names; no new one may join them.
-    const SWITCH_AND_VALUE: [&str; 1] = ["wait"];
-
+    /// switch plus a word in another command. No exceptions: the last ones were renamed
+    /// (owner, 2026-11-10).
     #[test]
     fn a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere() {
         use std::collections::BTreeMap;
         let mut by_long = BTreeMap::<String, BTreeMap<bool, Vec<String>>>::new();
         for (path, _, long, takes) in every_flag() {
-            if let Some(l) = long.filter(|l| !SWITCH_AND_VALUE.contains(&l.as_str())) {
+            if let Some(l) = long {
                 by_long.entry(l).or_default().entry(takes).or_default().push(path);
             }
         }
@@ -1628,16 +1626,6 @@ mod tests {
             .map(|(l, k)| format!("--{l}: a switch in {:?}, a value in {:?}", k[&false], k[&true]))
             .collect();
         assert!(mixed.is_empty(), "\n  {}", mixed.join("\n  "));
-        // And the old ones leave the list once they are fixed.
-        let flags = every_flag();
-        for l in SWITCH_AND_VALUE {
-            let kinds: std::collections::BTreeSet<bool> = flags
-                .iter()
-                .filter(|(_, _, long, _)| long.as_deref() == Some(l))
-                .map(|(_, _, _, t)| *t)
-                .collect();
-            assert_eq!(kinds.len(), 2, "--{l} is one kind now: take it off SWITCH_AND_VALUE");
-        }
     }
 
     /// Value syntax is the same everywhere (owner, 2026-11-09): `--flag V` and `--flag=V` both
