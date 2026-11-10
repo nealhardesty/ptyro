@@ -8282,7 +8282,7 @@ is incognito unless `--keep`.
 Three tiers; each one is useful without the next.
 
 1. **Keyword (CHAT3).** FTS5 over `node.text`, ranked by bm25 with a snippet and the match
-   highlighted, user messages weighted above assistant text as `llm` does. Filters: `--chat`,
+   highlighted, user messages weighted above assistant text as `llm` does. Filters: `--in CHAT`,
    `--workspace`, `--agent`, `--machine`, `--since 7d`, `--pinned`, `--archived`. A query is plain
    words (all must match), `"a phrase"`, `-word`, `prefix*`, or `agent:codex`, `since:7d`. A hit opens
    the chat at that node. In the chat, find-in-chat searches the shown branch.

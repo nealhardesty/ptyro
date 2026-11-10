@@ -213,8 +213,8 @@ pub enum ChatCmd {
         /// (A word may start with `-`: it is left out. After `--`, every word is a word.)
         #[arg(required = true, allow_hyphen_values = true)]
         query: Vec<String>,
-        /// Only this chat
-        #[arg(long, add = ArgValueCandidates::new(complete::chats))]
+        /// Only in this chat
+        #[arg(long = "in", value_name = "CHAT", add = ArgValueCandidates::new(complete::chats))]
         chat: Option<String>,
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
@@ -1770,7 +1770,7 @@ impl SearchArgs {
                     }
                     self.by = Some(by);
                 }
-                "--chat" => self.chat = Some(value(&mut it)?),
+                "--in" => self.chat = Some(value(&mut it)?),
                 "-w" | "--workspace" => self.workspace = Some(value(&mut it)?),
                 "-a" | "--agent" => self.agent = Some(value(&mut it)?),
                 "-l" | "--limit" => {
@@ -1990,7 +1990,7 @@ mod tests {
 
     #[test]
     fn search_flags_after_the_words_are_flags() {
-        let q: Vec<String> = "redis -budget -w work --chat=c:7f3k -l 3 -a codex --json -- -n"
+        let q: Vec<String> = "redis -budget -w work --in=c:7f3k -l 3 -a codex --json -- -n"
             .split(' ')
             .map(str::to_owned)
             .collect();
@@ -2008,7 +2008,7 @@ mod tests {
         let mut clap_said = args();
         clap_said.by = Some("words");
         assert!(clap_said.take_flags(&["cats".into(), "--meaning".into()]).is_err());
-        assert!(args().take_flags(&["x".into(), "--chat".into()]).is_err());
+        assert!(args().take_flags(&["x".into(), "--in".into()]).is_err());
         assert!(args().take_flags(&["x".into(), "-l".into(), "lots".into()]).is_err());
     }
 }
