@@ -606,9 +606,9 @@ impl Daemon {
         let (role, command) = match which {
             None => {
                 let (n, r) = cfg.scripts.run_script(None).ok_or_else(|| {
-                    Error::missing(
-                        "run script",
-                        "default (mark one with `default = true` in .ptyro.toml)",
+                    Error::new(
+                        ErrorCode::NotFound,
+                        "no default run script: mark one with `default = true` in .ptyro.toml",
                     )
                 })?;
                 (format!("run:{n}"), r.command.clone())
@@ -804,7 +804,7 @@ impl Daemon {
             }
             if let Some(b) = branch {
                 match (keep, git.branch_fate(&root, &b, base.as_deref())) {
-                    (true, _) => notes.push(format!("kept branch {b} (--keep-branch)")),
+                    (true, _) => notes.push(format!("kept branch {b}, as asked")),
                     (false, BranchFate::Delete(why)) => match git.delete_branch(&root, &b) {
                         Ok(()) => notes.push(format!("deleted branch {b} ({why})")),
                         Err(e) => notes.push(format!("kept branch {b}: {e}")),

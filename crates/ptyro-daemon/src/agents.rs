@@ -1438,9 +1438,7 @@ impl Daemon {
         if agent != "claude" {
             return Err(Error::new(
                 ErrorCode::Unsupported,
-                format!(
-                    "adopting works for Claude so far; start {agent} with `ptyro new --agent {agent}`"
-                ),
+                format!("adopting works for Claude so far; start a new {agent} session instead"),
             ));
         }
         if s.status() == Some(AgentStatus::Working) {
@@ -1466,7 +1464,10 @@ impl Daemon {
             .ok_or_else(|| Error::internal("no HOME"))?;
         let conversation =
             ptyro_agents::claude::latest_conversation(&dir, &cwd).ok_or_else(|| {
-                Error::missing("conversation", format!("Claude's transcript for {}", cwd.display()))
+                Error::new(
+                    ErrorCode::NotFound,
+                    format!("no Claude conversation was found for {}", cwd.display()),
+                )
             })?;
         // Leave it: clear the input line, then /exit, and wait for the shell to come back.
         s.write_raw(b"\x15/exit\r");

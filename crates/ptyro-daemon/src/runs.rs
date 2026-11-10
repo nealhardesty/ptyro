@@ -94,6 +94,11 @@ pub(crate) async fn wait_for_file(path: &std::path::Path, within: Duration) {
 }
 
 /// The last lines of a command's output.
+/// A step has made no worktree (yet): it's not that the user named one wrong.
+fn no_worktree_of(step: &str) -> Error {
+    Error::new(ErrorCode::NotFound, format!("step {step} has no worktree yet"))
+}
+
 pub(crate) fn tail(text: &str, lines: usize) -> String {
     let v: Vec<&str> = text.lines().collect();
     let start = v.len().saturating_sub(lines);
@@ -1493,7 +1498,9 @@ impl Daemon {
             .get(&sd.to)
             .and_then(|s| s.attempt())
             .and_then(|a| a.session.clone())
-            .ok_or_else(|| Error::missing("session", format!("of step {}", sd.to)))?;
+            .ok_or_else(|| {
+                Error::new(ErrorCode::NotFound, format!("step {} has no session yet", sd.to))
+            })?;
         let mut s = self.resolve(&target)?;
         if !s.is_live() {
             self.resume(&target).await?;
@@ -1661,7 +1668,7 @@ impl Daemon {
                 .and_then(|s| s.attempt())
                 .and_then(|a| a.worktree.clone())
                 .and_then(|w| self.worktree_by_id(&w))
-                .ok_or_else(|| Error::missing("worktree", format!("of step {sid}")))?,
+                .ok_or_else(|| no_worktree_of(&sid))?,
             None => {
                 let p = st
                     .project
@@ -1883,7 +1890,7 @@ impl Daemon {
             .and_then(|s| s.attempt())
             .and_then(|x| x.worktree.clone())
             .and_then(|w| self.worktree_by_id(&w))
-            .ok_or_else(|| Error::missing("worktree", format!("of step {}", a.from)))?;
+            .ok_or_else(|| no_worktree_of(&a.from))?;
         let done: Vec<String> = st
             .steps
             .get(&def.id)
@@ -2408,10 +2415,8 @@ impl Daemon {
         for a in &spec.agents {
             let (name, _) = ptyro_agents::split_agent(a);
             if ptyro_agents::command(&config, name).is_none() {
-                return Err(Error::missing(
-                    "agent",
-                    format!("{name} (known: {})", ptyro_agents::names(&config).join(", ")),
-                ));
+                let known = ptyro_agents::names(&config);
+                return Err(lookup::not_found_among("agent", name, &known));
             }
         }
         let p = match spec.project.as_deref() {

@@ -317,7 +317,7 @@ impl Daemon {
         if !create {
             return Err(Error::new(
                 ErrorCode::NotFound,
-                "the scratchpad isn't open yet; `ptyro scratchpad --pane` opens it",
+                "the scratchpad isn't open yet: open it first",
             ));
         }
         let pad = self.pad();

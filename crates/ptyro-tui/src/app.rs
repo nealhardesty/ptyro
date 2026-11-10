@@ -715,7 +715,6 @@ const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro project trust", "project.trust", "review and trust them"),
     ("`ptyro project add", "project.add", "add a project"),
     ("`ptyro status --explain", "session.explain", "see why"),
-    ("`ptyro new --structured", "session.new", "start one"),
     ("`ptyro new --agent", "session.new", "start one"),
     ("`ptyro new", "session.new", "start one"),
     ("`ptyro wt diff", "inspector", "inspect it"),

@@ -416,10 +416,10 @@ impl Daemon {
                     })
                     .collect());
                 if v.is_empty() {
-                    return Err(Error::missing(
-                        "recipient",
+                    return Err(Error::new(
+                        ErrorCode::NotFound,
                         format!(
-                            "{t} (no live {agent} session here; try @all, @idle, @lead, @user, @run:<id> or a session name)"
+                            "nobody to send to as {t}: no live {agent} session here; try @all, @idle, @lead, @user, @run:<id> or a session name"
                         ),
                     ));
                 }
@@ -512,7 +512,10 @@ impl Daemon {
         }
         let recipients = self.recipients(to, &sender, run.as_deref())?;
         if recipients.is_empty() {
-            return Err(Error::missing("recipient", format!("{to} (nobody matches right now)")));
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                format!("nobody to send to as {to}: nobody matches right now"),
+            ));
         }
         let rows = {
             let mut mail = self.mail.locked();

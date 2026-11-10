@@ -709,11 +709,14 @@ async fn the_profile_cli_edits_the_config() {
     // In use → rm refused; rename rewrites the references.
     w.ok(&["ws", "new", "job", "--profile", "work"]);
     let out = w.cli(&["profile", "rm", "-y", "work"]);
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("workspace job"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("workspace job"), "{err}");
+    // The way through in the CLI's words; the daemon's words name no flag.
+    assert!(err.contains("remove it anyway") && err.contains("(again with `--force`"), "{err}");
+    // A name that isn't one lists the profiles there are.
+    let out = w.cli(&["profile", "rm", "-y", "nosuch"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the profiles are default") && err.contains("work"), "{err}");
     // The daemon has to see the new config before it can accept the new name.
     w.ok(&["profile", "rename", "work", "acme"]);
     let ws = w.ok(&["ws", "ls"]);

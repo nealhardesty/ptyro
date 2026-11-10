@@ -267,7 +267,10 @@ pub async fn commit(
                     && s.state.is_live()
             })
             .max_by_key(|s| s.created_ms)
-            .ok_or_else(|| Error::missing("agent session", format!("in {}", info.qualified())))?;
+            .ok_or_else(|| {
+                let s = format!("no agent session works in {}", info.qualified());
+                Error::new(ErrorCode::NotFound, s)
+            })?;
         c.request(Request::SendText {
             addr: agent.id.full(),
             text: "[via ptyro] Please commit your work now: stage what belongs together, and write a clear commit message (subject line under 72 characters, then why).".into(),

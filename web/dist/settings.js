@@ -115,7 +115,7 @@ function moreView() {
             { label: "Turn them on for this device", hint: "A test is sent", run: () => ui.push() },
             { title: tip("notify.test"), label: "Send a test through every channel", hint: "This device, desktop notifications, anything in your config", run: async () => { const r = await ask({ t: "notify_test" }); if (r)
                     textSheet("Notification test", r.results.join("\n") || "Nothing is set up to notify."); } },
-        ]) }, "🔔 Notifications"), h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. `ptyro devices revoke` ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))), conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null, h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))), 
+        ]) }, "🔔 Notifications"), h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. Revoking it on the Devices page ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))), conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null, h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))), 
     // The version, quietly, where people look first (UX2.1).
     h("p", { class: "sub more-version" }, "ptyro ", status.get("")?.version ?? "", " · ", h("a", { href: "#/about", title: tip("app.about") }, "About"))));
 }

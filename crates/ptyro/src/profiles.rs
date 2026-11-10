@@ -471,13 +471,17 @@ pub(crate) async fn remove(ctx: &Ctx, name: &str, force: bool) -> Result<Vec<Str
     let used = usage(ctx, name).await?;
     if !used.is_empty() && !force {
         return Err(Error::conflict(format!(
-            "profile {name} is in use: {}; change those first or use --force",
+            "profile {name} is in use: {}; change those first, or remove it anyway: they fall back to the default profile",
             used.join(", ")
-        )));
+        ))
+        .with_fix(ptyro_core::error::Again::Force, "Remove anyway"));
     }
     edit(ctx, |doc| {
         let t = profiles_table(doc)?;
-        t.remove(name).ok_or_else(|| Error::missing("profile", name))?;
+        let known: Vec<String> = std::iter::once(DEFAULT_PROFILE.to_owned())
+            .chain(t.iter().map(|(k, _)| k.to_owned()))
+            .collect();
+        t.remove(name).ok_or_else(|| missing(name, known))?;
         Ok(())
     })?;
     reload(ctx).await;
@@ -495,7 +499,10 @@ pub(crate) async fn rename(ctx: &Ctx, old: &str, new: &str) -> Result<Vec<String
         if t.contains_key(new) {
             return Err(Error::conflict(format!("profile {new} exists")));
         }
-        let item = t.remove(old).ok_or_else(|| Error::missing("profile", old))?;
+        let known: Vec<String> = std::iter::once(DEFAULT_PROFILE.to_owned())
+            .chain(t.iter().map(|(k, _)| k.to_owned()))
+            .collect();
+        let item = t.remove(old).ok_or_else(|| missing(old, known))?;
         t.insert(new, item);
         Ok(())
     })?;
