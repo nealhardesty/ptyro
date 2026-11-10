@@ -921,6 +921,12 @@ pub async fn discard(
     let Reply::Run { run: info } = c.request(Request::RunGet { id: run }).await? else {
         return Err(Error::internal("unexpected reply"));
     };
+    if let Some(c) = &candidate
+        && !info.state.steps.contains_key(c)
+    {
+        let known: Vec<String> = info.state.steps.keys().cloned().collect();
+        return Err(ptyro_core::lookup::not_found_among("candidate", c, &known));
+    }
     let run = info.state.id;
     let q = match &candidate {
         Some(c) => format!("Discard candidate {c} of {run}? {DISCARD} {}", safety(force)),

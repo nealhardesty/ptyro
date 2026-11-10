@@ -3839,9 +3839,11 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
     `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
     resolves). What is removed after the yes is what was asked about, by its id or exact name,
-    never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` asks
-    naming what was typed, and a name that matches nothing is refused after the question, with
-    nothing changed.
+    never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` tries
+    the removal first without writing it (`settings::preview`), so a name that matches nothing
+    is refused before the question; `discard` finds its run and candidate first; `wt archive-rm`
+    asks once about every archive it found (the same one named twice is one), deletes each, and
+    carries on past one that fails, reporting it (as `rm`, `stop` and `kill` do).
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
     when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
     `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its

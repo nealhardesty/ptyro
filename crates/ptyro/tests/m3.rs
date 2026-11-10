@@ -850,8 +850,13 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     let out = w.cli(&["wt", "archive-rm", "gone"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("archive of app/gone?"), "{err}");
-    w.ok(&["wt", "archive-rm", "-y", "gone"]);
+    // Named twice, it is one archive: deleted once, no failure for the second.
+    w.ok(&["wt", "archive-rm", "-y", "gone", "app/gone"]);
     assert!(!w.ok(&["wt", "archives"]).contains("gone"), "deleted");
+    // `config rm` finds what it removes before asking: a name that isn't there asks nothing.
+    let out = w.cli(&["config", "rm", "agents", "nope"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("Remove agents nope?") && !out.status.success(), "{err}");
 
     let c = w.d.client().await.unwrap();
     let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();
