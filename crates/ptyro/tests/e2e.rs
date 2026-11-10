@@ -320,6 +320,49 @@ fn only_one_daemon_per_home_and_stale_sockets_are_recovered() {
     assert!(stop.status.success());
 }
 
+/// `daemon start` typed at a prompt returns once the daemon is up, and a `PTYRO_HOME` set inside
+/// a session never reaches the session's own daemon: an agent sandboxing itself that way once ran
+/// `daemon stop --force` and stopped the daemon it was running in (2026-11-09).
+#[test]
+fn daemon_start_detaches_and_a_home_ignores_the_outer_socket() {
+    let outer = TempDaemon::start(BIN).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        std::process::Command::new(BIN)
+            .args(args)
+            .env("PTYRO_HOME", home.path())
+            // What a session's environment carries: the outer daemon's socket.
+            .env("PTYRO_SOCKET", &outer.paths.socket)
+            .env("PTYRO_BIN", BIN)
+            // Asked for by name, it starts even so.
+            .env("PTYRO_NO_AUTOSPAWN", "1")
+            .env("PTYRO_TEST_LATEST", home.path().join("no-registry"))
+            .env("PTYRO_REMOTE", if cfg!(windows) { "local" } else { "" })
+            .env_remove("PTYRO_SESSION_ID")
+            .output()
+            .unwrap()
+    };
+    struct Stop<F: Fn(&[&str]) -> std::process::Output>(F);
+    impl<F: Fn(&[&str]) -> std::process::Output> Drop for Stop<F> {
+        fn drop(&mut self) {
+            let _ = (self.0)(&["daemon", "stop", "--force"]);
+        }
+    }
+    let guard = Stop(run);
+    let run = |args: &[&str]| (guard.0)(args);
+    assert_eq!(run(&["daemon", "status"]).status.code(), Some(8), "the outer daemon isn't ours");
+    let start = run(&["daemon", "start"]);
+    let said = String::from_utf8_lossy(&start.stderr);
+    assert_eq!(start.status.code(), Some(0), "{said}");
+    assert!(said.contains("daemon started (pid "), "{said}");
+    let again = run(&["daemon", "start"]);
+    assert_eq!(again.status.code(), Some(5));
+    assert!(String::from_utf8_lossy(&again.stderr).contains("already running"));
+    assert!(run(&["daemon", "stop", "--force"]).status.success());
+    let st = outer.cmd().args(["daemon", "status"]).output().unwrap();
+    assert!(st.status.success(), "the outer daemon still runs");
+}
+
 #[test]
 fn cli_autospawns_and_maps_errors_to_exit_codes() {
     let home = tempfile::tempdir().unwrap();

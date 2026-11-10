@@ -42,6 +42,11 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
             }
         }
     }
+    // Typed at a prompt: start it in the background, as any client would, and say so. Only
+    // `--foreground` (service managers, debugging) keeps it in this terminal.
+    if !foreground && !spawned {
+        return start_detached(serve);
+    }
     // Leave the client's session and process group so its terminal closing can't hang us up.
     // Done before any runtime exists: we never fork an initialized tokio process. (On Windows the
     // client starts it detached instead.)
@@ -78,6 +83,64 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
             }
         }
     }
+}
+
+/// `ptyro daemon start`: the daemon detached (`--spawned`, as a client starts it), this command
+/// returning once it accepts connections.
+fn start_detached(serve: bool) -> i32 {
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("ptyro: {e}");
+            return 1;
+        }
+    };
+    let paths = match Paths::from_env() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ptyro: {e}");
+            return 1;
+        }
+    };
+    let ctx = Ctx::local(paths);
+    rt.block_on(async {
+        let status = |client: Client| async move {
+            match client.request(Request::Status).await {
+                Ok(Reply::Status { status }) => Ok(status.pid),
+                Ok(_) => Err(Error::internal("unexpected reply")),
+                Err(e) => Err(e),
+            }
+        };
+        if let Ok(client) = ctx.connect(false).await {
+            match status(client).await {
+                Ok(pid) => eprintln!("ptyro: daemon already running (pid {pid})"),
+                Err(_) => eprintln!("ptyro: daemon already running"),
+            }
+            if serve {
+                // The daemon that is running reads the config it was just given.
+                eprintln!("ptyro: the web app starts in it now (`ptyro web`)");
+                let _ = crate::webapp::ask(&ctx, Some(true), None).await;
+            }
+            return ErrorCode::Conflict.exit_code();
+        }
+        // Asked for by name: started even under `PTYRO_NO_AUTOSPAWN`.
+        let mut opts = ctx.options(ClientKind::Cli, true);
+        opts.autospawn = true;
+        let started = match Client::connect(&opts).await {
+            Ok(client) => status(client).await,
+            Err(e) => Err(e.into()),
+        };
+        match started {
+            Ok(pid) => {
+                eprintln!("daemon started (pid {pid}); logs in {}", ctx.paths.log_dir().display());
+                0
+            }
+            Err(e) => {
+                eprintln!("ptyro: {}", said(&e));
+                e.code.exit_code()
+            }
+        }
+    })
 }
 
 pub async fn run(

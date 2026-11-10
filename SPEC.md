@@ -427,6 +427,13 @@ socket). Users may instead run the
 daemon under a systemd user unit, a launchd agent, or on Windows a per-user logon task
 (`ptyro daemon install-service`; §12 `install-service`, WIN10).
 
+**`ptyro daemon start` typed by a user** (no `--foreground`, no `--spawned`) starts the daemon the
+same way, detached, and returns once it accepts connections: `daemon started (pid N); logs in
+<state dir>`, exit 0. When one already runs it says `daemon already running (pid N)` and exits 5
+(conflict). `PTYRO_NO_AUTOSPAWN` does not stop it: the user asked by name. **[changed 2026-11-09]**
+Before, it ran the daemon in the terminal with no output, so it looked hung, and Ctrl-C stopped it.
+`--foreground` keeps that behaviour (plus logs on stderr) for service managers and debugging.
+
 ### 4.2 Actors **[decided]**
 
 Everything is message passing over `tokio::sync::mpsc`; no shared mutable state across actors except
@@ -4607,6 +4614,12 @@ dirs), it falls back to `/tmp/ptyro-<uid>-<fnv32 of the original path>/ptyro.soc
 deterministic, so every client finds it. The daemon refuses a socket directory owned by another
 uid and tightens it to `0700` (a shared `/tmp` could otherwise be pre-seeded). `PTYRO_SOCKET`
 overrides the socket path alone.
+
+**[fixed 2026-11-09]** Under a `PTYRO_HOME`, `PTYRO_SOCKET` counts only when it is that home's:
+inside the home, or the home's own fallback socket (a pipe on Windows: the home's own pipe).
+Otherwise it is ignored. Every session's environment carries its daemon's `PTYRO_SOCKET`, so an
+agent that sandboxed itself with `PTYRO_HOME=<scratch>` and ran `ptyro daemon stop --force` stopped
+the daemon it was running in, and every session with it.
 
 **[fixed 2026-10-23]** A daemon replaces an existing socket file only when connecting to it is
 *refused* (nobody listens); any other failure leaves it alone and the daemon refuses to start,

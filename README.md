@@ -413,7 +413,11 @@ status bar says what you'd do next with what's selected (`C-q p answer it`).
 `ptyro` again and you're back on the same screen. To stop ptyro altogether, press `Ctrl-Q
 Ctrl-D`: it lists what will stop and asks first. Agents that can resume hibernate and come back
 dormant next time; shells and other programs end. From a shell, `ptyro daemon stop --force`
-does the same.
+does the same. Any `ptyro` command starts the daemon again; `ptyro daemon start` does only that,
+in the background, and says its pid.
+
+A test or script that wants its own throwaway ptyro sets `PTYRO_HOME` to an empty directory:
+everything, socket included, lives there, even when it runs inside a ptyro session.
 
 **3. An agent on a task, in its own worktree.** Press `Ctrl-Q n`, type what it should do, and
 press `⏎`: Claude starts on it in a fresh worktree, on its own branch, named after the task

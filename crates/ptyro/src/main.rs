@@ -1304,9 +1304,9 @@ enum DevicesCmd {
 
 #[derive(Subcommand)]
 enum DaemonCmd {
-    /// Start the daemon (normally automatic)
+    /// Start the daemon in the background (normally automatic)
     Start {
-        /// Stay in the foreground and log to stderr too
+        /// Stay in this terminal and log to stderr too (Ctrl-C stops it)
         #[arg(long)]
         foreground: bool,
         /// Internal: started by a client; detach from its terminal
