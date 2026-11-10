@@ -1577,8 +1577,7 @@ mod tests {
     /// A long flag is a switch everywhere or takes a value everywhere: `--x V` never means a
     /// switch plus a word in another command. These were so before the rule and wait for the
     /// owner's word on new names; no new one may join them.
-    const SWITCH_AND_VALUE: [&str; 7] =
-        ["chat", "keep", "lead", "note", "pr", "scrollback", "wait"];
+    const SWITCH_AND_VALUE: [&str; 6] = ["chat", "keep", "lead", "pr", "scrollback", "wait"];
 
     #[test]
     fn a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere() {

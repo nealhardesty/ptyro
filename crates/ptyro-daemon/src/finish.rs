@@ -277,6 +277,13 @@ impl Daemon {
 
     /// Delete an archived worktree for good: off the list, then its snapshot, its kept files
     /// and its branch (only when merged or pushed, as `wt rm` decides).
+    /// The archive `addr` names, as `delete_archive` and restoring find it.
+    pub(crate) async fn get_archive(&self, addr: &str) -> Result<Reply, Error> {
+        let mut list = self.archives().await?;
+        let e = list.swap_remove(self.archive_index(&list, addr)?);
+        Ok(Reply::Archives { entries: vec![e] })
+    }
+
     pub(crate) async fn delete_archive(&self, addr: &str) -> Result<Reply, Error> {
         let _one = self.archive_list.lock().await;
         let mut list = self.archives().await?;
@@ -387,7 +394,12 @@ impl Daemon {
         let label = |i: &usize| {
             let e = &list[*i];
             let handle = lookup::handle(&e.id, ids.iter().copied());
-            format!("{handle} ({}/{}, archived {} ago)", e.project_slug, e.name, ago(e.archived_ms))
+            format!(
+                "{handle} ({}/{}, archived {} ago)",
+                e.project_slug,
+                e.name,
+                ptyro_core::ago(e.archived_ms)
+            )
         };
         let key = lookup::key(addr);
         let (project, name) = match addr.rsplit_once('/') {
@@ -570,17 +582,6 @@ const KEEP_TOTAL: u64 = 16 << 20;
 fn expired(list: Vec<ArchiveEntry>, days: u32, now: u64) -> (Vec<ArchiveEntry>, Vec<ArchiveEntry>) {
     let before = now.saturating_sub(u64::from(days) * 86_400_000);
     list.into_iter().partition(|e| days > 0 && e.archived_ms < before)
-}
-
-/// `3d`: how long ago `ms` was.
-fn ago(ms: u64) -> String {
-    let secs = now_ms().saturating_sub(ms) / 1000;
-    match secs {
-        0..60 => format!("{secs}s"),
-        60..3600 => format!("{}m", secs / 60),
-        3600..86400 => format!("{}h", secs / 3600),
-        _ => format!("{}d", secs / 86400),
-    }
 }
 
 /// Where the ignored files of the archive `snapshot` (`refs/ptyro/archive/x`) are kept.

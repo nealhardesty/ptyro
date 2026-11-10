@@ -1043,6 +1043,8 @@ mod tests {
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &std::fs::metadata(wt.join("ok")).unwrap().permissions(),
         );
-        assert_eq!(mode & 0o777, 0o750 & !0o022);
+        // Within the umask, which another test binding a socket may hold at 077 for a moment
+        // (it is the process's): the owner's bits always come, and nothing the source lacks.
+        assert_eq!((mode & 0o700, mode & 0o777 & !0o750), (0o700, 0), "{mode:o}");
     }
 }

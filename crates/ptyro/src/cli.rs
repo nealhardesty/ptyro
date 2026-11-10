@@ -8,7 +8,7 @@ use std::time::Duration;
 use ptyro_client::{Client, ConnectOptions};
 use ptyro_core::paths::Paths;
 use ptyro_core::session::{SessionInfo, SpawnSpec};
-use ptyro_core::{Error, ErrorCode, TermSize, now_ms};
+use ptyro_core::{Error, ErrorCode, TermSize};
 use ptyro_protocol::{ClientKind, Encoding, Reply, Request};
 use ptyro_tui::AttachEnd;
 
@@ -877,8 +877,14 @@ pub fn said(e: &Error) -> String {
         Again::StopSessions => "--stop-sessions".to_owned(),
         Again::Stop => "--stop".to_owned(),
         Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
+        Again::Release => "--release".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
+}
+
+/// The refusal's way through is `again` (SPEC §6.6).
+pub fn fixed_by(e: &Error, again: &ptyro_core::error::Again) -> bool {
+    e.fix.as_ref().is_some_and(|f| f.again == *again)
 }
 
 /// The fingerprint a refusal asks you to trust, if it asks.
@@ -1416,7 +1422,7 @@ async fn history(ctx: &Ctx, json: bool) -> Result<i32, Error> {
             truncate(&e.name, 20),
             truncate(&format!("{}{mark}", e.state.label()), 16),
             truncate(&e.argv.join(" "), 26),
-            age(e.created_ms),
+            ago(e.created_ms),
             ran,
             e.cwd.display()
         );
@@ -1596,7 +1602,7 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
             truncate(&place, 24),
             if profiles { format!("{:<10} ", truncate(&s.profile, 10)) } else { String::new() },
             s.viewers,
-            age(s.created_ms),
+            ago(s.created_ms),
             status
         );
     }
@@ -1613,15 +1619,7 @@ pub fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-pub fn age(ms: u64) -> String {
-    let secs = now_ms().saturating_sub(ms) / 1000;
-    match secs {
-        0..60 => format!("{secs}s"),
-        60..3600 => format!("{}m", secs / 60),
-        3600..86400 => format!("{}h", secs / 3600),
-        _ => format!("{}d", secs / 86400),
-    }
-}
+pub use ptyro_core::ago;
 
 /// Stop the daemon; `hibernate` puts resumable agents to sleep first (SPEC §7.4).
 pub(crate) async fn stop_daemon(ctx: &Ctx, force: bool, hibernate: bool) -> Result<i32, Error> {
@@ -1711,7 +1709,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                     println!("  machine   {m}");
                 }
                 println!("  pid       {}", status.pid);
-                println!("  uptime    {}", age(status.started_ms));
+                println!("  uptime    {}", ago(status.started_ms));
                 if let Some(l) = &status.load {
                     println!("  load      {} ({} CPUs)", l.text(), l.cpus);
                 }
@@ -1735,7 +1733,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                     println!(
                         "  upgrades  {} (last {} ago{})",
                         status.generation,
-                        status.upgraded_ms.map(age).unwrap_or_default(),
+                        status.upgraded_ms.map(ago).unwrap_or_default(),
                         if status.rolled_back { ", rolled back" } else { "" }
                     );
                 }

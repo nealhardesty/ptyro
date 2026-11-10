@@ -87,7 +87,7 @@ export const errText = (e: unknown): string => (e as Error)?.message || String(e
 
 /// A refusal's way through (SPEC §6.6): the same request again with one thing said, and what
 /// its button says.
-export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust"; label: string; fingerprint?: string }
+export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust" | "release"; label: string; fingerprint?: string }
 export const fixOf = (e: unknown): Fix | undefined => (e as { fix?: Fix })?.fix;
 
 /// `req` again with `f` said, where the request keeps that field; `null` when it has none.
@@ -100,7 +100,7 @@ export function withFix(req: any, f: Fix): any {
 }
 
 /// Run a request; on failure toast why and resolve `undefined`. A refusal with a way through
-/// asks whether to take it.
+/// asks whether to take it, and resolves with what that answered (so the caller goes on).
 export async function ask<T = any>(req: object, ok?: string): Promise<T | undefined> {
   try {
     const r = await conn.request(req);
@@ -108,8 +108,8 @@ export async function ask<T = any>(req: object, ok?: string): Promise<T | undefi
     return r as T;
   } catch (e) {
     const f = fixOf(e), again = f && withFix(req, f);
-    if (f && again) confirm(f.label, errText(e), f.label, () => ask(again, ok));
-    else ui.fail(errText(e));
+    if (f && again) return (await confirmed(f.label, errText(e), f.label)) ? ask<T>(again, ok) : undefined;
+    ui.fail(errText(e));
     return undefined;
   }
 }
@@ -245,6 +245,16 @@ export function confirm(title: string, message: Child, label: string, run: () =>
     h("button", { class: danger ? "deny" : "primary", onclick: () => { s.close(); void run(); } }, label),
   ]);
   return s;
+}
+
+/// `confirm`, as a question: true when its button was pressed, false however else it closed.
+export function confirmed(title: string, message: Child, label: string, danger = true): Promise<boolean> {
+  return new Promise((ok) => {
+    let said = false;
+    const s = confirm(title, message, label, () => { said = true; ok(true); }, danger);
+    // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
+    s.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
+  });
 }
 
 /// Show text (a command's output, a file) in a sheet, with a copy button.

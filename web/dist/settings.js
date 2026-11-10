@@ -4,7 +4,7 @@
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
-import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, fixOf, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
@@ -473,8 +473,9 @@ function removeProfile(name, force = false) {
             showNotes("Removed", r.notes ?? []);
         }
         catch (e) {
-            if (e.code === "conflict" && !force)
-                confirm("It's in use", errText(e), "Remove anyway", () => removeProfile(name, true));
+            const f = fixOf(e);
+            if (f?.fix === "force" && !force)
+                confirm("It's in use", errText(e), f.label, () => removeProfile(name, true));
             else
                 hostFail(e);
         }

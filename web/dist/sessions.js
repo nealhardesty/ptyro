@@ -6,7 +6,7 @@ import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, NAME_HINT, slugInput, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, fixOf, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
@@ -326,19 +326,10 @@ async function summarize(s) {
     if (r)
         textSheet(`${s.name}, in a line`, r.info?.summary?.text ?? "(no summary: set `[summaries] command` in your config)");
 }
-async function convert(s, force = false) {
+// Mid-turn, the daemon refuses with a way through (SPEC §6.6), which `ask` offers.
+async function convert(s) {
     const to = !s.structured;
-    try {
-        await conn.request({ t: "convert", addr: addr(s), structured: to, force });
-        ui.toast(to ? "Now a chat" : "Now a terminal");
-    }
-    catch (e) {
-        const f = fixOf(e);
-        if (f?.fix === "force" && !force)
-            confirm("It's mid-turn", errText(e), f.label, () => convert(s, true));
-        else
-            ui.toast(errText(e));
-    }
+    await ask({ t: "convert", addr: addr(s), structured: to, force: false }, to ? "Now a chat" : "Now a terminal");
 }
 /// Quick new (UX3.2, UX3.7): another of the agent `w` last started (with its profile and
 /// arguments), else its project's default agent, else the default agent. Asked for by name, so a
@@ -395,20 +386,9 @@ function end(s, how) {
 async function remove(s) {
     if (live(s))
         return end(s, "remove");
-    try {
-        await conn.request({ t: "remove", addr: addr(s), stop: false });
-        ui.toast(`Removed ${s.name}`);
+    // It started again meanwhile: the daemon says so, and offers to stop it too (`ask`).
+    if (await ask({ t: "remove", addr: addr(s), stop: false }, `Removed ${s.name}`))
         left();
-    }
-    catch (e) {
-        // It started again meanwhile: the daemon says so, and offers to stop it too.
-        const f = fixOf(e);
-        if (f?.fix === "stop")
-            confirm("It's running", errText(e), f.label, async () => { if (await ask(ENDS.remove.req(addr(s)), `${ENDS.remove.said} ${s.name}`))
-                left(); });
-        else
-            ui.fail(errText(e));
-    }
 }
 /// `ptyro attach <id> --tab` on the computer: a Windows Terminal tab there (WSL), attached.
 async function openOnComputer(s) {

@@ -2402,21 +2402,7 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
     lines
 }
 
-/// `12s`, `4m`, `3h`, `2d` ago.
-pub fn ago(ms: u64) -> String {
-    dur(ptyro_core::now_ms().saturating_sub(ms))
-}
-
-/// A duration: `12s`, `4m`, `3h`, `2d`.
-pub fn dur(ms: u64) -> String {
-    let s = ms / 1000;
-    match s {
-        0..60 => format!("{s}s"),
-        60..3600 => format!("{}m", s / 60),
-        3600..86400 => format!("{}h", s / 3600),
-        _ => format!("{}d", s / 86400),
-    }
-}
+pub use ptyro_core::{ago, dur};
 
 /// Text being typed, laid out for a box `width` columns wide (UX1.26): split at its new lines
 /// and wrapped, each row behind `first` (the first row) or as many spaces, at most `max_rows`

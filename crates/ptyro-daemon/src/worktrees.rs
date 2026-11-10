@@ -863,11 +863,15 @@ impl Daemon {
             return Some(wt);
         }
         if branch.is_some() && branch != wt.branch {
-            // Checked out another branch by hand: follow it.
-            let mut w = wt.clone();
-            w.branch = branch;
-            w.status = Some(status);
-            self.put_worktree(w.clone());
+            // Checked out another branch by hand: follow it, on the entry as it is now (a
+            // rename or a removal during the status read stays).
+            let w = self.update_worktree(id, |w| {
+                w.branch = branch;
+                w.status = Some(status);
+            })?;
+            if let Some(store) = &self.store {
+                store.save_worktree(w.clone());
+            }
             return Some(w);
         }
         self.update_worktree(id, |w| w.status = Some(status))
@@ -1122,7 +1126,7 @@ impl Daemon {
         addr: &str,
         new: Option<String>,
     ) -> Result<Reply, Error> {
-        let mut wt = self.find_worktree(addr)?;
+        let wt = self.find_worktree(addr)?;
         let p = self
             .project_by_id(&wt.project)
             .ok_or_else(|| Error::missing("project", &wt.project))?;
@@ -1172,8 +1176,14 @@ impl Daemon {
             git.rename_branch(&root, &o, &n).map_err(git_err)
         })
         .await??;
-        wt.branch = Some(new);
-        self.put_worktree(wt.clone());
+        // On the entry as it is now, not the copy held across the awaits: a rename (or a
+        // removal) that landed meanwhile stays.
+        let wt = self
+            .update_worktree(&wt.id, |w| w.branch = Some(new))
+            .ok_or_else(|| Error::missing("worktree", addr))?;
+        if let Some(store) = &self.store {
+            store.save_worktree(wt.clone());
+        }
         Ok(Reply::Worktree { info: wt })
     }
 
@@ -1272,6 +1282,7 @@ impl Daemon {
             }
             Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
             Request::WorktreeArchiveDelete { addr } => self.delete_archive(&addr).await,
+            Request::WorktreeArchiveGet { addr } => self.get_archive(&addr).await,
             Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
             Request::ProjectSuggest { addr, apply } => self.project_suggest(&addr, apply).await,
             Request::Branches { project } => {

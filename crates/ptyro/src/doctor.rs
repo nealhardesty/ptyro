@@ -326,19 +326,11 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
             S,
             "agents",
             Level::Ok,
-            format!("up to date (looked {})", ago(updates::now().saturating_sub(v.checked))),
+            format!(
+                "up to date (looked {} ago)",
+                ptyro_core::dur(updates::now().saturating_sub(v.checked))
+            ),
         );
-    }
-}
-
-/// `5 minutes ago`, `3 hours ago`.
-fn ago(ms: u64) -> String {
-    let m = ms / 60_000;
-    match m {
-        0 => "just now".into(),
-        1..=59 => format!("{m} minute(s) ago"),
-        60..=1439 => format!("{} hour(s) ago", m / 60),
-        _ => format!("{} day(s) ago", m / 1440),
     }
 }
 
@@ -1138,7 +1130,7 @@ async fn worktrees(c: &ptyro_client::Client, config: &Config, r: &mut Report) {
             format!(
                 "{} archived, the oldest {} ago; {purge}",
                 entries.len(),
-                crate::cli::age(oldest)
+                crate::cli::ago(oldest)
             ),
         );
     }

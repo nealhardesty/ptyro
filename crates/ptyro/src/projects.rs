@@ -5,14 +5,15 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use clap_complete::ArgValueCandidates;
 use ptyro_client::Client;
+use ptyro_core::error::Again;
 use ptyro_core::model::{ProjectInfo, RemoveOpts, WorktreeInfo, WorktreeSpec, WorktreeState};
 use ptyro_core::session::SpawnSpec;
 use ptyro_core::{Error, ErrorCode, removal};
 use ptyro_protocol::{Reply, Request};
 
 use crate::cli::{
-    Ctx, NewArgs, addr_here, addr_here_opt, age, ask_first, check_attachable, client_env, confirm,
-    current_dir, no_daemon, session_of, truncate, unexpected, with_confirmation,
+    Ctx, NewArgs, addr_here, addr_here_opt, ago, ask_first, check_attachable, client_env, confirm,
+    current_dir, fixed_by, no_daemon, session_of, truncate, unexpected, with_confirmation,
 };
 
 #[derive(Subcommand)]
@@ -552,18 +553,17 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
                 q = format!("{q} {}", removal::PROJECT_RELEASE);
             }
             ask_first(&q, yes)?;
-            let project = info.id;
-            let req = Request::ProjectRemove { addr: project.clone(), release };
-            let reply = match c.request(req).await {
-                // Its sessions are running: the TUI's and the web's offer, asked here too.
-                Err(e) if e.code == ErrorCode::Conflict && !release => {
-                    if yes || !confirm(&format!("{} Let them go?", e.message)) {
-                        return Err(Error::new(
-                            e.code,
-                            format!("{} (--release lets them go)", e.message),
-                        ));
+            let req = Request::ProjectRemove { addr: info.id, release };
+            let reply = match c.request(req.clone()).await {
+                // Its sessions are running: the refusal's way through (SPEC §6.6), the TUI's
+                // and the web's offer, asked here too.
+                Err(e) if fixed_by(&e, &Again::Release) => {
+                    let label = e.fix.as_ref().map_or("", |f| f.label.as_str());
+                    if yes || !confirm(&format!("{} {label}?", e.message)) {
+                        return Err(e);
                     }
-                    c.request(Request::ProjectRemove { addr: project, release: true }).await?
+                    let again = req.with_fix(&Again::Release);
+                    c.request(again.ok_or_else(|| Error::internal("no way through"))?).await?
                 }
                 other => other?,
             };
@@ -1069,11 +1069,20 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::ArchiveRm { worktrees, yes } => {
-            let what = worktrees.join(", ");
-            ask_first(&format!("Delete the archive of {what}? {}", removal::ARCHIVE), yes)?;
+            // Found first, then asked about by their names: a typo asks nothing.
+            let mut found = Vec::new();
             for addr in worktrees {
+                let reply = c.request(Request::WorktreeArchiveGet { addr }).await?;
+                let Reply::Archives { entries } = reply else { return Err(unexpected(reply)) };
+                found.extend(entries);
+            }
+            let what: Vec<String> =
+                found.iter().map(|e| format!("{}/{}", e.project_slug, e.name)).collect();
+            let q = format!("Delete the archive of {}? {}", what.join(", "), removal::ARCHIVE);
+            ask_first(&q, yes)?;
+            for e in found {
                 let Reply::Notes { notes: n } =
-                    c.request(Request::WorktreeArchiveDelete { addr }).await?
+                    c.request(Request::WorktreeArchiveDelete { addr: e.id }).await?
                 else {
                     return Err(Error::internal("unexpected reply"));
                 };
@@ -1101,7 +1110,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                     "{:<6} {:<28} {:<8} {:<24} {}",
                     ptyro_core::lookup::handle(&e.id, ids.iter().copied()),
                     truncate(&format!("{}/{}", e.project_slug, e.name), 28),
-                    age(e.archived_ms),
+                    ago(e.archived_ms),
                     truncate(&e.branch, 24),
                     e.title.as_deref().unwrap_or("")
                 );
@@ -1217,7 +1226,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             let worktree = addr_here(worktree)?;
             let req = Request::WorktreeRemove { addr: worktree.clone(), opts };
             let reply = match c.request(req).await {
-                Err(e) if e.code == ErrorCode::DirtyWorktree && force => {
+                Err(e) if force && fixed_by(&e, &Again::Force) => {
                     eprintln!("{}", e.message);
                     let q = format!("Discard that work and remove it? {}", removal::FORCED);
                     ask_first(&q, yes)?;
@@ -1501,7 +1510,7 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Res
         println!(
             "{:<28} {:<8} {:>11}  {}",
             truncate(&w.qualified(), 28),
-            age(w.last_used_ms.unwrap_or(w.created_ms)),
+            ago(w.last_used_ms.unwrap_or(w.created_ms)),
             e.size_label().unwrap_or_else(|| "-".into()),
             e.reasons.join("; ")
         );
@@ -1516,7 +1525,7 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Res
         println!(
             "{:<28} {:<8} {:>11}  a scratch shell's directory, left behind with {} files in it",
             truncate(&format!("scratch/{name}"), 28),
-            age(l.modified_ms),
+            ago(l.modified_ms),
             ptyro_core::model::human_bytes(l.bytes),
             l.files
         );

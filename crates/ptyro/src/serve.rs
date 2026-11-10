@@ -1013,7 +1013,7 @@ fn daemon_unavailable(e: &dyn std::fmt::Display) -> Response<Body> {
 }
 
 /// One request for one token, answered as JSON: `{"t":"ok","reply":…}` or
-/// `{"t":"err","error":{"code":…,"message":…}}` (the protocol's own outcome shape).
+/// `{"t":"err","error":{"code":…,"message":…,"fix"?:…}}` (the protocol's own outcome shape).
 async fn api_request(
     req: Request<Incoming>,
     st: &State,
@@ -1057,7 +1057,7 @@ async fn api_request(
     let out = match tokio::time::timeout(Duration::from_secs(30), client.request(request)).await {
         Ok(Ok(reply)) => serde_json::json!({ "t": "ok", "reply": reply }),
         Ok(Err(e)) => {
-            serde_json::json!({ "t": "err", "error": { "code": e.code, "message": e.message } })
+            serde_json::json!({ "t": "err", "error": e })
         }
         Err(_) => {
             serde_json::json!({ "t": "err", "error": { "code": "timeout", "message": "timed out" } })
@@ -1144,7 +1144,7 @@ async fn api_host(
     {
         Ok(Ok(v)) => serde_json::json!({ "t": "ok", "reply": v }),
         Ok(Err(e)) => {
-            serde_json::json!({ "t": "err", "error": { "code": e.code, "message": e.message } })
+            serde_json::json!({ "t": "err", "error": e })
         }
         Err(_) => {
             serde_json::json!({ "t": "err", "error": { "code": "timeout", "message": "timed out" } })

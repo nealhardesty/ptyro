@@ -4,7 +4,7 @@
 
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, confirmed, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import type { Child, Field, Item } from "./kit.js";
 import { allSessions } from "./sessions.js";
 
@@ -413,12 +413,7 @@ function newSet(): void {
         const fp = fixOf(e)?.fingerprint;
         if (!fp) throw e;
         // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.
-        const yes = await new Promise<boolean>((ok) => {
-          let said = false;
-          const c = confirm("Trust this template?", (e as Error).message, "Trust and go on", () => { said = true; ok(true); }, false);
-          c.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
-        });
-        if (!yes) return;
+        if (!(await confirmed("Trust this template?", (e as Error).message, "Trust and go on", false))) return;
         r = await conn.request({ t: "cs", op: { op: "new", spec: spec(fp.trim()) } });
       }
       s.close(); sets.reload(""); go(`#/set/${enc(r.value.set.name)}`);

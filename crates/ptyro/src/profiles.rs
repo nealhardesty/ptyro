@@ -261,6 +261,11 @@ pub async fn run(ctx: &Ctx, cmd: ProfileCmd) -> Result<i32, Error> {
         }
         ProfileCmd::Rm { name, force, yes } => {
             use ptyro_core::removal::{PROFILE, PROFILE_FORCE};
+            // Found first: a typo asks nothing.
+            let known = load(ctx)?.profiles;
+            if name != DEFAULT_PROFILE && !known.contains_key(&name) {
+                return Err(missing(&name, known.into_keys()));
+            }
             let q = format!("Remove profile {name}? {PROFILE}");
             let q = if force { format!("{q} {PROFILE_FORCE}") } else { q };
             crate::cli::ask_first(&q, yes)?;
@@ -470,10 +475,13 @@ pub(crate) async fn remove(ctx: &Ctx, name: &str, force: bool) -> Result<Vec<Str
     }
     let used = usage(ctx, name).await?;
     if !used.is_empty() && !force {
+        // The web shows these words too: the way through is data, the CLI's `said` names the
+        // flag (SPEC §6.6).
         return Err(Error::conflict(format!(
-            "profile {name} is in use: {}; change those first or use --force",
+            "profile {name} is in use: {}; change those first, or remove it anyway",
             used.join(", ")
-        )));
+        ))
+        .with_fix(ptyro_core::error::Again::Force, "Remove anyway"));
     }
     edit(ctx, |doc| {
         let t = profiles_table(doc)?;

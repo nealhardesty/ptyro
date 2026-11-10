@@ -3,26 +3,19 @@
 // waiting for review?); these are the same answers the TUI asks for, as sheets.
 
 import { conn } from "./conn.js";
-import { confirm, enc, errText, go, h, sheet, ui } from "./kit.js";
+import { confirmed, enc, errText, go, h, sheet, ui } from "./kit.js";
 
 /// Ask for `req`, and when the daemon wants the user to confirm (a profile guard) show its
 /// question and send it again with `confirmed`. The yes also covers a profile picked against the
 /// worktree's or the project's pin (`override_pin`), which is the question then (as `-y` does).
 export async function withConfirm(req: any, key: string): Promise<any | undefined> {
-  const send = (confirmed: boolean) => conn.request({ ...req, [key]: { ...req[key], confirmed, ...(confirmed ? { override_pin: true } : {}) } });
+  const send = (yes: boolean) => conn.request({ ...req, [key]: { ...req[key], confirmed: yes, ...(yes ? { override_pin: true } : {}) } });
   try {
     return await send(false);
   } catch (e) {
     if ((e as { code?: string }).code !== "needs_confirmation") { ui.fail(errText(e)); return undefined; }
-    return new Promise((ok) => {
-      let said = false;
-      const s = confirm("Are you sure?", (e as Error).message, "Go ahead", async () => {
-        said = true;
-        try { ok(await send(true)); } catch (e2) { ui.fail(errText(e2)); ok(undefined); }
-      }, false);
-      // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
-      s.onClose(() => setTimeout(() => { if (!said) ok(undefined); }, 0));
-    });
+    if (!(await confirmed("Are you sure?", (e as Error).message, "Go ahead", false))) return undefined;
+    try { return await send(true); } catch (e2) { ui.fail(errText(e2)); return undefined; }
   }
 }
 
@@ -31,11 +24,7 @@ export async function startSession(spec: any, then: "open" | "stay" = "open"): P
   const full = { cwd: "", argv: [], ...spec };
   let r = await withConfirm({ t: "spawn", spec: full }, "spec");
   if (r?.t === "queued") {
-    const again = await new Promise<boolean>((ok) => {
-      let said = false;
-      const s = confirm("Waiting for review", `${r.unreviewed} worktrees are waiting for you to review them. Start this one anyway?`, "Start anyway", () => { said = true; ok(true); }, false);
-      s.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
-    });
+    const again = await confirmed("Waiting for review", `${r.unreviewed} worktrees are waiting for you to review them. Start this one anyway?`, "Start anyway", false);
     if (!again) return undefined;
     r = await withConfirm({ t: "spawn", spec: { ...full, unqueued: true } }, "spec");
   }

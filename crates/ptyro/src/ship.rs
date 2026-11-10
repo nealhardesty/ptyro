@@ -10,7 +10,7 @@ use ptyro_core::model::{DiffAgainst, DiffDoc, LineKind, PrInfo, ReviewComment};
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 
-use crate::cli::{Ctx, age, current_dir, no_daemon, session_of, unexpected};
+use crate::cli::{Ctx, ago, current_dir, no_daemon, session_of, unexpected};
 
 #[derive(Subcommand)]
 pub enum PrCmd {
@@ -235,7 +235,7 @@ pub async fn log(c: &Client, addr: String, as_json: bool) -> Result<i32, Error> 
             k.subject,
             k.added,
             k.removed,
-            age(k.at_ms),
+            ago(k.at_ms),
             k.author
         );
     }

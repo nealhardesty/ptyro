@@ -6,7 +6,7 @@ import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
 import type { Project, Worktree, Workspace } from "./data.js";
-import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
@@ -209,19 +209,11 @@ function renameProject(p: Project): void {
 }
 
 // Asks as the CLI's `project rm` and the TUI do (ptyro_core::removal); running sessions in it
-// are offered a way out, as there.
+// refuse with a way through, "Let them go" (SPEC §6.6), which `ask` offers.
 function removeProject(p: Project): void {
-  const forget = async (release: boolean): Promise<void> => {
-    try {
-      await conn.request({ t: "project_remove", addr: p.id, release });
-      ui.toast(`Forgot ${p.slug}`);
-      go("#/p");
-    } catch (e) {
-      if (!release && (e as { code?: string }).code === "conflict") confirm("Sessions are running", `${errText(e)} Let them go?`, "Let them go", () => forget(true));
-      else ui.toast(errText(e));
-    }
-  };
-  confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", () => forget(false));
+  confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", async () => {
+    if (await ask({ t: "project_remove", addr: p.id, release: false }, `Forgot ${p.slug}`)) go("#/p");
+  });
 }
 
 function projectView(id: string): HTMLElement {
@@ -361,8 +353,8 @@ function remove(w: Worktree, force = false): void {
       for (const note of r.notes ?? []) ui.toast(note);
       go("#/p");
     } catch (e) {
-      const code = (e as { code?: string }).code;
-      if (code === "dirty_worktree") {
+      // Work would be lost: its way through, offered beside archiving it instead.
+      if (fixOf(e)?.fix === "force") {
         menu("It has work that isn't saved", [
           { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
           { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true) },

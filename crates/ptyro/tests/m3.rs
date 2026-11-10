@@ -709,11 +709,9 @@ async fn the_profile_cli_edits_the_config() {
     // In use → rm refused; rename rewrites the references.
     w.ok(&["ws", "new", "job", "--profile", "work"]);
     let out = w.cli(&["profile", "rm", "-y", "work"]);
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("workspace job"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    // Its way through is data (the web's button); the CLI names the flag (SPEC §6.6).
+    assert!(err.contains("workspace job") && err.contains("again with `--force`"), "{err}");
     // The daemon has to see the new config before it can accept the new name.
     w.ok(&["profile", "rename", "work", "acme"]);
     let ws = w.ok(&["ws", "ls"]);
@@ -811,7 +809,13 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     assert!(w.ok(&["ws", "ls"]).contains("side"), "nothing was removed");
     w.ok(&["ws", "rm", "--yes", "side"]);
     // Found first, then asked: a typo is "not found" (exit 3), not a question.
-    for args in [&["ws", "rm", "sdie"][..], &["project", "rm", "ap"], &["wt", "rm", "app/nope"]] {
+    for args in [
+        &["ws", "rm", "sdie"][..],
+        &["project", "rm", "ap"],
+        &["wt", "rm", "app/nope"],
+        &["wt", "archive-rm", "app/nope"],
+        &["profile", "rm", "nope"],
+    ] {
         let out = w.cli(args);
         assert_eq!(
             out.status.code(),
@@ -820,6 +824,14 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+    // An archive is found by its name (or handle) and asked about by its full name.
+    w.ok(&["wt", "new", "gone", "--project", "app"]);
+    w.ok(&["wt", "archive", "app/gone"]);
+    let out = w.cli(&["wt", "archive-rm", "gone"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("archive of app/gone?"), "{err}");
+    w.ok(&["wt", "archive-rm", "-y", "gone"]);
+    assert!(!w.ok(&["wt", "archives"]).contains("gone"), "deleted");
 
     let c = w.d.client().await.unwrap();
     let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();
@@ -827,7 +839,11 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(5), "{err}");
     assert!(err.contains(ptyro_core::removal::PROJECT), "{err}");
-    // Its session runs: refused, with both ways through.
+    // Its session runs: refused, with both ways through; letting them go is data (SPEC §6.6).
+    let e =
+        c.request(Request::ProjectRemove { addr: "app".into(), release: false }).await.unwrap_err();
+    let fix = e.fix.map(|f| (f.again, f.label));
+    assert_eq!(fix, Some((ptyro_core::error::Again::Release, "Let them go".into())));
     let out = w.cli(&["project", "rm", "-y", "app"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(5), "{err}");

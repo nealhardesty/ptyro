@@ -11,7 +11,7 @@ globalThis.localStorage = { getItem: () => { throw new Error("blocked"); }, setI
 globalThis.location = { origin: "http://x", hash: "" };
 globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send() {} close() {} };
 
-const { safeDecode, webHref, once, Cache, slugify, statusWord, NAME_HINT } = await import("../dist/kit.js");
+const { safeDecode, webHref, once, Cache, slugify, statusWord, withFix, NAME_HINT } = await import("../dist/kit.js");
 const { conn, store, token } = await import("../dist/conn.js");
 
 // A malformed escape in a route is kept as typed instead of throwing.
@@ -38,6 +38,10 @@ assert.equal(NAME_HINT, "A space or other odd character becomes - (a-z 0-9 . _ -
 // A status is shown with the selectors' word: `error`, as `@error` and `ptyro ls --status error` say.
 assert.equal(statusWord("errored"), "error");
 assert.equal(statusWord("idle"), "idle");
+// A refusal's way through is the same request with one field said (SPEC §6.6), wherever it sits.
+assert.deepEqual(withFix({ t: "project_remove", addr: "p", release: false }, { fix: "release", label: "Let them go" }), { t: "project_remove", addr: "p", release: true });
+assert.deepEqual(withFix({ t: "worktree_remove", addr: "w", opts: { force: false } }, { fix: "force", label: "x" }).opts, { force: true });
+assert.equal(withFix({ t: "status" }, { fix: "release", label: "x" }), null, "a request without that field");
 // localStorage that throws is not a crash.
 assert.equal(token(), null);
 store.set("k", "v");

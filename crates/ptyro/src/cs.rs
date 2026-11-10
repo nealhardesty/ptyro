@@ -23,7 +23,7 @@ use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, age, ask_first, client_env, confirm, no_daemon, trust_of, unexpected};
+use crate::cli::{Ctx, ago, ask_first, client_env, confirm, no_daemon, trust_of, unexpected};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -419,13 +419,13 @@ fn print_ledger(entries: &[LedgerEntry]) {
         match e.t.as_str() {
             "message" => println!(
                 "{:>6} ago  {} → {} [{}] {}",
-                age(e.at_ms),
+                ago(e.at_ms),
                 e.from.clone().unwrap_or_default(),
                 e.to.clone().unwrap_or_default(),
                 e.kind,
                 e.text.lines().next().unwrap_or("").chars().take(120).collect::<String>()
             ),
-            _ => println!("{:>6} ago  · {}", age(e.at_ms), e.text),
+            _ => println!("{:>6} ago  · {}", ago(e.at_ms), e.text),
         }
     }
 }
@@ -566,7 +566,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                     "{}  ({}, {} ago)",
                     headline(i),
                     i.status,
-                    age(i.set.contract.first().map_or(0, |r| r.at_ms).max(1))
+                    ago(i.set.contract.first().map_or(0, |r| r.at_ms).max(1))
                 );
             }
             Ok(0)
@@ -733,7 +733,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                 println!(
                     "#{:<3} {:>6} ago  {:<9} {}",
                     k.n,
-                    age(k.at_ms),
+                    ago(k.at_ms),
                     k.reason,
                     k.label.clone().unwrap_or_default()
                 );
@@ -944,7 +944,7 @@ async fn contract(c: &Client, set: String, cmd: ContractCmd) -> Result<i32, Erro
                 println!(
                     "r{:<3} {:>6} ago  by {:<8} {}{}{}",
                     r["n"],
-                    age(r["at_ms"].as_u64().unwrap_or(0)),
+                    ago(r["at_ms"].as_u64().unwrap_or(0)),
                     r["by"].as_str().unwrap_or(""),
                     r["approved"].as_str().map(|a| format!("approved ({a}) ")).unwrap_or_default(),
                     r["affects"]

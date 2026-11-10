@@ -556,7 +556,7 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
                 let seen = if d.pending {
                     "unclaimed".into()
                 } else {
-                    d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::age)
+                    d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::ago)
                 };
                 println!(
                     "{:<13} {:<16} {:<8} {:<12} {:<5} {}",

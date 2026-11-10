@@ -431,11 +431,8 @@ pub enum Confirmed {
     Append(std::path::PathBuf, String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
-    /// Forget this project; `release`: its running sessions go on outside it.
-    Forget {
-        id: String,
-        release: bool,
-    },
+    /// Forget this project (running sessions in it refuse, with a way through).
+    Forget(String),
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
     /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
@@ -2466,14 +2463,9 @@ impl App {
             (Pending::Removed(_) | Pending::Forget(_), Ok(Reply::Removed { notes })) => {
                 self.toast(notes.join(" · "))
             }
-            // Its sessions are running: let them go on, outside any project (as the web offers).
-            (Pending::Forget(id), Err(e)) if e.code == ErrorCode::Conflict => {
-                self.overlay = Some(Overlay::Confirm {
-                    text: format!("{} Let them go? [y/N]", e.message),
-                    action: Confirmed::Forget { id, release: true },
-                });
-            }
-            (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
+            (Pending::Removed(id), Err(e))
+                if e.fix.as_ref().is_some_and(|f| f.again == ptyro_core::error::Again::Force) =>
+            {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
                         "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: remove it anyway ({}) · n: neither",
@@ -4252,7 +4244,7 @@ impl App {
                                 p.slug,
                                 ptyro_core::removal::PROJECT
                             ),
-                            action: Confirmed::Forget { id: p.id, release: false },
+                            action: Confirmed::Forget(p.id),
                         });
                     }
                     "project.rename" => {
@@ -5818,8 +5810,10 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
-            Confirmed::Forget { id, release } => self
-                .request(Pending::Forget(id.clone()), Request::ProjectRemove { addr: id, release }),
+            Confirmed::Forget(id) => self.request(
+                Pending::Forget(id.clone()),
+                Request::ProjectRemove { addr: id, release: false },
+            ),
             Confirmed::Again(mut req, then) => {
                 if let Request::ChatTask { confirmed, .. }
                 | Request::ChatCompare { confirmed, .. }
@@ -9044,7 +9038,8 @@ mod tests {
         app.overlay = None;
         app.on_reply(AppMsg::Reply(
             Pending::Removed(w.id.clone()),
-            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")),
+            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")
+                .with_fix(ptyro_core::error::Again::Force, "Remove anyway")),
         ));
         assert!(screen(&app).contains("a: archive it instead"));
         key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
@@ -12407,17 +12402,17 @@ mod tests {
         let Ok(AppMsg::Reply(Pending::Forget(id), _)) = app.rx.try_recv() else {
             panic!("the project was asked to go")
         };
-        // The daemon refuses: sessions run in it. The same way through as the web and the CLI.
-        let e = ptyro_core::Error::new(ErrorCode::Conflict, "app has running sessions (a).");
-        app.handle_reply(Pending::Forget(id), Err(e));
-        let Some(Overlay::Confirm { text, action: Confirmed::Forget { id, release: true } }) =
-            &app.overlay
-        else {
-            panic!("offers to let them go")
-        };
-        assert!(text.contains("Let them go?") && id == "p1", "{text}");
-        app.overlay_key(KeyEvent::char('y'));
-        assert!(matches!(app.rx.try_recv(), Ok(AppMsg::Reply(Pending::Forget(_), _))));
+        // The daemon refuses: sessions run in it. Its way through is the same button as every
+        // refusal's (SPEC §6.6), the web's and the CLI's offer too.
+        let e = ptyro_core::Error::conflict("app has running sessions (a).")
+            .with_fix(ptyro_core::error::Again::Release, "Let them go");
+        let req = Request::ProjectRemove { addr: id.clone(), release: false };
+        let retry = req.with_fix(&ptyro_core::error::Again::Release).expect("it can say that");
+        app.on_reply(AppMsg::Refused(Pending::Forget(id), e, Box::new(retry)));
+        let t = app.toast.as_ref().unwrap();
+        let Some(Offer { label, then: Then::Send(req, _) }) = &t.offer else { panic!("no button") };
+        assert_eq!(label, "let them go");
+        assert!(matches!(&**req, Request::ProjectRemove { addr, release: true } if addr == "p1"));
     }
 
     #[test]

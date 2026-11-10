@@ -75,6 +75,8 @@ pub enum Again {
     Stop,
     /// `trust`: trust what was read, by its fingerprint.
     Trust { fingerprint: String },
+    /// `release`: let the running sessions go on, outside it.
+    Release,
 }
 
 impl Error {
