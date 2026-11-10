@@ -3950,7 +3950,9 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `send S… TEXT [--no-enter] [--raw] [--wait-ready[=2m]] [--wait [--timeout] [--stall]] [--json]`;
   - `broadcast S… TEXT [--timeout]`;
   - `read S [--screen|--scrollback [N]] [--plain|--ansi] [--json]`;
-  - `wait S… [--for C] [--match RE [--scrollback]] [--timeout] [--any|--all] [--stall] [--json]`;
+  - `wait S… [--for C] [--match RE [--scrollback [N]]] [--timeout] [--any|--all] [--stall] [--json]`
+    (`--scrollback N` means what it means to `read`: the screen and up to N lines above it, all
+    of them without N; a flag means one thing in every command, docs/commands.md);
   - `events [--follow] [--session S] [-l N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.

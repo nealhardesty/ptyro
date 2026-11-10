@@ -154,7 +154,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 |---|---|
 | `ptyro send SESSIONS… TEXT [--no-enter] [--raw] [--wait-ready[=D]] [--wait [--timeout D] [--stall D]] [--json]` | type into sessions. `--wait-ready` waits for the input box (2m, or D). `--wait` reports how the turn ended. `--raw` sends keys as written (`\e`, `\r`, `\t`, `\xHH`) |
 | `ptyro broadcast SESSIONS… TEXT [--no-enter] [--timeout D]` | one prompt to several, each once it's ready |
-| `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|error\|exit\|any-attention] [--match RE [--scrollback]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
+| `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|error\|exit\|any-attention] [--match RE [--scrollback [N]]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
 | `ptyro read SESSION [--scrollback [N]] [--ansi] [--chat] [--json]` | the screen, scrollback, or a structured session's transcript |
 | `ptyro events [-f] [--session S] [-l N] [--json]` | what happened; `--follow` streams every change as NDJSON |
 | `ptyro status [SESSION] [--explain] [--json]` | what every agent is doing; `--explain`: why ptyro thinks so |

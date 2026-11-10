@@ -92,7 +92,8 @@ pub struct WaitOpts {
     /// Any of these conditions ends the wait for a session.
     pub conditions: Vec<String>,
     pub pattern: Option<regex::Regex>,
-    pub scrollback: bool,
+    /// Match against this many lines of scrollback above the screen too (`None`: the screen).
+    pub scrollback: Option<u32>,
     pub timeout: Option<Duration>,
     pub any: bool,
     pub stall: Option<Duration>,
@@ -105,9 +106,9 @@ async fn get(c: &Client, id: SessionId) -> Result<SessionInfo, Error> {
     }
 }
 
-async fn screen_text(c: &Client, id: SessionId, scrollback: bool) -> Result<String, Error> {
-    if scrollback {
-        match c.request(Request::ReadScrollback { addr: id.full(), lines: None }).await? {
+async fn screen_text(c: &Client, id: SessionId, scrollback: Option<u32>) -> Result<String, Error> {
+    if let Some(lines) = scrollback {
+        match c.request(Request::ReadScrollback { addr: id.full(), lines: Some(lines) }).await? {
             Reply::Scrollback { doc } => {
                 Ok(ptyro_core::cache::plain_text(&ptyro_core::cache::doc_rows(&doc)))
             }
@@ -319,7 +320,7 @@ pub async fn wait(
     sessions: Vec<String>,
     condition: String,
     pattern: Option<String>,
-    scrollback: bool,
+    scrollback: Option<u32>,
     timeout: Option<String>,
     any: bool,
     stall: Option<String>,
@@ -425,7 +426,7 @@ pub async fn send(
     let o = WaitOpts {
         conditions: ["idle", "blocked", "error", "exit"].map(String::from).into(),
         pattern: None,
-        scrollback: false,
+        scrollback: None,
         timeout: timeout.as_deref().map(duration).transpose()?,
         any: false,
         stall: stall.as_deref().map(duration).transpose()?,
