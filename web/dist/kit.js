@@ -95,7 +95,7 @@ export function withFix(req, f) {
     return null;
 }
 /// Run a request; on failure toast why and resolve `undefined`. A refusal with a way through
-/// asks whether to take it.
+/// asks whether to take it, and resolves with what that answered (so the caller goes on).
 export async function ask(req, ok) {
     try {
         const r = await conn.request(req);
@@ -106,9 +106,8 @@ export async function ask(req, ok) {
     catch (e) {
         const f = fixOf(e), again = f && withFix(req, f);
         if (f && again)
-            confirm(f.label, errText(e), f.label, () => ask(again, ok));
-        else
-            ui.fail(errText(e));
+            return (await confirmed(f.label, errText(e), f.label)) ? ask(again, ok) : undefined;
+        ui.fail(errText(e));
         return undefined;
     }
 }
@@ -263,6 +262,16 @@ export function confirm(title, message, label, run, danger = true) {
         h("button", { class: danger ? "deny" : "primary", onclick: () => { s.close(); void run(); } }, label),
     ]);
     return s;
+}
+/// `confirm`, as a question: true when its button was pressed, false however else it closed.
+export function confirmed(title, message, label, danger = true) {
+    return new Promise((ok) => {
+        let said = false;
+        const s = confirm(title, message, label, () => { said = true; ok(true); }, danger);
+        // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
+        s.onClose(() => setTimeout(() => { if (!said)
+            ok(false); }, 0));
+    });
 }
 /// Show text (a command's output, a file) in a sheet, with a copy button.
 export function textSheet(title, text) {

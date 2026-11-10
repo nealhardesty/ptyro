@@ -1355,14 +1355,19 @@ the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 
 **The way through is data, not words** (protocol 1.39). A refusal that has one carries
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
-second time: `force`, `stop_sessions`, `stop`, or `trust` (with the `fingerprint` read). The
-daemon sets it exactly where that way applies (removing a running session: `stop`, "Stop and
-remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn convert,
-a daemon stop with sessions, a change set's restore, drop or remove: `force`; an untrusted recipe
-or template: `trust`), never for a refusal it doesn't undo (removing while it restarts, a
-restart while it runs). The CLI prints "(again with `--force`: remove anyway)" (`cli::said`);
-the TUI turns it into a toast button that resends the request (`Request::with_fix`); the web asks
-with a confirmation (`kit.ts` `withFix`, in `ask()`). Left as words: a message to an agent (which
+second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read), or
+`release`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
+"Stop and remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn
+convert, a daemon stop with sessions, a change set's restore, drop or remove: `force`; an
+untrusted recipe or template: `trust`; forgetting a project with running sessions: `release`,
+"Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
+it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
+and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
+happens to go with it (owner, 2026-11-09). The CLI prints "(again with `--force`: remove anyway)"
+(`cli::said`; `project rm` at a terminal asks "Let them go?" instead); the TUI turns it into a
+toast button that resends the request (`Request::with_fix`); the web asks with a confirmation
+(`kit.ts` `withFix`, in `ask()`), and `ask()` resolves with the retry's reply, so the caller goes
+on (leaves a removed thing's page) as if the first request had worked. Left as words: a message to an agent (which
 drives the CLI), one about another computer or the daemon process itself, and the ones that
 suggest a different action, which the TUI's `SUGGESTED` table still turns into one (`` `ptyro
 project trust` `` and the like).
@@ -3821,7 +3826,8 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   - **Running sessions don't trap a project.** `project rm` with live sessions is refused with
     both ways through (stop them, or let them go). The CLI's `--release` lets them go (at a
     terminal it offers to), and the TUI and the web offer "Let them go"; they keep running,
-    outside any project. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
+    outside any project. The refusal carries that way through as `fix: release` (§6.6), which
+    is what each client acts on. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
     refusal (which all three show) and in `project rm --release`'s question.
 
 ### 12.2 Command tree **[decided]**

@@ -1656,6 +1656,7 @@ impl Request {
             Request::Remove { .. }
                 | Request::WorktreeRemove { .. }
                 | Request::WorktreeArchive { .. }
+                | Request::ProjectRemove { .. }
                 | Request::Shutdown { .. }
                 | Request::Convert { .. }
                 | Request::Cs { .. }
@@ -1676,6 +1677,7 @@ impl Request {
             (Request::WorktreeArchive { stop_sessions, .. }, A::StopSessions) => {
                 *stop_sessions = true
             }
+            (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
             (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
                 *force = true
             }

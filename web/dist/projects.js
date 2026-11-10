@@ -187,22 +187,12 @@ function renameProject(p) {
     });
 }
 // Asks as the CLI's `project rm` and the TUI do (ptyro_core::removal); running sessions in it
-// are offered a way out, as there.
+// refuse with a way through, "Let them go" (SPEC §6.6), which `ask` offers.
 function removeProject(p) {
-    const forget = async (release) => {
-        try {
-            await conn.request({ t: "project_remove", addr: p.id, release });
-            ui.toast(`Forgot ${p.slug}`);
+    confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", async () => {
+        if (await ask({ t: "project_remove", addr: p.id, release: false }, `Forgot ${p.slug}`))
             go("#/p");
-        }
-        catch (e) {
-            if (!release && e.code === "conflict")
-                confirm("Sessions are running", `${errText(e)} Let them go?`, "Let them go", () => forget(true));
-            else
-                ui.toast(errText(e));
-        }
-    };
-    confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", () => forget(false));
+    });
 }
 function projectView(id) {
     const p = data.projects.get(id);

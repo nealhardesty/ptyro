@@ -471,7 +471,8 @@ impl Daemon {
                 p.slug,
                 live.join(", "),
                 ptyro_core::removal::PROJECT_RELEASE
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::Release, "Let them go"));
         }
         {
             let mut reg = self.registry.locked();

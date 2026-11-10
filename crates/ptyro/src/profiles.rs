@@ -470,10 +470,13 @@ pub(crate) async fn remove(ctx: &Ctx, name: &str, force: bool) -> Result<Vec<Str
     }
     let used = usage(ctx, name).await?;
     if !used.is_empty() && !force {
+        // The web shows these words too: the way through is data, the CLI's `said` names the
+        // flag (SPEC §6.6).
         return Err(Error::conflict(format!(
-            "profile {name} is in use: {}; change those first or use --force",
+            "profile {name} is in use: {}; change those first, or remove it anyway",
             used.join(", ")
-        )));
+        ))
+        .with_fix(ptyro_core::error::Again::Force, "Remove anyway"));
     }
     edit(ctx, |doc| {
         let t = profiles_table(doc)?;

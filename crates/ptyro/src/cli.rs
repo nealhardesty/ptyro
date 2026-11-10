@@ -877,8 +877,14 @@ pub fn said(e: &Error) -> String {
         Again::StopSessions => "--stop-sessions".to_owned(),
         Again::Stop => "--stop".to_owned(),
         Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
+        Again::Release => "--release".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
+}
+
+/// The refusal's way through is `again` (SPEC §6.6).
+pub fn fixed_by(e: &Error, again: &ptyro_core::error::Again) -> bool {
+    e.fix.as_ref().is_some_and(|f| f.again == *again)
 }
 
 /// The fingerprint a refusal asks you to trust, if it asks.

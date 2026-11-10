@@ -5,7 +5,7 @@
 import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, NAME_HINT, ago, ask, confirm, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, confirm, confirmed, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
 import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
 const ACTIONS = {
@@ -342,13 +342,7 @@ async function agreed(req) {
     catch (e) {
         if (e.code !== "needs_confirmation")
             throw e;
-        const yes = await new Promise((ok) => {
-            let said = false;
-            const s = confirm("Another profile?", errText(e), "Go ahead", () => { said = true; ok(true); }, false);
-            s.onClose(() => setTimeout(() => { if (!said)
-                ok(false); }, 0));
-        });
-        if (!yes)
+        if (!(await confirmed("Another profile?", errText(e), "Go ahead", false)))
             throw new Error("cancelled");
         return await conn.request({ ...req, confirmed: true });
     }
