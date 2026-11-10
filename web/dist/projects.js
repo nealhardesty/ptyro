@@ -4,7 +4,7 @@
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 const ACTIONS = {
@@ -334,7 +334,7 @@ function finish(w) {
     ]);
 }
 function archive(w) {
-    const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
+    const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
     confirm(`Archive ${w.title || w.name}?`, `Its files (uncommitted ones too) are saved and its branch kept; the worktree is removed. Restore brings it back.${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, "Archive", async () => {
         const r = await ask({ t: "worktree_archive", addr: w.id, stop_sessions: n > 0 }, "Archived");
         if (r)
@@ -342,26 +342,31 @@ function archive(w) {
     }, false);
 }
 function remove(w, force = false) {
-    const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
-    confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
+    const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
+    // Unsaved work offers archiving first; any other refusal with a way through (a session the
+    // count above missed: a loose shell, one starting) offers it, as `ask` does (SPEC §6.6).
+    const send = async (req) => {
         try {
-            const r = await conn.request({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } });
+            const r = await conn.request(req);
             for (const note of r.notes ?? [])
                 ui.toast(note);
             go("#/p");
         }
         catch (e) {
-            const code = e.code;
-            if (code === "dirty_worktree") {
+            const f = fixOf(e), again = f && withFix(req, f);
+            if (e.code === "dirty_worktree") {
                 menu("It has work that isn't saved", [
                     { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
                     { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true) },
                 ]);
             }
+            else if (f && again)
+                confirm(f.label, errText(e), f.label, () => send(again));
             else
                 ui.toast(errText(e));
         }
-    });
+    };
+    confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", () => send({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } }));
 }
 async function runScript(w) {
     const r = await ask({ t: "project_scripts", addr: w.project, worktree: w.id });
