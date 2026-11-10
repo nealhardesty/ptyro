@@ -83,7 +83,7 @@ enum Cmd {
         /// Size for a detached session, COLSxROWS (attached sessions use your terminal's size)
         #[arg(long, value_parser = cli::parse_size)]
         size: Option<ptyro_core::TermSize>,
-        /// Print the session as JSON (with -d)
+        /// Print the session as JSON (doesn't attach)
         #[arg(long)]
         json: bool,
         /// Start an agent: claude, codex, gemini, opencode, or one from [agents]; `claude@work`
@@ -104,7 +104,7 @@ enum Cmd {
         #[arg(long, num_args = 0..=1, default_missing_value = "")]
         new_wt: Option<String>,
         /// Project for --new-wt (default: the one containing the current directory)
-        #[arg(long, add = ArgValueCandidates::new(complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         /// Run under a profile other than the worktree's or the project's pin
         #[arg(long)]
@@ -113,7 +113,7 @@ enum Cmd {
         #[arg(short, long)]
         yes: bool,
         /// Type this prompt into the agent once it's ready (`@name`: a project prompt snippet)
-        #[arg(short, long, conflicts_with = "prompt_file")]
+        #[arg(long, conflicts_with = "prompt_file")]
         prompt: Option<String>,
         /// Read the prompt from a file
         #[arg(long)]
@@ -182,12 +182,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
         /// Include sessions from earlier daemon runs (from the store)
-        #[arg(short, long)]
-        all: bool,
-        /// Only sessions in this state or status: running, active (working, blocked or running
-        /// a command), exited, dormant, working, blocked, idle, done, errored
         #[arg(long)]
-        status: Option<String>,
+        all: bool,
+        /// Only sessions in this state or status (the @ selectors' words): live (running), active
+        /// (working, blocked or running a command), exited, dormant, working, blocked, idle,
+        /// done, error (errored)
+        #[arg(long, value_parser = parse_state)]
+        status: Option<ptyro_core::selector::State>,
         /// Only sessions of this project
         #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
@@ -198,19 +199,20 @@ enum Cmd {
         #[arg(long)]
         chats: bool,
     },
-    /// Stop sessions (SIGHUP, then TERM, then KILL) and remove them.
+    /// Kill sessions now: SIGKILL, no chance to clean up. They stay listed (`rm` forgets them).
     /// SESSION may be a selector: `@all`, `@live`, `@exited`, `@blocked`, `build-*`, `a,b`…
     Kill {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
-        /// Send this signal number instead of the graceful sequence
+        /// Send this signal number instead of SIGKILL (9)
         #[arg(short, long)]
         signal: Option<i32>,
-        /// Keep the exited session listed (with its final screen)
-        #[arg(long)]
+        /// Does nothing: kill always keeps the session listed now (it used to remove it)
+        #[arg(long, hide = true)]
         keep: bool,
     },
-    /// Stop sessions gracefully and keep them listed (agents finish their turn first)
+    /// Stop sessions and keep them listed: an agent's turn is interrupted and it gets a moment
+    /// to exit, then the process gets HUP, TERM and KILL
     Stop {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
@@ -220,10 +222,18 @@ enum Cmd {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
     },
-    /// Remove exited sessions from the list
+    /// Forget ended sessions (exited or dormant): they leave the list, and a dormant agent's
+    /// conversation is forgotten (asked first unless --yes). A running one is refused, unless
+    /// `--stop`. Each is tried; a failure is said and the rest go on
     Rm {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
+        /// Stop a running one first (as `stop`), then forget it
+        #[arg(long)]
+        stop: bool,
+        /// Don't ask before forgetting a dormant agent
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Rename a session
     Rename {
@@ -238,9 +248,10 @@ enum Cmd {
         /// The visible screen (the default)
         #[arg(long, conflicts_with = "scrollback")]
         screen: bool,
-        /// Up to N lines of scrollback above the screen (all of it without N)
-        #[arg(long, num_args = 0..=1, default_missing_value = "4294967295")]
-        scrollback: Option<u32>,
+        /// The scrollback above the screen: what's kept in memory, or N lines (which can reach
+        /// back into the recording)
+        #[arg(long, num_args = 0..=1)]
+        scrollback: Option<Option<u32>>,
         /// Keep colours and attributes (SGR)
         #[arg(long, conflicts_with = "plain")]
         ansi: bool,
@@ -298,16 +309,17 @@ enum Cmd {
     Wait {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
-        /// working, blocked, idle, done, errored, exit, any-attention (idle and done mean the
-        /// turn ptyro last typed has ended)
-        #[arg(long = "for", default_value = "idle", value_parser = script::CONDITIONS)]
+        /// working, blocked, idle, done, error (errored), exit, any-attention (idle and done mean
+        /// the turn ptyro last typed has ended; exit, that it stopped running, hibernating too)
+        #[arg(long = "for", default_value = "idle", value_parser = script::condition())]
         condition: String,
         /// Instead: until this regex appears on the screen
         #[arg(long = "match", value_name = "REGEX")]
         pattern: Option<String>,
-        /// With --match: search the scrollback too
-        #[arg(long, requires = "pattern")]
-        scrollback: bool,
+        /// With --match: search the scrollback above the screen too, as `read --scrollback [N]`
+        /// shows it (what's kept in memory, or N lines)
+        #[arg(long, requires = "pattern", num_args = 0..=1)]
+        scrollback: Option<Option<u32>>,
         /// Give up after this long (`30s`, `10m`; default: never)
         #[arg(long)]
         timeout: Option<String>,
@@ -326,10 +338,11 @@ enum Cmd {
     Events {
         #[arg(short, long)]
         follow: bool,
-        #[arg(short, long, add = ArgValueCandidates::new(complete::sessions))]
+        /// Only this session's
+        #[arg(long, add = ArgValueCandidates::new(complete::sessions))]
         session: Option<String>,
         /// How many past events (without --follow)
-        #[arg(short = 'n', long, default_value_t = 50)]
+        #[arg(short, long, default_value_t = 50)]
         limit: u32,
         #[arg(long)]
         json: bool,
@@ -367,23 +380,25 @@ enum Cmd {
     /// The same task to several agents, each in its own worktree; then `ptyro compare`
     Fanout {
         /// Agents, comma-separated or repeated: claude,codex,gemini (`claude@work` too)
-        #[arg(short, long = "agents", value_delimiter = ',', required_unless_present = "n")]
+        #[arg(short, long = "agent", visible_alias = "agents", value_delimiter = ',', required_unless_present = "count", add = ArgValueCandidates::new(complete::agents))]
         agents: Vec<String>,
-        /// How many candidates (cycling through --agents; default agent claude)
-        #[arg(short, value_name = "N")]
-        n: Option<u32>,
-        #[arg(short, long, conflicts_with = "prompt_file")]
+        /// How many candidates (cycling through --agent; default agent claude)
+        #[arg(long, value_name = "N")]
+        count: Option<u32>,
+        /// The task, for every candidate
+        #[arg(long, conflicts_with = "prompt_file")]
         prompt: Option<String>,
         #[arg(long)]
         prompt_file: Option<PathBuf>,
-        #[arg(long, add = ArgValueCandidates::new(complete::projects))]
+        /// Project (default: the one containing the current directory)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         /// Base for the worktrees (default: the project's)
         #[arg(long)]
         base: Option<String>,
-        /// Worktree name prefix (default: from the prompt)
+        /// What the worktrees' names start with (default: from the prompt)
         #[arg(long)]
-        name: Option<String>,
+        prefix: Option<String>,
         /// Rank by this check when they're done (default `scripts.run.test`)
         #[arg(long, num_args = 0..=1, default_missing_value = "scripts.run.test")]
         test: Option<String>,
@@ -421,7 +436,8 @@ enum Cmd {
         candidate: String,
         #[arg(long, conflicts_with_all = ["pr", "apply"])]
         cherry_pick: bool,
-        #[arg(long, conflicts_with = "apply")]
+        /// Push its branch and open a pull request
+        #[arg(long = "open-pr", conflicts_with = "apply")]
         pr: bool,
         /// Copy changes into a worktree (default: the main checkout), uncommitted
         #[arg(long)]
@@ -436,12 +452,16 @@ enum Cmd {
         #[arg(long = "hunk")]
         hunks: Vec<String>,
     },
-    /// Remove candidates' worktrees (every one not picked, or one); refuses to lose work
+    /// Remove candidates' worktrees (every one not picked, or one); refuses to lose work. Asks
+    /// first unless --yes
     Discard {
         run: String,
         candidate: Option<String>,
         #[arg(long)]
         force: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// A follow-up for a candidate's agent (or all of them): `ptyro iterate @last codex "also …"`
     Iterate {
@@ -476,7 +496,7 @@ enum Cmd {
     },
     /// Overlapping changes between a project's live worktrees, and predicted merge conflicts
     Radar {
-        #[arg(long, add = ArgValueCandidates::new(complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -567,9 +587,9 @@ enum Cmd {
         /// it the error in your terminal. Never starts one
         #[arg(long)]
         read: bool,
-        /// With --read: up to N lines of scrollback above the screen (all of it without N)
-        #[arg(long, requires = "read", num_args = 0..=1, default_missing_value = "4294967295")]
-        scrollback: Option<u32>,
+        /// With --read: the scrollback above the screen too, as `read --scrollback [N]` shows it
+        #[arg(long, requires = "read", num_args = 0..=1)]
+        scrollback: Option<Option<u32>>,
     },
     /// Chats with your agents: `ptyro chat "a question"` asks and keeps it (the CHATS section of
     /// the TUI and the web show it too); `ptyro chat ask` answers once and keeps nothing. A
@@ -637,9 +657,12 @@ enum Cmd {
     },
     /// Pair a phone or browser: prints a one-time QR code that opens the web app signed in
     Pair {
-        /// What to call it in `ptyro devices`
-        #[arg(default_value = "phone")]
-        name: String,
+        /// What to call it in `ptyro devices` (default: phone; with --open, browser)
+        #[arg(short, long)]
+        name: Option<String>,
+        /// (The name, the old way: `ptyro pair NAME`)
+        #[arg(hide = true, conflicts_with = "name")]
+        name_arg: Option<String>,
         /// read, approve, control or full (default: full, with a warning, since the whole web app
         /// needs it; name a scope for less)
         #[arg(long)]
@@ -652,7 +675,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
         /// Open the link in this computer's own browser instead, pairing that browser (inside
-        /// WSL, the Windows one); the name defaults to "browser"
+        /// WSL, the Windows one)
         #[arg(long)]
         open: bool,
     },
@@ -988,7 +1011,7 @@ enum Cmd {
     /// The inbox: what wanted you, newest first
     Inbox {
         /// Only this workspace (default: all)
-        #[arg(long)]
+        #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
         /// Only unread entries
         #[arg(short, long)]
@@ -1114,9 +1137,9 @@ enum ConfigCmd {
         /// Only what is set differently from the default
         #[arg(long)]
         changed: bool,
-        /// A repository's settings (`.ptyro.toml`) instead of your own: the one you are in, or
-        /// `--project=NAME` (its name or path)
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// A repository's settings (`.ptyro.toml`) instead of your own: its name or path (`.` for
+        /// the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -1128,7 +1151,8 @@ enum ConfigCmd {
         /// Say what it is, where it comes from and what it does
         #[arg(long)]
         explain: bool,
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// A repository's value instead of your own: its name or path (`.` for the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -1141,8 +1165,9 @@ enum ConfigCmd {
         /// (after `--` when one starts with a dash)
         #[arg(required = true, num_args = 1..)]
         value: Vec<String>,
-        /// Into a repository's `.ptyro.local.toml` (yours), or its `.ptyro.toml` with --shared
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// Into a repository's `.ptyro.local.toml` (yours), or its `.ptyro.toml` with --shared:
+        /// its name or path (`.` for the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         /// With --project: the committed `.ptyro.toml` instead of your `.ptyro.local.toml`
         #[arg(long, requires = "project")]
@@ -1152,7 +1177,8 @@ enum ConfigCmd {
     Unset {
         #[arg(required = true, add = ArgValueCandidates::new(complete::settings))]
         keys: Vec<String>,
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// In a repository's file, as for `set` (`.` for the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
@@ -1167,21 +1193,26 @@ enum ConfigCmd {
         /// Its settings, as FIELD=VALUE (`command="aider --model sonnet"`); a binding's action
         /// or a prompt's text is `value=…`; a sink's `type=ntfy`
         fields: Vec<String>,
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// In a repository's file, as for `set` (`.` for the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
     },
-    /// Remove one of those, and everything in it
+    /// Remove one of those, and everything in it. Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(complete::collections))]
         collection: String,
         /// Its name (a sink's position, from `config list notifications`)
         name: String,
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// In a repository's file, as for `set` (`.` for the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Give one of those another name
     Rename {
@@ -1189,14 +1220,17 @@ enum ConfigCmd {
         collection: String,
         from: String,
         to: String,
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// In a repository's file, as for `set` (`.` for the one you're in)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
     },
     /// Print every setting's description as JSON, for tools that build forms
     Schema {
-        #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
+        /// The settings a repository's `.ptyro.toml` takes instead of yours (the same for every
+        /// repository: `-p .`)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
     },
 }
@@ -1213,7 +1247,7 @@ enum MachineCmd {
     Add {
         target: String,
         /// What its names carry here (default: what it calls itself)
-        #[arg(long)]
+        #[arg(short, long)]
         name: Option<String>,
         /// Keep it even if it doesn't answer now
         #[arg(long)]
@@ -1221,10 +1255,13 @@ enum MachineCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Stop mirroring it (nothing changes on it)
+    /// Stop mirroring it (nothing changes on it). Asks first unless --yes
     Rm {
         #[arg(add = ArgValueCandidates::new(complete::machines))]
         name: String,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Don't show one of its workspaces here (nothing changes on it)
     Hide {
@@ -1260,17 +1297,23 @@ enum DevicesCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Revoke a device: its token stops working at once, connections close
-    Revoke { id: String },
+    /// Revoke a device: its token stops working at once, connections close. Asks first unless
+    /// --yes
+    Revoke {
+        id: String,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Send a test push notification to every subscribed device
     PushTest,
 }
 
 #[derive(Subcommand)]
 enum DaemonCmd {
-    /// Start the daemon (normally automatic)
+    /// Start the daemon in the background (normally automatic)
     Start {
-        /// Stay in the foreground and log to stderr too
+        /// Stay in this terminal and log to stderr too (Ctrl-C stops it)
         #[arg(long)]
         foreground: bool,
         /// Internal: started by a client; detach from its terminal
@@ -1328,7 +1371,8 @@ enum DaemonCmd {
     HandoffVersion,
     /// Show the end of the daemon log
     Logs {
-        #[arg(short = 'n', long, default_value_t = 50)]
+        /// How many lines
+        #[arg(long, default_value_t = 50)]
         lines: usize,
         /// Keep printing new lines
         #[arg(short, long)]
@@ -1339,6 +1383,12 @@ enum DaemonCmd {
 /// `123`, `#123` or a GitHub URL ending in the number.
 fn parse_access(s: &str) -> Result<ptyro_core::config::Access, String> {
     s.parse()
+}
+
+/// `--status`: a selector's state word (`ptyro_core::selector`), aliases too.
+fn parse_state(s: &str) -> Result<ptyro_core::selector::State, String> {
+    ptyro_core::selector::State::parse(s.trim().trim_start_matches('@'))
+        .ok_or_else(|| format!("unknown state {s:?}; try {}", ptyro_core::selector::state_words()))
 }
 
 fn parse_number(s: &str) -> Result<u32, String> {
@@ -1441,6 +1491,35 @@ mod tests {
         assert_eq!(parse(&["ptyro"]), Some((false, vec![])));
     }
 
+    /// `wait --scrollback [N]` reads as `read --scrollback [N]`: N lines above the screen, or
+    /// bare, what's kept in memory (never the whole recording, which `wait` would read every
+    /// poll).
+    #[test]
+    fn wait_scrollback_takes_lines_as_read_does() {
+        use clap::Parser;
+        let parse = |argv: &'static [&'static str]| {
+            std::thread::Builder::new()
+                .stack_size(32 << 20)
+                .spawn(move || match super::Cli::try_parse_from(argv).map(|c| c.cmd) {
+                    Ok(Some(super::Cmd::Wait { scrollback, .. })) => Some(scrollback),
+                    Ok(Some(super::Cmd::Read { scrollback, .. })) => Some(scrollback),
+                    _ => None,
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        let wait = parse(&["ptyro", "wait", "s", "--match", "x", "--scrollback", "50"]);
+        assert_eq!(wait, Some(Some(Some(50))));
+        assert_eq!(wait, parse(&["ptyro", "read", "s", "--scrollback", "50"]));
+        let all = parse(&["ptyro", "wait", "s", "--match", "x", "--scrollback"]);
+        assert_eq!(all, Some(Some(None)));
+        assert_eq!(all, parse(&["ptyro", "read", "s", "--scrollback"]));
+        assert_eq!(parse(&["ptyro", "wait", "s", "--match", "x"]), Some(None));
+        // Still only with --match.
+        assert_eq!(parse(&["ptyro", "wait", "s", "--scrollback", "5"]), None);
+    }
+
     #[test]
     fn send_takes_flags_between_its_words() {
         use clap::Parser;
@@ -1465,5 +1544,145 @@ mod tests {
         assert_eq!((args, ready.as_deref()), (vec!["s".to_owned(), "x".to_owned()], Some("60s")));
         let (_, ready) = parse(&["ptyro", "send", "--wait-ready=5m", "s", "x"]).unwrap();
         assert_eq!(ready.as_deref(), Some("5m"));
+    }
+
+    /// Every argument of every command, as `(command path, short, long, takes a value)`.
+    fn every_flag() -> Vec<(String, Option<char>, Option<String>, bool)> {
+        fn walk(
+            c: &clap::Command,
+            path: &str,
+            out: &mut Vec<(String, Option<char>, Option<String>, bool)>,
+        ) {
+            for a in c.get_arguments().filter(|a| !a.is_positional()) {
+                let id = a.get_id().as_str();
+                if id == "help" || id == "version" {
+                    continue;
+                }
+                let takes = a.get_num_args().is_some_and(|n| n.takes_values());
+                out.push((path.to_owned(), a.get_short(), a.get_long().map(str::to_owned), takes));
+            }
+            for s in c.get_subcommands() {
+                walk(s, &format!("{path} {}", s.get_name()), out);
+            }
+        }
+        // (The whole tree is built on the stack: more than a test thread's 2 MiB.)
+        std::thread::Builder::new()
+            .stack_size(32 << 20)
+            .spawn(|| {
+                let mut out = Vec::new();
+                let mut c = <super::Cli as clap::CommandFactory>::command();
+                c.build();
+                walk(&c, "ptyro", &mut out);
+                out
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    /// One meaning per short flag (owner, 2026-11-09; docs/commands.md): a letter is the same
+    /// long flag in every command (`-p` is always `--project`), and a long flag that has a
+    /// letter somewhere has it everywhere it is taken.
+    #[test]
+    fn a_short_flag_means_one_thing_everywhere() {
+        use std::collections::BTreeMap;
+        let flags = every_flag();
+        let mut by_short = BTreeMap::<char, BTreeMap<String, Vec<String>>>::new();
+        let mut by_long = BTreeMap::<String, BTreeMap<Option<char>, Vec<String>>>::new();
+        for (path, short, long, _) in &flags {
+            let long = long.clone().unwrap_or_else(|| "(no long name)".into());
+            if let Some(c) = short {
+                by_short.entry(*c).or_default().entry(long.clone()).or_default().push(path.clone());
+            }
+            by_long.entry(long).or_default().entry(*short).or_default().push(path.clone());
+        }
+        let mut problems = Vec::new();
+        for (c, longs) in by_short.iter().filter(|(_, l)| l.len() > 1) {
+            problems.push(format!("-{c} means {longs:?}"));
+        }
+        for (l, shorts) in by_long.iter().filter(|(_, s)| s.len() > 1) {
+            problems.push(format!("--{l} has the letters {shorts:?}"));
+        }
+        assert!(
+            problems.is_empty(),
+            "a short flag means one thing across the CLI (the table in docs/commands.md):\n  {}",
+            problems.join("\n  ")
+        );
+    }
+
+    /// A long flag is a switch everywhere or takes a value everywhere: `--x V` never means a
+    /// switch plus a word in another command. No exceptions: the last ones were renamed
+    /// (owner, 2026-11-10).
+    #[test]
+    fn a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere() {
+        use std::collections::BTreeMap;
+        let mut by_long = BTreeMap::<String, BTreeMap<bool, Vec<String>>>::new();
+        for (path, _, long, takes) in every_flag() {
+            if let Some(l) = long {
+                by_long.entry(l).or_default().entry(takes).or_default().push(path);
+            }
+        }
+        let mixed: Vec<String> = by_long
+            .iter()
+            .filter(|(_, k)| k.len() > 1)
+            .map(|(l, k)| format!("--{l}: a switch in {:?}, a value in {:?}", k[&false], k[&true]))
+            .collect();
+        assert!(mixed.is_empty(), "\n  {}", mixed.join("\n  "));
+    }
+
+    /// Value syntax is the same everywhere (owner, 2026-11-09): `--flag V` and `--flag=V` both
+    /// work, so no flag may insist on `=`.
+    #[test]
+    fn no_flag_insists_on_an_equals_sign() {
+        std::thread::Builder::new()
+            .stack_size(32 << 20)
+            .spawn(|| {
+                fn walk(c: &clap::Command, path: &str, out: &mut Vec<String>) {
+                    for a in c.get_arguments().filter(|a| a.is_require_equals_set()) {
+                        out.push(format!("{path} --{}", a.get_long().unwrap_or("?")));
+                    }
+                    for s in c.get_subcommands() {
+                        walk(s, &format!("{path} {}", s.get_name()), out);
+                    }
+                }
+                let mut out = Vec::new();
+                walk(&<super::Cli as clap::CommandFactory>::command(), "ptyro", &mut out);
+                assert!(out.is_empty(), "these insist on `--flag=VALUE`: {out:?}");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn the_guard_sees_the_flags() {
+        let flags = every_flag();
+        let has = |path: &str, short: char, long: &str| {
+            flags
+                .iter()
+                .any(|(p, s, l, _)| p == path && *s == Some(short) && l.as_deref() == Some(long))
+        };
+        assert!(has("ptyro new", 'p', "project"));
+        assert!(has("ptyro wt ls", 'p', "project"));
+        assert!(has("ptyro config list", 'p', "project"));
+        assert!(has("ptyro events", 'l', "limit"));
+        assert!(has("ptyro fanout", 'a', "agent"));
+    }
+
+    /// An interactive session's commands attach the same way (owner, 2026-11-09): `-d` says
+    /// don't, everywhere one is started, and an optional name is `-n/--name`.
+    #[test]
+    fn starting_a_session_takes_detach_and_name_alike() {
+        let flags = every_flag();
+        for cmd in ["ptyro new", "ptyro wt new", "ptyro shells new", "ptyro chat task"] {
+            for (short, long) in [('d', "detach"), ('n', "name")] {
+                assert!(
+                    flags.iter().any(|(p, s, l, _)| p == cmd
+                        && *s == Some(short)
+                        && l.as_deref() == Some(long)),
+                    "{cmd} takes -{short}/--{long}"
+                );
+            }
+        }
     }
 }

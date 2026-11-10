@@ -32,10 +32,10 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch, your changes), base, name, title, verify, structured, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it; `--again` is `session.again` (`C-n`): another of the agent this worktree last started (else the default agent), here, full sized | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch, done when (verify), chat mode (structured), lead; `--again` is `session.again`: the `+ claude` button on a project's and a worktree's page, and a session's ⋯ → Another … |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k`; `--tab`/`--pane`: `session.tab`, `session.pane` (the palette and a session's row menu, when the terminal is tmux or Windows Terminal) | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize`, `term.zoom` (pinch, a two-finger tap, Ctrl+wheel, Aa; this device's view only, so the TUI's is the terminal emulator's own font size); `--tab`: `session.tab`, a session's ⋯ → Open on the computer (a Windows Terminal tab there, when it is WSL) |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them; `--status running` / `active` is `sidebar.filter` (`f`, or click `running` / `active` under the sidebar title): only the live sessions, or only the busy ones, each machine, project and worktree with none hidden | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them; `sidebar.filter`: the `all` / `running` / `active` chips |
-| `stop` | `session.stop` (`x`) | `session.stop`: the session's ⋯ menu |
-| `kill` | `session.kill` (`X`) | `session.kill`: the session's ⋯ menu |
+| `stop` | `session.stop` (`x`; asks first unless `[ui] confirm_kill = false`) | `session.stop`: the session's ⋯ menu → Stop (asks first unless `[ui] confirm_kill = false`) |
+| `kill` | `session.kill` (`X`; asks first unless `[ui] confirm_kill = false`) | `session.kill`: the session's ⋯ menu → Kill (asks the same way) |
 | `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | `session.restart`: the session's ⋯ menu |
-| `rm` | `session.stop` (`x`) on an exited session | `session.stop`: ⋯ on an exited session removes it |
+| `rm` | `session.remove`: `x` on an ended session, the row menu, the palette; a dormant one asks first (`-y`); `--stop` is `session.remove` on a running one (Stop and remove, asking as stop does) | `session.remove`: the session's ⋯ menu → Remove (a dormant one asks first); `--stop` is Remove on a running one (Stop and remove, asking as stop does) |
 | `rename` | `session.rename` (`,`) | `session.rename`: the session's ⋯ menu |
 | `retitle` | `session.retitle` (`,` then `C-t`) | `session.retitle`: the session's ⋯ menu |
 | `resume` | `session.resume` (or `⏎` on a dormant pane) | `session.resume`: the session's ⋯ menu |
@@ -100,7 +100,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
 | `chat answer` | `chat.open`: `a` allow, `A` always, `d` deny on the permission card | `chat.answer`: Allow, Always, Deny on the card |
 | `chat stop` | `chat.stop`: `Ctrl-C` in the view | `chat.stop`: Stop beside the box while it answers |
-| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list) | `chat.retitle`: ⋯ → Rename |
+| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list; empty clears it), `chat.autotitle` (`--auto`) | `chat.retitle`: ⋯ → Rename (empty clears it), `chat.autotitle`: ⋯ → New automatic title |
 | `chat pin` | `chat.pin` (`*` on a chat row or in the list) | `chat.pin`: ⋯ → Pin |
 | `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
 | `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
@@ -108,7 +108,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat set` | `chat.agent`, `chat.preset` and `chat.folder` (the chat's menu, `.`; `/agent`, `/tools`, `/folder DIR`, `/folder none`) | `chat.agent`, `chat.preset` and `chat.folder`: ⋯ → Switch agent, Tools, Folders (`/folder`); `chat.folder_at`: `@` in the box lists the chat's folders |
 | `chat presets` | `chat.preset` (`/tools`): the picker lists every preset with what it lets a chat use | `chat.preset`: ⋯ → Tools lists every preset with its meaning; the new chat's tools menu too |
 | `chat task` | `chat.task` (`/task [PROJECT] [--agent A] [--name N]`, the chat's menu): asks which project when its workspace has several; `--yes` is the `y` it asks | `chat.task`: ⋯ → Make it a task: the project, who works on it (`--agent`) and the worktree's name (`--name`); `/task [PROJECT] [--agent A] [--name N]` goes at once; `--yes` is the Go ahead it asks |
-| `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks) | `chat.delete`: ⋯ → Delete |
+| `chat rm` | `chat.delete` (`X` on a chat row or in the list; asks, saying what goes) | `chat.delete`: ⋯ → Delete (asks, the same words) |
 | `chat export` | `chat.export` (`e` in the list, or the menu): written to a Markdown file | `chat.export`: ⋯ → Download as Markdown, or as JSON (`--format json`) |
 | `chat retry` | `chat.retry` (`/retry`): a new answer beside the old one; `Alt-←/→` flips between them | `chat.retry`: Retry under an answer; ‹ › flips between them |
 | `chat edit` | `chat.edit` (`/edit`): pick a message, say it differently | `chat.edit`: Edit under a message of yours |
@@ -142,7 +142,8 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `project suggest` | `project.suggest`; a project's first worktree offers it on its own | `project.suggest`: a project's ⋯ menu |
 | `project ls` | shown: the sidebar lists the workspace's projects | `projects`: the Projects tab lists every project with its worktrees; its workspace chips filter them (`workspace.switch`) |
 | `project show` | `project.show` (full sized) | `project.show`: tap a project's name |
-| `project rm` | `project.remove` (asks first) | `project.remove`: a project's ⋯ menu (asks first) |
+| `project rename` | `project.rename` (a project's row menu, `.`; the palette): the live check flags a taken or bad name as you type | `project.rename`: a project's ⋯ → Rename… |
+| `project rm` | `project.remove` (asks first; with sessions running in it, offers to let them go, as `--release` does) | `project.remove`: a project's ⋯ menu (asks first; offers Let them go, as `--release` does) |
 | `project trust` | `project.trust` | `project.trust`: a project's page: review the scripts, then trust |
 | `project untrust` | `project.untrust` | `project.untrust`: a project's page |
 | `project line-endings` | `project.line_endings`; the health finding's ⏎ runs it | `project.line_endings`: a project's ⋯ → Fix scripts' line endings; Health offers it beside the finding |
@@ -151,7 +152,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |
 | `wt new` | `worktree.new` (`N`): the session form with a new worktree chosen, a free name in it (base, profile, setup, fetch…) | `worktree.new`: ＋ Task on a project, or `session.new` with "in a new worktree" |
 | `wt ls` | shown: the sidebar lists every worktree under its project, each with what is left to do: `↑2` unpushed, `not pushed ↑2` (no upstream yet), `● 3` uncommitted, a quiet `✓ pushed` when it is all done (UX2.2) | `projects`: every worktree under its project, with its changes, PR and sessions |
-| `wt rm` | `worktree.remove` (`x` on a worktree row) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
+| `wt rm` | `worktree.remove` (`x` on a worktree row; asks, saying what happens to its branch) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
 | `wt status` | shown: the sidebar's and the pane header's `↑N`, `●`, `✓ pushed` and `+N −N` (while something is left); `inspector` (`D`) for the details | `worktree.status`: a worktree's page, and its row on the Projects tab |
 | `wt diff` | `inspector` (`D`), Diff tab; `a` picks what to diff against | `review.diff`: a worktree's Changes tab; `review.against` picks what to diff against |
 | `wt log` | `inspector` (`D`), Commits tab | `worktree.log`: a worktree's Commits tab |
@@ -163,6 +164,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt open` | `worktree.open` (`o`): the installed editors, the file manager, the terminal apps, and `shell` (`!`), a new shell in it | `worktree.open`: a worktree's ⋯ → Open in…: the editors installed on the computer (a terminal editor opens as a session), its file manager and terminal apps, and `shell` (`shell.new`) |
 | `wt lock` | `worktree.lock` | `worktree.lock`: a worktree's ⋯ menu |
 | `wt unlock` | `worktree.unlock` | `worktree.unlock`: a worktree's ⋯ menu |
+| `wt rename` | `worktree.rename` (a worktree's row menu, `.`; the palette): the live check flags a taken or bad name as you type; `C-t` there edits its title | `worktree.rename`: a worktree's ⋯ → Rename… |
 | `wt rename-branch` | `worktree.rename_branch` | `worktree.rename_branch`: a worktree's ⋯ menu |
 | `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
 | `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate | `worktree.finish`: Finish on a worktree's page: a PR, or merge into the main branch |
@@ -176,8 +178,8 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `ws set` | `workspace.profile` and `workspace.notify` | `workspace.set`: a workspace's menu: its profile and notifications |
 | `ws rm` | `workspace.remove` (asks first) | `workspace.remove`: a workspace's menu (asks first) |
 | `ws rename` | `workspace.rename` | `workspace.rename`: a workspace's menu |
-| `ws add` | `project.workspaces` (a project's row menu): every workspace, ticked where it is; `project.add` adds a new one to the one you pick | `workspace.member`: a project's ⋯ menu → Workspaces |
-| `ws remove` | `project.workspaces`: untick it; `project.leave` takes the selected project out of this workspace | `workspace.member`: a project's ⋯ menu → Workspaces |
+| `ws add-project` | `project.workspaces` (a project's row menu): every workspace, ticked where it is; `project.add` adds a new one to the one you pick | `workspace.member`: a project's ⋯ menu → Workspaces |
+| `ws remove-project` | `project.workspaces`: untick it; `project.leave` takes the selected project out of this workspace | `workspace.member`: a project's ⋯ menu → Workspaces |
 
 ## Profiles
 
@@ -186,7 +188,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `profile ls` | `profile.list` (full sized) | `profile.list`: More → Profiles |
 | `profile show` | `profile.show`: pick it | `profile.show`: tap a profile |
 | `profile new` | `profile.new` (the palette; Profiles' `+ Add …` in the configuration panel): a form with every option (name, label, colour, each agent's directory to adopt, git name, email, SSH key, matching remotes) and a login after | `profile.new`: ＋ on Profiles, adopting directories you have |
-| `profile rm` | `profile.remove`: pick it | `profile.remove`: a profile's page (asks; offers to force when it's in use) |
+| `profile rm` | `profile.remove`: pick it (asks in the split) | `profile.remove`: a profile's page (asks; offers to force when it's in use) |
 | `profile rename` | `profile.rename` | `profile.rename`: a profile's page |
 | `profile env` | waived: prints `export` lines for your shell to `eval`; sessions get the environment already | waived: prints `export` lines for a shell on the computer to `eval` |
 | `profile login` | `profile.login`: pick the profile and the agent; it logs in, full sized (a health finding offers it too) | `profile.login`: a profile's page, or a health finding's fix: the tool's own login, in a session |
@@ -200,7 +202,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 |---|---|---|
 | `review add` | `inspector` (`D`): `c` on a line | `review.add`: tap a line on the Changes tab |
 | `review ls` | `inspector` (`D`): comments show on their lines | `review.list`: comments show under their lines, counted in a bar |
-| `review rm` | `inspector` (`D`): `x` on a comment | `review.rm`: ✕ on a comment, or Clear |
+| `review rm` | `inspector` (`D`): `x` on a comment, `X` every comment (asks first) | `review.rm`: ✕ on a comment, or Clear (asks first) |
 | `review send` | `inspector` (`D`): `S` | `review.send`: Send to agent, on the comments bar |
 | `review queue` | `review.queue` (`Q`) | `review.queue`: More → Review queue |
 | `review done` | `review.queue` (`Q`): `d` | `review.done`: a queue item's menu → Mark reviewed |
@@ -221,7 +223,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `fanout` | `runs` (`O`): `F`: a form with the task, the agents (ticks), candidates, profile, project, base, name prefix, rank-by test, verify, judge, timeout and structured | `fanout`: ＋ on the Runs tab → A fan-out: the prompt, the agents (ticks), candidates, project, a test; More options: verify, judge (a pick), base, name prefix, time limit, chat mode |
 | `compare` | `runs` (`O`): `c` on a fan-out | `compare`: a run's Compare button |
 | `pick` | `runs` (`O`), compare: `m` merge, `C` cherry-pick, `p` PR | `pick`: Take on a candidate: merge, cherry-pick, a PR, or some of its files |
-| `discard` | `runs` (`O`), compare: `d` one, `X` the rest | `discard`: a candidate's Discard, or Discard the rest |
+| `discard` | `runs` (`O`), compare: `d` one, `X` the rest (asks first) | `discard`: a candidate's Discard, or Discard the rest |
 | `iterate` | `runs` (`O`), compare: `i` one, `I` all | `iterate`: Follow up on a candidate, or on all of them |
 | `run ls` | `runs` (`O`) | `runs`: the Runs tab, with the open gates on top |
 | `run show` | `runs` (`O`): `⏎` on a run | `run.show`: tap a run: its steps, why they ended, its forks |
@@ -285,8 +287,8 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `cs pr` | `set.pr` | `set.pr`: a set's Ship… → Open the pull requests |
 | `cs land` | `set.land` (or the land gate in `sets`) | `set.land`: a set's Ship… → Land (or the land gate's card) |
 | `cs add` | `set.add`: a form with the project, its agent and what it depends on | `set.add`: a set's ⋯ → Add a project |
-| `cs drop` | `set.drop` | `set.drop`: a member's menu → Take it out of the set |
-| `cs rm` | `set.remove` | `set.remove`: a set's ⋯ → Remove the set |
+| `cs drop` | `set.drop` (asks in the split) | `set.drop`: a member's menu → Take it out of the set |
+| `cs rm` | `set.remove` (asks in the split) | `set.remove`: a set's ⋯ → Remove the set |
 
 ## Remote, phone and recordings
 
@@ -296,11 +298,11 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `web` | `remote.web` (is it up, where, who can reach it, what next), `remote.web_on`, `remote.web_off` (full sized); `remote.access` and `remote.port` in Settings → remote (a dropdown and a number; search "tailscale" or "wifi"); `remote.web` says which certificate is in use; the health badge has its findings | `web.status`: More → Web app: up or not, the address (copy it), who can reach it with a Change button, the port, who runs it, the log (`web.logs`); `web.on` (asks who can reach it: my Tailscale network, every network, this computer only) and `web.off`; the certificate in use is on the page (Certificate, Tailscale certificate); the same settings are in Settings → remote |
 | `pair` | `remote.pair`: a form with its name, scope and address, then the QR code, full sized, to scan; `remote.pair.browser` (`--open`): the computer's own browser opens it, paired (inside WSL, Windows') | `pair`: this device's half (the link or QR code); `pair.device` makes a link and a QR code for another device (More → Devices → ＋; `full` preselected, the warning in the form and the sheet; a name that exists is replaced); `pair.open` (`--open`): More → Web app → Open on the computer |
 | `devices ls` | `devices.list` | `devices.list`: More → Devices |
-| `devices revoke` | `devices.revoke` | `devices.revoke`: a device's menu |
+| `devices revoke` | `devices.revoke` (asks in the split) | `devices.revoke`: a device's menu (asks first) |
 | `devices push-test` | `devices.push_test` | `notifications`: turning them on sends this device a test |
 | `machine ls` | `machine.list` (full sized); the sidebar shows every machine's workspaces, each header with its machine and how its link stands | `machine.list`: More → Machines |
 | `machine add` | `machine.add`: a form with `ssh://HOST` or the code, its name here, and keep-if-silent; then `machine add` full sized (it claims the code from this machine) | `machine.add`: More → Machines → ＋: the target, its name here, keep-if-silent (the claim runs on this machine, `full` scope) |
-| `machine rm` | `machine.remove`: the row menu of one of its workspaces, or the palette (asks first) | `machine.remove`: a machine's menu → Stop showing it here |
+| `machine rm` | `machine.remove`: the row menu of one of its workspaces, or the palette (asks first) | `machine.remove`: a machine's menu → Stop showing it here (asks first) |
 | `machine hide` | `machine.hide`: the row menu of one of its workspaces | `machine.hide`: a machine's menu → Hide WORKSPACE here |
 | `machine unhide` | `machine.unhide`: a picker of the hidden workspaces | `machine.unhide`: a machine's menu → Show WORKSPACE again |
 | `machine retry` | `machine.retry`: first in the row menu of its workspace while it's down | `machine.retry`: a machine's menu → Try its link now |
@@ -338,7 +340,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `shell-init` | `health` (`M`): with `shell.integration` off (Settings → Shells), a finding whose fix adds the line to your rc file; on (the default), every shell session ptyro starts has it already | waived: a line in the computer's shell rc file, for its shells; the setting is in More → Settings → Shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
-| `daemon restart` | `daemon.restart` (full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
+| `daemon restart` | `daemon.restart` (asks first, as the web does, then runs `daemon restart --force` full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |
 | `daemon status` | `daemon.status` (its `load` line is the computer's load average, also on the status bar's right; its `machine` line shows the computer's name; the sidebar title and the terminal title carry it too); `remote.web` is the web app's line; the health badge has its warnings | `daemon.status`: More → Daemon (its Load line; `host.load` beside the machine in the header; the machine is in the page title, the header and More); More → Web app (`web.status`) is the web app's line |
 | `daemon logs` | `daemon.logs` (followed, full sized) | `daemon.logs`: More → Daemon → Logs |
 | `daemon upgrade` | `daemon.upgrade`; a daemon running another binary is a health finding whose fix this is | `daemon.upgrade`: More → Daemon → Upgrade, or a health finding's fix |

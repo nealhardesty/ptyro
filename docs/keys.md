@@ -91,7 +91,7 @@ action by name.
 | `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session (asks first unless `[ui] confirm_kill = false`; an exited one is removed; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
+| `x` / `X` | stop the session: an agent's turn is interrupted and it gets a moment to exit, then it's signalled (an exited one is removed instead; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now (SIGKILL). Both ask first unless `[ui] confirm_kill = false`, and both keep it listed; Stop and remove (`session.remove`, its row menu) forgets it too. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session (its address); `C-t` in the dialog edits its title instead |
 | `=` | take control: size the session to your pane (when another client resized it) |
@@ -138,7 +138,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `b` | broadcast one prompt into the marked sessions |
 | `n` / `C-n` / `N` | new task here / quick new (another of this worktree's agent, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
-| `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill. Its pane shows the next session |
+| `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |

@@ -76,7 +76,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "worktree.archive_delete",
-        "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
+        "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
     ),
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
     a("shell.new", "New shell: another one of its own in this worktree, full sized"),
@@ -185,8 +185,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         "session.last",
         "Back and forth: a chat and the session under it, else the last session here",
     ),
-    a("session.stop", "Stop the session (HUP→TERM→KILL); removes it if it already exited"),
-    a("session.kill", "Kill the session's process group now (SIGKILL)"),
+    a(
+        "session.stop",
+        "Stop the session, kept listed: an agent's turn is interrupted and it gets a moment to exit, then HUP, TERM, KILL. On an ended one: remove it (a dormant one asks first)",
+    ),
+    a("session.kill", "Kill the session now (SIGKILL, no chance to clean up), kept listed"),
+    a(
+        "session.remove",
+        "Remove the session from the list: an ended one (a dormant one asks first: its conversation is forgotten), or stop a running one first",
+    ),
     a("session.restart", "Run an exited session's command again"),
     a("session.rename", "Rename the session: its address (C-t in the dialog: its title)"),
     a("session.retitle", "Change the session's title: what it's about, for people to read"),
@@ -212,7 +219,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("daemon.status", "The daemon's status and health, in a split"),
     a(
         "daemon.restart",
-        "Restart the daemon (agents come back dormant, resumable); this TUI reconnects",
+        "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
     ),
     a("daemon.upgrade", "Switch the daemon to the installed binary, live (sessions keep running)"),
     a(
@@ -313,7 +320,8 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Chats: this workspace's (Tab: every one), searchable; open, pin, archive, delete",
     ),
     a("chat.open", "Open this chat"),
-    a("chat.retitle", "Change this chat's title (empty: a new automatic one)"),
+    a("chat.retitle", "Change this chat's title (empty clears it)"),
+    a("chat.autotitle", "A new automatic title for this chat, made from the conversation"),
     a("chat.pin", "Pin this chat to the top of CHATS, or unpin it"),
     a(
         "chat.archive",
@@ -415,6 +423,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         "project.line_endings",
         "Rewrite this project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
     ),
+    a("project.rename", "Rename this project: its slug, the address of its worktrees and sessions"),
     a("project.pin", "Pin this project to a profile (its sessions run as it)"),
     a("project.unpin", "Unpin this project from its profile"),
     a("project.leave", "Take this project out of this workspace (it stays registered)"),
@@ -426,9 +435,16 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Show this worktree's work in the main checkout (for your IDE and dev server)",
     ),
     a("worktree.unpair", "Give the main checkout back, your edits carried to the worktree"),
+    a(
+        "worktree.rename",
+        "Rename this worktree: its address (its branch and directory stay; C-t: its title)",
+    ),
     a("worktree.rename_branch", "Rename this worktree's branch (never once it's pushed)"),
     a("workspace.rename", "Rename this workspace"),
-    a("workspace.remove", "Remove this workspace (its projects stay registered)"),
+    a(
+        "workspace.remove",
+        "Remove this workspace (its sessions, chats and only-here projects move to main)",
+    ),
     a("workspace.profile", "Which profile this workspace runs as"),
     a("workspace.notify", "How this workspace notifies you: all, badge or mute"),
     a(

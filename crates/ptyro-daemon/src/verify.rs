@@ -66,9 +66,9 @@ impl Daemon {
         };
         let Some(name) = name else { return argv("check", cmd) };
         let (_, script) = cfg.scripts.run_script(Some(name)).ok_or_else(|| {
-            Error::missing(
-                "run script",
-                format!("{name} (add [scripts.run.{name}] to .ptyro.toml)"),
+            Error::new(
+                ErrorCode::NotFound,
+                format!("no run script {name}: add [scripts.run.{name}] to .ptyro.toml"),
             )
         })?;
         if !self.is_trusted(&p.id, &cfg.trust_fingerprint()) {
@@ -467,12 +467,12 @@ impl Daemon {
                 }
                 .cloned()
                 .ok_or_else(|| {
-                    Error::missing(
-                        "checkpoint",
-                        n.map(|n| format!("#{n}"))
-                            .or(turn.map(|t| format!("turn {t}")))
-                            .unwrap_or_else(|| "any".into()),
-                    )
+                    let which = match (n, turn) {
+                        (Some(n), _) => format!("no checkpoint #{n}"),
+                        (None, Some(t)) => format!("no checkpoint at turn {t}"),
+                        (None, None) => "no checkpoint here yet".into(),
+                    };
+                    Error::new(ErrorCode::NotFound, which)
                 })?;
                 let (path, target) = (wt.path.clone(), pick.sha.clone());
                 let session = pick.session.clone();

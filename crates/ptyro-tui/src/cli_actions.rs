@@ -49,7 +49,7 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
         "checkpoint.restore",
         &["checkpoint", "restore", "{session}", "{ask:Back to which checkpoint (its number)}"],
     ),
-    ("pr.reply", &["pr", "reply", "{ask:Your reply on the PR}", "-w", "{worktree}"]),
+    ("pr.reply", &["pr", "reply", "{ask:Your reply on the PR}", "--wt", "{worktree}"]),
     ("project.show", &["project", "show", "{project}"]),
     ("project.config", &["project", "config", "{project}", "--explain"]),
     ("profile.list", &["profile", "ls"]),
@@ -149,7 +149,8 @@ impl App {
             (crate::app::Focus::Sidebar, Some(Row::Session(id) | Row::Quick(id))) => Some(id),
             _ => self.focused_session(),
         };
-        id.and_then(|id| self.session(id)).map(|s| s.name.clone())
+        id.and_then(|id| self.session(id))
+            .map(|s| s.address(&self.sessions, |p| self.project(p).map(|p| p.slug.clone())))
     }
 
     /// Resolve words until one needs asking; then ask (a picker or a prompt) and come back.

@@ -12,6 +12,7 @@ pub mod error;
 pub mod ids;
 pub mod imports;
 pub mod input;
+pub mod lookup;
 pub mod machine;
 pub mod model;
 pub mod names;
@@ -19,9 +20,11 @@ pub mod open;
 pub mod os;
 pub mod paths;
 pub mod project;
+pub mod removal;
 pub mod scratchpad;
 pub mod screen;
 pub mod secret;
+pub mod selector;
 pub mod session;
 pub mod settings;
 pub mod shell;
@@ -47,4 +50,20 @@ pub fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// How long ago the timestamp `ms` was: `12s`, `4m`, `3h`, `2d`. One way for every client.
+pub fn ago(ms: u64) -> String {
+    dur(now_ms().saturating_sub(ms))
+}
+
+/// A duration: `12s`, `4m`, `3h`, `2d`.
+pub fn dur(ms: u64) -> String {
+    let s = ms / 1000;
+    match s {
+        0..60 => format!("{s}s"),
+        60..3600 => format!("{}m", s / 60),
+        3600..86400 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86400),
+    }
 }

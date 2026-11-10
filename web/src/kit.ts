@@ -85,13 +85,30 @@ window.addEventListener("hashchange", () => { for (const t of polls.values()) cl
 
 export const errText = (e: unknown): string => (e as Error)?.message || String(e);
 
-/// Run a request; on failure toast why and resolve `undefined`.
+/// A refusal's way through (SPEC §6.6): the same request again with one thing said, and what
+/// its button says.
+export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust" | "release" | "ignore_dependents"; label: string; fingerprint?: string }
+export const fixOf = (e: unknown): Fix | undefined => (e as { fix?: Fix })?.fix;
+
+/// `req` again with `f` said, where the request keeps that field; `null` when it has none.
+export function withFix(req: any, f: Fix): any {
+  const r = JSON.parse(JSON.stringify(req));
+  for (const o of [r, r.opts, r.op, r.op?.spec]) {
+    if (o && typeof o === "object" && f.fix in o) { o[f.fix] = f.fix === "trust" ? f.fingerprint : true; return r; }
+  }
+  return null;
+}
+
+/// Run a request; on failure toast why and resolve `undefined`. A refusal with a way through
+/// asks whether to take it, and resolves with what that answered (so the caller goes on).
 export async function ask<T = any>(req: object, ok?: string): Promise<T | undefined> {
   try {
     const r = await conn.request(req);
     if (ok) ui.toast(ok);
     return r as T;
   } catch (e) {
+    const f = fixOf(e), again = f && withFix(req, f);
+    if (f && again) return (await confirmed(f.label, errText(e), f.label)) ? ask<T>(again, ok) : undefined;
     ui.fail(errText(e));
     return undefined;
   }
@@ -230,6 +247,16 @@ export function confirm(title: string, message: Child, label: string, run: () =>
   return s;
 }
 
+/// `confirm`, as a question: true when its button was pressed, false however else it closed.
+export function confirmed(title: string, message: Child, label: string, danger = true): Promise<boolean> {
+  return new Promise((ok) => {
+    let said = false;
+    const s = confirm(title, message, label, () => { said = true; ok(true); }, danger);
+    // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
+    s.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
+  });
+}
+
 /// Show text (a command's output, a file) in a sheet, with a copy button.
 export function textSheet(title: string, text: string): Sheet {
   return sheet(title, [h("pre", { class: "block" }, text || "(empty)")], [
@@ -239,25 +266,64 @@ export function textSheet(title: string, text: string): Sheet {
 
 // ── forms ───────────────────────────────────────────────────────────────────────────────────
 
-/// What a name can't hold becomes `_` as it is typed (the same rule as `names::typed` and
-/// `names::branch_typed` in ptyro-core): "name" for an address, "branch" for a git branch.
-export function slugify(kind: "name" | "branch", raw: string): string {
+/// What a name field says under itself (`names::TYPED_HINT` in ptyro-core, word for word).
+export const NAME_HINT = "A space or other odd character becomes - (a-z 0-9 . _ -)";
+
+/// `[ui] confirm_kill` (default on), from the user settings' entries: whether Stop, Kill, and
+/// Stop and remove ask first. A device that may not read the config always asks.
+export function confirmsKill(scope: string, entries?: { key: string; value: unknown }[] | null): boolean {
+  if (scope !== "full") return true;
+  const e = entries?.find((x) => x.key === "ui.confirm_kill");
+  return !e || String(e.value) !== "false";
+}
+
+/// What a project-name field says under itself (`names::SLUG_HINT`, word for word).
+export const SLUG_HINT = "A space or other odd character becomes - (a-z 0-9 -)";
+
+/// "name" for an address, "project" for a project's slug (only a-z 0-9 -), "branch" for a git
+/// branch.
+export type SlugKind = "name" | "project" | "branch";
+
+/// What a name can't hold becomes `-` as it is typed, and what it can't start with is dropped
+/// at the start (the same rule as `names::typed`, `names::slug_typed` and
+/// `names::branch_typed` in ptyro-core).
+export function slugify(kind: SlugKind, raw: string): string {
   let out = "";
   for (const c of raw) {
     if (kind === "branch") {
-      out += /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c) || (out === "" && c === "-") ? "_" : c;
+      const bad = /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c);
+      if (out === "" && (bad || c === "-")) continue;
+      out += bad ? "-" : c;
+    } else if (kind === "project") {
+      const l = c.toLowerCase();
+      if (out === "" && !/^[a-z0-9]$/.test(l)) continue;
+      out += /^[a-z0-9-]$/.test(l) ? l : "-";
     } else {
       const l = c.toLowerCase();
-      const bad = !/^[a-z0-9._-]$/.test(l) || (out === "" && (l === "." || l === "-")) || (l === "." && out.endsWith("."));
-      out += bad ? "_" : l;
+      if (out === "" && !/^[a-z0-9_]$/.test(l)) continue;
+      const bad = !/^[a-z0-9._-]$/.test(l) || (l === "." && out.endsWith("."));
+      out += bad ? "-" : l;
     }
   }
   return out;
 }
 
+/// Keep `box` as a name (or branch) while it is typed into. The cursor stays after what was
+/// before it: slugify never looks ahead, so the text before the cursor, slugified, is where the
+/// cursor goes (in UTF-16 units, as an emoji turned into one `-` shrinks).
+export function slugInput(box: HTMLInputElement, kind: SlugKind): void {
+  box.addEventListener("input", () => {
+    const fixed = slugify(kind, box.value);
+    if (fixed === box.value) return;
+    const at = slugify(kind, box.value.slice(0, box.selectionStart ?? box.value.length)).length;
+    box.value = fixed;
+    box.setSelectionRange(at, at);
+  });
+}
+
 /// `more`: the field goes under "More options", folded, so the quick path stays short.
 export type Field = (
-  | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean; slug?: "name" | "branch" }
+  | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean; slug?: SlugKind }
   | { key: string; label: string; type: "textarea"; value?: string | null; placeholder?: string; hint?: string; rows?: number; required?: boolean }
   | { key: string; label: string; type: "select"; options: ([string, string] | string)[]; value?: string | null; hint?: string }
   | { key: string; label: string; type: "check"; value?: boolean; hint?: string }
@@ -294,16 +360,7 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
     } else {
       input = h("input", { type: f.type ?? "text", placeholder: f.placeholder, autocapitalize: "off", autocomplete: "off", spellcheck: "false", inputmode: f.type === "number" ? "numeric" : undefined });
       input.value = f.value == null ? "" : String(f.value);
-      const slug = f.slug;
-      const box = input as HTMLInputElement;
-      if (slug) {
-        // The cursor stays where it was: one character in, one out.
-        box.addEventListener("input", () => {
-          const at = box.selectionStart;
-          const fixed = slugify(slug, box.value);
-          if (fixed !== box.value) { box.value = fixed; box.setSelectionRange(at, at); }
-        });
-      }
+      if (f.slug) slugInput(input as HTMLInputElement, f.slug);
     }
     inputs.set(f.key, input);
     return f.type === "check"
@@ -382,6 +439,9 @@ export function argWords(line: string): string[] {
 
 /// The profile a new workspace starts with: the one named like it, else `default`.
 export const profileFor = (names: string[], workspace: string): string => names.includes(workspace) ? workspace : "default";
+
+/// The word a status is shown as: the selectors' and the CLI's (`error`; the wire says `errored`).
+export const statusWord = (st: string): string => (st === "errored" ? "error" : st);
 
 // ── small parts ─────────────────────────────────────────────────────────────────────────────
 

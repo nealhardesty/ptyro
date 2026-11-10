@@ -162,13 +162,53 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   computed as the shortest unambiguous lowercase Crockford-base32 suffix (min 4 chars).
 - Sessions and worktrees also get a **name** and a **title** (**[built UX1.24]**):
   - The **name** is the address: `[a-z0-9._-]`, 1–64 characters, chosen at creation and changed
-    only by an explicit rename. Session names are globally unique; worktree names are unique per
-    project. Defaults are below.
+    only by an explicit rename. Session and worktree names are unique per project; sessions in
+    no project share one scope (owner, 2026-11-09). A bare name two projects share is ambiguous:
+    the error lists each `project/name`, except that mail from an agent means the session in
+    the sender's own project. Defaults are below.
+  - The renames (owner, 2026-11-09): `rename` (a session), `wt rename` (a worktree) and
+    `project rename` (a project's slug, the `project` in `project/name`), in the CLI, the TUI
+    (`session.rename`, `worktree.rename`, `project.rename`) and the web. A worktree keeps its
+    branch (`wt rename-branch` changes that) and its directory, and a project's worktrees keep
+    theirs: moving a directory under running sessions would break them. A worktree's name is
+    unique among its project's worktrees; a project's slug is unique; `@root`, the main
+    checkout, is never renamed. A running process keeps the `PTYRO_WORKTREE_NAME` and
+    `PTYRO_PROJECT` it started with (§10.6).
   - The **title** is free text for people to read: the task, a PR title. It may change at any
     time (`retitle`), is never an address, and is shown in the sidebar and headers, not used in
     commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.
   - The friendly-name generator draws from a corvid-themed word list (`brisk-rook`,
     `quiet-jackdaw`, `sly-magpie`; `ptyro_core::names`).
+- **One name policy** (owner, 2026-11-09). Every name a person, an agent or a script gives
+  follows the same rule, `names::validate`: `[a-z0-9._-]`, 1–64 characters, not all digits, not
+  starting with `.` or `-`, no `..`, not ending in `.` or `.lock`. That covers sessions (and
+  shells), worktrees, workspaces, profiles, change sets, a fan-out's name prefix, a lead's name
+  for its worker, machines, paired devices, and the config panel's named members (agents,
+  tools, …). A change set's name and a fan-out's prefix are at most 40 characters, kept short
+  because member names are appended (`<set>-<member>`, `<prefix>-<agent>`); the fix offered
+  then fits in 40 too (`names::validate_within`).
+  - **Given names are refused, never rewritten.** `cs new my_fix` makes `my_fix`. A bad one is an
+    error that offers the fix: `invalid name "My Feature": 'M' (uppercase) isn't allowed (only
+    a-z 0-9 . _ -); try "my-feature"` (`names::tidy`). An empty name is refused, never replaced
+    by a stand-in.
+  - **`-` is the one replacement character.** The suggestion, generated names and the TUI's and
+    web's live name fields all use it. As a name is typed (`names::typed`, the web's `slugify`)
+    a character it can't hold becomes `-`, and what a name can't start with is dropped at the
+    start. The fields say so: "A space or other odd character becomes - (a-z 0-9 . _ -)".
+  - **Derived names may be tidied silently**, since they are no one's input: names made from a
+    title, a prompt, a directory, a recipe's template (`names::derive`, always valid, or none so
+    the caller picks its own fallback), a machine's name from what it calls itself, and names
+    ptyro composes itself (`<set>-<member>`, a step's agent, `judge`). A taken name gets `-2`,
+    `-3` (`names::numbered`), its base cut so the whole stays within 64.
+  - **Project slugs** fold to the narrower `[a-z0-9-]`, at most 40 (`model::slugify`, built on the
+    same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
+    its worktrees and archives, so this fold stays as it was: re-adding a repository finds them
+    again, and stored slugs keep working. A directory with nothing slug-like in its name gets
+    `repo`; nothing else falls back to it. A slug a person gives (`project rename`, in every
+    client) follows the same rule and is refused when it's wrong, never rewritten, with the fix
+    offered: `invalid project name "my_app": '_' isn't allowed in a project's name (only a-z 0-9
+    -); try "my-app"` (`names::validate_slug`; owner, 2026-11-09). Its field in the TUI and the
+    web keeps to `a-z 0-9 -` as it is typed (`names::slug_typed`, `names::SLUG_HINT`).
 - **Address syntax** used across CLI and protocol (resolved by the daemon):
 
   | Form | Example | Resolves to |
@@ -179,21 +219,38 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   | `@focused` | | the session focused in the most recently active TUI |
   | `@last` | | most recently created session |
   | `@attention` | | oldest session with attention set |
-  | `@blocked` / `@idle` / `@working` | | all sessions in that status (multi) |
-  | `@all` | | all running sessions (multi) |
+  | `@all` | | every session, exited and dormant ones too (multi) |
+  | `@live` (alias `@running`) | | the process runs: starting or running, never dormant (multi) |
+  | `@active` | | busy now: an agent working or blocked, a shell running a command (multi) |
+  | `@exited` | | ended and not resumable: exited or failed, never dormant (multi) |
+  | `@dormant` | | hibernated agents, resumable (§7.4) (multi) |
+  | `@working` / `@blocked` / `@idle` / `@done` / `@error` (alias `@errored`) | | all sessions in that status (multi) |
 | `%N`, `ws%N` | `%3`, `work%3` | shell N of the context (or named) workspace's SHELLS (§23.5; proposed) |
   | `@run:<id>` | | all sessions of a run (multi) |
 
+**One selector vocabulary** (owner, 2026-11-09). `ptyro_core::selector::SELECTORS` is the one
+list of selectors: name, aliases, a line of help, and the state each picks. The daemon's
+`resolve_many`, its "unknown selector; try …" hint, shell completion, `ptyro list --status`
+(the state words without the `@`) and `ptyro wait --for` (the status words, plus `exit` and
+`any-attention`) all read it, so a word means the same thing everywhere. The status words are
+the status engine's own labels (`AgentStatus::label`): `error`, with `errored` accepted as an
+alias in each of those places. The wire keeps `errored` (`AgentStatus`'s serde name), and the
+web shows it as `error`. `@exited` never matches a dormant session, so `ptyro rm @exited` never
+throws away a resumable conversation; `@all` does include dormant ones, so `ptyro rm @all`
+forgets them too. A test fails when docs/commands.md's selector list drifts from `SELECTORS`.
+`wait --for exit` is an event, not the `exited` state: it is reached when the process stops
+running, hibernating included.
+
 **[built M2]** Implemented now: handles (`7f3k`, `s:7f3k`, full id), names, `@last`, `@focused`
-(the session most recently focused in any TUI, reported with `ClientMsg::Focus`), and the multi
-selectors `@all`, `@live` (alias `@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error`
-(the status `ptyro status` shows, whatever its source; until 2026-10-23 only self-reports
-counted, so hook-driven agents never matched), name globs (`build-*`, `a?c`), and `,` to join
-several (`a,b,@blocked`).
+(the session most recently focused in any TUI, reported with `ClientMsg::Focus`), the multi
+selectors in the table above (`@working`/`@blocked`/`@idle`/`@done`/`@error` are the status
+`ptyro status` shows, whatever its source; until 2026-10-23 only self-reports counted, so
+hook-driven agents never matched; `@dormant` and `@active` since 2026-11-09), name globs
+(`build-*`, `a?c`), and `,` to join several (`a,b,@blocked`).
 Results follow the session list's order without duplicates. Single-target requests accept a
 selector only if it matches exactly one session (otherwise `ambiguous`). The CLI expands
-selectors with `Request::Resolve`, so `ptyro kill @exited`, `ptyro send 'agent-*' …` and
-`ptyro rm @all` work. `myrepo/name` arrived with projects (M3). `@attention` and `@run:<id>` are
+selectors with `Request::Resolve`, so `ptyro stop @live`, `ptyro send 'agent-*' …` and
+`ptyro rm @exited` work. `myrepo/name` arrived with projects (M3). `@attention` and `@run:<id>` are
 **not built yet** (`@run:` works only as a mailbox recipient).
 
 **[built M3]** `project/name` resolves a session by project and name. Projects are addressed by
@@ -204,6 +261,32 @@ inside them, so CLI commands default to the worktree you're standing in. Ids are
 (`fix-flaky-test`, made unique), else for an agent session the agent and a corvid
 (`claude-rook`), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
 show the suggestion before ⏎ (§11.2h).
+
+**One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
+way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, runs, change
+sets, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
+uses it, so the rules can't drift apart.
+
+1. **Order**: an exact name (a project's slug) → the qualified form where the kind has one
+   (`project/name`) → the full id → a handle: the end of the id, **at least 4 characters**,
+   with or without its prefix (`s:`, `w:`, `p:`, `c:`, `r-`). A shorter one never matches, and
+   the not-found message says why. Runs match the end of their id, never a part of the middle.
+2. **Case**: names and ids are lowercase, so the input is lowercased before names, ids and
+   handles are compared (`Build` finds `build`; device and machine names likewise). Titles are
+   not addresses. Chats still take a word of a title, as the last resort; a destructive request
+   doesn't (`find_chat_by(addr, false)`).
+3. **Ambiguity** is always `ambiguous` (CLI exit 4), and the message lists the candidates as
+   they can be addressed, at most 5 and then "and N more": `2 sessions are named "build": say
+   which, app/build or lib/build`; `2 runs match "k3x9": say which, r-ak3x9 (fanout) or …`.
+   Several archived worktrees of one name are listed with their handles and ages. Each
+   candidate reads "address (description)": `r-ef9999 (login)`, `a1b2c3d4e5f6 (Phone)`,
+   `c:7f3k (Fix the build)`, `7f3k (myrepo/feat, archived 3d ago)`.
+4. **Not found names the kind**: `no run matches "zz9q"`, `no device matches "phone"; the
+   devices are laptop and tablet`. Where the set is small (devices, workspaces, profiles,
+   machines) the message lists what there is.
+5. **Archived worktrees** have an id (protocol 1.38; earlier ones get a stable one when the list
+   is read) and resolve by name, `project/name` (the project by slug, id or path, as anywhere),
+   or handle. `ptyro wt archives` shows the handle; the TUI and the web send the id.
 
 ---
 
@@ -347,6 +430,13 @@ the planned ready pipe and equally robust (a second client racing the first simp
 socket). Users may instead run the
 daemon under a systemd user unit, a launchd agent, or on Windows a per-user logon task
 (`ptyro daemon install-service`; §12 `install-service`, WIN10).
+
+**`ptyro daemon start` typed by a user** (no `--foreground`, no `--spawned`) starts the daemon the
+same way, detached, and returns once it accepts connections: `daemon started (pid N); logs in
+<state dir>`, exit 0. When one already runs it says `daemon already running (pid N)` and exits 5
+(conflict). `PTYRO_NO_AUTOSPAWN` does not stop it: the user asked by name. **[changed 2026-11-09]**
+Before, it ran the daemon in the terminal with no output, so it looked hung, and Ctrl-C stopped it.
+`--foreground` keeps that behaviour (plus logs on stderr) for service managers and debugging.
 
 ### 4.2 Actors **[decided]**
 
@@ -1093,6 +1183,36 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-09] Protocol 1.38** (additive; the consistency pass, one version for all of it):
+- `WorktreeRename{addr, name}` → `Worktree{info}` and `ProjectRename{addr, name}` → `Project{info}`
+  (§2.3). Both are `full` scope, like `WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a
+  project, one per worktree, carrying the new `project_slug`) and `ProjectUpdated`. An older daemon
+  answers "unsupported request".
+- `ArchiveEntry.id`, so archived worktrees that share a name can be told apart (§2.3). Clients send
+  it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's entries have none (empty), and
+  the clients then send `project/name` as before.
+- `ChatDelete` gains `confirmed` (default false). The daemon resolves its chat by an exact address
+  only (a title is refused, exit 4, its matches listed) and, unconfirmed, answers
+  `NeedsConfirmation` with the question every client asks ("Delete the chat “T”? It goes from every
+  list…", §12.1). The TUI and the web ask first and send it confirmed; `chat rm` asks through
+  `with_confirmation_as`. An older client's unconfirmed delete is asked about instead of done.
+- `Request::Remove` adds `stop` (absent: false): stop a running session, then forget it (`rm
+  --stop`, Stop and remove; §7.3). An older daemon ignores it and refuses a running session as
+  before.
+- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust|release|ignore_dependents,
+  label, fingerprint?}` (§6.6); an older client ignores it. The web's HTTP API passes it through.
+  A kind the client doesn't know decodes as no fix (the message still says what to do), so a
+  later kind never makes a reply unreadable.
+- `CsOp::Drop` adds `ignore_dependents` (absent: false): drop a member others depend on. `force`
+  now only discards unsaved work (before, it also overrode the dependency).
+- `WorktreeArchiveGet{addr}` → `Archives` with the one archive `addr` names (read scope), resolved as
+  restoring and deleting do, so `wt archive-rm` resolves before it asks. An older daemon answers
+  "unsupported request".
+- `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An empty `title` now clears a
+  chat's title (before 1.38 it asked for an automatic one), as `Retitle` does for a session or a
+  worktree. Clients send `auto_title` with an empty `title`, so an older daemon (which ignores
+  `auto_title`) still makes a new one; an older client's empty title now clears it.
+
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
@@ -1232,6 +1352,33 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
 `permission_denied`, `unsupported`, `timeout`, `busy`, `internal`. CLI exit codes map from these
 (§12.4).
 
+**A refusal says what to do in words every client shares** (owner, 2026-11-09). The CLI, the TUI
+and the web all show the daemon's message, so it never names a CLI flag or tells you to run a
+CLI command: "stop them first", "archive it to keep it, or remove it anyway to discard it", not
+"use --stop-sessions" or "use --force". Each client then offers the way through in its own idiom:
+the CLI adds the flag, the TUI and the web a button or a confirmation. A test
+(`refusals_name_no_cli_flag`) keeps flags out of the daemon's refusals.
+
+**The way through is data, not words** (protocol 1.38). A refusal that has one carries
+`Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
+second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read),
+`release`, or `ignore_dependents`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
+"Stop and remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn
+convert, a daemon stop with sessions, a change set's restore, drop or remove: `force`; an
+untrusted recipe or template: `trust`; forgetting a project with running sessions: `release`,
+"Let them go"; dropping a change-set member others depend on: `ignore_dependents`, "Drop it
+anyway"), never for a refusal it doesn't undo (removing while it restarts, a restart while
+it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
+and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
+happens to go with it. The CLI prints "(again with `--force`: remove anyway)"
+(`cli::said`; `project rm` at a terminal asks "Let them go?" instead); the TUI turns it into a
+toast button that resends the request (`Request::with_fix`); the web asks with a confirmation
+(`kit.ts` `withFix`, in `ask()`), and `ask()` resolves with the retry's reply, so the caller goes
+on (leaves a removed thing's page) as if the first request had worked. Left as words: a message to an agent (which
+drives the CLI), one about another computer or the daemon process itself, and the ones that
+suggest a different action, which the TUI's `SUGGESTED` table still turns into one (`` `ptyro
+project trust` `` and the like).
+
 ---
 
 ## 7. Sessions: lifecycle, persistence, hibernation, resume
@@ -1346,6 +1493,33 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
 ```
 
 - `Running` sessions additionally carry an **agent status** (§9).
+- **Stop, kill, remove** (owner, 2026-11-09): one meaning each, the same in the CLI, the TUI, the
+  web, the help and the daemon's messages.
+  - **stop** (`ptyro stop`, `x`, Stop; `Kill{signal: None}`): an agent's turn in progress is
+    interrupted and it gets a moment to exit (the adapter's `stop()` steps, §7.4); then the
+    process group gets HUP, TERM and KILL. It does not wait for the turn to finish. The session
+    stays listed, `Exited`.
+  - **kill** (`ptyro kill`, `X`, Kill; `Kill{signal: Some(9)}`): SIGKILL at once, no chance to
+    clean up. The session stays listed. `ptyro kill -s N` sends signal N instead. (Until
+    2026-11-09 `ptyro kill` was a stop followed by a remove; `--keep` is now a hidden no-op.)
+  - **rm** (`ptyro rm`, `session.remove`, Remove; `Remove{stop: false}`): forget an ended
+    session. A running one is refused ("NAME is still running: stop it first"); `rm --stop`,
+    the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.38) stop it, then
+    forget it. A removed dormant session never comes back.
+  - Stop means stop: on an ended session `ptyro stop`, `kill`, the TUI's `X` and the web say it
+    isn't running and change nothing; remove is the way to forget it (the TUI's toast offers it).
+    The TUI's `x` is the one key that takes a row away: it stops a running session and removes an
+    ended one, a dormant one asking first (owner, 2026-11-10). Over several sessions (`rm @all`, `stop`, `kill`) each is tried: a
+    refusal is said (`ptyro: NAME: …`), the rest go on, and the exit code is the first
+    refusal's.
+  - `[ui] confirm_kill` (default on) makes Stop, Kill, and Stop and remove ask first, in the TUI
+    and the web alike (the web reads it where the device may read the config, else always asks),
+    in the same words (`removal::STOP`, `KILL`, `STOP_REMOVE`); a refusal's "Stop and remove"
+    button asks the same way. Removing an exited session never asks.
+  - **Removing a dormant session asks** (owner, 2026-11-09), as `chat rm` does: its agent could
+    still resume its conversation. `ptyro rm` asks at a terminal (once for all of them), `-y`
+    doesn't ask, and with no terminal it refuses (exit 5) and changes nothing; the TUI and the
+    web ask with a dialog. All say `Remove the dormant session NAME?` and `removal::DORMANT`.
 - `Exited` sessions stay visible (greyed, with exit code and final screen) until removed; their
   recorder log remains readable (`ptyro read --scrollback`).
 - `Dormant` = process not running but resumable; the last screen is shown dimmed with a
@@ -2191,7 +2365,16 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - The main checkout is found through `--git-common-dir`, so `project add` from inside a linked
   worktree registers the real repository.
 - The slug comes from `.ptyro.toml [project] name`, else the directory name; `-2`, `-3` suffixes
-  keep it unique.
+  keep it unique. `ptyro project rename P NEW` changes it (§2.3; `.ptyro.toml` only names a
+  project when it is added). Sessions, workspaces, trust and pins refer to the project by id,
+  so they follow on their own; its worktrees' `project/name` and its archives
+  (`wt restore NEW/name`) follow it. A change set's member keeps the name it was added with:
+  that is the member's directory in the set. A change-set template that names its members by
+  slug doesn't follow either: after a rename, edit the template (or name the project by id).
+  On another machine's project (MM1.B), the clients offer and check the name it has there
+  (`app`, not `laptop2:app`), and the daemon takes the `laptop2:` off a rename's new name where it
+  routes the request. Sessions and workspaces are renamed the same way.
+  A worktree is renamed only while it is ready or missing; one being created is refused.
 - `remote_url` is `origin`'s URL, else the first remote's.
 - Every project gets an `@root` worktree row for its main checkout. It is never locked or
   removable.
@@ -2208,7 +2391,7 @@ modes, other-workspace badges and the per-workspace inbox tabs.
   Not registered: your home directory (a dotfiles repository would claim everything), anything
   under ptyro's data directory, and **declined** roots. `project rm` declines its root (kv
   `autoreg:declined`), and adding it by hand lifts that. `ProjectRemove{release: true}` (the
-  TUI's undo) lets the project's running sessions go first, instead of refusing; they keep
+  TUI's undo, `project rm --release`, every client's "Let them go") lets the project's running sessions go first, instead of refusing; they keep
   running outside any project. Clients hear `ProjectAutoAdded{info, workspace, notes}`.
   `[discover] auto_register = false` turns it off. **[proposed SH, §23.2]** A loose session (one in
   a workspace's SHELLS) is never moved: its repository may be registered, the shell stays put. `project add` without `--workspace` uses the
@@ -2233,7 +2416,13 @@ modes, other-workspace badges and the per-workspace inbox tabs.
 - `.ptyro/worktrees/<name>`.
 
 Symlinks higher up, like a macOS `/var` → `/private/var` or a symlinked home, are fine. An
-existing target path is refused.
+existing target path given with `WorktreeSpec.path` is refused.
+
+**[built 2026-11-09]** The directory is named once, at creation; a rename never moves it (§2.3). A
+renamed worktree stays in its old directory, and a renamed project's worktrees under its old
+slug. New worktrees go under the new slug. When the directory a new worktree's name would get
+is taken (a renamed worktree's, or one left behind), it gets the next free one: `name-2`,
+`name-3`.
 
 ### 10.3 WorktreeSpec and creation
 
@@ -2448,6 +2637,9 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
 | `PTYRO_SESSION_ID` | (sessions only) |
 | `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_WORKSPACE_NAME`, `CONDUCTOR_PORT` | only if `compat.conductor_env = true`, so existing setup scripts run unchanged |
 
+They are set when a process starts: a rename (§2.3) or `rename-branch` doesn't reach a process
+already running, and its next restart gets the new values.
+
 **[built M3]** Also `PTYRO_PORT_COUNT`. These variables, and `PTYRO_PROFILE`, are on the
 child-env strip list, so a daemon started inside a ptyro session can't leak its worktree into
 others.
@@ -2529,10 +2721,11 @@ branches, no sessions for N days.
   keep makes the archive refuse and name it, so nothing is lost silently. The archive list is
   kv `archive:list` (`ArchiveEntry`, newest first; read and written under a lock, errors
   propagated, the entry written after the removal; `WorktreeArchives`, `ptyro wt archives`).
-- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name`): the branch checked out at
-  its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the branch
-  has moved since) puts the snapshot back with the changes
-  uncommitted again, untracked files untracked. The entry leaves the list.
+- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name|handle`): the branch checked
+  out at its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the
+  branch has moved since) puts the snapshot back with the changes uncommitted again, untracked
+  files untracked. The entry leaves the list. Several archives of one name are listed (handle
+  and age), never picked between; the handle says which (§2.3, owner, 2026-11-09).
 - **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
   worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
   or 1 min if it never starts); what's left is committed as the worktree's profile with its
@@ -2545,7 +2738,7 @@ branches, no sessions for N days.
   a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
   could both snapshot it and both list it).
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
-- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name…`, asks
+- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name|handle…`, asks
   unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
   couldn't be restored), then the snapshot ref and its `archive-extras/` copies go, and its branch
   by `wt rm`'s rule (deleted when merged into the base, kept in the archive as `ArchiveEntry::base`,
@@ -2908,13 +3101,16 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   nothing.
 - **Name fields swap, they don't refuse** (`names::typed`, `names::branch_typed`): as a name is
   typed or pasted, uppercase is lowercased and any other character outside `[a-z0-9._-]` (a
-  space, `/`, an accent) becomes `_`, as does a leading `.` or `-` and the second `.` of `..`
-  (`My Feat/2` → `my_feat_2`). The dialog says so. What no one character fixes (all digits,
-  ending in `.` or `.lock`, over 64) is still flagged with its reason, and Tab applies the
-  suggested fix. A branch name keeps case and `/` and swaps whitespace, `~ ^ : ? * [ \` and a
-  leading `-`. It applies to every interactive name field in the TUI and the web (`slug` on a
-  form field): session rename, the task box's name, new worktree, workspace new and rename,
-  profile new and rename, config-panel members, machine names, and the branch rename. The CLI
+  space, `/`, an accent) becomes `-`, as does the second `.` of `..`; a leading `.`, `-` or
+  space is dropped (`My Feat/2` → `my-feat-2`; owner, 2026-11-09: `-`, not `_`, the same
+  character as the suggestion and generated names, §2.3). The dialog says so. What no one
+  character fixes (all digits, ending in `.` or `.lock`, over 64) is still flagged with its
+  reason, and Tab applies the suggested fix. A branch name keeps case and `/`, swaps
+  whitespace and `~ ^ : ? * [ \` for `-`, and drops them or a `-` at the start. It applies to
+  every interactive name field in the TUI and the web (`slug` on a form field): session rename,
+  the task box's name, new session, shell and worktree, workspace new and rename, profile new
+  and rename, a change set's and a fan-out's name, a paired device's, config-panel members,
+  machine names, and the branch rename. The CLI
   and the daemon stay strict: a bad name given as an argument is an error, so a script never
   gets a name it didn't write.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
@@ -3596,10 +3792,73 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   refused as a likely mistyped command.
 - **[built M1]** Attaching from inside a ptyro session is refused unless `PTYRO_ALLOW_NESTED=1`
   (a nested TUI fights over the prefix key).
+- **[built] One CLI surface (owner, 2026-11-09):**
+  - A short flag means one long flag in every command: `-a --agent`, `-C --cwd`, `-d --detach`,
+    `-e --editor`, `-f --follow`, `-l --limit`, `-m --message`, `-n --name`, `-o --output`,
+    `-p --project`, `-s --signal`, `-u --unread`, `-w --workspace`, `-y --yes`; and a long flag
+    that has a letter has it everywhere it is taken. The rest is long only (`--prompt`, `--all`,
+    `--force`, `--session`, `--wt`). The table is in `docs/commands.md`; the test
+    `a_short_flag_means_one_thing_everywhere` walks the command tree and fails on a clash.
+  - A value follows a flag after a space or an `=`, for every flag: none insists on `=`
+    (`no_flag_insists_on_an_equals_sign`). `config … -p .` is the repository you're in.
+  - A project or worktree address that starts with `.` (`.`, `../api`) is a path from the
+    directory you run the command in, never the daemon's, in every command that takes one
+    (`cli::addr_here`: `ws add-project`, `cs add`, `cs new --projects`, `new --wt`, `shell`,
+    `shells adopt` as much as `wt`/`project` commands).
+  - A command that starts a session you'd work in (`new`, `wt new --agent`, `shells new`,
+    `shells split`, `chat task`) attaches in a terminal unless `-d/--detach`; `--json` prints
+    instead. Without a terminal, or inside a ptyro session (whose TUI shows the new one), it
+    starts detached and prints it. A command whose session isn't one you'd type into (`wt run`,
+    `fanout`'s candidates) attaches only when asked (`wt run --attach`).
+  - A name you may leave out is `-n/--name`; a name a command needs is a positional word.
+    `fanout`'s worktree-name start is `--prefix`.
+  - `retitle X` with no title clears it, for a session, a worktree and a chat alike; a chat's
+    `--auto` (the TUI's and web's `chat.autotitle`) asks for a new automatic one.
 - All listing/query commands support `--json` (stable schemas, documented in `docs/cli-json.md`)
   and `--format` templates later.
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
+- **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
+  (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
+  item) asks on a
+  terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
+  (exit 5, `… (no terminal to ask: pass --yes)`) and changes nothing. The TUI and the web always
+  ask with a dialog. All three say the same thing, what goes and what stays, from one sentence
+  per kind of removal in `ptyro_core::removal`. `removal::DIALOGS` pairs each question's start
+  with its sentences, and a test checks that the web dialog asking that question (one
+  `confirm(…)` line in `web/src`) says those sentences word for word. Stopping, killing and removing sessions have their own rule.
+  - **Never by a fuzzy match.** A destructive command takes an exact address only: a name, an
+    id, an id suffix (a handle) of 4 or more characters, or `@last`; never words from a title and
+    never a substring. A chat's title words, `@pinned` or `@unread` are refused (exit 4) with the
+    chats they match listed by handle (`ChatDelete` resolves with `find_chat_as(addr, exact)`).
+    This holds for every kind: they all resolve by the one policy of §2.3 (runs by the end of
+    their id, archives by name or handle, several of one name listed, never picked).
+  - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
+    found" without a question, and the question names what was found (`wt rm`, `ws rm`,
+    `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`,
+    `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
+    `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
+    resolves). What is removed after the yes is what was asked about, by its id or exact name,
+    never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` tries
+    the removal first without writing it (`settings::preview`), so a name that matches nothing
+    is refused before the question; `discard` finds its run and candidate first; `wt archive-rm`
+    asks once about every archive it found (the same one named twice is one), deletes each, and
+    carries on past one that fails, reporting it (as `rm`, `stop` and `kill` do).
+  - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
+    when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
+    `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its
+    chats and the projects no other workspace has to main. Forgetting a project drops its trust,
+    pin and place in workspaces; its worktrees stay on disk.
+  - **Running sessions don't trap a project.** `project rm` with live sessions is refused with
+    both ways through (stop them, or let them go). The CLI's `--release` lets them go (at a
+    terminal it offers to), and the TUI and the web offer "Let them go"; they keep running,
+    outside any project. The refusal carries that way through as `fix: release` (§6.6), which
+    is what each client acts on. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
+    refusal (which all three show) and in `project rm --release`'s question. Names stay unique
+    outside any project too (§2.3): a session let go whose name a loose session already has takes
+    the next free one (`name-2`, as a restored session does), and the reply's notes say so, which
+    every client shows.
 
 ### 12.2 Command tree **[decided]**
 
@@ -3611,26 +3870,26 @@ The proposal as written. Built syntax differs in places (`export --format asciic
 ptyro                                  # TUI
 ptyro attach [<session>] [--raw] [--view-only] [--workspace <ws>]
 ptyro new [--agent <a>[@<profile>]] [--profile <pr>] [--project <p>] [--wt <name>|--new-wt [<name>]|--here|--cwd <dir>]
-          [--name <n>] [--prompt <text>|--prompt-file <f>] [--attach] [--override-pin] [-- <args…>]
-ptyro ls [--status running|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]
+          [--name <n>] [--prompt <text>|--prompt-file <f>] [--detach] [--override-pin] [-- <args…>]
+ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]   # §2.3's words
 ptyro status [<session>] [--explain] [--json]
 ptyro send <session…> <text> [--no-enter] [--raw] [--wait-ready]
 ptyro read <session> [--screen|--scrollback [N]] [--plain|--ansi] [--json]
-ptyro wait <session…> --for working|blocked|idle|done|exit|any-attention [--timeout 10m] [--any|--all]
+ptyro wait <session…> --for working|blocked|idle|done|error|exit|any-attention [--timeout 10m] [--any|--all]
 ptyro events [--follow] [--session <s>] [--json]       # NDJSON stream of domain events
 ptyro stop|kill|restart|resume|hibernate <session…>
 ptyro rename <session> <name>
 ptyro replay <session> [--speed 2]      ;  ptyro export <session> --asciicast|--text [-o file]
 
 ptyro ws ls|new <name> [--profile <pr>] [--notify all|badge|mute]|rm <name>|rename <a> <b>
-         |add <project>|remove <project>|set <name> [--profile <pr>] [--notify …]
+         |add-project <ws> <project>|remove-project <ws> <project>|set <name> [--profile <pr>] [--notify …]
 ptyro profile ls|show <pr>|new <pr> [--adopt <agent>=<dir>…]|rm <pr>|rename <a> <b>
               |login <pr> <agent|gh>|env <pr> [--agent <a>]|sync <pr>|doctor [<pr>]
-ptyro project add [<path>]|ls|rm <p>|show <p>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
+ptyro project add [<path>]|ls|rm <p>|show <p>|rename <p> <new>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
 ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>] [--setup run|skip]
          |rm <wt> [--force] [--keep-branch]|status <wt>|diff <wt>|open <wt> [--editor <e>]
-         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename-branch <wt> [<new>]
-ptyro fanout --agents claude,codex --prompt <p> [--base <ref>] [--name <prefix>] [--wait]
+         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename <wt> <new>|rename-branch <wt> [<new>]
+ptyro fanout --agent claude,codex --prompt <p> [--base <ref>] [--prefix <prefix>] [--wait]
 ptyro broadcast <session…> <text>
 ptyro run ls|show <run>|cancel <run>|gate <run> <gate> approve|reject
 ptyro recipe ls|run <recipe> [--var k=v]
@@ -3644,7 +3903,7 @@ ptyro daemon start [--foreground]|stop [--force|--hibernate]|restart|status|logs
              |upgrade|install-service|uninstall-service
 ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
-ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--output|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
+ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--activity|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
 ptyro setup [-y] [--agents A,B] [--tools T,U] [--where W] [--dry-run] [--json]   # the setup checklist (§24.2, §24.3)
 ptyro install NAME… [-y] [--where W] [--dry-run] [--json]             # install agents/tools by name; W: wsl|windows|both (Windows)
@@ -3661,9 +3920,9 @@ action names and the theme; `edit` starts from a commented template and re-opens
 
 **[built M1]** `new [-d] [-n NAME] [-C DIR] [--size CxR] [--json] [-- CMD…]`, `attach [S] [--raw]`,
 `ls [--json]`, `kill S… [--signal N] [--keep]`, `rm S…`, `rename S NAME`, `read S [--ansi]`,
-`send S TEXT [--no-enter]`, `daemon start [--foreground]|stop [--force]|status [--json]|logs [-n N]`,
+`send S TEXT [--no-enter]`, `daemon start [--foreground]|stop [--force]|status [--json]|logs [--lines N]`,
 the hidden `fake-agent` (§18.2), and the global `--json-wire`. `kill` waits for the graceful stop
-and then removes the session unless `--keep`. Still to come from this tree: `--view-only`,
+and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGKILL and keeps it, §7.3). Still to come from this tree: `--view-only`,
 `status`, `wait`, `events`, and everything project- or worktree-related.
 
 **[built M3]**
@@ -3706,9 +3965,12 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `send S… TEXT [--no-enter] [--raw] [--wait-ready[=2m]] [--wait [--timeout] [--stall]] [--json]`;
   - `broadcast S… TEXT [--timeout]`;
   - `read S [--screen|--scrollback [N]] [--plain|--ansi] [--json]`;
-  - `wait S… [--for C] [--match RE [--scrollback]] [--timeout] [--any|--all] [--stall] [--json]`;
-  - `events [--follow] [-s S] [-n N] [--json]`;
-  - `stop S…` (graceful, kept listed; `kill` also removes).
+  - `wait S… [--for C] [--match RE [--scrollback [N]]] [--timeout] [--any|--all] [--stall] [--json]`
+    (`--scrollback N` means what it means to `read`: the screen and up to N lines above it; bare,
+    the scrollback kept in memory (`lines: None`), never a replay of the recording, which `wait`
+    would redo every poll; a flag means one thing in every command, docs/commands.md);
+  - `events [--follow] [--session S] [-l N] [--json]`;
+  - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
 - **`attach --tab|--pane`** (WIN3, `ptyro_tui::tab`): open the session in a new tab or pane of
   the terminal instead, attached with this ptyro and its `--remote`. The innermost terminal that
@@ -3736,7 +3998,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `any-attention` is blocked, or an attention raised after the last prompt.
   - `exit` is "not running".
   - `--stall D` reports `stalled` when a working session's screen hasn't changed for `D`.
-  - `send --wait` waits for idle, blocked, errored or exit, and prints how the turn ended.
+  - `send --wait` waits for idle, blocked, error or exit, and prints how the turn ended.
   - Events wake the wait at once; a 250 ms tick covers `--match` and stalls.
 - **Completions** use clap_complete's dynamic engine (`=4.6.11`, feature `unstable-dynamic`,
   pinned exactly):
@@ -3835,7 +4097,7 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   - `pr fix [W]`;
   - `pr automerge [W] [--method] [--off]`;
   - `pr watch [W] [--off]` (also `watch-pr`);
-  - `pr reply [-w W] [--comment ID] TEXT`;
+  - `pr reply [--wt W] [--comment ID] TEXT`;
   - `pr open N|URL`.
 - **`review`:** `review add W FILE:LINE TEXT`, `review ls [W] [--json]`,
   `review rm W ID|--all`, `review send [W] [--to S] [--note]`, `review queue [--json]`,
@@ -3850,14 +4112,14 @@ and then removes the session unless `--keep`. Still to come from this tree: `--v
   (every mistake, exit 2), `recipe graph NAME|FILE [--format mermaid|dot]`,
   `recipe run NAME|FILE [--var k=v]… [--project] [--base] [--trust FP] [--wait] [--json]`.
   On a terminal an untrusted repo recipe asks first.
-- **Fan-out:** `fanout --agents a,b,c | -n N [--agents a] (--prompt P | --prompt-file F)
-  [--project] [--base] [--name PREFIX] [--test [CHECK]] [--verify CHECK] [--judge AGENT]
+- **Fan-out:** `fanout -a a,b,c | --count N [-a a] (--prompt P | --prompt-file F)
+  [-p P] [--base] [--prefix PREFIX] [--test [CHECK]] [--verify CHECK] [--judge AGENT]
   [--timeout D] [--wait] [--json]`; `compare R [--refresh] [--json]`;
-  `pick R CANDIDATE [--cherry-pick|--pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
+  `pick R CANDIDATE [--cherry-pick|--open-pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
   `discard R [CANDIDATE] [--force]`; `iterate R [CANDIDATE] TEXT`.
 - **Gates:** `gate ls [--all] [--json]`, `gate resolve ID CHOICE [--note] [--key]`.
 - **Mailbox:** `msg send TO TEXT [--kind] [--run] [--reply-to] [--interrupt] [--key]`,
-  `msg check [--me S] [--since ID] [--wait D] [--json]`, `msg ls [--run] [-n] [--json]`,
+  `msg check [--me S] [--since ID] [--timeout D] [--json]`, `msg ls [--run] [-l N] [--json]`,
   `msg ack ID…`. Inside a session the sender is that session.
 - **Leases and radar:** `lease claim PATTERN… [--exclusive] [--ttl] [--reason] [--as S]`
   (exit 5 when refused), `lease release [PATTERN…] [--as S]`, `lease ls [--json]`,
@@ -4074,7 +4336,7 @@ prefix = ["C-q", "C-Space"]  # or one key: "C-]"
 theme = "ptyro-dark"
 sidebar_width = 30
 show_ports = true
-confirm_kill = true              # x asks before stopping a session
+confirm_kill = true              # Stop, Kill, and Stop and remove ask first (TUI and web)
 shell_exit = "close"             # a shell that exits: close (disappears; agents stay) | keep
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
@@ -4306,7 +4568,7 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
   worktree (else the directory) it was run in, and for an agent the session's name; further lines
   are indented two spaces and belong to the item. Tags go at the end: `[wt:project/name]` (the
   worktree started from it) and `(#42)` (the pull request that finished it). Under `## Heading`
-  with `--section`. `--no-stamp` leaves the stamp off, `--note` writes a plain bullet. An item is
+  with `--section`. `--no-stamp` leaves the stamp off, `--bullet` writes a plain bullet (it was `--note`, which takes a text everywhere else). An item is
   selected by its line number or by words in exactly one open item.
 - **Writes.** `ptyro_core::scratchpad::Pad` is the only code that changes the file. An add is a
   single append (`O_APPEND`), so an editor with the file open sees only added bytes; anything else
@@ -4391,6 +4653,12 @@ dirs), it falls back to `/tmp/ptyro-<uid>-<fnv32 of the original path>/ptyro.soc
 deterministic, so every client finds it. The daemon refuses a socket directory owned by another
 uid and tightens it to `0700` (a shared `/tmp` could otherwise be pre-seeded). `PTYRO_SOCKET`
 overrides the socket path alone.
+
+**[fixed 2026-11-09]** Under a `PTYRO_HOME`, `PTYRO_SOCKET` counts only when it is that home's:
+inside the home, or the home's own fallback socket (a pipe on Windows: the home's own pipe).
+Otherwise it is ignored. Every session's environment carries its daemon's `PTYRO_SOCKET`, so an
+agent that sandboxed itself with `PTYRO_HOME=<scratch>` and ran `ptyro daemon stop --force` stopped
+the daemon it was running in, and every session with it.
 
 **[fixed 2026-10-23]** A daemon replaces an existing socket file only when connecting to it is
 *refused* (nobody listens); any other failure leaves it alone and the daemon refuses to start,
@@ -4552,7 +4820,7 @@ ptyro wait "$s" --for idle --timeout 30m && ptyro wt diff "$s"
 
 ### 15.2 Level 2 — fan-out and compare (M7)
 
-`ptyro fanout --agents claude,codex,gemini --prompt-file task.md`:
+`ptyro fanout -a claude,codex,gemini --prompt-file task.md`:
 
 1. Creates a run; N worktrees from the same base (`<prefix>-claude`, `<prefix>-codex`, …).
 2. Spawns each agent, delivers the prompt when ready.
@@ -4746,7 +5014,7 @@ be lost. One command to undo a multi-repo wrong turn.
   integration checks) before the next, and stops on failure with a precise partial-state report.
   Every step goes through a gate unless `--yes`.
 - **Removal** (`cs rm`) applies §10.8 to *every* member; one dirty member blocks removal of the
-  whole set (or `--keep <member>`).
+  whole set (or `--keep-member <member>`).
 
 #### 15.5.8 Templates
 
@@ -4779,7 +5047,7 @@ name in another member's dependencies).
 #### 15.5.10 CLI and TUI
 
 ```text
-ptyro cs new <name> --projects api,sdk,web [--template t] [--lead claude] [--layout lead|solo|manual]
+ptyro cs new <name> --projects api,sdk,web [--template t] [--lead-as claude] [--layout lead|solo|manual]
              [--prompt <goal> | --from-issue <url>]
 ptyro cs ls | show <set> | status <set> [--json] | log <set> [--follow]
 ptyro cs msg <set> <member|@lead|@all> <text> [--interrupt]
@@ -4787,7 +5055,7 @@ ptyro cs contract <set> [show|edit|diff <file>|history]
 ptyro cs check <set>                       # integration + contract checks
 ptyro cs checkpoint <set> [label] | restore <set> <n>
 ptyro cs commit|push|pr|land <set>        # lockstep, dependency-ordered, gated
-ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep <member>]
+ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep-member <member>]
 ```
 
 - **Sidebar:** a change set is a group node (`◆ add-user-tier 3/4 ready · r3`) above its members'
@@ -4979,7 +5247,7 @@ it. It is answered with `ptyro gate resolve ID CHOICE [--note] [--key]`, from th
 - optional `done_when` (`--verify`) and timeout;
 - then a `rank` step (`join = "all_settled"`, `verify = {candidates, tests, judge}`).
 
-`-n N` cycles through `--agents`.
+`--count N` cycles through `--agent`.
 
 **Evidence** (cached on the verify step; `compare --refresh` gathers it again):
 - **tests** in each candidate, and on the base in a throwaway detached worktree. `broke_tests`
@@ -5320,7 +5588,10 @@ tests green; nothing pushed. What it decided:
 - **`cs rm`** checks every member's safety first (§10.8); one with work that would be lost blocks
   the whole set unless `--keep` it or `--force`. Then the set's agents stop and the worktrees go
   (branches kept for members that didn't land). `cs drop` removes one member (refused while
-  others depend on it, unless `--force`); `cs add` adds one (same profile, no cycles) and starts
+  others depend on it, unless `--ignore-dependents`, fix `ignore_dependents`, "Drop it anyway").
+  Overriding the dependency never discards work: unsaved work in its worktree is a refusal of
+  its own, through only with `--force` (fix `force`), as `wt rm` (owner, 2026-11-09: one flag,
+  one meaning; `--force` always means "discard the work"); `cs add` adds one (same profile, no cycles) and starts
   its agent when the set is working.
 
 #### 15.7.7 States, actions, tools and the TUI
@@ -7781,12 +8052,14 @@ shown in every workspace, including those of linked machines (§16.4b).
 
 - A chat and a node have a **ULID** (§2.3); the human handle of a chat is `c:7f3k`.
 - A chat has a **title** (free text) and no name. It is addressed by handle (`7f3k`, `c:7f3k`),
-  by a title substring that matches one chat, or by `@last` (the chat most recently used), `@pinned`
-  and `@unread` (the one pinned chat, or the one with answers not read; when several are, the
-  error lists them, newest first). A chat of another machine is `laptop2:c:7f3k`, as sessions are
+  by `@last` (the chat most recently used), `@pinned` and `@unread` (the one pinned chat, or the
+  one with answers not read; when several are, the error lists them, newest first), and, as the
+  last resort (§2.3), by a title substring that matches one chat. A chat of another machine is `laptop2:c:7f3k`, as sessions are
   (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
   alike).
-- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 6), for `fork --at` and search hits.
+- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search
+  hits. The web's citation links look for 6 or more characters after the slash: that only finds
+  citations in prose (fewer would catch ordinary words); the daemon resolves the link.
 
 ### 22.4 Storage: `chat.db`
 
@@ -8004,7 +8277,8 @@ for Claude and Codex this step never happens and (2) always runs); else (2) `[ch
 `<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`), fed the first user
 and assistant messages (redacted as summaries are); else (3) the first line of the first message.
 A title the user typed (`title_src = user`) is never replaced; `chat.retitle` with an empty box
-makes a new one. `[chat] title = "off"` uses (3) only.
+clears it (and none is made for it again), `chat.autotitle` (`chat retitle --auto`) makes a new
+one (owner, 2026-11-09: retitle clears, for every kind). `[chat] title = "off"` uses (3) only.
 
 ### 22.9 Incognito
 
@@ -8029,7 +8303,7 @@ is incognito unless `--keep`.
 Three tiers; each one is useful without the next.
 
 1. **Keyword (CHAT3).** FTS5 over `node.text`, ranked by bm25 with a snippet and the match
-   highlighted, user messages weighted above assistant text as `llm` does. Filters: `--chat`,
+   highlighted, user messages weighted above assistant text as `llm` does. Filters: `--in CHAT`,
    `--workspace`, `--agent`, `--machine`, `--since 7d`, `--pinned`, `--archived`. A query is plain
    words (all must match), `"a phrase"`, `-word`, `prefix*`, or `agent:codex`, `since:7d`. A hit opens
    the chat at that node. In the chat, find-in-chat searches the shown branch.
@@ -8228,19 +8502,19 @@ hides when `enabled`):
   ptyro chat [new] [PROMPT] [--agent A[@P]] [--preset|--tools PRESET] [--folder DIR]… [--incognito|--keep]
                    [--workspace W] [--title T] [--compare A,B] [--no-wait] [--timeout S]   # new chat; with no PROMPT, opens it in a terminal
   ptyro chat ask QUESTION [--keep] [--agent A] [--preset|--tools PRESET] [--no-stdin] [--timeout S]   # one-shot answer on stdout; stdin is context
-  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-n N]   # every workspace's unless -w
+  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-l N]   # every workspace's unless -w
   ptyro chat show CHAT [--all] [--ids] [--branches] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view
   ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]   # waits for the answer by default
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
   ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes] [PROMPT] [--no-wait] [--timeout S]
-  ptyro chat retitle CHAT [TITLE] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
+  ptyro chat retitle CHAT [TITLE|--auto] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION   # no match is exit 0
   ptyro chat answer CHAT allow|always|deny  ·  ptyro chat stop CHAT
   ptyro chat export CHAT [--format md|json] [-o FILE]
   ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
-  ptyro chat presets [--json]  ·  ptyro chat task CHAT [--project P] [--agent A] [--name N]
-  ptyro chat compare CHAT [--agents A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
+  ptyro chat presets [--json]  ·  ptyro chat task CHAT [-p P] [-a A] [-n NAME] [-d]
+  ptyro chat compare CHAT [-a A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
   ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
   ```
 
@@ -8308,7 +8582,7 @@ reset too big for one frame comes as several, the first with `reset`; a subscrip
 chat's full id, so any of its addresses ends it); `ChatSend{chat, text}`; `ChatRetry{chat, node?}`;
 `ChatEdit{chat, node, text}`; `ChatBranch{chat, to}`; `ChatFork{chat, node?, agent?, side,
 confirmed}`; `ChatUpdate{chat, title?, pinned?, archived?, agent?, preset?, keep?, folders?,
-confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat}`;
+confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.38);
 `ChatAnswer{chat, decision}`; `ChatStop{chat}`; `ChatSearch{query, chat?, workspace?, agent?,
 pinned, archived, limit?, machines}` → `ChatHits{hits}`; `ChatFind{question, agent?, workspace?}` →
 `Chat{info}` (an incognito chat that answers; the client follows it); `ChatExport{chat, format}` →
@@ -8428,7 +8702,7 @@ agent installed:
 - **A loose spawn** whose directory doesn't exist on the daemon's machine (`~` from the web, a gone
   directory, another machine's path) starts at home. `~/x` is expanded when it exists.
 - **Joining SHELLS** happens on a `ProjectRemove{release}`, at a spawn outside every project, and by
-  hand. A project dropped from a workspace (`ws remove`) keeps its sessions placed, and they are
+  hand. A project dropped from a workspace (`ws remove-project`) keeps its sessions placed, and they are
   listed unnumbered under SHELLS. So is any other session with no row (the old `other sessions`).
   The note when one joins is in the log, not sent to clients.
 - **Put there, or landed there** (`Shelf.pinned`, the full suite's UX1.5 tests found it): a shell
@@ -8571,7 +8845,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
   sessions` group (`tree.rs`), which disappears. Such a session becomes loose, takes the lowest free
   slot in its home workspace, and the daemon raises a note ("`make dev` moved to SHELLS as 4"):
   - a session whose project is let go (`ProjectRemove{release}`);
-  - a session whose project leaves its workspace (`ws remove`);
+  - a session whose project leaves its workspace (`ws remove-project`);
   - a session started outside every project (`ptyro new --cwd /tmp -- htop`);
   - a session left running when its worktree goes: removal can't stop a busy one, and one set
     loose by hand (§23.8) stays.
@@ -8695,18 +8969,19 @@ showing it):
 
 ```text
 ptyro shells [ls] [--workspace WS] [--all] [--json]   # the workspace's shells, by number (--all: every workspace)
-ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--name N] [--title T] [--scratch] [--workspace WS] [--attach] [--json]
+ptyro shells new [-- CMD…] [-C DIR] [--slot N] [-n NAME] [--title T] [--scratch] [-w WS] [-d] [--json]
 ptyro shells go N [--workspace WS]                    # attach with shell N shown (= ptyro attach %N)
 ptyro shells move N M [--workspace WS]                # renumber; swaps when M is taken
 ptyro shells loose <session>                          # set a worktree's session loose into SHELLS (§23.8)
 ptyro shells adopt <session> [WORKTREE]               # move a loose one into a worktree (default: where its directory is)
-ptyro shells watch <session> [--done|--output|--silence DUR|--match RE|--off]   # §23.9
+ptyro shells watch <session> [--done|--activity|--silence DUR|--match RE|--off]   # §23.9
 ```
 
 - `ls --json` prints `[{slot, id, name, label, kind, state, cwd, live_cwd, command, last_exit,
   watch, attention}]`. Text is one line a shell: `3  ssh prod  ◉ bell  ~`.
-- `new` prints the slot and name (`4 quiet-jackdaw`), `--json` the session. Without `--attach` it
-  doesn't attach, so scripts can run `ptyro shells new --slot 9 -- htop`.
+- `new` attaches in a terminal unless `-d` (§12.1); detached it prints the slot and name
+  (`4 quiet-jackdaw`), `--json` the session. A script (no terminal) never attaches, so
+  `ptyro shells new --slot 9 -- htop` works there as it is.
 - `ls` and the session commands with `%N` work against other machines' workspaces as the session
   commands already do (§16.4b).
 
@@ -8839,7 +9114,7 @@ The web has no splits and no `Alt` it can count on: on macOS the browser types c
   - removal frees a number and nothing renumbers;
   - a loose spawn inside a worktree isn't placed;
   - auto-registration doesn't move a loose shell that `cd`s into a new repository;
-  - `release`, `ws remove` and a session started outside every project join SHELLS with a note;
+  - `release`, `ws remove-project` and a session started outside every project join SHELLS with a note;
   - worktree removal still refuses a busy loose shell whose directory is inside it;
   - adopt refuses another profile;
   - `restore = offer|start|forget` across a daemon restart;
@@ -8951,7 +9226,8 @@ strip, and a split is always a shell.
   - `shells.break` and `shells.join` are in a shell's row menu and the palette; join asks for the
     number.
 - **The CLI:**
-  - `shells split [S] [--down] [--attach]`, where S defaults to the session it runs in;
+  - `shells split [S] [--down] [-d]`, where S defaults to the session it runs in (it attaches as
+    `shells new` does, §12.1);
   - `shells break S`;
   - `shells join S N [--right]`;
   - `shells ls` lists panes under their window, and its `--json` rows carry `pane`.

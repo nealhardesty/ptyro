@@ -128,7 +128,7 @@ async fn the_file_the_variable_and_the_cli() {
     assert!(ok, "{err}");
     let (ok, ..) = w.pad(&["add", "--section", "Bugs", "second one"]);
     assert!(ok);
-    let (ok, ..) = w.pad(&["add", "--note", "--no-stamp", "just a thought"]);
+    let (ok, ..) = w.pad(&["add", "--bullet", "--no-stamp", "just a thought"]);
     assert!(ok);
     let mut piped = w.d.cmd();
     piped.args(["scratchpad", "add", "-"]).stdin(std::process::Stdio::piped());
@@ -319,6 +319,18 @@ async fn an_item_started_as_a_task_is_ticked_when_its_worktree_is_cleaned_up() {
     assert!(text.contains("- [ ] fix the flaky test [wt:myrepo/flaky]"), "{text}");
     let (_, out, _) = w.pad(&["todo"]);
     assert!(out.contains("→ myrepo/flaky"), "{out}");
+    // The link follows a rename of the worktree or of its project (and back).
+    let renamed =
+        |addr: &str, name: &str| Request::WorktreeRename { addr: addr.into(), name: name.into() };
+    c.request(renamed("myrepo/flaky", "flaky2")).await.unwrap();
+    assert!(get(&c).await.text.contains("test [wt:myrepo/flaky2]"));
+    let project =
+        |addr: &str, name: &str| Request::ProjectRename { addr: addr.into(), name: name.into() };
+    c.request(project("myrepo", "repo2")).await.unwrap();
+    assert!(get(&c).await.text.contains("test [wt:repo2/flaky2]"));
+    c.request(project("repo2", "myrepo")).await.unwrap();
+    c.request(renamed("myrepo/flaky2", "flaky")).await.unwrap();
+    assert!(get(&c).await.text.contains("test [wt:myrepo/flaky]"));
 
     c.request(Request::WorktreeRemove { addr: info.id.clone(), opts: Default::default() })
         .await

@@ -556,7 +556,7 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
                 let seen = if d.pending {
                     "unclaimed".into()
                 } else {
-                    d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::age)
+                    d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::ago)
                 };
                 println!(
                     "{:<13} {:<16} {:<8} {:<12} {:<5} {}",
@@ -570,9 +570,20 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        DevicesCmd::Revoke { id } => {
-            c.request(Request::DeviceRevoke { id: id.clone() }).await?;
-            eprintln!("revoked {id}: its token no longer works and its connections closed");
+        DevicesCmd::Revoke { id, yes } => {
+            // Found first, then asked about by its name: a typo asks nothing.
+            let devices = match c.request(Request::DeviceList).await? {
+                Reply::Devices { devices } => devices,
+                r => return Err(unexpected(r)),
+            };
+            let d = ptyro_core::lookup::pick("device", &id, &devices, |d| &d.name, |d| &d.id)?;
+            let (id, name) = (d.id.clone(), d.name.clone());
+            crate::cli::ask_first(
+                &format!("Revoke device {name} ({id})? {}", ptyro_core::removal::DEVICE),
+                yes,
+            )?;
+            c.request(Request::DeviceRevoke { id }).await?;
+            eprintln!("revoked {name}: its token no longer works and its connections closed");
             Ok(0)
         }
         DevicesCmd::PushTest => {

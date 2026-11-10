@@ -378,6 +378,23 @@ impl App {
                     );
                 }
             }
+            // Every comment (`review rm --all`): asked first, as the CLI and the web do.
+            (_, Some('X')) if !i.comments.is_empty() => {
+                let name = self
+                    .worktree(&i.worktree)
+                    .map_or_else(|| i.worktree.clone(), |w| w.qualified());
+                let req = Request::ReviewRemove { addr: i.worktree.clone(), id: None };
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!(
+                        "Remove every comment on {name}? {} [y/N]",
+                        ptyro_core::removal::REVIEW_ALL
+                    ),
+                    action: Confirmed::Again(
+                        Box::new(req),
+                        Box::new(Pending::InspectComments(i.worktree.clone())),
+                    ),
+                });
+            }
             (_, Some('S')) => {
                 if i.comments.is_empty() {
                     self.toast("no comments yet: c on a line adds one");
@@ -471,7 +488,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     let foot = Rect { y: inner.bottom() - 1, height: 1, ..inner };
     let help = match i.tab {
         Tab::Diff => {
-            "j/k move · n/p file · c comment · x drop · S send comments · a against · s split · Space mark · C commit · A agent commits · P PR · I integrate · q close"
+            "j/k move · n/p file · c comment · x drop · X drop all · S send comments · a against · s split · Space mark · C commit · A agent commits · P PR · I integrate · q close"
         }
         Tab::Checks => {
             "f fix failing checks · m auto-merge · w watch · P open PR · r refresh · q close"

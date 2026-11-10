@@ -696,7 +696,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.clock", "interface", Kind::Bool, "Show the time in the status bar."),
     s("ui.load", "interface", Kind::Bool, "Show the load average of the computer ptyro runs on (1, 5 and 15 minutes) in the status bar and the web app's header. It turns amber once it passes the number of CPUs.").also("cpu busy uptime system"),
     s("ui.mouse", "interface", Kind::Bool, "Let ptyro take the mouse: click to focus, wheel to scroll, drag borders. Off leaves it to your terminal, so you can select and copy text with it.").also("click scroll select copy"),
-    s("ui.confirm_kill", "interface", Kind::Bool, "Ask before stopping a session."),
+    s("ui.confirm_kill", "interface", Kind::Bool, "Ask before ending a running session: Stop, Kill, and Stop and remove, in the terminal and the web app alike.").also("confirm ask stop kill remove"),
     s("ui.show_ports", "interface", Kind::Bool, "Show the ports a session listens on, in the sidebar and pane headers."),
     s("ui.tint_borders", "interface", Kind::Bool, "Tint pane borders with the session's profile colour."),
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
@@ -740,7 +740,7 @@ pub const SETTINGS: &[Setting] = &[
     s("worktrees.stale_days", "worktrees", int(1, 3650), "`ptyro gc` reports a worktree with no sessions after this long.").unit("days"),
     s("worktrees.auto_rename_branch", "worktrees", Kind::Bool, "Name the branch after the first prompt, until it is pushed."),
     s("worktrees.archive_on_merge", "worktrees", Kind::Bool, "Archive a worktree when its pull request merges and nothing runs in it."),
-    s("worktrees.archive_purge_days", "worktrees", int(0, 36_500), "Delete archived worktrees after this many days, and their branches when merged or pushed. 0 keeps them.").unit("days"),
+    s("worktrees.archive_purge_days", "worktrees", int(0, 36_500), "Delete archived worktrees after this many days, and their branches when merged into their base or the same as their pushed copy. 0 keeps them.").unit("days"),
     s("ports.range", "worktrees", Kind::Text, "The ports handed out to worktrees, LOW-HIGH (LOW at least 1024).").new_only(),
     s("ports.count", "worktrees", int(1, 1000), "Ports for each worktree.").new_only().unit("ports"),
     s("discover.roots", "worktrees", Kind::List, "Folders to look in for git repositories.").or("none"),
@@ -1472,7 +1472,7 @@ fn target(scope: Scope, key: &str) -> Result<Target, String> {
     if sec.scope != scope {
         return Err(match scope {
             Scope::User => format!(
-                "{key} is a project setting: use `--project` (it lives in the repository's .ptyro.toml)"
+                "{key} is a project setting: use `-p .` (or `-p NAME`; it lives in the repository's .ptyro.toml)"
             ),
             Scope::Project => format!(
                 "{key} is a user setting: agents, profiles, keys and the rest can only be set in your own config, never in a repository (SPEC §13.1)"

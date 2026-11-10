@@ -4,7 +4,7 @@
 
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, form, go, h, menu, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, confirmed, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
 import type { Child, Field, Item } from "./kit.js";
 import { allSessions } from "./sessions.js";
 
@@ -106,7 +106,7 @@ function fanoutForm(): void {
     { key: "verify", label: "Done when", placeholder: "e.g. cargo test", hint: "A candidate only counts as done once this passes", more: true },
     { key: "judge", label: "Judge", type: "select", options: [["", "No judge"], ...agents], hint: "An agent that scores the candidates' diffs, advisory", more: true },
     { key: "base", label: "Base", placeholder: "default: the project's base, e.g. origin/main", hint: "The ref every candidate's branch starts from", more: true },
-    { key: "name", label: "Name prefix", slug: "name", placeholder: "default: from the prompt", hint: "The worktrees are called this, numbered", more: true },
+    { key: "name", label: "Name prefix", slug: "name", placeholder: "default: from the prompt", hint: `The worktrees are called this, numbered. ${NAME_HINT}`, more: true },
     { key: "timeout", label: "Time limit", placeholder: "e.g. 45m", hint: "Per candidate", more: true },
     { key: "structured", label: "Chat mode (full tool-call visibility)", type: "check", more: true },
   ], "Start", async (v) => {
@@ -192,7 +192,7 @@ function runView(rest: string): HTMLElement {
       bar(
         s.kind === "fanout" || s.picked?.length || s.discarded?.length ? h("button", { class: "primary", title: tip("compare"), onclick: () => go(`#/compare/${enc(id)}`) }, "Compare") : null,
         h("button", { title: tip("run.events"), onclick: () => go(`#/run/${enc(id)}/events`) }, "Events"),
-        s.status === "running" || s.status === "waiting" ? h("button", { class: "deny", title: tip("run.cancel"), onclick: () => confirm("Cancel the run?", "Its steps stop; sessions it started are left running.", "Cancel it", async () => { await ask({ t: "run_cancel", id }, "Cancelled"); run.refresh(id); }) }, "Cancel") : null,
+        s.status === "running" || s.status === "waiting" ? h("button", { class: "deny", title: tip("run.cancel"), onclick: () => confirm(`Cancel run ${id}?`, "Its running steps are cancelled and the agents they started are stopped; their worktrees stay.", "Cancel it", async () => { await ask({ t: "run_cancel", id }, "Cancelled"); run.refresh(id); }) }, "Cancel") : null,
         s.changeset ? h("button", { onclick: () => go(`#/set/${enc(s.changeset.name)}`) }, "Open the change set") : null),
       section("Steps", h("div", { class: "rows", title: tip("run.show") }, ...r.order.map((k: string) => {
         const st = s.steps[k] ?? { status: "pending", attempts: [] };
@@ -257,7 +257,7 @@ function candidateCard(id: string, c: any): HTMLElement {
       h("button", { class: "small", title: tip("iterate"), onclick: () => iterateForm(id, c) }, "Follow up"),
       c.worktree ? h("button", { class: "small", onclick: () => go(`#/wt/${enc(c.worktree)}/changes`) }, "Changes") : null,
       sessionId ? h("button", { class: "small", onclick: () => go(`#/s/${enc(sessionId)}`) }, "Session") : null,
-      h("button", { class: "small", title: tip("discard"), onclick: () => confirm(`Discard ${c.step}?`, "Its worktree is removed, if that loses nothing.", "Discard", async () => { await ask({ t: "discard", run: id, candidate: c.step, force: false }, "Discarded"); compare.reload(id); }) }, "Discard")) : null);
+      h("button", { class: "small", title: tip("discard"), onclick: () => confirm(`Discard candidate ${c.step}?`, "Its agent stops and its worktree is removed. Nothing is removed if that would lose work.", "Discard", async () => { await ask({ t: "discard", run: id, candidate: c.step, force: false }, "Discarded"); compare.reload(id); }) }, "Discard")) : null);
 }
 
 function compareView(rest: string): HTMLElement {
@@ -268,7 +268,7 @@ function compareView(rest: string): HTMLElement {
     ...(d.warnings as string[]).map((w) => h("p", { class: "form-err" }, w)),
     h("div", { class: "sub" }, `against ${d.base ?? "the main branch"}${d.base_tests != null ? ` (its tests ${d.base_tests === 0 ? "pass" : "fail"})` : ""}`),
     bar(h("button", { title: tip("iterate"), onclick: () => iterateForm(id) }, "Follow up with all"),
-      h("button", { title: tip("discard"), onclick: () => confirm("Discard the rest?", "Every candidate that wasn't picked has its worktree removed, if that loses nothing.", "Discard them", async () => { await ask({ t: "discard", run: id, candidate: null, force: false }, "Discarded"); compare.reload(id); }) }, "Discard the rest"),
+      h("button", { title: tip("discard"), onclick: () => confirm("Discard every candidate you didn't pick?", "Their agents stop and their worktrees are removed. Nothing is removed if that would lose work.", "Discard them", async () => { await ask({ t: "discard", run: id, candidate: null, force: false }, "Discarded"); compare.reload(id); }) }, "Discard the rest"),
       h("button", { class: "icon", "aria-label": "Run the evidence again", onclick: () => { conn.request({ t: "compare", run: id, refresh: true }).then((r) => { compare.set(id, r.doc); ui.render(); }, (e) => ui.toast(errText(e))); } }, "↻")),
     ...(d.candidates as any[]).map((c) => candidateCard(id, c)),
     d.top_difference ? section("Between the top two", h("pre", { class: "block" }, d.top_difference)) : null);
@@ -367,6 +367,7 @@ function newSet(): void {
   for (const m of members) m.pick.addEventListener("change", syncMembers);
   syncMembers();
   const name = h("input", { placeholder: "e.g. add-user-tier", autocapitalize: "off", spellcheck: "false" });
+  slugInput(name, "name");
   const goal = h("textarea", { rows: 3, placeholder: "What the change is, across the repositories" });
   const fromIssue = h("input", { placeholder: "a number in the first member's repository, or a URL", autocapitalize: "off", spellcheck: "false" });
   const tpl = h("select", {}, h("option", { value: "" }, "No template"));
@@ -381,7 +382,7 @@ function newSet(): void {
   const workspace = h("select", {}, h("option", { value: "" }, "default"), ...wsNames.map((w) => h("option", { value: w }, w)));
   const err = h("p", { class: "form-err" });
   const s = sheet("New change set", [
-    h("label", { class: "field" }, h("span", {}, "Name"), name),
+    h("label", { class: "field" }, h("span", {}, "Name"), name, h("small", {}, NAME_HINT)),
     h("div", { class: "field" }, h("span", {}, "Projects"), ...members.flatMap((m) => [m.pickRow, m.opts])),
     h("label", { class: "field" }, h("span", {}, "Goal"), goal),
     h("label", { class: "field" }, h("span", {}, "Template"), tpl),
@@ -395,13 +396,13 @@ function newSet(): void {
     err,
   ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
     const chosen = members.filter((m) => m.pick.checked);
-    if (!name.value.trim()) { err.textContent = "Name it."; return; }
+    if (!name.value) { err.textContent = "Name it."; return; }
     if (!chosen.length && !tpl.value) { err.textContent = "Pick the projects, or a template."; return; }
     const on = gates.filter(([c]) => c.checked).map(([c]) => c.value);
     const map = (f: (m: (typeof members)[number]) => string) => Object.fromEntries(chosen.map((m) => [m.p.slug, f(m).trim()]).filter(([, v]) => v));
     const depends = Object.fromEntries(chosen.filter((m) => m.on.size).map((m) => [m.p.slug, [...m.on].filter((d) => chosen.some((o) => o.p.slug === d))]));
     const spec = (trust: string | null) => ({
-      name: name.value.trim(), projects: chosen.map((m) => m.p.id), template: tpl.value || null, lead: (layout.value !== "manual" && lead.value) || null, layout: layout.value,
+      name: name.value, projects: chosen.map((m) => m.p.id), template: tpl.value || null, lead: (layout.value !== "manual" && lead.value) || null, layout: layout.value,
       goal: goal.value.trim() || null, from_issue: fromIssue.value.trim() || null, depends, agents: map((m) => m.agent.value), bases: map((m) => m.base.value),
       // All three ticked: the default (the template's, else all three); none: no approvals.
       gates: on.length === gates.length ? null : on,
@@ -409,15 +410,10 @@ function newSet(): void {
     try {
       let r: any;
       try { r = await conn.request({ t: "cs", op: { op: "new", spec: spec(null) } }); } catch (e) {
-        const fp = (e as { code?: string }).code === "untrusted_project" ? (e as Error).message.split("--trust ").pop() : null;
+        const fp = fixOf(e)?.fingerprint;
         if (!fp) throw e;
         // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.
-        const yes = await new Promise<boolean>((ok) => {
-          let said = false;
-          const c = confirm("Trust this template?", (e as Error).message, "Trust and go on", () => { said = true; ok(true); }, false);
-          c.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
-        });
-        if (!yes) return;
+        if (!(await confirmed("Trust this template?", (e as Error).message, "Trust and go on", false))) return;
         r = await conn.request({ t: "cs", op: { op: "new", spec: spec(fp.trim()) } });
       }
       s.close(); sets.reload(""); go(`#/set/${enc(r.value.set.name)}`);
@@ -456,7 +452,7 @@ function setMemberMenu(i: any, m: any): void {
     { title: tip("set.message"), label: "Message it…", run: () => msgSet(name, m.name) },
     { title: tip("set.overlay"), label: "Wire it to its siblings…", run: () => overlaySet(name, m.name) },
     m.pr_url && { label: `Pull request #${m.pr}`, run: () => openWeb(m.pr_url) },
-    { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name}?`, "It leaves the set; its worktree stays unless it can't.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false }, "Dropped"); set.reload(name); }) },
+    { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name} from change set ${name}?`, "It leaves the set and its worktree is removed. Nothing is removed if that would lose work.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false, ignore_dependents: false }, "Dropped"); set.reload(name); }) },
   ]);
 }
 
@@ -527,7 +523,7 @@ function setView(rest: string): HTMLElement {
           { title: tip("set.overlay"), label: "Wire members to each other…", run: () => overlaySet(name) },
           i.lead && { label: "Open the lead", run: () => go(`#/s/${enc(i.lead)}`) },
           { title: tip("set.add"), label: "Add a project…", run: () => addMember(name) },
-          { title: tip("set.remove"), label: "Remove the set", danger: true, run: () => confirm(`Remove ${name}?`, "Its worktrees are removed, unless they hold work: then it says so.", "Remove", async () => { const v = await csOp({ op: "rm", set: name, keep: [], force: false }, "Removed"); if (v) go("#/sets"); }) },
+          { title: tip("set.remove"), label: "Remove the set", danger: true, run: () => confirm(`Remove change set ${name}?`, "Every member's worktree is removed, or none is. Nothing is removed if that would lose work.", "Remove", async () => { const v = await csOp({ op: "rm", set: name, keep: [], force: false }, "Removed"); if (v) go("#/sets"); }) },
         ]) }, "⋯")),
       ...(i.report.issues as any[]).map((x) => h("section", { class: "issue" }, h("b", {}, `✗ ${x.state.replace(/_/g, " ")}${x.member ? ` · ${x.member}` : ""}`), h("div", {}, x.detail), h("div", { class: "sub" }, `→ ${x.action}`))),
       section("Members", h("div", { class: "rows" }, ...(c.members as any[]).map((m) => {

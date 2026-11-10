@@ -23,8 +23,19 @@ use serde::Serialize;
 
 use crate::cli::{Ctx, no_daemon, targets, unexpected};
 
-pub const CONDITIONS: [&str; 7] =
-    ["working", "blocked", "idle", "done", "errored", "exit", "any-attention"];
+/// `wait --for`: the status words of `ptyro_core::selector::SELECTORS` with their aliases
+/// (`errored` is `error`), plus `exit` and `any-attention`.
+pub fn condition() -> clap::builder::PossibleValuesParser {
+    use clap::builder::PossibleValue as V;
+    use ptyro_core::selector::{SELECTORS, State};
+    let words = SELECTORS
+        .iter()
+        .filter(|s| matches!(s.state, Some(State::Status(_))))
+        .map(|s| V::new(s.name).aliases(s.aliases.iter().copied()));
+    clap::builder::PossibleValuesParser::new(
+        words.chain([V::new("exit"), V::new("any-attention")]).collect::<Vec<_>>(),
+    )
+}
 
 pub fn duration(s: &str) -> Result<Duration, Error> {
     ptyro_core::config::parse_duration(s).map_err(|e| Error::invalid(format!("{s:?}: {e}")))
@@ -81,7 +92,9 @@ pub struct WaitOpts {
     /// Any of these conditions ends the wait for a session.
     pub conditions: Vec<String>,
     pub pattern: Option<regex::Regex>,
-    pub scrollback: bool,
+    /// Match against the scrollback above the screen too (`None`: the screen); `Some(None)`:
+    /// what's kept in memory, `Some(Some(n))`: n lines.
+    pub scrollback: Option<Option<u32>>,
     pub timeout: Option<Duration>,
     pub any: bool,
     pub stall: Option<Duration>,
@@ -94,9 +107,13 @@ async fn get(c: &Client, id: SessionId) -> Result<SessionInfo, Error> {
     }
 }
 
-async fn screen_text(c: &Client, id: SessionId, scrollback: bool) -> Result<String, Error> {
-    if scrollback {
-        match c.request(Request::ReadScrollback { addr: id.full(), lines: None }).await? {
+async fn screen_text(
+    c: &Client,
+    id: SessionId,
+    scrollback: Option<Option<u32>>,
+) -> Result<String, Error> {
+    if let Some(lines) = scrollback {
+        match c.request(Request::ReadScrollback { addr: id.full(), lines }).await? {
             Reply::Scrollback { doc } => {
                 Ok(ptyro_core::cache::plain_text(&ptyro_core::cache::doc_rows(&doc)))
             }
@@ -308,7 +325,7 @@ pub async fn wait(
     sessions: Vec<String>,
     condition: String,
     pattern: Option<String>,
-    scrollback: bool,
+    scrollback: Option<Option<u32>>,
     timeout: Option<String>,
     any: bool,
     stall: Option<String>,
@@ -412,16 +429,16 @@ pub async fn send(
     // The turn this prompt starts is over when the agent is idle again, needs you, errs or
     // exits; `report` tells which.
     let o = WaitOpts {
-        conditions: ["idle", "blocked", "errored", "exit"].map(String::from).into(),
+        conditions: ["idle", "blocked", "error", "exit"].map(String::from).into(),
         pattern: None,
-        scrollback: false,
+        scrollback: None,
         timeout: timeout.as_deref().map(duration).transpose()?,
         any: false,
         stall: stall.as_deref().map(duration).transpose()?,
     };
     let ids: Vec<SessionId> = infos.iter().map(|s| s.id).collect();
     let outcomes = wait_for_lasting(ctx, &mut c, &ids, &o).await?;
-    // Ending on "blocked" or "errored" is a fine answer to "how did the turn end?".
+    // Ending on "blocked" or "error" is a fine answer to "how did the turn end?".
     Ok(report(&outcomes, false, json))
 }
 
@@ -463,11 +480,18 @@ pub async fn broadcast(
 
 pub async fn stop(ctx: &Ctx, sessions: Vec<String>) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
+    let mut code = 0;
     for info in targets(&c, &sessions).await? {
-        c.request(Request::Kill { addr: info.id.full(), signal: None }).await?;
-        eprintln!("stopped {}", info.name);
+        if !info.state.is_live() {
+            eprintln!("{} isn't running", info.name);
+            continue;
+        }
+        match c.request(Request::Kill { addr: info.id.full(), signal: None }).await {
+            Ok(_) => eprintln!("stopped {}", info.name),
+            Err(e) => crate::cli::failed(&mut code, &info.name, &e),
+        }
     }
-    Ok(0)
+    Ok(code)
 }
 
 #[derive(Serialize)]
@@ -486,15 +510,14 @@ struct ReadOut<'a> {
 pub async fn read(
     ctx: &Ctx,
     session: String,
-    scrollback: Option<u32>,
+    scrollback: Option<Option<u32>>,
     ansi: bool,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     let text = if let Some(lines) = scrollback {
-        let Reply::Scrollback { doc } = c
-            .request(Request::ReadScrollback { addr: session.clone(), lines: Some(lines) })
-            .await?
+        let Reply::Scrollback { doc } =
+            c.request(Request::ReadScrollback { addr: session.clone(), lines }).await?
         else {
             return Err(Error::internal("unexpected reply"));
         };
@@ -709,6 +732,21 @@ mod tests {
         s.status = Some(r);
         s.last_prompt_ms = last_prompt;
         s
+    }
+
+    /// `wait --for` takes every status selector's word and alias (SPEC §2.3), and each works.
+    #[test]
+    fn wait_takes_the_selectors_status_words() {
+        use clap::builder::TypedValueParser;
+        let words: Vec<String> = super::condition()
+            .possible_values()
+            .unwrap()
+            .map(|v| v.get_name().to_owned())
+            .collect();
+        assert_eq!(words, ["working", "blocked", "idle", "done", "error", "exit", "any-attention"]);
+        let err = info(AgentStatus::Errored, 30, Some(20));
+        assert!(reached(&err, "error") && reached(&err, "errored"));
+        assert!(reached(&info(AgentStatus::Working, 10, None), "working"));
     }
 
     #[test]

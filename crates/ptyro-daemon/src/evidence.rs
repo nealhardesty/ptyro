@@ -185,7 +185,12 @@ impl Daemon {
             .steps
             .get(step)
             .and_then(|s| s.attempts.iter().rev().find_map(|a| a.worktree.clone()))
-            .ok_or_else(|| Error::missing("worktree", format!("of candidate {step}")))?;
+            .ok_or_else(|| {
+                Error::new(
+                    ptyro_core::ErrorCode::NotFound,
+                    format!("candidate {step} has no worktree yet"),
+                )
+            })?;
         self.worktree_by_id(&w)
             .ok_or_else(|| Error::conflict(format!("candidate {step}'s worktree is gone")))
     }
@@ -442,7 +447,8 @@ impl Daemon {
             agent: Some(agent.to_owned()),
             cwd: dir.clone(),
             prompt: Some(prompt),
-            name: Some(self.free_name("judge")),
+            name: Some("judge".into()),
+            name_or_next: true,
             confirmed: true,
             unqueued: true,
             ..Default::default()
@@ -715,11 +721,11 @@ impl Daemon {
             warnings.push("more than 6 candidates rarely finds a better answer".into());
         }
         if out.len() > 1 && agents.len() == 1 {
-            warnings.push("every candidate is the same agent; mixed agents fail differently (--agents claude,codex,gemini)".into());
+            warnings.push("every candidate is the same agent; mixed agents fail differently (claude, codex, gemini)".into());
         }
         if out.iter().all(|c| c.tests.is_none()) {
             warnings.push(
-                "no tests ran: ranked on status and diff only (fanout --test, or verify.tests)"
+                "no tests ran: ranked on status and diff only (give the fanout a test command, or set verify.tests)"
                     .into(),
             );
         }
@@ -822,7 +828,7 @@ impl Daemon {
                     PickMode::Apply => {
                         if paths.is_empty() && hunks.is_empty() {
                             return Err(Error::invalid(
-                                "say what to take: --path FILE (repeatable) or --hunk FILE:N",
+                                "say what to take: files, or hunks (FILE:N)",
                             ));
                         }
                         let target = match &into {

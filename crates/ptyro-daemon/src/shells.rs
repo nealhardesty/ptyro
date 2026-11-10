@@ -277,7 +277,7 @@ impl Daemon {
     /// `launch` will make session `id` a new pane of the window loose session `src` is in
     /// (`ShellSplit`); refused at [`MAX_PANES`], counting panes still starting.
     pub(crate) fn pend_pane(&self, src: SessionId, id: SessionId) -> Result<(), Error> {
-        let s = self.session(src).ok_or_else(|| Error::not_found(src.full()))?;
+        let s = self.session(src).ok_or_else(|| Error::missing("session", src.full()))?;
         let Some((ws, slot)) = Self::window_of(&s) else {
             let name =
                 s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
@@ -287,7 +287,7 @@ impl Daemon {
         let taken = self.panes_taken(&ws, slot, &pending);
         if taken.len() >= MAX_PANES {
             return Err(Error::conflict(format!(
-                "shell {slot} has {MAX_PANES} panes, the most a window holds: `ptyro shells break` moves one to a number of its own"
+                "shell {slot} has {MAX_PANES} panes, the most a window holds: break one out to a number of its own first"
             )));
         }
         let pane = next_pane_number(&taken);
@@ -373,7 +373,7 @@ impl Daemon {
                         .name
                         .clone();
                     return Err(Error::conflict(format!(
-                        "{workspace} has a shell {n} already ({name}): `ptyro shells go {n}` shows it"
+                        "{workspace} has a shell {n} already ({name}): go to it instead"
                     )));
                 }
                 if held {
@@ -499,7 +499,7 @@ impl Daemon {
         let Some(first) = self.shell_at(&ws, n) else {
             return Some(Err(Error::new(
                 ErrorCode::NotFound,
-                format!("no shell {n} in {ws}: `ptyro shells new --slot {n}` starts one"),
+                format!("no shell {n} in {ws}: start one there first"),
             )));
         };
         // `%3.2`: pane 2 of shell 3 (SPEC §23.17); `%3` is its first pane.
@@ -721,8 +721,8 @@ impl Daemon {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(f) = &m.shelf else {
                 return Err(Error::invalid(format!(
-                    "{} isn't in SHELLS: `ptyro shells loose {}` moves it there",
-                    m.name, m.name
+                    "{} isn't in SHELLS: move it there first",
+                    m.name
                 )));
             };
             (m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into()), f.slot)
@@ -801,7 +801,7 @@ impl Daemon {
             }
             None => self.target(None, &here)?.ok_or_else(|| {
                 Error::invalid(format!(
-                    "{name} is in {}, which is in no project: name the worktree (`ptyro shells adopt {name} myrepo/brisk-rook`)",
+                    "{name} is in {}, which is in no project: name the worktree to move it into (like myrepo/brisk-rook)",
                     here.display()
                 ))
             })?,
@@ -814,7 +814,7 @@ impl Daemon {
             .unwrap_or_default();
         if !theirs.is_empty() && theirs != info.profile {
             return Err(Error::conflict(format!(
-                "{name} runs under the profile {} and {} under {theirs}; a session's profile never changes, so start a shell there instead (`ptyro new --wt {}`)",
+                "{name} runs under the profile {} and {} under {theirs}; a session's profile never changes, so start a new shell in {} instead",
                 info.profile,
                 wt.qualified(),
                 wt.qualified()
@@ -914,9 +914,7 @@ impl Daemon {
         let s = self.resolve(addr)?;
         let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
         let Some((ws, from)) = Self::window_of(&s) else {
-            return Err(Error::invalid(format!(
-                "{name} isn't in SHELLS: `ptyro shells loose {name}` moves it there"
-            )));
+            return Err(Error::invalid(format!("{name} isn't in SHELLS: move it there first")));
         };
         let set = |slot: u32, pane: u32| {
             if let Some(f) =
@@ -1004,7 +1002,7 @@ impl Daemon {
             let name = m.name.clone();
             let Some(f) = m.shelf.as_mut() else {
                 return Err(Error::invalid(format!(
-                    "{name} isn't in SHELLS: watches are for SHELLS (`ptyro shells loose {name}` moves it there)"
+                    "{name} isn't in SHELLS: watches are for SHELLS (move it there first)"
                 )));
             };
             f.watch = watch;
@@ -1267,16 +1265,14 @@ impl Daemon {
                 }
                 continue;
             }
-            let ws = if self.find_workspace(&k.workspace).is_ok() {
-                k.workspace.clone()
-            } else {
-                MAIN_WORKSPACE.into()
-            };
+            let ws = self
+                .find_workspace(&k.workspace)
+                .map_or_else(|_| MAIN_WORKSPACE.into(), |w| w.name);
             let Some((slot, r)) = number(self, &ws, &k) else { continue };
             let cwd =
                 if k.cwd.is_dir() { k.cwd.clone() } else { ptyro_core::config::expand_home("~") };
             let spec = crate::session::DormantSpec {
-                name: self.free_name(&k.name),
+                name: self.free_name(None, &k.name),
                 kind: k.kind,
                 argv: k.argv.clone(),
                 cwd: cwd.clone(),

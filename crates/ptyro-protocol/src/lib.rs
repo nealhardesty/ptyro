@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 37 };
+pub const PROTO: Version = Version { major: 1, minor: 38 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -179,15 +179,20 @@ pub enum Request {
     Get {
         addr: String,
     },
-    /// Stop the session's process group (default: the graceful HUP→TERM→KILL sequence).
+    /// `signal: None` stops the session (SPEC §7.3): an agent is interrupted and given a moment
+    /// to exit, then the process group gets HUP, TERM and KILL. `Some(n)` sends that signal at
+    /// once (kill: 9). Either way the session stays listed.
     Kill {
         addr: String,
         #[serde(default)]
         signal: Option<i32>,
     },
-    /// Forget an exited session.
+    /// Forget an ended session. A live one is refused, unless `stop` (1.38): stop it, then
+    /// forget it.
     Remove {
         addr: String,
+        #[serde(default)]
+        stop: bool,
     },
     Rename {
         addr: String,
@@ -488,8 +493,8 @@ pub enum Request {
     ChatGet {
         addr: String,
     },
-    /// Expand a selector (SPEC §2.3): names, handles, globs (`build-*`), `@all`, `@live`,
-    /// `@exited`, `@focused`, `@last`, `@working`/`@blocked`/`@idle`/`@done`; `,` joins several.
+    /// Expand a selector (SPEC §2.3): names, handles, globs (`build-*`), the `@` selectors of
+    /// `ptyro_core::selector::SELECTORS`; `,` joins several.
     Resolve {
         addr: String,
     },
@@ -538,6 +543,12 @@ pub enum Request {
         addr: String,
         #[serde(default)]
         release: bool,
+    },
+    /// Rename a project: its slug, its address (1.38, SPEC §2.3). Its worktrees' directories
+    /// stay where they are.
+    ProjectRename {
+        addr: String,
+        name: String,
     },
     /// Pin to a profile, or unpin with `None` (SPEC §10.10).
     ProjectPin {
@@ -634,6 +645,12 @@ pub enum Request {
         addr: String,
         lock: bool,
     },
+    /// Rename a worktree: its name, its address `project/name` (1.38, SPEC §2.3). Its branch and
+    /// its directory stay as they are; `@root` can't be renamed.
+    WorktreeRename {
+        addr: String,
+        name: String,
+    },
     /// Rename the branch (refused once pushed); `None` derives a name from the first commit.
     WorktreeRenameBranch {
         addr: String,
@@ -669,6 +686,11 @@ pub enum Request {
     /// Delete an archived worktree for good (`name`, or `project/name`): its snapshot, the
     /// ignored files kept with it, and its branch when that is merged or pushed.
     WorktreeArchiveDelete {
+        addr: String,
+    },
+    /// The one archived worktree `addr` names, resolved as restoring and deleting resolve it
+    /// (`Reply::Archives` with that entry), so a client can ask about it by its name first.
+    WorktreeArchiveGet {
         addr: String,
     },
     /// Archived worktrees, newest first.
@@ -1312,7 +1334,7 @@ pub enum Request {
     ChatStop {
         chat: String,
     },
-    /// Change a chat: its title (empty: a new automatic one), pin, archive, agent, preset.
+    /// Change a chat: its title (empty: none), pin, archive, agent, preset.
     ChatUpdate {
         chat: String,
         #[serde(default)]
@@ -1334,9 +1356,17 @@ pub enum Request {
         /// As `ChatFork.confirmed`, for `agent` (1.25).
         #[serde(default)]
         confirmed: bool,
+        /// A new automatic title instead of `title` (1.38). Before 1.38 an empty `title` asked
+        /// for one; now it clears the title, as `Retitle` does for a session or a worktree.
+        #[serde(default)]
+        auto_title: bool,
     },
+    /// `chat` is an exact address (a handle, an id, `@last`): never a title (1.38). Unconfirmed,
+    /// the daemon asks first: `NeedsConfirmation`, naming the chat and what goes (1.38).
     ChatDelete {
         chat: String,
+        #[serde(default)]
+        confirmed: bool,
     },
     /// The shown branch as Markdown (`md`) or JSON (`json`).
     ChatExport {
@@ -1621,6 +1651,61 @@ pub struct Metrics {
     pub scrollback_bytes: u64,
     /// Per session: `(name, approximate bytes of terminal state)`.
     pub sessions: Vec<(String, u64)>,
+}
+
+impl Request {
+    /// One that a refusal's way through can apply to (see [`Request::with_fix`]).
+    pub fn fixable(&self) -> bool {
+        matches!(
+            self,
+            Request::Remove { .. }
+                | Request::WorktreeRemove { .. }
+                | Request::WorktreeArchive { .. }
+                | Request::ProjectRemove { .. }
+                | Request::Shutdown { .. }
+                | Request::Convert { .. }
+                | Request::Cs { .. }
+                | Request::RecipeRun { .. }
+        )
+    }
+
+    /// This request again with a refusal's way through said (SPEC §6.6), for the TUI's
+    /// button; `None` when it can't say that.
+    pub fn with_fix(&self, again: &ptyro_core::error::Again) -> Option<Request> {
+        use ptyro_core::error::Again as A;
+        use ptyro_run::wire::CsOp;
+        let mut r = self.clone();
+        match (&mut r, again) {
+            (Request::Remove { stop, .. }, A::Stop) => *stop = true,
+            (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
+            (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
+            (Request::WorktreeArchive { stop_sessions, .. }, A::StopSessions) => {
+                *stop_sessions = true
+            }
+            (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
+            (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
+                *force = true
+            }
+            (
+                Request::Cs {
+                    op:
+                        CsOp::Restore { force, .. } | CsOp::Drop { force, .. } | CsOp::Rm { force, .. },
+                },
+                A::Force,
+            ) => *force = true,
+            (Request::Cs { op: CsOp::Drop { ignore_dependents, .. } }, A::IgnoreDependents) => {
+                *ignore_dependents = true
+            }
+            (Request::Cs { op: CsOp::New { spec } }, A::Trust { fingerprint }) => {
+                spec.trust = Some(fingerprint.clone())
+            }
+            (Request::RecipeRun { trust, .. }, A::Trust { fingerprint }) => {
+                *trust = Some(fingerprint.clone())
+            }
+            _ => return None,
+        }
+        Some(r)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2574,8 +2659,29 @@ mod tests {
         });
         round_trip(ServerMsg::Response {
             id: 1,
-            outcome: Outcome::Err { error: Error::not_found("x") },
+            outcome: Outcome::Err { error: Error::missing("session", "x") },
         });
+        round_trip(ServerMsg::Response {
+            id: 1,
+            outcome: Outcome::Err {
+                error: Error::conflict("x").with_fix(ptyro_core::error::Again::Force, "Go"),
+            },
+        });
+    }
+
+    /// A fix kind from a later daemon reads as none, in both encodings; the reply still reads.
+    #[test]
+    fn a_later_fix_kind_does_not_break_the_reply() {
+        let json = r#"{"t":"response","id":1,"outcome":{"t":"err","error":{"code":"conflict","message":"m","fix":{"fix":"keep_branch","label":"Keep"}}}}"#;
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        for enc in [Encoding::MsgPack, Encoding::Json] {
+            let bytes = encode(&v, enc).unwrap();
+            let (back, _): (ServerMsg, _) = decode(&bytes).unwrap();
+            let ServerMsg::Response { outcome: Outcome::Err { error }, .. } = back else {
+                panic!("not an error: {back:?}")
+            };
+            assert_eq!((error.message.as_str(), error.fix), ("m", None));
+        }
     }
 
     #[test]

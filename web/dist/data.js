@@ -164,11 +164,6 @@ export function shipped(w) {
     return !!(w.integrated && st && repoLeft(st).uncommitted === 0 && st.head && w.integrated.startsWith(st.head));
 }
 export const projectOf = (w) => data.projects.get(w.project);
-/// A worktree by id, name, `project/name` or the end of its id (how addresses read).
-export function findWorktree(addr) {
-    const all = [...data.worktrees.values()];
-    return data.worktrees.get(addr) ?? all.find((w) => `${w.project_slug}/${w.name}` === addr) ?? all.find((w) => w.name === addr) ?? all.find((w) => w.id.endsWith(addr));
-}
 export const liveWorktrees = () => [...data.worktrees.values()].filter((w) => w.state !== "removed");
 /// Does this device's scope allow `need`? (The daemon decides; this only hides what would fail.)
 const RANK = { read: 0, approve: 1, control: 2, full: 3 };

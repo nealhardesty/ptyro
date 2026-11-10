@@ -129,8 +129,12 @@ fn free_port() -> u16 {
 
 /// A raw HTTP/1.1 request; returns (status, headers + body as text).
 fn http(port: u16, req: &str) -> (u16, String) {
+    http_within(port, req, Duration::from_secs(10))
+}
+
+fn http_within(port: u16, req: &str, wait: Duration) -> (u16, String) {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.set_read_timeout(Some(wait)).unwrap();
     s.write_all(req.as_bytes()).unwrap();
     let mut out = Vec::new();
     let _ = s.read_to_end(&mut out);
@@ -326,7 +330,7 @@ async fn done_when_a_phone_approves_a_blocked_agent() {
         std::thread::sleep(Duration::from_millis(100));
     }
     // The answer is in a1's event log, with the device.
-    let events = w.ok(&["events", "-s", "a1", "--json", "-n", "200"]);
+    let events = w.ok(&["events", "--session", "a1", "--json", "-l", "200"]);
     assert!(events.lines().any(|l| l.contains("\"remote\"") && l.contains("phone")), "{events}");
 
     // Unauthenticated: no token, a wrong token, or claiming to be a local client.
@@ -415,7 +419,7 @@ async fn scopes_revocation_and_lockout() {
     assert_eq!(o["t"], "err", "{o}");
 
     // Revoke: the live connection gets a goodbye, and the token stops working.
-    w.ok(&["devices", "revoke", &ctl_id]);
+    w.ok(&["devices", "revoke", "-y", &ctl_id]);
     let bye = tab.until("goodbye", |m| m["t"] == "goodbye").await;
     assert!(bye["reason"].as_str().unwrap().contains("revoked"), "{bye}");
     let (p, _) =
@@ -571,8 +575,12 @@ async fn pairing_a_name_again_replaces_the_device_and_takes_the_new_scope() {
     let mut p = Phone::signed_in(serve.port, &new).await;
     let o = p.request(json!({ "t": "spawn", "spec": { "argv": ["sh"], "cwd": "/" } })).await;
     assert_ne!(o["t"], "err", "{o}");
+    // A device's name is a name like any other: refused with the fix, never rewritten.
+    let bad = w.cli(&["pair", "Phone", "--scope", "read", "--json"]);
+    let said = String::from_utf8_lossy(&bad.stderr);
+    assert!(!bad.status.success() && said.contains(r#"try "phone""#), "{said}");
     // Downgrade: full to read.
-    let v = w.json(&["pair", "Phone", "--scope", "read", "--json"]);
+    let v = w.json(&["pair", "phone", "--scope", "read", "--json"]);
     assert_eq!(v["replaces"]["scope"], "full", "{v}");
     let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
     let (status, body) = claim(serve.port, &code);
@@ -1402,12 +1410,15 @@ fn node_available() -> bool {
 fn host(port: u16, token: Option<&str>, body: &Value) -> (u16, Value) {
     let body = body.to_string();
     let auth = token.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
-    let (code, text) = http(
+    // As long as the server gives a host op (90 s): the doctor asks each agent installed on
+    // this machine for its version, which takes seconds per agent on a busy one.
+    let (code, text) = http_within(
         port,
         &format!(
             "POST /api/host HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ),
+        Duration::from_secs(90),
     );
     let json = text
         .split("\r\n\r\n")

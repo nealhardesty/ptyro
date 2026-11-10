@@ -95,7 +95,7 @@ export interface Session {
   turns?: number;
 }
 export interface InboxEntry { id: number; session: string; session_name: string; at_ms: number; kind: string; title: string; body: string; read_ms?: number | null }
-export type Outcome = { t: "ok"; reply: any } | { t: "err"; error: { code: string; message: string } };
+export type Outcome = { t: "ok"; reply: any } | { t: "err"; error: { code: string; message: string; fix?: unknown } };
 
 // ── a screen cache (crates/ptyro-core/src/cache.rs, in TypeScript) ───────────────────────────
 

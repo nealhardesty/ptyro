@@ -17,13 +17,15 @@ use std::time::Duration;
 use clap::Subcommand;
 use clap_complete::ArgValueCandidates;
 use ptyro_client::Client;
-use ptyro_core::{Error, ErrorCode};
+use ptyro_core::{Error, ErrorCode, removal};
 use ptyro_protocol::{Reply, Request};
 use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, age, client_env, confirm, no_daemon, unexpected};
+use crate::cli::{
+    Ctx, addr_here, ago, ask_first, client_env, confirm, no_daemon, trust_of, unexpected,
+};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -39,13 +41,13 @@ pub enum CsCmd {
         #[arg(long)]
         template: Option<String>,
         /// The lead's agent (default: your default agent)
-        #[arg(long)]
+        #[arg(long = "lead-as", value_name = "AGENT", add = ArgValueCandidates::new(crate::complete::agents))]
         lead: Option<String>,
         /// lead (one agent per member, the default), solo (one agent for all), manual (none)
         #[arg(long)]
         layout: Option<String>,
         /// The goal, for the lead and every member
-        #[arg(short, long, conflicts_with_all = ["prompt_file", "from_issue"])]
+        #[arg(long, conflicts_with_all = ["prompt_file", "from_issue"])]
         prompt: Option<String>,
         #[arg(long)]
         prompt_file: Option<std::path::PathBuf>,
@@ -56,7 +58,7 @@ pub enum CsCmd {
         #[arg(long = "depends", value_name = "MEMBER:DEPS")]
         depends: Vec<String>,
         /// A member's agent: `api=codex` (repeatable)
-        #[arg(long = "agent", value_name = "MEMBER=AGENT")]
+        #[arg(short, long = "agent", value_name = "MEMBER=AGENT")]
         agents: Vec<String>,
         /// A member's base: `web=origin/develop` (repeatable)
         #[arg(long = "base", value_name = "MEMBER=REF")]
@@ -73,7 +75,8 @@ pub enum CsCmd {
         /// Build against siblings: turn on the overlays the manifests suggest
         #[arg(long)]
         overlay: bool,
-        #[arg(long)]
+        /// The workspace it belongs to (default: the first member's)
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::workspaces))]
         workspace: Option<String>,
         /// The fingerprint of a hub template you reviewed
         #[arg(long)]
@@ -209,26 +212,38 @@ pub enum CsCmd {
         set: String,
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: String,
-        #[arg(long)]
+        /// Its agent (default: the project's default agent, else yours)
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::agents))]
         agent: Option<String>,
         #[arg(long, value_delimiter = ',')]
         depends_on: Vec<String>,
     },
-    /// Drop a member (its worktree is removed safely)
+    /// Drop a member (its worktree is removed safely). Asks first unless --yes
     Drop {
         set: String,
         member: String,
+        /// Discard unsaved work in its worktree (as `wt rm --force`)
         #[arg(long)]
         force: bool,
+        /// Drop it though other members depend on it (unsaved work still refuses)
+        #[arg(long)]
+        ignore_dependents: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
-    /// Remove the set: every member's worktree, safely (one with unshipped work blocks all)
+    /// Remove the set: every member's worktree, safely (one with unshipped work blocks all).
+    /// Asks first unless --yes
     Rm {
         set: String,
         /// Keep this member's worktree (repeatable)
-        #[arg(long)]
+        #[arg(long = "keep-member", value_name = "MEMBER")]
         keep: Vec<String>,
         #[arg(long)]
         force: bool,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Change-set templates: yours and trusted hub repositories'
     Templates {
@@ -410,13 +425,13 @@ fn print_ledger(entries: &[LedgerEntry]) {
         match e.t.as_str() {
             "message" => println!(
                 "{:>6} ago  {} → {} [{}] {}",
-                age(e.at_ms),
+                ago(e.at_ms),
                 e.from.clone().unwrap_or_default(),
                 e.to.clone().unwrap_or_default(),
                 e.kind,
                 e.text.lines().next().unwrap_or("").chars().take(120).collect::<String>()
             ),
-            _ => println!("{:>6} ago  · {}", age(e.at_ms), e.text),
+            _ => println!("{:>6} ago  · {}", ago(e.at_ms), e.text),
         }
     }
 }
@@ -491,6 +506,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                     )
                 })
                 .collect();
+            let projects = projects.into_iter().map(addr_here).collect::<Result<_, _>>()?;
             let spec = CsNewSpec {
                 name,
                 projects,
@@ -514,7 +530,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             if let Err(e) = &v
                 && e.code == ErrorCode::UntrustedProject
                 && std::io::stdin().is_terminal()
-                && let Some(fp) = e.message.rsplit("--trust ").next().map(str::to_owned)
+                && let Some(fp) = trust_of(e)
             {
                 eprintln!("{}", e.message);
                 if confirm("Trust this template and go on?") {
@@ -557,7 +573,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                     "{}  ({}, {} ago)",
                     headline(i),
                     i.status,
-                    age(i.set.contract.first().map_or(0, |r| r.at_ms).max(1))
+                    ago(i.set.contract.first().map_or(0, |r| r.at_ms).max(1))
                 );
             }
             Ok(0)
@@ -724,7 +740,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                 println!(
                     "#{:<3} {:>6} ago  {:<9} {}",
                     k.n,
-                    age(k.at_ms),
+                    ago(k.at_ms),
                     k.reason,
                     k.label.clone().unwrap_or_default()
                 );
@@ -794,6 +810,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
         }
         CsCmd::Land { set, yes, no_wait } => land(&c, set, yes, no_wait).await,
         CsCmd::Add { set, project, agent, depends_on } => {
+            let project = addr_here(project)?;
             let v = op(&c, CsOp::Add { set, project, agent, depends_on }).await?;
             eprintln!(
                 "{} joined ({})",
@@ -802,13 +819,44 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             );
             Ok(0)
         }
-        CsCmd::Drop { set, member, force } => {
-            op(&c, CsOp::Drop { set, member: member.clone(), force }).await?;
+        CsCmd::Drop { set, member, force, ignore_dependents, yes } => {
+            // Found first, then asked about by name: a typo asks nothing.
+            let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            let Some(m) = i.set.member(&member) else {
+                let known: Vec<String> = i.set.members.iter().map(|m| m.name.clone()).collect();
+                return Err(ptyro_core::lookup::not_found_among("member", &member, &known));
+            };
+            let member = m.name.clone();
+            let (what, safety) = (removal::SET_MEMBER, removal::safety(force));
+            let name = &i.set.name;
+            ask_first(&format!("Drop {member} from change set {name}? {what} {safety}"), yes)?;
+            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force, ignore_dependents })
+                .await?;
             eprintln!("dropped {member}");
             Ok(0)
         }
-        CsCmd::Rm { set, keep, force } => {
-            let v = op(&c, CsOp::Rm { set, keep, force }).await?;
+        CsCmd::Rm { set, keep, force, yes } => {
+            // Found first, then asked about by name: a typo asks nothing.
+            let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            // Kept members by their real names, so the question says what is kept.
+            let mut kept = Vec::new();
+            for k in &keep {
+                let Some(m) = i.set.member(k) else {
+                    let known: Vec<String> = i.set.members.iter().map(|m| m.name.clone()).collect();
+                    return Err(ptyro_core::lookup::not_found_among("member", k, &known));
+                };
+                if !kept.contains(&m.name) {
+                    kept.push(m.name.clone());
+                }
+            }
+            let keep = kept;
+            let (what, safety) = (removal::SET, removal::safety(force));
+            let mut q = format!("Remove change set {}? {what} {safety}", i.set.name);
+            if !keep.is_empty() {
+                q = format!("{q} Kept: {}.", keep.join(", "));
+            }
+            ask_first(&q, yes)?;
+            let v = op(&c, CsOp::Rm { set: i.run, keep, force }).await?;
             eprintln!(
                 "removed {}",
                 v["removed"]
@@ -919,7 +967,7 @@ async fn contract(c: &Client, set: String, cmd: ContractCmd) -> Result<i32, Erro
                 println!(
                     "r{:<3} {:>6} ago  by {:<8} {}{}{}",
                     r["n"],
-                    age(r["at_ms"].as_u64().unwrap_or(0)),
+                    ago(r["at_ms"].as_u64().unwrap_or(0)),
                     r["by"].as_str().unwrap_or(""),
                     r["approved"].as_str().map(|a| format!("approved ({a}) ")).unwrap_or_default(),
                     r["affects"]

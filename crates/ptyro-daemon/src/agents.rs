@@ -606,7 +606,7 @@ impl Daemon {
         env: BTreeMap<String, String>,
     ) -> Result<Reply, Error> {
         let id: SessionId = session.parse().map_err(|_| Error::invalid("bad session id"))?;
-        let s = self.session_soon(id).await.ok_or_else(|| Error::not_found(session))?;
+        let s = self.session_soon(id).await.ok_or_else(|| Error::missing("session", session))?;
         let adapter = s.adapter().unwrap_or_else(|| adapter.to_owned());
         // Codex's `notify` also reports its side threads (the one that writes the conversation's
         // title, SPEC §20.2): only the session's own conversation counts.
@@ -995,6 +995,10 @@ impl Daemon {
         }
         let words: String =
             ptyro_core::model::slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
+        // Nothing to name it after (a prompt of only symbols): the branch stays as it is.
+        if words.is_empty() {
+            return;
+        }
         if let Err(e) = self.rename_branch_to(&wt.id, &words).await {
             tracing::debug!("auto-rename skipped: {}", e.message);
         }
@@ -1151,8 +1155,9 @@ impl Daemon {
         if s.is_live() {
             if s.status() == Some(AgentStatus::Working) && !force {
                 return Err(Error::conflict(format!(
-                    "{name} is in the middle of a turn: wait for it, or --force to interrupt"
-                )));
+                    "{name} is in the middle of a turn: wait for it, or switch anyway to interrupt it"
+                ))
+                .with_fix(ptyro_core::error::Again::Force, "Switch anyway"));
             }
             s.hibernating.store(true, Ordering::Relaxed);
             self.stop_session(&s).await;
@@ -1433,9 +1438,7 @@ impl Daemon {
         if agent != "claude" {
             return Err(Error::new(
                 ErrorCode::Unsupported,
-                format!(
-                    "adopting works for Claude so far; start {agent} with `ptyro new --agent {agent}`"
-                ),
+                format!("adopting works for Claude so far; start a new {agent} session instead"),
             ));
         }
         if s.status() == Some(AgentStatus::Working) {
@@ -1461,7 +1464,10 @@ impl Daemon {
             .ok_or_else(|| Error::internal("no HOME"))?;
         let conversation =
             ptyro_agents::claude::latest_conversation(&dir, &cwd).ok_or_else(|| {
-                Error::missing("conversation", format!("Claude's transcript for {}", cwd.display()))
+                Error::new(
+                    ErrorCode::NotFound,
+                    format!("no Claude conversation was found for {}", cwd.display()),
+                )
             })?;
         // Leave it: clear the input line, then /exit, and wait for the shell to come back.
         s.write_raw(b"\x15/exit\r");

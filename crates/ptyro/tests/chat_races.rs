@@ -268,7 +268,7 @@ fn a_deleted_chat_leaves_no_agent_behind() {
     let dir = w.d.paths.data.join("chat").join(chat["id"].as_str().unwrap());
     // Deleted just after a message: whatever engine the message starts is stopped with it.
     w.ok(&["chat", "send", "--no-wait", &addr, "work 30 slowly"]);
-    w.ok(&["chat", "rm", &addr]);
+    w.ok(&["chat", "rm", "-y", &addr]);
     w.until("no engine", || {
         w.json(&["ls", "--chats", "--json"]).as_array().is_none_or(|a| a.is_empty())
     });
@@ -294,7 +294,7 @@ fn pinned_and_unread_address_a_chat() {
     w.ok(&["chat", "pin", &addr("First")]);
     let two = w.cli(&["chat", "show", "@pinned"]);
     let err = String::from_utf8_lossy(&two.stderr);
-    assert!(err.contains("matches 2 chats") && err.contains("First"), "{err}");
+    assert!(err.contains("2 chats match \"@pinned\"") && err.contains("First"), "{err}");
     let unread = w.cli(&["chat", "show", "@unread"]);
     assert!(String::from_utf8_lossy(&unread.stderr).contains("haven't read"), "{unread:?}");
 }

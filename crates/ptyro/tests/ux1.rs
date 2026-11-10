@@ -707,6 +707,66 @@ async fn deleting_an_archive_forgets_it_and_keeps_an_unmerged_branch() {
     assert_eq!(missing.code, ptyro_core::ErrorCode::NotFound);
 }
 
+/// Two archives of one name are never picked between silently: the error lists each with its
+/// handle and age, and the handle (or the id) says which (SPEC §2.3).
+#[tokio::test]
+async fn archives_of_one_name_are_told_apart_by_id() {
+    let w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    let c = w.d.client().await.unwrap();
+    for again in [false, true] {
+        // The second time on the branch the first archive kept.
+        let spec = ptyro_core::model::WorktreeSpec {
+            project: dir.to_string_lossy().into_owned(),
+            name: Some("feat".into()),
+            branch: again.then(|| "feat".into()),
+            existing: again,
+            fetch: Some(false),
+            ..Default::default()
+        };
+        c.request(Request::WorktreeNew { spec }).await.unwrap();
+        c.request(Request::WorktreeArchive { addr: "myrepo/feat".into(), stop_sessions: false })
+            .await
+            .unwrap();
+    }
+    let Reply::Archives { entries } =
+        c.request(Request::WorktreeArchives { project: Some("MYREPO".into()) }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(entries.len(), 2, "by its slug in any case: {entries:?}");
+    assert!(entries.iter().all(|e| e.id.len() >= 4) && entries[0].id != entries[1].id);
+    for addr in ["feat", "myrepo/feat", "MyRepo/FEAT"] {
+        let e = c.request(Request::WorktreeRestore { addr: addr.into() }).await.unwrap_err();
+        assert_eq!(e.code, ptyro_core::ErrorCode::Ambiguous, "{addr}: {e:?}");
+        assert!(
+            e.message.starts_with(r#"2 archived worktrees are named "feat": say which, "#)
+                && e.message.contains("(myrepo/feat, archived ")
+                && !e.message.contains("{name}"),
+            "{}",
+            e.message
+        );
+    }
+    // The older one, by the end of its id.
+    let older = &entries[1];
+    let handle = older.id[older.id.len() - 6..].to_uppercase();
+    let Reply::Worktree { info } =
+        c.request(Request::WorktreeRestore { addr: handle }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(info.name, "feat");
+    // One left: its name is enough.
+    let Reply::Notes { .. } =
+        c.request(Request::WorktreeArchiveDelete { addr: "feat".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    let e = c.request(Request::WorktreeArchiveDelete { addr: "feat".into() }).await.unwrap_err();
+    assert_eq!(e.code, ptyro_core::ErrorCode::NotFound);
+    assert_eq!(e.message, r#"no archived worktree matches "feat""#);
+}
+
 async fn gc_entries(c: &Client) -> Vec<ptyro_core::model::GcEntry> {
     match c.request(Request::Gc).await.unwrap() {
         Reply::Gc { entries, .. } => entries,

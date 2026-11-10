@@ -2,7 +2,7 @@
 //! `%APPDATA%\ptyro` and the rest under `%LOCALAPPDATA%\ptyro` (WIN3), unless the XDG variables
 //! are set, which win there too (WIN4); `PTYRO_HOME` puts
 //! everything under one directory (tests, portable installs); `PTYRO_SOCKET` overrides only the
-//! socket.
+//! socket, and under a `PTYRO_HOME` only with one of that home's.
 
 use std::path::{Path, PathBuf};
 
@@ -31,7 +31,8 @@ impl Paths {
     /// Resolve with an explicit variable lookup (testable without touching the real environment).
     pub fn resolve(var: impl Fn(&str) -> Option<PathBuf>) -> std::io::Result<Self> {
         let uid = crate::os::uid().unwrap_or(0);
-        let mut paths = if let Some(home) = var("PTYRO_HOME").map(absolute) {
+        let home = var("PTYRO_HOME").map(absolute);
+        let mut paths = if let Some(home) = &home {
             Self {
                 config: home.join("config"),
                 data: home.join("data"),
@@ -75,8 +76,23 @@ impl Paths {
                 tools: xdg.data_dir().join("ptyro-tools"),
             }
         };
+        // Every session's environment carries its daemon's `PTYRO_SOCKET`. A `PTYRO_HOME` set on
+        // top means another ptyro, so a socket that isn't that home's is the outer daemon's and
+        // is ignored: a sandbox's `daemon stop` must never reach the daemon it runs in.
+        let default = if cfg!(windows) {
+            pipe_for(&paths.runtime)
+        } else {
+            short_enough(paths.runtime.join("ptyro.sock"), uid)
+        };
+        let given = var("PTYRO_SOCKET").filter(|s| match &home {
+            None => true,
+            Some(h) => {
+                let s = absolute(s.clone());
+                s == default || (!cfg!(windows) && s.starts_with(h))
+            }
+        });
         if cfg!(windows) {
-            paths.socket = match var("PTYRO_SOCKET") {
+            paths.socket = match given {
                 Some(p) if p.to_string_lossy().starts_with(PIPE_PREFIX) => p,
                 Some(p) => {
                     return Err(std::io::Error::new(
@@ -87,11 +103,11 @@ impl Paths {
                         ),
                     ));
                 }
-                None => pipe_for(&paths.runtime),
+                None => default,
             };
             return Ok(paths);
         }
-        paths.socket = match var("PTYRO_SOCKET").map(absolute) {
+        paths.socket = match given.map(absolute) {
             Some(s) if s.as_os_str().len() > MAX_SOCKET_PATH + 3 => {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -103,7 +119,7 @@ impl Paths {
                 ));
             }
             Some(s) => s,
-            None => short_enough(paths.runtime.join("ptyro.sock"), uid),
+            None => default,
         };
         Ok(paths)
     }
@@ -255,12 +271,41 @@ mod tests {
     #[cfg(unix)] // Unix paths
     #[test]
     fn socket_override_wins() {
+        let p =
+            Paths::resolve(|k| (k == "PTYRO_SOCKET").then(|| PathBuf::from("/s.sock"))).unwrap();
+        assert_eq!(p.socket, PathBuf::from("/s.sock"));
+        // Inside the home: still the home's ptyro, so it wins there too.
         let p = Paths::resolve(|k| match k {
             "PTYRO_HOME" => Some(PathBuf::from("/h")),
-            "PTYRO_SOCKET" => Some(PathBuf::from("/s.sock")),
+            "PTYRO_SOCKET" => Some(PathBuf::from("/h/other.sock")),
             _ => None,
         })
         .unwrap();
-        assert_eq!(p.socket, PathBuf::from("/s.sock"));
+        assert_eq!(p.socket, PathBuf::from("/h/other.sock"));
+    }
+
+    #[cfg(unix)] // Unix paths
+    #[test]
+    fn a_home_ignores_the_outer_sessions_socket() {
+        // An agent in a ptyro session sets PTYRO_HOME to sandbox itself; the session's
+        // PTYRO_SOCKET is still in its environment. `daemon stop` there once stopped the real
+        // daemon (2026-11-09).
+        let p = Paths::resolve(|k| match k {
+            "PTYRO_HOME" => Some(PathBuf::from("/h")),
+            "PTYRO_SOCKET" => Some(PathBuf::from("/tmp/ptyro-501/ptyro.sock")),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(p.socket, PathBuf::from("/h/run/ptyro.sock"));
+        // A deep home's socket lives in /tmp: its own daemon's sessions still find it.
+        let deep = PathBuf::from("/x".repeat(80));
+        let own = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| deep.clone())).unwrap().socket;
+        let p = Paths::resolve(|k| match k {
+            "PTYRO_HOME" => Some(deep.clone()),
+            "PTYRO_SOCKET" => Some(own.clone()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(p.socket, own);
     }
 }

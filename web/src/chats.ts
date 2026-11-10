@@ -6,7 +6,7 @@
 import { conn, host } from "./conn.js";
 import { data, machineOf, wsLabel } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, ago, ask, confirm, download, errText, form, go, h, menu, patch, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, confirm, confirmed, download, errText, form, go, h, menu, patch, statusWord, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
 import { atInsert, atQuery, chatsOff, folderList, importedFrom, itemKey, label, recentChats, shownChats, slashMessage, sorted, onMachine } from "./chatkit.js";
 import { composing } from "./keys.js";
@@ -18,7 +18,8 @@ const ACTIONS = {
   "chat.send": "Send the message; the answer streams in (Enter sends, Shift+Enter starts a new line)",
   "chat.answer": "Answer what the chat's agent asks: allow once, always, or deny",
   "chat.stop": "Stop the answer being written",
-  "chat.retitle": "Change the chat's title (empty: a new automatic one)",
+  "chat.retitle": "Change the chat's title (empty clears it)",
+  "chat.autotitle": "A new automatic title for the chat, made from the conversation",
   "chat.pin": "Pin the chat to the top, or unpin it",
   "chat.archive": "Archive the chat (Archived shows them; again brings it back)",
   "chat.delete": "Delete the chat",
@@ -357,12 +358,7 @@ async function agreed<T = any>(req: Record<string, unknown>): Promise<T> {
     return await conn.request(req) as T;
   } catch (e) {
     if ((e as { code?: string }).code !== "needs_confirmation") throw e;
-    const yes = await new Promise<boolean>((ok) => {
-      let said = false;
-      const s = confirm("Another profile?", errText(e), "Go ahead", () => { said = true; ok(true); }, false);
-      s.onClose(() => setTimeout(() => { if (!said) ok(false); }, 0));
-    });
-    if (!yes) throw new Error("cancelled");
+    if (!(await confirmed("Another profile?", errText(e), "Go ahead", false))) throw new Error("cancelled");
     return await conn.request({ ...req, confirmed: true }) as T;
   }
 }
@@ -459,6 +455,7 @@ function chatMenu(c: Chat): void {
     !c.incognito && { title: tip("chat.side"), label: "Side chat", hint: "ask about it without changing it", run: () => void sideChat(c) },
     find,
     { title: tip("chat.retitle"), label: "Rename", run: () => retitle(c) },
+    { title: tip("chat.autotitle"), label: "New automatic title", hint: "made from the conversation", run: () => update(c, { title: "", auto_title: true }, "A new title is on its way") },
     { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
     { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
     { title: tip("chat.preset"), label: "Tools", hint: `now ${c.tools}`, run: () => pickPreset(c) },
@@ -474,8 +471,8 @@ function chatMenu(c: Chat): void {
       if (state.following === c.id && !archived) location.hash = "#/chats";
       ui.render();
     } },
-    { title: tip("chat.delete"), label: "Delete", danger: true, run: () => confirm(`Delete “${label(c)}”?`, "It goes from every list, on every device.", "Delete", async () => {
-      await ask({ t: "chat_delete", chat: c.id }, "Deleted");
+    { title: tip("chat.delete"), label: "Delete", danger: true, run: () => confirm(`Delete the chat “${label(c)}”?`, "It goes from every list, on every device, with its side chats. This can't be undone.", "Delete", async () => {
+      await ask({ t: "chat_delete", chat: c.id, confirmed: true }, "Deleted");
       if (state.archived) state.archived = state.archived.filter((x) => x.id !== c.id);
       if (state.following === c.id) location.hash = "#/chats";
     }) },
@@ -518,7 +515,7 @@ function findInChat(c: Chat): void {
 }
 
 function retitle(c: Chat): void {
-  form("Rename the chat", [{ key: "title", label: "Title (empty: a new automatic one)", value: c.title ?? "" }], "Save", async (v) => {
+  form("Rename the chat", [{ key: "title", label: "Title", value: c.title ?? "", hint: "Empty clears it (New automatic title makes one)." }], "Save", async (v) => {
     await conn.request({ t: "chat_update", chat: c.id, title: (v.title as string) ?? "" });
     ui.toast("Renamed");
   });
@@ -587,7 +584,7 @@ function makeTask(c: Chat, args = ""): void {
   form("Make it a task", [
     { key: "project", label: "The project it works in", type: "select", options: here.map((p): [string, string] => [p.slug, p.slug]), value: guess || here[0].slug },
     { key: "agent", label: "Who works on it", type: "select", options: [["", `${c.agent}@${c.profile} (the chat's)`], ...agentNames().filter((a) => a !== c.agent).map((a): [string, string] => [a, a])] },
-    { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name" },
+    { key: "name", label: "The worktree's name (optional)", placeholder: "from the chat's title", slug: "name", hint: NAME_HINT },
   ], "Make it", (v) => go(String(v.project), (v.agent as string) || null, (v.name as string)?.trim() || null),
   { intro: "An agent in a new worktree of the project carries out the chat's last answer, starting from its conversation." });
 }
@@ -640,7 +637,7 @@ function follow(id: string | null): void {
 window.addEventListener("hashchange", () => {
   // Leaving a side chat that wasn't kept: it goes (SPEC §22.7).
   const left = chatOf(state.following);
-  if (left?.side_of && !location.hash.startsWith(`#/c/${encodeURIComponent(left.id)}`)) void conn.request({ t: "chat_delete", chat: left.id }).catch(() => {});
+  if (left?.side_of && !location.hash.startsWith(`#/c/${encodeURIComponent(left.id)}`)) void conn.request({ t: "chat_delete", chat: left.id, confirmed: true }).catch(() => {});
   if (!/^#\/c\//.test(location.hash)) follow(null);
   if (location.hash !== `#/c/${atRoute}`) atRoute = "";
   state.findIn = "";
@@ -1002,7 +999,7 @@ function chatView(rest: string): HTMLElement {
       c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
       // `⎇ 2/3`: where the shown branch last has others (`/branch` picks among them).
       last ? h("button", { class: "link", title: tip("chat.branch"), onclick: () => pickBranch(id) }, ` · ⎇ branch ${last.at}/${last.of}${sibLabel(last) ? ` ${sibLabel(last)}` : ""}`) : "",
-      c.status ? ` · ${c.status}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
+      c.status ? ` · ${statusWord(c.status)}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
     : [isNew ? "A new chat: it can search the web, and it is kept." : gone ? "" : "Loading the chat…"];
   const empty = isNew && !state.items.length
     ? h("div", { class: "empty" }, h("p", {}, h("b", {}, "Ask anything.")), h("p", { class: "sub" }, "Pick the agent and what it may use below, or keep the defaults."))

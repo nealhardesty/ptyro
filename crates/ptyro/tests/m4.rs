@@ -281,7 +281,7 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     assert!(out.contains("applied: working → blocked"), "{out}");
     assert!(out.contains("hook (high)"), "{out}");
     // Graceful stop: the fake honours /exit.
-    w.ok(&["kill", "cl", "--keep"]);
+    w.ok(&["stop", "cl"]);
     assert!(!get(&c, "cl").await.state.is_live());
 }
 
@@ -313,7 +313,7 @@ async fn a_slow_session_start_replaces_a_guessed_working() {
     .await;
     assert_eq!(s.status.unwrap().confidence, Confidence::High);
     // The start's idle replaced the guess.
-    let ev = w.ok(&["events", "-s", "cx", "--json", "-n", "200"]);
+    let ev = w.ok(&["events", "--session", "cx", "--json", "-l", "200"]);
     let statuses: Vec<serde_json::Value> = ev
         .lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
@@ -362,7 +362,7 @@ async fn laggy_claude_asks(extra: &str, prompt: &str) -> String {
     // The send is reported, however long the watch takes to end.
     let deadline = Instant::now() + WAIT;
     loop {
-        let ev = w.ok(&["events", "-s", "lag", "--json", "-n", "200"]);
+        let ev = w.ok(&["events", "--session", "lag", "--json", "-l", "200"]);
         if ev.contains("prompt_unconfirmed") {
             assert!(!ev.contains("prompt_enter_again"), "{ev}");
             return ev;
@@ -639,13 +639,53 @@ async fn dormant_resume_and_hibernate_across_daemon_restarts() {
     c.send(ClientMsg::Focus { session: cx.id, terminal_focused: true }).unwrap();
     let screen = w.d.wait_for_text(&c, "cdx", "resumed=true", WAIT).await.unwrap();
     assert!(screen.contains(&format!("session={codex_conv}")), "{screen}");
-    // Removing a dormant one makes it stay gone.
-    w.ok(&["rm", "keeper"]);
+    // Removing a dormant one asks first (no terminal here: refused, nothing changed), and
+    // makes it stay gone.
+    let out = w.d.cmd().args(["rm", "keeper"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(ptyro_core::removal::DORMANT) && err.contains("--yes"), "{err}");
+    assert_eq!(get(&c, "keeper").await.state, ProcessState::Dormant);
+    w.ok(&["rm", "-y", "keeper"]);
     drop(c);
     w.d.restart().unwrap();
     let c = w.d.client().await.unwrap();
     assert!(c.request(Request::Get { addr: "keeper".into() }).await.is_err());
     assert_eq!(get(&c, "cdx").await.state, ProcessState::Dormant);
+}
+
+/// `@exited` is ended and not resumable; a hibernated agent is `@dormant`, so `rm @exited` never
+/// throws away a conversation (owner, 2026-11-09). `ls --status` takes the same words.
+#[tokio::test]
+async fn rm_exited_leaves_a_dormant_agent_alone() {
+    let w = World::new("");
+    let c = w.d.client().await.unwrap();
+    agent(&c, "sleeper", "claude", None).await;
+    w.d.wait_for_text(&c, "sleeper", "resumed=false", WAIT).await.unwrap();
+    let spec = SpawnSpec {
+        argv: vec!["true".into()],
+        cwd: std::env::temp_dir(),
+        name: Some("gone".into()),
+        ..SpawnSpec::default()
+    };
+    c.request(Request::Spawn { spec }).await.unwrap();
+    wait_for(&c, "gone", "exited", |s| matches!(s.state, ProcessState::Exited { .. })).await;
+    w.ok(&["hibernate", "sleeper"]);
+    wait_for(&c, "sleeper", "dormant", |s| s.state == ProcessState::Dormant).await;
+
+    assert_eq!(resolve(&c, "@exited").await, ["gone"]);
+    assert_eq!(resolve(&c, "@dormant").await, ["sleeper"]);
+    assert_eq!(resolve(&c, "@live").await, Vec::<String>::new(), "dormant isn't live");
+    assert_eq!(resolve(&c, "@all").await, ["sleeper", "gone"], "@all has both");
+    assert_eq!(resolve(&c, "@errored").await, resolve(&c, "@error").await);
+    let ls = w.ok(&["ls", "--status", "dormant"]);
+    assert!(ls.contains("sleeper") && !ls.contains("gone"), "{ls}");
+    let err = c.request(Request::Resolve { addr: "@nonsense".into() }).await.unwrap_err();
+    assert!(err.message.contains("@dormant") && err.message.contains("@error"), "{err:?}");
+
+    w.ok(&["rm", "@exited"]);
+    assert!(c.request(Request::Get { addr: "gone".into() }).await.is_err(), "removed");
+    assert_eq!(get(&c, "sleeper").await.state, ProcessState::Dormant, "kept, still resumable");
 }
 
 #[tokio::test]
@@ -903,7 +943,7 @@ async fn a_late_session_start_does_not_end_the_turn() {
         "{o}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ev = w.cli(&["events", "-s", "cx", "--json", "-n", "200"]);
+    let ev = w.cli(&["events", "--session", "cx", "--json", "-l", "200"]);
     let lines: Vec<serde_json::Value> = String::from_utf8_lossy(&ev.stdout)
         .lines()
         .filter_map(|l| serde_json::from_str(l).ok())
@@ -937,8 +977,10 @@ async fn a_wrapped_prompt_whose_enter_was_lost_is_sent() {
         "{o}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ev = String::from_utf8_lossy(&w.cli(&["events", "-s", "cx", "--json", "-n", "200"]).stdout)
-        .into_owned();
+    let ev = String::from_utf8_lossy(
+        &w.cli(&["events", "--session", "cx", "--json", "-l", "200"]).stdout,
+    )
+    .into_owned();
     assert_eq!(ev.lines().filter(|l| l.contains("prompt_enter_again")).count(), 1, "{ev}");
     assert!(ev.contains("\"Stop\""), "the turn ran: {ev}");
 }
@@ -968,8 +1010,10 @@ async fn a_prompt_whose_enter_was_lost_is_sent() {
         "{o}{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let ev = String::from_utf8_lossy(&w.cli(&["events", "-s", "cx", "--json", "-n", "200"]).stdout)
-        .into_owned();
+    let ev = String::from_utf8_lossy(
+        &w.cli(&["events", "--session", "cx", "--json", "-l", "200"]).stdout,
+    )
+    .into_owned();
     let again = ev.lines().filter(|l| l.contains("prompt_enter_again")).count();
     assert_eq!(again, 1, "one Enter more, no more: {ev}");
     assert!(ev.contains("\"Stop\""), "the turn ran: {ev}");

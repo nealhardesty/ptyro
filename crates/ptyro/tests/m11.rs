@@ -266,7 +266,7 @@ fn done_when_a_set_drafts_approves_builds_restores_and_lands() {
         "--agent",
         "api=codex",
         "--overlay",
-        "-p",
+        "--prompt",
         "users get a tier: free or pro",
         "--json",
     ]);
@@ -485,7 +485,9 @@ fn a_failing_check_stops_the_train_with_a_partial_state_report() {
     )
     .unwrap();
     let refused = w.fails(&["cs", "new", "p2", "--template", "pair"]);
-    let fp = refused.rsplit("--trust ").next().unwrap().trim().to_owned();
+    // The CLI says its way through: `--trust FINGERPRINT`, the daemon's fix (SPEC §6.6).
+    let fp = refused.split("again with `--trust ").nth(1).unwrap().split('`').next().unwrap();
+    let fp = fp.to_owned();
     assert!(refused.contains("isn't trusted"), "{refused}");
     w.ok(&["cs", "new", "p2", "--template", "pair", "--trust", &fp]);
 }
@@ -547,7 +549,18 @@ fn every_failure_mode_has_a_state_and_an_action() {
     // Resuming skips what's pushed.
     let out = w.fails(&["cs", "push", "nr", "--yes"]);
     assert!(out.contains("already up to date: api"), "{out}");
-    w.ok(&["cs", "rm", "nr", "--force"]);
+    // Dropping a member others depend on: the dependency override never discards work.
+    std::fs::write(root.join("api").join("unsaved.txt"), "mine\n").unwrap();
+    let out = w.fails(&["cs", "drop", "-y", "nr", "api"]);
+    assert!(out.contains("depend on api") && out.contains("--ignore-dependents"), "{out}");
+    let out = w.fails(&["cs", "drop", "-y", "nr", "api", "--ignore-dependents"]);
+    assert!(out.contains("would be lost") && out.contains("--force"), "{out}");
+    assert!(root.join("api").join("unsaved.txt").exists());
+    assert!(w.show("nr")["set"]["members"].as_array().unwrap().iter().any(|m| m["name"] == "api"));
+    // A kept member is kept whatever case it was typed in.
+    w.ok(&["cs", "rm", "-y", "nr", "--force", "--keep-member", "API"]);
+    assert!(root.join("api").join("unsaved.txt").exists(), "api was kept");
+    assert!(!root.join("local").join("x.txt").exists(), "local went");
     // ── a member agent that errors out; a contract revised after a member said ready.
     let i = w.json(&["cs", "new", "fm", "--projects", "api,sdk", "--no-gates", "--json"]);
     let root = PathBuf::from(s(&i["set"]["root"]));
@@ -596,7 +609,7 @@ fn every_failure_mode_has_a_state_and_an_action() {
     // Recovers on its next good turn.
     w.ok(&["send", "fm-sdk", "work 0.2 again"]);
     w.until("sdk recovered", || w.member(&w.show("fm"), "sdk")["failed"].is_null());
-    w.ok(&["cs", "rm", "fm", "--force"]);
+    w.ok(&["cs", "rm", "-y", "fm", "--force"]);
     // ── out of order: a human merges sdk before api.
     let i = w.json(&[
         "cs",
@@ -735,7 +748,7 @@ fn a_set_lead_uses_its_tools_and_the_set_survives_a_restart() {
     .unwrap();
     w.ok(&["cs", "contract", "mc", "submit", "-m", "silver"]);
     assert_eq!(w.show("mc")["set"]["contract"].as_array().unwrap().len(), 3);
-    w.ok(&["cs", "rm", "mc", "--force"]);
+    w.ok(&["cs", "rm", "-y", "mc", "--force"]);
     assert!(!root.exists());
 }
 
@@ -762,7 +775,7 @@ fn linked_prs_and_a_ci_failure_stopping_the_train() {
         "manual",
         "--gates",
         "land",
-        "-p",
+        "--prompt",
         "Add the tier field",
         "--json",
     ]);
@@ -900,6 +913,32 @@ fn removing_a_set_calls_off_a_push_waiting_at_its_gate() {
     let out = w.ok(&["cs", "push", "held"]);
     assert!(out.contains("gate") || out.contains("waiting"), "{out}");
     w.until("the push gate", || w.show("held")["gates"].as_array().is_some_and(|g| !g.is_empty()));
-    w.ok(&["cs", "rm", "held", "--force"]);
+    w.ok(&["cs", "rm", "-y", "held", "--force"]);
     assert!(!root.exists(), "removed, not refused as busy");
+}
+
+/// A change set's name is a name like any other (SPEC §2.3, owner 2026-11-09): kept as given
+/// when valid (`my_fix` stays `my_fix`, not `my-fix`), refused with the fix when it isn't, and
+/// an empty one is refused, not turned into a made-up one.
+#[test]
+fn a_change_sets_name_is_checked_never_rewritten() {
+    let w = World::new("");
+    w.project("api", &[], false);
+    let i = w.json(&["cs", "new", "my_fix", "--projects", "api", "--layout", "manual", "--json"]);
+    assert_eq!(i["set"]["name"], "my_fix", "{i:#}");
+    let out = w.fails(&["cs", "new", "My Feature", "--projects", "api", "--layout", "manual"]);
+    assert!(out.contains(r#"invalid name "My Feature""#), "{out}");
+    assert!(out.contains(r#"try "my-feature""#), "{out}");
+    let out = w.fails(&["cs", "new", "", "--projects", "api", "--layout", "manual"]);
+    assert!(out.contains("a change set needs a name"), "{out}");
+    let out = w.fails(&["cs", "new", "!!!", "--projects", "api", "--layout", "manual"]);
+    assert!(out.contains("invalid name") && !out.contains("try"), "{out}");
+    // Too long for a set (members' names are appended): the fix offered fits.
+    let long = format!("{}-z", "ab".repeat(22));
+    let out = w.fails(&["cs", "new", &long, "--projects", "api", "--layout", "manual"]);
+    assert!(
+        out.contains("at most 40") && out.contains(&format!("try \"{}\"", &long[..40])),
+        "{out}"
+    );
+    w.ok(&["cs", "rm", "-y", "my_fix", "--force"]);
 }

@@ -11,7 +11,7 @@ globalThis.localStorage = { getItem: () => { throw new Error("blocked"); }, setI
 globalThis.location = { origin: "http://x", hash: "" };
 globalThis.WebSocket = class { static OPEN = 1; readyState = 1; send() {} close() {} };
 
-const { safeDecode, webHref, once, Cache, slugify } = await import("../dist/kit.js");
+const { safeDecode, webHref, once, Cache, slugify, statusWord, withFix, NAME_HINT } = await import("../dist/kit.js");
 const { conn, store, token } = await import("../dist/conn.js");
 
 // A malformed escape in a route is kept as typed instead of throwing.
@@ -21,12 +21,29 @@ assert.equal(safeDecode("%E0%A4%A"), "%E0%A4%A");
 assert.equal(webHref("https://example.com/a?b=1"), "https://example.com/a?b=1");
 assert.equal(webHref("http://example.com/"), "http://example.com/");
 for (const bad of ["javascript:alert(1)", "data:text/html,x", "ptyro://x", "/relative", "", null, undefined, 5]) assert.equal(webHref(bad), null, String(bad));
-// A name field swaps what a name can't hold for _ as it is typed (the same rule as ptyro-core's).
-assert.equal(slugify("name", "My Feat/2"), "my_feat_2");
-assert.equal(slugify("name", "-x"), "_x");
-assert.equal(slugify("name", "x..y"), "x._y");
+// A name field swaps what a name can't hold for - as it is typed, and drops what it can't start
+// with (the same rule as ptyro-core's `names::typed`, whose tests use the same cases).
+assert.equal(slugify("name", "My Feat/2"), "my-feat-2");
+assert.equal(slugify("name", "-x"), "x");
+assert.equal(slugify("name", ".hidden"), "hidden");
+assert.equal(slugify("name", " x"), "x");
+assert.equal(slugify("name", "_x"), "_x");
+assert.equal(slugify("name", "x..y"), "x.-y");
+assert.equal(slugify("name", "héllo"), "h-llo");
+assert.equal(slugify("name", "my_fix"), "my_fix");
 assert.equal(slugify("name", "brisk-rook.v1"), "brisk-rook.v1");
-assert.equal(slugify("branch", "fix this/Now: ok"), "fix_this/Now__ok");
+assert.equal(slugify("branch", "fix this/Now: ok"), "fix-this/Now--ok");
+assert.equal(slugify("project", "My App_2."), "my-app-2-", "names::slug_typed");
+assert.equal(slugify("project", "-x"), "x");
+assert.equal(slugify("branch", "-x"), "x");
+assert.equal(NAME_HINT, "A space or other odd character becomes - (a-z 0-9 . _ -)");
+// A status is shown with the selectors' word: `error`, as `@error` and `ptyro ls --status error` say.
+assert.equal(statusWord("errored"), "error");
+assert.equal(statusWord("idle"), "idle");
+// A refusal's way through is the same request with one field said (SPEC §6.6), wherever it sits.
+assert.deepEqual(withFix({ t: "project_remove", addr: "p", release: false }, { fix: "release", label: "Let them go" }), { t: "project_remove", addr: "p", release: true });
+assert.deepEqual(withFix({ t: "worktree_remove", addr: "w", opts: { force: false } }, { fix: "force", label: "x" }).opts, { force: true });
+assert.equal(withFix({ t: "status" }, { fix: "release", label: "x" }), null, "a request without that field");
 // localStorage that throws is not a crash.
 assert.equal(token(), null);
 store.set("k", "v");
@@ -152,6 +169,29 @@ store.set("k", "v");
   assert.equal(profileFor(["default", "work"], "play"), "default");
   assert.deepEqual(argWords(`--model opus  --name "a b" 'c d'`), ["--model", "opus", "--name", "a b", "c d"]);
   assert.deepEqual(argWords("   "), []);
+}
+// A refusal's way through (SPEC §6.6) becomes the same request with its field said, wherever
+// the request keeps it; a request without that field gets no button.
+{
+  const { withFix, fixOf } = await import("../dist/kit.js");
+  const err = Object.assign(new Error("x is still running: stop it first"), { code: "conflict", fix: { fix: "stop", label: "Stop and remove" } });
+  assert.deepEqual(withFix({ t: "remove", addr: "x", stop: false }, fixOf(err)), { t: "remove", addr: "x", stop: true });
+  assert.deepEqual(withFix({ t: "worktree_remove", addr: "w", opts: { force: false, stop_sessions: false } }, { fix: "force", label: "Remove anyway" }).opts, { force: true, stop_sessions: false });
+  assert.deepEqual(withFix({ t: "cs", op: { op: "rm", set: "s", force: false } }, { fix: "force", label: "Remove the set anyway" }).op.force, true);
+  assert.equal(withFix({ t: "cs", op: { op: "new", spec: { name: "s", trust: null } } }, { fix: "trust", label: "Trust and go on", fingerprint: "ab12" }).op.spec.trust, "ab12");
+  assert.equal(withFix({ t: "kill", addr: "x", signal: null }, { fix: "stop", label: "Stop and remove" }), null);
+  assert.equal(fixOf(new Error("plain")), undefined);
+}
+// `[ui] confirm_kill` (default on) decides whether Stop, Kill, and Stop and remove ask, as in
+// the TUI; a device that can't read the config always asks.
+{
+  const { confirmsKill } = await import("../dist/kit.js");
+  assert.equal(confirmsKill("full", [{ key: "ui.confirm_kill", value: false }]), false);
+  assert.equal(confirmsKill("full", [{ key: "ui.confirm_kill", value: "false" }]), false);
+  assert.equal(confirmsKill("full", [{ key: "ui.confirm_kill", value: true }]), true);
+  assert.equal(confirmsKill("full", []), true, "unset: the default, on");
+  assert.equal(confirmsKill("full", null), true, "unread: asks");
+  assert.equal(confirmsKill("control", [{ key: "ui.confirm_kill", value: false }]), true);
 }
 console.log("ok");
 process.exit(0);

@@ -4,7 +4,7 @@
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 const ACTIONS = {
@@ -17,6 +17,7 @@ const ACTIONS = {
     "project.line_endings": "Rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
     "project.config": "The project's configuration, and where each value comes from",
     "project.pin": "Pin the project to a profile (its account)",
+    "project.rename": "Rename the project: its address, which finds its worktrees and sessions (project/name)",
     "project.suggest": "What a first worktree could use: a setup script, files to copy",
     "worktree.new": "A new worktree in this project, with an agent in it if you like",
     "worktree.show": "A worktree's page: status, sessions, changes and what to do next",
@@ -28,12 +29,13 @@ const ACTIONS = {
     "worktree.open": "Open the worktree in an editor installed on the computer, its file manager, a terminal app there, or a new shell",
     "worktree.lock": "Keep the worktree from being removed or cleaned up",
     "worktree.unlock": "Let the worktree be removed again",
+    "worktree.rename": "Rename the worktree: its address (project/name). Its branch and its directory stay",
     "worktree.rename_branch": "Rename the worktree's branch (until it's pushed)",
     "worktree.retitle": "Change what the worktree is titled",
     "worktree.finish": "Finish: commit what's left, then open a PR or merge into the main branch",
     "worktree.archive": "Archive: keep its work and its branch, remove the worktree",
     "worktree.restore": "Bring an archived worktree back as it was",
-    "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
+    "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
     "worktree.gc": "Stale worktrees: merged, abandoned or missing; archive or remove them",
     "workspace.switch": "Show one workspace's projects, or all of them",
     "workspace.new": "A new workspace",
@@ -174,18 +176,26 @@ async function suggest(p) {
         h("button", { class: "primary", onclick: async () => { s.close(); await ask({ t: "project_suggest", addr: p.id, apply: true }, "Saved"); } }, "Use these"),
     ]);
 }
-function removeProject(p, release = false) {
-    confirm(`Forget ${p.slug}?`, release ? "Its running sessions keep going, outside any project. Its worktrees stay on disk." : "Its worktrees stay on disk. ptyro won't register it on its own again.", "Forget it", async () => {
-        try {
-            await conn.request({ t: "project_remove", addr: p.id, release });
-            ui.toast(`Forgot ${p.slug}`);
+function renameProject(p) {
+    // Another machine's project is renamed there, by the name it has there (MM1.B).
+    const slug = splitMachine(p.slug)[1];
+    form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "project", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. ${SLUG_HINT}` }], "Rename", async (v) => {
+        if (v.name === slug)
+            return;
+        await conn.request({ t: "project_rename", addr: p.id, name: v.name });
+        ui.toast(`Renamed to ${v.name}`);
+    });
+}
+// Asks as the CLI's `project rm` and the TUI do (ptyro_core::removal); running sessions in it
+// refuse with a way through, "Let them go" (SPEC §6.6), which `ask` offers.
+function removeProject(p) {
+    confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", async () => {
+        // Its notes say what stays on disk, and any session let go under a new name.
+        const r = await ask({ t: "project_remove", addr: p.id, release: false });
+        if (r) {
+            for (const n of r.notes?.length ? r.notes : [`Forgot ${p.slug}`])
+                ui.toast(n);
             go("#/p");
-        }
-        catch (e) {
-            if (!release && e.code === "conflict")
-                confirm("Sessions are running", errText(e), "Let them go", () => removeProject(p, true));
-            else
-                ui.toast(errText(e));
         }
     });
 }
@@ -200,6 +210,7 @@ function projectView(id) {
             { title: tip("project.suggest"), label: "Suggestions for new worktrees", run: () => suggest(p) },
             { title: tip("project.config"), label: "Configuration", hint: "And where each value comes from", run: async () => { const r = await ask({ t: "project_config", addr: p.id }); if (r)
                     textSheet(`${p.slug}: configuration`, r.text); } },
+            { title: tip("project.rename"), label: "Rename…", run: () => renameProject(p) },
             { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
             { title: tip("project.line_endings"), label: "Fix scripts' line endings", hint: "Windows (CRLF) endings bash can't run", run: () => void fixLineEndings(p.id, p.slug) },
             { title: tip("radar"), label: "Collision radar", run: () => go(`#/radar/${enc(p.id)}`) },
@@ -228,7 +239,7 @@ function projectWorkspaces(p) {
 function workspaceForm(w) {
     const machines = [...data.machines.values()];
     const s = form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
-        ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }]),
+        ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: NAME_HINT }]),
         // With other machines (MM1.B): which one it's made on.
         ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select", options: [["", "This machine"], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`])], value: "" }]),
         { key: "profile", label: "Profile", type: "select", options: [[w?.profile ?? "default", w?.profile ?? "default"]], hint: "The account its sessions use unless a worktree or project says otherwise" },
@@ -272,8 +283,8 @@ function workspacesView() {
     const wss = [...data.workspaces.values()];
     return h("div", {}, ui.header("Workspaces", "#/p", h("button", { class: "icon plus", title: tip("workspace.new"), onclick: () => workspaceForm() }, "＋")), h("main", { class: "stack", title: tip("workspace.set") }, h("div", { class: "rows" }, ...wss.map((w) => row(w.name, `${w.projects.length} project${w.projects.length === 1 ? "" : "s"} · ${w.profile} · notifies ${w.notify}`, null, { onclick: () => menu(w.name, [
             { title: tip("workspace.set"), label: "Profile and notifications…", run: () => workspaceForm(w) },
-            { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: w.name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
-            { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove ${w.name}?`, "Its projects stay; they just leave this workspace.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
+            { title: tip("workspace.rename"), label: "Rename…", run: () => form("Rename workspace", [{ key: "name", label: "New name", value: splitMachine(w.name)[1], required: true, slug: "name", hint: NAME_HINT }], "Rename", (v) => conn.request({ t: "workspace_rename", name: w.name, new_name: v.name })) },
+            { title: tip("workspace.remove"), label: "Remove", danger: true, run: () => confirm(`Remove workspace ${w.name}?`, "Its sessions keep running and move to main, with its chats and the projects no other workspace has.", "Remove", () => ask({ t: "workspace_remove", name: w.name }, "Removed")) },
         ]) })))));
 }
 // ── a worktree ──────────────────────────────────────────────────────────────────────────────
@@ -318,34 +329,40 @@ function finish(w) {
     ]);
 }
 function archive(w) {
-    const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
+    const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
     confirm(`Archive ${w.title || w.name}?`, `Its files (uncommitted ones too) are saved and its branch kept; the worktree is removed. Restore brings it back.${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, "Archive", async () => {
         const r = await ask({ t: "worktree_archive", addr: w.id, stop_sessions: n > 0 }, "Archived");
         if (r)
             go("#/p");
     }, false);
 }
-function remove(w, force = false) {
-    const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
-    confirm(`Remove ${w.title || w.name}?`, force ? "This throws away work that isn't saved anywhere else." : `The worktree's directory is deleted; its branch is kept.${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
+function remove(w, force = false, stopAgreed = false) {
+    const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
+    // Unsaved work offers archiving first; any other refusal with a way through (a session the
+    // count above missed: a loose shell, one starting) offers it, as `ask` does (SPEC §6.6).
+    const send = async (req) => {
         try {
-            const r = await conn.request({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } });
+            const r = await conn.request(req);
             for (const note of r.notes ?? [])
                 ui.toast(note);
             go("#/p");
         }
         catch (e) {
-            const code = e.code;
-            if (code === "dirty_worktree") {
+            // Work would be lost: its way through, offered beside archiving it instead.
+            const f = fixOf(e), again = f && withFix(req, f);
+            if (f?.fix === "force" && !force) {
                 menu("It has work that isn't saved", [
                     { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
-                    { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true) },
+                    { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true, req.opts?.stop_sessions === true) },
                 ]);
             }
+            else if (f && again)
+                confirm(f.label, errText(e), f.label, () => send(again));
             else
                 ui.toast(errText(e));
         }
-    });
+    };
+    confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", () => send({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: stopAgreed || n > 0, keep_branch: false } }));
 }
 async function runScript(w) {
     const r = await ask({ t: "project_scripts", addr: w.project, worktree: w.id });
@@ -384,14 +401,22 @@ async function openIn(w) {
         { title: tipOf("shell.new"), label: "shell", hint: "A new shell in it", run: () => void newShell(w) },
     ]);
 }
+function renameWorktree(w) {
+    form(`Rename ${w.name}`, [{ key: "name", label: "Name", value: w.name, required: true, slug: "name", hint: `Its address: ${w.project_slug}/name, unique in its project. Its branch and its directory stay, so what runs in it carries on. ${NAME_HINT}` }], "Rename", async (v) => {
+        if (v.name === w.name)
+            return;
+        await conn.request({ t: "worktree_rename", addr: w.id, name: v.name });
+        ui.toast(`Renamed to ${v.name}`);
+    });
+}
 function renameBranch(w) {
-    form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes _." }], "Rename", async (v) => {
+    form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes -." }], "Rename", async (v) => {
         await conn.request({ t: "worktree_rename_branch", addr: w.id, branch: v.branch || null });
         ui.toast("Branch renamed");
     });
 }
 function retitleWorktree(w) {
-    form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for. Empty goes back to the default." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: v.title || null, worktree: true }));
+    form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for, for people to read. Empty clears it." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: v.title || null, worktree: true }));
 }
 async function pairMode(w, off) {
     const r = await ask({ t: "worktree_pair", addr: w.id, off, refresh: false });
@@ -405,6 +430,7 @@ function worktreeMenu(w) {
         { title: tip("worktree.pair"), label: "Pair mode: show it in the main checkout", hint: "Run it from the project's own directory", run: () => pairMode(w, false) },
         { title: tip("worktree.unpair"), label: "End pair mode", hint: "Puts the main checkout back, carrying edits over", run: () => pairMode(w, true) },
         !w.is_root && { title: tip("worktree.retitle"), label: "Set title…", run: () => retitleWorktree(w) },
+        !w.is_root && { title: tip("worktree.rename"), label: "Rename…", hint: "Its address; the branch stays", run: () => renameWorktree(w) },
         !w.is_root && { title: tip("worktree.rename_branch"), label: "Rename the branch…", run: () => renameBranch(w) },
         !w.is_root && { title: w.locked ? tip("worktree.unlock") : tip("worktree.lock"), label: w.locked ? "Unlock" : "Lock", hint: w.locked ? "Allow removing it" : "Keep it from being removed", run: async () => { await ask({ t: "worktree_lock", addr: w.id, lock: !w.locked }, w.locked ? "Unlocked" : "Locked"); } },
         !w.is_root && { title: tip("worktree.archive"), label: "Archive", hint: "Keeps its work and branch", run: () => archive(w) },
@@ -422,7 +448,7 @@ function worktreeView(rest) {
     const sess = sessionsIn(w);
     const proj = data.projects.get(w.project);
     const st = w.status;
-    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusOf(s), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
+    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
         ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
         ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url), target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],
         ["Merged into main", w.integrated ? w.integrated.slice(0, 8) : null],
@@ -476,7 +502,7 @@ function gcView() {
     const left = scratch.length ? section("Left behind by scratch shells", h("div", { class: "rows" }, ...scratch.map((l) => {
         const name = String(l.path).split("/").pop() ?? l.path;
         return row(name, `${l.files} files · changed ${ago(l.modified_ms)} ago`, bytes(l.bytes), {
-            onclick: () => confirm(`Delete ${name}?`, `${l.path} and the ${l.files} files in it go for good.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
+            onclick: () => confirm(`Delete the scratch directory ${name}?`, `${l.path}, ${l.files} files. A scratch shell left it behind. It is deleted with everything in it; this can't be undone.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
         });
     }))) : null;
     return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")), h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, `Worktrees that are merged, abandoned or gone, biggest first${total ? ` (${bytes(total)} in all, build output included)` : ""}. Nothing is removed unless you say so.`), body, left));
@@ -485,7 +511,8 @@ function archivesView() {
     const entries = archives.get("");
     const body = pending(archives, "") ?? (entries.length
         ? h("div", { class: "rows" }, ...entries.map((e) => {
-            const name = e.title || e.name, addr = `${e.project_slug}/${e.name}`;
+            // By id: several archives can share a name (an older daemon's have none).
+            const name = e.title || e.name, addr = e.id || `${e.project_slug}/${e.name}`;
             return row(name, `${e.project_slug} · ${e.branch}`, ago(e.archived_ms), {
                 onclick: () => menu(name, [
                     { title: tip("worktree.restore"), label: "Restore", hint: "Back as it was", run: () => confirm(`Restore ${name}?`, "The branch is checked out again and the saved files come back as uncommitted work.", "Restore", async () => {
@@ -493,7 +520,7 @@ function archivesView() {
                             if (r?.info)
                                 go(`#/wt/${enc(r.info.id)}`);
                         }, false) },
-                    { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted, and its branch too if it is merged or pushed. This can't be undone.", "Delete", async () => {
+                    { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. This can't be undone.", "Delete", async () => {
                             const r = await ask({ t: "worktree_archive_delete", addr }, "Deleted");
                             if (r)
                                 showNotes("Archive deleted", r.notes ?? []);

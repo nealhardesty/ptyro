@@ -4,7 +4,7 @@
 import { conn, host, store, token } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { fixLineEndings } from "./projects.js";
-import { actions, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, fixOf, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
@@ -35,7 +35,7 @@ const ACTIONS = {
     "daemon.status": "The daemon: version, uptime, sessions, health",
     "daemon.logs": "The daemon's log, the latest lines",
     "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
-    "daemon.restart": "Stop and start the daemon (sessions are stopped; agents hibernate)",
+    "daemon.restart": "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
     "daemon.stop": "Stop every session and the daemon",
     "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
     "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
@@ -115,7 +115,7 @@ function moreView() {
             { label: "Turn them on for this device", hint: "A test is sent", run: () => ui.push() },
             { title: tip("notify.test"), label: "Send a test through every channel", hint: "This device, desktop notifications, anything in your config", run: async () => { const r = await ask({ t: "notify_test" }); if (r)
                     textSheet("Notification test", r.results.join("\n") || "Nothing is set up to notify."); } },
-        ]) }, "🔔 Notifications"), h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. `ptyro devices revoke` ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))), conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null, h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))), 
+        ]) }, "🔔 Notifications"), h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. Revoking it on the Devices page ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))), conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null, h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))), 
     // The version, quietly, where people look first (UX2.1).
     h("p", { class: "sub more-version" }, "ptyro ", status.get("")?.version ?? "", " · ", h("a", { href: "#/about", title: tip("app.about") }, "About"))));
 }
@@ -293,7 +293,7 @@ const devices = new Cache(() => conn.request({ t: "device_list" }).then((r) => r
 const FULL_WARNING = "This device gets FULL control: it can run commands as you, change settings, and pair or revoke other devices. Pair only your own phone or browser. Pick Approve or Control below for less.";
 function pairAnother() {
     form("Pair another device", [
-        { key: "name", label: "Name", value: "phone", required: true, hint: "A name that exists is replaced: its old link stops working and it takes the access chosen here." },
+        { key: "name", label: "Name", value: "phone", required: true, slug: "name", hint: `A name that exists is replaced: its old link stops working and it takes the access chosen here. ${NAME_HINT}` },
         { key: "scope", label: "May", type: "select", options: SCOPES.map(([k, l, d]) => [k, `${l}: ${d}`]), value: "full" },
     ], "Make a link", async (v) => {
         const r = await conn.request({ t: "device_pair", name: v.name, scope: v.scope });
@@ -328,7 +328,7 @@ function devicesView() {
     poll("devices", () => devices.refresh(""), 10000);
     const list = devices.get("");
     return h("div", {}, ui.header("Devices", "#/more", h("button", { class: "icon plus", title: tip("pair.device"), "aria-label": "Pair another device", onclick: pairAnother }, "＋")), h("main", { class: "stack", title: tip("devices.list") }, conn.scope !== "full" ? h("p", { class: "empty" }, "Listing devices needs a device paired with --scope full.") :
-        pending(devices, "") ?? (list.length ? h("div", { class: "rows" }, ...list.map((d) => row(h("span", {}, d.name, " ", badge(d.scope, d.scope === "full" ? "warn" : ""), d.pending ? badge("waiting to pair", "info") : null), `${d.last_seen_ms ? `seen ${ago(d.last_seen_ms)} ago` : "never seen"}${d.last_via ? ` · ${d.last_via}` : ""}${d.push ? ` · ${d.push} notification${d.push === 1 ? "" : "s"}` : ""}`, null, { onclick: () => menu(d.name, [{ title: tip("devices.revoke"), label: "Revoke", danger: true, hint: "Its token stops working at once", run: () => confirm(`Revoke ${d.name}?`, "It's unpaired now. If it's this device, you'll be signed out.", "Revoke", async () => { await ask({ t: "device_revoke", id: d.id }, "Revoked"); devices.reload(""); }) }]) }))) : h("p", { class: "empty" }, "No devices."))));
+        pending(devices, "") ?? (list.length ? h("div", { class: "rows" }, ...list.map((d) => row(h("span", {}, d.name, " ", badge(d.scope, d.scope === "full" ? "warn" : ""), d.pending ? badge("waiting to pair", "info") : null), `${d.last_seen_ms ? `seen ${ago(d.last_seen_ms)} ago` : "never seen"}${d.last_via ? ` · ${d.last_via}` : ""}${d.push ? ` · ${d.push} notification${d.push === 1 ? "" : "s"}` : ""}`, null, { onclick: () => menu(d.name, [{ title: tip("devices.revoke"), label: "Revoke", danger: true, hint: "Its token stops working at once", run: () => confirm(`Revoke device ${d.name}?`, "Its token stops working at once and its connections close. Pair it again to bring it back. If it's this device, you'll be signed out.", "Revoke", async () => { await ask({ t: "device_revoke", id: d.id }, "Revoked"); devices.reload(""); }) }]) }))) : h("p", { class: "empty" }, "No devices."))));
 }
 // a QR code, drawn here (qr.ts, no library)
 function qrBox(text) {
@@ -365,7 +365,7 @@ async function profileLogin(name, target) {
 /// `made`: told the new profile's name (a form that offered "new profile…" picks it).
 export function profileForm(made) {
     return form("New profile", [
-        { key: "name", label: "Name", required: true, slug: "name", placeholder: "work", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" },
+        { key: "name", label: "Name", required: true, slug: "name", placeholder: "work", hint: NAME_HINT },
         { key: "label", label: "Label", placeholder: "shown in the sidebar" },
         { key: "color", label: "Colour", placeholder: "e.g. orange or #ff8800" },
         ...AGENT_DIRS.map((a) => ({ key: `dir_${a}`, label: `${a} directory`, placeholder: `adopt one you have, e.g. ~/.${a}-work`, hint: undefined })),
@@ -461,11 +461,11 @@ function profileView(rest) {
     const body = pending(profiles, "") ?? (!p ? h("p", { class: "empty" }, "No such profile.") : h("div", { class: "stack-in", title: tip("profile.show") }, facts([["Label", p.label], ["Colour", p.color], ["Isolated", p.isolate ? "yes: credentials it inherits are removed" : "no: it inherits the daemon's"], ["Git", p.git_email],
         ["Matches remotes", (p.matches?.remotes ?? []).join(", ")], ["Matches paths", (p.matches?.paths ?? []).join(", ")], ["Variables", p.vars.join(" ")]]), section("Directories", facts(Object.entries(p.dirs).map(([a, d]) => [a, h("code", {}, String(d))]))), section("Log in", h("div", { class: "bar", title: tip("profile.login") }, ...AGENT_DIRS.map((a) => h("button", { onclick: () => void profileLogin(name, a) }, a)))), bar(h("button", { title: tip("profile.doctor"), onclick: async () => { const r = await doHost("profile.doctor", { name }); if (r)
             textSheet(`${name}: checks`, r.checks.map((c) => `${(LEVEL[c.level] ?? ["·"])[0]} ${c.name}: ${c.text}`).join("\n") || "Nothing to check."); } }, "Check"), h("button", { title: tip("profile.sync"), onclick: async () => { const r = await doHost("profile.sync", { name }); if (r)
-            textSheet(`${name}: shared files`, r.notes.join("\n")); } }, "Sync shared files"), name !== "default" ? h("button", { title: tip("profile.rename"), onclick: () => form("Rename the profile", [{ key: "new", label: "New name", value: name, required: true, slug: "name", hint: "A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => { const r = await host("profile.rename", { old: name, new: v.new }); profiles.reload(""); go(`#/profile/${enc(String(v.new))}`); showNotes("Renamed", r.notes ?? []); }) }, "Rename") : null, name !== "default" ? h("button", { class: "deny", title: tip("profile.remove"), onclick: () => removeProfile(name) }, "Remove") : null)));
+            textSheet(`${name}: shared files`, r.notes.join("\n")); } }, "Sync shared files"), name !== "default" ? h("button", { title: tip("profile.rename"), onclick: () => form("Rename the profile", [{ key: "new", label: "New name", value: name, required: true, slug: "name", hint: NAME_HINT }], "Rename", async (v) => { const r = await host("profile.rename", { old: name, new: v.new }); profiles.reload(""); go(`#/profile/${enc(String(v.new))}`); showNotes("Renamed", r.notes ?? []); }) }, "Rename") : null, name !== "default" ? h("button", { class: "deny", title: tip("profile.remove"), onclick: () => removeProfile(name) }, "Remove") : null)));
     return h("div", {}, ui.header(p?.label || name, "#/profiles"), h("main", { class: "stack" }, body));
 }
 function removeProfile(name, force = false) {
-    confirm(`Remove ${name}?`, force ? "Whatever uses it falls back to the default profile." : "It leaves your config; its directories aren't touched.", force ? "Remove anyway" : "Remove", async () => {
+    confirm(`Remove profile ${name}?`, `It leaves your config; its directories aren't touched.${force ? " Whatever uses it falls back to the default profile." : ""}`, force ? "Remove anyway" : "Remove", async () => {
         try {
             const r = await host("profile.rm", { name, force });
             profiles.reload("");
@@ -473,8 +473,9 @@ function removeProfile(name, force = false) {
             showNotes("Removed", r.notes ?? []);
         }
         catch (e) {
-            if (e.code === "conflict" && !force)
-                confirm("It's in use", errText(e), "Remove anyway", () => removeProfile(name, true));
+            const f = fixOf(e);
+            if (f?.fix === "force" && !force)
+                confirm("It's in use", errText(e), f.label, () => removeProfile(name, true));
             else
                 hostFail(e);
         }
@@ -629,7 +630,7 @@ function upgradeDaemon() {
     }, false);
 }
 function restartDaemon() {
-    confirm("Restart the daemon?", "Running sessions are stopped (agents hibernate and can be resumed). The app reconnects when it's back.", "Restart", async () => { if (await doHost("daemon.restart", {}, "Restarting…"))
+    confirm("Restart the daemon?", "Running sessions are stopped; agents hibernate and come back resumable. Clients reconnect.", "Restart", async () => { if (await doHost("daemon.restart", {}, "Restarting…"))
         setTimeout(() => status.reload(""), 4000); });
 }
 function daemonView() {

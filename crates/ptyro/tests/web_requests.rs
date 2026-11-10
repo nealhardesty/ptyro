@@ -82,6 +82,7 @@ fn the_shapes_the_web_app_sends_parse() {
         json!({ "t": "spawn", "spec": { "cwd": "", "argv": ["sh", "-c", "make"], "worktree": "w1", "unqueued": true } }),
         json!({ "t": "worktree_new", "spec": { "setup": true, "project": "p", "agent": "claude", "prompt": "x", "title": "x", "pr": 12, "existing": true, "branch": "b", "take_changes": true, "trust": "fp", "confirmed": false } }),
         json!({ "t": "kill", "addr": "a", "signal": null }),
+        json!({ "t": "remove", "addr": "a", "stop": true }),
         json!({ "t": "retitle", "addr": "a", "title": null, "worktree": true }),
         json!({ "t": "msg_post", "from": null, "to": "a", "kind": "info", "body": "b", "run": null, "in_reply_to": null, "priority": null, "ttl_ms": null, "key": null }),
         json!({ "t": "set_verify", "addr": "a", "check": null, "max_bounces": 3 }),

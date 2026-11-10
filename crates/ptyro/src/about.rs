@@ -13,7 +13,7 @@ use ptyro_core::config::Config;
 use ptyro_protocol::{PROTO, Reply, Request};
 use serde::Serialize;
 
-use crate::cli::{Ctx, age};
+use crate::cli::{Ctx, ago};
 use crate::doctor::Report;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -281,7 +281,7 @@ impl About {
             match (&d.version, &d.protocol, d.pid) {
                 (Some(v), Some(p), Some(pid)) => format!(
                     "running, version {v} (protocol {p}), pid {pid}, up {}{}",
-                    d.started_ms.map(age).unwrap_or_default(),
+                    d.started_ms.map(ago).unwrap_or_default(),
                     if d.same == Some(false) { ", NOT this version" } else { "" }
                 ),
                 _ => "not running (it starts on demand)".into(),

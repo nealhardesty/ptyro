@@ -6,7 +6,7 @@
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request, WebServe};
 
-use crate::cli::{Ctx, age};
+use crate::cli::{Ctx, ago};
 
 /// What turning it on changes, in a sentence a person decides by.
 pub const WHAT_IT_CHANGES: &str = "Turning it on makes the daemon run a web server: it is HTTPS only, and `[remote] access` says who can reach it \
@@ -18,7 +18,7 @@ pub fn lines(w: &WebServe) -> Vec<String> {
     let mut out = Vec::new();
     match (w.wanted, w.up, &w.url) {
         (_, true, Some(url)) => {
-            let since = w.since_ms.map(age).map(|a| format!(", up {a}")).unwrap_or_default();
+            let since = w.since_ms.map(ago).map(|a| format!(", up {a}")).unwrap_or_default();
             let pid = w.pid.map(|p| format!(" (pid {p}{since})")).unwrap_or_default();
             out.push(format!("up at {url}{pid}"));
         }

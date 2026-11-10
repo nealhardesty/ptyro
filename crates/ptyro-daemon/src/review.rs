@@ -239,7 +239,10 @@ impl Daemon {
             DiffAgainst::Upstream => {
                 let p = path.clone();
                 blocking(move || Git::new().upstream(&p)).await?.ok_or_else(|| {
-                    Error::missing("upstream", format!("{} (push it first)", wt.qualified()))
+                    Error::new(
+                        ErrorCode::NotFound,
+                        format!("{} has no upstream: push it first", wt.qualified()),
+                    )
                 })?
             }
             DiffAgainst::LastTurn => {
@@ -253,9 +256,9 @@ impl Daemon {
                     })
                     .max_by_key(|(_, at)| *at)
                     .ok_or_else(|| {
-                        Error::missing(
-                            "agent turn",
-                            format!("in {} (no agent has worked there yet)", wt.qualified()),
+                        Error::new(
+                            ErrorCode::NotFound,
+                            format!("no agent has worked in {} yet", wt.qualified()),
                         )
                     })?;
                 since_ms = Some(at);
@@ -315,9 +318,7 @@ impl Daemon {
         }
         let s = match session {
             Some(a) => self.resolve(&a)?,
-            None => self
-                .owner(&wt)
-                .ok_or_else(|| Error::missing("agent session", format!("in {}", wt.qualified())))?,
+            None => self.owner(&wt).ok_or_else(|| crate::github::no_agent_in(&wt))?,
         };
         let mut text = format!("[via ptyro: review of your changes in {}]\n", wt.qualified());
         if let Some(n) = note.filter(|n| !n.trim().is_empty()) {
@@ -1043,6 +1044,8 @@ mod tests {
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &std::fs::metadata(wt.join("ok")).unwrap().permissions(),
         );
-        assert_eq!(mode & 0o777, 0o750 & !0o022);
+        // Within the umask, which another test binding a socket may hold at 077 for a moment
+        // (it is the process's): the owner's bits always come, and nothing the source lacks.
+        assert_eq!((mode & 0o700, mode & 0o777 & !0o750), (0o700, 0), "{mode:o}");
     }
 }

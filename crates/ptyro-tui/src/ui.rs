@@ -1972,7 +1972,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             let mut field = vec![Span::styled("› ", fg(app, t.accent))];
             if kind.is_name() && check.is_err() {
                 field.extend(text.chars().map(|c| {
-                    let style = if ptyro_core::names::allowed(c) { Style::new() } else { bad };
+                    let style = if kind.allowed(c) { Style::new() } else { bad };
                     Span::styled(c.to_string(), style)
                 }));
             }
@@ -1980,7 +1980,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 Err(e) => {
                     let fix = kind
                         .is_name()
-                        .then(|| ptyro_core::names::tidy(text))
+                        .then(|| kind.tidy(text))
                         .flatten()
                         .map(|n| format!(" · Tab → {n}"))
                         .unwrap_or_default();
@@ -1990,7 +1990,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     let nl = if kind.multiline() {
                         format!(" · {}", newline_hint(app))
                     } else if kind.is_name() {
-                        " · a space or other odd character becomes _ (a-z 0-9 . _ -)".to_owned()
+                        format!(" · {}", kind.hint().to_lowercase())
                     } else {
                         String::new()
                     };
@@ -2402,21 +2402,7 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
     lines
 }
 
-/// `12s`, `4m`, `3h`, `2d` ago.
-pub fn ago(ms: u64) -> String {
-    dur(ptyro_core::now_ms().saturating_sub(ms))
-}
-
-/// A duration: `12s`, `4m`, `3h`, `2d`.
-pub fn dur(ms: u64) -> String {
-    let s = ms / 1000;
-    match s {
-        0..60 => format!("{s}s"),
-        60..3600 => format!("{}m", s / 60),
-        3600..86400 => format!("{}h", s / 3600),
-        _ => format!("{}d", s / 86400),
-    }
-}
+pub use ptyro_core::{ago, dur};
 
 /// Text being typed, laid out for a box `width` columns wide (UX1.26): split at its new lines
 /// and wrapped, each row behind `first` (the first row) or as many spaces, at most `max_rows`

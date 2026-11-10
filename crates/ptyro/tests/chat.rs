@@ -220,6 +220,12 @@ fn titles_pins_archive_export_and_delete() {
     assert_eq!(w.chats()[0]["title"], "Dinner ideas");
     w.ok(&["chat", "retitle", "@last", "Cooking"]);
     assert_eq!(w.chats()[0]["title"], "Cooking");
+    // No title clears it, as for a session or a worktree; --auto asks for a new one.
+    w.ok(&["chat", "retitle", "@last"]);
+    assert!(w.chats()[0]["title"].is_null(), "{}", w.chats()[0]);
+    w.ok(&["chat", "retitle", "@last", "--auto"]);
+    w.until("an automatic title", || w.chats()[0]["title"].is_string());
+    w.ok(&["chat", "retitle", "@last", "Cooking"]);
     w.ok(&["chat", "pin", &addr]);
     assert_eq!(w.chats()[0]["pinned"], true);
     let md = w.ok(&["chat", "export", &addr]);
@@ -228,11 +234,48 @@ fn titles_pins_archive_export_and_delete() {
     assert!(w.chats().is_empty());
     let archived = w.json(&["chat", "ls", "--archived", "--json"]);
     assert_eq!(archived.as_array().unwrap().len(), 1);
-    w.ok(&["chat", "rm", &addr]);
+    // Deleting never goes by a title (SPEC §12.1): refused, the chat named by its handle.
+    let out = w.cli(&["chat", "rm", "-y", "cook"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.contains(&addr) && err.contains("Cooking"), "lists it: {err}");
+    // No terminal to ask and no --yes: refused, saying what it would lose and offering --yes.
+    let out = w.cli(&["chat", "rm", &addr]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains("Delete the chat \u{201c}Cooking\u{201d}?"), "{err}");
+    assert!(err.contains(ptyro_core::removal::CHAT) && err.contains("--yes"), "{err}");
+    assert_eq!(w.json(&["chat", "ls", "--archived", "--json"]).as_array().unwrap().len(), 1);
+    w.ok(&["chat", "rm", "-y", &addr]);
     let archived = w.json(&["chat", "ls", "--archived", "--json"]);
     assert!(archived.as_array().unwrap().is_empty());
     let out = w.cli(&["chat", "show", &addr]);
     assert!(!out.status.success());
+}
+
+/// Chats resolve like everything else (SPEC §2.3): a handle in any case, never fewer than 4
+/// characters of an id, and a word of several titles is ambiguous (exit 4), listed by handle.
+#[test]
+fn chats_resolve_by_the_one_policy() {
+    let w = World::new("");
+    w.ok(&["chat", "new", "--title", "Fix the build", "--no-wait", "one"]);
+    w.ok(&["chat", "new", "--title", "Fix the docs", "--no-wait", "two"]);
+    let chats = w.chats();
+    let handle = |c: &Value| c["handle"].as_str().unwrap().to_owned();
+    let out = w.cli(&["chat", "show", "fix"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.contains(r#"2 chats match "fix": say which"#), "{err}");
+    for c in &chats {
+        assert!(err.contains(&format!("c:{}", handle(c))), "{err}");
+    }
+    let one = w.chat(&format!("C:{}", handle(&chats[0]).to_uppercase()));
+    assert_eq!(one["chat"]["id"], chats[0]["id"]);
+    let id = chats[0]["id"].as_str().unwrap();
+    let out = w.cli(&["chat", "show", &format!("c:{}", &id[id.len() - 3..])]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(3), "{err}");
+    assert!(err.contains("no chat matches") && err.contains("at least 4 characters"), "{err}");
 }
 
 #[test]

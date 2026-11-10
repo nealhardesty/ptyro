@@ -47,6 +47,8 @@ pub enum Target {
     Setting(String),
     /// Palette: open this chat (SPEC §22.12).
     Chat(String),
+    /// An archived worktree: its address (its id) and how it is shown (`myrepo/feat`).
+    Archive(String, String),
 }
 
 #[derive(Debug, Clone)]

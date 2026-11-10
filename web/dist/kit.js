@@ -82,7 +82,20 @@ window.addEventListener("hashchange", () => { for (const t of polls.values())
     clearInterval(t); polls.clear(); });
 // ── asking the daemon ───────────────────────────────────────────────────────────────────────
 export const errText = (e) => e?.message || String(e);
-/// Run a request; on failure toast why and resolve `undefined`.
+export const fixOf = (e) => e?.fix;
+/// `req` again with `f` said, where the request keeps that field; `null` when it has none.
+export function withFix(req, f) {
+    const r = JSON.parse(JSON.stringify(req));
+    for (const o of [r, r.opts, r.op, r.op?.spec]) {
+        if (o && typeof o === "object" && f.fix in o) {
+            o[f.fix] = f.fix === "trust" ? f.fingerprint : true;
+            return r;
+        }
+    }
+    return null;
+}
+/// Run a request; on failure toast why and resolve `undefined`. A refusal with a way through
+/// asks whether to take it, and resolves with what that answered (so the caller goes on).
 export async function ask(req, ok) {
     try {
         const r = await conn.request(req);
@@ -91,6 +104,9 @@ export async function ask(req, ok) {
         return r;
     }
     catch (e) {
+        const f = fixOf(e), again = f && withFix(req, f);
+        if (f && again)
+            return (await confirmed(f.label, errText(e), f.label)) ? ask(again, ok) : undefined;
         ui.fail(errText(e));
         return undefined;
     }
@@ -247,6 +263,16 @@ export function confirm(title, message, label, run, danger = true) {
     ]);
     return s;
 }
+/// `confirm`, as a question: true when its button was pressed, false however else it closed.
+export function confirmed(title, message, label, danger = true) {
+    return new Promise((ok) => {
+        let said = false;
+        const s = confirm(title, message, label, () => { said = true; ok(true); }, danger);
+        // Cancel, Esc, ✕ and a tap outside all answer "no" (after the button's own handler had its turn).
+        s.onClose(() => setTimeout(() => { if (!said)
+            ok(false); }, 0));
+    });
+}
 /// Show text (a command's output, a file) in a sheet, with a copy button.
 export function textSheet(title, text) {
     return sheet(title, [h("pre", { class: "block" }, text || "(empty)")], [
@@ -254,21 +280,58 @@ export function textSheet(title, text) {
     ]);
 }
 // ── forms ───────────────────────────────────────────────────────────────────────────────────
-/// What a name can't hold becomes `_` as it is typed (the same rule as `names::typed` and
-/// `names::branch_typed` in ptyro-core): "name" for an address, "branch" for a git branch.
+/// What a name field says under itself (`names::TYPED_HINT` in ptyro-core, word for word).
+export const NAME_HINT = "A space or other odd character becomes - (a-z 0-9 . _ -)";
+/// `[ui] confirm_kill` (default on), from the user settings' entries: whether Stop, Kill, and
+/// Stop and remove ask first. A device that may not read the config always asks.
+export function confirmsKill(scope, entries) {
+    if (scope !== "full")
+        return true;
+    const e = entries?.find((x) => x.key === "ui.confirm_kill");
+    return !e || String(e.value) !== "false";
+}
+/// What a project-name field says under itself (`names::SLUG_HINT`, word for word).
+export const SLUG_HINT = "A space or other odd character becomes - (a-z 0-9 -)";
+/// What a name can't hold becomes `-` as it is typed, and what it can't start with is dropped
+/// at the start (the same rule as `names::typed`, `names::slug_typed` and
+/// `names::branch_typed` in ptyro-core).
 export function slugify(kind, raw) {
     let out = "";
     for (const c of raw) {
         if (kind === "branch") {
-            out += /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c) || (out === "" && c === "-") ? "_" : c;
+            const bad = /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c);
+            if (out === "" && (bad || c === "-"))
+                continue;
+            out += bad ? "-" : c;
+        }
+        else if (kind === "project") {
+            const l = c.toLowerCase();
+            if (out === "" && !/^[a-z0-9]$/.test(l))
+                continue;
+            out += /^[a-z0-9-]$/.test(l) ? l : "-";
         }
         else {
             const l = c.toLowerCase();
-            const bad = !/^[a-z0-9._-]$/.test(l) || (out === "" && (l === "." || l === "-")) || (l === "." && out.endsWith("."));
-            out += bad ? "_" : l;
+            if (out === "" && !/^[a-z0-9_]$/.test(l))
+                continue;
+            const bad = !/^[a-z0-9._-]$/.test(l) || (l === "." && out.endsWith("."));
+            out += bad ? "-" : l;
         }
     }
     return out;
+}
+/// Keep `box` as a name (or branch) while it is typed into. The cursor stays after what was
+/// before it: slugify never looks ahead, so the text before the cursor, slugified, is where the
+/// cursor goes (in UTF-16 units, as an emoji turned into one `-` shrinks).
+export function slugInput(box, kind) {
+    box.addEventListener("input", () => {
+        const fixed = slugify(kind, box.value);
+        if (fixed === box.value)
+            return;
+        const at = slugify(kind, box.value.slice(0, box.selectionStart ?? box.value.length)).length;
+        box.value = fixed;
+        box.setSelectionRange(at, at);
+    });
 }
 /// A form in a sheet. `go` gets the values; if it throws, the message shows in the form and the
 /// sheet stays; if it returns, the sheet closes. Empty text fields are left out of the values.
@@ -298,19 +361,8 @@ export function form(title, fields, label, go, opts = {}) {
         else {
             input = h("input", { type: f.type ?? "text", placeholder: f.placeholder, autocapitalize: "off", autocomplete: "off", spellcheck: "false", inputmode: f.type === "number" ? "numeric" : undefined });
             input.value = f.value == null ? "" : String(f.value);
-            const slug = f.slug;
-            const box = input;
-            if (slug) {
-                // The cursor stays where it was: one character in, one out.
-                box.addEventListener("input", () => {
-                    const at = box.selectionStart;
-                    const fixed = slugify(slug, box.value);
-                    if (fixed !== box.value) {
-                        box.value = fixed;
-                        box.setSelectionRange(at, at);
-                    }
-                });
-            }
+            if (f.slug)
+                slugInput(input, f.slug);
         }
         inputs.set(f.key, input);
         return f.type === "check"
@@ -402,6 +454,8 @@ export function argWords(line) {
 }
 /// The profile a new workspace starts with: the one named like it, else `default`.
 export const profileFor = (names, workspace) => names.includes(workspace) ? workspace : "default";
+/// The word a status is shown as: the selectors' and the CLI's (`error`; the wire says `errored`).
+export const statusWord = (st) => (st === "errored" ? "error" : st);
 // ── small parts ─────────────────────────────────────────────────────────────────────────────
 export const badge = (text, kind = "") => h("span", { class: `badge ${kind}` }, text);
 /// A titled block on a detail page.

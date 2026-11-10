@@ -6,7 +6,7 @@
 import { conn, host } from "./conn.js";
 import { data, splitMachine } from "./data.js";
 import { accent } from "./machine.js";
-import { actions, ago, ask, badge, bar, confirm, errText, form, h, menu, row, section, sheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, confirm, errText, form, h, menu, row, section, sheet, ui, views } from "./kit.js";
 const ACTIONS = {
     "machine.list": "Other machines whose workspaces show here: how each link stands, and its workspaces",
     "machine.add": "Show another machine's workspaces here: over ssh, or with the code `ptyro machine pair` printed on it",
@@ -55,13 +55,13 @@ function machineMenu(m) {
         { title: tip("machine.retry"), label: "Try its link now", hint: m.state === "online" ? "It is online" : m.fix ?? "", run: async () => { await ask({ t: "machine_retry", name: m.name }, `Trying ${m.name}…`); } },
         ...m.workspaces.filter((w) => !m.hidden.includes(w)).map((w) => ({ title: tip("machine.hide"), label: `Hide ${w} here`, hint: "Nothing changes there", run: async () => { await ask({ t: "machine_hide", name: m.name, workspace: w, hidden: true }, `${m.name} / ${w} is hidden here`); } })),
         ...m.hidden.map((w) => ({ title: tip("machine.unhide"), label: `Show ${w} again`, run: async () => { await ask({ t: "machine_hide", name: m.name, workspace: w, hidden: false }, `${m.name} / ${w} is shown again`); } })),
-        { title: tip("machine.remove"), label: "Stop showing it here", danger: true, hint: "Nothing changes on it", run: () => confirm(`Stop showing ${m.name}?`, "Its workspaces leave this list. Nothing changes on it; revoke this machine's token there too.", "Stop", async () => { await ask({ t: "machine_remove", name: m.name }, `${m.name} is no longer shown here`); }) },
+        { title: tip("machine.remove"), label: "Stop showing it here", danger: true, hint: "Nothing changes on it", run: () => confirm(`Stop mirroring ${m.name}?`, "Its workspaces leave this list. Nothing changes on it, and its pairing stays until you revoke it there.", "Stop", async () => { await ask({ t: "machine_remove", name: m.name }, `${m.name} is no longer shown here`); }) },
     ]);
 }
 function addMachine() {
     form("Add a machine", [
         { key: "target", label: "ssh://HOST, or the code `ptyro machine pair` printed on it", required: true, hint: "Over ssh it needs a key or an agent, no password prompt. A code is claimed once, within 10 minutes." },
-        { key: "name", label: "Name here (optional)", slug: "name", hint: "Default: what it calls itself. A space or other odd character becomes _" },
+        { key: "name", label: "Name here (optional)", slug: "name", hint: `Default: what it calls itself. ${NAME_HINT}` },
         { key: "force", label: "Keep it even if it doesn't answer now", type: "check", value: false },
     ], "Add", async (v) => {
         try {

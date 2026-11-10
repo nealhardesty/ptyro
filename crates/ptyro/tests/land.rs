@@ -143,7 +143,7 @@ impl World {
             "manual",
             "--gates",
             "land",
-            "-p",
+            "--prompt",
             "land it",
             "--json",
         ]);

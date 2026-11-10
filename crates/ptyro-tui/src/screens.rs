@@ -527,9 +527,7 @@ impl App {
             }
             "machine.remove" => {
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!(
-                        "Stop mirroring {m}? Its workspaces leave this list; nothing changes on it. [y/N]"
-                    ),
+                    text: format!("Stop mirroring {m}? {} [y/N]", ptyro_core::removal::MACHINE),
                     action: Confirmed::Send(
                         Box::new(Request::MachineRemove { name: m.clone() }),
                         format!("{m} is no longer mirrored here"),

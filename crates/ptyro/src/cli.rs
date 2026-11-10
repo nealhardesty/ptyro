@@ -8,7 +8,7 @@ use std::time::Duration;
 use ptyro_client::{Client, ConnectOptions};
 use ptyro_core::paths::Paths;
 use ptyro_core::session::{SessionInfo, SpawnSpec};
-use ptyro_core::{Error, ErrorCode, TermSize, now_ms};
+use ptyro_core::{Error, ErrorCode, TermSize};
 use ptyro_protocol::{ClientKind, Encoding, Reply, Request};
 use ptyro_tui::AttachEnd;
 
@@ -41,6 +41,11 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
                 return e.code.exit_code();
             }
         }
+    }
+    // Typed at a prompt: start it in the background, as any client would, and say so. Only
+    // `--foreground` (service managers, debugging) keeps it in this terminal.
+    if !foreground && !spawned {
+        return start_detached(serve);
     }
     // Leave the client's session and process group so its terminal closing can't hang us up.
     // Done before any runtime exists: we never fork an initialized tokio process. (On Windows the
@@ -80,6 +85,64 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
     }
 }
 
+/// `ptyro daemon start`: the daemon detached (`--spawned`, as a client starts it), this command
+/// returning once it accepts connections.
+fn start_detached(serve: bool) -> i32 {
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("ptyro: {e}");
+            return 1;
+        }
+    };
+    let paths = match Paths::from_env() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("ptyro: {e}");
+            return 1;
+        }
+    };
+    let ctx = Ctx::local(paths);
+    rt.block_on(async {
+        let status = |client: Client| async move {
+            match client.request(Request::Status).await {
+                Ok(Reply::Status { status }) => Ok(status.pid),
+                Ok(_) => Err(Error::internal("unexpected reply")),
+                Err(e) => Err(e),
+            }
+        };
+        if let Ok(client) = ctx.connect(false).await {
+            match status(client).await {
+                Ok(pid) => eprintln!("ptyro: daemon already running (pid {pid})"),
+                Err(_) => eprintln!("ptyro: daemon already running"),
+            }
+            if serve {
+                // The daemon that is running reads the config it was just given.
+                eprintln!("ptyro: the web app starts in it now (`ptyro web`)");
+                let _ = crate::webapp::ask(&ctx, Some(true), None).await;
+            }
+            return ErrorCode::Conflict.exit_code();
+        }
+        // Asked for by name: started even under `PTYRO_NO_AUTOSPAWN`.
+        let mut opts = ctx.options(ClientKind::Cli, true);
+        opts.autospawn = true;
+        let started = match Client::connect(&opts).await {
+            Ok(client) => status(client).await,
+            Err(e) => Err(e.into()),
+        };
+        match started {
+            Ok(pid) => {
+                eprintln!("daemon started (pid {pid}); logs in {}", ctx.paths.log_dir().display());
+                0
+            }
+            Err(e) => {
+                eprintln!("ptyro: {}", said(&e));
+                e.code.exit_code()
+            }
+        }
+    })
+}
+
 pub async fn run(
     cmd: Option<Cmd>,
     task: Vec<String>,
@@ -89,7 +152,7 @@ pub async fn run(
     match dispatch(cmd, task, json_wire, remote).await {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("ptyro: {}", e.message);
+            eprintln!("ptyro: {}", said(&e));
             e.code.exit_code()
         }
     }
@@ -286,6 +349,10 @@ async fn dispatch(
                 Some(wt_name) => {
                     crate::projects::new_in_new_worktree(&ctx, a, wt_name, project).await
                 }
+                // `-p` once meant `--prompt`: never drop it unheard.
+                None if project.is_some() => Err(Error::invalid(
+                    "--project picks the project a new worktree goes in: add --new-wt, or give the agent a prompt with --prompt",
+                )),
                 None => new(&ctx, a).await,
             }
         }
@@ -410,22 +477,24 @@ async fn dispatch(
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
         Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
         Some(Cmd::Tour { here: true }) => tour_here(&ctx).await,
-        Some(Cmd::Kill { sessions, signal, keep }) => {
+        // Kill is immediate and keeps the session listed, as in the TUI and the web (SPEC §7.3).
+        Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
+            let mut code = 0;
             for info in targets(&client, &sessions).await? {
-                let addr = info.id.full();
-                client.request(Request::Kill { addr: addr.clone(), signal }).await?;
-                if signal.is_none() && !keep {
-                    // A quick terminal forgets itself once it exits (UX1.25).
-                    if !info.quick {
-                        client.request(Request::Remove { addr }).await?;
-                    }
-                    eprintln!("killed {}", info.name);
-                } else {
-                    eprintln!("signalled {}", info.name);
+                if !info.state.is_live() {
+                    eprintln!("{} isn't running", info.name);
+                    continue;
+                }
+                let signal = signal.unwrap_or(9);
+                let req = Request::Kill { addr: info.id.full(), signal: Some(signal) };
+                match client.request(req).await {
+                    Err(e) => failed(&mut code, &info.name, &e),
+                    Ok(_) if signal == 9 => eprintln!("killed {}", info.name),
+                    Ok(_) => eprintln!("sent signal {signal} to {}", info.name),
                 }
             }
-            Ok(0)
+            Ok(code)
         }
         Some(Cmd::Restart { sessions }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
@@ -436,12 +505,37 @@ async fn dispatch(
             }
             Ok(0)
         }
-        Some(Cmd::Rm { sessions }) => {
+        Some(Cmd::Rm { sessions, stop, yes }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
-            for info in targets(&client, &sessions).await? {
-                client.request(Request::Remove { addr: info.id.full() }).await?;
+            let found = targets(&client, &sessions).await?;
+            // A dormant agent could still be resumed: forgetting it asks first, once for all
+            // of them (owner, 2026-11-09).
+            let dormant: Vec<&str> = found
+                .iter()
+                .filter(|s| s.state == ptyro_core::session::ProcessState::Dormant)
+                .map(|s| s.name.as_str())
+                .collect();
+            if !dormant.is_empty() {
+                let s = if dormant.len() > 1 { "s" } else { "" };
+                let q = format!(
+                    "Remove the dormant session{s} {}? {}",
+                    dormant.join(", "),
+                    ptyro_core::removal::DORMANT
+                );
+                ask_first(&q, yes)?;
             }
-            Ok(0)
+            // Each is tried: one that is refused (still running) is said, and the rest go on.
+            let mut code = 0;
+            for info in found {
+                match client.request(Request::Remove { addr: info.id.full(), stop }).await {
+                    Err(e) => failed(&mut code, &info.name, &e),
+                    Ok(_) if stop && info.state.is_live() => {
+                        eprintln!("stopped and removed {}", info.name);
+                    }
+                    Ok(_) => {}
+                }
+            }
+            Ok(code)
         }
         Some(Cmd::Rename { session, name }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
@@ -506,12 +600,12 @@ async fn dispatch(
         Some(Cmd::Recipe { cmd }) => crate::orch::recipe(&ctx, cmd).await,
         Some(Cmd::Fanout {
             agents,
-            n,
+            count,
             prompt,
             prompt_file,
             project,
             base,
-            name,
+            prefix,
             test,
             verify,
             judge,
@@ -525,14 +619,14 @@ async fn dispatch(
                 prompt: String::new(),
                 project,
                 base,
-                name,
+                name: prefix,
                 test,
                 verify,
                 judge,
                 timeout,
                 structured,
             };
-            crate::orch::fanout(&ctx, spec, n, prompt, prompt_file, wait, json).await
+            crate::orch::fanout(&ctx, spec, count, prompt, prompt_file, wait, json).await
         }
         Some(Cmd::Compare { run, refresh, json }) => {
             crate::orch::compare(&ctx, run, refresh, json).await
@@ -541,8 +635,8 @@ async fn dispatch(
             crate::orch::pick(&ctx, run, candidate, cherry_pick, pr, apply, into, paths, hunks)
                 .await
         }
-        Some(Cmd::Discard { run, candidate, force }) => {
-            crate::orch::discard(&ctx, run, candidate, force).await
+        Some(Cmd::Discard { run, candidate, force, yes }) => {
+            crate::orch::discard(&ctx, run, candidate, force, yes).await
         }
         Some(Cmd::Iterate { run, args }) => crate::orch::iterate(&ctx, run, args).await,
         Some(Cmd::Gate { cmd }) => crate::orch::gate(&ctx, cmd).await,
@@ -637,9 +731,11 @@ async fn dispatch(
         Some(Cmd::Web { action, access, pair, json }) => {
             crate::webapp::run(&ctx, &action, access, json, pair).await
         }
-        Some(Cmd::Pair { name, scope, url, json, open }) => {
+        Some(Cmd::Pair { name, name_arg, scope, url, json, open }) => {
             // "phone" is the default name; a browser on this computer is a "browser".
-            let name = if open && name == "phone" { "browser".to_owned() } else { name };
+            let name = name
+                .or(name_arg)
+                .unwrap_or_else(|| if open { "browser" } else { "phone" }.to_owned());
             crate::remote::pair(&ctx, name, scope.as_deref(), url, json, open).await
         }
         Some(Cmd::Devices { cmd }) => crate::remote::devices(&ctx, cmd).await,
@@ -795,6 +891,35 @@ async fn tour_here(ctx: &Ctx) -> Result<i32, Error> {
     };
     let tui = ptyro_tui::Options { tour: true, ..Default::default() };
     attach_with(ctx, client, Some(info), tui).await
+}
+
+/// What the CLI prints for an error: the daemon's words, then a refusal's way through the
+/// CLI's way, the flag that says it (SPEC §6.6).
+pub fn said(e: &Error) -> String {
+    use ptyro_core::error::Again;
+    let Some(f) = &e.fix else { return e.message.clone() };
+    let flag = match &f.again {
+        Again::Force => "--force".to_owned(),
+        Again::StopSessions => "--stop-sessions".to_owned(),
+        Again::Stop => "--stop".to_owned(),
+        Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
+        Again::Release => "--release".to_owned(),
+        Again::IgnoreDependents => "--ignore-dependents".to_owned(),
+    };
+    format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
+}
+
+/// The refusal's way through is `again` (SPEC §6.6).
+pub fn fixed_by(e: &Error, again: &ptyro_core::error::Again) -> bool {
+    e.fix.as_ref().is_some_and(|f| f.again == *again)
+}
+
+/// The fingerprint a refusal asks you to trust, if it asks.
+pub fn trust_of(e: &Error) -> Option<String> {
+    match &e.fix.as_ref()?.again {
+        ptyro_core::error::Again::Trust { fingerprint } => Some(fingerprint.clone()),
+        _ => None,
+    }
 }
 
 pub fn no_daemon(e: Error) -> Error {
@@ -970,7 +1095,30 @@ static DAEMON_ELSEWHERE: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
-    let cwd = cwd.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", cwd.display())))?;
+    daemon_path(&cwd)
+}
+
+/// An address the daemon reads (SPEC §2.3), with a relative path (`.`, `../app`) made this
+/// client's: the daemon would read it against its own directory. Names, ids, `~` and absolute
+/// paths go as they are. Every `--project` and worktree argument goes through it.
+pub fn addr_here(addr: String) -> Result<String, Error> {
+    if !addr.starts_with('.') {
+        return Ok(addr);
+    }
+    let cwd =
+        std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
+    Ok(daemon_path(&cwd.join(&addr))?.to_string_lossy().into_owned())
+}
+
+/// `addr_here` for an optional address.
+pub fn addr_here_opt(addr: Option<String>) -> Result<Option<String>, Error> {
+    addr.map(addr_here).transpose()
+}
+
+/// A folder on this computer as the daemon names it: canonical, and on Windows translated as
+/// `current_dir` says.
+fn daemon_path(p: &std::path::Path) -> Result<std::path::PathBuf, Error> {
+    let cwd = p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?;
     if cfg!(windows) && !DAEMON_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
         return Ok(plain_windows_path(&cwd));
     }
@@ -1009,6 +1157,41 @@ pub fn confirm(question: &str) -> bool {
     matches!(line.trim(), "y" | "Y" | "yes")
 }
 
+/// A destructive command's question (SPEC §12.1, owner 2026-11-09): asked on a terminal unless
+/// `yes`; with no terminal to ask, refused with an error that offers `--yes`.
+pub fn ask_first(question: &str, yes: bool) -> Result<(), Error> {
+    if yes || confirm(question) {
+        return Ok(());
+    }
+    Err(not_agreed(question, "pass --yes"))
+}
+
+/// One of several sessions refused (`rm @all`, `stop`, `kill`): said, and the first failure's
+/// exit code kept, while the rest go on.
+pub(crate) fn failed(code: &mut i32, name: &str, e: &Error) {
+    // Its way through in the CLI's words (`said`); named once, by the message when it does.
+    match said(e) {
+        s if e.message.contains(name) => eprintln!("ptyro: {s}"),
+        s => eprintln!("ptyro: {name}: {s}"),
+    }
+    if *code == 0 {
+        *code = e.code.exit_code();
+    }
+}
+
+/// Why a question wasn't agreed to: a "no" on the terminal, or no terminal to ask (`flags`
+/// says what to pass instead).
+fn not_agreed(question: &str, flags: &str) -> Error {
+    if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+        Error::new(ErrorCode::NeedsConfirmation, "cancelled: nothing was changed")
+    } else {
+        Error::new(
+            ErrorCode::NeedsConfirmation,
+            format!("{question} (no terminal to ask: {flags})"),
+        )
+    }
+}
+
 /// Send a request that may need the user's confirmation (SPEC §10.10 guards): ask on a TTY and
 /// resend with `agree` applied; without a TTY, explain the flags.
 pub async fn with_confirmation<F>(
@@ -1042,10 +1225,8 @@ where
             if confirm(&e.message) {
                 agree(&mut req);
                 client.request(req).await
-            } else if std::io::stdin().is_terminal() {
-                Err(Error::new(ErrorCode::NeedsConfirmation, "cancelled"))
             } else {
-                Err(Error::new(e.code, format!("{} (no terminal to ask: {flags})", e.message)))
+                Err(not_agreed(&e.message, flags))
             }
         }
         other => other,
@@ -1053,7 +1234,8 @@ where
 }
 
 pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
-    let attaching = !a.detach;
+    // `ptyro` alone opens the TUI, so it says why it can't instead of starting a shell.
+    let attaching = a.welcome || attaches(a.detach || a.json);
     if attaching {
         check_attachable()?;
     }
@@ -1068,7 +1250,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         argv: a.argv,
         agent: a.agent,
         cwd,
-        worktree: a.wt,
+        worktree: addr_here_opt(a.wt)?,
         profile: a.profile,
         override_pin: a.override_pin,
         confirmed: a.yes,
@@ -1114,6 +1296,17 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
     Ok(0)
 }
 
+/// Whether a command that starts an interactive session attaches to it (owner, 2026-11-09):
+/// yes in a terminal of its own, unless `-d`. Without a terminal (a script), or inside a ptyro
+/// session (whose TUI shows the new one), it starts detached and says so.
+pub fn attaches(detach: bool) -> bool {
+    !detach
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+        && (std::env::var_os("PTYRO_SESSION_ID").is_none()
+            || std::env::var_os("PTYRO_ALLOW_NESTED").is_some())
+}
+
 pub fn check_attachable() -> Result<(), Error> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return Err(Error::invalid(
@@ -1149,7 +1342,7 @@ async fn quick_shell(
     worktree: Option<String>,
     json: bool,
     read: bool,
-    scrollback: Option<u32>,
+    scrollback: Option<Option<u32>>,
 ) -> Result<i32, Error> {
     let attaching = !json && !read;
     if attaching {
@@ -1158,7 +1351,7 @@ async fn quick_shell(
     let client =
         if read { ctx.connect(false).await.map_err(no_daemon)? } else { ctx.connect(true).await? };
     let req = Request::QuickShell {
-        worktree,
+        worktree: addr_here_opt(worktree)?,
         cwd: current_dir()?,
         create: !read,
         env: client_env(),
@@ -1238,7 +1431,7 @@ pub async fn targets(client: &Client, addrs: &[String]) -> Result<Vec<SessionInf
             return Err(Error::internal("unexpected reply"));
         };
         if sessions.is_empty() {
-            return Err(Error::new(ErrorCode::NotFound, format!("no session matches {addr:?}")));
+            return Err(ptyro_core::lookup::not_found("session", addr, []));
         }
         for s in sessions {
             if !out.iter().any(|o| o.id == s.id) {
@@ -1269,7 +1462,7 @@ async fn history(ctx: &Ctx, json: bool) -> Result<i32, Error> {
             truncate(&e.name, 20),
             truncate(&format!("{}{mark}", e.state.label()), 16),
             truncate(&e.argv.join(" "), 26),
-            age(e.created_ms),
+            ago(e.created_ms),
             ran,
             e.cwd.display()
         );
@@ -1323,7 +1516,7 @@ pub fn shell_init(shell: Shell, paths: &Paths) -> String {
 
 /// `ls --status/--project/--workspace`.
 pub struct Filter {
-    pub status: Option<String>,
+    pub status: Option<ptyro_core::selector::State>,
     pub project: Option<String>,
     pub workspace: Option<String>,
     /// Chats' engines too (SPEC §22.2).
@@ -1332,20 +1525,8 @@ pub struct Filter {
 
 impl Filter {
     fn keeps(&self, s: &SessionInfo, projects: &[ptyro_core::model::ProjectInfo]) -> bool {
-        let status_ok = self.status.as_deref().is_none_or(|want| {
-            let st = s.status.as_ref().map(|r| r.status.label());
-            match want {
-                "running" | "live" => s.state.is_live(),
-                // Busy now: an agent working or waiting for you, a shell running a command.
-                "active" => s.is_active(),
-                "exited" => matches!(
-                    s.state,
-                    ptyro_core::session::ProcessState::Exited { .. }
-                        | ptyro_core::session::ProcessState::Failed { .. }
-                ),
-                "dormant" => s.state == ptyro_core::session::ProcessState::Dormant,
-                w => st == Some(w) || (w == "errored" && st == Some("error")),
-            }
+        let status_ok = self.status.is_none_or(|want| {
+            want.matches(&s.state, s.status.as_ref().map(|r| r.status), || s.is_active())
         });
         let project_ok = self.project.as_deref().is_none_or(|p| {
             s.project
@@ -1357,7 +1538,7 @@ impl Filter {
     }
 }
 
-async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
+async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
     let (all, worktrees) = match ctx.connect(false).await {
         Ok(client) => {
             let worktrees = match client.request(Request::WorktreeList { project: None }).await? {
@@ -1368,6 +1549,13 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
                 Reply::Projects { projects } => projects,
                 _ => Vec::new(),
             };
+            // `-p .` (a path): the project it is in, by id.
+            if let Some(p) = filter.project.clone().filter(|p| ptyro_core::os::looks_like_path(p))
+                && let Reply::Project { info, .. } =
+                    client.request(Request::ProjectGet { addr: addr_here(p)? }).await?
+            {
+                filter.project = Some(info.id);
+            }
             let mut all = sessions(&client).await?;
             all.retain(|s| filter.keeps(s, &projects));
             (all, worktrees)
@@ -1454,7 +1642,7 @@ async fn list(ctx: &Ctx, json: bool, filter: Filter) -> Result<i32, Error> {
             truncate(&place, 24),
             if profiles { format!("{:<10} ", truncate(&s.profile, 10)) } else { String::new() },
             s.viewers,
-            age(s.created_ms),
+            ago(s.created_ms),
             status
         );
     }
@@ -1471,15 +1659,7 @@ pub fn truncate(s: &str, n: usize) -> String {
     }
 }
 
-pub fn age(ms: u64) -> String {
-    let secs = now_ms().saturating_sub(ms) / 1000;
-    match secs {
-        0..60 => format!("{secs}s"),
-        60..3600 => format!("{}m", secs / 60),
-        3600..86400 => format!("{}h", secs / 3600),
-        _ => format!("{}d", secs / 86400),
-    }
-}
+pub use ptyro_core::ago;
 
 /// Stop the daemon; `hibernate` puts resumable agents to sleep first (SPEC §7.4).
 pub(crate) async fn stop_daemon(ctx: &Ctx, force: bool, hibernate: bool) -> Result<i32, Error> {
@@ -1569,7 +1749,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                     println!("  machine   {m}");
                 }
                 println!("  pid       {}", status.pid);
-                println!("  uptime    {}", age(status.started_ms));
+                println!("  uptime    {}", ago(status.started_ms));
                 if let Some(l) = &status.load {
                     println!("  load      {} ({} CPUs)", l.text(), l.cpus);
                 }
@@ -1593,7 +1773,7 @@ async fn daemon(ctx: &Ctx, cmd: DaemonCmd) -> Result<i32, Error> {
                     println!(
                         "  upgrades  {} (last {} ago{})",
                         status.generation,
-                        status.upgraded_ms.map(age).unwrap_or_default(),
+                        status.upgraded_ms.map(ago).unwrap_or_default(),
                         if status.rolled_back { ", rolled back" } else { "" }
                     );
                 }
@@ -1691,7 +1871,19 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
         M::Add { target, name, force, json } => {
             crate::machines::add(ctx, target, name, force, json).await
         }
-        M::Rm { name } => {
+        M::Rm { name, yes } => {
+            // Found first, then asked about: a typo asks nothing.
+            let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let Reply::Machines { machines } = c.request(Request::MachineList).await? else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            // By name, any case, as the daemon finds it.
+            let Some(m) = machines.iter().find(|m| ptyro_core::lookup::same(&m.name, &name)) else {
+                let known: Vec<String> = machines.iter().map(|m| m.name.clone()).collect();
+                return Err(ptyro_core::lookup::not_found_among("machine", &name, &known));
+            };
+            let name = m.name.clone();
+            ask_first(&format!("Stop mirroring {name}? {}", ptyro_core::removal::MACHINE), yes)?;
             let said = format!("{name} is no longer mirrored here (revoke its token there too)");
             crate::machines::simple(ctx, Request::MachineRemove { name }, said).await
         }
@@ -1717,6 +1909,19 @@ const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
 mod path_tests {
     use super::plain_windows_path;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn a_relative_path_is_this_clients_and_a_name_stays_a_name() {
+        use super::{addr_here, current_dir};
+        let here = current_dir().unwrap().to_string_lossy().into_owned();
+        assert_eq!(addr_here(".".into()).unwrap(), here);
+        let up = current_dir().unwrap().parent().unwrap().to_string_lossy().into_owned();
+        assert_eq!(addr_here("..".into()).unwrap(), up);
+        for name in ["myrepo", "myrepo/brisk-rook", "/abs/path", "~/src/app", "c:7f3k"] {
+            assert_eq!(addr_here(name.into()).unwrap(), name, "a name, id or absolute path");
+        }
+        assert!(addr_here("./no-such-folder-here".into()).is_err(), "a missing path says so");
+    }
 
     #[test]
     fn a_verbatim_windows_path_is_written_the_usual_way() {

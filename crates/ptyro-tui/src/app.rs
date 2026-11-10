@@ -330,11 +330,15 @@ pub enum PromptKind {
     OpenPr,
     /// A workspace's new name.
     RenameWorkspace(String),
+    /// A worktree's new name (by id).
+    RenameWorktree(String),
+    /// A project's new slug (by id).
+    RenameProject(String),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
     /// Typed in the change-set view (M11).
     Sets(crate::sets::SetsInput),
-    /// A chat's title (by id); empty asks for a new automatic one.
+    /// A chat's title (by id); empty clears it (`chat.autotitle` makes a new one).
     ChatRetitle(String),
     /// One more folder this chat (`None`: the new chat being written) may read (`none`: none).
     ChatFolder(Option<String>),
@@ -364,6 +368,17 @@ pub(crate) fn is_newline_key(key: &KeyEvent) -> bool {
     }
 }
 
+/// A name as its own machine knows it: `laptop2:work` → `work` for a thing mirrored from
+/// `laptop2` (MM1.B). A rename types and checks this, and the daemon renames it there.
+pub(crate) fn bare<'a>(machine: Option<&str>, name: &'a str) -> &'a str {
+    machine.and_then(|m| name.strip_prefix(m)?.strip_prefix(':')).unwrap_or(name)
+}
+
+/// `bare`'s inverse: `work` on `laptop2` is `laptop2:work` here.
+fn on_machine(machine: Option<&str>, name: &str) -> String {
+    machine.map_or_else(|| name.to_owned(), |m| format!("{m}:{name}"))
+}
+
 impl PromptKind {
     /// Free text that may run over several lines (UX1.26): a prompt for agents, a comment, a
     /// commit message. Names, titles and command lines stay on one line.
@@ -373,12 +388,43 @@ impl PromptKind {
 
     /// The text is a name (`[a-z0-9._-]`): bad characters are marked and Tab tidies it.
     pub fn is_name(&self) -> bool {
-        matches!(self, Self::Rename(_) | Self::RenameWorkspace(_))
+        matches!(
+            self,
+            Self::Rename(_)
+                | Self::RenameWorkspace(_)
+                | Self::RenameWorktree(_)
+                | Self::RenameProject(_)
+        )
     }
 
-    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `_`.
+    /// Whether a name here may hold `c`: a project's slug is the narrower `[a-z0-9-]`.
+    pub fn allowed(&self, c: char) -> bool {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_allowed(c),
+            _ => ptyro_core::names::allowed(c),
+        }
+    }
+
+    /// The name Tab makes of `text`, when that fixes it.
+    pub fn tidy(&self, text: &str) -> Option<String> {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_tidy(text),
+            _ => ptyro_core::names::tidy(text),
+        }
+    }
+
+    /// What a name field says under itself.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::SLUG_HINT,
+            _ => ptyro_core::names::TYPED_HINT,
+        }
+    }
+
+    /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `-`.
     pub fn fit(&self, text: &str) -> String {
         match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_typed(text),
             _ if self.is_name() => ptyro_core::names::typed(text),
             Self::RenameBranch(_) => ptyro_core::names::branch_typed(text),
             _ => text.to_owned(),
@@ -389,6 +435,12 @@ impl PromptKind {
 #[derive(Debug, Clone)]
 pub enum Confirmed {
     Stop(SessionId),
+    /// SIGKILL, now.
+    Kill(SessionId),
+    /// Stop it, then forget it (`rm --stop`).
+    StopRemove(SessionId),
+    /// Forget an ended session (`rm`); a dormant one was asked about first.
+    Remove(SessionId),
     /// Resend with the guard / pin override acknowledged.
     Spawn(Box<SpawnSpec>, Option<Dir>),
     Worktree(Box<WorktreeSpec>, Option<Dir>),
@@ -406,8 +458,12 @@ pub enum Confirmed {
     Append(std::path::PathBuf, String),
     /// Send this request, then show this (runs view: cancel, pick, discard).
     Send(Box<Request>, String),
+    /// Forget this project (running sessions in it refuse, with a way through).
+    Forget(String),
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
+    /// Restart the daemon, stopping what runs (`daemon restart --force`).
+    RestartDaemon,
     /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
     MeaningOn,
     /// Send this request again, agreed to (`confirmed`), its reply going to this.
@@ -516,6 +572,8 @@ pub enum Pending {
     TrustDialog(AfterTrust),
     Trusted(AfterTrust),
     Removed(String),
+    /// A project forgotten (`ProjectRemove`): running sessions in it are offered a way out.
+    Forget(String),
     ProjectAdded(Option<AfterAdd>),
     Discovered(Option<AfterAdd>),
     Scripts(String),
@@ -588,6 +646,8 @@ pub enum CopyStart {
 
 pub enum AppMsg {
     Reply(Pending, Result<Reply, Error>),
+    /// A refusal with a way through, and the request that takes it (SPEC §6.6).
+    Refused(Pending, Error, Box<Request>),
     /// A workspace's saved view, after switching to it.
     View(String, Result<Reply, Error>),
     /// What `ptyro doctor` found (UX1.20).
@@ -646,13 +706,17 @@ pub(crate) fn run_offer(label: &str, action: &'static str) -> Offer {
     Offer { label: label.into(), then: Then::Run(Command { action, arg: None }) }
 }
 
+/// An offer to run a session action on that session, whatever is selected when it's taken.
+pub(crate) fn session_offer(label: &str, action: &'static str, id: SessionId) -> Offer {
+    Offer { label: label.into(), then: Then::Run(Command { action, arg: Some(id.full()) }) }
+}
+
 /// The CLI commands error messages suggest, and the TUI action that does each (UX1.17): a
 /// message that names one offers that action instead of leaving you to type it. Longest first.
 const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro project trust", "project.trust", "review and trust them"),
     ("`ptyro project add", "project.add", "add a project"),
     ("`ptyro status --explain", "session.explain", "see why"),
-    ("`ptyro new --structured", "session.new", "start one"),
     ("`ptyro new --agent", "session.new", "start one"),
     ("`ptyro new", "session.new", "start one"),
     ("`ptyro wt diff", "inspector", "inspect it"),
@@ -825,6 +889,8 @@ pub struct App {
     reported_focus: Option<(SessionId, bool)>,
     /// Sessions this TUI stopped: their panes move on when they exit (`[ui] on_stop`, UX1.23).
     stopping: HashSet<SessionId>,
+    /// While a refusal is handled: the request that takes its way through (SPEC §6.6).
+    retry: Option<Box<Request>>,
     /// A project just added, and what to do in it once its main checkout is known (UX1.6).
     after_add: Option<(String, AfterAdd)>,
     /// The project `context()` answers while an `after_add` runs.
@@ -966,6 +1032,7 @@ impl App {
             drag: None,
             reported_focus: None,
             stopping: HashSet::new(),
+            retry: None,
             after_add: None,
             context_hint: None,
             first_run: None,
@@ -1250,9 +1317,18 @@ impl App {
             return;
         };
         let tx = self.tx.clone();
+        // Kept for a refusal's way through (SPEC §6.6): the same request, said again.
+        let again = req.fixable().then(|| req.clone());
         tokio::spawn(async move {
             let res = client.request(req).await;
-            let _ = tx.send(AppMsg::Reply(pending, res));
+            let retry = match (&res, again) {
+                (Err(e), Some(r)) => e.fix.as_ref().and_then(|f| r.with_fix(&f.again)),
+                _ => None,
+            };
+            let _ = tx.send(match (res, retry) {
+                (Err(e), Some(r)) => AppMsg::Refused(pending, e, Box::new(r)),
+                (res, _) => AppMsg::Reply(pending, res),
+            });
         });
     }
 
@@ -1954,8 +2030,9 @@ impl App {
 
     pub fn on_reply(&mut self, msg: AppMsg) {
         self.dirty = true;
-        let (pending, res) = match msg {
-            AppMsg::Reply(p, r) => (p, r),
+        let (pending, res, retry) = match msg {
+            AppMsg::Reply(p, r) => (p, r, None),
+            AppMsg::Refused(p, e, r) => (p, Err(e), Some(r)),
             AppMsg::Health(checks) => {
                 self.got_health(checks);
                 return;
@@ -2008,7 +2085,10 @@ impl App {
             ) if !matches!(pending, Pending::Peek(_)) => self.overlay.take(),
             _ => None,
         };
+        // A refusal's way through, for the reply's error to offer (SPEC §6.6).
+        self.retry = retry;
         self.handle_reply(pending, res);
+        self.retry = None;
         if let Some(h) = held {
             if self.overlay.is_some() {
                 self.toast("a reply arrived while you were typing: ask again when you're done");
@@ -2413,12 +2493,17 @@ impl App {
                     });
                 }
             }
-            (Pending::Removed(_), Ok(Reply::Removed { notes })) => self.toast(notes.join(" · ")),
-            (Pending::Removed(id), Err(e)) if e.code == ErrorCode::DirtyWorktree => {
+            (Pending::Removed(_) | Pending::Forget(_), Ok(Reply::Removed { notes })) => {
+                self.toast(notes.join(" · "))
+            }
+            (Pending::Removed(id), Err(e))
+                if e.fix.as_ref().is_some_and(|f| f.again == ptyro_core::error::Again::Force) =>
+            {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
-                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: discard that work and remove it · n: neither",
-                        e.message
+                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: remove it anyway ({}) · n: neither",
+                        e.message,
+                        ptyro_core::removal::FORCED
                     ),
                     action: Confirmed::RemoveWorktree { id, force: true },
                 });
@@ -2480,10 +2565,16 @@ impl App {
                                 e.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default()
                             ),
                             key: None,
-                            target: Target::Path(std::path::PathBuf::from(format!(
-                                "{}/{}",
-                                e.project_slug, e.name
-                            ))),
+                            // By id: several archives can share a name (an older
+                            // daemon's have none).
+                            target: Target::Archive(
+                                if e.id.is_empty() {
+                                    format!("{}/{}", e.project_slug, e.name)
+                                } else {
+                                    e.id.clone()
+                                },
+                                format!("{}/{}", e.project_slug, e.name),
+                            ),
                         })
                         .collect();
                     let (title, purpose) = if delete {
@@ -2584,6 +2675,10 @@ impl App {
                 self.toast(format!("workspace {name} created"));
                 self.switch_workspace(name);
             }
+            // A retried refusal's reply says what it did (SPEC §6.6): its notes, not the label.
+            (Pending::Done(_), Ok(Reply::Removed { notes })) if !notes.is_empty() => {
+                self.toast(notes.join(" · "))
+            }
             (Pending::Done(msg), Ok(_)) => {
                 if !msg.is_empty() {
                     self.toast(msg);
@@ -2598,9 +2693,17 @@ impl App {
             }
             // Only a label: a worktree still being made says so elsewhere.
             (Pending::Again(_), Err(_)) => {}
-            (_, Err(e)) => match offer_for(&e.message) {
-                Some(offer) => self.toast_offer(e.message, true, offer),
-                None => self.toast_err(e.message),
+            // A refusal's way through (SPEC §6.6), else what its words suggest.
+            (_, Err(e)) => match (self.retry.take(), &e.fix) {
+                (Some(req), Some(fix)) => {
+                    let label = fix.label.to_lowercase();
+                    let offer = Offer { label: label.clone(), then: Then::Send(req, label) };
+                    self.toast_offer(e.message, true, offer)
+                }
+                _ => match offer_for(&e.message) {
+                    Some(offer) => self.toast_offer(e.message, true, offer),
+                    None => self.toast_err(e.message),
+                },
             },
             _ => {}
         }
@@ -3211,17 +3314,8 @@ impl App {
             "scratchpad.note" => self.note_this(),
             "scratchpad.items" => self.open_pad_items(),
             "scratchpad.history" => self.open_pad_history(),
-            "worktree.retitle" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
-                Some(w) => {
-                    self.overlay = Some(Overlay::Prompt {
-                        title: format!(
-                            "Title of {} (what it's for; empty clears it)",
-                            w.qualified()
-                        ),
-                        text: w.title.clone().unwrap_or_default(),
-                        kind: PromptKind::RetitleWorktree(w.id.clone()),
-                    })
-                }
+            "worktree.retitle" => match self.context().1.filter(|w| self.worktree(w).is_some()) {
+                Some(w) => self.open_retitle_worktree(&w),
                 None => self.pick_project(Some(AfterAdd::Run("worktree.retitle"))),
             },
             "worktree.remove" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
@@ -3251,10 +3345,15 @@ impl App {
             }
             "session.stop"
             | "session.kill"
+            | "session.remove"
             | "session.restart"
             | "session.rename"
             | "session.retitle"
             | "session.take_control" => {
+                // An offer names its session: it acts on that one, wherever the selection went.
+                if let Some(id) = cmd.arg.as_deref().and_then(|a| a.parse().ok()) {
+                    return self.session_action(cmd.action, id);
+                }
                 // On a chat row, the same keys mean the chat's own: `,` its title, `x` archive,
                 // `X` delete (SPEC §22.12).
                 let on_chat_row = self.focus == Focus::Sidebar
@@ -3352,7 +3451,16 @@ impl App {
             "health" => self.open_health(),
             "daemon.logs" => self.run_cli(&["daemon".into(), "logs".into(), "-f".into()]),
             "daemon.status" => self.run_cli(&["daemon".into(), "status".into()]),
-            "daemon.restart" => self.run_cli(&["daemon".into(), "restart".into()]),
+            // Asked, as the web asks, in the same words (`removal::DAEMON_RESTART`).
+            "daemon.restart" => {
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!(
+                        "Restart the daemon? {} [y/N]",
+                        ptyro_core::removal::DAEMON_RESTART
+                    ),
+                    action: Confirmed::RestartDaemon,
+                });
+            }
             "daemon.upgrade" => self.run_cli(&["daemon".into(), "upgrade".into()]),
             "daemon.service" => self.run_cli(&["daemon".into(), "install-service".into()]),
             "daemon.unservice" => self.run_cli(&["daemon".into(), "uninstall-service".into()]),
@@ -3378,7 +3486,17 @@ impl App {
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
-                    self.request(Pending::Done(done), *req)
+                    // A refusal's "Stop and remove" asks as Stop and remove does (SPEC §7.3).
+                    let stop_remove = match &*req {
+                        Request::Remove { addr, stop: true } => {
+                            self.sessions.iter().find(|s| s.id.full() == *addr).map(|s| s.id)
+                        }
+                        _ => None,
+                    };
+                    match stop_remove {
+                        Some(id) => self.ask_end(Confirmed::StopRemove(id)),
+                        None => self.request(Pending::Done(done), *req),
+                    }
                 }
                 Some(Offer { then: Then::Edit(path), .. }) => self.edit_file(path, None),
                 Some(Offer { then: Then::Set { key, value, done }, .. }) => {
@@ -3777,40 +3895,55 @@ impl App {
         self.theme_name = name;
     }
 
+    /// Stop, kill, or stop and remove a running session: `ui.confirm_kill` asks first, in the
+    /// web's words (`removal::STOP`, `KILL`, `STOP_REMOVE`; SPEC §7.3).
+    fn ask_end(&mut self, end: Confirmed) {
+        let (verb, what, id) = match &end {
+            Confirmed::Stop(id) => ("Stop", ptyro_core::removal::STOP, *id),
+            Confirmed::Kill(id) => ("Kill", ptyro_core::removal::KILL, *id),
+            Confirmed::StopRemove(id) => ("Stop and remove", ptyro_core::removal::STOP_REMOVE, *id),
+            _ => return self.confirmed(end),
+        };
+        if !self.config.ui.confirm_kill {
+            return self.confirmed(end);
+        }
+        let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
+        self.overlay =
+            Some(Overlay::Confirm { text: format!("{verb} {name}? {what} [y/N]"), action: end });
+    }
+
     fn session_action(&mut self, action: &str, id: SessionId) {
         let Some(info) = self.session(id).cloned() else { return };
         let addr = id.full();
         match action {
-            "session.stop" if !info.state.is_live() => {
-                self.request(
-                    Pending::Done(format!("removed {}", info.name)),
-                    Request::Remove { addr },
-                );
-            }
-            "session.stop" if self.config.ui.confirm_kill => {
+            // `x` takes the row away: on an ended session it removes it (owner, 2026-11-10), a
+            // dormant one asking first, as remove does.
+            "session.stop" if !info.state.is_live() => self.session_action("session.remove", id),
+            // Kill never forgets: an ended session isn't running, and remove is offered.
+            "session.kill" if !info.state.is_live() => self.toast_offer(
+                format!("{} isn't running", info.name),
+                false,
+                session_offer("remove it", "session.remove", id),
+            ),
+            // A dormant agent can still be resumed: forgetting it asks, as the CLI's rm does.
+            "session.remove" if info.state == ProcessState::Dormant => {
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!("Stop {} ({})? [y/N]", info.name, info.argv.join(" ")),
-                    action: Confirmed::Stop(id),
+                    text: format!(
+                        "Remove the dormant session {}? {} [y/N]",
+                        info.name,
+                        ptyro_core::removal::DORMANT
+                    ),
+                    action: Confirmed::Remove(id),
                 });
             }
-            "session.stop" => {
-                self.stopping.insert(id);
-                self.request(
-                    Pending::Done(format!("stopped {}", info.name)),
-                    Request::Kill { addr, signal: None },
-                );
-            }
-            "session.kill" => {
-                self.stopping.insert(id);
-                self.request(
-                    Pending::Done(format!("killed {}", info.name)),
-                    Request::Kill { addr, signal: Some(9) },
-                );
-            }
+            "session.remove" if !info.state.is_live() => self.confirmed(Confirmed::Remove(id)),
+            "session.stop" => self.ask_end(Confirmed::Stop(id)),
+            "session.kill" => self.ask_end(Confirmed::Kill(id)),
+            "session.remove" => self.ask_end(Confirmed::StopRemove(id)),
             "session.restart" if info.state.is_live() => self.toast_offer(
                 format!("{} is still running", info.name),
                 false,
-                run_offer("stop it", "session.stop"),
+                session_offer("stop it", "session.stop", id),
             ),
             "session.restart" => self.request(
                 Pending::Done(format!("restarted {}", info.name)),
@@ -3819,7 +3952,7 @@ impl App {
             "session.rename" => {
                 self.overlay = Some(Overlay::Prompt {
                     title: format!("Rename {} (its address; C-t: its title)", info.name),
-                    text: info.name.clone(),
+                    text: bare(info.machine.as_deref(), &info.name).to_owned(),
                     kind: PromptKind::Rename(id),
                 });
             }
@@ -3836,6 +3969,16 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// A worktree's title prompt, filled with its title.
+    fn open_retitle_worktree(&mut self, id: &str) {
+        let Some(w) = self.worktree(id).cloned() else { return };
+        self.overlay = Some(Overlay::Prompt {
+            title: format!("Title of {} (what it's for; empty clears it)", w.qualified()),
+            text: w.title.clone().unwrap_or_default(),
+            kind: PromptKind::RetitleWorktree(w.id.clone()),
+        });
     }
 
     /// The title prompt (UX1.24), filled with the current title.
@@ -3970,7 +4113,10 @@ impl App {
         let taken = |n: &str| self.worktrees.iter().any(|w| w.project == project && w.name == n);
         match want {
             Some(n) if !taken(n) => n.to_owned(),
-            Some(n) => (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite"),
+            Some(n) => (2..)
+                .map(|k| ptyro_core::names::numbered(n, k))
+                .find(|c| !taken(c))
+                .expect("infinite"),
             None => ptyro_core::names::friendly(SessionId::new().seed(), taken),
         }
     }
@@ -4156,6 +4302,7 @@ impl App {
                 }
             }
             "project.remove"
+            | "project.rename"
             | "project.untrust"
             | "project.pin"
             | "project.unpin"
@@ -4170,13 +4317,21 @@ impl App {
                     "project.remove" => {
                         self.overlay = Some(Overlay::Confirm {
                             text: format!(
-                                "Forget project {}? Its worktrees stay on disk, and it won't register on its own again. [y/N]",
-                                p.slug
+                                "Forget project {}? {} [y/N]",
+                                p.slug,
+                                ptyro_core::removal::PROJECT
                             ),
-                            action: Confirmed::Send(
-                                Box::new(Request::ProjectRemove { addr: p.id, release: false }),
-                                "forgotten".into(),
+                            action: Confirmed::Forget(p.id),
+                        });
+                    }
+                    "project.rename" => {
+                        self.overlay = Some(Overlay::Prompt {
+                            title: format!(
+                                "Rename project {} (its address: {}/name finds its worktrees)",
+                                p.slug, p.slug
                             ),
+                            text: bare(p.machine.as_deref(), &p.slug).to_owned(),
+                            kind: PromptKind::RenameProject(p.id),
                         });
                     }
                     "project.untrust" => self.request(
@@ -4241,6 +4396,22 @@ impl App {
                 ),
                 None => need_wt(self),
             },
+            "worktree.rename" => match worktree {
+                Some(w) if w.is_root => self.toast_err(
+                    "that's the main checkout: it's always @root (rename the project, or give it a title)",
+                ),
+                Some(w) => {
+                    self.overlay = Some(Overlay::Prompt {
+                        title: format!(
+                            "Rename {} (its address; its branch and directory stay; C-t: its title)",
+                            w.qualified()
+                        ),
+                        text: w.name.clone(),
+                        kind: PromptKind::RenameWorktree(w.id),
+                    });
+                }
+                None => need_wt(self),
+            },
             "worktree.rename_branch" => match worktree {
                 Some(w) => {
                     self.overlay = Some(Overlay::Prompt {
@@ -4255,16 +4426,20 @@ impl App {
                 None => need_wt(self),
             },
             "workspace.rename" => {
+                let machine = self.workspace_machine(&self.workspace);
                 self.overlay = Some(Overlay::Prompt {
                     title: format!("Rename workspace {}", self.workspace),
-                    text: self.workspace.clone(),
+                    text: bare(machine.as_deref(), &self.workspace).to_owned(),
                     kind: PromptKind::RenameWorkspace(self.workspace.clone()),
                 });
             }
             "workspace.remove" => {
                 let name = self.workspace.clone();
                 self.overlay = Some(Overlay::Confirm {
-                    text: format!("Remove workspace {name}? Its projects stay registered. [y/N]"),
+                    text: format!(
+                        "Remove workspace {name}? {} [y/N]",
+                        ptyro_core::removal::WORKSPACE
+                    ),
                     action: Confirmed::Send(
                         Box::new(Request::WorkspaceRemove { name }),
                         "workspace removed".into(),
@@ -4455,9 +4630,8 @@ impl App {
                 }
                 if s.state.is_live() {
                     v.extend(["session.stop", "session.kill"]);
-                } else {
-                    v.push("session.stop");
                 }
+                v.push("session.remove");
                 v
             }
             Row::Worktree(w) => {
@@ -4473,7 +4647,7 @@ impl App {
                 ];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
                 if !root {
-                    v.extend(["worktree.archive", "worktree.remove"]);
+                    v.extend(["worktree.rename", "worktree.archive", "worktree.remove"]);
                 }
                 v
             }
@@ -4486,6 +4660,7 @@ impl App {
                 "shell.pane",
                 "project.trust",
                 "project.workspaces",
+                "project.rename",
                 "script.pick",
                 "worktree.open",
             ],
@@ -5181,11 +5356,9 @@ impl App {
     }
 
     /// Deleting an archive can't be undone: asked first.
-    fn confirm_archive_delete(&mut self, addr: &str) {
+    fn confirm_archive_delete(&mut self, addr: &str, label: &str) {
         self.overlay = Some(Overlay::Confirm {
-            text: format!(
-                "Delete the archive of {addr} for good? Its saved files go, and its branch if merged or pushed. [y/N]"
-            ),
+            text: format!("Delete the archive of {label}? {} [y/N]", ptyro_core::removal::ARCHIVE),
             action: Confirmed::Send(
                 Box::new(Request::WorktreeArchiveDelete { addr: addr.to_owned() }),
                 "archive deleted".into(),
@@ -5206,9 +5379,11 @@ impl App {
         };
         self.overlay = Some(Overlay::Confirm {
             text: format!(
-                "Remove worktree {} ({})?{note} [y/N]",
+                "Remove worktree {} ({})? {} {}{note} [y/N]",
                 w.qualified(),
-                w.branch.as_deref().unwrap_or("-")
+                w.branch.as_deref().unwrap_or("-"),
+                ptyro_core::removal::WORKTREE,
+                ptyro_core::removal::SAFE,
             ),
             action: Confirmed::RemoveWorktree { id: w.id.clone(), force: false },
         });
@@ -5479,12 +5654,12 @@ impl App {
                     && key.mods.has(Mods::CTRL)
                     && key.code == (KeyCode::Char { c: 'x' })
                 {
-                    if let Some(Target::Path(addr)) = palette
+                    if let Some(Target::Archive(addr, label)) = palette
                         .filtered
                         .get(palette.selected)
                         .map(|_| palette.item(palette.selected).target.clone())
                     {
-                        self.confirm_archive_delete(&addr.to_string_lossy());
+                        self.confirm_archive_delete(&addr, &label);
                     } else {
                         self.overlay = Some(Overlay::Picker { palette, purpose });
                     }
@@ -5508,7 +5683,7 @@ impl App {
                 }
                 KeyCode::Enter => self.prompt_done(text, kind),
                 KeyCode::Tab if kind.is_name() => {
-                    let text = ptyro_core::names::tidy(&text).unwrap_or(text);
+                    let text = kind.tidy(&text).unwrap_or(text);
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
                 }
                 KeyCode::Backspace => {
@@ -5521,6 +5696,7 @@ impl App {
                 // Renaming: C-t edits the title instead (UX1.24).
                 KeyCode::Char { c: 't' } if key.mods.has(Mods::CTRL) => match kind {
                     PromptKind::Rename(id) => self.open_retitle(id),
+                    PromptKind::RenameWorktree(id) => self.open_retitle_worktree(&id),
                     kind => self.overlay = Some(Overlay::Prompt { title, text, kind }),
                 },
                 KeyCode::Char { c } if !key.mods.has(Mods::CTRL) => {
@@ -5711,6 +5887,10 @@ impl App {
     fn confirmed(&mut self, action: Confirmed) {
         match action {
             Confirmed::Send(req, toast) => self.request(Pending::Done(toast), *req),
+            Confirmed::Forget(id) => self.request(
+                Pending::Forget(id.clone()),
+                Request::ProjectRemove { addr: id, release: false },
+            ),
             Confirmed::Again(mut req, then) => {
                 if let Request::ChatTask { confirmed, .. }
                 | Request::ChatCompare { confirmed, .. }
@@ -5727,6 +5907,9 @@ impl App {
                 self.request(*then, *req);
             }
             Confirmed::MeaningOn => self.meaning_on(),
+            Confirmed::RestartDaemon => {
+                self.run_cli(&["daemon".into(), "restart".into(), "--force".into()]);
+            }
             Confirmed::Quit => {
                 self.quitting = true;
                 self.toast("stopping ptyro…");
@@ -5741,12 +5924,22 @@ impl App {
                     push: false,
                 },
             ),
-            Confirmed::Stop(id) => {
+            Confirmed::Stop(id) | Confirmed::Kill(id) | Confirmed::StopRemove(id) => {
+                let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
+                let addr = id.full();
+                let (said, req) = match action {
+                    Confirmed::Stop(_) => ("stopped", Request::Kill { addr, signal: None }),
+                    Confirmed::Kill(_) => ("killed", Request::Kill { addr, signal: Some(9) }),
+                    _ => ("stopped and removed", Request::Remove { addr, stop: true }),
+                };
                 self.stopping.insert(id);
+                self.request(Pending::Done(format!("{said} {name}")), req);
+            }
+            Confirmed::Remove(id) => {
                 let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
                 self.request(
-                    Pending::Done(format!("stopped {name}")),
-                    Request::Kill { addr: id.full(), signal: None },
+                    Pending::Done(format!("removed {name}")),
+                    Request::Remove { addr: id.full(), stop: false },
                 );
             }
             Confirmed::Spawn(mut spec, split) => {
@@ -5853,8 +6046,9 @@ impl App {
             (Target::Path(path), Purpose::Gc) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
-                        "Delete {} and everything in it? A scratch shell left it behind. [y/N]",
-                        path.display()
+                        "Delete the scratch directory {}? {} [y/N]",
+                        path.display(),
+                        ptyro_core::removal::SCRATCH
                     ),
                     action: Confirmed::Send(
                         Box::new(Request::ShellScratchRemove { path }),
@@ -5898,14 +6092,11 @@ impl App {
                 args.push(arg.to_string_lossy().into_owned());
                 self.run_cli(&args);
             }
-            (Target::Path(addr), Purpose::ArchiveDelete) => {
-                self.confirm_archive_delete(&addr.to_string_lossy())
+            (Target::Archive(addr, label), Purpose::ArchiveDelete) => {
+                self.confirm_archive_delete(&addr, &label)
             }
-            (Target::Path(addr), Purpose::Restore) => {
-                self.request(
-                    Pending::Done("restored".into()),
-                    Request::WorktreeRestore { addr: addr.to_string_lossy().into_owned() },
-                );
+            (Target::Archive(addr, _), Purpose::Restore) => {
+                self.request(Pending::Done("restored".into()), Request::WorktreeRestore { addr });
             }
             // Picked on its own: where it goes, on the form (SPEC §11.5a).
             (Target::Path(path), Purpose::AddProject(None)) => self.open_project_form(Some(path)),
@@ -6011,16 +6202,29 @@ impl App {
         let name = |t: &str| ptyro_core::names::problem(t).map_or(Ok(()), Err);
         match kind {
             PromptKind::Rename(id) => {
-                let current = self.session(*id).map(|s| s.name.as_str());
-                if t.is_empty() || current == Some(t) {
+                let me = self.session(*id);
+                let machine = me.and_then(|s| s.machine.as_deref());
+                if t.is_empty() || me.is_some_and(|s| bare(machine, &s.name) == t) {
                     return Ok(Some("unchanged".into()));
                 }
                 name(t)?;
-                if self.sessions.iter().any(|s| s.id != *id && s.name == t) {
-                    return Err(format!("a session named {t} exists"));
+                // Unique per project (SPEC §2.3): another project's session may share it.
+                let project = me.and_then(|s| s.project.clone());
+                if self.sessions.iter().any(|s| {
+                    s.id != *id
+                        && s.machine.as_deref() == machine
+                        && bare(machine, &s.name) == t
+                        && s.project == project
+                }) {
+                    return Err(match project.as_deref().and_then(|p| self.project(p)) {
+                        Some(p) => format!("a session named {t} exists in {}", p.slug),
+                        None => format!("a session named {t} exists"),
+                    });
                 }
             }
             PromptKind::RenameWorkspace(old) => {
+                let machine = self.workspace_machine(old);
+                let old = bare(machine.as_deref(), old);
                 if old == "main" {
                     return Err("the main workspace can't be renamed".into());
                 }
@@ -6028,8 +6232,36 @@ impl App {
                     return Ok(Some("unchanged".into()));
                 }
                 name(t)?;
-                if self.workspaces.iter().any(|w| w.name == t) {
+                if self.workspaces.iter().any(|w| w.name == on_machine(machine.as_deref(), t)) {
                     return Err(format!("workspace {t} exists"));
+                }
+            }
+            // Unique among the project's worktrees (SPEC §2.3).
+            PromptKind::RenameWorktree(id) => {
+                let Some(wt) = self.worktree(id) else { return Ok(None) };
+                if t.is_empty() || t == wt.name {
+                    return Ok(Some("unchanged".into()));
+                }
+                name(t)?;
+                if self
+                    .worktrees
+                    .iter()
+                    .any(|w| w.id != wt.id && w.project == wt.project && w.name == t)
+                {
+                    return Err(format!("{}/{t} exists", wt.project_slug));
+                }
+            }
+            PromptKind::RenameProject(id) => {
+                let Some(p) = self.project(id) else { return Ok(None) };
+                let machine = p.machine.as_deref();
+                if t.is_empty() || t == bare(machine, &p.slug) {
+                    return Ok(Some("unchanged".into()));
+                }
+                if let Some(p) = ptyro_core::names::slug_problem(t) {
+                    return Err(p);
+                }
+                if self.projects.iter().any(|o| o.id != p.id && o.slug == on_machine(machine, t)) {
+                    return Err(format!("a project named {t} exists"));
                 }
             }
             _ => {}
@@ -6116,6 +6348,7 @@ impl App {
                         keep: None,
                         folders: None,
                         confirmed: false,
+                        auto_title: false,
                     },
                 );
             }
@@ -6149,14 +6382,37 @@ impl App {
                 );
             }
             PromptKind::RenameWorkspace(old) => {
-                let new_name = text.trim().to_owned();
-                if !new_name.is_empty() && new_name != old {
+                let machine = self.workspace_machine(&old);
+                let new_name = on_machine(machine.as_deref(), text.trim());
+                if !text.trim().is_empty() && new_name != old {
                     // The name changes here once the daemon has accepted it: it refuses `main`
                     // and bad names, and a rename that failed must not leave this TUI on a
                     // workspace that doesn't exist.
                     self.request(
                         Pending::WorkspaceRenamed(new_name.clone()),
                         Request::WorkspaceRename { name: old, new_name },
+                    );
+                }
+            }
+            PromptKind::RenameWorktree(id) => {
+                let name = text.trim().to_owned();
+                if !name.is_empty() && self.worktree(&id).is_some_and(|w| w.name != name) {
+                    self.request(
+                        Pending::Done(format!("renamed to {name}")),
+                        Request::WorktreeRename { addr: id, name },
+                    );
+                }
+            }
+            PromptKind::RenameProject(id) => {
+                let name = text.trim().to_owned();
+                if !name.is_empty()
+                    && self
+                        .project(&id)
+                        .is_some_and(|p| bare(p.machine.as_deref(), &p.slug) != name)
+                {
+                    self.request(
+                        Pending::Done(format!("renamed to {name}")),
+                        Request::ProjectRename { addr: id, name },
                     );
                 }
             }
@@ -6195,7 +6451,8 @@ impl App {
             }
             PromptKind::Rename(id) => {
                 let name = text.trim().to_owned();
-                let same = self.session(id).is_some_and(|s| s.name == name);
+                let same =
+                    self.session(id).is_some_and(|s| bare(s.machine.as_deref(), &s.name) == name);
                 if !name.is_empty() && !same {
                     self.request(
                         Pending::Done(format!("renamed to {name}")),
@@ -6674,6 +6931,11 @@ impl App {
 
     pub fn worktree(&self, id: &str) -> Option<&WorktreeInfo> {
         self.worktrees.iter().find(|w| w.id == id)
+    }
+
+    /// The machine a workspace (by name) is mirrored from, if any.
+    fn workspace_machine(&self, name: &str) -> Option<String> {
+        self.workspaces.iter().find(|w| w.name == name).and_then(|w| w.machine.clone())
     }
 
     pub fn project(&self, id: &str) -> Option<&ProjectInfo> {
@@ -7707,7 +7969,7 @@ mod tests {
         key(&mut app, KeyCode::Tab, Mods::NONE);
         key(&mut app, KeyCode::Char { c: 'j' }, Mods(Mods::CTRL));
         app.on_paste("x\ny".into());
-        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x_y")), Some(true));
+        assert_eq!(task(&app).1.as_deref().map(|n| n.ends_with("x-y")), Some(true));
 
         // Peek's reply, and a broadcast prompt: several lines. A rename: one.
         let id = SessionId::new();
@@ -7727,12 +7989,12 @@ mod tests {
             );
         }
         app.on_paste("b\nc".into());
-        // A name can't hold a space: it becomes _ (the rename prompt is a name).
-        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab_c"));
+        // A name can't hold a space: it becomes - (the rename prompt is a name).
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "ab-c"));
     }
 
     #[test]
-    fn a_name_prompt_swaps_what_it_cant_hold_for_an_underscore() {
+    fn a_name_prompt_swaps_what_it_cant_hold_for_a_dash() {
         let mut app = app();
         let id = SessionId::new();
         app.overlay = Some(Overlay::Prompt {
@@ -7743,10 +8005,10 @@ mod tests {
         for c in "My Feat/2".chars() {
             key(&mut app, KeyCode::Char { c }, Mods::NONE);
         }
-        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my_feat_2"));
+        assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my-feat-2"));
         app.on_paste(" a b".into());
         assert!(
-            matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my_feat_2_a_b")
+            matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == "my-feat-2-a-b")
         );
         // Free text isn't touched.
         app.overlay = Some(Overlay::Prompt {
@@ -8227,10 +8489,10 @@ mod tests {
         key(&mut app, KeyCode::Tab, Mods::NONE);
         typed(&mut app, " now");
         assert!(screen(&app).contains("→ fix-flaky-test-x ·"), "the edited name stays");
-        // A space in the name becomes _; what no character fixes says why, and ⏎ keeps the box.
+        // A space in the name becomes -; what no character fixes says why, and ⏎ keeps the box.
         key(&mut app, KeyCode::Tab, Mods::NONE);
         typed(&mut app, " y");
-        assert!(screen(&app).contains("→ fix-flaky-test-x_y ·"), "{}", screen(&app));
+        assert!(screen(&app).contains("→ fix-flaky-test-x-y ·"), "{}", screen(&app));
         typed(&mut app, ".");
         assert!(screen(&app).contains("✗ name:"), "{}", screen(&app));
         key(&mut app, KeyCode::Enter, Mods::NONE);
@@ -8239,7 +8501,7 @@ mod tests {
         key(&mut app, KeyCode::Char { c: 'o' }, Mods(Mods::CTRL));
         let Some(Overlay::Form(f)) = &app.overlay else { panic!("the session form") };
         assert_eq!(f.get("prompt"), "Fix the flaky test in tests/api.rs now");
-        assert_eq!(f.get("name"), "fix-flaky-test-x_y.");
+        assert_eq!(f.get("name"), "fix-flaky-test-x-y.");
         assert_eq!(f.get("agent"), "claude");
         assert_eq!(f.get("where"), "new:p1", "a new worktree of the project in context");
         // The bad name is said on ⏎; fixed, ⏎ creates the worktree with every option.
@@ -8265,7 +8527,7 @@ mod tests {
             }
         }
         let spec = spec.expect("the worktree, asked for");
-        assert_eq!(spec.name.as_deref(), Some("fix-flaky-test-x_y"));
+        assert_eq!(spec.name.as_deref(), Some("fix-flaky-test-x-y"));
         assert_eq!(spec.base.as_deref(), Some("origin/dev"));
         assert_eq!(spec.verify.as_deref(), Some("make test"));
         assert!(!spec.setup, "setup unticked");
@@ -8592,6 +8854,101 @@ mod tests {
         assert!(screen(&app).contains("Session live"), "in the pane: the focused session's");
     }
 
+    /// Stop, kill, and stop and remove each ask first while `ui.confirm_kill` is on (the web does
+    /// the same), and none asks once it is off. An ended session is removed without asking.
+    #[test]
+    fn confirm_kill_asks_before_stop_kill_and_stop_and_remove() {
+        for action in ["session.stop", "session.kill", "session.remove"] {
+            let mut app = app();
+            let live = session("live");
+            app.sessions = vec![live.clone()];
+            app.session_action(action, live.id);
+            let Some(Overlay::Confirm { text, .. }) = &app.overlay else {
+                panic!("{action} didn't ask: {:?}", app.overlay.is_some())
+            };
+            assert!(text.contains("live"), "{text}");
+            // The web's sentence, word for word.
+            let said = match action {
+                "session.stop" => ptyro_core::removal::STOP,
+                "session.kill" => ptyro_core::removal::KILL,
+                _ => ptyro_core::removal::STOP_REMOVE,
+            };
+            assert!(text.contains(said), "{text}");
+            assert!(!app.stopping.contains(&live.id), "{action} waits for the answer");
+
+            app.overlay = None;
+            app.config.ui.confirm_kill = false;
+            app.session_action(action, live.id);
+            assert!(app.overlay.is_none(), "{action} asked with confirm_kill off");
+            assert!(app.stopping.contains(&live.id), "{action} ran");
+        }
+        let mut app = app();
+        let mut gone = session("gone");
+        gone.state = ProcessState::Exited { code: Some(0), signal: None };
+        app.sessions = vec![gone.clone()];
+        app.session_action("session.remove", gone.id);
+        assert!(app.overlay.is_none(), "an ended session is removed without asking");
+        let actions = app.row_actions(&Row::Session(gone.id));
+        assert!(actions.contains(&"session.remove") && !actions.contains(&"session.stop"));
+        // Kill never forgets: on an ended session it says it isn't running and offers remove.
+        app.session_action("session.kill", gone.id);
+        let t = app.toast.as_ref().unwrap();
+        assert!(t.text.contains("isn't running") && t.offer.is_some(), "{}", t.text);
+        // … for that session, wherever the selection goes before it's taken.
+        let named = matches!(&t.offer, Some(Offer { then: Then::Run(Command { action: "session.remove", arg: Some(a) }), .. }) if *a == gone.id.full());
+        assert!(named, "{:?}", t.offer);
+        assert!(app.overlay.is_none());
+        // A dormant one can be resumed: removing it asks.
+        let mut dormant = session("sleepy");
+        dormant.state = ProcessState::Dormant;
+        app.sessions.push(dormant.clone());
+        app.session_action("session.remove", dormant.id);
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("didn't ask") };
+        assert!(text.contains(ptyro_core::removal::DORMANT), "{text}");
+    }
+
+    /// A refusal's "Stop and remove" asks first, as the action does (`ui.confirm_kill`).
+    #[test]
+    fn a_refusal_s_stop_and_remove_asks_first() {
+        let mut app = app();
+        let live = session("live");
+        app.sessions = vec![live.clone()];
+        let req = Request::Remove { addr: live.id.full(), stop: true };
+        app.toast_offer(
+            "live is still running",
+            true,
+            Offer {
+                label: "stop and remove".into(),
+                then: Then::Send(Box::new(req), String::new()),
+            },
+        );
+        app.run(&Command { action: "toast.act", arg: None });
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("didn't ask") };
+        assert!(text.contains(ptyro_core::removal::STOP_REMOVE), "{text}");
+        assert!(!app.stopping.contains(&live.id));
+    }
+
+    /// A refusal's way through (SPEC §6.6) is a button: the same request with it said.
+    #[test]
+    fn a_refusal_s_fix_becomes_a_button() {
+        use ptyro_core::error::Again;
+        let mut app = app();
+        let req = Request::Remove { addr: "x".into(), stop: false };
+        let e = Error::conflict("x is still running: stop it first")
+            .with_fix(Again::Stop, "Stop and remove");
+        let retry = req.with_fix(&e.fix.as_ref().unwrap().again).unwrap();
+        app.on_reply(AppMsg::Refused(Pending::Done(String::new()), e, Box::new(retry)));
+        let t = app.toast.as_ref().unwrap();
+        assert!(t.text.contains("stop it first"), "{}", t.text);
+        let Some(Offer { label, then: Then::Send(req, _) }) = &t.offer else { panic!("no button") };
+        assert_eq!(label, "stop and remove");
+        assert!(matches!(**req, Request::Remove { stop: true, .. }));
+        // Without one, its words still decide (or nothing is offered).
+        let mut app = self::app();
+        app.on_reply(AppMsg::Reply(Pending::Done(String::new()), Err(Error::conflict("nope"))));
+        assert!(app.toast.as_ref().unwrap().offer.is_none());
+    }
+
     #[test]
     fn the_status_bar_hints_what_to_do_with_what_s_selected() {
         let mut app = app();
@@ -8661,6 +9018,102 @@ mod tests {
         w
     }
 
+    /// Worktrees and projects are renamed from their row menu (SPEC §2.3), with the session
+    /// rename's live check: a taken or bad name is flagged as it is typed.
+    #[test]
+    fn worktrees_and_projects_are_renamed_with_a_live_check() {
+        let mut app = app();
+        with_project(&mut app);
+        app.projects.push(project("p2", "lib"));
+        let w = feature(&mut app, false);
+        let mut other = w.clone();
+        (other.id, other.name) = ("p1-other".into(), "other".into());
+        app.worktrees.push(other);
+        assert!(app.row_actions(&Row::Worktree(w.id.clone())).contains(&"worktree.rename"));
+        assert!(!app.row_actions(&Row::Worktree("p1-root".into())).contains(&"worktree.rename"));
+        assert!(app.row_actions(&Row::Project("p1".into())).contains(&"project.rename"));
+        for a in ["worktree.rename", "project.rename"] {
+            assert!(keymap::spec(a).is_some(), "{a} is in the palette");
+        }
+
+        app.focus = Focus::Sidebar;
+        let select = |app: &mut App, row: Row| {
+            let rows = app.rows();
+            let i = rows.iter().position(|r| *r == row).unwrap();
+            app.set_sel(&rows, i);
+        };
+        select(&mut app, Row::Worktree(w.id.clone()));
+        app.run(&Command { action: "worktree.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("feat"));
+        assert!(screen(&app).contains("⏎ ok (unchanged)"), "{}", screen(&app));
+        let kind = PromptKind::RenameWorktree(w.id.clone());
+        assert_eq!(app.prompt_check(&kind, "other"), Err("p1/other exists".into()));
+        assert!(app.prompt_check(&kind, "a/b").is_err(), "the daemon's rule");
+        assert!(app.prompt_check(&kind, "login-fix").is_ok());
+        // Typed: what a name can't hold is replaced, as in every name prompt.
+        typed(&mut app, "\x08\x08\x08\x08Login Fix");
+        let want = ptyro_core::names::typed("Login Fix");
+        assert_eq!(prompt_text(&app), Some(want.as_str()));
+        typed(&mut app, "\n");
+        assert!(app.overlay.is_none(), "sent");
+
+        // The main checkout is always @root: it says so instead of asking.
+        select(&mut app, Row::Worktree("p1-root".into()));
+        app.run(&Command { action: "worktree.rename", arg: None });
+        assert!(prompt_text(&app).is_none());
+
+        select(&mut app, Row::Project("p1".into()));
+        app.run(&Command { action: "project.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("myrepo"));
+        let kind = PromptKind::RenameProject("p1".into());
+        assert_eq!(app.prompt_check(&kind, "myrepo"), Ok(Some("unchanged".into())));
+        assert_eq!(app.prompt_check(&kind, "lib"), Err("a project named lib exists".into()));
+        assert!(app.prompt_check(&kind, "web").is_ok());
+        // A slug is `[a-z0-9-]`, as the daemon refuses: `_` is marked, Tab offers `-`.
+        assert!(app.prompt_check(&kind, "my_web").is_err());
+        assert_eq!(kind.fit("My Web_2"), "my-web-2");
+        assert_eq!(kind.tidy("my_web").as_deref(), Some("my-web"));
+    }
+
+    /// Renaming something mirrored from another machine (MM1.B) types and checks the name it
+    /// has there: `laptop2:app` is offered as `app`, never as `laptop2_app`.
+    #[test]
+    fn a_mirrored_thing_is_renamed_by_its_own_name() {
+        let mut app = app();
+        let mirrored = |id: &str, slug: &str| ProjectInfo {
+            machine: Some("laptop2".into()),
+            ..project(id, &format!("laptop2:{slug}"))
+        };
+        app.projects = vec![project("p1", "lib"), mirrored("m1", "app"), mirrored("m2", "tool")];
+        let kind = PromptKind::RenameProject("m1".into());
+        assert_eq!(app.prompt_check(&kind, "app"), Ok(Some("unchanged".into())));
+        assert!(app.prompt_check(&kind, "lib").is_ok(), "this machine's lib is another one");
+        assert_eq!(app.prompt_check(&kind, "tool"), Err("a project named tool exists".into()));
+        app.workspaces.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "w", "name": "laptop2:work", "profile": "default", "projects": [],
+                "notify": "all", "created_ms": 0, "machine": "laptop2",
+            }))
+            .unwrap(),
+        );
+        app.workspace = "laptop2:work".into();
+        app.run(&Command { action: "workspace.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("work"));
+        let ws = PromptKind::RenameWorkspace("laptop2:work".into());
+        assert_eq!(app.prompt_check(&ws, "work"), Ok(Some("unchanged".into())));
+        let mut s = session("laptop2:fixer");
+        s.machine = Some("laptop2".into());
+        app.sessions = vec![s.clone()];
+        app.overlay = None;
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.run(&Command { action: "session.rename", arg: None });
+        assert_eq!(prompt_text(&app), Some("fixer"));
+        assert_eq!(
+            app.prompt_check(&PromptKind::Rename(s.id), "fixer"),
+            Ok(Some("unchanged".into()))
+        );
+    }
+
     #[test]
     fn finishing_and_cleaning_up_a_worktree() {
         let mut app = app();
@@ -8722,7 +9175,8 @@ mod tests {
         app.overlay = None;
         app.on_reply(AppMsg::Reply(
             Pending::Removed(w.id.clone()),
-            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")),
+            Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")
+                .with_fix(ptyro_core::error::Again::Force, "Remove anyway")),
         ));
         assert!(screen(&app).contains("a: archive it instead"));
         key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
@@ -9511,19 +9965,19 @@ mod tests {
         rename(&mut app, &s);
         assert!(screen(&app).contains("⏎ ok (unchanged)"));
 
-        // What it can't hold becomes _, and the dialog says so.
+        // What it can't hold becomes -, and the dialog says so.
         typed(&mut app, "/X");
-        assert_eq!(prompt_text(&app), Some("brisk-rook_x"));
-        assert!(screen(&app).contains("becomes _ (a-z 0-9 . _ -)"), "{}", screen(&app));
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x"));
+        assert!(screen(&app).contains("becomes - (a-z 0-9 . _ -)"), "{}", screen(&app));
         // What no one character fixes is flagged, and ⏎ doesn't throw the typing away.
         typed(&mut app, ".");
         let shown = screen(&app);
         assert!(shown.contains("✗ must not end with . or .lock"), "{shown}");
         typed(&mut app, "\n");
-        assert_eq!(prompt_text(&app), Some("brisk-rook_x."));
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x."));
         typed(&mut app, "\x08");
-        assert_eq!(prompt_text(&app), Some("brisk-rook_x"));
-        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook_x").is_ok());
+        assert_eq!(prompt_text(&app), Some("brisk-rook-x"));
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook-x").is_ok());
         assert!(
             app.prompt_check(&PromptKind::Rename(s.id), "brisk/rook").is_err(),
             "the daemon's rule"
@@ -9535,6 +9989,12 @@ mod tests {
             Err("a session named quiet-jay exists".into())
         );
         assert!(app.prompt_check(&PromptKind::Rename(s.id), "brisk-rook").is_ok());
+
+        // Names are unique per project: another project's session may share it.
+        let mut elsewhere = session("calm-crow");
+        elsewhere.project = Some("p9".into());
+        app.sessions.push(elsewhere);
+        assert!(app.prompt_check(&PromptKind::Rename(s.id), "calm-crow").is_ok());
     }
 
     #[test]
@@ -12065,5 +12525,39 @@ mod tests {
         app.learn_alt(KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT)));
         assert!(app.alt_seen && app.alt_digits_reach());
         assert!(app.health.findings.is_empty(), "it works after all: no finding");
+    }
+
+    #[test]
+    fn forgetting_a_project_with_running_sessions_offers_to_let_them_go() {
+        let mut app = app();
+        app.projects = vec![project("p1", "app")];
+        app.context_hint = Some("p1".into());
+        app.run(&Command { action: "project.remove", arg: None });
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("asks first") };
+        assert!(text.contains(ptyro_core::removal::PROJECT), "says what goes: {text}");
+        app.overlay_key(KeyEvent::char('y'));
+        let Ok(AppMsg::Reply(Pending::Forget(id), _)) = app.rx.try_recv() else {
+            panic!("the project was asked to go")
+        };
+        // The daemon refuses: sessions run in it. Its way through is the same button as every
+        // refusal's (SPEC §6.6), the web's and the CLI's offer too.
+        let e = ptyro_core::Error::conflict("app has running sessions (a).")
+            .with_fix(ptyro_core::error::Again::Release, "Let them go");
+        let req = Request::ProjectRemove { addr: id.clone(), release: false };
+        let retry = req.with_fix(&ptyro_core::error::Again::Release).expect("it can say that");
+        app.on_reply(AppMsg::Refused(Pending::Forget(id), e, Box::new(retry)));
+        let t = app.toast.as_ref().unwrap();
+        let Some(Offer { label, then: Then::Send(req, _) }) = &t.offer else { panic!("no button") };
+        assert_eq!(label, "let them go");
+        assert!(matches!(&**req, Request::ProjectRemove { addr, release: true } if addr == "p1"));
+    }
+
+    #[test]
+    fn removing_a_workspace_says_what_the_daemon_does() {
+        let mut app = app();
+        app.workspace = "side".into();
+        app.run(&Command { action: "workspace.remove", arg: None });
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("asks first") };
+        assert!(text.contains(ptyro_core::removal::WORKSPACE), "{text}");
     }
 }

@@ -381,6 +381,34 @@ const scenarios = {
       writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"] }));
     }
   },
+
+  // A worktree's ⋯ → Rename…, then its project's (SPEC §2.3): the address changes, the branch
+  // and the directory stay. The project gets its name back afterwards.
+  async rename() {
+    const wts = () => JSON.parse(ptyro("wt", "ls", "--json"));
+    ptyro("wt", "new", "e2e-name", "-p", "repo", "--no-fetch", "--no-setup");
+    const before = await until("the new worktree", () => wts().find((w) => w.name === "e2e-name"));
+    const rename = async (title, name) => {
+      await tab.waitFor("its ⋯", `!!document.querySelector('header button[aria-label="More"]')`);
+      await tab.click('header button[aria-label="More"]');
+      await tab.waitFor("its menu", `!!document.querySelector(".menu button")`);
+      await tab.eval(`[...document.querySelectorAll(".menu button")].find(b => b.innerText.startsWith("Rename…")).click()`);
+      await tab.waitFor(title, `!!document.querySelector(".sheet") && document.querySelector(".sheet").innerText.includes(${JSON.stringify(title)})`);
+      await tab.eval(`(() => { const i = document.querySelector(".sheet input"); i.value = ${JSON.stringify(name)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+      await tab.click(".sheet-foot .primary");
+    };
+    await fresh(`#/wt/${encodeURIComponent(before.id)}`);
+    await rename("Rename e2e-name", "e2e-renamed");
+    const after = await until("the rename", () => wts().find((w) => w.id === before.id && w.name === "e2e-renamed"));
+    if (after.branch !== before.branch || after.path !== before.path) throw new Error(`moved: ${JSON.stringify(after)}`);
+    await fresh(`#/proj/${encodeURIComponent(before.project)}`);
+    try {
+      await rename("Rename repo", "e2e-repo");
+      await until("the project's rename", () => wts().some((w) => w.id === before.id && w.project_slug === "e2e-repo"));
+    } finally {
+      ptyro("project", "rename", before.project, "repo");
+    }
+  },
 };
 
 let failed = 0;

@@ -101,7 +101,7 @@ impl Daemon {
 
     pub(crate) fn statusline(&self, session: &str, payload: &Value) -> Result<Reply, Error> {
         let id = session.parse().map_err(|_| Error::invalid("bad session id"))?;
-        let s = self.session(id).ok_or_else(|| Error::not_found(session))?;
+        let s = self.session(id).ok_or_else(|| Error::missing("session", session))?;
         let profile =
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.profile.clone();
         self.put_usage(claude_usage(&profile, payload));

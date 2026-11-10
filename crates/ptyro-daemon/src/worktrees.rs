@@ -216,7 +216,8 @@ impl Daemon {
             .unwrap_or_else(|| self.config().worktrees.branch_template);
         let mut vars = BTreeMap::new();
         vars.insert("name", name.to_owned());
-        vars.insert("slug", slugify(name));
+        let slug = slugify(name);
+        vars.insert("slug", if slug.is_empty() { name.to_owned() } else { slug });
         vars.insert("user", std::env::var("USER").unwrap_or_default());
         vars.insert("date", today());
         render_branch(&template, &vars)
@@ -262,11 +263,11 @@ impl Daemon {
                 match spec.title.as_deref().or(spec.prompt.as_deref()).and_then(names::from_text) {
                     Some(n) if !taken(&n) => n,
                     Some(n) => {
-                        (2..).map(|k| format!("{n}-{k}")).find(|c| !taken(c)).expect("infinite")
+                        (2..).map(|k| names::numbered(&n, k)).find(|c| !taken(c)).expect("infinite")
                     }
-                    None => {
-                        names::friendly(SessionId::new().seed(), |n| taken(n) || self.name_taken(n))
-                    }
+                    None => names::friendly(SessionId::new().seed(), |n| {
+                        taken(n) || self.name_taken(Some(&p.id), n)
+                    }),
                 }
             }
         };
@@ -317,7 +318,7 @@ impl Daemon {
                 (Source::PullRequest { number: n, branch: branch.clone(), remote }, branch)
             }
             (None, true, Some(b)) => (Source::Existing { branch: b.clone() }, b),
-            (None, true, None) => return Err(Error::invalid("--existing needs --branch")),
+            (None, true, None) => return Err(Error::invalid("an existing branch needs its name")),
             (None, false, b) => {
                 let branch = b.unwrap_or_else(|| self.branch_for(&root_cfg, &name));
                 let base = spec
@@ -350,7 +351,20 @@ impl Daemon {
         };
         let (path, ours) = match &spec.path {
             Some(at) => (at.clone(), at.parent().map(Path::to_path_buf).unwrap_or_default()),
-            None => worktree_path(config.worktrees.location, &self.paths.data, &p, &name),
+            // A renamed worktree keeps its directory, so the one this name would get may be
+            // taken: then the next free one (`name-2`). Free means no worktree we know of uses it
+            // either, even one whose directory is gone for now.
+            None => {
+                let used: Vec<PathBuf> =
+                    self.registry.locked().worktrees.iter().map(|w| w.path.clone()).collect();
+                std::iter::once(name.clone())
+                    .chain((2..).map(|k| format!("{name}-{k}")))
+                    .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
+                    .find(|(path, _)| {
+                        std::fs::symlink_metadata(path).is_err() && !used.contains(path)
+                    })
+                    .expect("infinite")
+            }
         };
         refuse_symlinks(&ours, &path)?;
         if path.exists() {
@@ -599,9 +613,9 @@ impl Daemon {
         let (role, command) = match which {
             None => {
                 let (n, r) = cfg.scripts.run_script(None).ok_or_else(|| {
-                    Error::missing(
-                        "run script",
-                        "default (mark one with `default = true` in .ptyro.toml)",
+                    Error::new(
+                        ErrorCode::NotFound,
+                        "no default run script: mark one with `default = true` in .ptyro.toml",
                     )
                 })?;
                 (format!("run:{n}"), r.command.clone())
@@ -650,7 +664,8 @@ impl Daemon {
         // Scripts can't ask questions; a refusing guard still refuses.
         let res = self.resolve_profile(None, Some(&target), &workspace, false, true)?;
         let label = role.strip_prefix("run:").unwrap_or(&role);
-        let name = self.free_name(&format!("{}.{label}", wt.name.trim_start_matches('@')));
+        let name =
+            self.free_name(Some(&p.id), &format!("{}.{label}", wt.name.trim_start_matches('@')));
         self.launch(Launch {
             id: SessionId::new(),
             argv,
@@ -687,7 +702,7 @@ impl Daemon {
         let wt = self.find_worktree(addr)?;
         if wt.is_root {
             return Err(Error::invalid(format!(
-                "{} is the project's main checkout; use `ptyro project rm {}` to forget the project",
+                "{} is the project's main checkout; forget the project {} instead",
                 wt.qualified(),
                 wt.project_slug
             )));
@@ -708,11 +723,12 @@ impl Daemon {
                 })
                 .collect();
             return Err(Error::conflict(format!(
-                "refusing to remove {}: {} session(s) running in it ({}); stop them or use --stop-sessions",
+                "refusing to remove {}: {} session(s) running in it ({}); stop them first",
                 wt.qualified(),
                 names.len(),
                 names.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::StopSessions, "Stop them and remove it"));
         }
         let mut notes = Vec::new();
         let exists = wt.path.exists();
@@ -726,11 +742,12 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "refusing to remove {} — it has work that would be lost:\n  {}\nCommit or push it, or use --force to discard it.",
+                        "refusing to remove {} — it has work that would be lost:\n  {}\nCommit or push it, archive it to keep it, or remove it anyway to discard it.",
                         wt.qualified(),
                         safety.report()
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Remove anyway"));
             }
             if !safety.is_clean() {
                 notes.push(format!("discarded: {}", safety.report().replace("\n  ", "; ")));
@@ -794,7 +811,7 @@ impl Daemon {
             }
             if let Some(b) = branch {
                 match (keep, git.branch_fate(&root, &b, base.as_deref())) {
-                    (true, _) => notes.push(format!("kept branch {b} (--keep-branch)")),
+                    (true, _) => notes.push(format!("kept branch {b}, as asked")),
                     (false, BranchFate::Delete(why)) => match git.delete_branch(&root, &b) {
                         Ok(()) => notes.push(format!("deleted branch {b} ({why})")),
                         Err(e) => notes.push(format!("kept branch {b}: {e}")),
@@ -853,11 +870,15 @@ impl Daemon {
             return Some(wt);
         }
         if branch.is_some() && branch != wt.branch {
-            // Checked out another branch by hand: follow it.
-            let mut w = wt.clone();
-            w.branch = branch;
-            w.status = Some(status);
-            self.put_worktree(w.clone());
+            // Checked out another branch by hand: follow it, on the entry as it is now (a
+            // rename or a removal during the status read stays).
+            let w = self.update_worktree(id, |w| {
+                w.branch = branch;
+                w.status = Some(status);
+            })?;
+            if let Some(store) = &self.store {
+                store.save_worktree(w.clone());
+            }
             return Some(w);
         }
         self.update_worktree(id, |w| w.status = Some(status))
@@ -1112,7 +1133,7 @@ impl Daemon {
         addr: &str,
         new: Option<String>,
     ) -> Result<Reply, Error> {
-        let mut wt = self.find_worktree(addr)?;
+        let wt = self.find_worktree(addr)?;
         let p = self
             .project_by_id(&wt.project)
             .ok_or_else(|| Error::missing("project", &wt.project))?;
@@ -1125,15 +1146,12 @@ impl Daemon {
         let prompt = self.sessions_in(&wt.id).iter().find_map(|s| {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).first_prompt.clone()
         });
+        let words = |text: &str| slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
+        let from_prompt = prompt.as_deref().map(words).filter(|w| !w.is_empty());
         let new = match new {
             Some(n) => n,
-            None if prompt.is_some() => {
-                let slug: String = slugify(prompt.as_deref().unwrap_or_default())
-                    .split('-')
-                    .take(6)
-                    .collect::<Vec<_>>()
-                    .join("-");
-                self.branch_for(&cfg, &slug)
+            None if from_prompt.is_some() => {
+                self.branch_for(&cfg, from_prompt.as_deref().unwrap_or_default())
             }
             None => {
                 let (path, base) =
@@ -1145,7 +1163,12 @@ impl Daemon {
                 let first = first.ok_or_else(|| {
                     Error::invalid("no commits yet to name the branch after; give a name")
                 })?;
-                let slug: String = slugify(&first).split('-').take(6).collect::<Vec<_>>().join("-");
+                let slug = words(&first);
+                if slug.is_empty() {
+                    return Err(Error::invalid(
+                        "the first commit's subject has no words to name the branch after; give a name",
+                    ));
+                }
                 self.branch_for(&cfg, &slug)
             }
         };
@@ -1160,8 +1183,78 @@ impl Daemon {
             git.rename_branch(&root, &o, &n).map_err(git_err)
         })
         .await??;
-        wt.branch = Some(new);
-        self.put_worktree(wt.clone());
+        // On the entry as it is now, not the copy held across the awaits: a rename (or a
+        // removal) that landed meanwhile stays.
+        let wt = self
+            .update_worktree(&wt.id, |w| w.branch = Some(new))
+            .ok_or_else(|| Error::missing("worktree", addr))?;
+        if let Some(store) = &self.store {
+            store.save_worktree(wt.clone());
+        }
+        Ok(Reply::Worktree { info: wt })
+    }
+
+    /// `WorktreeRename` (SPEC §2.3): a new name, the worktree's address `project/name`. Its
+    /// branch stays (`rename-branch` changes that) and so does its directory: sessions running in
+    /// it keep their working directory. The marker git keeps for it follows, so a re-adoption
+    /// finds the new name.
+    async fn rename_worktree(&self, addr: &str, name: &str) -> Result<Reply, Error> {
+        let found = self.find_worktree(addr)?;
+        if found.is_root {
+            return Err(Error::invalid(format!(
+                "{} is the project's main checkout and is always called @root: rename the project, or give it a title",
+                found.qualified()
+            )));
+        }
+        names::validate(name).map_err(Error::invalid)?;
+        // The check and the change in one step on the entry itself: two renames can't both take
+        // a name, and one that a removal overtook doesn't bring the worktree back.
+        let wt = {
+            let mut reg = self.registry.locked();
+            let taken = reg
+                .worktrees
+                .iter()
+                .any(|w| w.project == found.project && w.id != found.id && w.name == name);
+            let wt = reg
+                .worktrees
+                .iter_mut()
+                .find(|w| w.id == found.id)
+                .ok_or_else(|| Error::missing("worktree", addr))?;
+            if wt.name == name {
+                return Ok(Reply::Worktree { info: wt.clone() });
+            }
+            if !matches!(wt.state, WorktreeState::Ready | WorktreeState::Missing) {
+                return Err(Error::conflict(format!(
+                    "{} is {}: only a ready worktree can be renamed",
+                    wt.qualified(),
+                    wt.state.label()
+                )));
+            }
+            if taken {
+                return Err(Error::conflict(format!("{}/{name} exists", wt.project_slug)));
+            }
+            wt.name = name.into();
+            wt.clone()
+        };
+        if let Some(store) = &self.store {
+            store.save_worktree(wt.clone());
+        }
+        let _ = self.events.send(DomainEvent::WorktreeUpdated { info: wt.clone() });
+        self.pad_renamed(&[(found.qualified(), wt.qualified())]);
+        let (path, n) = (wt.path.clone(), name.to_owned());
+        blocking(move || {
+            let Ok(dir) = Git::new().git_dir(&path) else { return };
+            let file = dir.join("ptyro.json");
+            let Some(mut marker) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            else {
+                return;
+            };
+            marker["name"] = n.into();
+            let _ = std::fs::write(&file, marker.to_string());
+        })
+        .await?;
         Ok(Reply::Worktree { info: wt })
     }
 
@@ -1197,6 +1290,7 @@ impl Daemon {
             }
             Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
             Request::WorktreeArchiveDelete { addr } => self.delete_archive(&addr).await,
+            Request::WorktreeArchiveGet { addr } => self.get_archive(&addr).await,
             Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
             Request::ProjectSuggest { addr, apply } => self.project_suggest(&addr, apply).await,
             Request::Branches { project } => {
@@ -1274,6 +1368,7 @@ impl Daemon {
                 let info = self.update_worktree(&wt.id, |w| w.locked = lock).unwrap_or(wt);
                 Ok(Reply::Worktree { info })
             }
+            Request::WorktreeRename { addr, name } => self.rename_worktree(&addr, &name).await,
             Request::WorktreeRenameBranch { addr, branch } => {
                 self.rename_branch(&addr, branch).await
             }

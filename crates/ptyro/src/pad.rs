@@ -11,7 +11,7 @@ use ptyro_core::config::Config;
 use ptyro_core::scratchpad as pad;
 use ptyro_protocol::{PadMark, Reply, Request};
 
-use crate::cli::{Ctx, age, current_dir, unexpected};
+use crate::cli::{Ctx, ago, current_dir, unexpected};
 
 #[derive(Subcommand)]
 pub enum PadCmd {
@@ -36,7 +36,7 @@ pub enum PadCmd {
         #[arg(long)]
         section: Option<String>,
         /// A plain bullet, not a `- [ ]` item
-        #[arg(long)]
+        #[arg(long = "bullet")]
         note: bool,
         /// No time or place on it
         #[arg(long)]
@@ -64,7 +64,7 @@ pub enum PadCmd {
         /// Its line number, or words from one open item
         item: String,
         /// The agent (default: yours)
-        #[arg(long)]
+        #[arg(short, long, add = clap_complete::ArgValueCandidates::new(crate::complete::agents))]
         agent: Option<String>,
         /// Just print what it would be told
         #[arg(long)]
@@ -317,7 +317,7 @@ async fn log(ctx: &Ctx, json: bool) -> Result<i32, Error> {
         return Ok(0);
     }
     for s in &snapshots {
-        println!("{}  {:>5} ago  {} lines", s.rev, age(s.at_ms), s.lines);
+        println!("{}  {:>5} ago  {} lines", s.rev, ago(s.at_ms), s.lines);
     }
     if snapshots.is_empty() {
         eprintln!("no saved copies yet");

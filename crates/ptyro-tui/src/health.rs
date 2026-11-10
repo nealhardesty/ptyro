@@ -569,9 +569,9 @@ impl App {
         self.last_cli = Some(args.to_vec());
         let argv: Vec<String> = std::iter::once(bin).chain(args.iter().cloned()).collect();
         let base = format!("ptyro-{}", args.first().map_or("cli", String::as_str));
-        let base = ptyro_core::names::tidy(&base).unwrap_or(base);
+        let base = ptyro_core::names::derive(&base).unwrap_or(base);
         let name = std::iter::once(base.clone())
-            .chain((2..).map(|k| format!("{base}-{k}")))
+            .chain((2..).map(|k| ptyro_core::names::numbered(&base, k)))
             .find(|n| self.sessions.iter().all(|s| s.name != *n))
             .expect("infinite");
         self.last_split = Some(name.clone());

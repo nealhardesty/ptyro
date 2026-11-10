@@ -207,7 +207,7 @@ fn bad_values_are_refused_with_the_reason() {
     assert!(err("scratchpad.keep", "0").contains("outside 1 to 3650"));
     assert!(err("agents.claude.env", "x").contains("edit it in the file"));
     // A project setting is not a user setting, and the other way round.
-    assert!(err("project.base", "main").contains("--project"));
+    assert!(err("project.base", "main").contains("use `-p .`"));
     let e = set(Scope::Project, "", "agents.x.command", "y", &lk, &none).unwrap_err();
     assert!(e.contains("never in a repository"), "{e}");
 }

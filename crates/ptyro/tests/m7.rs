@@ -186,13 +186,13 @@ fn done_when_fanout_compare_and_merge_the_best() {
     std::fs::write(w.home().join("task.md"), "sh echo $PTYRO_STEP_ID > answer.txt\n").unwrap();
     let out = w.ok(&[
         "fanout",
-        "--agents",
+        "--agent",
         "claude,codex,gemini",
         "--prompt-file",
         w.home().join("task.md").to_str().unwrap(),
         "--project",
         "app",
-        "--name",
+        "--prefix",
         "ans",
         "--test",
         "grep -q claude answer.txt",
@@ -236,9 +236,9 @@ fn done_when_fanout_compare_and_merge_the_best() {
             .contains(&format!("claude from run {id}"))
     );
     // Discarding refuses to lose the others' (untracked) work without --force…
-    let kept = w.ok(&["discard", &id]);
+    let kept = w.ok(&["discard", "-y", &id]);
     assert!(kept.contains("kept"), "{kept}");
-    w.ok(&["discard", &id, "--force"]);
+    w.ok(&["discard", "-y", &id, "--force"]);
     let wts = w.json(&["wt", "ls", "--project", "app", "--json"]);
     let names: Vec<&str> =
         wts.as_array().unwrap().iter().filter_map(|x| x["name"].as_str()).collect();
@@ -648,6 +648,12 @@ fn leases_radar_mail_checkpoints_and_verify_by_follow_up() {
             .iter()
             .any(|m| m["id"] == mid.as_str() && (m["state"] == "seen" || m["state"] == "acked"))
     });
+    // `msg check --timeout` waits that long for the first one: none newer than Bob's is mine,
+    // so it gives up (exit 7) after about a second.
+    let t = std::time::Instant::now();
+    let none = w.cli(&["msg", "check", "--since", &mid, "--timeout", "1s", "--json"]);
+    assert_eq!(none.status.code(), Some(7), "{}", String::from_utf8_lossy(&none.stderr));
+    assert!(t.elapsed() >= std::time::Duration::from_millis(900));
     // Checkpoints: the one that closed Alice's shared.txt turn has the file; restore it after a
     // scribble.
     let wt_a = w.json(&["wt", "status", "app/a", "--json"])["path"].as_str().unwrap().to_owned();
@@ -757,9 +763,9 @@ fn fanout_with_an_advisory_judge() {
     let id = w
         .ok(&[
             "fanout",
-            "--agents",
+            "--agent",
             "claude,codex",
-            "-p",
+            "--prompt",
             "sh echo $PTYRO_STEP_ID > a.txt",
             "--project",
             "app",
@@ -815,15 +821,15 @@ fn json_shapes() {
     let id = w
         .ok(&[
             "fanout",
-            "--agents",
+            "--agent",
             "claude,codex",
-            "-p",
+            "--prompt",
             "sh echo $PTYRO_STEP_ID > a.txt",
             "--project",
             "app",
             "--test",
             "true",
-            "--name",
+            "--prefix",
             "j",
         ])
         .lines()

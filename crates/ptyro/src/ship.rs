@@ -10,7 +10,7 @@ use ptyro_core::model::{DiffAgainst, DiffDoc, LineKind, PrInfo, ReviewComment};
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 
-use crate::cli::{Ctx, age, current_dir, no_daemon, session_of, unexpected};
+use crate::cli::{Ctx, ago, current_dir, no_daemon, session_of, unexpected};
 
 #[derive(Subcommand)]
 pub enum PrCmd {
@@ -72,8 +72,8 @@ pub enum PrCmd {
     },
     /// Reply on a review thread (`--comment ID`) or on the PR, marked "via ptyro"
     Reply {
-        /// Default: the worktree you're in
-        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::worktrees))]
+        /// The worktree (default: the one you're in)
+        #[arg(long = "wt", alias = "worktree", add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: Option<String>,
         #[arg(long)]
         comment: Option<u64>,
@@ -100,7 +100,7 @@ pub enum ReviewCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Remove a comment, or --all
+    /// Remove a comment, or --all (which asks first unless --yes)
     Rm {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
@@ -108,6 +108,9 @@ pub enum ReviewCmd {
         id: Option<u32>,
         #[arg(long)]
         all: bool,
+        /// With --all: don't ask
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Send the comments to the worktree's agent as one prompt (once its turn is over)
     Send {
@@ -134,7 +137,7 @@ pub enum ReviewCmd {
 
 fn here(w: Option<String>) -> Result<String, Error> {
     match w {
-        Some(w) => Ok(w),
+        Some(w) => crate::cli::addr_here(w),
         None => Ok(current_dir()?.to_string_lossy().into_owned()),
     }
 }
@@ -232,7 +235,7 @@ pub async fn log(c: &Client, addr: String, as_json: bool) -> Result<i32, Error> 
             k.subject,
             k.added,
             k.removed,
-            age(k.at_ms),
+            ago(k.at_ms),
             k.author
         );
     }
@@ -264,7 +267,10 @@ pub async fn commit(
                     && s.state.is_live()
             })
             .max_by_key(|s| s.created_ms)
-            .ok_or_else(|| Error::missing("agent session", format!("in {}", info.qualified())))?;
+            .ok_or_else(|| {
+                let s = format!("no agent session works in {}", info.qualified());
+                Error::new(ErrorCode::NotFound, s)
+            })?;
         c.request(Request::SendText {
             addr: agent.id.full(),
             text: "[via ptyro] Please commit your work now: stage what belongs together, and write a clear commit message (subject line under 72 characters, then why).".into(),
@@ -497,6 +503,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     match cmd {
         ReviewCmd::Add { worktree, at, text } => {
+            let worktree = crate::cli::addr_here(worktree)?;
             let (path, line) = at
                 .rsplit_once(':')
                 .and_then(|(p, l)| Some((p.to_owned(), l.parse::<u32>().ok()?)))
@@ -539,7 +546,22 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        ReviewCmd::Rm { worktree, id, all } => {
+        ReviewCmd::Rm { worktree, id, all, yes } => {
+            let worktree = crate::cli::addr_here(worktree)?;
+            if all {
+                // Found first, then asked about by its name: a typo asks nothing.
+                let Reply::Worktree { info } =
+                    c.request(Request::WorktreeGet { addr: worktree.clone() }).await?
+                else {
+                    return Err(Error::internal("unexpected reply"));
+                };
+                let q = format!(
+                    "Remove every comment on {}? {}",
+                    info.qualified(),
+                    ptyro_core::removal::REVIEW_ALL
+                );
+                crate::cli::ask_first(&q, yes)?;
+            }
             let left = comments_of(
                 c.request(Request::ReviewRemove {
                     addr: worktree,
@@ -583,7 +605,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ReviewCmd::Done { worktree } => {
-            c.request(Request::ReviewDone { addr: worktree }).await?;
+            c.request(Request::ReviewDone { addr: crate::cli::addr_here(worktree)? }).await?;
             Ok(0)
         }
     }

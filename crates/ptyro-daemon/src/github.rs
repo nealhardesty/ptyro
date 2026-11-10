@@ -46,6 +46,11 @@ pub struct Watch {
 
 pub type Watches = HashMap<String, Watch>;
 
+/// No agent session works in `wt` to hand something to.
+pub(crate) fn no_agent_in(wt: &WorktreeInfo) -> Error {
+    Error::new(ErrorCode::NotFound, format!("no agent session works in {}", wt.qualified()))
+}
+
 fn gh_err(msg: impl Into<String>) -> Error {
     Error::new(ErrorCode::Unsupported, msg)
 }
@@ -498,9 +503,7 @@ impl Daemon {
             }));
         }
         let msg = self.failure_report(&wt, &pr, None).await;
-        let s = self
-            .owner(&wt)
-            .ok_or_else(|| Error::missing("agent session", format!("in {}", wt.qualified())))?;
+        let s = self.owner(&wt).ok_or_else(|| no_agent_in(&wt))?;
         let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
         self.deliver_when_idle(&s, msg);
         Ok(Reply::Notes {

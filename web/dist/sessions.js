@@ -6,14 +6,15 @@ import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { Screen } from "./screen.js";
-import { actions, ago, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, ago, confirmsKill, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
     "session.menu": "More for this session: stop, restart, rename, summarize…",
-    "session.stop": "Stop the session (gracefully); a stopped one is removed",
-    "session.kill": "Kill the session now",
+    "session.stop": "Stop the session: its agent's turn is interrupted and it gets a moment to exit, then it's signalled; it stays listed",
+    "session.kill": "Kill the session now (SIGKILL, no chance to clean up); it stays listed",
+    "session.remove": "Remove the session from the list: an ended one is forgotten, a running one is stopped first",
     "session.restart": "Start the session's command again, in place",
     "session.rename": "Change the session's name (its address)",
     "session.tab": "Open this session in a terminal on the computer: a new Windows Terminal tab (when the computer is WSL)",
@@ -42,7 +43,8 @@ const ACTIONS = {
     "sidebar.filter": "Show every session, only the running ones (a live process), or only the active ones (an agent working or waiting for you, a shell running a command)",
 };
 const tip = actions(ACTIONS);
-const live = (s) => s.state.t === "running";
+// A live process, as the TUI and the daemon say it (`is_live`): starting counts.
+const live = (s) => s.state.t === "running" || s.state.t === "starting";
 const addr = (s) => s.id;
 // ── start a task ────────────────────────────────────────────────────────────────────────────
 const SOURCES = [
@@ -107,7 +109,8 @@ export function newTask(where, task) {
     const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
     const sourceRow = h("label", { class: "field" }, h("span", {}, "Start from"), source);
     const whichRow = h("label", { class: "field" }, h("span", {}, "Which one?"), which);
-    const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name);
+    slugInput(name, "name");
+    const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name, h("small", {}, NAME_HINT));
     const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
     const verifyRow = h("label", { class: "field" }, h("span", {}, "Done when"), verify, h("small", {}, "Verified-done: a turn counts as done only once this passes; failures go back to the agent"));
     const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
@@ -273,13 +276,14 @@ export function newTask(where, task) {
 const notice = (r, ok) => { if (r)
     ui.toast(ok); };
 export function renameSession(s) {
-    form("Rename", [{ key: "name", label: "Name", value: s.name, required: true, slug: "name", hint: "Its address: what you type to find it. A space or other odd character becomes _ (a-z 0-9 . _ -)" }], "Rename", async (v) => {
+    // Another machine's session is renamed there, by the name it has there (MM1.B).
+    form("Rename", [{ key: "name", label: "Name", value: splitMachine(s.name)[1], required: true, slug: "name", hint: `Its address: what you type to find it, unique in its project. ${NAME_HINT}` }], "Rename", async (v) => {
         await conn.request({ t: "rename", addr: addr(s), name: v.name });
         ui.toast(`Renamed to ${v.name}`);
     });
 }
 export function retitleSession(s) {
-    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty goes back to the default." }], "Save", async (v) => {
+    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty clears it." }], "Save", async (v) => {
         await conn.request({ t: "retitle", addr: addr(s), title: v.title || null, worktree: false });
     });
 }
@@ -315,7 +319,7 @@ export function verifySession(s) {
 function explainSession(s) {
     conn.request({ t: "status_explain", addr: addr(s) }).then((r) => {
         const lines = r.lines.map((l) => `${new Date(l.at_ms).toLocaleTimeString()}  ${l.applied ? "✓" : "·"} ${l.source}: ${l.signal}\n      ${l.reason}`);
-        textSheet(`Why ${s.name} is ${s.status?.status ?? "like this"}`, lines.join("\n") || "No decisions recorded yet.");
+        textSheet(`Why ${s.name} is ${s.status ? statusWord(s.status.status) : "like this"}`, lines.join("\n") || "No decisions recorded yet.");
     }, (e) => ui.toast(errText(e)));
 }
 async function summarize(s) {
@@ -323,18 +327,10 @@ async function summarize(s) {
     if (r)
         textSheet(`${s.name}, in a line`, r.info?.summary?.text ?? "(no summary: set `[summaries] command` in your config)");
 }
-async function convert(s, force = false) {
+// Mid-turn, the daemon refuses with a way through (SPEC §6.6), which `ask` offers.
+async function convert(s) {
     const to = !s.structured;
-    try {
-        await conn.request({ t: "convert", addr: addr(s), structured: to, force });
-        ui.toast(to ? "Now a chat" : "Now a terminal");
-    }
-    catch (e) {
-        if (e.code === "conflict" && !force)
-            confirm("It's mid-turn", `${errText(e)} Switch anyway? The turn in progress is interrupted.`, "Switch", () => convert(s, true));
-        else
-            ui.toast(errText(e));
-    }
+    await ask({ t: "convert", addr: addr(s), structured: to, force: false }, to ? "Now a chat" : "Now a terminal");
 }
 /// Quick new (UX3.2, UX3.7): another of the agent `w` last started (with its profile and
 /// arguments), else its project's default agent, else the default agent. Asked for by name, so a
@@ -359,13 +355,48 @@ export async function openQuickShell(w, cwd = "") {
     if (r?.info)
         go(`#/s/${enc(r.info.id)}`);
 }
-function stop(s) {
-    if (!live(s)) {
-        void ask({ t: "remove", addr: addr(s) }, `Removed ${s.name}`).then(() => { if (location.hash.startsWith("#/s/"))
-            go("#/"); });
+/// `[ui] confirm_kill`: Stop, Kill, and Stop and remove ask first, as in the TUI. Read where
+/// this device may read the config; elsewhere they always ask.
+async function asksFirst() {
+    if (conn.scope !== "full")
+        return true;
+    const v = await host("settings.view", { scope: "user" }).catch(() => null);
+    return confirmsKill(conn.scope, v?.entries);
+}
+/// Leave its page once it's gone from the list.
+const left = () => { if (location.hash.startsWith("#/s/"))
+    go("#/"); };
+/// The same three words as the CLI and the TUI (SPEC §7.3): stop is graceful, kill is SIGKILL
+/// now (both keep it listed), remove forgets it (stopping a running one first).
+const ENDS = {
+    stop: { verb: "Stop", said: "Stopped", what: "Its agent's turn is interrupted and it gets a moment to exit; then it's signalled. It stays in the list.", req: (a) => ({ t: "kill", addr: a, signal: null }) },
+    kill: { verb: "Kill", said: "Killed", what: "It's killed at once (SIGKILL), with no chance to clean up. It stays in the list.", req: (a) => ({ t: "kill", addr: a, signal: 9 }) },
+    remove: { verb: "Stop and remove", said: "Stopped and removed", what: "It's stopped, then forgotten: it leaves the list.", req: (a) => ({ t: "remove", addr: a, stop: true }) },
+};
+function end(s, how) {
+    const e = ENDS[how];
+    const run = async () => { if (await ask(e.req(addr(s)), `${e.said} ${s.name}`) && how === "remove")
+        left(); };
+    void asksFirst().then((yes) => { if (yes)
+        confirm(`${e.verb} ${s.name}?`, e.what, e.verb, run);
+    else
+        void run(); });
+}
+/// Forget an ended session; a running one is stopped first.
+async function remove(s) {
+    if (live(s))
+        return end(s, "remove");
+    // A dormant agent could still be resumed: forgetting it asks, as `ptyro rm` and the TUI do.
+    if (s.state.t === "dormant") {
+        confirm(`Remove the dormant session ${s.name}?`, "Its agent's conversation, which it could resume, is forgotten. This can't be undone.", "Remove", () => forget(s));
         return;
     }
-    confirm(`Stop ${s.name}?`, "It gets a moment to finish, then it's stopped.", "Stop", async () => { notice(await ask({ t: "kill", addr: addr(s), signal: null }), `Stopped ${s.name}`); });
+    await forget(s);
+}
+async function forget(s) {
+    // It started again meanwhile: the daemon says so, and offers to stop it too (`ask`).
+    if (await ask({ t: "remove", addr: addr(s), stop: false }, `Removed ${s.name}`))
+        left();
 }
 /// `ptyro attach <id> --tab` on the computer: a Windows Terminal tab there (WSL), attached.
 async function openOnComputer(s) {
@@ -406,8 +437,9 @@ export function sessionMenu(s) {
         ...shellMenuItems(s),
         { title: tip("session.rename"), label: "Rename…", run: () => renameSession(s) },
         { title: tip("session.retitle"), label: "Set title…", run: () => retitleSession(s) },
-        live(s) && { title: tip("session.kill"), label: "Kill now", danger: true, hint: "No waiting", run: () => confirm(`Kill ${s.name}?`, "It's stopped at once, with no chance to clean up.", "Kill", async () => notice(await ask({ t: "kill", addr: addr(s), signal: 9 }), `Killed ${s.name}`)) },
-        { title: tip("session.stop"), label: live(s) ? "Stop" : "Remove", danger: true, run: () => stop(s) },
+        live(s) && { title: tip("session.stop"), label: "Stop", danger: true, hint: "Interrupt it, then end it; it stays listed", run: () => end(s, "stop") },
+        live(s) && { title: tip("session.kill"), label: "Kill", danger: true, hint: "SIGKILL now; it stays listed", run: () => end(s, "kill") },
+        { title: tip("session.remove"), label: live(s) ? "Stop and remove" : "Remove", danger: true, hint: live(s) ? "Stop it, then forget it" : "Forget it", run: () => void remove(s) },
     ];
     menu(s.name, items);
 }

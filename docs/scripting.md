@@ -10,16 +10,17 @@ while the script runs. The building blocks:
 |---|---|
 | `ptyro new -d --agent A [--new-wt NAME] --prompt TEXT` | start an agent detached (in a fresh worktree), prompt typed once it's ready |
 | `ptyro send S… TEXT [--wait-ready] [--wait]` | type into sessions; `--wait` reports how the turn ended |
-| `ptyro wait S… --for idle\|blocked\|done\|errored\|exit\|working\|any-attention` | block until they get there (`--any`, `--timeout`, `--stall`) |
-| `ptyro wait S --match REGEX [--scrollback]` | block until text appears |
+| `ptyro wait S… --for idle\|blocked\|done\|error\|exit\|working\|any-attention` | block until they get there (`--any`, `--timeout`, `--stall`) |
+| `ptyro wait S --match REGEX [--scrollback [N]]` | block until text appears (`--scrollback`: in up to N lines above the screen too, as `read --scrollback N` shows them; without N, what's kept in memory) |
 | `ptyro read S [--scrollback [N]] [--json]` | the screen as text |
 | `ptyro events --follow` | every change, one JSON line each |
 | `ptyro ls --json --status blocked` | who needs you |
 | `ptyro answer S allow\|always\|deny` | answer a permission prompt |
 | `ptyro broadcast S… TEXT` | one prompt into several sessions |
-| `ptyro stop S…` / `ptyro kill S…` | stop gracefully (kept listed) / stop and remove |
+| `ptyro stop S…` / `ptyro kill S…` / `ptyro rm S… [--stop]` | stop (interrupt, then signal; kept listed) / kill now (SIGKILL; kept listed) / forget an ended one (`--stop` stops it first) |
 
-Sessions can be selectors: `@working`, `@blocked`, `@idle`, `@live`, `build-*`, `a,b`.
+Sessions can be selectors: `@working`, `@blocked`, `@idle`, `@live`, `build-*`, `a,b` (all of them
+are in [commands.md](commands.md#naming-sessions-and-worktrees)).
 
 `idle` means **the turn ptyro last typed has ended**. ptyro remembers when it typed your prompt,
 and an idle from before that doesn't count, so `new --prompt …` then `wait --for idle` is safe.
@@ -35,7 +36,7 @@ The milestone's acceptance test does exactly this (`crates/ptyro/tests/m5.rs`):
 ```sh
 #!/bin/sh
 set -eu
-ptyro wt new fix-login --project app
+ptyro wt new -n fix-login -p app
 ptyro new -d -n fixer --agent claude --wt app/fix-login \
   --prompt "The login form rejects valid emails. Fix it and add a test."
 ptyro wait fixer --for idle --timeout 30m      # exit 7 if it's still going
@@ -172,7 +173,7 @@ Use these commands; they print JSON with `--json`:
 - `ptyro read NAME --scrollback 200`: read what it printed.
 - `ptyro send NAME "TEXT" --wait-ready --wait`: give it the next instruction and wait for the turn.
 - `ptyro report --state working --msg "what you're doing"`: tell the human what you're doing.
-- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --wait 5m`: talk to
+- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --timeout 5m`: talk to
   the other agents (messages reach them when they're idle; `@user` reaches the human).
 - `ptyro lease claim 'src/api/**' --exclusive --reason "…"`: keep others out of files you're
   changing; `ptyro lease release` when done. `ptyro radar` shows who else is changing what.
@@ -181,7 +182,7 @@ Use these commands; they print JSON with `--json`:
   follow-up) in their scratchpad, `$PTYRO_SCRATCHPAD`, stamped with your name; `ptyro scratchpad
   todo` lists what they've noted. Add with the command; don't edit the file.
 
-Rules: never `ptyro kill` or `ptyro wt rm` sessions or worktrees you didn't create; never answer
+Rules: never `ptyro stop`, `kill` or `rm` sessions, or `ptyro wt rm` worktrees, you didn't create; never answer
 another session's permission prompt (`ptyro answer`) or a gate; the human does that (ptyro
 refuses agents both). If you're a lead (started with `--lead`), use the `ptyro` MCP tools for
 workers; your policy limits how many and where.
@@ -193,11 +194,11 @@ Recipes and fan-outs are runs, which a script can start, wait for and read:
 
 ```sh
 #!/bin/sh
-run=$(ptyro fanout --agents claude,codex -p "Fix the flaky test in src/net" --test)
+run=$(ptyro fanout -a claude,codex --prompt "Fix the flaky test in src/net" --test)
 ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 5 cancelled, 7 timeout
 best=$(ptyro compare "$run" --json | jq -r '.candidates[0].step')
-ptyro pick "$run" "$best" --pr                        # push + PR from the winner
-ptyro discard "$run" --force
+ptyro pick "$run" "$best" --open-pr                   # push + PR from the winner
+ptyro discard "$run" --force -y
 ```
 
 ```sh

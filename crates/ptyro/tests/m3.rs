@@ -321,12 +321,19 @@ async fn the_worktree_lifecycle() {
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict);
     assert!(e.message.contains("running"), "{}", e.message);
+    // Seen by every client, so it names no CLI flag; the CLI adds its own.
+    assert!(!e.message.contains("--"), "{}", e.message);
+    let again = e.fix.map(|f| f.again);
+    assert_eq!(again, Some(ptyro_core::error::Again::StopSessions), "its way through");
+    let out = w.cli(&["wt", "rm", "-y", "app/second"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("again with `--stop-sessions`"), "{err}");
     c.request(Request::Kill { addr: s.name.clone(), signal: None }).await.unwrap();
     wait_worktree(&c, "app/second", |w| !w.locked).await;
     // … and with work that would be lost, with a precise report (CLI exit code 5).
     std::fs::write(second.path.join("README"), "edited\n").unwrap();
     std::fs::write(second.path.join("notes.md"), "mine\n").unwrap();
-    let out = w.cli(&["wt", "rm", "app/second"]);
+    let out = w.cli(&["wt", "rm", "-y", "app/second"]);
     assert_eq!(out.status.code(), Some(5));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -335,6 +342,7 @@ async fn the_worktree_lifecycle() {
             && err.contains("notes.md"),
         "{err}"
     );
+    assert!(err.contains("(again with `--force`: remove anyway)"), "{err}");
     assert!(second.path.exists());
     // Committed but not pushed: still refused, and the branch would be kept.
     w.git(&second.path, &["add", "-A"]);
@@ -367,7 +375,7 @@ async fn the_worktree_lifecycle() {
     w.git(&info.path, &["commit", "-q", "--allow-empty", "-m", "feature"]);
     w.git(&root, &["merge", "-q", "--ff-only", "first"]);
     w.git(&root, &["push", "-q", "origin", "main"]);
-    let out = w.ok(&["wt", "rm", "app/first"]);
+    let out = w.ok(&["wt", "rm", "-y", "app/first"]);
     assert!(out.contains("deleted branch first"), "{out}");
     assert!(out.contains("released ports 21000-21004"), "{out}");
     assert!(!w.git(&root, &["branch"]).contains("first"));
@@ -700,12 +708,15 @@ async fn the_profile_cli_edits_the_config() {
 
     // In use → rm refused; rename rewrites the references.
     w.ok(&["ws", "new", "job", "--profile", "work"]);
-    let out = w.cli(&["profile", "rm", "work"]);
-    assert!(
-        String::from_utf8_lossy(&out.stderr).contains("workspace job"),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    let out = w.cli(&["profile", "rm", "-y", "work"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("workspace job"), "{err}");
+    // The way through in the CLI's words; the daemon's words name no flag.
+    assert!(err.contains("remove it anyway") && err.contains("(again with `--force`"), "{err}");
+    // A name that isn't one lists the profiles there are.
+    let out = w.cli(&["profile", "rm", "-y", "nosuch"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the profiles are default") && err.contains("work"), "{err}");
     // The daemon has to see the new config before it can accept the new name.
     w.ok(&["profile", "rename", "work", "acme"]);
     let ws = w.ok(&["ws", "ls"]);
@@ -737,9 +748,24 @@ async fn workspaces_reconcile_and_gc() {
     let out = w.ok(&["ws", "ls"]);
     assert!(out.lines().any(|l| l.starts_with("side") && l.contains("lib")), "{out}");
     assert!(out.lines().any(|l| l.starts_with("main")), "main always exists: {out}");
-    w.ok(&["ws", "add", "main", "lib"]);
+    w.ok(&["ws", "add-project", "main", "lib"]);
+    // `.` is the client's directory, never the daemon's.
+    let in_lib = |args: &[&str]| {
+        let out = w.d.cmd().args(args).env("HOME", w.home()).current_dir(&root).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    let main_has_lib =
+        || w.ok(&["ws", "ls"]).lines().any(|l| l.starts_with("main") && l.contains("lib"));
+    in_lib(&["ws", "remove-project", "main", "."]);
+    assert!(!main_has_lib(), "{}", w.ok(&["ws", "ls"]));
+    in_lib(&["ws", "add-project", "main", "."]);
+    assert!(main_has_lib(), "{}", w.ok(&["ws", "ls"]));
+    // `-p` once meant `--prompt`: `new -p X` without a new worktree is refused, never ignored.
+    let out = w.cli(&["new", "-d", "-p", "fix the bug"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--new-wt"));
     w.ok(&["ws", "rename", "side", "aside"]);
-    assert!(w.cli(&["ws", "rm", "main"]).status.code() == Some(2));
+    assert!(w.cli(&["ws", "rm", "-y", "main"]).status.code() == Some(2));
     let c = w.d.client().await.unwrap();
     let Reply::WorktreeCreated { info: gone, .. } = new_wt(
         &c,
@@ -783,8 +809,89 @@ async fn workspaces_reconcile_and_gc() {
     let out = d.ok(&["ws", "ls"]);
     assert!(out.contains("aside"), "{out}");
     // Removing a missing worktree just forgets it.
-    let out = d.ok(&["wt", "rm", "lib/gone"]);
+    let out = d.ok(&["wt", "rm", "-y", "lib/gone"]);
     assert!(out.contains("removed lib/gone"), "{out}");
+}
+
+/// Removals ask first, the same words in every client, and running sessions don't trap a
+/// project: `--release` lets them go (SPEC §12.1).
+#[tokio::test]
+async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
+    let w = World::new("[worktrees]\nfetch = false\n");
+    let root = w.repo("app", &[]);
+    w.ok(&["project", "add", root.to_str().unwrap()]);
+    w.ok(&["ws", "new", "side"]);
+    // No terminal to ask and no --yes: refused, saying what goes and offering --yes.
+    let out = w.cli(&["ws", "rm", "side"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains(ptyro_core::removal::WORKSPACE) && err.contains("--yes"), "{err}");
+    assert!(w.ok(&["ws", "ls"]).contains("side"), "nothing was removed");
+    w.ok(&["ws", "rm", "--yes", "side"]);
+    // Found first, then asked: a typo is "not found" (exit 3), not a question.
+    for args in [
+        &["ws", "rm", "sdie"][..],
+        &["project", "rm", "ap"],
+        &["wt", "rm", "app/nope"],
+        &["wt", "archive-rm", "app/nope"],
+        &["profile", "rm", "nope"],
+    ] {
+        let out = w.cli(args);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // An archive is found by its name (or handle) and asked about by its full name.
+    w.ok(&["wt", "new", "gone", "--project", "app"]);
+    w.ok(&["wt", "archive", "app/gone"]);
+    let out = w.cli(&["wt", "archive-rm", "gone"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("archive of app/gone?"), "{err}");
+    // Named twice, it is one archive: deleted once, no failure for the second.
+    w.ok(&["wt", "archive-rm", "-y", "gone", "app/gone"]);
+    assert!(!w.ok(&["wt", "archives"]).contains("gone"), "deleted");
+    // `config rm` finds what it removes before asking: a name that isn't there asks nothing.
+    let out = w.cli(&["config", "rm", "agents", "nope"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("Remove agents nope?") && !out.status.success(), "{err}");
+
+    let c = w.d.client().await.unwrap();
+    let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();
+    let out = w.cli(&["project", "rm", "app"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains(ptyro_core::removal::PROJECT), "{err}");
+    // Its session runs: refused, with both ways through; letting them go is data (SPEC §6.6).
+    let e =
+        c.request(Request::ProjectRemove { addr: "app".into(), release: false }).await.unwrap_err();
+    let fix = e.fix.map(|f| (f.again, f.label));
+    assert_eq!(fix, Some((ptyro_core::error::Again::Release, "Let them go".into())));
+    let out = w.cli(&["project", "rm", "-y", "app"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(5), "{err}");
+    assert!(err.contains("let them go") && err.contains("--release"), "{err}");
+    // A loose session already has its name: let go, it takes the next free one, and says so.
+    let loose = SpawnSpec {
+        name: Some(s.name.clone()),
+        worktree: None,
+        cwd: "/".into(),
+        ..sh("sleep 60", "app/@root")
+    };
+    let loose = spawn(&c, loose).await.unwrap();
+    assert!(loose.project.is_none(), "{loose:?}");
+    let out = w.ok(&["project", "rm", "-y", "--release", "app"]);
+    assert!(out.contains("forgot app"), "{out}");
+    let free = format!("{}-2", s.name);
+    assert!(out.contains(&format!("{} is {free} now", s.name)), "{out}");
+    let Reply::Session { info } = c.request(Request::Get { addr: s.id.full() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(info.state.is_live() && info.project.is_none(), "it runs on, outside: {info:?}");
+    assert_eq!(info.name, free);
 }
 
 async fn run(s: Script) -> Report {
@@ -921,7 +1028,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     let refused = r.at(3.8);
     assert!(refused.contains("1 untracked file") && refused.contains("scratch.txt"), "{refused}");
     assert!(
-        refused.contains("discard that work") && refused.contains("a: archive it instead"),
+        refused.contains("y: remove it anyway") && refused.contains("a: archive it instead"),
         "{refused}"
     );
     assert!(dirty.path.exists(), "nothing removed without consent");
@@ -1075,4 +1182,218 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
     assert!(w.ok(&["project", "line-endings", "shells"]).contains("no script here"));
     let Reply::Session { info } = c.request(run("crlf")).await.unwrap() else { panic!() };
     screen_with(&w.d, &c, &info.name, "crlf-ran").await;
+}
+
+/// Session names are unique per project (SPEC §2.3): two projects may both have a `build`, a bare
+/// `build` is then ambiguous and the error says which to type, and `project/name` finds each.
+#[tokio::test]
+async fn session_names_are_unique_per_project() {
+    let w = World::new("");
+    for p in ["app", "lib"] {
+        let root = w.repo(p, &[]);
+        w.ok(&["project", "add", root.to_str().unwrap()]);
+    }
+    let c = w.d.client().await.unwrap();
+    let named = |wt: &str, name: &str| SpawnSpec { name: Some(name.into()), ..sh("sleep 30", wt) };
+    let app = spawn(&c, named("app/@root", "build")).await.unwrap();
+    let lib = spawn(&c, named("lib/@root", "build")).await.expect("another project may share it");
+
+    // Taken in its own project: refused, with where and a free one to try.
+    let e = spawn(&c, named("app/@root", "build")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert!(e.message.contains("in project app") && e.message.contains("build-2"), "{}", e.message);
+
+    // A bare name two projects share: ambiguous, naming each; `project/name` finds each.
+    let e = c.request(Request::Get { addr: "build".into() }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Ambiguous, "{e:?}");
+    assert!(e.message.contains("app/build") && e.message.contains("lib/build"), "{}", e.message);
+    for (addr, want) in [("app/build", &app), ("lib/build", &lib)] {
+        let Reply::Session { info } = c.request(Request::Get { addr: addr.into() }).await.unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(info.id, want.id, "{addr}");
+    }
+
+    // Rename follows the same rule: into another project's name is fine, into its own isn't.
+    let loose = spawn(
+        &c,
+        SpawnSpec {
+            argv: vec!["sleep".into(), "30".into()],
+            cwd: w.home(),
+            ..SpawnSpec::default()
+        },
+    )
+    .await
+    .unwrap();
+    let rename = |addr: String, name: &str| Request::Rename { addr, name: name.into() };
+    c.request(rename(loose.id.full(), "build")).await.expect("no loose session is named build");
+    let e = c.request(rename("lib/build".into(), "build")).await;
+    assert!(e.is_ok(), "renaming to its own name changes nothing: {e:?}");
+    let e = w.cli(&["rename", "app/build", "build"]);
+    assert!(e.status.success(), "{}", String::from_utf8_lossy(&e.stderr));
+    // Three now: the loose one is offered by its handle.
+    let e = c.request(Request::Get { addr: "build".into() }).await.unwrap_err();
+    assert!(e.message.starts_with("3 sessions") && e.message.contains("s:"), "{}", e.message);
+    let spare = spawn(&c, named("lib/@root", "spare")).await.unwrap();
+    let e = c.request(rename(spare.id.full(), "build")).await.unwrap_err();
+    assert!(e.message.contains("in project lib"), "{}", e.message);
+
+    // One lookup policy (SPEC §2.3). The CLI exits 4 on an ambiguous name, listing each.
+    let out = w.cli(&["read", "build"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(4), "{err}");
+    assert!(err.contains("lib/build") && err.contains("say which"), "{err}");
+    // Case doesn't matter, for names and handles alike.
+    let get = |addr: String| c.request(Request::Get { addr });
+    let Reply::Session { info } = get("LIB/BUILD".into()).await.unwrap() else { panic!() };
+    assert_eq!(info.id, lib.id);
+    let Reply::Session { info } = get(spare.handle.to_uppercase()).await.unwrap() else { panic!() };
+    assert_eq!(info.id, spare.id);
+    // Three characters of an id are too few, and the message says so; four are enough.
+    let full = spare.id.full();
+    let e = get(full[full.len() - 3..].to_owned()).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    assert!(e.message.contains("at least 4 characters"), "{}", e.message);
+    let out = w.cli(&["read", &format!("s:{}", &full[full.len() - 3..])]);
+    assert_eq!(out.status.code(), Some(3), "{}", String::from_utf8_lossy(&out.stderr));
+    // Projects: not found names the kind.
+    let e = c.request(Request::ProjectGet { addr: "nope".into() }).await.unwrap_err();
+    assert_eq!((e.code, e.message.as_str()), (ErrorCode::NotFound, r#"no project matches "nope""#));
+    let Reply::Project { info, .. } =
+        c.request(Request::ProjectGet { addr: "LIB".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(info.slug, "lib");
+}
+
+/// Worktrees and projects are renamed like sessions (SPEC §2.3): the address changes and the old
+/// one finds nothing; a worktree keeps its branch and its directory, so what runs in it carries
+/// on and is found under the new address; `@root` and a taken name are refused.
+#[tokio::test]
+async fn worktrees_and_projects_are_renamed() {
+    let w = World::new("");
+    for p in ["app", "lib"] {
+        let root = w.repo(p, &[]);
+        w.ok(&["project", "add", root.to_str().unwrap()]);
+    }
+    let c = w.d.client().await.unwrap();
+    let wt = |name: &str| WorktreeSpec {
+        project: "app".into(),
+        name: Some(name.into()),
+        ..WorktreeSpec::default()
+    };
+    for n in ["feat", "other", "old"] {
+        new_wt(&c, wt(n)).await.unwrap();
+    }
+    let before = worktree(&c, "app/feat").await;
+    let job = spawn(&c, SpawnSpec { name: Some("job".into()), ..sh("sleep 30", "app/feat") })
+        .await
+        .unwrap();
+    let rename =
+        |addr: &str, name: &str| Request::WorktreeRename { addr: addr.into(), name: name.into() };
+
+    // The address changes; the branch, the directory and the id don't.
+    let out = w.ok(&["wt", "rename", "app/feat", "login-fix"]);
+    assert!(out.contains("app/login-fix"), "{out}");
+    let after = worktree(&c, "app/login-fix").await;
+    assert_eq!((&after.id, &after.branch, &after.path), (&before.id, &before.branch, &before.path));
+    let e = c.request(Request::WorktreeGet { addr: "app/feat".into() }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    // git's marker follows, so a re-adoption finds the new name.
+    let gitdir = w.git(&after.path, &["rev-parse", "--absolute-git-dir"]);
+    let marker = std::fs::read_to_string(Path::new(gitdir.trim()).join("ptyro.json")).unwrap();
+    assert!(marker.contains("\"name\":\"login-fix\""), "{marker}");
+
+    // Refused: another worktree's name in its project, the main checkout, a bad name.
+    let e = c.request(rename("app/login-fix", "other")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert!(e.message.contains("app/other"), "{}", e.message);
+    let e = c.request(rename("app/@root", "main")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Invalid, "{e:?}");
+    assert!(e.message.contains("@root"), "{}", e.message);
+    let e = c.request(rename("app/other", "Bad Name")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Invalid, "{e:?}");
+    // Two renames to one name at once: one wins, the other is refused, and both sides agree.
+    for n in ["r1", "r2"] {
+        new_wt(&c, wt(n)).await.unwrap();
+    }
+    let c2 = w.d.client().await.unwrap();
+    let (a, b) =
+        tokio::join!(c.request(rename("app/r1", "dup")), c2.request(rename("app/r2", "dup")));
+    assert!(a.is_ok() != b.is_ok(), "exactly one: {a:?} {b:?}");
+    let Reply::Worktrees { worktrees } =
+        c.request(Request::WorktreeList { project: Some("app".into()) }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(worktrees.iter().filter(|w| w.name == "dup").count(), 1);
+    // Another project's worktree may share it.
+    new_wt(&c, WorktreeSpec { project: "lib".into(), ..wt("shared") }).await.unwrap();
+    c.request(rename("app/other", "shared")).await.expect("unique per project only");
+
+    // What runs in it carries on, still in it.
+    let Reply::Session { info } = c.request(Request::Get { addr: "app/job".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(info.state.is_live() && info.worktree.as_deref() == Some(after.id.as_str()));
+
+    // The old name is free again (its branch too, once renamed); its directory isn't, so the
+    // new one gets the next.
+    w.ok(&["wt", "rename-branch", "app/login-fix", "login-fix"]);
+    let Reply::WorktreeCreated { info: again, .. } = new_wt(&c, wt("feat")).await.unwrap() else {
+        panic!()
+    };
+    assert_eq!(again.name, "feat");
+    assert!(again.path != before.path && again.path.ends_with("feat-2"), "{again:?}");
+    // Nor a directory a worktree we know of uses while it's gone from disk for now.
+    let Reply::WorktreeCreated { info: tmp, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
+        panic!()
+    };
+    w.ok(&["wt", "rename", "app/tmp", "tmp-moved"]);
+    w.ok(&["wt", "rename-branch", "app/tmp-moved", "tmp-moved"]);
+    std::fs::rename(&tmp.path, tmp.path.with_extension("away")).unwrap();
+    let Reply::WorktreeCreated { info: tmp2, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
+        panic!()
+    };
+    assert!(tmp2.path != tmp.path && tmp2.path.ends_with("tmp-2"), "{tmp2:?}");
+    std::fs::rename(tmp.path.with_extension("away"), &tmp.path).unwrap();
+
+    // An archive, to restore under the project's new name.
+    c.request(Request::WorktreeArchive { addr: "app/old".into(), stop_sessions: false })
+        .await
+        .unwrap();
+
+    // A project: the slug changes; sessions, worktrees and archives follow it.
+    let e = c
+        .request(Request::ProjectRename { addr: "app".into(), name: "lib".into() })
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    // A slug is `[a-z0-9-]` (SPEC §2.3): a name's `_` or `.` is refused, the fix offered.
+    let e = c
+        .request(Request::ProjectRename { addr: "app".into(), name: "my_web".into() })
+        .await
+        .unwrap_err();
+    assert!(e.code == ErrorCode::Invalid && e.message.contains("try \"my-web\""), "{e:?}");
+    let out = w.ok(&["project", "rename", "app", "web"]);
+    assert!(out.contains("web"), "{out}");
+    let e = c.request(Request::ProjectGet { addr: "app".into() }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    let Reply::Session { info } = c.request(Request::Get { addr: "web/job".into() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(info.id, job.id);
+    let moved = worktree(&c, "web/login-fix").await;
+    assert_eq!(
+        (&moved.id, moved.project_slug.as_str(), &moved.path),
+        (&after.id, "web", &after.path)
+    );
+    assert!(w.ok(&["wt", "ls"]).contains("web/feat"));
+    let restored = c.request(Request::WorktreeRestore { addr: "web/old".into() }).await;
+    assert!(restored.is_ok(), "{restored:?}");
+    worktree(&c, "web/old").await;
 }

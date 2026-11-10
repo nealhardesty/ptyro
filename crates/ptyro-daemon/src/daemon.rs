@@ -16,7 +16,9 @@ use ptyro_core::ids::short_handle;
 use ptyro_core::model::MAIN_WORKSPACE;
 use ptyro_core::paths::Paths;
 use ptyro_core::session::{HistoryEntry, SessionInfo, SessionKind, SpawnSpec};
-use ptyro_core::{ClientId, Error, ErrorCode, SessionId, TermSize, names, now_ms};
+use ptyro_core::{
+    ClientId, Error, ErrorCode, SessionId, TermSize, lookup, names, now_ms, selector,
+};
 use ptyro_protocol::{DaemonStatus, DomainEvent, PROTO, Reply, Request};
 use ptyro_store::{Registry, Store};
 use tokio::sync::{broadcast, mpsc, watch};
@@ -151,9 +153,13 @@ pub struct Daemon {
     // ── change sets (M11) ──
     /// Per set name: its actor's memory and the push or land in progress.
     pub(crate) cs: Mutex<HashMap<String, crate::changesets::CsLive>>,
-    /// Launches in flight: sessions relaunching, names being started (`launch.rs` `Claim`).
-    pub(crate) launching:
-        Mutex<(std::collections::HashSet<SessionId>, std::collections::HashSet<String>)>,
+    /// Launches in flight: sessions relaunching, and the (project, name) of sessions being
+    /// started (`launch.rs` `Claim`).
+    #[allow(clippy::type_complexity)]
+    pub(crate) launching: Mutex<(
+        std::collections::HashSet<SessionId>,
+        std::collections::HashSet<(Option<String>, String)>,
+    )>,
     /// Snapshot writes (`save_kv`): the latest generation per key, and one writer at a time.
     pub(crate) kv_gens: Arc<Mutex<HashMap<String, u64>>>,
     pub(crate) kv_writer: Arc<tokio::sync::Mutex<()>>,
@@ -450,11 +456,7 @@ impl Daemon {
             }
             let adapter = r.agent.as_deref().map(|a| ptyro_agents::adapter_name(&self.config(), a));
             let spec = crate::session::DormantSpec {
-                name: if self.name_taken(&r.name) {
-                    self.free_name(&r.name)
-                } else {
-                    r.name.clone()
-                },
+                name: self.free_name(r.project.as_deref(), &r.name),
                 kind: r.kind,
                 argv: r.argv.clone(),
                 cwd: r.cwd.clone().into(),
@@ -550,91 +552,122 @@ impl Daemon {
     }
 
     /// One session (SPEC §2.3): `@last`, `@focused`, a full id, `s:<handle>`, an exact name,
-    /// `project/name`, or a handle (id suffix). Exact names win over handles. Selectors that can
+    /// `project/name`, or a handle (the end of the id, at least 4 characters), all in any case
+    /// (`ptyro_core::lookup`). Exact names win over handles. Selectors that can
     /// match several sessions are an error here unless they match exactly one; use
-    /// `resolve_many`.
+    /// `resolve_many`. Names are unique per project, so a bare name two projects share is
+    /// ambiguous, and the error names each `project/name`.
     pub fn resolve(&self, addr: &str) -> Result<Arc<Session>, Error> {
+        self.resolve_near(addr, None)
+    }
+
+    /// `resolve`, where a bare name several projects share means the one in `near` (the
+    /// project of whoever asks: an agent writing to `reviewer` means its own project's).
+    pub(crate) fn resolve_near(
+        &self,
+        addr: &str,
+        near: Option<&str>,
+    ) -> Result<Arc<Session>, Error> {
         let sessions = self.sessions();
         let addr = addr.trim();
         // `%3`, `work%3`: a shell of SHELLS by its number (SPEC §23.5).
         if let Some(found) = self.resolve_slot(addr) {
             return found;
         }
+        let missing = || {
+            let ids: Vec<String> = sessions.iter().map(|s| s.id.full()).collect();
+            lookup::not_found("session", addr, ids.iter().map(String::as_str))
+        };
         match addr {
-            "@last" => return sessions.last().cloned().ok_or_else(|| Error::not_found(addr)),
+            "@last" => return sessions.last().cloned().ok_or_else(missing),
             "@focused" => {
                 let id = *self.focused.locked();
-                return id.and_then(|id| self.session(id)).ok_or_else(|| Error::not_found(addr));
+                return id.and_then(|id| self.session(id)).ok_or_else(missing);
             }
             _ => {}
         }
         if addr.starts_with('@') || addr.contains(['*', '?', ',']) {
-            return match self.resolve_many(addr)?.as_slice() {
-                [one] => Ok(Arc::clone(one)),
-                [] => Err(Error::not_found(addr)),
-                many => Err(Error::new(
-                    ErrorCode::Ambiguous,
-                    format!("{addr:?} matches {} sessions", many.len()),
-                )),
-            };
+            let many = self.resolve_many(addr)?;
+            return lookup::one("session", addr, many, |s| self.session_addr(s))?
+                .ok_or_else(missing);
         }
-        if let Some(s) = sessions
-            .iter()
-            .find(|s| s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == addr)
-        {
-            return Ok(Arc::clone(s));
+        let key = lookup::key(addr);
+        let name_of = |s: &Session| {
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone()
+        };
+        let project_of = |s: &Session| {
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone()
+        };
+        let named: Vec<&Arc<Session>> =
+            sessions.iter().filter(|s| lookup::same(&name_of(s), &key)).collect();
+        match named.as_slice() {
+            [] => {}
+            [one] => return Ok(Arc::clone(one)),
+            many => {
+                let here: Vec<_> = many
+                    .iter()
+                    .filter(|s| near.is_some() && project_of(s).as_deref() == near)
+                    .collect();
+                if let [one] = here.as_slice() {
+                    return Ok(Arc::clone(one));
+                }
+                let which: Vec<String> = many.iter().map(|s| self.session_addr(s)).collect();
+                return Err(lookup::ambiguous_name("session", addr, &which));
+            }
         }
-        if let Some((project, name)) = addr.split_once('/') {
+        if let Some((project, name)) = key.split_once('/') {
             let project = self.find_project(project)?;
             return sessions
                 .iter()
                 .find(|s| {
-                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    m.name == name && m.place.project.as_deref() == Some(project.id.as_str())
+                    lookup::same(&name_of(s), name)
+                        && project_of(s).as_deref() == Some(project.id.as_str())
                 })
                 .cloned()
-                .ok_or_else(|| Error::not_found(addr));
+                .ok_or_else(missing);
         }
-        let handle = addr.strip_prefix("s:").unwrap_or(addr).to_ascii_lowercase();
+        let handle = key.strip_prefix("s:").unwrap_or(&key);
         if handle.is_empty() {
             return Err(Error::invalid("empty session address"));
         }
-        let matches: Vec<_> = sessions.iter().filter(|s| s.id.full().ends_with(&handle)).collect();
-        match matches.as_slice() {
-            [one] => Ok(Arc::clone(one)),
-            [] => Err(Error::not_found(addr)),
-            many => Err(Error::new(
-                ErrorCode::Ambiguous,
-                format!("{addr:?} matches {} sessions; use a longer handle", many.len()),
-            )),
-        }
+        let matches: Vec<_> =
+            sessions.iter().filter(|s| lookup::id_matches(&s.id.full(), handle)).collect();
+        lookup::one("session", addr, matches, |s| self.session_addr(s))?
+            .cloned()
+            .ok_or_else(missing)
     }
 
-    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus `@all`, `@live`
-    /// (`@running`), `@exited`, `@working`/`@blocked`/`@idle`/`@done`/`@error` (the status engine's
-    /// verdict, whatever its source: hooks, self-reports, the screen), and name globs with `*` and
-    /// `?`. Order follows the session list; duplicates are dropped.
+    /// Selectors (SPEC §2.3), joined with `,`: anything `resolve` takes, plus the `@` selectors of
+    /// `ptyro_core::selector::SELECTORS` (`@all`, `@exited`, `@dormant`, the status engine's
+    /// verdicts, …) and name globs with `*` and `?`. Order follows the session list; duplicates
+    /// are dropped.
     pub fn resolve_many(&self, selector: &str) -> Result<Vec<Arc<Session>>, Error> {
         let sessions = self.sessions();
         let mut picked: Vec<SessionId> = Vec::new();
         for part in selector.split(',').map(str::trim).filter(|p| !p.is_empty()) {
-            let status_is =
-                |s: &Session, want: &str| s.status().is_some_and(|st| st.label() == want);
             let found: Vec<SessionId> = match part {
-                "@all" => sessions.iter().map(|s| s.id).collect(),
-                "@live" | "@running" => {
-                    sessions.iter().filter(|s| s.is_live()).map(|s| s.id).collect()
-                }
-                "@exited" => sessions.iter().filter(|s| !s.is_live()).map(|s| s.id).collect(),
                 "@last" | "@focused" => vec![self.resolve(part)?.id],
+                "@all" => sessions.iter().map(|s| s.id).collect(),
                 p if p.starts_with('@') => {
-                    let want = &p[1..];
-                    if !["working", "blocked", "idle", "done", "error"].contains(&want) {
+                    let Some(want) = selector::find(p).and_then(|s| s.state) else {
                         return Err(Error::invalid(format!(
-                            "unknown selector {p:?}; try @all, @live, @exited, @focused, @last, @working, @blocked, @idle, @done"
+                            "unknown selector {p:?}; try {}",
+                            selector::list()
                         )));
-                    }
-                    sessions.iter().filter(|s| status_is(s, want)).map(|s| s.id).collect()
+                    };
+                    sessions
+                        .iter()
+                        .filter(|s| {
+                            let state = s
+                                .meta
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .state
+                                .clone();
+                            want.matches(&state, s.status(), || self.info(s).is_active())
+                        })
+                        .map(|s| s.id)
+                        .collect()
                 }
                 p if p.contains(['*', '?']) => sessions
                     .iter()
@@ -645,7 +678,7 @@ impl Daemon {
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .name
                             .clone();
-                        glob(p, &name)
+                        glob(&lookup::key(p), &name.to_lowercase())
                     })
                     .map(|s| s.id)
                     .collect(),
@@ -660,19 +693,63 @@ impl Daemon {
         Ok(sessions.into_iter().filter(|s| picked.contains(&s.id)).collect())
     }
 
-    pub(crate) fn name_taken(&self, name: &str) -> bool {
-        self.launching.locked().1.contains(name)
+    /// Session names are unique per project (SPEC §2.3); sessions in no project share one scope.
+    pub(crate) fn name_taken(&self, project: Option<&str>, name: &str) -> bool {
+        self.launching.locked().1.iter().any(|(p, n)| p.as_deref() == project && n == name)
             || self.sessions().iter().any(|s| {
-                s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == name
+                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                m.name == name && m.place.project.as_deref() == project
             })
     }
 
-    /// `name`, or `name-2`, `name-3`… whichever is free.
-    pub(crate) fn free_name(&self, name: &str) -> String {
-        if !self.name_taken(name) {
+    /// `Ok` when `name` is free in `project`; else a conflict that says where it's taken and
+    /// offers a free one.
+    pub(crate) fn name_free_or_why(&self, project: Option<&str>, name: &str) -> Result<(), Error> {
+        if !self.name_taken(project, name) {
+            return Ok(());
+        }
+        let place = match project.and_then(|p| self.find_project(p).ok()) {
+            Some(p) => format!("in project {}", p.slug),
+            None => "outside any project".to_owned(),
+        };
+        Err(Error::conflict(format!(
+            "a session named {name:?} exists {place}; try {:?}",
+            self.free_name(project, name)
+        )))
+    }
+
+    /// `name`, or `name-2`, `name-3`… whichever is free in `project`.
+    pub(crate) fn free_name(&self, project: Option<&str>, name: &str) -> String {
+        if !self.name_taken(project, name) {
             return name.to_owned();
         }
-        (2..).map(|k| format!("{name}-{k}")).find(|n| !self.name_taken(n)).expect("infinite")
+        (2..)
+            .map(|k| ptyro_core::names::numbered(name, k))
+            .find(|n| !self.name_taken(project, n))
+            .expect("infinite")
+    }
+
+    /// A session's name as an address that finds it alone: `name` when no other session has
+    /// it, else `project/name`, else (a loose session sharing its name) its handle.
+    pub(crate) fn session_addr(&self, s: &Session) -> String {
+        let (name, project) = {
+            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            (m.name.clone(), m.place.project.clone())
+        };
+        let shared = self.sessions().iter().any(|o| {
+            o.id != s.id
+                && o.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name == name
+        });
+        if !shared {
+            return name;
+        }
+        match project.and_then(|p| self.find_project(&p).ok()) {
+            Some(p) => format!("{}/{name}", p.slug),
+            None => {
+                let ids: Vec<SessionId> = self.sessions().iter().map(|s| s.id).collect();
+                format!("s:{}", short_handle(&s.id, &ids))
+            }
+        }
     }
 
     /// Sessions running (or exited) in a worktree.
@@ -724,7 +801,7 @@ impl Daemon {
         let config = self.config();
         let (verify, lead) = (spec.verify.clone(), spec.lead.clone());
         if lead.is_some() && spec.agent.is_none() {
-            return Err(Error::invalid("--lead needs an agent (--agent claude)"));
+            return Err(Error::invalid("a lead needs an agent (claude)"));
         }
         let policy: Option<ptyro_run::Policy> = lead
             .map(|p| serde_json::from_value(p).map_err(|e| Error::invalid(format!("policy: {e}"))))
@@ -739,7 +816,7 @@ impl Daemon {
         if let (Some(a), Some(b)) = (&spec.profile, &agent_profile)
             && a != b
         {
-            return Err(Error::invalid(format!("--profile {a} contradicts the agent's @{b}")));
+            return Err(Error::invalid(format!("the profile {a} contradicts the agent's @{b}")));
         }
         let explicit = spec.profile.clone().or(agent_profile);
         // SHELLS (SPEC §23.2): a loose session belongs to its workspace, wherever it starts.
@@ -847,22 +924,28 @@ impl Daemon {
         };
         // What it's for (UX1.24): `--title`, else the prompt it starts with.
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
+        let project = target.as_ref().map(|(_, p)| p.id.as_str());
         let name = match spec.name {
+            // Composed by ptyro itself (`<set>-<member>`, a step, `judge`), so derived: made a
+            // valid name of at most 64, then a free one.
+            Some(n) if spec.name_or_next => {
+                let n = names::derive(&n)
+                    .ok_or_else(|| Error::invalid(names::validate(&n).err().unwrap_or_default()))?;
+                self.free_name(project, &n)
+            }
             Some(n) => {
                 names::validate(&n).map_err(Error::invalid)?;
-                if self.name_taken(&n) {
-                    return Err(Error::conflict(format!("a session named {n:?} exists")));
-                }
+                self.name_free_or_why(project, &n)?;
                 n
             }
             // A name says what it's for: from its title or prompt (`fix-flaky-test`), else the
             // agent and a corvid (`claude-rook`, never `claude-2`), else a friendly pair.
             None => match (wording.as_deref().and_then(names::from_text), &agent) {
-                (Some(n), _) => self.free_name(&n),
+                (Some(n), _) => self.free_name(project, &n),
                 (None, Some(a)) if names::validate(a).is_ok() => {
-                    names::corvid(id.seed(), a, |n| self.name_taken(n))
+                    names::corvid(id.seed(), a, |n| self.name_taken(project, n))
                 }
-                _ => names::friendly(id.seed(), |n| self.name_taken(n)),
+                _ => names::friendly(id.seed(), |n| self.name_taken(project, n)),
             },
         };
         let place = Place {
@@ -887,9 +970,9 @@ impl Daemon {
                     })
                     .unwrap_or_default();
                 Some(cfg.prompts.get(snippet).cloned().ok_or_else(|| {
-                    Error::missing(
-                        "prompt snippet",
-                        format!("@{snippet} (in .ptyro.toml [prompts])"),
+                    Error::new(
+                        ErrorCode::NotFound,
+                        format!("no prompt snippet @{snippet} in .ptyro.toml [prompts]"),
                     )
                 })?)
             }
@@ -897,7 +980,7 @@ impl Daemon {
         };
         if spec.structured && agent.is_none() {
             return Err(Error::invalid(
-                "--structured drives an agent over its protocol: give it --agent",
+                "structured mode drives an agent over its protocol: pick an agent",
             ));
         }
         let prompt_text = prompt.clone();
@@ -979,7 +1062,7 @@ impl Daemon {
     pub async fn restart(self: &Arc<Self>, addr: &str) -> Result<Arc<Session>, Error> {
         let old = self.resolve(addr)?;
         if old.is_live() {
-            return Err(Error::conflict("session is still running; kill it first"));
+            return Err(still_running(&old));
         }
         let meta = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
         if !ptyro_agents::profile::exists(&self.config(), &meta.place.profile) {
@@ -1277,13 +1360,27 @@ impl Daemon {
                 }
                 Ok(Reply::Session { info: self.info(&s) })
             }
-            Request::Remove { addr } => {
+            Request::Remove { addr, stop } => {
                 let s = self.resolve(&addr)?;
                 if self.launching.locked().0.contains(&s.id) {
                     return Err(Error::conflict("the session is restarting; remove it after"));
                 }
+                if s.is_live() && stop {
+                    self.stop_session(&s).await;
+                    // A quick terminal forgets itself once it exits (UX1.25).
+                    let Some(now) = self.session(s.id) else { return Ok(Reply::Done) };
+                    // Restarted while it stopped (still starting, or already started under the
+                    // same id): that one is new, so it stays.
+                    if self.launching.locked().0.contains(&s.id) || !Arc::ptr_eq(&now, &s) {
+                        return Err(Error::conflict("the session is restarting; remove it after"));
+                    }
+                }
+                if s.is_live() && !stop {
+                    let again = ptyro_core::error::Again::Stop;
+                    return Err(still_running(&s).with_fix(again, "Stop and remove"));
+                }
                 if s.is_live() {
-                    return Err(Error::conflict("session is still running; kill it first"));
+                    return Err(still_running(&s));
                 }
                 // A removed dormant session must not come back at the next start.
                 {
@@ -1304,8 +1401,12 @@ impl Daemon {
             Request::Rename { addr, name } => {
                 let s = self.resolve(&addr)?;
                 names::validate(&name).map_err(Error::invalid)?;
-                if self.name_taken(&name) {
-                    return Err(Error::conflict(format!("a session named {name:?} exists")));
+                let (current, project) = {
+                    let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    (m.name.clone(), m.place.project.clone())
+                };
+                if current != name {
+                    self.name_free_or_why(project.as_deref(), &name)?;
                 }
                 s.rename(name);
                 let info = self.info(&s);
@@ -1495,8 +1596,9 @@ impl Daemon {
                 let live = self.sessions().iter().filter(|s| s.is_live()).count();
                 if live > 0 && !force {
                     return Err(Error::conflict(format!(
-                        "{live} session(s) still running; use --force to stop them"
-                    )));
+                        "{live} session(s) still running: stopping the daemon stops them too"
+                    ))
+                    .with_fix(ptyro_core::error::Again::Force, "Stop them too"));
                 }
                 let _ = self.shutdown.send(true);
                 Ok(Reply::Done)
@@ -1544,7 +1646,9 @@ impl Daemon {
             Request::ChatGet { addr } => {
                 let s = self.resolve(&addr)?;
                 let st = s.structured.as_ref().ok_or_else(|| {
-                    Error::invalid("not a structured session (`ptyro new --structured`)")
+                    Error::invalid(
+                        "not a structured session: only one started structured has a transcript",
+                    )
                 })?;
                 Ok(Reply::Transcript { items: st.chat.locked().items.clone() })
             }
@@ -1658,15 +1762,10 @@ impl Daemon {
         asked: Option<&str>,
         project: Option<&ptyro_core::model::ProjectInfo>,
     ) -> Result<String, Error> {
-        let reg = self.registry.locked();
         if let Some(name) = asked {
-            return reg
-                .workspaces
-                .iter()
-                .find(|w| w.name == name)
-                .map(|w| w.name.clone())
-                .ok_or_else(|| Error::missing("workspace", name));
+            return self.find_workspace(name).map(|w| w.name);
         }
+        let reg = self.registry.locked();
         if let Some(p) = project
             && let Some(w) = reg.workspaces.iter().find(|w| w.projects.contains(&p.id))
         {
@@ -1674,6 +1773,13 @@ impl Daemon {
         }
         Ok(MAIN_WORKSPACE.into())
     }
+}
+
+/// Remove or restart on a live session. Each client offers the fix its own way: the CLI's
+/// `rm --stop`, the TUI's and the web's Stop and remove (SPEC §7.3).
+fn still_running(s: &Session) -> Error {
+    let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
+    Error::conflict(format!("{name} is still running: stop it first"))
 }
 
 /// What a new shell session runs: `[shell] command`, else the login shell (`$SHELL -l`).
@@ -1719,6 +1825,14 @@ pub fn glob(pattern: &str, text: &str) -> bool {
     p[pi..].iter().all(|c| *c == '*')
 }
 
+/// A daemon with no store and nothing running, over `registry`: for tests of what it decides.
+#[cfg(test)]
+pub(crate) fn test_daemon(dir: &std::path::Path, registry: Registry) -> Arc<Daemon> {
+    let home = dir.to_path_buf();
+    let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+    Daemon::new(paths, None, Config::default(), registry)
+}
+
 #[cfg(test)]
 mod tests {
     use super::glob;
@@ -1735,5 +1849,113 @@ mod tests {
         // The pathological pattern finishes at once.
         let name = "a".repeat(64);
         assert!(!glob("*a*a*a*a*a*a*a*a*a*a*a*a*b", &name));
+    }
+
+    /// The daemon's refusals reach the CLI, the TUI and the web alike, so they say what to do in
+    /// words all three share, never a CLI flag; and they say stop, not kill (SPEC §7.3). The
+    /// CLI adds its flag itself (`cli::offer`).
+    #[test]
+    fn refusals_name_no_cli_flag() {
+        const SAID: &[&str] = &[
+            "kill\x20it first",
+            "use \x2d-",
+            "or \x2d-force",
+            "\x2d-stop-sessions",
+            "\x2d-keep <",
+            "(\x2d-member",
+            "(\x2d-agents",
+            "\x2d-agents claude",
+            "\x2d-project (",
+            "with \x2d-project",
+            "with \x2d-name",
+            "(\x2d-name",
+            "pick \x2d-profile",
+            "\x2d-existing needs",
+            "\x2d-lead needs",
+            "with \x2d-trust",
+            "pair \x2d-scope",
+            "ptyro\x20machine rm",
+        ];
+        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    let text = std::fs::read_to_string(&p).unwrap();
+                    for l in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                        out.push((p.display().to_string(), l.to_owned()));
+                    }
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut lines);
+        // SAID is written escaped, so this file is checked too.
+        for (file, line) in &lines {
+            for s in SAID {
+                assert!(!line.contains(s), "{file}: {:?} names a CLI flag or verb: {line}", s);
+            }
+        }
+        // Any flag in the daemon's words: `--x` after a space, `(` or a backtick. An argv
+        // (`"--json"`) starts its string with it, so isn't caught. What may say one: other
+        // programs' flags, and text only a CLI or an agent reads (mail an agent gets, a health
+        // finding whose `ptyro …` command the TUI and the web turn into a button).
+        const ELSEWHERE: &[&str] = &[
+            "diff \x2d-git",                       // git's own output, parsed
+            "\x2d-frozen-lockfile",                // a setup script suggested for the repository
+            "\x2d-password=",                      // a redaction test's input
+            "codex \x2d-version",                  // another program
+            "ptyro \x2d-version`",                 // a shell command to try over ssh
+            "msg send {} \\\"…\\\" \x2d-reply-to", // the reply line of mail to an agent
+            "\x2d-kind contract_change",           // a change set's agent, told how to ask its lead
+            "claude \x2d-lead`",                   // an agent's `ptyro mcp` / lead refusal
+            "daemon restart \x2d-hibernate",       // an upgrade's finding: the TUI and web offer it
+        ];
+        let flag = |l: &str| {
+            let b = l.as_bytes();
+            (1..b.len().saturating_sub(2)).any(|i| {
+                matches!(b[i - 1], b' ' | b'(' | b'`')
+                    && b[i] == b'-'
+                    && b[i + 1] == b'-'
+                    && b[i + 2].is_ascii_lowercase()
+            })
+        };
+        let named: Vec<String> = lines
+            .iter()
+            .filter(|(_, l)| l.contains('"') && flag(l) && !ELSEWHERE.iter().any(|a| l.contains(a)))
+            .map(|(file, l)| format!("{file}: {}", l.trim()))
+            .collect();
+        assert!(named.is_empty(), "the daemon's words name a CLI flag:\n{}", named.join("\n"));
+    }
+
+    /// `Error::missing(kind, addr)` says `no KIND matches "ADDR"`: its address is what someone
+    /// typed or an id, never a description (`no session matches "of step x"`). A made-up
+    /// address has no space in it; a sentence does, and is its own `NotFound` error.
+    #[test]
+    fn a_missing_thing_is_named_by_its_address() {
+        let mut wrong = Vec::new();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = vec![dir];
+        while let Some(d) = files.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    files.push(p);
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                for (i, _) in text.match_indices("Error::missing(") {
+                    let call: String = text[i..].chars().take_while(|c| *c != ';').collect();
+                    let call = call.split("})").next().unwrap_or(&call);
+                    let Some(f) = call.find("format!(\"") else { continue };
+                    let lit = call[f + 9..].split('"').next().unwrap_or("");
+                    if lit.contains(' ') {
+                        wrong.push(format!("{}: {lit}", p.display()));
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "a description given as an address:\n{}", wrong.join("\n"));
     }
 }

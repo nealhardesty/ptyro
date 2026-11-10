@@ -28,7 +28,7 @@ use std::time::Duration;
 use ptyro_core::model::{RemoveOpts, WorktreeInfo, WorktreeSpec, WorktreeState};
 use ptyro_core::session::{ProcessState, SessionKind, SpawnSpec};
 use ptyro_core::status::{AgentStatus, AttentionKind};
-use ptyro_core::{Error, ErrorCode, now_ms};
+use ptyro_core::{Error, ErrorCode, lookup, now_ms};
 use ptyro_protocol::{Reply, Request};
 use ptyro_run::changeset::{
     self as cs, ChangeSet, CheckResult, ContractRev, CsEvent, Layout, Member, MemberLive, Phase,
@@ -147,30 +147,51 @@ pub(crate) fn normalize(p: &Path) -> PathBuf {
 impl Daemon {
     // ── finding sets ───────────────────────────────────────────────────────
 
-    /// A set by name, run id, or `@last`.
+    /// A set by name (the live one, else the newest), `@last`, or its run's id or the end of
+    /// it, at least 4 characters (SPEC §2.3).
     pub(crate) fn find_set(&self, addr: &str) -> Result<String, Error> {
         let runs = self.runs.locked();
         let sets: Vec<(&String, &ChangeSet, u64)> = runs
             .iter()
             .filter_map(|(id, e)| e.state.changeset.as_ref().map(|c| (id, c, e.state.created_ms)))
             .collect();
+        let addr = addr.trim();
         if addr == "@last" {
             return sets
                 .iter()
                 .max_by_key(|(_, _, t)| *t)
                 .map(|(id, _, _)| (*id).clone())
-                .ok_or_else(|| Error::not_found("no change sets yet"));
+                .ok_or_else(|| Error::new(ErrorCode::NotFound, "there are no change sets yet"));
         }
+        let key = lookup::key(addr);
         let live = |c: &ChangeSet| c.phase != Phase::Removed;
-        if let Some((id, _, _)) =
-            sets.iter().filter(|(_, c, _)| c.name == addr).max_by_key(|(_, c, t)| (live(c), *t))
+        if let Some((id, _, _)) = sets
+            .iter()
+            .filter(|(_, c, _)| lookup::same(&c.name, &key))
+            .max_by_key(|(_, c, t)| (live(c), *t))
         {
             return Ok((*id).clone());
         }
-        if sets.iter().any(|(id, _, _)| *id == addr) {
-            return Ok(addr.to_owned());
-        }
-        Err(Error::missing("change set", addr))
+        let bare = key.strip_prefix("r-").unwrap_or(&key);
+        let by_id = sets
+            .iter()
+            .filter(|(id, _, _)| lookup::id_matches(id.trim_start_matches("r-"), bare))
+            .collect();
+        lookup::one("change set", addr, by_id, |(id, c, _)| format!("{id} ({})", c.name))?
+            .map(|(id, _, _)| (*id).clone())
+            .ok_or_else(|| {
+                lookup::not_found("change set", addr, sets.iter().map(|(id, _, _)| id.as_str()))
+            })
+    }
+
+    /// Whether a live set has this name (not an id: a new name is checked with this).
+    pub(crate) fn set_named(&self, name: &str) -> bool {
+        self.runs.locked().values().any(|e| {
+            e.state
+                .changeset
+                .as_ref()
+                .is_some_and(|c| c.phase != Phase::Removed && lookup::same(&c.name, name))
+        })
     }
 
     pub(crate) fn set_state(&self, run: &str) -> Result<ChangeSet, Error> {
@@ -414,8 +435,8 @@ impl Daemon {
             CsOp::Add { project, agent, depends_on, .. } => {
                 self.cs_add(&run.unwrap_or_default(), &project, agent, depends_on).await
             }
-            CsOp::Drop { member, force, .. } => {
-                self.cs_drop(&run.unwrap_or_default(), &member, force).await
+            CsOp::Drop { member, force, ignore_dependents, .. } => {
+                self.cs_drop(&run.unwrap_or_default(), &member, force, ignore_dependents).await
             }
             CsOp::Rm { keep, force, .. } => {
                 self.cs_rm(&run.unwrap_or_default(), &keep, force).await
@@ -449,7 +470,7 @@ impl Daemon {
                 self.set_state(run)?.member(&n).ok_or_else(|| Error::missing("member", &n))?;
                 Ok(n)
             }
-            (_, None) => Err(Error::invalid("which member? (--member NAME)")),
+            (_, None) => Err(Error::invalid("which member? name one")),
         }
     }
 
@@ -460,16 +481,16 @@ impl Daemon {
     }
 
     async fn cs_new(self: &Arc<Self>, spec: CsNewSpec) -> Result<String, Error> {
-        let name = ptyro_core::model::slugify(&spec.name);
-        if name.is_empty() {
+        // A name someone gave: checked, never rewritten (SPEC §2.3).
+        let name = spec.name.clone();
+        if name.trim().is_empty() {
             return Err(Error::invalid("a change set needs a name"));
         }
-        if let Ok(r) = self.find_set(&name)
-            && self.set_state(&r).is_ok_and(|c| c.phase != Phase::Removed)
-        {
-            return Err(Error::conflict(format!(
-                "change set {name} exists (ptyro cs show {name})"
-            )));
+        // Kept short because its members' names are appended (`<set>-<member>`).
+        ptyro_core::names::validate_within(&name, 40, ", since its members' names are appended")
+            .map_err(Error::invalid)?;
+        if self.set_named(&name) {
+            return Err(Error::conflict(format!("change set {name} exists: pick another name")));
         }
         // The template, if any.
         let template: Option<Template> = match &spec.template {
@@ -490,9 +511,13 @@ impl Daemon {
                         return Err(Error::new(
                             ErrorCode::UntrustedProject,
                             format!(
-                                "template {t} comes from the {} repository and isn't trusted; read {}, then run with --trust {fp}",
+                                "template {t} comes from the {} repository and isn't trusted: read {}, then trust it to go on",
                                 hub.slug, info.path
                             ),
+                        )
+                        .with_fix(
+                            ptyro_core::error::Again::Trust { fingerprint: fp },
+                            "Trust and go on",
                         ));
                     }
                 }
@@ -509,7 +534,7 @@ impl Daemon {
         }
         if want.is_empty() {
             return Err(Error::invalid(
-                "a change set needs members: --projects api,sdk,web (or --template)",
+                "a change set needs members: name its projects, or a template that has them",
             ));
         }
         let projects: Vec<ptyro_core::model::ProjectInfo> =
@@ -530,7 +555,7 @@ impl Daemon {
             let ws = self.home_workspace(None, Some(p))?;
             if spec.workspace.is_none() && ws != workspace {
                 return Err(Error::invalid(format!(
-                    "a change set lives in one workspace: {} is in {ws}, {} in {workspace} (--workspace picks one)",
+                    "a change set lives in one workspace: {} is in {ws}, {} in {workspace}; say which workspace",
                     p.slug, projects[0].slug
                 )));
             }
@@ -868,7 +893,8 @@ impl Daemon {
             profile: Some(set.profile.clone()),
             workspace: set.workspace.clone(),
             prompt: Some(prompt),
-            name: Some(self.free_name(&format!("{}-{step}", set.name))),
+            name: Some(format!("{}-{step}", set.name)),
+            name_or_next: true,
             env: self.agent_env(run, &set, step),
             confirmed: true,
             unqueued: true,
@@ -922,7 +948,8 @@ impl Daemon {
             profile: Some(set.profile.clone()),
             workspace: set.workspace.clone(),
             prompt: Some(cs::member_prompt(&set, &m, approved.as_ref())),
-            name: Some(self.free_name(&format!("{}-{}", set.name, m.name))),
+            name: Some(format!("{}-{}", set.name, m.name)),
+            name_or_next: true,
             env: self.agent_env(run, &set, &m.name),
             confirmed: true,
             unqueued: true,
@@ -1170,9 +1197,9 @@ impl Daemon {
             }
         }
         if targets.is_empty() {
-            return Err(Error::missing(
-                "recipient",
-                format!("{to} (no agents in {} yet)", set.name),
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                format!("nobody to send to as {to}: {} has no agents yet", set.name),
             ));
         }
         let mut ids = Vec::new();
@@ -2400,11 +2427,12 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "{} changed since the last set checkpoint: restoring would lose that. `ptyro cs checkpoint {}` first, or --force (which checkpoints the present first)",
+                        "{} changed since the last set checkpoint: restoring would lose that. Checkpoint {} first, or restore anyway (which checkpoints the present first)",
                         unrecorded.join(", "),
                         set.name
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Restore anyway"));
             }
             let safety =
                 self.cs_checkpoint(run, Some(format!("before restoring #{n}")), "restore").await?;
@@ -3076,7 +3104,8 @@ impl Daemon {
     ) -> Result<Value, Error> {
         let set = self.set_state(run)?;
         let p = self.find_project(project)?;
-        if set.member(&p.slug).is_some() {
+        // By id too: a project renamed since it joined keeps its member's old name.
+        if set.member(&p.slug).is_some() || set.members.iter().any(|m| m.project == p.id) {
             return Err(Error::conflict(format!("{} is a member already", p.slug)));
         }
         for d in &depends_on {
@@ -3146,6 +3175,7 @@ impl Daemon {
         run: &str,
         member: &str,
         force: bool,
+        ignore_dependents: bool,
     ) -> Result<Value, Error> {
         let set = self.set_state(run)?;
         let m = set.member(member).ok_or_else(|| Error::missing("member", member))?.clone();
@@ -3155,11 +3185,14 @@ impl Daemon {
             .filter(|x| x.depends_on.contains(&m.name))
             .map(|x| x.name.as_str())
             .collect();
-        if !users.is_empty() && !force {
+        // Overriding the dependency never discards work: unsaved work in its worktree is its
+        // own refusal, with its own way through (`force`), as removing a worktree is.
+        if !users.is_empty() && !ignore_dependents {
             return Err(Error::conflict(format!(
-                "{} depend on {member}: drop them first, or --force",
+                "{} depend on {member}: drop them first, or drop it anyway",
                 users.join(", ")
-            )));
+            ))
+            .with_fix(ptyro_core::error::Again::IgnoreDependents, "Drop it anyway"));
         }
         if let Some(w) = &m.worktree {
             self.remove_worktree(w, RemoveOpts { force, stop_sessions: true, keep_branch: false })
@@ -3171,7 +3204,7 @@ impl Daemon {
     }
 
     /// Remove the set: every member through the safe removal; one member with work that would
-    /// be lost blocks all of them (or `--keep` it).
+    /// be lost blocks all of them (or `--keep-member` it).
     async fn cs_rm(
         self: &Arc<Self>,
         run: &str,
@@ -3195,9 +3228,15 @@ impl Daemon {
         force: bool,
     ) -> Result<Value, Error> {
         let set = set.clone();
+        // Kept members by their real names (a member is named as `ChangeSet::member` finds it).
+        let mut kept: Vec<String> = Vec::new();
         for k in keep {
-            set.member(k).ok_or_else(|| Error::missing("member", k))?;
+            let m = set.member(k).ok_or_else(|| Error::missing("member", k))?;
+            if !kept.contains(&m.name) {
+                kept.push(m.name.clone());
+            }
         }
+        let keep = &kept[..];
         let going: Vec<&Member> = set.members.iter().filter(|m| !keep.contains(&m.name)).collect();
         if !force {
             let mut unsafe_ = Vec::new();
@@ -3224,11 +3263,12 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "refusing to remove {}: work would be lost in {}. Ship it, `--keep <member>`, or --force",
+                        "refusing to remove {}: work would be lost in {}. Ship it, keep that member, or remove the set anyway",
                         set.name,
                         unsafe_.join("; ")
                     ),
-                ));
+                )
+                .with_fix(ptyro_core::error::Again::Force, "Remove the set anyway"));
             }
         }
         // The agents first.

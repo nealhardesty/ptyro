@@ -459,24 +459,26 @@ fn fresh(s: &SessionInfo) -> bool {
         && s.status.as_ref().is_some_and(|r| r.since_ms >= s.last_prompt_ms.unwrap_or(0))
 }
 
-/// Has `s` reached `cond`: `working`, `blocked`, `idle`, `done`, `errored`, `exit` or
-/// `any-attention`? `idle` and `done` mean "the turn ptyro last typed has ended", so the idle
-/// before a prompt never counts (SPEC §12.2, M5).
+/// Has `s` reached `cond`: a status word of `crate::selector::SELECTORS` (`working`, `blocked`,
+/// `idle`, `done`, `error`, aliases too), `exit` or `any-attention`? `idle`, `done` and `error`
+/// mean "the turn ptyro last typed has ended", so the idle before a prompt never counts (SPEC
+/// §12.2, M5).
 pub fn reached(s: &SessionInfo, cond: &str) -> bool {
-    use crate::status::AgentStatus;
+    use crate::selector::State;
+    use crate::status::AgentStatus as A;
     let st = s.status.as_ref().map(|r| r.status);
     match cond {
         "exit" => !s.state.is_live(),
-        "working" => st == Some(AgentStatus::Working),
-        "blocked" => st == Some(AgentStatus::Blocked),
-        "idle" => matches!(st, Some(AgentStatus::Idle | AgentStatus::Done)) && fresh(s),
-        "done" => st == Some(AgentStatus::Done) && fresh(s),
-        "errored" => st == Some(AgentStatus::Errored) && fresh(s),
         "any-attention" => {
-            st == Some(AgentStatus::Blocked)
+            st == Some(A::Blocked)
                 || s.attention.as_ref().is_some_and(|a| a.since_ms >= s.last_prompt_ms.unwrap_or(0))
         }
-        _ => false,
+        word => match State::parse(word) {
+            Some(State::Status(A::Idle)) => matches!(st, Some(A::Idle | A::Done)) && fresh(s),
+            Some(State::Status(want @ (A::Done | A::Errored))) => st == Some(want) && fresh(s),
+            Some(State::Status(want)) => st == Some(want),
+            _ => false,
+        },
     }
 }
 
@@ -539,6 +541,10 @@ pub struct SpawnSpec {
     pub prompt: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    /// The daemon's own starts (`scratchpad`, `judge`, a run's steps): a `name` taken in the
+    /// project it lands in becomes `name-2`, … instead of being refused. Never from a client.
+    #[serde(skip)]
+    pub name_or_next: bool,
     /// Extra variables from the requesting client (SPEC §5.1 `client_env`).
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -672,6 +678,19 @@ impl Show {
 }
 
 impl SessionInfo {
+    /// Its name as an address that finds it alone among `all` (names are unique per project,
+    /// SPEC §2.3): `name`, else `project/name` (`slug` gives a project id's slug), else its
+    /// handle.
+    pub fn address(&self, all: &[SessionInfo], slug: impl Fn(&str) -> Option<String>) -> String {
+        if !all.iter().any(|o| o.id != self.id && o.name == self.name) {
+            return self.name.clone();
+        }
+        match self.project.as_deref().and_then(slug) {
+            Some(p) => format!("{p}/{}", self.name),
+            None => format!("s:{}", self.handle),
+        }
+    }
+
     /// A session of its own: not a worktree's quick terminal, not the scratchpad's editor.
     pub fn is_real(&self) -> bool {
         !self.quick && !self.pad

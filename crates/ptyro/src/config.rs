@@ -49,14 +49,8 @@ fn semantic_config(config: &Config) -> Result<(), String> {
 /// or `.ptyro.toml` with `--shared`).
 async fn layer(ctx: &Ctx, project: Option<&str>, shared: bool) -> Result<Layer, Error> {
     let Some(project) = project else { return Ok(Layer::User(Config::path(&ctx.paths))) };
-    let addr = if project.is_empty() {
-        std::env::current_dir()
-            .map_err(|e| Error::internal(format!("the current directory: {e}")))?
-            .to_string_lossy()
-            .into_owned()
-    } else {
-        project.to_owned()
-    };
+    // `.` is the repository you're in, as the daemon names its folder.
+    let addr = crate::cli::addr_here(project.to_owned())?;
     let c = ctx.connect(false).await?;
     let Reply::Project { info, .. } = c.request(Request::ProjectGet { addr }).await? else {
         return Err(Error::internal("unexpected reply"));
@@ -252,13 +246,14 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
             )?;
             Ok(0)
         }
-        ConfigCmd::Rm { collection, name, project, shared } => {
+        ConfigCmd::Rm { collection, name, project, shared, yes } => {
+            // Found first, then asked: one that isn't there is refused without a question.
             let layer = layer(ctx, project.as_deref(), shared).await?;
-            change(
-                &layer,
-                &Op::Remove { path: collection.clone(), name: name.clone() },
-                &format!("removed {collection} {name}"),
-            )?;
+            let op = Op::Remove { path: collection.clone(), name: name.clone() };
+            settings::preview(&layer, &op, &lookups(), &extra_for(&layer)).map_err(invalid)?;
+            let q = format!("Remove {collection} {name}? {}", ptyro_core::removal::CONFIG_ENTRY);
+            crate::cli::ask_first(&q, yes)?;
+            change(&layer, &op, &format!("removed {collection} {name}"))?;
             Ok(0)
         }
         ConfigCmd::Rename { collection, from, to, project, shared } => {
@@ -739,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn project_takes_its_name_only_with_an_equals_sign() {
+    fn project_takes_its_value_like_every_other_flag() {
         use clap::Parser;
         // (The whole command tree is built on the stack: more than a test thread's 2 MiB.)
         std::thread::Builder::new()
@@ -748,40 +743,31 @@ mod tests {
                 let parse = |args: &[&str]| {
                     let mut v = vec!["ptyro", "config"];
                     v.extend_from_slice(args);
-                    match crate::Cli::try_parse_from(v).unwrap().cmd {
-                        Some(crate::Cmd::Config { cmd }) => cmd,
-                        _ => panic!("not a config command"),
-                    }
+                    crate::Cli::try_parse_from(v).ok().and_then(|c| match c.cmd {
+                        Some(crate::Cmd::Config { cmd }) => Some(cmd),
+                        _ => None,
+                    })
                 };
-                // `-p` alone means the repository I'm in; the next word is a word of its own.
-                let ConfigCmd::List { section, project, .. } = parse(&["list", "-p", "ui"]) else {
-                    panic!()
-                };
-                assert_eq!((section.as_deref(), project.as_deref()), (Some("ui"), Some("")));
-                let ConfigCmd::List { section, project, .. } =
-                    parse(&["list", "ui", "--project=app"])
-                else {
-                    panic!()
-                };
-                assert_eq!((section.as_deref(), project.as_deref()), (Some("ui"), Some("app")));
-                let ConfigCmd::Add { collection, name, project, .. } =
-                    parse(&["add", "-p", "scripts.run", "dev", "command=make"])
+                // `--project P` and `--project=P` mean the same, as everywhere else.
+                for args in
+                    [&["list", "--project", "app", "ui"][..], &["list", "ui", "--project=app"]]
+                {
+                    let Some(ConfigCmd::List { section, project, .. }) = parse(args) else {
+                        panic!("{args:?}")
+                    };
+                    assert_eq!((section.as_deref(), project.as_deref()), (Some("ui"), Some("app")));
+                }
+                let Some(ConfigCmd::Add { collection, name, project, .. }) =
+                    parse(&["add", "-p", ".", "scripts.run", "dev", "command=make"])
                 else {
                     panic!()
                 };
                 assert_eq!(
                     (collection.as_str(), name.as_deref(), project.as_deref()),
-                    ("scripts.run", Some("dev"), Some(""))
+                    ("scripts.run", Some("dev"), Some("."))
                 );
-                let ConfigCmd::Set { key, value, project, shared } =
-                    parse(&["set", "x", "v", "--project", "--shared"])
-                else {
-                    panic!()
-                };
-                assert_eq!(
-                    (key.as_str(), value, project.as_deref(), shared),
-                    ("x", vec!["v".to_owned()], Some(""), true)
-                );
+                // A bare `--project` is an error, never the next word taken quietly.
+                assert!(parse(&["set", "x", "v", "--project"]).is_none());
             })
             .unwrap()
             .join()

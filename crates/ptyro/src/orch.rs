@@ -3,7 +3,7 @@
 //! (`O`) sends the same requests.
 //!
 //! ```sh
-//! ptyro fanout --agents claude,codex,gemini --prompt-file task.md --test --wait
+//! ptyro fanout --agent claude,codex,gemini --prompt-file task.md --test --wait
 //! ptyro compare @last && ptyro pick @last claude
 //! ptyro recipe run implement-and-review --var task="add --json to ls"
 //! ptyro gate resolve g-7f3a approve
@@ -22,7 +22,7 @@ use ptyro_protocol::{Reply, Request};
 use ptyro_run::wire::{CompareDoc, FanoutSpec, PickMode, RunInfo};
 use ptyro_run::{RunStatus, StepStatus};
 
-use crate::cli::{Ctx, age, current_dir, no_daemon, unexpected};
+use crate::cli::{Ctx, ago, current_dir, no_daemon, unexpected};
 
 #[derive(Subcommand)]
 pub enum RunCmd {
@@ -60,7 +60,8 @@ pub enum RunCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Stop the run: running steps are cancelled, their agents stopped (worktrees stay)
+    /// Stop the run: its running steps are cancelled and the agents they started are stopped;
+    /// their worktrees stay
     Cancel { run: String },
     /// Run a step again (a failed, held or finished one), and what it skipped
     Retry { run: String, step: String },
@@ -79,9 +80,11 @@ pub enum RunCmd {
     Lead {
         #[arg(add = ArgValueCandidates::new(crate::complete::sessions))]
         session: String,
+        /// Live workers at once (default 4)
         #[arg(long)]
         max_workers: Option<u32>,
-        #[arg(long = "agent")]
+        /// The agents it may start (repeatable; default: any)
+        #[arg(short, long = "agent", add = ArgValueCandidates::new(crate::complete::agents))]
         agents: Vec<String>,
     },
 }
@@ -90,7 +93,7 @@ pub enum RunCmd {
 pub enum RecipeCmd {
     /// Built-in, your own (~/.config/ptyro/recipes) and the project's (.ptyro/recipes)
     Ls {
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         #[arg(long)]
         json: bool,
@@ -98,7 +101,7 @@ pub enum RecipeCmd {
     /// A recipe's source
     Show {
         name: String,
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
     },
     /// Check a recipe file (every mistake at once, with where)
@@ -109,7 +112,7 @@ pub enum RecipeCmd {
         recipe: String,
         #[arg(long, default_value = "mermaid")]
         format: String,
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
     },
     /// Start a recipe (a name or a .toml file)
@@ -118,7 +121,7 @@ pub enum RecipeCmd {
         /// `--var task="…"` (repeatable)
         #[arg(long = "var", value_parser = parse_kv)]
         vars: Vec<(String, String)>,
-        #[arg(long, add = ArgValueCandidates::new(crate::complete::projects))]
+        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
         /// Base for new worktrees (default: the project's)
         #[arg(long)]
@@ -177,14 +180,16 @@ pub enum MsgCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Messages for you (or --me SESSION), after --since; --wait for the first one
+    /// Messages for you (or --me SESSION), after --since; with --timeout, wait that long for the
+    /// first one (exit 7 if none came)
     Check {
         #[arg(long)]
         me: Option<String>,
         #[arg(long)]
         since: Option<String>,
-        #[arg(long)]
-        wait: Option<String>,
+        /// Wait up to this long for the first message (`30s`, `5m`; at most 10m)
+        #[arg(long, value_name = "DUR")]
+        timeout: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -192,7 +197,8 @@ pub enum MsgCmd {
     Ls {
         #[arg(long)]
         run: Option<String>,
-        #[arg(short = 'n', long, default_value_t = 100)]
+        /// At most N
+        #[arg(short, long, default_value_t = 100)]
         limit: u32,
         #[arg(long)]
         json: bool,
@@ -279,7 +285,7 @@ fn duration(s: &str) -> Result<Duration, Error> {
 /// The project for a new run: the one asked for, else the repository you're in.
 fn project_or_here(p: Option<String>) -> Result<Option<String>, Error> {
     Ok(match p {
-        Some(p) => Some(p),
+        Some(p) => Some(crate::cli::addr_here(p)?),
         None => Some(current_dir()?.to_string_lossy().into_owned()),
     })
 }
@@ -316,7 +322,7 @@ fn print_run(r: &RunInfo) {
         s.kind.label(),
         s.name,
         s.status.label(),
-        age(s.created_ms)
+        ago(s.created_ms)
     );
     for (k, v) in &s.vars {
         println!(
@@ -524,7 +530,7 @@ pub async fn run(ctx: &Ctx, cmd: RunCmd) -> Result<i32, Error> {
                     s.name,
                     s.status.label(),
                     s.steps.len(),
-                    age(s.created_ms),
+                    ago(s.created_ms),
                     if gates > 0 { format!("  ⏸ {gates} gate(s)") } else { String::new() }
                 );
             };
@@ -573,7 +579,7 @@ pub async fn run(ctx: &Ctx, cmd: RunCmd) -> Result<i32, Error> {
                         o.remove("step");
                         o.remove("at");
                     }
-                    println!("{seq:>4} {:>8} ago  {kind}{step} {}", age(at), rest);
+                    println!("{seq:>4} {:>8} ago  {kind}{step} {}", ago(at), rest);
                 }
             }
             Ok(0)
@@ -738,7 +744,7 @@ pub async fn recipe(ctx: &Ctx, cmd: RecipeCmd) -> Result<i32, Error> {
             };
             let r = match c.request(req.clone()).await {
                 Err(e) if e.code == ErrorCode::UntrustedProject => {
-                    let fp = e.message.rsplit(' ').next().unwrap_or("").to_owned();
+                    let fp = crate::cli::trust_of(&e).unwrap_or_default();
                     if std::io::stdin().is_terminal() && !fp.is_empty() {
                         eprintln!("{}", e.message);
                         eprint!("Trust it and run? [y/N] ");
@@ -816,7 +822,7 @@ pub async fn fanout(
         .map(str::to_owned)
         .collect();
     if let Some(n) = n {
-        // `-n 3 --agents claude`: three of the same; `-n 4 --agents claude,codex`: alternate.
+        // `--count 3 --agent claude`: three of the same; `--count 4 --agent claude,codex`: alternate.
         let pool = if list.is_empty() { vec!["claude".to_owned()] } else { list.clone() };
         list = (0..n as usize).map(|i| pool[i % pool.len()].clone()).collect();
     }
@@ -907,8 +913,29 @@ pub async fn discard(
     run: String,
     candidate: Option<String>,
     force: bool,
+    yes: bool,
 ) -> Result<i32, Error> {
+    use ptyro_core::removal::{DISCARD, DISCARD_REST, safety};
     let c = ctx.connect(false).await.map_err(no_daemon)?;
+    // Found first, then asked about by its id: a typo asks nothing.
+    let Reply::Run { run: info } = c.request(Request::RunGet { id: run }).await? else {
+        return Err(Error::internal("unexpected reply"));
+    };
+    if let Some(c) = &candidate
+        && !info.state.steps.contains_key(c)
+    {
+        let known: Vec<String> = info.state.steps.keys().cloned().collect();
+        return Err(ptyro_core::lookup::not_found_among("candidate", c, &known));
+    }
+    let run = info.state.id;
+    let q = match &candidate {
+        Some(c) => format!("Discard candidate {c} of {run}? {DISCARD} {}", safety(force)),
+        None => format!(
+            "Discard every candidate of {run} you didn't pick? {DISCARD_REST} {}",
+            safety(force)
+        ),
+    };
+    crate::cli::ask_first(&q, yes)?;
     notes(c.request(Request::Discard { run, candidate, force }).await?)
 }
 
@@ -935,7 +962,7 @@ pub async fn gate(ctx: &Ctx, cmd: GateCmd) -> Result<i32, Error> {
             }
             for g in gates {
                 let state = g.gate.choice.as_ref().map_or_else(
-                    || format!("waiting {}", age(g.gate.opened_ms)),
+                    || format!("waiting {}", ago(g.gate.opened_ms)),
                     |c| format!("answered {c:?}"),
                 );
                 println!(
@@ -997,9 +1024,10 @@ pub async fn msg(ctx: &Ctx, cmd: MsgCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        MsgCmd::Check { me: who, since, wait, json } => {
+        MsgCmd::Check { me: who, since, timeout, json } => {
             let who = who.or_else(me).unwrap_or_else(|| "@user".into());
-            let wait_ms = wait.as_deref().map(duration).transpose()?.map(|d| d.as_millis() as u64);
+            let wait_ms =
+                timeout.as_deref().map(duration).transpose()?.map(|d| d.as_millis() as u64);
             let Reply::Messages { messages } =
                 c.request(Request::MsgCheck { me: who, since, wait_ms }).await?
             else {
@@ -1015,7 +1043,7 @@ pub async fn msg(ctx: &Ctx, cmd: MsgCmd) -> Result<i32, Error> {
                         m.from,
                         m.to,
                         m.kind,
-                        age(m.at_ms),
+                        ago(m.at_ms),
                         m.body.replace('\n', "\n  ")
                     );
                 }
@@ -1038,7 +1066,7 @@ pub async fn msg(ctx: &Ctx, cmd: MsgCmd) -> Result<i32, Error> {
                 for m in &messages {
                     println!(
                         "{:>8} ago  {:<10} {} → {} [{}] {}",
-                        age(m.at_ms),
+                        ago(m.at_ms),
                         m.state,
                         m.from,
                         m.to,
@@ -1169,7 +1197,7 @@ pub async fn checkpoint(ctx: &Ctx, cmd: CheckpointCmd) -> Result<i32, Error> {
                     "{:>3}  turn {:<3} {:>8} ago  {} file(s)  {}  {}",
                     k.n,
                     k.turn,
-                    age(k.at_ms),
+                    ago(k.at_ms),
                     k.files,
                     &k.sha[..k.sha.len().min(10)],
                     k.refname

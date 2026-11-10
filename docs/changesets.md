@@ -9,7 +9,7 @@ safe way to ship, while staying honest that git, PRs and CI are per repository (
 §15.7; ROADMAP M11).
 
 ```bash
-ptyro cs new add-user-tier --projects api,sdk,web -p "users get a tier: free or pro"
+ptyro cs new add-user-tier --projects api,sdk,web --prompt "users get a tier: free or pro"
 ptyro cs contract add-user-tier approve      # once the lead's contract looks right
 ptyro cs status add-user-tier                # where it stands, and what to do about it
 ptyro cs commit add-user-tier -m "Add user tier"
@@ -152,7 +152,7 @@ checkpoint (it names them); `--force` checkpoints the present first, so nothing 
   > the merge train stopped at sdk: CI failed on PR #12: build. Landed: api; not landed: sdk, web
 
   Fix it and run `cs land` again: it resumes where it stopped.
-- **`ptyro cs rm SET [--keep M] [--force]`** removes every member's worktree safely: one with
+- **`ptyro cs rm SET [--keep-member M] [--force] [-y]`** removes every member's worktree safely: one with
   unshipped work blocks the whole set unless you keep it. `cs add SET PROJECT` and `cs drop SET
   MEMBER` change membership.
 
