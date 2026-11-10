@@ -967,7 +967,7 @@ pub async fn new_in_new_worktree(
             let o = crate::script::WaitOpts {
                 conditions: vec!["exit".into()],
                 pattern: None,
-                scrollback: false,
+                scrollback: None,
                 timeout: None,
                 any: false,
                 stall: None,

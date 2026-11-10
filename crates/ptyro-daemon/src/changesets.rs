@@ -3201,7 +3201,7 @@ impl Daemon {
     }
 
     /// Remove the set: every member through the safe removal; one member with work that would
-    /// be lost blocks all of them (or `--keep` it).
+    /// be lost blocks all of them (or `--keep-member` it).
     async fn cs_rm(
         self: &Arc<Self>,
         run: &str,

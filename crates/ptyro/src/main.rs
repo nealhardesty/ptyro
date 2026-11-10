@@ -315,9 +315,10 @@ enum Cmd {
         /// Instead: until this regex appears on the screen
         #[arg(long = "match", value_name = "REGEX")]
         pattern: Option<String>,
-        /// With --match: search the scrollback too
-        #[arg(long, requires = "pattern")]
-        scrollback: bool,
+        /// With --match: search up to N lines of scrollback above the screen too (all of it
+        /// without N), as `read --scrollback [N]` shows them
+        #[arg(long, requires = "pattern", num_args = 0..=1, default_missing_value = "4294967295")]
+        scrollback: Option<u32>,
         /// Give up after this long (`30s`, `10m`; default: never)
         #[arg(long)]
         timeout: Option<String>,
@@ -434,7 +435,8 @@ enum Cmd {
         candidate: String,
         #[arg(long, conflicts_with_all = ["pr", "apply"])]
         cherry_pick: bool,
-        #[arg(long, conflicts_with = "apply")]
+        /// Push its branch and open a pull request
+        #[arg(long = "open-pr", conflicts_with = "apply")]
         pr: bool,
         /// Copy changes into a worktree (default: the main checkout), uncommitted
         #[arg(long)]
@@ -1488,6 +1490,34 @@ mod tests {
         assert_eq!(parse(&["ptyro"]), Some((false, vec![])));
     }
 
+    /// `wait --scrollback [N]` reads as `read --scrollback [N]`: N lines above the screen, all
+    /// of them without N.
+    #[test]
+    fn wait_scrollback_takes_lines_as_read_does() {
+        use clap::Parser;
+        let parse = |argv: &'static [&'static str]| {
+            std::thread::Builder::new()
+                .stack_size(32 << 20)
+                .spawn(move || match super::Cli::try_parse_from(argv).map(|c| c.cmd) {
+                    Ok(Some(super::Cmd::Wait { scrollback, .. })) => Some(scrollback),
+                    Ok(Some(super::Cmd::Read { scrollback, .. })) => Some(scrollback),
+                    _ => None,
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        let wait = parse(&["ptyro", "wait", "s", "--match", "x", "--scrollback", "50"]);
+        assert_eq!(wait, Some(Some(50)));
+        assert_eq!(wait, parse(&["ptyro", "read", "s", "--scrollback", "50"]));
+        let all = parse(&["ptyro", "wait", "s", "--match", "x", "--scrollback"]);
+        assert_eq!(all, Some(Some(u32::MAX)));
+        assert_eq!(all, parse(&["ptyro", "read", "s", "--scrollback"]));
+        assert_eq!(parse(&["ptyro", "wait", "s", "--match", "x"]), Some(None));
+        // Still only with --match.
+        assert_eq!(parse(&["ptyro", "wait", "s", "--scrollback", "5"]), None);
+    }
+
     #[test]
     fn send_takes_flags_between_its_words() {
         use clap::Parser;
@@ -1579,16 +1609,14 @@ mod tests {
     }
 
     /// A long flag is a switch everywhere or takes a value everywhere: `--x V` never means a
-    /// switch plus a word in another command. These were so before the rule and wait for the
-    /// owner's word on new names; no new one may join them.
-    const SWITCH_AND_VALUE: [&str; 6] = ["chat", "keep", "lead", "pr", "scrollback", "wait"];
-
+    /// switch plus a word in another command. No exceptions: the last ones were renamed
+    /// (owner, 2026-11-10).
     #[test]
     fn a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere() {
         use std::collections::BTreeMap;
         let mut by_long = BTreeMap::<String, BTreeMap<bool, Vec<String>>>::new();
         for (path, _, long, takes) in every_flag() {
-            if let Some(l) = long.filter(|l| !SWITCH_AND_VALUE.contains(&l.as_str())) {
+            if let Some(l) = long {
                 by_long.entry(l).or_default().entry(takes).or_default().push(path);
             }
         }
@@ -1598,16 +1626,6 @@ mod tests {
             .map(|(l, k)| format!("--{l}: a switch in {:?}, a value in {:?}", k[&false], k[&true]))
             .collect();
         assert!(mixed.is_empty(), "\n  {}", mixed.join("\n  "));
-        // And the old ones leave the list once they are fixed.
-        let flags = every_flag();
-        for l in SWITCH_AND_VALUE {
-            let kinds: std::collections::BTreeSet<bool> = flags
-                .iter()
-                .filter(|(_, _, long, _)| long.as_deref() == Some(l))
-                .map(|(_, _, _, t)| *t)
-                .collect();
-            assert_eq!(kinds.len(), 2, "--{l} is one kind now: take it off SWITCH_AND_VALUE");
-        }
     }
 
     /// Value syntax is the same everywhere (owner, 2026-11-09): `--flag V` and `--flag=V` both

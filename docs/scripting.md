@@ -11,7 +11,7 @@ while the script runs. The building blocks:
 | `ptyro new -d --agent A [--new-wt NAME] --prompt TEXT` | start an agent detached (in a fresh worktree), prompt typed once it's ready |
 | `ptyro send S… TEXT [--wait-ready] [--wait]` | type into sessions; `--wait` reports how the turn ended |
 | `ptyro wait S… --for idle\|blocked\|done\|error\|exit\|working\|any-attention` | block until they get there (`--any`, `--timeout`, `--stall`) |
-| `ptyro wait S --match REGEX [--scrollback]` | block until text appears |
+| `ptyro wait S --match REGEX [--scrollback [N]]` | block until text appears (`--scrollback`: in up to N lines above the screen too, as `read --scrollback N` shows them; all of them without N) |
 | `ptyro read S [--scrollback [N]] [--json]` | the screen as text |
 | `ptyro events --follow` | every change, one JSON line each |
 | `ptyro ls --json --status blocked` | who needs you |
@@ -173,7 +173,7 @@ Use these commands; they print JSON with `--json`:
 - `ptyro read NAME --scrollback 200`: read what it printed.
 - `ptyro send NAME "TEXT" --wait-ready --wait`: give it the next instruction and wait for the turn.
 - `ptyro report --state working --msg "what you're doing"`: tell the human what you're doing.
-- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --wait 5m`: talk to
+- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --timeout 5m`: talk to
   the other agents (messages reach them when they're idle; `@user` reaches the human).
 - `ptyro lease claim 'src/api/**' --exclusive --reason "…"`: keep others out of files you're
   changing; `ptyro lease release` when done. `ptyro radar` shows who else is changing what.
@@ -197,7 +197,7 @@ Recipes and fan-outs are runs, which a script can start, wait for and read:
 run=$(ptyro fanout -a claude,codex --prompt "Fix the flaky test in src/net" --test)
 ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 5 cancelled, 7 timeout
 best=$(ptyro compare "$run" --json | jq -r '.candidates[0].step')
-ptyro pick "$run" "$best" --pr                        # push + PR from the winner
+ptyro pick "$run" "$best" --open-pr                   # push + PR from the winner
 ptyro discard "$run" --force -y
 ```
 

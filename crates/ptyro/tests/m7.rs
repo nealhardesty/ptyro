@@ -648,6 +648,12 @@ fn leases_radar_mail_checkpoints_and_verify_by_follow_up() {
             .iter()
             .any(|m| m["id"] == mid.as_str() && (m["state"] == "seen" || m["state"] == "acked"))
     });
+    // `msg check --timeout` waits that long for the first one: none newer than Bob's is mine,
+    // so it gives up (exit 7) after about a second.
+    let t = std::time::Instant::now();
+    let none = w.cli(&["msg", "check", "--since", &mid, "--timeout", "1s", "--json"]);
+    assert_eq!(none.status.code(), Some(7), "{}", String::from_utf8_lossy(&none.stderr));
+    assert!(t.elapsed() >= std::time::Duration::from_millis(900));
     // Checkpoints: the one that closed Alice's shared.txt turn has the file; restore it after a
     // scribble.
     let wt_a = w.json(&["wt", "status", "app/a", "--json"])["path"].as_str().unwrap().to_owned();

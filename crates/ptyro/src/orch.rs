@@ -180,14 +180,16 @@ pub enum MsgCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Messages for you (or --me SESSION), after --since; --wait for the first one
+    /// Messages for you (or --me SESSION), after --since; with --timeout, wait that long for the
+    /// first one (exit 7 if none came)
     Check {
         #[arg(long)]
         me: Option<String>,
         #[arg(long)]
         since: Option<String>,
-        #[arg(long)]
-        wait: Option<String>,
+        /// Wait up to this long for the first message (`30s`, `5m`; at most 10m)
+        #[arg(long, value_name = "DUR")]
+        timeout: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1016,9 +1018,10 @@ pub async fn msg(ctx: &Ctx, cmd: MsgCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        MsgCmd::Check { me: who, since, wait, json } => {
+        MsgCmd::Check { me: who, since, timeout, json } => {
             let who = who.or_else(me).unwrap_or_else(|| "@user".into());
-            let wait_ms = wait.as_deref().map(duration).transpose()?.map(|d| d.as_millis() as u64);
+            let wait_ms =
+                timeout.as_deref().map(duration).transpose()?.map(|d| d.as_millis() as u64);
             let Reply::Messages { messages } =
                 c.request(Request::MsgCheck { me: who, since, wait_ms }).await?
             else {

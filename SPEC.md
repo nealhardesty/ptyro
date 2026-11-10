@@ -3950,7 +3950,9 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `send S… TEXT [--no-enter] [--raw] [--wait-ready[=2m]] [--wait [--timeout] [--stall]] [--json]`;
   - `broadcast S… TEXT [--timeout]`;
   - `read S [--screen|--scrollback [N]] [--plain|--ansi] [--json]`;
-  - `wait S… [--for C] [--match RE [--scrollback]] [--timeout] [--any|--all] [--stall] [--json]`;
+  - `wait S… [--for C] [--match RE [--scrollback [N]]] [--timeout] [--any|--all] [--stall] [--json]`
+    (`--scrollback N` means what it means to `read`: the screen and up to N lines above it, all
+    of them without N; a flag means one thing in every command, docs/commands.md);
   - `events [--follow] [--session S] [-l N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
@@ -4097,11 +4099,11 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
 - **Fan-out:** `fanout -a a,b,c | --count N [-a a] (--prompt P | --prompt-file F)
   [-p P] [--base] [--prefix PREFIX] [--test [CHECK]] [--verify CHECK] [--judge AGENT]
   [--timeout D] [--wait] [--json]`; `compare R [--refresh] [--json]`;
-  `pick R CANDIDATE [--cherry-pick|--pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
+  `pick R CANDIDATE [--cherry-pick|--open-pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
   `discard R [CANDIDATE] [--force]`; `iterate R [CANDIDATE] TEXT`.
 - **Gates:** `gate ls [--all] [--json]`, `gate resolve ID CHOICE [--note] [--key]`.
 - **Mailbox:** `msg send TO TEXT [--kind] [--run] [--reply-to] [--interrupt] [--key]`,
-  `msg check [--me S] [--since ID] [--wait D] [--json]`, `msg ls [--run] [-l N] [--json]`,
+  `msg check [--me S] [--since ID] [--timeout D] [--json]`, `msg ls [--run] [-l N] [--json]`,
   `msg ack ID…`. Inside a session the sender is that session.
 - **Leases and radar:** `lease claim PATTERN… [--exclusive] [--ttl] [--reason] [--as S]`
   (exit 5 when refused), `lease release [PATTERN…] [--as S]`, `lease ls [--json]`,
@@ -4996,7 +4998,7 @@ be lost. One command to undo a multi-repo wrong turn.
   integration checks) before the next, and stops on failure with a precise partial-state report.
   Every step goes through a gate unless `--yes`.
 - **Removal** (`cs rm`) applies §10.8 to *every* member; one dirty member blocks removal of the
-  whole set (or `--keep <member>`).
+  whole set (or `--keep-member <member>`).
 
 #### 15.5.8 Templates
 
@@ -5029,7 +5031,7 @@ name in another member's dependencies).
 #### 15.5.10 CLI and TUI
 
 ```text
-ptyro cs new <name> --projects api,sdk,web [--template t] [--lead claude] [--layout lead|solo|manual]
+ptyro cs new <name> --projects api,sdk,web [--template t] [--lead-as claude] [--layout lead|solo|manual]
              [--prompt <goal> | --from-issue <url>]
 ptyro cs ls | show <set> | status <set> [--json] | log <set> [--follow]
 ptyro cs msg <set> <member|@lead|@all> <text> [--interrupt]
@@ -5037,7 +5039,7 @@ ptyro cs contract <set> [show|edit|diff <file>|history]
 ptyro cs check <set>                       # integration + contract checks
 ptyro cs checkpoint <set> [label] | restore <set> <n>
 ptyro cs commit|push|pr|land <set>        # lockstep, dependency-ordered, gated
-ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep <member>]
+ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep-member <member>]
 ```
 
 - **Sidebar:** a change set is a group node (`◆ add-user-tier 3/4 ready · r3`) above its members'
@@ -8282,7 +8284,7 @@ is incognito unless `--keep`.
 Three tiers; each one is useful without the next.
 
 1. **Keyword (CHAT3).** FTS5 over `node.text`, ranked by bm25 with a snippet and the match
-   highlighted, user messages weighted above assistant text as `llm` does. Filters: `--chat`,
+   highlighted, user messages weighted above assistant text as `llm` does. Filters: `--in CHAT`,
    `--workspace`, `--agent`, `--machine`, `--since 7d`, `--pinned`, `--archived`. A query is plain
    words (all must match), `"a phrase"`, `-word`, `prefix*`, or `agent:codex`, `since:7d`. A hit opens
    the chat at that node. In the chat, find-in-chat searches the shown branch.

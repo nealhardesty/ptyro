@@ -53,6 +53,14 @@ A letter means the same flag in every command that takes it (owner, 2026-11-09; 
 
 Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt`, `--json`.
 
+A long flag is a switch in every command or takes a value in every command, never one here and
+the other there (owner, 2026-11-10; `a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere`).
+So `--pr N` is a PR number (`new`, `wt new`) and `pick --open-pr` opens one; `--lead` makes a
+lead (`new`) and `cs new --lead-as AGENT` picks its agent; `--keep` keeps a chat and
+`cs rm --keep-member M` a member; `--chat` reads a transcript and `chat search --in CHAT` narrows
+a search; `--timeout D` is how long to wait (`msg check` too). An optional value reads the same
+everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`.
+
 ## Naming sessions and worktrees
 
 - **`SESSION`** is a name (`brisk-rook`), `project/name`, a short handle from `ptyro ls`
@@ -140,7 +148,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 | `ptyro chat branch CHAT --to NODE` | show the branch through NODE (`show --branches` lists where there are others) |
 | `ptyro chat fork CHAT [--at NODE] [--agent A] [--side [--keep]] [--json] [PROMPT…]` | a new chat from the end or a message, on its agent or another (natively for Claude from the end, else seeded); `--side`: a side chat that reads it and never changes it, gone after its answer unless `--keep` |
 | `ptyro chat keep CHAT` | keep a side chat as a chat of its own |
-| `ptyro chat search QUERY… [--chat C] [-w WS] [-a A] [--pinned] [--archived] [--here] [--meaning\|--words] [-l N] [--json]` | search every chat's messages and titles, on every linked machine (`--here`: this one): words, `"a phrase"`, `prefix*` (3 letters), `-word`, `agent:codex`, `since:7d`, `by:meaning`/`by:words`; each hit's citation (`c:7f3k/node`) and snippet. With `[chat] meaning` on, messages near in meaning are merged in (`≈`); `--meaning` only those (off: offers to switch it on), `--words` none of them |
+| `ptyro chat search QUERY… [--in CHAT] [-w WS] [-a A] [--pinned] [--archived] [--here] [--meaning\|--words] [-l N] [--json]` | search every chat's messages and titles, on every linked machine (`--here`: this one): words, `"a phrase"`, `prefix*` (3 letters), `-word`, `agent:codex`, `since:7d`, `by:meaning`/`by:words`; each hit's citation (`c:7f3k/node`) and snippet. With `[chat] meaning` on, messages near in meaning are merged in (`≈`); `--meaning` only those (off: offers to switch it on), `--words` none of them |
 | `ptyro chat find [--agent A] QUESTION…` | ask your chats: an agent with only the history tools searches them and answers, citing; nothing of it is kept |
 | `ptyro chat compare CHAT [-a A,B…] [--yes] [--no-wait] [--json] [TEXT…]` | ask several agents one question (TEXT, or the last message again of those that haven't answered it; default every installed one; a bare name is under the chat's profile, another profile's `agent@p` asks first, `--yes` agrees): each answer is a branch of the chat labelled with its agent (`‹ 2/3 codex ›`), printed under its agent once all are in; `chat new --compare A,B QUESTION` asks a new chat's first message so |
 | `ptyro chat pick CHAT [NODE]` | keep an answer: show its branch and switch the chat to the agent that wrote it (the next message goes there) |
@@ -154,7 +162,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 |---|---|
 | `ptyro send SESSIONS… TEXT [--no-enter] [--raw] [--wait-ready[=D]] [--wait [--timeout D] [--stall D]] [--json]` | type into sessions. `--wait-ready` waits for the input box (2m, or D). `--wait` reports how the turn ended. `--raw` sends keys as written (`\e`, `\r`, `\t`, `\xHH`) |
 | `ptyro broadcast SESSIONS… TEXT [--no-enter] [--timeout D]` | one prompt to several, each once it's ready |
-| `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|error\|exit\|any-attention] [--match RE [--scrollback]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
+| `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|error\|exit\|any-attention] [--match RE [--scrollback [N]]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
 | `ptyro read SESSION [--scrollback [N]] [--ansi] [--chat] [--json]` | the screen, scrollback, or a structured session's transcript |
 | `ptyro events [-f] [--session S] [-l N] [--json]` | what happened; `--follow` streams every change as NDJSON |
 | `ptyro status [SESSION] [--explain] [--json]` | what every agent is doing; `--explain`: why ptyro thinks so |
@@ -221,14 +229,14 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 |---|---|
 | `ptyro fanout (-a A,B,C \| --count N) (--prompt P \| --prompt-file F) [--test [CHECK]] [--verify CHECK] [--judge A] [--timeout D] [--prefix PREFIX] [--base REF] [-p P] [--structured] [--wait] [--json]` | one task, several agents, one worktree each |
 | `ptyro compare R [--refresh] [--json]` | rank candidates by evidence: tests, diff, time |
-| `ptyro pick R C [--cherry-pick \| --pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
+| `ptyro pick R C [--cherry-pick \| --open-pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
 | `ptyro discard R [C] [--force] [-y]` / `iterate R [C] TEXT` | remove the others (asks unless `-y`) / a follow-up prompt |
 | `ptyro recipe ls\|show NAME\|validate FILE\|graph R [--format mermaid\|dot]` (each with `[-p P]`) | recipes: list, read, check, draw |
 | `ptyro recipe run R [--var k=v]… [-p P] [--base REF] [--trust FP] [--wait] [--json]` | start a recipe |
 | `ptyro run ls [--active] [--tree]` / `show R` / `events R` / `wait R [--gate] [--timeout D]` | runs and their steps (`wait`: exit 0 succeeded, 1 failed, 5 cancelled, 7 timeout) |
 | `ptyro run cancel R` / `retry R STEP` / `fork R --from STEP [--set k=v]` / `lead SESSION [--max-workers N] [--agent A]…` | control runs; make an existing agent a lead |
 | `ptyro gate ls [--all]` / `resolve ID CHOICE [--note N] [--key K]` | what runs wait on you for / answer |
-| `ptyro msg send TO TEXT [--kind K] [--interrupt] [--run R] [--reply-to ID] [--key K]` / `check [--me S] [--since ID] [--wait D]` / `ls [--run R] [-l N]` / `ack [IDS] [--me S]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
+| `ptyro msg send TO TEXT [--kind K] [--interrupt] [--run R] [--reply-to ID] [--key K]` / `check [--me S] [--since ID] [--timeout D]` / `ls [--run R] [-l N]` / `ack [IDS] [--me S]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
 | `ptyro lease claim PATTERN… [--exclusive] [--ttl D] [--reason TEXT] [--as S]` / `release [PATTERN…] [--as S]` / `ls` | file leases (`claim` exits 5 when refused) |
 | `ptyro radar [-p P]` | overlapping worktrees and predicted conflicts (exit 1 when it predicts one) |
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |
@@ -241,7 +249,7 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 
 | Command | Does |
 |---|---|
-| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [--prompt GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [-w WS] [--trust FP] [--json]` | start a change set (`--trust`: the fingerprint of a hub template you reviewed) |
+| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead-as AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [--prompt GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [-w WS] [--trust FP] [--json]` | start a change set (`--trust`: the fingerprint of a hub template you reviewed) |
 | `ptyro cs ls` / `show SET` (alias `status`) / `log SET [-f]` | change sets / one set with its issues and actions / its ledger |
 | `ptyro cs msg SET TO TEXT [--kind K] [--interrupt]` | a message on the set (`TO`: a member, `@lead`, `@all`) |
 | `ptyro cs ready SET [NOTE]` / `blocked SET ON [NOTE]` (both `[--member M]`) / `assign SET M TASK` / `ask SET QUESTION [--option O]…` | from inside the set: readiness, blockers, a member's task, a question for you |
@@ -249,7 +257,7 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 | `ptyro cs diff SET M` / `check SET` / `overlay SET [auto\|go\|rust\|node\|python\|compose\|off] [--member M]` | a member's changes / integration and contract checks / build against siblings |
 | `ptyro cs checkpoint SET [LABEL]` / `checkpoints SET` / `restore SET N [--force]` | undo across every repo |
 | `ptyro cs commit SET -m MSG` / `push SET [-y]` / `pr SET [--draft]` / `land SET [-y] [--no-wait]` | lockstep git and the merge train |
-| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--force] [-y]` / `rm SET [--keep M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates |
+| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--force] [-y]` / `rm SET [--keep-member M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates |
 
 ## Remote and phone
 
