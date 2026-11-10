@@ -248,9 +248,10 @@ enum Cmd {
         /// The visible screen (the default)
         #[arg(long, conflicts_with = "scrollback")]
         screen: bool,
-        /// Up to N lines of scrollback above the screen (all of it without N)
-        #[arg(long, num_args = 0..=1, default_missing_value = "4294967295")]
-        scrollback: Option<u32>,
+        /// The scrollback above the screen: what's kept in memory, or N lines (which can reach
+        /// back into the recording)
+        #[arg(long, num_args = 0..=1)]
+        scrollback: Option<Option<u32>>,
         /// Keep colours and attributes (SGR)
         #[arg(long, conflicts_with = "plain")]
         ansi: bool,
@@ -315,10 +316,10 @@ enum Cmd {
         /// Instead: until this regex appears on the screen
         #[arg(long = "match", value_name = "REGEX")]
         pattern: Option<String>,
-        /// With --match: search up to N lines of scrollback above the screen too (all of it
-        /// without N), as `read --scrollback [N]` shows them
-        #[arg(long, requires = "pattern", num_args = 0..=1, default_missing_value = "4294967295")]
-        scrollback: Option<u32>,
+        /// With --match: search the scrollback above the screen too, as `read --scrollback [N]`
+        /// shows it (what's kept in memory, or N lines)
+        #[arg(long, requires = "pattern", num_args = 0..=1)]
+        scrollback: Option<Option<u32>>,
         /// Give up after this long (`30s`, `10m`; default: never)
         #[arg(long)]
         timeout: Option<String>,
@@ -586,9 +587,9 @@ enum Cmd {
         /// it the error in your terminal. Never starts one
         #[arg(long)]
         read: bool,
-        /// With --read: up to N lines of scrollback above the screen (all of it without N)
-        #[arg(long, requires = "read", num_args = 0..=1, default_missing_value = "4294967295")]
-        scrollback: Option<u32>,
+        /// With --read: the scrollback above the screen too, as `read --scrollback [N]` shows it
+        #[arg(long, requires = "read", num_args = 0..=1)]
+        scrollback: Option<Option<u32>>,
     },
     /// Chats with your agents: `ptyro chat "a question"` asks and keeps it (the CHATS section of
     /// the TUI and the web show it too); `ptyro chat ask` answers once and keeps nothing. A
@@ -1490,8 +1491,9 @@ mod tests {
         assert_eq!(parse(&["ptyro"]), Some((false, vec![])));
     }
 
-    /// `wait --scrollback [N]` reads as `read --scrollback [N]`: N lines above the screen, all
-    /// of them without N.
+    /// `wait --scrollback [N]` reads as `read --scrollback [N]`: N lines above the screen, or
+    /// bare, what's kept in memory (never the whole recording, which `wait` would read every
+    /// poll).
     #[test]
     fn wait_scrollback_takes_lines_as_read_does() {
         use clap::Parser;
@@ -1508,10 +1510,10 @@ mod tests {
                 .unwrap()
         };
         let wait = parse(&["ptyro", "wait", "s", "--match", "x", "--scrollback", "50"]);
-        assert_eq!(wait, Some(Some(50)));
+        assert_eq!(wait, Some(Some(Some(50))));
         assert_eq!(wait, parse(&["ptyro", "read", "s", "--scrollback", "50"]));
         let all = parse(&["ptyro", "wait", "s", "--match", "x", "--scrollback"]);
-        assert_eq!(all, Some(Some(u32::MAX)));
+        assert_eq!(all, Some(Some(None)));
         assert_eq!(all, parse(&["ptyro", "read", "s", "--scrollback"]));
         assert_eq!(parse(&["ptyro", "wait", "s", "--match", "x"]), Some(None));
         // Still only with --match.

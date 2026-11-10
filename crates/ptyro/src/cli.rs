@@ -349,6 +349,10 @@ async fn dispatch(
                 Some(wt_name) => {
                     crate::projects::new_in_new_worktree(&ctx, a, wt_name, project).await
                 }
+                // `-p` once meant `--prompt`: never drop it unheard.
+                None if project.is_some() => Err(Error::invalid(
+                    "--project picks the project a new worktree goes in: add --new-wt, or give the agent a prompt with --prompt",
+                )),
                 None => new(&ctx, a).await,
             }
         }
@@ -900,6 +904,7 @@ pub fn said(e: &Error) -> String {
         Again::Stop => "--stop".to_owned(),
         Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
         Again::Release => "--release".to_owned(),
+        Again::IgnoreDependents => "--ignore-dependents".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
 }
@@ -1245,7 +1250,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         argv: a.argv,
         agent: a.agent,
         cwd,
-        worktree: a.wt,
+        worktree: addr_here_opt(a.wt)?,
         profile: a.profile,
         override_pin: a.override_pin,
         confirmed: a.yes,
@@ -1337,7 +1342,7 @@ async fn quick_shell(
     worktree: Option<String>,
     json: bool,
     read: bool,
-    scrollback: Option<u32>,
+    scrollback: Option<Option<u32>>,
 ) -> Result<i32, Error> {
     let attaching = !json && !read;
     if attaching {
@@ -1346,7 +1351,7 @@ async fn quick_shell(
     let client =
         if read { ctx.connect(false).await.map_err(no_daemon)? } else { ctx.connect(true).await? };
     let req = Request::QuickShell {
-        worktree,
+        worktree: addr_here_opt(worktree)?,
         cwd: current_dir()?,
         create: !read,
         env: client_env(),

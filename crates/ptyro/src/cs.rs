@@ -23,7 +23,9 @@ use ptyro_run::changeset::Phase;
 use ptyro_run::wire::{ChangeSetInfo, ContractAction, CsNewSpec, CsOp, LedgerEntry, TemplateInfo};
 use serde_json::Value;
 
-use crate::cli::{Ctx, ago, ask_first, client_env, confirm, no_daemon, trust_of, unexpected};
+use crate::cli::{
+    Ctx, addr_here, ago, ask_first, client_env, confirm, no_daemon, trust_of, unexpected,
+};
 
 // Parsed once per process: the size of `New` doesn't matter.
 #[allow(clippy::large_enum_variant)]
@@ -220,8 +222,12 @@ pub enum CsCmd {
     Drop {
         set: String,
         member: String,
+        /// Discard unsaved work in its worktree (as `wt rm --force`)
         #[arg(long)]
         force: bool,
+        /// Drop it though other members depend on it (unsaved work still refuses)
+        #[arg(long)]
+        ignore_dependents: bool,
         /// Don't ask
         #[arg(short, long)]
         yes: bool,
@@ -500,6 +506,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
                     )
                 })
                 .collect();
+            let projects = projects.into_iter().map(addr_here).collect::<Result<_, _>>()?;
             let spec = CsNewSpec {
                 name,
                 projects,
@@ -803,6 +810,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
         }
         CsCmd::Land { set, yes, no_wait } => land(&c, set, yes, no_wait).await,
         CsCmd::Add { set, project, agent, depends_on } => {
+            let project = addr_here(project)?;
             let v = op(&c, CsOp::Add { set, project, agent, depends_on }).await?;
             eprintln!(
                 "{} joined ({})",
@@ -811,7 +819,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             );
             Ok(0)
         }
-        CsCmd::Drop { set, member, force, yes } => {
+        CsCmd::Drop { set, member, force, ignore_dependents, yes } => {
             // Found first, then asked about by name: a typo asks nothing.
             let i = info_of(op(&c, CsOp::Show { set }).await?)?;
             let Some(m) = i.set.member(&member) else {
@@ -822,13 +830,26 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             let (what, safety) = (removal::SET_MEMBER, removal::safety(force));
             let name = &i.set.name;
             ask_first(&format!("Drop {member} from change set {name}? {what} {safety}"), yes)?;
-            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force }).await?;
+            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force, ignore_dependents })
+                .await?;
             eprintln!("dropped {member}");
             Ok(0)
         }
         CsCmd::Rm { set, keep, force, yes } => {
             // Found first, then asked about by name: a typo asks nothing.
             let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            // Kept members by their real names, so the question says what is kept.
+            let mut kept = Vec::new();
+            for k in &keep {
+                let Some(m) = i.set.member(k) else {
+                    let known: Vec<String> = i.set.members.iter().map(|m| m.name.clone()).collect();
+                    return Err(ptyro_core::lookup::not_found_among("member", k, &known));
+                };
+                if !kept.contains(&m.name) {
+                    kept.push(m.name.clone());
+                }
+            }
+            let keep = kept;
             let (what, safety) = (removal::SET, removal::safety(force));
             let mut q = format!("Remove change set {}? {what} {safety}", i.set.name);
             if !keep.is_empty() {

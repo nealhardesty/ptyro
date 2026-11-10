@@ -435,8 +435,8 @@ impl Daemon {
             CsOp::Add { project, agent, depends_on, .. } => {
                 self.cs_add(&run.unwrap_or_default(), &project, agent, depends_on).await
             }
-            CsOp::Drop { member, force, .. } => {
-                self.cs_drop(&run.unwrap_or_default(), &member, force).await
+            CsOp::Drop { member, force, ignore_dependents, .. } => {
+                self.cs_drop(&run.unwrap_or_default(), &member, force, ignore_dependents).await
             }
             CsOp::Rm { keep, force, .. } => {
                 self.cs_rm(&run.unwrap_or_default(), &keep, force).await
@@ -3175,6 +3175,7 @@ impl Daemon {
         run: &str,
         member: &str,
         force: bool,
+        ignore_dependents: bool,
     ) -> Result<Value, Error> {
         let set = self.set_state(run)?;
         let m = set.member(member).ok_or_else(|| Error::missing("member", member))?.clone();
@@ -3184,12 +3185,14 @@ impl Daemon {
             .filter(|x| x.depends_on.contains(&m.name))
             .map(|x| x.name.as_str())
             .collect();
-        if !users.is_empty() && !force {
+        // Overriding the dependency never discards work: unsaved work in its worktree is its
+        // own refusal, with its own way through (`force`), as removing a worktree is.
+        if !users.is_empty() && !ignore_dependents {
             return Err(Error::conflict(format!(
                 "{} depend on {member}: drop them first, or drop it anyway",
                 users.join(", ")
             ))
-            .with_fix(ptyro_core::error::Again::Force, "Drop it anyway"));
+            .with_fix(ptyro_core::error::Again::IgnoreDependents, "Drop it anyway"));
         }
         if let Some(w) = &m.worktree {
             self.remove_worktree(w, RemoveOpts { force, stop_sessions: true, keep_branch: false })
@@ -3225,9 +3228,15 @@ impl Daemon {
         force: bool,
     ) -> Result<Value, Error> {
         let set = set.clone();
+        // Kept members by their real names (a member is named as `ChangeSet::member` finds it).
+        let mut kept: Vec<String> = Vec::new();
         for k in keep {
-            set.member(k).ok_or_else(|| Error::missing("member", k))?;
+            let m = set.member(k).ok_or_else(|| Error::missing("member", k))?;
+            if !kept.contains(&m.name) {
+                kept.push(m.name.clone());
+            }
         }
+        let keep = &kept[..];
         let going: Vec<&Member> = set.members.iter().filter(|m| !keep.contains(&m.name)).collect();
         if !force {
             let mut unsafe_ = Vec::new();

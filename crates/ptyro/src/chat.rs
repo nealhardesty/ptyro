@@ -718,16 +718,19 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             for chat in chats {
                 // An exact address only (never a title), asked first (SPEC §12.1). The "yes"
                 // deletes the chat that was asked about, by its id: `@last` may name a newer
-                // chat by the time the person answers.
+                // chat by the time the person answers. So the address is checked (the daemon
+                // refuses a title), then resolved to an id once, and the question is about that id.
                 let mut id = chat.clone();
                 if !yes {
-                    let ask = Request::ChatDelete { chat: chat.clone(), confirmed: false };
-                    let Err(e) = c.request(ask).await else {
-                        return Err(Error::internal("deleted without asking"));
+                    let question = |chat: String| async {
+                        let ask = Request::ChatDelete { chat, confirmed: false };
+                        match c.request(ask).await {
+                            Ok(_) => Err(Error::internal("deleted without asking")),
+                            Err(e) if e.code == ErrorCode::NeedsConfirmation => Ok(e.message),
+                            Err(e) => Err(e),
+                        }
                     };
-                    if e.code != ErrorCode::NeedsConfirmation {
-                        return Err(e);
-                    }
+                    question(chat.clone()).await?;
                     let read = Request::ChatRead {
                         chat: chat.clone(),
                         all: false,
@@ -737,8 +740,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
                     let Reply::ChatTranscript { info, .. } = c.request(read).await? else {
                         return Err(Error::internal("unexpected reply"));
                     };
-                    crate::cli::ask_first(&e.message, false)?;
                     id = info.id;
+                    crate::cli::ask_first(&question(id.clone()).await?, false)?;
                 }
                 c.request(Request::ChatDelete { chat: id, confirmed: true }).await?;
                 eprintln!("deleted {chat}");

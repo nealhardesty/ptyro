@@ -212,7 +212,9 @@ function renameProject(p: Project): void {
 // refuse with a way through, "Let them go" (SPEC §6.6), which `ask` offers.
 function removeProject(p: Project): void {
   confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", async () => {
-    if (await ask({ t: "project_remove", addr: p.id, release: false }, `Forgot ${p.slug}`)) go("#/p");
+    // Its notes say what stays on disk, and any session let go under a new name.
+    const r = await ask<{ notes?: string[] }>({ t: "project_remove", addr: p.id, release: false });
+    if (r) { for (const n of r.notes?.length ? r.notes : [`Forgot ${p.slug}`]) ui.toast(n); go("#/p"); }
   });
 }
 

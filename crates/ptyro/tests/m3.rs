@@ -749,6 +749,21 @@ async fn workspaces_reconcile_and_gc() {
     assert!(out.lines().any(|l| l.starts_with("side") && l.contains("lib")), "{out}");
     assert!(out.lines().any(|l| l.starts_with("main")), "main always exists: {out}");
     w.ok(&["ws", "add-project", "main", "lib"]);
+    // `.` is the client's directory, never the daemon's.
+    let in_lib = |args: &[&str]| {
+        let out = w.d.cmd().args(args).env("HOME", w.home()).current_dir(&root).output().unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    let main_has_lib =
+        || w.ok(&["ws", "ls"]).lines().any(|l| l.starts_with("main") && l.contains("lib"));
+    in_lib(&["ws", "remove-project", "main", "."]);
+    assert!(!main_has_lib(), "{}", w.ok(&["ws", "ls"]));
+    in_lib(&["ws", "add-project", "main", "."]);
+    assert!(main_has_lib(), "{}", w.ok(&["ws", "ls"]));
+    // `-p` once meant `--prompt`: `new -p X` without a new worktree is refused, never ignored.
+    let out = w.cli(&["new", "-d", "-p", "fix the bug"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--new-wt"));
     w.ok(&["ws", "rename", "side", "aside"]);
     assert!(w.cli(&["ws", "rm", "-y", "main"]).status.code() == Some(2));
     let c = w.d.client().await.unwrap();
@@ -835,8 +850,13 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     let out = w.cli(&["wt", "archive-rm", "gone"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("archive of app/gone?"), "{err}");
-    w.ok(&["wt", "archive-rm", "-y", "gone"]);
+    // Named twice, it is one archive: deleted once, no failure for the second.
+    w.ok(&["wt", "archive-rm", "-y", "gone", "app/gone"]);
     assert!(!w.ok(&["wt", "archives"]).contains("gone"), "deleted");
+    // `config rm` finds what it removes before asking: a name that isn't there asks nothing.
+    let out = w.cli(&["config", "rm", "agents", "nope"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!err.contains("Remove agents nope?") && !out.status.success(), "{err}");
 
     let c = w.d.client().await.unwrap();
     let s = spawn(&c, sh("sleep 60", "app/@root")).await.unwrap();
@@ -853,13 +873,25 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(5), "{err}");
     assert!(err.contains("let them go") && err.contains("--release"), "{err}");
+    // A loose session already has its name: let go, it takes the next free one, and says so.
+    let loose = SpawnSpec {
+        name: Some(s.name.clone()),
+        worktree: None,
+        cwd: "/".into(),
+        ..sh("sleep 60", "app/@root")
+    };
+    let loose = spawn(&c, loose).await.unwrap();
+    assert!(loose.project.is_none(), "{loose:?}");
     let out = w.ok(&["project", "rm", "-y", "--release", "app"]);
     assert!(out.contains("forgot app"), "{out}");
+    let free = format!("{}-2", s.name);
+    assert!(out.contains(&format!("{} is {free} now", s.name)), "{out}");
     let Reply::Session { info } = c.request(Request::Get { addr: s.id.full() }).await.unwrap()
     else {
         panic!()
     };
     assert!(info.state.is_live() && info.project.is_none(), "it runs on, outside: {info:?}");
+    assert_eq!(info.name, free);
 }
 
 async fn run(s: Script) -> Report {
@@ -1316,6 +1348,18 @@ async fn worktrees_and_projects_are_renamed() {
     };
     assert_eq!(again.name, "feat");
     assert!(again.path != before.path && again.path.ends_with("feat-2"), "{again:?}");
+    // Nor a directory a worktree we know of uses while it's gone from disk for now.
+    let Reply::WorktreeCreated { info: tmp, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
+        panic!()
+    };
+    w.ok(&["wt", "rename", "app/tmp", "tmp-moved"]);
+    w.ok(&["wt", "rename-branch", "app/tmp-moved", "tmp-moved"]);
+    std::fs::rename(&tmp.path, tmp.path.with_extension("away")).unwrap();
+    let Reply::WorktreeCreated { info: tmp2, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
+        panic!()
+    };
+    assert!(tmp2.path != tmp.path && tmp2.path.ends_with("tmp-2"), "{tmp2:?}");
+    std::fs::rename(tmp.path.with_extension("away"), &tmp.path).unwrap();
 
     // An archive, to restore under the project's new name.
     c.request(Request::WorktreeArchive { addr: "app/old".into(), stop_sessions: false })

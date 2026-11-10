@@ -87,7 +87,7 @@ export const errText = (e: unknown): string => (e as Error)?.message || String(e
 
 /// A refusal's way through (SPEC §6.6): the same request again with one thing said, and what
 /// its button says.
-export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust" | "release"; label: string; fingerprint?: string }
+export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust" | "release" | "ignore_dependents"; label: string; fingerprint?: string }
 export const fixOf = (e: unknown): Fix | undefined => (e as { fix?: Fix })?.fix;
 
 /// `req` again with `f` said, where the request keeps that field; `null` when it has none.

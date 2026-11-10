@@ -1199,8 +1199,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - `Request::Remove` adds `stop` (absent: false): stop a running session, then forget it (`rm
   --stop`, Stop and remove; §7.3). An older daemon ignores it and refuses a running session as
   before.
-- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust|release,
+- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust|release|ignore_dependents,
   label, fingerprint?}` (§6.6); an older client ignores it. The web's HTTP API passes it through.
+  A kind the client doesn't know decodes as no fix (the message still says what to do), so a
+  later kind never makes a reply unreadable.
+- `CsOp::Drop` adds `ignore_dependents` (absent: false): drop a member others depend on. `force`
+  now only discards unsaved work (before, it also overrode the dependency).
 - `WorktreeArchiveGet{addr}` → `Archives` with the one archive `addr` names (read scope), resolved as
   restoring and deleting do, so `wt archive-rm` resolves before it asks. An older daemon answers
   "unsupported request".
@@ -1357,12 +1361,13 @@ the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 
 **The way through is data, not words** (protocol 1.38). A refusal that has one carries
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
-second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read), or
-`release`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
+second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read),
+`release`, or `ignore_dependents`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
 "Stop and remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn
 convert, a daemon stop with sessions, a change set's restore, drop or remove: `force`; an
 untrusted recipe or template: `trust`; forgetting a project with running sessions: `release`,
-"Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
+"Let them go"; dropping a change-set member others depend on: `ignore_dependents`, "Drop it
+anyway"), never for a refusal it doesn't undo (removing while it restarts, a restart while
 it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
 and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
 happens to go with it. The CLI prints "(again with `--force`: remove anyway)"
@@ -3796,6 +3801,10 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     `a_short_flag_means_one_thing_everywhere` walks the command tree and fails on a clash.
   - A value follows a flag after a space or an `=`, for every flag: none insists on `=`
     (`no_flag_insists_on_an_equals_sign`). `config … -p .` is the repository you're in.
+  - A project or worktree address that starts with `.` (`.`, `../api`) is a path from the
+    directory you run the command in, never the daemon's, in every command that takes one
+    (`cli::addr_here`: `ws add-project`, `cs add`, `cs new --projects`, `new --wt`, `shell`,
+    `shells adopt` as much as `wt`/`project` commands).
   - A command that starts a session you'd work in (`new`, `wt new --agent`, `shells new`,
     `shells split`, `chat task`) attaches in a terminal unless `-d/--detach`; `--json` prints
     instead. Without a terminal, or inside a ptyro session (whose TUI shows the new one), it
@@ -3831,9 +3840,11 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
     `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
     resolves). What is removed after the yes is what was asked about, by its id or exact name,
-    never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` asks
-    naming what was typed, and a name that matches nothing is refused after the question, with
-    nothing changed.
+    never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` tries
+    the removal first without writing it (`settings::preview`), so a name that matches nothing
+    is refused before the question; `discard` finds its run and candidate first; `wt archive-rm`
+    asks once about every archive it found (the same one named twice is one), deletes each, and
+    carries on past one that fails, reporting it (as `rm`, `stop` and `kill` do).
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
     when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
     `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its
@@ -3844,7 +3855,10 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     terminal it offers to), and the TUI and the web offer "Let them go"; they keep running,
     outside any project. The refusal carries that way through as `fix: release` (§6.6), which
     is what each client acts on. One sentence, `removal::PROJECT_RELEASE`, says so: in the daemon's
-    refusal (which all three show) and in `project rm --release`'s question.
+    refusal (which all three show) and in `project rm --release`'s question. Names stay unique
+    outside any project too (§2.3): a session let go whose name a loose session already has takes
+    the next free one (`name-2`, as a restored session does), and the reply's notes say so, which
+    every client shows (owner, 2026-11-09).
 
 ### 12.2 Command tree **[decided]**
 
@@ -3952,8 +3966,9 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `broadcast S… TEXT [--timeout]`;
   - `read S [--screen|--scrollback [N]] [--plain|--ansi] [--json]`;
   - `wait S… [--for C] [--match RE [--scrollback [N]]] [--timeout] [--any|--all] [--stall] [--json]`
-    (`--scrollback N` means what it means to `read`: the screen and up to N lines above it, all
-    of them without N; a flag means one thing in every command, docs/commands.md);
+    (`--scrollback N` means what it means to `read`: the screen and up to N lines above it; bare,
+    the scrollback kept in memory (`lines: None`), never a replay of the recording, which `wait`
+    would redo every poll; a flag means one thing in every command, docs/commands.md);
   - `events [--follow] [--session S] [-l N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
 - **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
@@ -5573,7 +5588,10 @@ tests green; nothing pushed. What it decided:
 - **`cs rm`** checks every member's safety first (§10.8); one with work that would be lost blocks
   the whole set unless `--keep` it or `--force`. Then the set's agents stop and the worktrees go
   (branches kept for members that didn't land). `cs drop` removes one member (refused while
-  others depend on it, unless `--force`); `cs add` adds one (same profile, no cycles) and starts
+  others depend on it, unless `--ignore-dependents`, fix `ignore_dependents`, "Drop it anyway").
+  Overriding the dependency never discards work: unsaved work in its worktree is a refusal of
+  its own, through only with `--force` (fix `force`), as `wt rm` (owner, 2026-11-09: one flag,
+  one meaning; `--force` always means "discard the work"); `cs add` adds one (same profile, no cycles) and starts
   its agent when the set is working.
 
 #### 15.7.7 States, actions, tools and the TUI

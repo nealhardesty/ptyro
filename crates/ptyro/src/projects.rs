@@ -834,10 +834,12 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WsCmd::AddProject { name, project } => {
+            let project = addr_here(project)?;
             c.request(Request::WorkspaceMember { name, project, remove: false }).await?;
             Ok(0)
         }
         WsCmd::RemoveProject { name, project } => {
+            let project = addr_here(project)?;
             c.request(Request::WorkspaceMember { name, project, remove: true }).await?;
             Ok(0)
         }
@@ -1075,21 +1077,28 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             for addr in worktrees {
                 let reply = c.request(Request::WorktreeArchiveGet { addr }).await?;
                 let Reply::Archives { entries } = reply else { return Err(unexpected(reply)) };
-                found.extend(entries);
+                // The same archive named twice is one.
+                for e in entries {
+                    if !found.iter().any(|f: &ptyro_core::model::ArchiveEntry| f.id == e.id) {
+                        found.push(e);
+                    }
+                }
             }
             let what: Vec<String> =
                 found.iter().map(|e| format!("{}/{}", e.project_slug, e.name)).collect();
             let q = format!("Delete the archive of {}? {}", what.join(", "), removal::ARCHIVE);
             ask_first(&q, yes)?;
+            // Each is tried: one that fails is said, and the rest go on (as `rm` does).
+            let mut code = 0;
             for e in found {
-                let Reply::Notes { notes: n } =
-                    c.request(Request::WorktreeArchiveDelete { addr: e.id }).await?
-                else {
-                    return Err(Error::internal("unexpected reply"));
-                };
-                notes(&n);
+                let name = format!("{}/{}", e.project_slug, e.name);
+                match c.request(Request::WorktreeArchiveDelete { addr: e.id }).await {
+                    Ok(Reply::Notes { notes: n }) => notes(&n),
+                    Ok(other) => crate::cli::failed(&mut code, &name, &unexpected(other)),
+                    Err(e) => crate::cli::failed(&mut code, &name, &e),
+                }
             }
-            Ok(0)
+            Ok(code)
         }
         WtCmd::Archives { project, json } => {
             let Reply::Archives { entries } =

@@ -1368,11 +1368,10 @@ impl Daemon {
                 if s.is_live() && stop {
                     self.stop_session(&s).await;
                     // A quick terminal forgets itself once it exits (UX1.25).
-                    if self.session(s.id).is_none() {
-                        return Ok(Reply::Done);
-                    }
-                    // Restarted while it stopped: that one is new, so it stays.
-                    if self.launching.locked().0.contains(&s.id) {
+                    let Some(now) = self.session(s.id) else { return Ok(Reply::Done) };
+                    // Restarted while it stopped (still starting, or already started under the
+                    // same id): that one is new, so it stays.
+                    if self.launching.locked().0.contains(&s.id) || !Arc::ptr_eq(&now, &s) {
                         return Err(Error::conflict("the session is restarting; remove it after"));
                     }
                 }

@@ -291,6 +291,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32
         }
         ShellsCmd::Adopt { session, worktree } => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
+            let worktree = crate::cli::addr_here_opt(worktree)?;
             let req = Request::ShellPlace { addr: session, loose: false, worktree };
             let info = session_of(c.request(req).await?)?;
             println!("{} joined its worktree", info.name);

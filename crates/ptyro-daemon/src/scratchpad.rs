@@ -281,6 +281,36 @@ impl Daemon {
         }
     }
 
+    /// Worktrees renamed (a worktree's or its project's rename): the items' `[wt:old]` links
+    /// follow, as `(old, new)` qualified names, so finishing it still ticks them.
+    pub(crate) fn pad_renamed(&self, renames: &[(String, String)]) {
+        let _l = self.pad_state.lock.locked();
+        let pad = self.pad();
+        let Ok(cur) = pad.read() else { return };
+        let tag = |q: &str| format!(" [wt:{q}]");
+        if !renames.iter().any(|(old, new)| old != new && cur.contains(&tag(old))) {
+            return;
+        }
+        self.remember(&cur);
+        let done = pad.modify(|t| {
+            // Each line has one link, so one pass over the lines can't rename twice.
+            let lines: Vec<String> = t
+                .split_inclusive('\n')
+                .map(|l| {
+                    renames
+                        .iter()
+                        .find(|(old, _)| l.contains(&tag(old)))
+                        .map_or_else(|| l.to_owned(), |(old, new)| l.replace(&tag(old), &tag(new)))
+                })
+                .collect();
+            Ok(lines.concat())
+        });
+        match done {
+            Ok(text) => self.pad_changed(&text, Some("worktree renamed".into())),
+            Err(e) => tracing::warn!("scratchpad: following a rename: {e}"),
+        }
+    }
+
     /// The item on `line` starts in worktree `qualified` (`WorktreeSpec::pad_item`).
     pub(crate) fn pad_started(&self, line: u32, qualified: &str) {
         let _l = self.pad_state.lock.locked();

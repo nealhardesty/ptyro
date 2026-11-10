@@ -59,7 +59,8 @@ So `--pr N` is a PR number (`new`, `wt new`) and `pick --open-pr` opens one; `--
 lead (`new`) and `cs new --lead-as AGENT` picks its agent; `--keep` keeps a chat and
 `cs rm --keep-member M` a member; `--chat` reads a transcript and `chat search --in CHAT` narrows
 a search; `--timeout D` is how long to wait (`msg check` too). An optional value reads the same
-everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`.
+everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`
+(bare: the scrollback kept in memory; N can reach back into the recording).
 
 ## Naming sessions and worktrees
 
@@ -100,7 +101,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches in a terminal unless `-d` (`--json` prints it instead). No `--agent` means your shell, or `CMD` |
 | `ptyro new … -a A[@PROFILE] [--prompt TEXT \| --prompt-file F] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
 | `ptyro new --again [--wt W] [-d]` | quick new: another of the agent this worktree last started (with its profile and arguments); the project's `default_agent`, else `[agents] default` (claude), when none has |
-| `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes |
+| `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
 | `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
@@ -257,7 +258,7 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 | `ptyro cs diff SET M` / `check SET` / `overlay SET [auto\|go\|rust\|node\|python\|compose\|off] [--member M]` | a member's changes / integration and contract checks / build against siblings |
 | `ptyro cs checkpoint SET [LABEL]` / `checkpoints SET` / `restore SET N [--force]` | undo across every repo |
 | `ptyro cs commit SET -m MSG` / `push SET [-y]` / `pr SET [--draft]` / `land SET [-y] [--no-wait]` | lockstep git and the merge train |
-| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--force] [-y]` / `rm SET [--keep-member M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates |
+| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--ignore-dependents] [--force] [-y]` / `rm SET [--keep-member M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates. `--force` discards unsaved work, as `wt rm --force`; `--ignore-dependents` drops a member others depend on and never discards work |
 
 ## Remote and phone
 

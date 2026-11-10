@@ -11,7 +11,7 @@ while the script runs. The building blocks:
 | `ptyro new -d --agent A [--new-wt NAME] --prompt TEXT` | start an agent detached (in a fresh worktree), prompt typed once it's ready |
 | `ptyro send S… TEXT [--wait-ready] [--wait]` | type into sessions; `--wait` reports how the turn ended |
 | `ptyro wait S… --for idle\|blocked\|done\|error\|exit\|working\|any-attention` | block until they get there (`--any`, `--timeout`, `--stall`) |
-| `ptyro wait S --match REGEX [--scrollback [N]]` | block until text appears (`--scrollback`: in up to N lines above the screen too, as `read --scrollback N` shows them; all of them without N) |
+| `ptyro wait S --match REGEX [--scrollback [N]]` | block until text appears (`--scrollback`: in up to N lines above the screen too, as `read --scrollback N` shows them; without N, what's kept in memory) |
 | `ptyro read S [--scrollback [N]] [--json]` | the screen as text |
 | `ptyro events --follow` | every change, one JSON line each |
 | `ptyro ls --json --status blocked` | who needs you |

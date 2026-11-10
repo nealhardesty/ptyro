@@ -247,14 +247,13 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
             Ok(0)
         }
         ConfigCmd::Rm { collection, name, project, shared, yes } => {
+            // Found first, then asked: one that isn't there is refused without a question.
+            let layer = layer(ctx, project.as_deref(), shared).await?;
+            let op = Op::Remove { path: collection.clone(), name: name.clone() };
+            settings::preview(&layer, &op, &lookups(), &extra_for(&layer)).map_err(invalid)?;
             let q = format!("Remove {collection} {name}? {}", ptyro_core::removal::CONFIG_ENTRY);
             crate::cli::ask_first(&q, yes)?;
-            let layer = layer(ctx, project.as_deref(), shared).await?;
-            change(
-                &layer,
-                &Op::Remove { path: collection.clone(), name: name.clone() },
-                &format!("removed {collection} {name}"),
-            )?;
+            change(&layer, &op, &format!("removed {collection} {name}"))?;
             Ok(0)
         }
         ConfigCmd::Rename { collection, from, to, project, shared } => {
