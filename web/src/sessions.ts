@@ -49,7 +49,8 @@ const ACTIONS = {
 } as const;
 const tip = actions(ACTIONS);
 
-const live = (s: Session): boolean => s.state.t === "running";
+// A live process, as the TUI and the daemon say it (`is_live`): starting counts.
+const live = (s: Session): boolean => s.state.t === "running" || s.state.t === "starting";
 const addr = (s: Session): string => s.id;
 
 // ── start a task ────────────────────────────────────────────────────────────────────────────

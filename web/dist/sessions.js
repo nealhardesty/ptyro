@@ -43,7 +43,8 @@ const ACTIONS = {
     "sidebar.filter": "Show every session, only the running ones (a live process), or only the active ones (an agent working or waiting for you, a shell running a command)",
 };
 const tip = actions(ACTIONS);
-const live = (s) => s.state.t === "running";
+// A live process, as the TUI and the daemon say it (`is_live`): starting counts.
+const live = (s) => s.state.t === "running" || s.state.t === "starting";
 const addr = (s) => s.id;
 // ── start a task ────────────────────────────────────────────────────────────────────────────
 const SOURCES = [

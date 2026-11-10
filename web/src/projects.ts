@@ -345,7 +345,7 @@ function archive(w: Worktree): void {
   }, false);
 }
 
-function remove(w: Worktree, force = false): void {
+function remove(w: Worktree, force = false, stopAgreed = false): void {
   const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
   // Unsaved work offers archiving first; any other refusal with a way through (a session the
   // count above missed: a loose shell, one starting) offers it, as `ask` does (SPEC §6.6).
@@ -360,13 +360,13 @@ function remove(w: Worktree, force = false): void {
       if (f?.fix === "force" && !force) {
         menu("It has work that isn't saved", [
           { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
-          { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true) },
+          { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true, (req as { opts?: { stop_sessions?: boolean } }).opts?.stop_sessions === true) },
         ]);
       } else if (f && again) confirm(f.label, errText(e), f.label, () => send(again));
       else ui.toast(errText(e));
     }
   };
-  confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", () => send({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } }));
+  confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", () => send({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: stopAgreed || n > 0, keep_branch: false } }));
 }
 
 async function runScript(w: Worktree): Promise<void> {

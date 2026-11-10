@@ -706,6 +706,11 @@ pub(crate) fn run_offer(label: &str, action: &'static str) -> Offer {
     Offer { label: label.into(), then: Then::Run(Command { action, arg: None }) }
 }
 
+/// An offer to run a session action on that session, whatever is selected when it's taken.
+pub(crate) fn session_offer(label: &str, action: &'static str, id: SessionId) -> Offer {
+    Offer { label: label.into(), then: Then::Run(Command { action, arg: Some(id.full()) }) }
+}
+
 /// The CLI commands error messages suggest, and the TUI action that does each (UX1.17): a
 /// message that names one offers that action instead of leaving you to type it. Longest first.
 const SUGGESTED: &[(&str, &str, &str)] = &[
@@ -2670,6 +2675,10 @@ impl App {
                 self.toast(format!("workspace {name} created"));
                 self.switch_workspace(name);
             }
+            // A retried refusal's reply says what it did (SPEC §6.6): its notes, not the label.
+            (Pending::Done(_), Ok(Reply::Removed { notes })) if !notes.is_empty() => {
+                self.toast(notes.join(" · "))
+            }
             (Pending::Done(msg), Ok(_)) => {
                 if !msg.is_empty() {
                     self.toast(msg);
@@ -3341,6 +3350,10 @@ impl App {
             | "session.rename"
             | "session.retitle"
             | "session.take_control" => {
+                // An offer names its session: it acts on that one, wherever the selection went.
+                if let Some(id) = cmd.arg.as_deref().and_then(|a| a.parse().ok()) {
+                    return self.session_action(cmd.action, id);
+                }
                 // On a chat row, the same keys mean the chat's own: `,` its title, `x` archive,
                 // `X` delete (SPEC §22.12).
                 let on_chat_row = self.focus == Focus::Sidebar
@@ -3908,7 +3921,7 @@ impl App {
             "session.stop" | "session.kill" if !info.state.is_live() => self.toast_offer(
                 format!("{} isn't running", info.name),
                 false,
-                run_offer("remove it", "session.remove"),
+                session_offer("remove it", "session.remove", id),
             ),
             // A dormant agent can still be resumed: forgetting it asks, as the CLI's rm does.
             "session.remove" if info.state == ProcessState::Dormant => {
@@ -3928,7 +3941,7 @@ impl App {
             "session.restart" if info.state.is_live() => self.toast_offer(
                 format!("{} is still running", info.name),
                 false,
-                run_offer("stop it", "session.stop"),
+                session_offer("stop it", "session.stop", id),
             ),
             "session.restart" => self.request(
                 Pending::Done(format!("restarted {}", info.name)),
@@ -4192,7 +4205,10 @@ impl App {
                     let restart = if self.focus == Focus::Sidebar { "R" } else { "⏎" };
                     return Some(format!(
                         "{restart} restart · {}",
-                        with("session.stop", "remove").unwrap_or_default()
+                        // Remove has no key of its own: the row menu has it.
+                        with("session.remove", "remove")
+                            .or_else(|| with("row.menu", "remove…"))
+                            .unwrap_or_default()
                     ));
                 }
                 if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
@@ -8879,6 +8895,9 @@ mod tests {
         app.session_action("session.stop", gone.id);
         let t = app.toast.as_ref().unwrap();
         assert!(t.text.contains("isn't running") && t.offer.is_some(), "{}", t.text);
+        // … for that session, wherever the selection goes before it's taken.
+        let named = matches!(&t.offer, Some(Offer { then: Then::Run(Command { action: "session.remove", arg: Some(a) }), .. }) if *a == gone.id.full());
+        assert!(named, "{:?}", t.offer);
         assert!(app.overlay.is_none());
         // A dormant one can be resumed: removing it asks.
         let mut dormant = session("sleepy");
@@ -8947,7 +8966,7 @@ mod tests {
         let rows = app.rows();
         let i = rows.iter().position(|r| *r == Row::Session(gone.id)).unwrap();
         app.set_sel(&rows, i);
-        assert_eq!(app.context_hint().as_deref(), Some("R restart · x remove"));
+        assert_eq!(app.context_hint().as_deref(), Some("R restart · . remove…"));
     }
 
     #[test]
