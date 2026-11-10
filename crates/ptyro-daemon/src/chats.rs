@@ -616,7 +616,7 @@ impl Daemon {
         let found: Vec<&ChatInfo> = if a == "@last" {
             all.iter().max_by_key(|c| c.last_ms).into_iter().collect()
         } else if a == "@pinned" || a == "@unread" {
-            // Several, newest first: one is the chat; more are listed to pick from.
+            // Several are ambiguous: the error lists them, newest first (SPEC §22.3).
             let mut v: Vec<&ChatInfo> = all
                 .iter()
                 .filter(|c| if a == "@pinned" { c.pinned } else { c.unread > 0 })

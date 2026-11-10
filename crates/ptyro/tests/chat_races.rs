@@ -294,7 +294,7 @@ fn pinned_and_unread_address_a_chat() {
     w.ok(&["chat", "pin", &addr("First")]);
     let two = w.cli(&["chat", "show", "@pinned"]);
     let err = String::from_utf8_lossy(&two.stderr);
-    assert!(err.contains("matches 2 chats") && err.contains("First"), "{err}");
+    assert!(err.contains("2 chats match \"@pinned\"") && err.contains("First"), "{err}");
     let unread = w.cli(&["chat", "show", "@unread"]);
     assert!(String::from_utf8_lossy(&unread.stderr).contains("haven't read"), "{unread:?}");
 }

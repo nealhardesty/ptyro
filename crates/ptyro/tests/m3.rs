@@ -325,8 +325,9 @@ async fn the_worktree_lifecycle() {
     assert!(!e.message.contains("--"), "{}", e.message);
     let again = e.fix.map(|f| f.again);
     assert_eq!(again, Some(ptyro_core::error::Again::StopSessions), "its way through");
-    let out = w.cli(&["wt", "rm", "app/second"]);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("again with `--stop-sessions`"));
+    let out = w.cli(&["wt", "rm", "-y", "app/second"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("again with `--stop-sessions`"), "{err}");
     c.request(Request::Kill { addr: s.name.clone(), signal: None }).await.unwrap();
     wait_worktree(&c, "app/second", |w| !w.locked).await;
     // … and with work that would be lost, with a precise report (CLI exit code 5).
