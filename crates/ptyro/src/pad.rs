@@ -11,7 +11,7 @@ use ptyro_core::config::Config;
 use ptyro_core::scratchpad as pad;
 use ptyro_protocol::{PadMark, Reply, Request};
 
-use crate::cli::{Ctx, age, current_dir, unexpected};
+use crate::cli::{Ctx, ago, current_dir, unexpected};
 
 #[derive(Subcommand)]
 pub enum PadCmd {
@@ -317,7 +317,7 @@ async fn log(ctx: &Ctx, json: bool) -> Result<i32, Error> {
         return Ok(0);
     }
     for s in &snapshots {
-        println!("{}  {:>5} ago  {} lines", s.rev, age(s.at_ms), s.lines);
+        println!("{}  {:>5} ago  {} lines", s.rev, ago(s.at_ms), s.lines);
     }
     if snapshots.is_empty() {
         eprintln!("no saved copies yet");

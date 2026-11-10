@@ -22,7 +22,7 @@ use ptyro_protocol::{Reply, Request};
 use ptyro_run::wire::{CompareDoc, FanoutSpec, PickMode, RunInfo};
 use ptyro_run::{RunStatus, StepStatus};
 
-use crate::cli::{Ctx, age, current_dir, no_daemon, unexpected};
+use crate::cli::{Ctx, ago, current_dir, no_daemon, unexpected};
 
 #[derive(Subcommand)]
 pub enum RunCmd {
@@ -319,7 +319,7 @@ fn print_run(r: &RunInfo) {
         s.kind.label(),
         s.name,
         s.status.label(),
-        age(s.created_ms)
+        ago(s.created_ms)
     );
     for (k, v) in &s.vars {
         println!(
@@ -527,7 +527,7 @@ pub async fn run(ctx: &Ctx, cmd: RunCmd) -> Result<i32, Error> {
                     s.name,
                     s.status.label(),
                     s.steps.len(),
-                    age(s.created_ms),
+                    ago(s.created_ms),
                     if gates > 0 { format!("  ⏸ {gates} gate(s)") } else { String::new() }
                 );
             };
@@ -576,7 +576,7 @@ pub async fn run(ctx: &Ctx, cmd: RunCmd) -> Result<i32, Error> {
                         o.remove("step");
                         o.remove("at");
                     }
-                    println!("{seq:>4} {:>8} ago  {kind}{step} {}", age(at), rest);
+                    println!("{seq:>4} {:>8} ago  {kind}{step} {}", ago(at), rest);
                 }
             }
             Ok(0)
@@ -953,7 +953,7 @@ pub async fn gate(ctx: &Ctx, cmd: GateCmd) -> Result<i32, Error> {
             }
             for g in gates {
                 let state = g.gate.choice.as_ref().map_or_else(
-                    || format!("waiting {}", age(g.gate.opened_ms)),
+                    || format!("waiting {}", ago(g.gate.opened_ms)),
                     |c| format!("answered {c:?}"),
                 );
                 println!(
@@ -1033,7 +1033,7 @@ pub async fn msg(ctx: &Ctx, cmd: MsgCmd) -> Result<i32, Error> {
                         m.from,
                         m.to,
                         m.kind,
-                        age(m.at_ms),
+                        ago(m.at_ms),
                         m.body.replace('\n', "\n  ")
                     );
                 }
@@ -1056,7 +1056,7 @@ pub async fn msg(ctx: &Ctx, cmd: MsgCmd) -> Result<i32, Error> {
                 for m in &messages {
                     println!(
                         "{:>8} ago  {:<10} {} → {} [{}] {}",
-                        age(m.at_ms),
+                        ago(m.at_ms),
                         m.state,
                         m.from,
                         m.to,
@@ -1187,7 +1187,7 @@ pub async fn checkpoint(ctx: &Ctx, cmd: CheckpointCmd) -> Result<i32, Error> {
                     "{:>3}  turn {:<3} {:>8} ago  {} file(s)  {}  {}",
                     k.n,
                     k.turn,
-                    age(k.at_ms),
+                    ago(k.at_ms),
                     k.files,
                     &k.sha[..k.sha.len().min(10)],
                     k.refname

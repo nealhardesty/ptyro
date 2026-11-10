@@ -13,7 +13,7 @@ use ptyro_core::chats::{ChatInfo, ChatNode, ChatSiblings};
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{ClientMsg, Reply, Request, ServerMsg};
 
-use crate::cli::{Ctx, age, unexpected};
+use crate::cli::{Ctx, ago, unexpected};
 use crate::complete;
 
 /// `chat new`'s, and plain `chat`'s: `ptyro chat --folder ~/notes "what's left?"`.
@@ -1345,7 +1345,7 @@ async fn ls(
             crate::cli::truncate(ch.label(), 40),
             ch.agent,
             ch.workspace,
-            age(ch.last_ms),
+            ago(ch.last_ms),
         );
     }
     Ok(0)
@@ -1813,7 +1813,7 @@ async fn search(
             Some(n) => format!("{}/{}", h.chat.addr(), short_id(n)),
             None => h.chat.addr(),
         };
-        println!("{cite}  {} · {} · {}", h.chat.label(), h.chat.agent, age(h.at_ms));
+        println!("{cite}  {} · {} · {}", h.chat.label(), h.chat.agent, ago(h.at_ms));
         let snippet = h
             .snippet
             .replace('\n', " ")

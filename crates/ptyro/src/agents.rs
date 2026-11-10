@@ -9,7 +9,7 @@ use ptyro_core::session::SessionInfo;
 use ptyro_core::{Error, ErrorCode, now_ms};
 use ptyro_protocol::{Reply, Request};
 
-use crate::cli::{Ctx, age, no_daemon, truncate, unexpected};
+use crate::cli::{Ctx, ago, no_daemon, truncate, unexpected};
 
 #[derive(Subcommand)]
 pub enum NotifyCmd {
@@ -90,7 +90,7 @@ pub async fn status(
                 "  source    {} ({:?}), since {} ago",
                 r.source.label(),
                 r.confidence,
-                age(r.since_ms)
+                ago(r.since_ms)
             );
             if let Some(p) = r.progress {
                 println!("  progress  {p}%");
@@ -100,7 +100,7 @@ pub async fn status(
             println!("  doing     {a}");
         }
         if let Some(a) = &info.attention {
-            println!("  wants you {} ({} ago)", a.text, age(a.since_ms));
+            println!("  wants you {} ({} ago)", a.text, ago(a.since_ms));
         }
         if let Some(conv) = &info.conversation {
             println!("  conversation {conv}");
@@ -115,7 +115,7 @@ pub async fn status(
             for l in lines {
                 println!(
                     "  {:>5} {} {:<24} {:<36} {}",
-                    age(l.at_ms),
+                    ago(l.at_ms),
                     if l.applied { "✓" } else { "·" },
                     l.source,
                     truncate(&l.signal, 36),
@@ -141,7 +141,7 @@ pub async fn status(
         let wants = s
             .attention
             .as_ref()
-            .map_or(String::new(), |a| format!("{} ({})", a.text, age(a.since_ms)));
+            .map_or(String::new(), |a| format!("{} ({})", a.text, ago(a.since_ms)));
         let doing = s.activity.as_deref().map(|a| format!(" · {a}")).unwrap_or_default();
         println!(
             "{:<18} {:<10} {:<34} {}",
@@ -214,7 +214,7 @@ pub async fn inbox(
     }
     for e in entries {
         let mark = if e.read_ms.is_none() { "●" } else { " " };
-        println!("{mark} {:>4} {:<12} {} — {}", age(e.at_ms), e.kind.label(), e.title, e.body);
+        println!("{mark} {:>4} {:<12} {} — {}", ago(e.at_ms), e.kind.label(), e.title, e.body);
     }
     Ok(0)
 }

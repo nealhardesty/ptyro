@@ -12,7 +12,7 @@ use ptyro_core::{Error, ErrorCode, removal};
 use ptyro_protocol::{Reply, Request};
 
 use crate::cli::{
-    Ctx, NewArgs, addr_here, addr_here_opt, age, ask_first, check_attachable, client_env, confirm,
+    Ctx, NewArgs, addr_here, addr_here_opt, ago, ask_first, check_attachable, client_env, confirm,
     current_dir, fixed_by, no_daemon, session_of, truncate, unexpected, with_confirmation,
 };
 
@@ -1110,7 +1110,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                     "{:<6} {:<28} {:<8} {:<24} {}",
                     ptyro_core::lookup::handle(&e.id, ids.iter().copied()),
                     truncate(&format!("{}/{}", e.project_slug, e.name), 28),
-                    age(e.archived_ms),
+                    ago(e.archived_ms),
                     truncate(&e.branch, 24),
                     e.title.as_deref().unwrap_or("")
                 );
@@ -1510,7 +1510,7 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Res
         println!(
             "{:<28} {:<8} {:>11}  {}",
             truncate(&w.qualified(), 28),
-            age(w.last_used_ms.unwrap_or(w.created_ms)),
+            ago(w.last_used_ms.unwrap_or(w.created_ms)),
             e.size_label().unwrap_or_else(|| "-".into()),
             e.reasons.join("; ")
         );
@@ -1525,7 +1525,7 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Res
         println!(
             "{:<28} {:<8} {:>11}  a scratch shell's directory, left behind with {} files in it",
             truncate(&format!("scratch/{name}"), 28),
-            age(l.modified_ms),
+            ago(l.modified_ms),
             ptyro_core::model::human_bytes(l.bytes),
             l.files
         );
