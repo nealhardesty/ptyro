@@ -204,7 +204,11 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
     its worktrees and archives, so this fold stays as it was: re-adding a repository finds them
     again, and stored slugs keep working. A directory with nothing slug-like in its name gets
-    `repo`; nothing else falls back to it.
+    `repo`; nothing else falls back to it. A slug a person gives (`project rename`, in every
+    client) follows the same rule and is refused when it's wrong, never rewritten, with the fix
+    offered: `invalid project name "my_app": '_' isn't allowed in a project's name (only a-z 0-9
+    -); try "my-app"` (`names::validate_slug`; owner, 2026-11-09). Its field in the TUI and the
+    web keeps to `a-z 0-9 -` as it is typed (`names::slug_typed`, `names::SLUG_HINT`).
 - **Address syntax** used across CLI and protocol (resolved by the daemon):
 
   | Form | Example | Resolves to |

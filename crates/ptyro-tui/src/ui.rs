@@ -1972,7 +1972,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
             let mut field = vec![Span::styled("› ", fg(app, t.accent))];
             if kind.is_name() && check.is_err() {
                 field.extend(text.chars().map(|c| {
-                    let style = if ptyro_core::names::allowed(c) { Style::new() } else { bad };
+                    let style = if kind.allowed(c) { Style::new() } else { bad };
                     Span::styled(c.to_string(), style)
                 }));
             }
@@ -1980,7 +1980,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 Err(e) => {
                     let fix = kind
                         .is_name()
-                        .then(|| ptyro_core::names::tidy(text))
+                        .then(|| kind.tidy(text))
                         .flatten()
                         .map(|n| format!(" · Tab → {n}"))
                         .unwrap_or_default();
@@ -1990,7 +1990,7 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     let nl = if kind.multiline() {
                         format!(" · {}", newline_hint(app))
                     } else if kind.is_name() {
-                        format!(" · {}", ptyro_core::names::TYPED_HINT.to_lowercase())
+                        format!(" · {}", kind.hint().to_lowercase())
                     } else {
                         String::new()
                     };

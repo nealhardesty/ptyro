@@ -1307,6 +1307,12 @@ async fn worktrees_and_projects_are_renamed() {
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    // A slug is `[a-z0-9-]` (SPEC §2.3): a name's `_` or `.` is refused, the fix offered.
+    let e = c
+        .request(Request::ProjectRename { addr: "app".into(), name: "my_web".into() })
+        .await
+        .unwrap_err();
+    assert!(e.code == ErrorCode::Invalid && e.message.contains("try \"my-web\""), "{e:?}");
     let out = w.ok(&["project", "rename", "app", "web"]);
     assert!(out.contains("web"), "{out}");
     let e = c.request(Request::ProjectGet { addr: "app".into() }).await.unwrap_err();

@@ -244,9 +244,80 @@ pub fn fold(raw: &str, keep: impl Fn(char) -> bool, max: usize) -> String {
     }
 }
 
+/// A character a project's slug may hold: the narrower `[a-z0-9-]` of `model::slugify` (SPEC
+/// §2.3), since a slug names its directory under `<data>/worktrees/`.
+pub fn slug_allowed(c: char) -> bool {
+    c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'
+}
+
+/// What a project-name field says under itself, in the TUI and (the same words) the web.
+pub const SLUG_HINT: &str = "A space or other odd character becomes - (a-z 0-9 -)";
+
+/// Why `slug` isn't a project's slug as a person gives one (`project rename`): exactly what
+/// `model::slugify` would make of it, 1–40 characters.
+pub fn slug_problem(slug: &str) -> Option<String> {
+    if slug.is_empty() {
+        return Some("empty: use 1-40 of a-z 0-9 -".into());
+    }
+    if let Some(c) = slug.chars().find(|c| !slug_allowed(*c)) {
+        let what = match c {
+            ' ' => "a space".to_owned(),
+            c if c.is_ascii_uppercase() => format!("{c:?} (uppercase)"),
+            c => format!("{c:?}"),
+        };
+        return Some(format!("{what} isn't allowed in a project's name (only a-z 0-9 -)"));
+    }
+    if slug.chars().count() > 40 {
+        return Some(format!("too long: {} of at most 40", slug.chars().count()));
+    }
+    (crate::model::slugify(slug) != slug).then(|| "must not start or end with -, or hold --".into())
+}
+
+/// A project's slug as a person gives it, refused when it's wrong, offering the fix:
+/// `invalid project name "my_app": '_' isn't allowed …; try "my-app"`.
+pub fn validate_slug(slug: &str) -> Result<(), String> {
+    let Some(p) = slug_problem(slug) else { return Ok(()) };
+    Err(match slug_tidy(slug) {
+        Some(fix) => format!("invalid project name {slug:?}: {p}; try {fix:?}"),
+        None => format!("invalid project name {slug:?}: {p}"),
+    })
+}
+
+/// The fix [`validate_slug`] offers: `raw` slugified, when that changes it and leaves a slug.
+pub fn slug_tidy(raw: &str) -> Option<String> {
+    let out = crate::model::slugify(raw);
+    (out != raw && slug_problem(&out).is_none()).then_some(out)
+}
+
+/// `raw` as it is typed into a project-name field: [`typed`], keeping only `a-z 0-9 -`.
+pub fn slug_typed(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars().map(|c| c.to_ascii_lowercase()) {
+        if out.is_empty() && !c.is_ascii_alphanumeric() {
+            continue;
+        }
+        out.push(if slug_allowed(c) { c } else { '-' });
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_project_name_follows_the_slug_rule() {
+        assert!(validate_slug("my-app2").is_ok());
+        let e = validate_slug("my_app").unwrap_err();
+        assert!(e.contains("'_' isn't allowed") && e.ends_with("try \"my-app\""), "{e}");
+        let e = validate_slug("My.App").unwrap_err();
+        assert!(e.contains("uppercase") && e.ends_with("try \"my-app\""), "{e}");
+        assert!(validate_slug("-app").is_err() && validate_slug("a--b").is_err());
+        assert!(validate_slug(&"a".repeat(41)).is_err());
+        assert!(validate_slug("").is_err());
+        assert_eq!(slug_typed("My App_2."), "my-app-2-");
+        assert_eq!(slug_tidy("My App_2."), Some("my-app-2".into()));
+    }
 
     #[test]
     fn names_from_what_its_for() {
@@ -425,6 +496,7 @@ mod tests {
         let kit = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/kit.ts");
         let kit = std::fs::read_to_string(kit).unwrap();
         assert!(kit.contains(&format!("NAME_HINT = {TYPED_HINT:?}")), "web/src/kit.ts NAME_HINT");
+        assert!(kit.contains(&format!("SLUG_HINT = {SLUG_HINT:?}")), "web/src/kit.ts SLUG_HINT");
     }
 
     #[test]

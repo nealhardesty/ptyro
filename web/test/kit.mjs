@@ -33,6 +33,8 @@ assert.equal(slugify("name", "héllo"), "h-llo");
 assert.equal(slugify("name", "my_fix"), "my_fix");
 assert.equal(slugify("name", "brisk-rook.v1"), "brisk-rook.v1");
 assert.equal(slugify("branch", "fix this/Now: ok"), "fix-this/Now--ok");
+assert.equal(slugify("project", "My App_2."), "my-app-2-", "names::slug_typed");
+assert.equal(slugify("project", "-x"), "x");
 assert.equal(slugify("branch", "-x"), "x");
 assert.equal(NAME_HINT, "A space or other odd character becomes - (a-z 0-9 . _ -)");
 // A status is shown with the selectors' word: `error`, as `@error` and `ptyro ls --status error` say.

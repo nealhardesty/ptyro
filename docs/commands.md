@@ -178,7 +178,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 | Command | Does |
 |---|---|
 | `ptyro project add [PATH] [-w WS]` / `ls` / `show [P]` / `rm P [--release] [-y]` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again, and its worktrees stay on disk. Sessions running in it block `rm` (at a terminal it offers to let them go); `--release` lets them go on, outside any project |
-| `ptyro project rename P NEW` | rename a project: its slug, the address of its worktrees and sessions (`NEW/name`). Its worktrees' directories stay where they are; new ones go under the new name |
+| `ptyro project rename P NEW` | rename a project: its slug, the address of its worktrees and sessions (`NEW/name`). Its worktrees' directories stay where they are; new ones go under the new name. `NEW` is a slug: `a-z 0-9 -`, at most 40 |
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
 | `ptyro project line-endings [P]` | rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |

@@ -259,16 +259,27 @@ export function textSheet(title: string, text: string): Sheet {
 /// What a name field says under itself (`names::TYPED_HINT` in ptyro-core, word for word).
 export const NAME_HINT = "A space or other odd character becomes - (a-z 0-9 . _ -)";
 
+/// What a project-name field says under itself (`names::SLUG_HINT`, word for word).
+export const SLUG_HINT = "A space or other odd character becomes - (a-z 0-9 -)";
+
+/// "name" for an address, "project" for a project's slug (only a-z 0-9 -), "branch" for a git
+/// branch.
+export type SlugKind = "name" | "project" | "branch";
+
 /// What a name can't hold becomes `-` as it is typed, and what it can't start with is dropped
-/// at the start (the same rule as `names::typed` and `names::branch_typed` in ptyro-core):
-/// "name" for an address, "branch" for a git branch.
-export function slugify(kind: "name" | "branch", raw: string): string {
+/// at the start (the same rule as `names::typed`, `names::slug_typed` and
+/// `names::branch_typed` in ptyro-core).
+export function slugify(kind: SlugKind, raw: string): string {
   let out = "";
   for (const c of raw) {
     if (kind === "branch") {
       const bad = /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c);
       if (out === "" && (bad || c === "-")) continue;
       out += bad ? "-" : c;
+    } else if (kind === "project") {
+      const l = c.toLowerCase();
+      if (out === "" && !/^[a-z0-9]$/.test(l)) continue;
+      out += /^[a-z0-9-]$/.test(l) ? l : "-";
     } else {
       const l = c.toLowerCase();
       if (out === "" && !/^[a-z0-9_]$/.test(l)) continue;
@@ -282,7 +293,7 @@ export function slugify(kind: "name" | "branch", raw: string): string {
 /// Keep `box` as a name (or branch) while it is typed into. The cursor stays after what was
 /// before it: slugify never looks ahead, so the text before the cursor, slugified, is where the
 /// cursor goes (in UTF-16 units, as an emoji turned into one `-` shrinks).
-export function slugInput(box: HTMLInputElement, kind: "name" | "branch"): void {
+export function slugInput(box: HTMLInputElement, kind: SlugKind): void {
   box.addEventListener("input", () => {
     const fixed = slugify(kind, box.value);
     if (fixed === box.value) return;
@@ -294,7 +305,7 @@ export function slugInput(box: HTMLInputElement, kind: "name" | "branch"): void 
 
 /// `more`: the field goes under "More options", folded, so the quick path stays short.
 export type Field = (
-  | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean; slug?: "name" | "branch" }
+  | { key: string; label: string; type?: "text" | "password" | "number"; value?: string | number | null; placeholder?: string; hint?: string; required?: boolean; slug?: SlugKind }
   | { key: string; label: string; type: "textarea"; value?: string | null; placeholder?: string; hint?: string; rows?: number; required?: boolean }
   | { key: string; label: string; type: "select"; options: ([string, string] | string)[]; value?: string | null; hint?: string }
   | { key: string; label: string; type: "check"; value?: boolean; hint?: string }

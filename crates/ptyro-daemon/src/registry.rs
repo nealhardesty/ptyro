@@ -502,7 +502,7 @@ impl Daemon {
     /// name`) and its archives. Worktree directories stay where they are.
     async fn project_rename(&self, addr: &str, name: &str) -> Result<Reply, Error> {
         let id = self.find_project(addr)?.id;
-        ptyro_core::names::validate(name).map_err(Error::invalid)?;
+        ptyro_core::names::validate_slug(name).map_err(Error::invalid)?;
         // The check and the change in one step, so two renames can't both take a name.
         let (p, worktrees) = {
             let mut reg = self.registry.locked();

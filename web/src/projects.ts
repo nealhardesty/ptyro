@@ -6,7 +6,7 @@ import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
 import type { Project, Worktree, Workspace } from "./data.js";
-import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
@@ -201,7 +201,7 @@ async function suggest(p: Project): Promise<void> {
 function renameProject(p: Project): void {
   // Another machine's project is renamed there, by the name it has there (MM1.B).
   const slug = splitMachine(p.slug)[1];
-  form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "name", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. ${NAME_HINT}` }], "Rename", async (v) => {
+  form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "project", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. ${SLUG_HINT}` }], "Rename", async (v) => {
     if (v.name === slug) return;
     await conn.request({ t: "project_rename", addr: p.id, name: v.name });
     ui.toast(`Renamed to ${v.name}`);

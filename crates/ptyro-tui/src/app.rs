@@ -397,9 +397,34 @@ impl PromptKind {
         )
     }
 
+    /// Whether a name here may hold `c`: a project's slug is the narrower `[a-z0-9-]`.
+    pub fn allowed(&self, c: char) -> bool {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_allowed(c),
+            _ => ptyro_core::names::allowed(c),
+        }
+    }
+
+    /// The name Tab makes of `text`, when that fixes it.
+    pub fn tidy(&self, text: &str) -> Option<String> {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_tidy(text),
+            _ => ptyro_core::names::tidy(text),
+        }
+    }
+
+    /// What a name field says under itself.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::SLUG_HINT,
+            _ => ptyro_core::names::TYPED_HINT,
+        }
+    }
+
     /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `-`.
     pub fn fit(&self, text: &str) -> String {
         match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_typed(text),
             _ if self.is_name() => ptyro_core::names::typed(text),
             Self::RenameBranch(_) => ptyro_core::names::branch_typed(text),
             _ => text.to_owned(),
@@ -5614,7 +5639,7 @@ impl App {
                 }
                 KeyCode::Enter => self.prompt_done(text, kind),
                 KeyCode::Tab if kind.is_name() => {
-                    let text = ptyro_core::names::tidy(&text).unwrap_or(text);
+                    let text = kind.tidy(&text).unwrap_or(text);
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
                 }
                 KeyCode::Backspace => {
@@ -6175,7 +6200,9 @@ impl App {
                 if t.is_empty() || t == bare(machine, &p.slug) {
                     return Ok(Some("unchanged".into()));
                 }
-                name(t)?;
+                if let Some(p) = ptyro_core::names::slug_problem(t) {
+                    return Err(p);
+                }
                 if self.projects.iter().any(|o| o.id != p.id && o.slug == on_machine(machine, t)) {
                     return Err(format!("a project named {t} exists"));
                 }
@@ -8942,6 +8969,10 @@ mod tests {
         assert_eq!(app.prompt_check(&kind, "myrepo"), Ok(Some("unchanged".into())));
         assert_eq!(app.prompt_check(&kind, "lib"), Err("a project named lib exists".into()));
         assert!(app.prompt_check(&kind, "web").is_ok());
+        // A slug is `[a-z0-9-]`, as the daemon refuses: `_` is marked, Tab offers `-`.
+        assert!(app.prompt_check(&kind, "my_web").is_err());
+        assert_eq!(kind.fit("My Web_2"), "my-web-2");
+        assert_eq!(kind.tidy("my_web").as_deref(), Some("my-web"));
     }
 
     /// Renaming something mirrored from another machine (MM1.B) types and checks the name it
