@@ -129,8 +129,12 @@ fn free_port() -> u16 {
 
 /// A raw HTTP/1.1 request; returns (status, headers + body as text).
 fn http(port: u16, req: &str) -> (u16, String) {
+    http_within(port, req, Duration::from_secs(10))
+}
+
+fn http_within(port: u16, req: &str, wait: Duration) -> (u16, String) {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.set_read_timeout(Some(wait)).unwrap();
     s.write_all(req.as_bytes()).unwrap();
     let mut out = Vec::new();
     let _ = s.read_to_end(&mut out);
@@ -1406,12 +1410,15 @@ fn node_available() -> bool {
 fn host(port: u16, token: Option<&str>, body: &Value) -> (u16, Value) {
     let body = body.to_string();
     let auth = token.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
-    let (code, text) = http(
+    // As long as the server gives a host op (90 s): the doctor asks each agent installed on
+    // this machine for its version, which takes seconds per agent on a busy one.
+    let (code, text) = http_within(
         port,
         &format!(
             "POST /api/host HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ),
+        Duration::from_secs(90),
     );
     let json = text
         .split("\r\n\r\n")
