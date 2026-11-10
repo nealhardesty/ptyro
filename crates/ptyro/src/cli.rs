@@ -1342,7 +1342,7 @@ async fn quick_shell(
     worktree: Option<String>,
     json: bool,
     read: bool,
-    scrollback: Option<u32>,
+    scrollback: Option<Option<u32>>,
 ) -> Result<i32, Error> {
     let attaching = !json && !read;
     if attaching {

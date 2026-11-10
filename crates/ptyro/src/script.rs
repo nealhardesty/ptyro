@@ -92,8 +92,9 @@ pub struct WaitOpts {
     /// Any of these conditions ends the wait for a session.
     pub conditions: Vec<String>,
     pub pattern: Option<regex::Regex>,
-    /// Match against this many lines of scrollback above the screen too (`None`: the screen).
-    pub scrollback: Option<u32>,
+    /// Match against the scrollback above the screen too (`None`: the screen); `Some(None)`:
+    /// what's kept in memory, `Some(Some(n))`: n lines.
+    pub scrollback: Option<Option<u32>>,
     pub timeout: Option<Duration>,
     pub any: bool,
     pub stall: Option<Duration>,
@@ -106,9 +107,13 @@ async fn get(c: &Client, id: SessionId) -> Result<SessionInfo, Error> {
     }
 }
 
-async fn screen_text(c: &Client, id: SessionId, scrollback: Option<u32>) -> Result<String, Error> {
+async fn screen_text(
+    c: &Client,
+    id: SessionId,
+    scrollback: Option<Option<u32>>,
+) -> Result<String, Error> {
     if let Some(lines) = scrollback {
-        match c.request(Request::ReadScrollback { addr: id.full(), lines: Some(lines) }).await? {
+        match c.request(Request::ReadScrollback { addr: id.full(), lines }).await? {
             Reply::Scrollback { doc } => {
                 Ok(ptyro_core::cache::plain_text(&ptyro_core::cache::doc_rows(&doc)))
             }
@@ -320,7 +325,7 @@ pub async fn wait(
     sessions: Vec<String>,
     condition: String,
     pattern: Option<String>,
-    scrollback: Option<u32>,
+    scrollback: Option<Option<u32>>,
     timeout: Option<String>,
     any: bool,
     stall: Option<String>,
@@ -505,15 +510,14 @@ struct ReadOut<'a> {
 pub async fn read(
     ctx: &Ctx,
     session: String,
-    scrollback: Option<u32>,
+    scrollback: Option<Option<u32>>,
     ansi: bool,
     json: bool,
 ) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     let text = if let Some(lines) = scrollback {
-        let Reply::Scrollback { doc } = c
-            .request(Request::ReadScrollback { addr: session.clone(), lines: Some(lines) })
-            .await?
+        let Reply::Scrollback { doc } =
+            c.request(Request::ReadScrollback { addr: session.clone(), lines }).await?
         else {
             return Err(Error::internal("unexpected reply"));
         };

@@ -59,7 +59,8 @@ So `--pr N` is a PR number (`new`, `wt new`) and `pick --open-pr` opens one; `--
 lead (`new`) and `cs new --lead-as AGENT` picks its agent; `--keep` keeps a chat and
 `cs rm --keep-member M` a member; `--chat` reads a transcript and `chat search --in CHAT` narrows
 a search; `--timeout D` is how long to wait (`msg check` too). An optional value reads the same
-everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`.
+everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`
+(bare: the scrollback kept in memory; N can reach back into the recording).
 
 ## Naming sessions and worktrees
 
