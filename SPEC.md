@@ -1199,8 +1199,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - `Request::Remove` adds `stop` (absent: false): stop a running session, then forget it (`rm
   --stop`, Stop and remove; §7.3). An older daemon ignores it and refuses a running session as
   before.
-- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust|release,
+- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust|release|ignore_dependents,
   label, fingerprint?}` (§6.6); an older client ignores it. The web's HTTP API passes it through.
+  A kind the client doesn't know decodes as no fix (the message still says what to do), so a
+  later kind never makes a reply unreadable.
+- `CsOp::Drop` adds `ignore_dependents` (absent: false): drop a member others depend on. `force`
+  now only discards unsaved work (before, it also overrode the dependency).
 - `WorktreeArchiveGet{addr}` → `Archives` with the one archive `addr` names (read scope), resolved as
   restoring and deleting do, so `wt archive-rm` resolves before it asks. An older daemon answers
   "unsupported request".
@@ -1357,12 +1361,13 @@ the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 
 **The way through is data, not words** (protocol 1.38). A refusal that has one carries
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
-second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read), or
-`release`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
+second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read),
+`release`, or `ignore_dependents`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
 "Stop and remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn
 convert, a daemon stop with sessions, a change set's restore, drop or remove: `force`; an
 untrusted recipe or template: `trust`; forgetting a project with running sessions: `release`,
-"Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
+"Let them go"; dropping a change-set member others depend on: `ignore_dependents`, "Drop it
+anyway"), never for a refusal it doesn't undo (removing while it restarts, a restart while
 it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
 and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
 happens to go with it. The CLI prints "(again with `--force`: remove anyway)"
@@ -5572,7 +5577,10 @@ tests green; nothing pushed. What it decided:
 - **`cs rm`** checks every member's safety first (§10.8); one with work that would be lost blocks
   the whole set unless `--keep` it or `--force`. Then the set's agents stop and the worktrees go
   (branches kept for members that didn't land). `cs drop` removes one member (refused while
-  others depend on it, unless `--force`); `cs add` adds one (same profile, no cycles) and starts
+  others depend on it, unless `--ignore-dependents`, fix `ignore_dependents`, "Drop it anyway").
+  Overriding the dependency never discards work: unsaved work in its worktree is a refusal of
+  its own, through only with `--force` (fix `force`), as `wt rm` (owner, 2026-11-09: one flag,
+  one meaning; `--force` always means "discard the work"); `cs add` adds one (same profile, no cycles) and starts
   its agent when the set is working.
 
 #### 15.7.7 States, actions, tools and the TUI

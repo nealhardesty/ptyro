@@ -900,6 +900,7 @@ pub fn said(e: &Error) -> String {
         Again::Stop => "--stop".to_owned(),
         Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
         Again::Release => "--release".to_owned(),
+        Again::IgnoreDependents => "--ignore-dependents".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
 }

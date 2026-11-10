@@ -1693,6 +1693,9 @@ impl Request {
                 },
                 A::Force,
             ) => *force = true,
+            (Request::Cs { op: CsOp::Drop { ignore_dependents, .. } }, A::IgnoreDependents) => {
+                *ignore_dependents = true
+            }
             (Request::Cs { op: CsOp::New { spec } }, A::Trust { fingerprint }) => {
                 spec.trust = Some(fingerprint.clone())
             }

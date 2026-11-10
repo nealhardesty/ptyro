@@ -220,8 +220,12 @@ pub enum CsCmd {
     Drop {
         set: String,
         member: String,
+        /// Discard unsaved work in its worktree (as `wt rm --force`)
         #[arg(long)]
         force: bool,
+        /// Drop it though other members depend on it (unsaved work still refuses)
+        #[arg(long)]
+        ignore_dependents: bool,
         /// Don't ask
         #[arg(short, long)]
         yes: bool,
@@ -811,7 +815,7 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             );
             Ok(0)
         }
-        CsCmd::Drop { set, member, force, yes } => {
+        CsCmd::Drop { set, member, force, ignore_dependents, yes } => {
             // Found first, then asked about by name: a typo asks nothing.
             let i = info_of(op(&c, CsOp::Show { set }).await?)?;
             let Some(m) = i.set.member(&member) else {
@@ -822,13 +826,26 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
             let (what, safety) = (removal::SET_MEMBER, removal::safety(force));
             let name = &i.set.name;
             ask_first(&format!("Drop {member} from change set {name}? {what} {safety}"), yes)?;
-            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force }).await?;
+            op(&c, CsOp::Drop { set: i.run, member: member.clone(), force, ignore_dependents })
+                .await?;
             eprintln!("dropped {member}");
             Ok(0)
         }
         CsCmd::Rm { set, keep, force, yes } => {
             // Found first, then asked about by name: a typo asks nothing.
             let i = info_of(op(&c, CsOp::Show { set }).await?)?;
+            // Kept members by their real names, so the question says what is kept.
+            let mut kept = Vec::new();
+            for k in &keep {
+                let Some(m) = i.set.member(k) else {
+                    let known: Vec<String> = i.set.members.iter().map(|m| m.name.clone()).collect();
+                    return Err(ptyro_core::lookup::not_found_among("member", k, &known));
+                };
+                if !kept.contains(&m.name) {
+                    kept.push(m.name.clone());
+                }
+            }
+            let keep = kept;
             let (what, safety) = (removal::SET, removal::safety(force));
             let mut q = format!("Remove change set {}? {what} {safety}", i.set.name);
             if !keep.is_empty() {

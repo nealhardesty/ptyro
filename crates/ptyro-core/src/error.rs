@@ -84,6 +84,8 @@ pub enum Again {
     Trust { fingerprint: String },
     /// `release`: let the running sessions go on, outside it.
     Release,
+    /// `ignore_dependents`: take it out though others depend on it (their work stays safe).
+    IgnoreDependents,
 }
 
 impl Error {

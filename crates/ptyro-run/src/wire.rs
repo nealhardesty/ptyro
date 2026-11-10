@@ -520,8 +520,12 @@ pub enum CsOp {
     Drop {
         set: String,
         member: String,
+        /// Discard unsaved work in its worktree (as `wt rm --force`).
         #[serde(default)]
         force: bool,
+        /// Drop it though other members depend on it. Never implies `force`.
+        #[serde(default)]
+        ignore_dependents: bool,
     },
     Rm {
         set: String,

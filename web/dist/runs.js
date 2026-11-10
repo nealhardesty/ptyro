@@ -419,7 +419,7 @@ function setMemberMenu(i, m) {
         { title: tip("set.message"), label: "Message it…", run: () => msgSet(name, m.name) },
         { title: tip("set.overlay"), label: "Wire it to its siblings…", run: () => overlaySet(name, m.name) },
         m.pr_url && { label: `Pull request #${m.pr}`, run: () => openWeb(m.pr_url) },
-        { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name} from change set ${name}?`, "It leaves the set and its worktree is removed. Nothing is removed if that would lose work.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false }, "Dropped"); set.reload(name); }) },
+        { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name} from change set ${name}?`, "It leaves the set and its worktree is removed. Nothing is removed if that would lose work.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false, ignore_dependents: false }, "Dropped"); set.reload(name); }) },
     ]);
 }
 function msgSet(name, to) {
