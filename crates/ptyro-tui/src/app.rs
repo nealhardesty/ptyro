@@ -3916,9 +3916,11 @@ impl App {
         let Some(info) = self.session(id).cloned() else { return };
         let addr = id.full();
         match action {
-            // Stop means stop, as `ptyro stop` says (SPEC §7.3): an ended session is forgotten
-            // by remove, offered here.
-            "session.stop" | "session.kill" if !info.state.is_live() => self.toast_offer(
+            // `x` takes the row away: on an ended session it removes it (owner, 2026-11-10), a
+            // dormant one asking first, as remove does.
+            "session.stop" if !info.state.is_live() => self.session_action("session.remove", id),
+            // Kill never forgets: an ended session isn't running, and remove is offered.
+            "session.kill" if !info.state.is_live() => self.toast_offer(
                 format!("{} isn't running", info.name),
                 false,
                 session_offer("remove it", "session.remove", id),
@@ -4205,10 +4207,7 @@ impl App {
                     let restart = if self.focus == Focus::Sidebar { "R" } else { "⏎" };
                     return Some(format!(
                         "{restart} restart · {}",
-                        // Remove has no key of its own: the row menu has it.
-                        with("session.remove", "remove")
-                            .or_else(|| with("row.menu", "remove…"))
-                            .unwrap_or_default()
+                        with("session.stop", "remove").unwrap_or_default()
                     ));
                 }
                 if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
@@ -8891,8 +8890,8 @@ mod tests {
         assert!(app.overlay.is_none(), "an ended session is removed without asking");
         let actions = app.row_actions(&Row::Session(gone.id));
         assert!(actions.contains(&"session.remove") && !actions.contains(&"session.stop"));
-        // Stop means stop: on an ended session it says it isn't running and offers remove.
-        app.session_action("session.stop", gone.id);
+        // Kill never forgets: on an ended session it says it isn't running and offers remove.
+        app.session_action("session.kill", gone.id);
         let t = app.toast.as_ref().unwrap();
         assert!(t.text.contains("isn't running") && t.offer.is_some(), "{}", t.text);
         // … for that session, wherever the selection goes before it's taken.
@@ -8966,7 +8965,7 @@ mod tests {
         let rows = app.rows();
         let i = rows.iter().position(|r| *r == Row::Session(gone.id)).unwrap();
         app.set_sel(&rows, i);
-        assert_eq!(app.context_hint().as_deref(), Some("R restart · . remove…"));
+        assert_eq!(app.context_hint().as_deref(), Some("R restart · x remove"));
     }
 
     #[test]

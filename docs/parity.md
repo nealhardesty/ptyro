@@ -35,7 +35,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `stop` | `session.stop` (`x`; asks first unless `[ui] confirm_kill = false`) | `session.stop`: the session's ⋯ menu → Stop (asks first unless `[ui] confirm_kill = false`) |
 | `kill` | `session.kill` (`X`; asks first unless `[ui] confirm_kill = false`) | `session.kill`: the session's ⋯ menu → Kill (asks the same way) |
 | `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | `session.restart`: the session's ⋯ menu |
-| `rm` | `session.remove`: the row menu, the palette, or the "remove it" offer of `x` on an ended session; a dormant one asks first (`-y`); `--stop` is `session.remove` on a running one (Stop and remove, asking as stop does) | `session.remove`: the session's ⋯ menu → Remove (a dormant one asks first); `--stop` is Remove on a running one (Stop and remove, asking as stop does) |
+| `rm` | `session.remove`: `x` on an ended session, the row menu, the palette; a dormant one asks first (`-y`); `--stop` is `session.remove` on a running one (Stop and remove, asking as stop does) | `session.remove`: the session's ⋯ menu → Remove (a dormant one asks first); `--stop` is Remove on a running one (Stop and remove, asking as stop does) |
 | `rename` | `session.rename` (`,`) | `session.rename`: the session's ⋯ menu |
 | `retitle` | `session.retitle` (`,` then `C-t`) | `session.retitle`: the session's ⋯ menu |
 | `resume` | `session.resume` (or `⏎` on a dormant pane) | `session.resume`: the session's ⋯ menu |

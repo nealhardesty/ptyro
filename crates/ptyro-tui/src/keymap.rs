@@ -187,7 +187,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "session.stop",
-        "Stop the session, kept listed: an agent's turn is interrupted and it gets a moment to exit, then HUP, TERM, KILL. An ended one isn't running: it offers to remove it",
+        "Stop the session, kept listed: an agent's turn is interrupted and it gets a moment to exit, then HUP, TERM, KILL. On an ended one: remove it (a dormant one asks first)",
     ),
     a("session.kill", "Kill the session now (SIGKILL, no chance to clean up), kept listed"),
     a(

@@ -1501,9 +1501,10 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
     session. A running one is refused ("NAME is still running: stop it first"); `rm --stop`,
     the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.38) stop it, then
     forget it. A removed dormant session never comes back.
-  - Stop means stop everywhere: on an ended session `ptyro stop`, `kill`, the TUI's `x`/`X` and
-    the web say it isn't running and change nothing; remove is the way to forget it (the TUI's
-    toast offers it). Over several sessions (`rm @all`, `stop`, `kill`) each is tried: a
+  - Stop means stop: on an ended session `ptyro stop`, `kill`, the TUI's `X` and the web say it
+    isn't running and change nothing; remove is the way to forget it (the TUI's toast offers it).
+    The TUI's `x` is the one key that takes a row away: it stops a running session and removes an
+    ended one, a dormant one asking first (owner, 2026-11-10). Over several sessions (`rm @all`, `stop`, `kill`) each is tried: a
     refusal is said (`ptyro: NAME: …`), the rest go on, and the exit code is the first
     refusal's.
   - `[ui] confirm_kill` (default on) makes Stop, Kill, and Stop and remove ask first, in the TUI
