@@ -544,6 +544,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ReviewCmd::Rm { worktree, id, all, yes } => {
+            let worktree = crate::cli::addr_here(worktree)?;
             if all {
                 // Found first, then asked about by its name: a typo asks nothing.
                 let Reply::Worktree { info } =
@@ -560,7 +561,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             }
             let left = comments_of(
                 c.request(Request::ReviewRemove {
-                    addr: crate::cli::addr_here(worktree)?,
+                    addr: worktree,
                     id: if all { None } else { id },
                 })
                 .await?,

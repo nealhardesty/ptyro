@@ -1839,9 +1839,12 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
             let Reply::Machines { machines } = c.request(Request::MachineList).await? else {
                 return Err(Error::internal("unexpected reply"));
             };
-            if !machines.iter().any(|m| m.name == name) {
-                return Err(Error::missing("machine", &name));
-            }
+            // By name, any case, as the daemon finds it.
+            let Some(m) = machines.iter().find(|m| ptyro_core::lookup::same(&m.name, &name)) else {
+                let known: Vec<String> = machines.iter().map(|m| m.name.clone()).collect();
+                return Err(ptyro_core::lookup::not_found_among("machine", &name, &known));
+            };
+            let name = m.name.clone();
             ask_first(&format!("Stop mirroring {name}? {}", ptyro_core::removal::MACHINE), yes)?;
             let said = format!("{name} is no longer mirrored here (revoke its token there too)");
             crate::machines::simple(ctx, Request::MachineRemove { name }, said).await

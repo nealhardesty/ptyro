@@ -814,9 +814,11 @@ pub async fn cs(ctx: &Ctx, cmd: CsCmd) -> Result<i32, Error> {
         CsCmd::Drop { set, member, force, yes } => {
             // Found first, then asked about by name: a typo asks nothing.
             let i = info_of(op(&c, CsOp::Show { set }).await?)?;
-            if !i.set.members.iter().any(|m| m.name == member) {
-                return Err(Error::missing("member", &member));
-            }
+            let Some(m) = i.set.member(&member) else {
+                let known: Vec<String> = i.set.members.iter().map(|m| m.name.clone()).collect();
+                return Err(ptyro_core::lookup::not_found_among("member", &member, &known));
+            };
+            let member = m.name.clone();
             let (what, safety) = (removal::SET_MEMBER, removal::safety(force));
             let name = &i.set.name;
             ask_first(&format!("Drop {member} from change set {name}? {what} {safety}"), yes)?;

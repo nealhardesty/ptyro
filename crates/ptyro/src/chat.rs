@@ -716,9 +716,31 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
         ChatCmd::Rm { chats, yes } => {
             let c = ctx.connect(true).await?;
             for chat in chats {
-                // An exact address only (never a title), asked first (SPEC §12.1).
-                confirmed(&c, Request::ChatDelete { chat: chat.clone(), confirmed: false }, yes)
-                    .await?;
+                // An exact address only (never a title), asked first (SPEC §12.1). The "yes"
+                // deletes the chat that was asked about, by its id: `@last` may name a newer
+                // chat by the time the person answers.
+                let mut id = chat.clone();
+                if !yes {
+                    let ask = Request::ChatDelete { chat: chat.clone(), confirmed: false };
+                    let Err(e) = c.request(ask).await else {
+                        return Err(Error::internal("deleted without asking"));
+                    };
+                    if e.code != ErrorCode::NeedsConfirmation {
+                        return Err(e);
+                    }
+                    let read = Request::ChatRead {
+                        chat: chat.clone(),
+                        all: false,
+                        from: None,
+                        limit: Some(0),
+                    };
+                    let Reply::ChatTranscript { info, .. } = c.request(read).await? else {
+                        return Err(Error::internal("unexpected reply"));
+                    };
+                    crate::cli::ask_first(&e.message, false)?;
+                    id = info.id;
+                }
+                c.request(Request::ChatDelete { chat: id, confirmed: true }).await?;
                 eprintln!("deleted {chat}");
             }
             Ok(0)
