@@ -163,7 +163,6 @@ pub enum WsCmd {
         project: String,
     },
     /// Take a project out of a workspace (it stays registered)
-    #[command(alias = "remove")]
     RemoveProject {
         #[arg(add = ArgValueCandidates::new(crate::complete::workspaces))]
         name: String,
