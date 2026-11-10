@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 39 };
+pub const PROTO: Version = Version { major: 1, minor: 38 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -187,7 +187,7 @@ pub enum Request {
         #[serde(default)]
         signal: Option<i32>,
     },
-    /// Forget an ended session. A live one is refused, unless `stop` (1.39): stop it, then
+    /// Forget an ended session. A live one is refused, unless `stop` (1.38): stop it, then
     /// forget it.
     Remove {
         addr: String,
@@ -1351,13 +1351,13 @@ pub enum Request {
         /// As `ChatFork.confirmed`, for `agent` (1.25).
         #[serde(default)]
         confirmed: bool,
-        /// A new automatic title instead of `title` (1.39). Before 1.39 an empty `title` asked
+        /// A new automatic title instead of `title` (1.38). Before 1.38 an empty `title` asked
         /// for one; now it clears the title, as `Retitle` does for a session or a worktree.
         #[serde(default)]
         auto_title: bool,
     },
-    /// `chat` is an exact address (a handle, an id, `@last`): never a title (1.39). Unconfirmed,
-    /// the daemon asks first: `NeedsConfirmation`, naming the chat and what goes (1.39).
+    /// `chat` is an exact address (a handle, an id, `@last`): never a title (1.38). Unconfirmed,
+    /// the daemon asks first: `NeedsConfirmation`, naming the chat and what goes (1.38).
     ChatDelete {
         chat: String,
         #[serde(default)]

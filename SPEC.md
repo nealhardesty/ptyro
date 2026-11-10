@@ -1179,38 +1179,33 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
-**[built, 2026-11-09] Protocol 1.39** (additive): `ChatDelete` gains `confirmed` (default
-false). The daemon resolves its chat by an exact address only (a title is refused, exit 4, its
-matches listed) and, unconfirmed, answers `NeedsConfirmation` with the question every client
-asks ("Delete the chat “T”? It goes from every list…", §12.1). The TUI and the web ask first and
-send it confirmed; `chat rm` asks through `with_confirmation_as`. An older client's unconfirmed delete
-is asked about instead of done.
-
-**[built 2026-11-09] Protocol 1.39** (additive): `Request::Remove` adds `stop` (absent: false): stop a
-running session, then forget it (`rm --stop`, Stop and remove; §7.3). An older daemon ignores
-it and refuses a running session as before. `Error` adds `fix` (absent: none): a
-refusal's way through, `{fix: force|stop_sessions|stop|trust, label, fingerprint?}` (§6.6); an
-older client ignores it.
-
-**[built] Protocol 1.39**: `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An
-empty `title` now clears a chat's title (before 1.39 it asked for an automatic one), as `Retitle`
-does for a session or a worktree. Clients send `auto_title` with an empty `title`, so a daemon older
-than 1.39 (which ignores `auto_title`) still makes a new one; an older client's empty title now
-clears it.
-
-**[built 2026-11-09] Protocol 1.38** (additive): `WorktreeRename{addr, name}` → `Worktree{info}` and
-`ProjectRename{addr, name}` → `Project{info}` (§2.3). Both are `full` scope, like
-`WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a project, one per worktree, carrying
-the new `project_slug`) and `ProjectUpdated`. An older daemon answers "unsupported request".
+**[built 2026-11-09] Protocol 1.38** (additive; the consistency pass, one version for all of it):
+- `WorktreeRename{addr, name}` → `Worktree{info}` and `ProjectRename{addr, name}` → `Project{info}`
+  (§2.3). Both are `full` scope, like `WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a
+  project, one per worktree, carrying the new `project_slug`) and `ProjectUpdated`. An older daemon
+  answers "unsupported request".
+- `ArchiveEntry.id`, so archived worktrees that share a name can be told apart (§2.3). Clients send
+  it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's entries have none (empty), and
+  the clients then send `project/name` as before.
+- `ChatDelete` gains `confirmed` (default false). The daemon resolves its chat by an exact address
+  only (a title is refused, exit 4, its matches listed) and, unconfirmed, answers
+  `NeedsConfirmation` with the question every client asks ("Delete the chat “T”? It goes from every
+  list…", §12.1). The TUI and the web ask first and send it confirmed; `chat rm` asks through
+  `with_confirmation_as`. An older client's unconfirmed delete is asked about instead of done.
+- `Request::Remove` adds `stop` (absent: false): stop a running session, then forget it (`rm
+  --stop`, Stop and remove; §7.3). An older daemon ignores it and refuses a running session as
+  before.
+- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust,
+  label, fingerprint?}` (§6.6); an older client ignores it.
+- `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An empty `title` now clears a
+  chat's title (before 1.38 it asked for an automatic one), as `Retitle` does for a session or a
+  worktree. Clients send `auto_title` with an empty `title`, so an older daemon (which ignores
+  `auto_title`) still makes a new one; an older client's empty title now clears it.
 
 **[built SH.14] Protocol 1.37** (additive): `DomainEvent::HostLoad{load?}` (every watcher,
 when the 5 s sample changes; `None` once `[ui] load` is off) and `DaemonStatus.load?`:
 `HostLoad{avg: [1, 5, 15 min in hundredths], cpus}`. Never mirrored from another machine. An older
 client ignores both.
-
-**Protocol 1.38** (additive): `ArchiveEntry.id`, so archived worktrees that share a name can be
-told apart (§2.3). Clients send it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's
-entries have none (empty), and the clients then send `project/name` as before.
 
 **[built BOOT7] Protocol 1.36** (additive): moves to the recommended installer (§24.9). A setup
 entry installed another way carries `moves` (the offer: `from`, `to`, `uninstall`, `admin`,
@@ -1353,7 +1348,7 @@ CLI command: "stop them first", "archive it to keep it, or remove it anyway to d
 the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 (`refusals_name_no_cli_flag`) keeps flags out of the daemon's refusals.
 
-**The way through is data, not words** (protocol 1.39). A refusal that has one carries
+**The way through is data, not words** (protocol 1.38). A refusal that has one carries
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
 second time: `force`, `stop_sessions`, `stop`, or `trust` (with the `fingerprint` read). The
 daemon sets it exactly where that way applies (removing a running session: `stop`, "Stop and
@@ -1492,7 +1487,7 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
     2026-11-09 `ptyro kill` was a stop followed by a remove; `--keep` is now a hidden no-op.)
   - **rm** (`ptyro rm`, `session.remove`, Remove; `Remove{stop: false}`): forget an ended
     session. A running one is refused ("NAME is still running: stop it first"); `rm --stop`,
-    the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.39) stop it, then
+    the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.38) stop it, then
     forget it. A removed dormant session never comes back.
   - `[ui] confirm_kill` (default on) makes Stop, Kill, and Stop and remove ask first, in the TUI
     and the web alike (the web reads it where the device may read the config, else always asks).
@@ -8540,7 +8535,7 @@ reset too big for one frame comes as several, the first with `reset`; a subscrip
 chat's full id, so any of its addresses ends it); `ChatSend{chat, text}`; `ChatRetry{chat, node?}`;
 `ChatEdit{chat, node, text}`; `ChatBranch{chat, to}`; `ChatFork{chat, node?, agent?, side,
 confirmed}`; `ChatUpdate{chat, title?, pinned?, archived?, agent?, preset?, keep?, folders?,
-confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.39);
+confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.38);
 `ChatAnswer{chat, decision}`; `ChatStop{chat}`; `ChatSearch{query, chat?, workspace?, agent?,
 pinned, archived, limit?, machines}` → `ChatHits{hits}`; `ChatFind{question, agent?, workspace?}` →
 `Chat{info}` (an incognito chat that answers; the client follows it); `ChatExport{chat, format}` →

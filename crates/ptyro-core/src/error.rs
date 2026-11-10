@@ -47,7 +47,7 @@ impl ErrorCode {
 pub struct Error {
     pub code: ErrorCode,
     pub message: String,
-    /// The way through this refusal, when there is one (protocol 1.39, SPEC §6.6).
+    /// The way through this refusal, when there is one (protocol 1.38, SPEC §6.6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix: Option<Fix>,
 }
