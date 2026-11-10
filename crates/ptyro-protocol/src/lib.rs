@@ -2658,6 +2658,27 @@ mod tests {
             id: 1,
             outcome: Outcome::Err { error: Error::missing("session", "x") },
         });
+        round_trip(ServerMsg::Response {
+            id: 1,
+            outcome: Outcome::Err {
+                error: Error::conflict("x").with_fix(ptyro_core::error::Again::Force, "Go"),
+            },
+        });
+    }
+
+    /// A fix kind from a later daemon reads as none, in both encodings; the reply still reads.
+    #[test]
+    fn a_later_fix_kind_does_not_break_the_reply() {
+        let json = r#"{"t":"response","id":1,"outcome":{"t":"err","error":{"code":"conflict","message":"m","fix":{"fix":"keep_branch","label":"Keep"}}}}"#;
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        for enc in [Encoding::MsgPack, Encoding::Json] {
+            let bytes = encode(&v, enc).unwrap();
+            let (back, _): (ServerMsg, _) = decode(&bytes).unwrap();
+            let ServerMsg::Response { outcome: Outcome::Err { error }, .. } = back else {
+                panic!("not an error: {back:?}")
+            };
+            assert_eq!((error.message.as_str(), error.fix), ("m", None));
+        }
     }
 
     #[test]
