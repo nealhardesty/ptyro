@@ -225,7 +225,7 @@ gets `421`. That stops DNS rebinding: a web page whose own name is made to resol
 ```bash
 ptyro pair -n phone              # a one-time QR code; scan it with the phone's camera
                                  # (full control: it warns you; --scope approve for less)
-ptyro pair tablet --scope control
+ptyro pair -n tablet --scope control
 ptyro devices                    # what's paired, last seen, from where, push on/off
 ptyro devices revoke 3f9a1c2b7e04  # the token stops working at once; open connections close
 ```

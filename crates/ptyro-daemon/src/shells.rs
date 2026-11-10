@@ -814,7 +814,7 @@ impl Daemon {
             .unwrap_or_default();
         if !theirs.is_empty() && theirs != info.profile {
             return Err(Error::conflict(format!(
-                "{name} runs under the profile {} and {} under {theirs}; a session's profile never changes, so start a shell there instead (`ptyro new --wt {}`)",
+                "{name} runs under the profile {} and {} under {theirs}; a session's profile never changes, so start a new shell in {} instead",
                 info.profile,
                 wt.qualified(),
                 wt.qualified()

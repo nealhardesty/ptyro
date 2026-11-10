@@ -155,6 +155,11 @@ impl Reaper {
 }
 
 /// The binary that is running now (on Linux even after it was replaced on disk).
+/// The binary to upgrade to isn't there.
+fn no_binary(path: &Path) -> Error {
+    Error::new(ErrorCode::NotFound, format!("no ptyro binary at {}", path.display()))
+}
+
 pub(crate) fn running_binary() -> PathBuf {
     let p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ptyro"));
     let s = p.to_string_lossy();
@@ -201,7 +206,7 @@ impl Daemon {
     pub(crate) async fn upgrade(self: &Arc<Self>, binary: Option<PathBuf>) -> Result<Reply, Error> {
         let target = binary.unwrap_or_else(|| crate::started_from().to_path_buf());
         if !target.is_file() {
-            return Err(Error::missing("binary", target.display()));
+            return Err(no_binary(&target));
         }
         let probe = target.clone();
         let versions = tokio::time::timeout(
@@ -412,7 +417,7 @@ impl Daemon {
     pub(crate) async fn upgrade(self: &Arc<Self>, binary: Option<PathBuf>) -> Result<Reply, Error> {
         let target = binary.unwrap_or_else(running_binary);
         if !target.is_file() {
-            return Err(Error::missing("binary", target.display()));
+            return Err(no_binary(&target));
         }
         // Asking the other binary runs it: off the runtime, and not forever.
         let probe = target.clone();

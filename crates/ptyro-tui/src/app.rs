@@ -397,9 +397,34 @@ impl PromptKind {
         )
     }
 
+    /// Whether a name here may hold `c`: a project's slug is the narrower `[a-z0-9-]`.
+    pub fn allowed(&self, c: char) -> bool {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_allowed(c),
+            _ => ptyro_core::names::allowed(c),
+        }
+    }
+
+    /// The name Tab makes of `text`, when that fixes it.
+    pub fn tidy(&self, text: &str) -> Option<String> {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_tidy(text),
+            _ => ptyro_core::names::tidy(text),
+        }
+    }
+
+    /// What a name field says under itself.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            Self::RenameProject(_) => ptyro_core::names::SLUG_HINT,
+            _ => ptyro_core::names::TYPED_HINT,
+        }
+    }
+
     /// `text` as this prompt keeps it: a name or branch swaps what it can't hold for `-`.
     pub fn fit(&self, text: &str) -> String {
         match self {
+            Self::RenameProject(_) => ptyro_core::names::slug_typed(text),
             _ if self.is_name() => ptyro_core::names::typed(text),
             Self::RenameBranch(_) => ptyro_core::names::branch_typed(text),
             _ => text.to_owned(),
@@ -414,6 +439,8 @@ pub enum Confirmed {
     Kill(SessionId),
     /// Stop it, then forget it (`rm --stop`).
     StopRemove(SessionId),
+    /// Forget an ended session (`rm`); a dormant one was asked about first.
+    Remove(SessionId),
     /// Resend with the guard / pin override acknowledged.
     Spawn(Box<SpawnSpec>, Option<Dir>),
     Worktree(Box<WorktreeSpec>, Option<Dir>),
@@ -435,6 +462,8 @@ pub enum Confirmed {
     Forget(String),
     /// Quit ptyro: stop every session and the daemon (`daemon stop --force`).
     Quit,
+    /// Restart the daemon, stopping what runs (`daemon restart --force`).
+    RestartDaemon,
     /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
     MeaningOn,
     /// Send this request again, agreed to (`confirmed`), its reply going to this.
@@ -683,7 +712,6 @@ const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro project trust", "project.trust", "review and trust them"),
     ("`ptyro project add", "project.add", "add a project"),
     ("`ptyro status --explain", "session.explain", "see why"),
-    ("`ptyro new --structured", "session.new", "start one"),
     ("`ptyro new --agent", "session.new", "start one"),
     ("`ptyro new", "session.new", "start one"),
     ("`ptyro wt diff", "inspector", "inspect it"),
@@ -3410,7 +3438,16 @@ impl App {
             "health" => self.open_health(),
             "daemon.logs" => self.run_cli(&["daemon".into(), "logs".into(), "-f".into()]),
             "daemon.status" => self.run_cli(&["daemon".into(), "status".into()]),
-            "daemon.restart" => self.run_cli(&["daemon".into(), "restart".into()]),
+            // Asked, as the web asks, in the same words (`removal::DAEMON_RESTART`).
+            "daemon.restart" => {
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!(
+                        "Restart the daemon? {} [y/N]",
+                        ptyro_core::removal::DAEMON_RESTART
+                    ),
+                    action: Confirmed::RestartDaemon,
+                });
+            }
             "daemon.upgrade" => self.run_cli(&["daemon".into(), "upgrade".into()]),
             "daemon.service" => self.run_cli(&["daemon".into(), "install-service".into()]),
             "daemon.unservice" => self.run_cli(&["daemon".into(), "uninstall-service".into()]),
@@ -3436,7 +3473,17 @@ impl App {
             "toast.act" => match self.toast.take().and_then(|t| t.offer) {
                 Some(Offer { then: Then::Run(cmd), .. }) => self.run(&cmd),
                 Some(Offer { then: Then::Send(req, done), .. }) => {
-                    self.request(Pending::Done(done), *req)
+                    // A refusal's "Stop and remove" asks as Stop and remove does (SPEC §7.3).
+                    let stop_remove = match &*req {
+                        Request::Remove { addr, stop: true } => {
+                            self.sessions.iter().find(|s| s.id.full() == *addr).map(|s| s.id)
+                        }
+                        _ => None,
+                    };
+                    match stop_remove {
+                        Some(id) => self.ask_end(Confirmed::StopRemove(id)),
+                        None => self.request(Pending::Done(done), *req),
+                    }
                 }
                 Some(Offer { then: Then::Edit(path), .. }) => self.edit_file(path, None),
                 Some(Offer { then: Then::Set { key, value, done }, .. }) => {
@@ -3835,34 +3882,49 @@ impl App {
         self.theme_name = name;
     }
 
+    /// Stop, kill, or stop and remove a running session: `ui.confirm_kill` asks first, in the
+    /// web's words (`removal::STOP`, `KILL`, `STOP_REMOVE`; SPEC §7.3).
+    fn ask_end(&mut self, end: Confirmed) {
+        let (verb, what, id) = match &end {
+            Confirmed::Stop(id) => ("Stop", ptyro_core::removal::STOP, *id),
+            Confirmed::Kill(id) => ("Kill", ptyro_core::removal::KILL, *id),
+            Confirmed::StopRemove(id) => ("Stop and remove", ptyro_core::removal::STOP_REMOVE, *id),
+            _ => return self.confirmed(end),
+        };
+        if !self.config.ui.confirm_kill {
+            return self.confirmed(end);
+        }
+        let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
+        self.overlay =
+            Some(Overlay::Confirm { text: format!("{verb} {name}? {what} [y/N]"), action: end });
+    }
+
     fn session_action(&mut self, action: &str, id: SessionId) {
         let Some(info) = self.session(id).cloned() else { return };
         let addr = id.full();
         match action {
-            // `x` on an ended session removes it.
-            "session.stop" | "session.remove" if !info.state.is_live() => {
-                self.request(
-                    Pending::Done(format!("removed {}", info.name)),
-                    Request::Remove { addr, stop: false },
-                );
+            // Stop means stop, as `ptyro stop` says (SPEC §7.3): an ended session is forgotten
+            // by remove, offered here.
+            "session.stop" | "session.kill" if !info.state.is_live() => self.toast_offer(
+                format!("{} isn't running", info.name),
+                false,
+                run_offer("remove it", "session.remove"),
+            ),
+            // A dormant agent can still be resumed: forgetting it asks, as the CLI's rm does.
+            "session.remove" if info.state == ProcessState::Dormant => {
+                self.overlay = Some(Overlay::Confirm {
+                    text: format!(
+                        "Remove the dormant session {}? {} [y/N]",
+                        info.name,
+                        ptyro_core::removal::DORMANT
+                    ),
+                    action: Confirmed::Remove(id),
+                });
             }
-            // Stop, kill, and stop and remove all end a running session: `ui.confirm_kill` asks
-            // first for each, as the web does (SPEC §7.3).
-            "session.stop" | "session.kill" | "session.remove" => {
-                let (verb, end) = match action {
-                    "session.stop" => ("Stop", Confirmed::Stop(id)),
-                    "session.kill" => ("Kill", Confirmed::Kill(id)),
-                    _ => ("Stop and remove", Confirmed::StopRemove(id)),
-                };
-                if self.config.ui.confirm_kill {
-                    self.overlay = Some(Overlay::Confirm {
-                        text: format!("{verb} {} ({})? [y/N]", info.name, info.argv.join(" ")),
-                        action: end,
-                    });
-                } else {
-                    self.confirmed(end);
-                }
-            }
+            "session.remove" if !info.state.is_live() => self.confirmed(Confirmed::Remove(id)),
+            "session.stop" => self.ask_end(Confirmed::Stop(id)),
+            "session.kill" => self.ask_end(Confirmed::Kill(id)),
+            "session.remove" => self.ask_end(Confirmed::StopRemove(id)),
             "session.restart" if info.state.is_live() => self.toast_offer(
                 format!("{} is still running", info.name),
                 false,
@@ -5606,7 +5668,7 @@ impl App {
                 }
                 KeyCode::Enter => self.prompt_done(text, kind),
                 KeyCode::Tab if kind.is_name() => {
-                    let text = ptyro_core::names::tidy(&text).unwrap_or(text);
+                    let text = kind.tidy(&text).unwrap_or(text);
                     self.overlay = Some(Overlay::Prompt { title, text, kind });
                 }
                 KeyCode::Backspace => {
@@ -5830,6 +5892,9 @@ impl App {
                 self.request(*then, *req);
             }
             Confirmed::MeaningOn => self.meaning_on(),
+            Confirmed::RestartDaemon => {
+                self.run_cli(&["daemon".into(), "restart".into(), "--force".into()]);
+            }
             Confirmed::Quit => {
                 self.quitting = true;
                 self.toast("stopping ptyro…");
@@ -5854,6 +5919,13 @@ impl App {
                 };
                 self.stopping.insert(id);
                 self.request(Pending::Done(format!("{said} {name}")), req);
+            }
+            Confirmed::Remove(id) => {
+                let name = self.session(id).map(|s| s.name.clone()).unwrap_or_default();
+                self.request(
+                    Pending::Done(format!("removed {name}")),
+                    Request::Remove { addr: id.full(), stop: false },
+                );
             }
             Confirmed::Spawn(mut spec, split) => {
                 spec.override_pin = true;
@@ -5959,8 +6031,9 @@ impl App {
             (Target::Path(path), Purpose::Gc) => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
-                        "Delete {} and everything in it? A scratch shell left it behind. [y/N]",
-                        path.display()
+                        "Delete the scratch directory {}? {} [y/N]",
+                        path.display(),
+                        ptyro_core::removal::SCRATCH
                     ),
                     action: Confirmed::Send(
                         Box::new(Request::ShellScratchRemove { path }),
@@ -6169,7 +6242,9 @@ impl App {
                 if t.is_empty() || t == bare(machine, &p.slug) {
                     return Ok(Some("unchanged".into()));
                 }
-                name(t)?;
+                if let Some(p) = ptyro_core::names::slug_problem(t) {
+                    return Err(p);
+                }
                 if self.projects.iter().any(|o| o.id != p.id && o.slug == on_machine(machine, t)) {
                     return Err(format!("a project named {t} exists"));
                 }
@@ -8777,6 +8852,13 @@ mod tests {
                 panic!("{action} didn't ask: {:?}", app.overlay.is_some())
             };
             assert!(text.contains("live"), "{text}");
+            // The web's sentence, word for word.
+            let said = match action {
+                "session.stop" => ptyro_core::removal::STOP,
+                "session.kill" => ptyro_core::removal::KILL,
+                _ => ptyro_core::removal::STOP_REMOVE,
+            };
+            assert!(text.contains(said), "{text}");
             assert!(!app.stopping.contains(&live.id), "{action} waits for the answer");
 
             app.overlay = None;
@@ -8793,6 +8875,39 @@ mod tests {
         assert!(app.overlay.is_none(), "an ended session is removed without asking");
         let actions = app.row_actions(&Row::Session(gone.id));
         assert!(actions.contains(&"session.remove") && !actions.contains(&"session.stop"));
+        // Stop means stop: on an ended session it says it isn't running and offers remove.
+        app.session_action("session.stop", gone.id);
+        let t = app.toast.as_ref().unwrap();
+        assert!(t.text.contains("isn't running") && t.offer.is_some(), "{}", t.text);
+        assert!(app.overlay.is_none());
+        // A dormant one can be resumed: removing it asks.
+        let mut dormant = session("sleepy");
+        dormant.state = ProcessState::Dormant;
+        app.sessions.push(dormant.clone());
+        app.session_action("session.remove", dormant.id);
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("didn't ask") };
+        assert!(text.contains(ptyro_core::removal::DORMANT), "{text}");
+    }
+
+    /// A refusal's "Stop and remove" asks first, as the action does (`ui.confirm_kill`).
+    #[test]
+    fn a_refusal_s_stop_and_remove_asks_first() {
+        let mut app = app();
+        let live = session("live");
+        app.sessions = vec![live.clone()];
+        let req = Request::Remove { addr: live.id.full(), stop: true };
+        app.toast_offer(
+            "live is still running",
+            true,
+            Offer {
+                label: "stop and remove".into(),
+                then: Then::Send(Box::new(req), String::new()),
+            },
+        );
+        app.run(&Command { action: "toast.act", arg: None });
+        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("didn't ask") };
+        assert!(text.contains(ptyro_core::removal::STOP_REMOVE), "{text}");
+        assert!(!app.stopping.contains(&live.id));
     }
 
     /// A refusal's way through (SPEC §6.6) is a button: the same request with it said.
@@ -8936,6 +9051,10 @@ mod tests {
         assert_eq!(app.prompt_check(&kind, "myrepo"), Ok(Some("unchanged".into())));
         assert_eq!(app.prompt_check(&kind, "lib"), Err("a project named lib exists".into()));
         assert!(app.prompt_check(&kind, "web").is_ok());
+        // A slug is `[a-z0-9-]`, as the daemon refuses: `_` is marked, Tab offers `-`.
+        assert!(app.prompt_check(&kind, "my_web").is_err());
+        assert_eq!(kind.fit("My Web_2"), "my-web-2");
+        assert_eq!(kind.tidy("my_web").as_deref(), Some("my-web"));
     }
 
     /// Renaming something mirrored from another machine (MM1.B) types and checks the name it

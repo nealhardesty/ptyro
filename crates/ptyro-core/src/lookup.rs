@@ -112,6 +112,35 @@ pub fn not_found_among(kind: &str, addr: &str, known: &[String]) -> Error {
     Error::new(ErrorCode::NotFound, format!("{}; the {kind}s are {}", base.message, and(known)))
 }
 
+/// The one of `items` that `addr` names, by the policy above: a name (any case), else an id or
+/// its end. Two with that name are ambiguous; nothing is [`not_found_among`] the names. For a
+/// client that checks what it is about to act on before it asks (`ws rm`, `devices revoke`).
+pub fn pick<'a, T>(
+    kind: &str,
+    addr: &str,
+    items: &'a [T],
+    name: impl Fn(&T) -> &str,
+    id: impl Fn(&T) -> &str,
+) -> Result<&'a T, Error> {
+    let label = |t: &&T| match (name(t), id(t)) {
+        (n, i) if n == i => n.to_owned(),
+        (n, i) => format!("{n} ({i})"),
+    };
+    let named: Vec<&T> = items.iter().filter(|t| same(name(t), addr)).collect();
+    if named.len() > 1 {
+        return Err(ambiguous_name(kind, addr, &named.iter().map(label).collect::<Vec<_>>()));
+    }
+    if let [one] = named.as_slice() {
+        return Ok(one);
+    }
+    let k = key(addr);
+    let by_id = items.iter().filter(|t| id_matches(id(t), &k)).collect();
+    one(kind, addr, by_id, label)?.ok_or_else(|| {
+        let names: Vec<String> = items.iter().map(|t| name(t).to_owned()).collect();
+        not_found_among(kind, addr, &names)
+    })
+}
+
 /// `a, b or c`; past [`LISTED`]: `a, b, c, d, e and 3 more`.
 fn list(which: &[String]) -> String {
     join(which, "or")
@@ -150,6 +179,21 @@ mod tests {
         }
         assert_eq!(handle("01jb7f3k", ["01jb7f3k", "01jbaf3k"]), "7f3k");
         assert_eq!(handle("ab", ["ab"]), "ab", "a short id is its own handle");
+    }
+
+    #[test]
+    fn pick_takes_a_name_in_any_case_then_an_id_end() {
+        let all = [("laptop", "dv01jb7f3k"), ("Tablet", "dv01jbaf9z")];
+        let get = |a: &str| pick("device", a, &all, |t| t.0, |t| t.1).map(|t| t.0);
+        assert_eq!(get("LAPTOP").unwrap(), "laptop");
+        assert_eq!(get("tablet").unwrap(), "Tablet");
+        assert_eq!(get("af9z").unwrap(), "Tablet");
+        assert_eq!(get("9z").unwrap_err().code, ErrorCode::NotFound, "too short for an id");
+        let e = get("phone").unwrap_err();
+        assert!(e.message.contains("laptop and Tablet"), "{}", e.message);
+        let twins = [("a", "x1111"), ("A", "x2222")];
+        let e = pick("device", "a", &twins, |t| t.0, |t| t.1).unwrap_err();
+        assert_eq!(e.code, ErrorCode::Ambiguous);
     }
 
     #[test]

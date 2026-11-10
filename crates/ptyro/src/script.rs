@@ -474,15 +474,18 @@ pub async fn broadcast(
 
 pub async fn stop(ctx: &Ctx, sessions: Vec<String>) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
+    let mut code = 0;
     for info in targets(&c, &sessions).await? {
         if !info.state.is_live() {
             eprintln!("{} isn't running", info.name);
             continue;
         }
-        c.request(Request::Kill { addr: info.id.full(), signal: None }).await?;
-        eprintln!("stopped {}", info.name);
+        match c.request(Request::Kill { addr: info.id.full(), signal: None }).await {
+            Ok(_) => eprintln!("stopped {}", info.name),
+            Err(e) => crate::cli::failed(&mut code, &info.name, &e),
+        }
     }
-    Ok(0)
+    Ok(code)
 }
 
 #[derive(Serialize)]

@@ -710,8 +710,13 @@ async fn the_profile_cli_edits_the_config() {
     w.ok(&["ws", "new", "job", "--profile", "work"]);
     let out = w.cli(&["profile", "rm", "-y", "work"]);
     let err = String::from_utf8_lossy(&out.stderr);
-    // Its way through is data (the web's button); the CLI names the flag (SPEC §6.6).
-    assert!(err.contains("workspace job") && err.contains("again with `--force`"), "{err}");
+    assert!(err.contains("workspace job"), "{err}");
+    // The way through in the CLI's words; the daemon's words name no flag.
+    assert!(err.contains("remove it anyway") && err.contains("(again with `--force`"), "{err}");
+    // A name that isn't one lists the profiles there are.
+    let out = w.cli(&["profile", "rm", "-y", "nosuch"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("the profiles are default") && err.contains("work"), "{err}");
     // The daemon has to see the new config before it can accept the new name.
     w.ok(&["profile", "rename", "work", "acme"]);
     let ws = w.ok(&["ws", "ls"]);
@@ -1323,6 +1328,12 @@ async fn worktrees_and_projects_are_renamed() {
         .await
         .unwrap_err();
     assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    // A slug is `[a-z0-9-]` (SPEC §2.3): a name's `_` or `.` is refused, the fix offered.
+    let e = c
+        .request(Request::ProjectRename { addr: "app".into(), name: "my_web".into() })
+        .await
+        .unwrap_err();
+    assert!(e.code == ErrorCode::Invalid && e.message.contains("try \"my-web\""), "{e:?}");
     let out = w.ok(&["project", "rename", "app", "web"]);
     assert!(out.contains("web"), "{out}");
     let e = c.request(Request::ProjectGet { addr: "app".into() }).await.unwrap_err();

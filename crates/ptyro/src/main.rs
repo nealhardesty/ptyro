@@ -223,13 +223,17 @@ enum Cmd {
         sessions: Vec<String>,
     },
     /// Forget ended sessions (exited or dormant): they leave the list, and a dormant agent's
-    /// conversation is forgotten. A running one is refused, unless `--stop`
+    /// conversation is forgotten (asked first unless --yes). A running one is refused, unless
+    /// `--stop`. Each is tried; a failure is said and the rest go on
     Rm {
         #[arg(required = true, add = ArgValueCandidates::new(complete::sessions))]
         sessions: Vec<String>,
         /// Stop a running one first (as `stop`), then forget it
         #[arg(long)]
         stop: bool,
+        /// Don't ask before forgetting a dormant agent
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Rename a session
     Rename {

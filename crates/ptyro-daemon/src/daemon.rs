@@ -970,9 +970,9 @@ impl Daemon {
                     })
                     .unwrap_or_default();
                 Some(cfg.prompts.get(snippet).cloned().ok_or_else(|| {
-                    Error::missing(
-                        "prompt snippet",
-                        format!("@{snippet} (in .ptyro.toml [prompts])"),
+                    Error::new(
+                        ErrorCode::NotFound,
+                        format!("no prompt snippet @{snippet} in .ptyro.toml [prompts]"),
                     )
                 })?)
             }
@@ -1647,7 +1647,9 @@ impl Daemon {
             Request::ChatGet { addr } => {
                 let s = self.resolve(&addr)?;
                 let st = s.structured.as_ref().ok_or_else(|| {
-                    Error::invalid("not a structured session (`ptyro new --structured`)")
+                    Error::invalid(
+                        "not a structured session: only one started structured has a transcript",
+                    )
                 })?;
                 Ok(Reply::Transcript { items: st.chat.locked().items.clone() })
             }
@@ -1896,5 +1898,65 @@ mod tests {
                 assert!(!line.contains(s), "{file}: {:?} names a CLI flag or verb: {line}", s);
             }
         }
+        // Any flag in the daemon's words: `--x` after a space, `(` or a backtick. An argv
+        // (`"--json"`) starts its string with it, so isn't caught. What may say one: other
+        // programs' flags, and text only a CLI or an agent reads (mail an agent gets, a health
+        // finding whose `ptyro …` command the TUI and the web turn into a button).
+        const ELSEWHERE: &[&str] = &[
+            "diff \x2d-git",                       // git's own output, parsed
+            "\x2d-frozen-lockfile",                // a setup script suggested for the repository
+            "\x2d-password=",                      // a redaction test's input
+            "codex \x2d-version",                  // another program
+            "ptyro \x2d-version`",                 // a shell command to try over ssh
+            "msg send {} \\\"…\\\" \x2d-reply-to", // the reply line of mail to an agent
+            "\x2d-kind contract_change",           // a change set's agent, told how to ask its lead
+            "claude \x2d-lead`",                   // an agent's `ptyro mcp` / lead refusal
+            "daemon restart \x2d-hibernate",       // an upgrade's finding: the TUI and web offer it
+        ];
+        let flag = |l: &str| {
+            let b = l.as_bytes();
+            (1..b.len().saturating_sub(2)).any(|i| {
+                matches!(b[i - 1], b' ' | b'(' | b'`')
+                    && b[i] == b'-'
+                    && b[i + 1] == b'-'
+                    && b[i + 2].is_ascii_lowercase()
+            })
+        };
+        let named: Vec<String> = lines
+            .iter()
+            .filter(|(_, l)| l.contains('"') && flag(l) && !ELSEWHERE.iter().any(|a| l.contains(a)))
+            .map(|(file, l)| format!("{file}: {}", l.trim()))
+            .collect();
+        assert!(named.is_empty(), "the daemon's words name a CLI flag:\n{}", named.join("\n"));
+    }
+
+    /// `Error::missing(kind, addr)` says `no KIND matches "ADDR"`: its address is what someone
+    /// typed or an id, never a description (`no session matches "of step x"`). A made-up
+    /// address has no space in it; a sentence does, and is its own `NotFound` error.
+    #[test]
+    fn a_missing_thing_is_named_by_its_address() {
+        let mut wrong = Vec::new();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = vec![dir];
+        while let Some(d) = files.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    files.push(p);
+                    continue;
+                }
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                for (i, _) in text.match_indices("Error::missing(") {
+                    let call: String = text[i..].chars().take_while(|c| *c != ';').collect();
+                    let call = call.split("})").next().unwrap_or(&call);
+                    let Some(f) = call.find("format!(\"") else { continue };
+                    let lit = call[f + 9..].split('"').next().unwrap_or("");
+                    if lit.contains(' ') {
+                        wrong.push(format!("{}: {lit}", p.display()));
+                    }
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "a description given as an address:\n{}", wrong.join("\n"));
     }
 }

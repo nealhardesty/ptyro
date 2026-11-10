@@ -60,7 +60,8 @@ pub enum RunCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Stop the run: running steps are cancelled, their agents stopped (worktrees stay)
+    /// Stop the run: its running steps are cancelled and the agents they started are stopped;
+    /// their worktrees stay
     Cancel { run: String },
     /// Run a step again (a failed, held or finished one), and what it skipped
     Retry { run: String, step: String },

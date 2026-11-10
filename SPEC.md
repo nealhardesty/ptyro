@@ -204,7 +204,11 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
     its worktrees and archives, so this fold stays as it was: re-adding a repository finds them
     again, and stored slugs keep working. A directory with nothing slug-like in its name gets
-    `repo`; nothing else falls back to it.
+    `repo`; nothing else falls back to it. A slug a person gives (`project rename`, in every
+    client) follows the same rule and is refused when it's wrong, never rewritten, with the fix
+    offered: `invalid project name "my_app": '_' isn't allowed in a project's name (only a-z 0-9
+    -); try "my-app"` (`names::validate_slug`; owner, 2026-11-09). Its field in the TUI and the
+    web keeps to `a-z 0-9 -` as it is typed (`names::slug_typed`, `names::SLUG_HINT`).
 - **Address syntax** used across CLI and protocol (resolved by the daemon):
 
   | Form | Example | Resolves to |
@@ -1497,9 +1501,19 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
     session. A running one is refused ("NAME is still running: stop it first"); `rm --stop`,
     the TUI's and the web's Stop and remove (`Remove{stop: true}`, protocol 1.38) stop it, then
     forget it. A removed dormant session never comes back.
+  - Stop means stop everywhere: on an ended session `ptyro stop`, `kill`, the TUI's `x`/`X` and
+    the web say it isn't running and change nothing; remove is the way to forget it (the TUI's
+    toast offers it). Over several sessions (`rm @all`, `stop`, `kill`) each is tried: a
+    refusal is said (`ptyro: NAME: …`), the rest go on, and the exit code is the first
+    refusal's.
   - `[ui] confirm_kill` (default on) makes Stop, Kill, and Stop and remove ask first, in the TUI
-    and the web alike (the web reads it where the device may read the config, else always asks).
-    Removing an ended session never asks.
+    and the web alike (the web reads it where the device may read the config, else always asks),
+    in the same words (`removal::STOP`, `KILL`, `STOP_REMOVE`); a refusal's "Stop and remove"
+    button asks the same way. Removing an exited session never asks.
+  - **Removing a dormant session asks** (owner, 2026-11-09), as `chat rm` does: its agent could
+    still resume its conversation. `ptyro rm` asks at a terminal (once for all of them), `-y`
+    doesn't ask, and with no terminal it refuses (exit 5) and changes nothing; the TUI and the
+    web ask with a dialog. All say `Remove the dormant session NAME?` and `removal::DORMANT`.
 - `Exited` sessions stay visible (greyed, with exit code and final screen) until removed; their
   recorder log remains readable (`ptyro read --scrollback`).
 - `Dormant` = process not running but resumable; the last screen is shown dimmed with a
@@ -3795,7 +3809,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 - **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
-  (`chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
   `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
   item) asks on a
   terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
@@ -3815,8 +3829,10 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`,
     `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
     `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
-    resolves). `config rm` asks naming what was typed, and a name that matches nothing is refused
-    after the question, with nothing changed.
+    resolves). What is removed after the yes is what was asked about, by its id or exact name,
+    never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` asks
+    naming what was typed, and a name that matches nothing is refused after the question, with
+    nothing changed.
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
     when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
     `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its

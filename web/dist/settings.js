@@ -35,7 +35,7 @@ const ACTIONS = {
     "daemon.status": "The daemon: version, uptime, sessions, health",
     "daemon.logs": "The daemon's log, the latest lines",
     "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
-    "daemon.restart": "Stop and start the daemon (sessions are stopped; agents hibernate)",
+    "daemon.restart": "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
     "daemon.stop": "Stop every session and the daemon",
     "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
     "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
@@ -115,7 +115,7 @@ function moreView() {
             { label: "Turn them on for this device", hint: "A test is sent", run: () => ui.push() },
             { title: tip("notify.test"), label: "Send a test through every channel", hint: "This device, desktop notifications, anything in your config", run: async () => { const r = await ask({ t: "notify_test" }); if (r)
                     textSheet("Notification test", r.results.join("\n") || "Nothing is set up to notify."); } },
-        ]) }, "🔔 Notifications"), h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. `ptyro devices revoke` ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))), conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null, h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))), 
+        ]) }, "🔔 Notifications"), h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. Revoking it on the Devices page ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))), conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null, h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))), 
     // The version, quietly, where people look first (UX2.1).
     h("p", { class: "sub more-version" }, "ptyro ", status.get("")?.version ?? "", " · ", h("a", { href: "#/about", title: tip("app.about") }, "About"))));
 }
@@ -630,7 +630,7 @@ function upgradeDaemon() {
     }, false);
 }
 function restartDaemon() {
-    confirm("Restart the daemon?", "Running sessions are stopped (agents hibernate and can be resumed). The app reconnects when it's back.", "Restart", async () => { if (await doHost("daemon.restart", {}, "Restarting…"))
+    confirm("Restart the daemon?", "Running sessions are stopped; agents hibernate and come back resumable. Clients reconnect.", "Restart", async () => { if (await doHost("daemon.restart", {}, "Restarting…"))
         setTimeout(() => status.reload(""), 4000); });
 }
 function daemonView() {

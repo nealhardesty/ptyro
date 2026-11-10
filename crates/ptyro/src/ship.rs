@@ -267,7 +267,10 @@ pub async fn commit(
                     && s.state.is_live()
             })
             .max_by_key(|s| s.created_ms)
-            .ok_or_else(|| Error::missing("agent session", format!("in {}", info.qualified())))?;
+            .ok_or_else(|| {
+                let s = format!("no agent session works in {}", info.qualified());
+                Error::new(ErrorCode::NotFound, s)
+            })?;
         c.request(Request::SendText {
             addr: agent.id.full(),
             text: "[via ptyro] Please commit your work now: stage what belongs together, and write a clear commit message (subject line under 72 characters, then why).".into(),
@@ -544,6 +547,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             Ok(0)
         }
         ReviewCmd::Rm { worktree, id, all, yes } => {
+            let worktree = crate::cli::addr_here(worktree)?;
             if all {
                 // Found first, then asked about by its name: a typo asks nothing.
                 let Reply::Worktree { info } =
@@ -560,7 +564,7 @@ pub async fn review(ctx: &Ctx, cmd: ReviewCmd) -> Result<i32, Error> {
             }
             let left = comments_of(
                 c.request(Request::ReviewRemove {
-                    addr: crate::cli::addr_here(worktree)?,
+                    addr: worktree,
                     id: if all { None } else { id },
                 })
                 .await?,

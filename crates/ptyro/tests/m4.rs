@@ -639,8 +639,14 @@ async fn dormant_resume_and_hibernate_across_daemon_restarts() {
     c.send(ClientMsg::Focus { session: cx.id, terminal_focused: true }).unwrap();
     let screen = w.d.wait_for_text(&c, "cdx", "resumed=true", WAIT).await.unwrap();
     assert!(screen.contains(&format!("session={codex_conv}")), "{screen}");
-    // Removing a dormant one makes it stay gone.
-    w.ok(&["rm", "keeper"]);
+    // Removing a dormant one asks first (no terminal here: refused, nothing changed), and
+    // makes it stay gone.
+    let out = w.d.cmd().args(["rm", "keeper"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(5));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(ptyro_core::removal::DORMANT) && err.contains("--yes"), "{err}");
+    assert_eq!(get(&c, "keeper").await.state, ProcessState::Dormant);
+    w.ok(&["rm", "-y", "keeper"]);
     drop(c);
     w.d.restart().unwrap();
     let c = w.d.client().await.unwrap();

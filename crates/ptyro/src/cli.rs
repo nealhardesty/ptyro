@@ -476,21 +476,21 @@ async fn dispatch(
         // Kill is immediate and keeps the session listed, as in the TUI and the web (SPEC §7.3).
         Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
+            let mut code = 0;
             for info in targets(&client, &sessions).await? {
                 if !info.state.is_live() {
                     eprintln!("{} isn't running", info.name);
                     continue;
                 }
                 let signal = signal.unwrap_or(9);
-                client
-                    .request(Request::Kill { addr: info.id.full(), signal: Some(signal) })
-                    .await?;
-                match signal {
-                    9 => eprintln!("killed {}", info.name),
-                    n => eprintln!("sent signal {n} to {}", info.name),
+                let req = Request::Kill { addr: info.id.full(), signal: Some(signal) };
+                match client.request(req).await {
+                    Err(e) => failed(&mut code, &info.name, &e),
+                    Ok(_) if signal == 9 => eprintln!("killed {}", info.name),
+                    Ok(_) => eprintln!("sent signal {signal} to {}", info.name),
                 }
             }
-            Ok(0)
+            Ok(code)
         }
         Some(Cmd::Restart { sessions }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
@@ -501,15 +501,37 @@ async fn dispatch(
             }
             Ok(0)
         }
-        Some(Cmd::Rm { sessions, stop }) => {
+        Some(Cmd::Rm { sessions, stop, yes }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
-            for info in targets(&client, &sessions).await? {
-                client.request(Request::Remove { addr: info.id.full(), stop }).await?;
-                if stop && info.state.is_live() {
-                    eprintln!("stopped and removed {}", info.name);
+            let found = targets(&client, &sessions).await?;
+            // A dormant agent could still be resumed: forgetting it asks first, once for all
+            // of them (owner, 2026-11-09).
+            let dormant: Vec<&str> = found
+                .iter()
+                .filter(|s| s.state == ptyro_core::session::ProcessState::Dormant)
+                .map(|s| s.name.as_str())
+                .collect();
+            if !dormant.is_empty() {
+                let s = if dormant.len() > 1 { "s" } else { "" };
+                let q = format!(
+                    "Remove the dormant session{s} {}? {}",
+                    dormant.join(", "),
+                    ptyro_core::removal::DORMANT
+                );
+                ask_first(&q, yes)?;
+            }
+            // Each is tried: one that is refused (still running) is said, and the rest go on.
+            let mut code = 0;
+            for info in found {
+                match client.request(Request::Remove { addr: info.id.full(), stop }).await {
+                    Err(e) => failed(&mut code, &info.name, &e),
+                    Ok(_) if stop && info.state.is_live() => {
+                        eprintln!("stopped and removed {}", info.name);
+                    }
+                    Ok(_) => {}
                 }
             }
-            Ok(0)
+            Ok(code)
         }
         Some(Cmd::Rename { session, name }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
@@ -1137,6 +1159,19 @@ pub fn ask_first(question: &str, yes: bool) -> Result<(), Error> {
         return Ok(());
     }
     Err(not_agreed(question, "pass --yes"))
+}
+
+/// One of several sessions refused (`rm @all`, `stop`, `kill`): said, and the first failure's
+/// exit code kept, while the rest go on.
+pub(crate) fn failed(code: &mut i32, name: &str, e: &Error) {
+    // Its way through in the CLI's words (`said`); named once, by the message when it does.
+    match said(e) {
+        s if e.message.contains(name) => eprintln!("ptyro: {s}"),
+        s => eprintln!("ptyro: {name}: {s}"),
+    }
+    if *code == 0 {
+        *code = e.code.exit_code();
+    }
 }
 
 /// Why a question wasn't agreed to: a "no" on the terminal, or no terminal to ask (`flags`
@@ -1837,9 +1872,12 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
             let Reply::Machines { machines } = c.request(Request::MachineList).await? else {
                 return Err(Error::internal("unexpected reply"));
             };
-            if !machines.iter().any(|m| m.name == name) {
-                return Err(Error::missing("machine", &name));
-            }
+            // By name, any case, as the daemon finds it.
+            let Some(m) = machines.iter().find(|m| ptyro_core::lookup::same(&m.name, &name)) else {
+                let known: Vec<String> = machines.iter().map(|m| m.name.clone()).collect();
+                return Err(ptyro_core::lookup::not_found_among("machine", &name, &known));
+            };
+            let name = m.name.clone();
             ask_first(&format!("Stop mirroring {name}? {}", ptyro_core::removal::MACHINE), yes)?;
             let said = format!("{name} is no longer mirrored here (revoke its token there too)");
             crate::machines::simple(ctx, Request::MachineRemove { name }, said).await

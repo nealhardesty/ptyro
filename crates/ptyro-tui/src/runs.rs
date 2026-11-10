@@ -243,7 +243,8 @@ impl App {
                             self.orch = Some(o);
                             self.overlay = Some(Overlay::Confirm {
                                 text: format!(
-                                    "Cancel run {id}? Its running agents are stopped (worktrees stay). [y/N]"
+                                    "Cancel run {id}? {} [y/N]",
+                                    ptyro_core::removal::RUN_CANCEL
                                 ),
                                 action: Confirmed::Send(
                                     Box::new(Request::RunCancel { id: id.clone() }),
@@ -364,7 +365,10 @@ impl App {
                     (_, Some('x')) if !run.state.status.is_over() => {
                         self.orch = Some(o);
                         self.overlay = Some(Overlay::Confirm {
-                            text: format!("Cancel run {id}? [y/N]"),
+                            text: format!(
+                                "Cancel run {id}? {} [y/N]",
+                                ptyro_core::removal::RUN_CANCEL
+                            ),
                             action: Confirmed::Send(
                                 Box::new(Request::RunCancel { id: id.clone() }),
                                 format!("run {id} cancelled"),

@@ -192,7 +192,7 @@ function runView(rest: string): HTMLElement {
       bar(
         s.kind === "fanout" || s.picked?.length || s.discarded?.length ? h("button", { class: "primary", title: tip("compare"), onclick: () => go(`#/compare/${enc(id)}`) }, "Compare") : null,
         h("button", { title: tip("run.events"), onclick: () => go(`#/run/${enc(id)}/events`) }, "Events"),
-        s.status === "running" || s.status === "waiting" ? h("button", { class: "deny", title: tip("run.cancel"), onclick: () => confirm("Cancel the run?", "Its steps stop; sessions it started are left running.", "Cancel it", async () => { await ask({ t: "run_cancel", id }, "Cancelled"); run.refresh(id); }) }, "Cancel") : null,
+        s.status === "running" || s.status === "waiting" ? h("button", { class: "deny", title: tip("run.cancel"), onclick: () => confirm(`Cancel run ${id}?`, "Its running steps are cancelled and the agents they started are stopped; their worktrees stay.", "Cancel it", async () => { await ask({ t: "run_cancel", id }, "Cancelled"); run.refresh(id); }) }, "Cancel") : null,
         s.changeset ? h("button", { onclick: () => go(`#/set/${enc(s.changeset.name)}`) }, "Open the change set") : null),
       section("Steps", h("div", { class: "rows", title: tip("run.show") }, ...r.order.map((k: string) => {
         const st = s.steps[k] ?? { status: "pending", attempts: [] };

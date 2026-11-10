@@ -4,7 +4,7 @@
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, NAME_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 const ACTIONS = {
@@ -35,7 +35,7 @@ const ACTIONS = {
     "worktree.finish": "Finish: commit what's left, then open a PR or merge into the main branch",
     "worktree.archive": "Archive: keep its work and its branch, remove the worktree",
     "worktree.restore": "Bring an archived worktree back as it was",
-    "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged or pushed",
+    "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
     "worktree.gc": "Stale worktrees: merged, abandoned or missing; archive or remove them",
     "workspace.switch": "Show one workspace's projects, or all of them",
     "workspace.new": "A new workspace",
@@ -179,7 +179,7 @@ async function suggest(p) {
 function renameProject(p) {
     // Another machine's project is renamed there, by the name it has there (MM1.B).
     const slug = splitMachine(p.slug)[1];
-    form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "name", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. ${NAME_HINT}` }], "Rename", async (v) => {
+    form(`Rename ${p.slug}`, [{ key: "name", label: "Name", value: slug, required: true, slug: "project", hint: `Its address: ${p.slug}/name finds its worktrees and sessions. Its worktrees' directories stay where they are. ${SLUG_HINT}` }], "Rename", async (v) => {
         if (v.name === slug)
             return;
         await conn.request({ t: "project_rename", addr: p.id, name: v.name });
@@ -324,7 +324,7 @@ function finish(w) {
     ]);
 }
 function archive(w) {
-    const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
+    const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
     confirm(`Archive ${w.title || w.name}?`, `Its files (uncommitted ones too) are saved and its branch kept; the worktree is removed. Restore brings it back.${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, "Archive", async () => {
         const r = await ask({ t: "worktree_archive", addr: w.id, stop_sessions: n > 0 }, "Archived");
         if (r)
@@ -332,26 +332,32 @@ function archive(w) {
     }, false);
 }
 function remove(w, force = false) {
-    const n = sessionsIn(w).filter((s) => s.state.t === "running").length;
-    confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", async () => {
+    const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
+    // Unsaved work offers archiving first; any other refusal with a way through (a session the
+    // count above missed: a loose shell, one starting) offers it, as `ask` does (SPEC §6.6).
+    const send = async (req) => {
         try {
-            const r = await conn.request({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } });
+            const r = await conn.request(req);
             for (const note of r.notes ?? [])
                 ui.toast(note);
             go("#/p");
         }
         catch (e) {
             // Work would be lost: its way through, offered beside archiving it instead.
-            if (fixOf(e)?.fix === "force") {
+            const f = fixOf(e), again = f && withFix(req, f);
+            if (f?.fix === "force" && !force) {
                 menu("It has work that isn't saved", [
                     { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
                     { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true) },
                 ]);
             }
+            else if (f && again)
+                confirm(f.label, errText(e), f.label, () => send(again));
             else
                 ui.toast(errText(e));
         }
-    });
+    };
+    confirm(`Remove worktree ${w.title || w.name}?`, `Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. ${force ? "Work that isn't saved anywhere else is thrown away." : "Nothing is removed if that would lose work."}${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, force ? "Remove and lose it" : "Remove", () => send({ t: "worktree_remove", addr: w.id, opts: { force, stop_sessions: n > 0, keep_branch: false } }));
 }
 async function runScript(w) {
     const r = await ask({ t: "project_scripts", addr: w.project, worktree: w.id });
@@ -491,7 +497,7 @@ function gcView() {
     const left = scratch.length ? section("Left behind by scratch shells", h("div", { class: "rows" }, ...scratch.map((l) => {
         const name = String(l.path).split("/").pop() ?? l.path;
         return row(name, `${l.files} files · changed ${ago(l.modified_ms)} ago`, bytes(l.bytes), {
-            onclick: () => confirm(`Delete ${name}?`, `${l.path} and the ${l.files} files in it go for good.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
+            onclick: () => confirm(`Delete the scratch directory ${name}?`, `${l.path}, ${l.files} files. A scratch shell left it behind. It is deleted with everything in it; this can't be undone.`, "Delete", () => done("Deleted")({ t: "shell_scratch_remove", path: l.path })),
         });
     }))) : null;
     return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")), h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, `Worktrees that are merged, abandoned or gone, biggest first${total ? ` (${bytes(total)} in all, build output included)` : ""}. Nothing is removed unless you say so.`), body, left));
@@ -509,7 +515,7 @@ function archivesView() {
                             if (r?.info)
                                 go(`#/wt/${enc(r.info.id)}`);
                         }, false) },
-                    { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted, and its branch too if it is merged or pushed. This can't be undone.", "Delete", async () => {
+                    { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. This can't be undone.", "Delete", async () => {
                             const r = await ask({ t: "worktree_archive_delete", addr }, "Deleted");
                             if (r)
                                 showNotes("Archive deleted", r.notes ?? []);

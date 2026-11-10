@@ -296,9 +296,13 @@ fn cli_selectors_restart_scrollback_config_and_shell_init() {
     assert!(tail.contains("done"), "{tail}");
     ok(&["restart", "w1"]);
     std::thread::sleep(Duration::from_millis(300));
-    ok(&["rm", "@exited"]);
+    // Over a selector each is tried: the ended ones go, the running one is refused and said,
+    // and the exit code is that refusal's.
+    let out = run(&["rm", "@all"]);
+    assert_eq!(out.status.code(), Some(5), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("keep is still running"));
     let ls = ok(&["ls"]);
-    assert!(ls.contains("keep") && !ls.contains("w2"), "{ls}");
+    assert!(ls.contains("keep") && !ls.contains("w2") && !ls.contains("w1"), "{ls}");
     assert_eq!(run(&["kill", "@nothing-matches-this"]).status.code(), Some(2));
     ok(&["rm", "--stop", "@live"]);
     assert!(!ok(&["ls"]).contains("keep"), "rm --stop forgot it");

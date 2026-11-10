@@ -185,7 +185,12 @@ impl Daemon {
             .steps
             .get(step)
             .and_then(|s| s.attempts.iter().rev().find_map(|a| a.worktree.clone()))
-            .ok_or_else(|| Error::missing("worktree", format!("of candidate {step}")))?;
+            .ok_or_else(|| {
+                Error::new(
+                    ptyro_core::ErrorCode::NotFound,
+                    format!("candidate {step} has no worktree yet"),
+                )
+            })?;
         self.worktree_by_id(&w)
             .ok_or_else(|| Error::conflict(format!("candidate {step}'s worktree is gone")))
     }

@@ -138,7 +138,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `b` | broadcast one prompt into the marked sessions |
 | `n` / `C-n` / `N` | new task here / quick new (another of this worktree's agent, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
-| `x` / `X` | stop a session (`x` again removes it) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill a session now. Its pane shows the next session |
+| `x` / `X` | stop a session (on an ended one it says it isn't running and offers to remove it) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
 | `D` `O` `S` | inspector / runs / change sets |

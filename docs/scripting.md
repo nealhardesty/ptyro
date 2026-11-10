@@ -36,7 +36,7 @@ The milestone's acceptance test does exactly this (`crates/ptyro/tests/m5.rs`):
 ```sh
 #!/bin/sh
 set -eu
-ptyro wt new fix-login --project app
+ptyro wt new -n fix-login -p app
 ptyro new -d -n fixer --agent claude --wt app/fix-login \
   --prompt "The login form rejects valid emails. Fix it and add a test."
 ptyro wait fixer --for idle --timeout 30m      # exit 7 if it's still going

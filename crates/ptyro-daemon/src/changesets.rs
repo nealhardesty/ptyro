@@ -490,9 +490,7 @@ impl Daemon {
         ptyro_core::names::validate_within(&name, 40, ", since its members' names are appended")
             .map_err(Error::invalid)?;
         if self.set_named(&name) {
-            return Err(Error::conflict(format!(
-                "change set {name} exists (ptyro cs show {name})"
-            )));
+            return Err(Error::conflict(format!("change set {name} exists: pick another name")));
         }
         // The template, if any.
         let template: Option<Template> = match &spec.template {
@@ -536,7 +534,7 @@ impl Daemon {
         }
         if want.is_empty() {
             return Err(Error::invalid(
-                "a change set needs members: --projects api,sdk,web (or --template)",
+                "a change set needs members: name its projects, or a template that has them",
             ));
         }
         let projects: Vec<ptyro_core::model::ProjectInfo> =
@@ -557,7 +555,7 @@ impl Daemon {
             let ws = self.home_workspace(None, Some(p))?;
             if spec.workspace.is_none() && ws != workspace {
                 return Err(Error::invalid(format!(
-                    "a change set lives in one workspace: {} is in {ws}, {} in {workspace} (--workspace picks one)",
+                    "a change set lives in one workspace: {} is in {ws}, {} in {workspace}; say which workspace",
                     p.slug, projects[0].slug
                 )));
             }
@@ -1199,9 +1197,9 @@ impl Daemon {
             }
         }
         if targets.is_empty() {
-            return Err(Error::missing(
-                "recipient",
-                format!("{to} (no agents in {} yet)", set.name),
+            return Err(Error::new(
+                ErrorCode::NotFound,
+                format!("nobody to send to as {to}: {} has no agents yet", set.name),
             ));
         }
         let mut ids = Vec::new();
