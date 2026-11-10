@@ -4103,7 +4103,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   `discard R [CANDIDATE] [--force]`; `iterate R [CANDIDATE] TEXT`.
 - **Gates:** `gate ls [--all] [--json]`, `gate resolve ID CHOICE [--note] [--key]`.
 - **Mailbox:** `msg send TO TEXT [--kind] [--run] [--reply-to] [--interrupt] [--key]`,
-  `msg check [--me S] [--since ID] [--wait D] [--json]`, `msg ls [--run] [-l N] [--json]`,
+  `msg check [--me S] [--since ID] [--timeout D] [--json]`, `msg ls [--run] [-l N] [--json]`,
   `msg ack ID…`. Inside a session the sender is that session.
 - **Leases and radar:** `lease claim PATTERN… [--exclusive] [--ttl] [--reason] [--as S]`
   (exit 5 when refused), `lease release [PATTERN…] [--as S]`, `lease ls [--json]`,

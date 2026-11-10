@@ -53,6 +53,14 @@ A letter means the same flag in every command that takes it (owner, 2026-11-09; 
 
 Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt`, `--json`.
 
+A long flag is a switch in every command or takes a value in every command, never one here and
+the other there (owner, 2026-11-10; `a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere`).
+So `--pr N` is a PR number (`new`, `wt new`) and `pick --open-pr` opens one; `--lead` makes a
+lead (`new`) and `cs new --lead-as AGENT` picks its agent; `--keep` keeps a chat and
+`cs rm --keep-member M` a member; `--chat` reads a transcript and `chat search --in CHAT` narrows
+a search; `--timeout D` is how long to wait (`msg check` too). An optional value reads the same
+everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`.
+
 ## Naming sessions and worktrees
 
 - **`SESSION`** is a name (`brisk-rook`), `project/name`, a short handle from `ptyro ls`
@@ -228,7 +236,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 | `ptyro run ls [--active] [--tree]` / `show R` / `events R` / `wait R [--gate] [--timeout D]` | runs and their steps (`wait`: exit 0 succeeded, 1 failed, 5 cancelled, 7 timeout) |
 | `ptyro run cancel R` / `retry R STEP` / `fork R --from STEP [--set k=v]` / `lead SESSION [--max-workers N] [--agent A]…` | control runs; make an existing agent a lead |
 | `ptyro gate ls [--all]` / `resolve ID CHOICE [--note N] [--key K]` | what runs wait on you for / answer |
-| `ptyro msg send TO TEXT [--kind K] [--interrupt] [--run R] [--reply-to ID] [--key K]` / `check [--me S] [--since ID] [--wait D]` / `ls [--run R] [-l N]` / `ack [IDS] [--me S]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
+| `ptyro msg send TO TEXT [--kind K] [--interrupt] [--run R] [--reply-to ID] [--key K]` / `check [--me S] [--since ID] [--timeout D]` / `ls [--run R] [-l N]` / `ack [IDS] [--me S]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
 | `ptyro lease claim PATTERN… [--exclusive] [--ttl D] [--reason TEXT] [--as S]` / `release [PATTERN…] [--as S]` / `ls` | file leases (`claim` exits 5 when refused) |
 | `ptyro radar [-p P]` | overlapping worktrees and predicted conflicts (exit 1 when it predicts one) |
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |

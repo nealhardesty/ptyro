@@ -173,7 +173,7 @@ Use these commands; they print JSON with `--json`:
 - `ptyro read NAME --scrollback 200`: read what it printed.
 - `ptyro send NAME "TEXT" --wait-ready --wait`: give it the next instruction and wait for the turn.
 - `ptyro report --state working --msg "what you're doing"`: tell the human what you're doing.
-- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --wait 5m`: talk to
+- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --timeout 5m`: talk to
   the other agents (messages reach them when they're idle; `@user` reaches the human).
 - `ptyro lease claim 'src/api/**' --exclusive --reason "…"`: keep others out of files you're
   changing; `ptyro lease release` when done. `ptyro radar` shows who else is changing what.
