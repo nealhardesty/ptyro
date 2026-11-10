@@ -128,7 +128,7 @@ async fn the_file_the_variable_and_the_cli() {
     assert!(ok, "{err}");
     let (ok, ..) = w.pad(&["add", "--section", "Bugs", "second one"]);
     assert!(ok);
-    let (ok, ..) = w.pad(&["add", "--note", "--no-stamp", "just a thought"]);
+    let (ok, ..) = w.pad(&["add", "--bullet", "--no-stamp", "just a thought"]);
     assert!(ok);
     let mut piped = w.d.cmd();
     piped.args(["scratchpad", "add", "-"]).stdin(std::process::Stdio::piped());

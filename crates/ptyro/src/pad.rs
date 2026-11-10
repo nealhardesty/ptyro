@@ -36,7 +36,7 @@ pub enum PadCmd {
         #[arg(long)]
         section: Option<String>,
         /// A plain bullet, not a `- [ ]` item
-        #[arg(long)]
+        #[arg(long = "bullet")]
         note: bool,
         /// No time or place on it
         #[arg(long)]

@@ -4536,7 +4536,7 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
   worktree (else the directory) it was run in, and for an agent the session's name; further lines
   are indented two spaces and belong to the item. Tags go at the end: `[wt:project/name]` (the
   worktree started from it) and `(#42)` (the pull request that finished it). Under `## Heading`
-  with `--section`. `--no-stamp` leaves the stamp off, `--note` writes a plain bullet. An item is
+  with `--section`. `--no-stamp` leaves the stamp off, `--bullet` writes a plain bullet (it was `--note`, which takes a text everywhere else). An item is
   selected by its line number or by words in exactly one open item.
 - **Writes.** `ptyro_core::scratchpad::Pad` is the only code that changes the file. An add is a
   single append (`O_APPEND`), so an editor with the file open sees only added bytes; anything else
