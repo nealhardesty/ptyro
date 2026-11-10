@@ -1158,7 +1158,11 @@ pub fn ask_first(question: &str, yes: bool) -> Result<(), Error> {
 /// One of several sessions refused (`rm @all`, `stop`, `kill`): said, and the first failure's
 /// exit code kept, while the rest go on.
 pub(crate) fn failed(code: &mut i32, name: &str, e: &Error) {
-    eprintln!("ptyro: {name}: {}", e.message);
+    // Its way through in the CLI's words (`said`); named once, by the message when it does.
+    match said(e) {
+        s if e.message.contains(name) => eprintln!("ptyro: {s}"),
+        s => eprintln!("ptyro: {name}: {s}"),
+    }
     if *code == 0 {
         *code = e.code.exit_code();
     }

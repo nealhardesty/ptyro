@@ -3918,7 +3918,7 @@ impl App {
                 false,
                 run_offer("remove it", "session.remove"),
             ),
-            // A dormant agent can still be resumed: forgetting it asks, as `ptyro rm` does.
+            // A dormant agent can still be resumed: forgetting it asks, as the CLI's rm does.
             "session.remove" if info.state == ProcessState::Dormant => {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(

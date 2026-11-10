@@ -1668,7 +1668,7 @@ impl Daemon {
                 .and_then(|s| s.attempt())
                 .and_then(|a| a.worktree.clone())
                 .and_then(|w| self.worktree_by_id(&w))
-                .ok_or_else(|| no_worktree_of(&sid))?,
+                .ok_or_else(|| no_worktree_of(sid))?,
             None => {
                 let p = st
                     .project
