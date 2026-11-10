@@ -1195,8 +1195,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - `Request::Remove` adds `stop` (absent: false): stop a running session, then forget it (`rm
   --stop`, Stop and remove; §7.3). An older daemon ignores it and refuses a running session as
   before.
-- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust,
-  label, fingerprint?}` (§6.6); an older client ignores it.
+- `Error` adds `fix` (absent: none): a refusal's way through, `{fix: force|stop_sessions|stop|trust|release,
+  label, fingerprint?}` (§6.6); an older client ignores it. The web's HTTP API passes it through.
+- `WorktreeArchiveGet{addr}` → `Archives` with the one archive `addr` names (read scope), resolved as
+  restoring and deleting do, so `wt archive-rm` resolves before it asks. An older daemon answers
+  "unsupported request".
 - `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An empty `title` now clears a
   chat's title (before 1.38 it asked for an automatic one), as `Retitle` does for a session or a
   worktree. Clients send `auto_title` with an empty `title`, so an older daemon (which ignores
@@ -1358,7 +1361,7 @@ untrusted recipe or template: `trust`; forgetting a project with running session
 "Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
 it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
 and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
-happens to go with it (owner, 2026-11-09). The CLI prints "(again with `--force`: remove anyway)"
+happens to go with it. The CLI prints "(again with `--force`: remove anyway)"
 (`cli::said`; `project rm` at a terminal asks "Let them go?" instead); the TUI turns it into a
 toast button that resends the request (`Request::with_fix`); the web asks with a confirmation
 (`kit.ts` `withFix`, in `ask()`), and `ask()` resolves with the retry's reply, so the caller goes
