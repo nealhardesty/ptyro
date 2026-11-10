@@ -5029,7 +5029,7 @@ name in another member's dependencies).
 #### 15.5.10 CLI and TUI
 
 ```text
-ptyro cs new <name> --projects api,sdk,web [--template t] [--lead claude] [--layout lead|solo|manual]
+ptyro cs new <name> --projects api,sdk,web [--template t] [--lead-as claude] [--layout lead|solo|manual]
              [--prompt <goal> | --from-issue <url>]
 ptyro cs ls | show <set> | status <set> [--json] | log <set> [--follow]
 ptyro cs msg <set> <member|@lead|@all> <text> [--interrupt]

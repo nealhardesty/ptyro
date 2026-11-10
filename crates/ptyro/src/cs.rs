@@ -39,7 +39,7 @@ pub enum CsCmd {
         #[arg(long)]
         template: Option<String>,
         /// The lead's agent (default: your default agent)
-        #[arg(long)]
+        #[arg(long = "lead-as", value_name = "AGENT", add = ArgValueCandidates::new(crate::complete::agents))]
         lead: Option<String>,
         /// lead (one agent per member, the default), solo (one agent for all), manual (none)
         #[arg(long)]

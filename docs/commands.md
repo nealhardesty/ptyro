@@ -241,7 +241,7 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 
 | Command | Does |
 |---|---|
-| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [--prompt GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [-w WS] [--trust FP] [--json]` | start a change set (`--trust`: the fingerprint of a hub template you reviewed) |
+| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead-as AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [--prompt GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [-w WS] [--trust FP] [--json]` | start a change set (`--trust`: the fingerprint of a hub template you reviewed) |
 | `ptyro cs ls` / `show SET` (alias `status`) / `log SET [-f]` | change sets / one set with its issues and actions / its ledger |
 | `ptyro cs msg SET TO TEXT [--kind K] [--interrupt]` | a message on the set (`TO`: a member, `@lead`, `@all`) |
 | `ptyro cs ready SET [NOTE]` / `blocked SET ON [NOTE]` (both `[--member M]`) / `assign SET M TASK` / `ask SET QUESTION [--option O]…` | from inside the set: readiness, blockers, a member's task, a question for you |

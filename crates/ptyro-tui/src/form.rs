@@ -1153,7 +1153,7 @@ impl App {
             )
             .arg(Arg::Flag("--layout")),
             Field::choice("lead", "Lead agent", self.agent_options(Some("your default agent")), 0, "The lead's agent")
-                .arg(Arg::Flag("--lead")),
+                .arg(Arg::Flag("--lead-as")),
             Field::text("agents", "Member agents", "api=codex, web=claude", "A member's own agent; several: comma separated")
                 .arg(Arg::Each("--agent")),
             Field::text("bases", "Member bases", "web=origin/develop", "A member's own base; several: comma separated")
