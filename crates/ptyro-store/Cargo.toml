@@ -15,7 +15,6 @@ workspace = true
 ptyro-core.workspace = true
 ptyro-meaning.workspace = true
 rusqlite.workspace = true
-rusqlite_migration.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

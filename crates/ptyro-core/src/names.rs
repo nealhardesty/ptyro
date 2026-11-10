@@ -155,7 +155,7 @@ pub const TYPED_HINT: &str = "A space or other odd character becomes - (a-z 0-9 
 /// `raw` as it is typed into a name field: uppercase is lowercased, any other character a name
 /// can't hold (a space, `/`, an accent) becomes `-`, as does the second `.` of `..`, and what a
 /// name can't start with (`.`, `-`, a space) is dropped at the start. `-` is the one replacement
-/// character everywhere: [`tidy`], [`derive`] and generated names use it too. Past the start one
+/// character everywhere: [`tidy`], [`derive()`] and generated names use it too. Past the start one
 /// character in is one out, so a cursor stays where it was. What no single character fixes (all
 /// digits, `.lock` at the end, too long) is left for [`problem`] to explain.
 pub fn typed(raw: &str) -> String {
@@ -218,7 +218,7 @@ pub fn numbered(base: &str, k: u32) -> String {
 
 /// The one way ptyro turns text into a name: lowercased, each run of characters `keep` refuses
 /// (and a `.` after a `.`) becomes one `-`, with no `.` or `-` at either end, no `.lock` at the
-/// end, and at most `max` characters. [`tidy`] and [`derive`] keep a name's characters;
+/// end, and at most `max` characters. [`tidy`] and [`derive()`] keep a name's characters;
 /// `model::slugify` keeps only `a-z0-9` (project slugs). It may return `""`: there is no
 /// made-up stand-in.
 pub fn fold(raw: &str, keep: impl Fn(char) -> bool, max: usize) -> String {

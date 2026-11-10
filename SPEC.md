@@ -391,7 +391,7 @@ MSRV: latest stable at project start, pinned in `rust-toolchain.toml`; edition 2
 | Input encoding | `terminput` 0.5 + `terminput-crossterm` | key/mouse → xterm or kitty bytes |
 | TUI | `ratatui` 0.30, `crossterm` 0.29 | |
 | CLI | `clap` 4 (derive), `clap_complete` 4.6 | dynamic completion of session names |
-| Storage | `rusqlite` 0.40 (`bundled`), `rusqlite_migration` 2.6 | one store thread |
+| Storage | `rusqlite` 0.41 (`bundled`: SQLite 3.54) | one store thread |
 | Paths | `etcetera` 0.11 | XDG layout on macOS too |
 | Config | `toml`, `serde` | |
 | Logging | `tracing`, `tracing-subscriber`, `tracing-appender` | |
@@ -4669,8 +4669,8 @@ running daemon's socket, so new clients could no longer reach it.
 
 ### 14.2 Database
 
-SQLite (bundled), WAL, `foreign_keys=ON`, migrations embedded with `rusqlite_migration`
-(`user_version`). Only metadata — never terminal contents. **One exception, decided 2026-10-29:**
+SQLite (bundled), WAL, `foreign_keys=ON`, migrations embedded and counted by `user_version` (`ptyro-store`'s `migrate`: pending ones run in one transaction; a newer schema is refused untouched).
+Only metadata — never terminal contents. **One exception, decided 2026-10-29:**
 chat text, which lives in its own file, `chat.db` (§22.4), never in `ptyro.db`.
 
 ```sql

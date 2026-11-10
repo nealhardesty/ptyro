@@ -5,20 +5,21 @@
 use std::path::Path;
 use std::sync::mpsc;
 
+use migrate::M;
 use ptyro_core::model::{PortBlock, ProjectInfo, WorkspaceInfo, WorktreeInfo};
 use ptyro_core::session::{ProcessState, SessionKind};
 use ptyro_core::status::{AttentionKind, InboxEntry};
 use rusqlite::{Connection, OptionalExtension, params};
-use rusqlite_migration::{M, Migrations};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 pub mod chat;
+mod migrate;
 mod runs;
 pub use runs::{LeaseRow, MessageRow, RunRow};
 
 /// Schema history. Never edit a released migration; append a new one.
-const MIGRATIONS: &[M<'static>] = &[
+const MIGRATIONS: &[M] = &[
     M::up(
         "CREATE TABLE session (
         id TEXT PRIMARY KEY,
@@ -192,8 +193,6 @@ const MIGRATIONS: &[M<'static>] = &[
 pub enum StoreError {
     #[error("sqlite: {0}")]
     Sql(#[from] rusqlite::Error),
-    #[error("migration: {0}")]
-    Migration(#[from] rusqlite_migration::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
     #[error("the store thread has stopped")]
@@ -216,9 +215,6 @@ impl StoreError {
         use rusqlite::ErrorCode as C;
         let code = match self {
             StoreError::Sql(e) => e.sqlite_error_code(),
-            StoreError::Migration(rusqlite_migration::Error::RusqliteError { err, .. }) => {
-                err.sqlite_error_code()
-            }
             _ => None,
         };
         matches!(code, Some(C::DatabaseBusy | C::DatabaseLocked))
@@ -231,9 +227,6 @@ impl StoreError {
         let code = match self {
             StoreError::TooNew { .. } => return Some(self.to_string()),
             StoreError::Sql(e) => e.sqlite_error_code()?,
-            StoreError::Migration(rusqlite_migration::Error::RusqliteError { err, .. }) => {
-                err.sqlite_error_code()?
-            }
             _ => return None,
         };
         Some(match code {
@@ -412,7 +405,7 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        Migrations::from_slice(MIGRATIONS).to_latest(&mut conn)?;
+        migrate::to_latest(&mut conn, MIGRATIONS)?;
         let (tx, rx) = mpsc::channel::<Job>();
         std::thread::Builder::new()
             .name("ptyro-store".into())
@@ -1000,14 +993,14 @@ mod tests {
 
     #[test]
     fn migrations_are_valid() {
-        Migrations::from_slice(MIGRATIONS).validate().unwrap();
+        migrate::to_latest(&mut Connection::open_in_memory().unwrap(), MIGRATIONS).unwrap();
     }
 
     /// A database as ptyro left it at schema `version`, with a row in every table that exists
     /// then (what the first `version` migrations make, and rows only they know how to write).
     fn database_at(path: &Path, version: usize) {
         let mut c = Connection::open(path).unwrap();
-        Migrations::from_slice(&MIGRATIONS[..version]).to_latest(&mut c).unwrap();
+        migrate::to_latest(&mut c, &MIGRATIONS[..version]).unwrap();
         let state = serde_json::to_string(&ProcessState::Running).unwrap();
         let kind = serde_json::to_string(&SessionKind::Shell).unwrap();
         c.execute(

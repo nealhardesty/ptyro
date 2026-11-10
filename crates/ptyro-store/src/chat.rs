@@ -6,10 +6,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
+use crate::migrate::{self, M};
 use ptyro_core::chat::{ChatBody, NoticeLevel, ToolStatus};
 use ptyro_core::chats::{self, ChatInfo, ChatNode, ChatSiblings};
 use rusqlite::{Connection, OptionalExtension, params};
-use rusqlite_migration::{M, Migrations};
 use tokio::sync::oneshot;
 
 use crate::{Result, StoreError};
@@ -18,7 +18,7 @@ mod vec;
 pub use vec::VecTodo;
 
 /// Schema history. Never edit a released migration; append a new one.
-const MIGRATIONS: &[M<'static>] = &[
+const MIGRATIONS: &[M] = &[
     M::up(
         "CREATE TABLE meta (key TEXT PRIMARY KEY, value);
     CREATE TABLE chat (
@@ -336,7 +336,7 @@ impl ChatDb {
                 known: MIGRATIONS.len(),
             });
         }
-        Migrations::from_slice(MIGRATIONS).to_latest(&mut conn)?;
+        migrate::to_latest(&mut conn, MIGRATIONS)?;
         let machine_id: String = match conn
             .query_row("SELECT value FROM meta WHERE key = 'machine_id'", [], |r| r.get(0))
             .optional()?
