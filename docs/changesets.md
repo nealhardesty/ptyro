@@ -152,7 +152,7 @@ checkpoint (it names them); `--force` checkpoints the present first, so nothing 
   > the merge train stopped at sdk: CI failed on PR #12: build. Landed: api; not landed: sdk, web
 
   Fix it and run `cs land` again: it resumes where it stopped.
-- **`ptyro cs rm SET [--keep M] [--force] [-y]`** removes every member's worktree safely: one with
+- **`ptyro cs rm SET [--keep-member M] [--force] [-y]`** removes every member's worktree safely: one with
   unshipped work blocks the whole set unless you keep it. `cs add SET PROJECT` and `cs drop SET
   MEMBER` change membership.
 

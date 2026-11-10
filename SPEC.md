@@ -4996,7 +4996,7 @@ be lost. One command to undo a multi-repo wrong turn.
   integration checks) before the next, and stops on failure with a precise partial-state report.
   Every step goes through a gate unless `--yes`.
 - **Removal** (`cs rm`) applies §10.8 to *every* member; one dirty member blocks removal of the
-  whole set (or `--keep <member>`).
+  whole set (or `--keep-member <member>`).
 
 #### 15.5.8 Templates
 
@@ -5037,7 +5037,7 @@ ptyro cs contract <set> [show|edit|diff <file>|history]
 ptyro cs check <set>                       # integration + contract checks
 ptyro cs checkpoint <set> [label] | restore <set> <n>
 ptyro cs commit|push|pr|land <set>        # lockstep, dependency-ordered, gated
-ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep <member>]
+ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep-member <member>]
 ```
 
 - **Sidebar:** a change set is a group node (`◆ add-user-tier 3/4 ready · r3`) above its members'

@@ -231,7 +231,7 @@ pub enum CsCmd {
     Rm {
         set: String,
         /// Keep this member's worktree (repeatable)
-        #[arg(long)]
+        #[arg(long = "keep-member", value_name = "MEMBER")]
         keep: Vec<String>,
         #[arg(long)]
         force: bool,

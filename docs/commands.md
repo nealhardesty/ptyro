@@ -249,7 +249,7 @@ See [`changesets.md`](changesets.md) for the walkthrough.
 | `ptyro cs diff SET M` / `check SET` / `overlay SET [auto\|go\|rust\|node\|python\|compose\|off] [--member M]` | a member's changes / integration and contract checks / build against siblings |
 | `ptyro cs checkpoint SET [LABEL]` / `checkpoints SET` / `restore SET N [--force]` | undo across every repo |
 | `ptyro cs commit SET -m MSG` / `push SET [-y]` / `pr SET [--draft]` / `land SET [-y] [--no-wait]` | lockstep git and the merge train |
-| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--force] [-y]` / `rm SET [--keep M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates |
+| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--force] [-y]` / `rm SET [--keep-member M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates |
 
 ## Remote and phone
 
