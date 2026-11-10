@@ -4097,7 +4097,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
 - **Fan-out:** `fanout -a a,b,c | --count N [-a a] (--prompt P | --prompt-file F)
   [-p P] [--base] [--prefix PREFIX] [--test [CHECK]] [--verify CHECK] [--judge AGENT]
   [--timeout D] [--wait] [--json]`; `compare R [--refresh] [--json]`;
-  `pick R CANDIDATE [--cherry-pick|--pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
+  `pick R CANDIDATE [--cherry-pick|--open-pr|--apply] [--into B|W] [--path F]… [--hunk F:N]…`;
   `discard R [CANDIDATE] [--force]`; `iterate R [CANDIDATE] TEXT`.
 - **Gates:** `gate ls [--all] [--json]`, `gate resolve ID CHOICE [--note] [--key]`.
 - **Mailbox:** `msg send TO TEXT [--kind] [--run] [--reply-to] [--interrupt] [--key]`,

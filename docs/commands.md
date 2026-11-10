@@ -221,7 +221,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 |---|---|
 | `ptyro fanout (-a A,B,C \| --count N) (--prompt P \| --prompt-file F) [--test [CHECK]] [--verify CHECK] [--judge A] [--timeout D] [--prefix PREFIX] [--base REF] [-p P] [--structured] [--wait] [--json]` | one task, several agents, one worktree each |
 | `ptyro compare R [--refresh] [--json]` | rank candidates by evidence: tests, diff, time |
-| `ptyro pick R C [--cherry-pick \| --pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
+| `ptyro pick R C [--cherry-pick \| --open-pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
 | `ptyro discard R [C] [--force] [-y]` / `iterate R [C] TEXT` | remove the others (asks unless `-y`) / a follow-up prompt |
 | `ptyro recipe ls\|show NAME\|validate FILE\|graph R [--format mermaid\|dot]` (each with `[-p P]`) | recipes: list, read, check, draw |
 | `ptyro recipe run R [--var k=v]… [-p P] [--base REF] [--trust FP] [--wait] [--json]` | start a recipe |

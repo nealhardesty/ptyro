@@ -434,7 +434,8 @@ enum Cmd {
         candidate: String,
         #[arg(long, conflicts_with_all = ["pr", "apply"])]
         cherry_pick: bool,
-        #[arg(long, conflicts_with = "apply")]
+        /// Push its branch and open a pull request
+        #[arg(long = "open-pr", conflicts_with = "apply")]
         pr: bool,
         /// Copy changes into a worktree (default: the main checkout), uncommitted
         #[arg(long)]
@@ -1581,7 +1582,7 @@ mod tests {
     /// A long flag is a switch everywhere or takes a value everywhere: `--x V` never means a
     /// switch plus a word in another command. These were so before the rule and wait for the
     /// owner's word on new names; no new one may join them.
-    const SWITCH_AND_VALUE: [&str; 3] = [ "pr", "scrollback", "wait"];
+    const SWITCH_AND_VALUE: [&str; 2] = ["scrollback", "wait"];
 
     #[test]
     fn a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere() {

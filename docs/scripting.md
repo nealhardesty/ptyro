@@ -197,7 +197,7 @@ Recipes and fan-outs are runs, which a script can start, wait for and read:
 run=$(ptyro fanout -a claude,codex --prompt "Fix the flaky test in src/net" --test)
 ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 5 cancelled, 7 timeout
 best=$(ptyro compare "$run" --json | jq -r '.candidates[0].step')
-ptyro pick "$run" "$best" --pr                        # push + PR from the winner
+ptyro pick "$run" "$best" --open-pr                   # push + PR from the winner
 ptyro discard "$run" --force -y
 ```
 
