@@ -525,7 +525,7 @@ impl Daemon {
                         // It answered, but refused this machine's token: revoked there (or
                         // replaced by an older ptyro's pairing). Waiting won't bring it back.
                         _ if e.message.contains("unauthorized") => format!(
-                            "{name} no longer accepts this machine's pairing (revoked there, or replaced by another machine's): `ptyro machine rm {name}` here, then `ptyro machine pair` on {name} and `ptyro machine add CODE` here"
+                            "{name} no longer accepts this machine's pairing (revoked there, or replaced by another machine's): remove {name} here, then make a fresh machine code on {name} and add it here with that code"
                         ),
                         "ssh" => format!(
                             "check that `ssh {} ptyro --version` works here without a password (keys or ssh-agent)",
