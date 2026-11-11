@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 38 };
+pub const PROTO: Version = Version { major: 1, minor: 39 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -247,6 +247,11 @@ pub enum Request {
         code: String,
         #[serde(default)]
         via: Option<String>,
+        /// A machine code's claimer says what it is called (protocol 1.39): the device is named
+        /// after it (`bear`, `bear-2` when that's taken), not `machine`. Ignored for a person's
+        /// device, whose name the one who paired it chose.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
     DeviceList,
     DeviceRevoke {
@@ -2603,7 +2608,11 @@ mod tests {
         });
         round_trip(ClientMsg::Request {
             id: 10,
-            req: Request::DeviceClaim { code: "ptp_x".into(), via: Some("ws:127.0.0.1".into()) },
+            req: Request::DeviceClaim {
+                code: "ptp_x".into(),
+                via: Some("ws:127.0.0.1".into()),
+                name: None,
+            },
         });
         round_trip(ClientMsg::Request {
             id: 7,

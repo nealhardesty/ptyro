@@ -1307,7 +1307,7 @@ impl App {
                 "force",
                 "Keep if silent",
                 false,
-                "Keep it even if it doesn't answer now",
+                "Keep it even if it doesn't answer now (ssh; a claimed code is always kept)",
             )
             .arg(Arg::Switch("--force")),
         ];

@@ -1249,7 +1249,7 @@ enum MachineCmd {
         /// What its names carry here (default: what it calls itself)
         #[arg(short, long)]
         name: Option<String>,
-        /// Keep it even if it doesn't answer now
+        /// Keep it even if it doesn't answer now (over ssh: a claimed code is always kept)
         #[arg(long)]
         force: bool,
         #[arg(long)]

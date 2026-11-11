@@ -48,6 +48,9 @@ pub struct PairingCode {
 /// How long a pairing code can be claimed.
 pub const PAIRING_TTL_MS: u64 = 10 * 60 * 1000;
 
+/// Machine codes (`machine pair`) waiting to be claimed at once; a newer one retires the oldest.
+pub const MAX_MACHINE_CODES: usize = 8;
+
 impl DeviceRecord {
     pub fn info(&self) -> DeviceInfo {
         DeviceInfo {
@@ -441,22 +444,50 @@ impl Daemon {
                 self.prune_pairings();
                 let replaces = {
                     let mut devices = self.devices.locked();
-                    // A name is one device: an earlier unused link for it is superseded now,
-                    // and a paired one is replaced when this link is claimed (not before, so
-                    // an abandoned pairing doesn't cut the phone off).
-                    devices.retain(|d| d.pairing.is_none() || !same_name(&d.name, &rec.name));
-                    let replaces = devices
-                        .iter()
-                        .find(|d| d.pairing.is_none() && same_name(&d.name, &rec.name))
-                        .map(DeviceRecord::info);
-                    devices.push(rec);
-                    replaces
+                    if machine {
+                        // Machine codes stand side by side: each claim is a device of its own,
+                        // named after the machine that claims it, and replaces none (SPEC
+                        // §16.4b). Only so many wait at once; the oldest goes first.
+                        let waiting: Vec<String> = devices
+                            .iter()
+                            .filter(|d| d.machine && d.pairing.is_some())
+                            .map(|d| d.id.clone())
+                            .collect();
+                        let extra = (waiting.len() + 1).saturating_sub(MAX_MACHINE_CODES);
+                        devices.retain(|d| !waiting[..extra].contains(&d.id));
+                        devices.push(rec);
+                        None
+                    } else {
+                        // A machine's link isn't a person's device: a name it has is taken.
+                        if let Some(m) = devices.iter().find(|d| {
+                            d.machine && d.pairing.is_none() && same_name(&d.name, &rec.name)
+                        }) {
+                            return Err(Error::conflict(format!(
+                                "{} is the name of another machine's link here (device {}): pick another name for this device",
+                                m.name, m.id
+                            )));
+                        }
+                        // A name is one device: an earlier unused link for it is superseded
+                        // now, and a paired one is replaced when this link is claimed (not
+                        // before, so an abandoned pairing doesn't cut the phone off).
+                        devices.retain(|d| {
+                            d.machine || d.pairing.is_none() || !same_name(&d.name, &rec.name)
+                        });
+                        let replaces = devices
+                            .iter()
+                            .find(|d| {
+                                !d.machine && d.pairing.is_none() && same_name(&d.name, &rec.name)
+                            })
+                            .map(DeviceRecord::info);
+                        devices.push(rec);
+                        replaces
+                    }
                 };
                 self.save_devices();
                 tracing::info!(device = %device.id, name = %device.name, scope = device.scope.label(), replaces = ?replaces.as_ref().map(|d| d.id.clone()), "pairing code issued");
                 Ok(Reply::Pairing { device, code, expires_ms, replaces })
             }
-            Request::DeviceClaim { code, via } => {
+            Request::DeviceClaim { code, via, name } => {
                 self.prune_pairings();
                 let h = hash(&code);
                 let token = token("ptd_").map_err(|e| Error::internal(format!("random: {e}")))?;
@@ -474,21 +505,54 @@ impl Daemon {
                     let Some(i) = found else {
                         return Err(Error::new(
                             ErrorCode::PermissionDenied,
-                            "this pairing code is unknown, already used or expired: run `ptyro pair` again",
+                            "this pairing code is unknown, already used or expired: make a fresh one (`ptyro pair`, or `ptyro machine pair` for a machine)",
                         ));
                     };
+                    // A machine is named after itself, as it says (`bear`, else `machine`),
+                    // under a name no other device has: it never replaces one.
+                    let named = devices[i].machine.then(|| {
+                        let own = name
+                            .as_deref()
+                            .and_then(ptyro_core::names::derive)
+                            .unwrap_or_else(|| devices[i].name.clone());
+                        // Taken: another device's name, or what `devices revoke` would read as
+                        // another device's id (the claimer chooses this name).
+                        let taken = |n: &str| {
+                            devices.iter().enumerate().any(|(j, x)| {
+                                j != i
+                                    && (same_name(&x.name, n)
+                                        || lookup::id_matches(&x.id, &lookup::key(n)))
+                            })
+                        };
+                        (1..)
+                            .map(|k| {
+                                if k == 1 {
+                                    own.clone()
+                                } else {
+                                    ptyro_core::names::numbered(&own, k)
+                                }
+                            })
+                            .find(|n| !taken(n))
+                            .unwrap_or(own)
+                    });
                     let d = &mut devices[i];
                     // Used up: the printed code is worth nothing from here on.
                     d.pairing = None;
                     d.token_sha256 = hash(&token);
                     d.last_via = via;
+                    if let Some(n) = named {
+                        d.name = n;
+                    }
                     let device = d.info();
-                    // The new credentials replace the old device of the same name: its token
-                    // stops working and its connections close (they were checked against it).
+                    // A person's device: the new credentials replace the old device of the same
+                    // name, its token stops working and its connections close (they were checked
+                    // against it). A machine's never do (its name is its own, above).
                     let before = devices.len();
                     let mut replaced = None;
                     devices.retain(|x| {
-                        let old = x.id != device.id
+                        let old = !device.machine
+                            && !x.machine
+                            && x.id != device.id
                             && x.pairing.is_none()
                             && same_name(&x.name, &device.name);
                         if old && replaced.is_none() {

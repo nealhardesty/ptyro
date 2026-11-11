@@ -423,7 +423,7 @@ fn resume_failures_and_remote_reading() {
     rt.block_on(async {
         // The code is traded for the token (what `ptyro serve` does for the web app).
         let local = w.d.client().await.unwrap();
-        let claim = ptyro_protocol::Request::DeviceClaim { code, via: None };
+        let claim = ptyro_protocol::Request::DeviceClaim { code, via: None, name: None };
         let ptyro_protocol::Reply::Paired { token, .. } = local.request(claim).await.unwrap()
         else {
             panic!("not paired")

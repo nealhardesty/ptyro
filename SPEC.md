@@ -1183,6 +1183,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-11] Protocol 1.39** (additive): `DeviceClaim.name` (absent: none), what a
+machine claiming a `machine pair` code calls itself; its device is named after it (§16.4b). Ignored
+for a person's device. `POST /api/pair` takes it as `name`. An older daemon ignores it and names
+the device `machine` (and still replaces an earlier one: update the machine that makes the codes).
+
 **[built 2026-11-09] Protocol 1.38** (additive; the consistency pass, one version for all of it):
 - `WorktreeRename{addr, name}` → `Worktree{info}` and `ProjectRename{addr, name}` → `Project{info}`
   (§2.3). Both are `full` scope, like `WorkspaceRename`. Watchers hear `WorktreeUpdated` (for a
@@ -5777,7 +5782,7 @@ is "the web is up when the daemon is".
 - **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
   `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
-  one request, JSON outcome); `POST /api/pair` (`{code}` → `{token, device}`: a `DeviceClaim`
+  one request, JSON outcome); `POST /api/pair` (`{code, name?}` → `{token, device}`: a `DeviceClaim`
   over a local connection; a refused code counts as a failed login); `/healthz`.
 - **Headers:** a strict CSP (`default-src 'none'`, `script-src 'self'`…), `X-Frame-Options:
   DENY`, `nosniff`, `no-referrer`.
@@ -6121,6 +6126,35 @@ holding several machines) was not chosen.
   device's `machine` flag (`DevicePair{machine: true}`, `ptyro machine pair`) marks it. The code
   `machine pair` prints is a link: `https://HOST:PORT/#machine=ptp_…&ca=FP&name=laptop2`;
   `machine add CODE` claims it once (`POST /api/pair`, the same pin) for the token.
+- **Many machines pair with one** (fixed 2026-11-11, protocol 1.39). Before, every machine device
+  was named `machine`, so a new code cancelled an unclaimed one and a claim *replaced* the machine
+  paired before it (its token stopped working: only the last machine to pair stayed linked). Now:
+  machine codes stand side by side (at most `MAX_MACHINE_CODES` = 8 wait at once; a ninth retires
+  the oldest); a claim says who claims (`{code, name}` → `DeviceClaim.name`), and the device is
+  named after it (`derive`d; `bear-2` when the name is taken by any device), never replacing one.
+  A person's device (`ptyro pair`) still replaces its namesake, but never a machine's, and can't
+  take a machine link's name (`conflict`). `devices ls` marks machine links (`[machine link]`,
+  the web's badge).
+- **`machine add CODE` spends the code last.** It asks its daemon first and refuses, without
+  claiming: a code this machine made itself (its `ca` is this machine's certificate authority, or,
+  without one, its base is this machine's served address; never by name, since two machines may
+  share one, `ubuntu`), no name known (none in the code, no `--name`), a name `add_problem`
+  rejects (invalid, `c`, this machine's own: the message offers `--name`), and a machine already
+  added (`already_added`: by name, which offers `--name NAME-2` when the place differs, or by
+  place, the same URL or ssh target, case and a trailing `/` aside; the daemon checks the same).
+  Once claimed, the machine is kept (`force`) even if it doesn't answer that moment, so a spent
+  code doesn't leave a device there with no token here. A refused claim names its cause and the fix: 401 unknown,
+  used, expired or retired; 429 too many wrong codes from here; no server, which says to turn on
+  `ptyro serve` there. If the claim's reply names the device `machine` although a name was sent,
+  the other side is older and will replace it: `machine add` says to update it.
+- **Claimed names** are `derive`d (a-z 0-9 . _ -, at most 64), and a name that another device has,
+  or that `devices revoke` would read as another device's id (a hex suffix), is numbered instead.
+- **A refused token** (`unauthorized` from the other daemon: revoked there, or replaced) leaves the
+  link offline with the fix to pair again, not "is it awake?".
+- **What stays:** `machine rm` deletes the token here and says how to revoke its device there
+  (`ptyro devices revoke ME` on it); until then it stays listed there, never seen again. A token
+  left under a temporary name (`.adding-*`) by an add the daemon never finished is deleted at
+  start.
 - **Same version** is checked against `Welcome.daemon_version`; a mismatch leaves the link down
   (retried every 5 minutes, or on `retry`) with `error` and `fix` naming the older side.
 - **The mirror** holds what the link heard, qualified on arrival: a JSON walk over replies and
