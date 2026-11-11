@@ -212,6 +212,9 @@ impl Daemon {
             Request::Upgrade { binary: Some(_) } => {
                 return refuse("the daemon is upgraded to another binary by a person");
             }
+            Request::SelfUpdate | Request::MachineUpdate { .. } => {
+                return refuse("ptyro is updated by a person");
+            }
             // Keys typed into a dialog answer it (Claude's preselects "Yes"): a blocked
             // session's prompt is answered with `answer`, by a person.
             Request::SendText { addr, .. } | Request::SendBytes { addr, .. }

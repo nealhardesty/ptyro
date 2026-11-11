@@ -315,6 +315,8 @@ fn here_only(req: &Request) -> bool {
             | MachineRemove { .. }
             | MachineHide { .. }
             | MachineRetry { .. }
+            | MachineUpdate { .. }
+            | SelfUpdate
     )
 }
 
@@ -1292,6 +1294,52 @@ impl Daemon {
         }
     }
 
+    /// `MachineUpdate` (SPEC §24.8): that machine updates its own ptyro. Over a connection of
+    /// its own, so a link down for a version mismatch (the usual reason) still carries it.
+    pub(crate) async fn machine_update(self: &Arc<Self>, name: &str) -> Result<Reply, Error> {
+        let name = self.machine_named(name)?;
+        let transport = self
+            .links
+            .locked()
+            .get(&name)
+            .map(|l| l.record.transport.clone())
+            .ok_or_else(|| Error::missing("machine", &name))?;
+        let c = self.dial(&name, &transport).await.map_err(|e| {
+            Error::new(e.code, format!("{name} didn't answer, so it wasn't updated: {}", e.message))
+        })?;
+        let theirs = plain(&c.daemon_version);
+        match c.request(Request::SelfUpdate).await {
+            Ok(Reply::Session { mut info }) => {
+                info.name = qualify(&name, &info.name);
+                info.machine = Some(name.clone());
+                // Its link (likely down for its version) is tried again while the update runs,
+                // so it comes back soon after, not at the next 5-minute retry.
+                let me = Arc::clone(self);
+                let who = name.clone();
+                tokio::spawn(async move {
+                    for _ in 0..20 {
+                        tokio::time::sleep(Duration::from_secs(15)).await;
+                        let Some(wake) = me.links.locked().get(&who).map(|l| Arc::clone(&l.wake))
+                        else {
+                            return;
+                        };
+                        wake.notify_one();
+                    }
+                });
+                Ok(Reply::Session { info })
+            }
+            Ok(_) => Err(Error::internal(format!("{name} answered something else"))),
+            // From before machines could be updated from another (protocol 1.40).
+            Err(e) if e.message.contains("unsupported") || e.message.contains("couldn't read") => {
+                Err(Error::invalid(format!(
+                    "{name} runs ptyro {theirs}, from before a machine could be updated from another: update it on {name} itself once, and from then on it can be updated from here"
+                )))
+            }
+            // Its words, as text: never a terminal's control sequences.
+            Err(e) => Err(Error::new(e.code, format!("{name}: {}", plain(&e.message)))),
+        }
+    }
+
     async fn add_machine(
         self: &Arc<Self>,
         name: Option<String>,
@@ -1384,6 +1432,12 @@ impl Daemon {
         let _ = self.mirrored.send(DomainEvent::MachineUpdated { info: info.clone() });
         Ok(Reply::Machine { info })
     }
+}
+
+/// Another machine's text, shown here: its control characters dropped (no escape sequence of
+/// its reaches this terminal), at most 2000 characters.
+fn plain(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control() || *c == '\n').take(2000).collect()
 }
 
 /// A mirror as shown: without the workspaces hidden here, and what lives only in them.

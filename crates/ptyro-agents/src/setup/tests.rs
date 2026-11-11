@@ -805,7 +805,7 @@ fn updates_cfg(check: &str, ignore: &[&str]) -> ptyro_core::config::Updates {
             ptyro_core::config::UpdateCheck::Daily
         },
         ignore: ignore.iter().map(|s| (*s).to_owned()).collect(),
-        keep_installer: Vec::new(),
+        ..ptyro_core::config::Updates::default()
     }
 }
 
@@ -1487,4 +1487,34 @@ fn a_windows_npm_leftover_is_deleted_by_its_shims_and_package_folder() {
         Platform::Linux,
     );
     assert_eq!(unix, "`rm '/home/me/.npm-global/bin/codex'`");
+}
+
+/// A new ptyro release is announced on the desktop once (SPEC §24.8), not with `notify` off.
+#[test]
+fn a_new_ptyro_release_is_announced_once() {
+    use crate::updates;
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = updates_cfg("daily", &[]);
+    assert!(updates::announce(dir.path(), &cfg).is_none(), "nothing remembered yet");
+    let row = |latest: &str| {
+        serde_json::json!({ "id": "ptyro", "name": "ptyro", "program": "ptyro",
+            "version": "0.0.68", "latest": latest, "doc": "" })
+    };
+    let write = |latest: &str| {
+        let v = serde_json::json!({ "checked": 1, "outdated": [row(latest)] });
+        std::fs::write(updates::path(dir.path()), v.to_string()).unwrap();
+    };
+    write("0.0.69");
+    cfg.notify = false;
+    assert!(updates::announce(dir.path(), &cfg).is_none(), "off says nothing");
+    cfg.notify = true;
+    assert_eq!(updates::announce(dir.path(), &cfg).map(|o| o.latest).as_deref(), Some("0.0.69"));
+    assert!(updates::announce(dir.path(), &cfg).is_none(), "said once");
+    // The next release is said again, once; one ignored isn't.
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(updates::path(dir.path())).unwrap()).unwrap();
+    v["outdated"] = serde_json::json!([row("0.0.70")]);
+    std::fs::write(updates::path(dir.path()), v.to_string()).unwrap();
+    assert!(updates::announce(dir.path(), &updates_cfg("daily", &["ptyro@0.0.70"])).is_none());
+    assert!(updates::announce(dir.path(), &cfg).is_some());
 }

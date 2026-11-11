@@ -11,6 +11,7 @@ mod cs;
 mod doctor;
 mod host;
 mod init;
+mod linked;
 mod logins;
 mod machines;
 mod mcp;
@@ -169,6 +170,9 @@ enum Cmd {
         /// Watch without typing or resizing (another client keeps control)
         #[arg(long)]
         view_only: bool,
+        /// Started in an older TUI's place after an update (`FROM:TO`, SPEC §24.8a)
+        #[arg(long, hide = true, value_name = "FROM:TO")]
+        restarted: Option<String>,
         /// Open it in a new tab of this terminal instead (tmux, Windows Terminal)
         #[arg(long, conflicts_with = "pane")]
         tab: bool,
@@ -875,6 +879,10 @@ enum Cmd {
         /// A person answers on stdin though it isn't a terminal (as for setup)
         #[arg(long, hide = true)]
         tty: bool,
+        /// Only this machine: not the machines linked to it that run an older ptyro (which are
+        /// otherwise offered too, each updating itself)
+        #[arg(long)]
+        here: bool,
     },
     /// Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in
     /// this terminal, confirmed by its own status command (ptyro never sees a credential)
@@ -1279,6 +1287,21 @@ enum MachineCmd {
     Retry {
         #[arg(add = ArgValueCandidates::new(complete::machines))]
         name: String,
+    },
+    /// Have those machines update their own ptyro (each downloads and checks the release there
+    /// and upgrades its daemon live); none named: every linked machine behind this one's version
+    Update {
+        #[arg(add = ArgValueCandidates::new(complete::machines))]
+        names: Vec<String>,
+        /// Every linked machine behind this one's version (what no name means too)
+        #[arg(long)]
+        all: bool,
+        /// Don't ask first
+        #[arg(short, long)]
+        yes: bool,
+        /// Each machine's answer as a JSON line
+        #[arg(long)]
+        json: bool,
     },
     /// Print a code for another machine to mirror this one (`ptyro machine add CODE` there)
     Pair {

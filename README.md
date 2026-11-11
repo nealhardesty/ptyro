@@ -129,8 +129,10 @@ ptyro init       # finds your agents, accounts and repositories; asks a few ques
 ptyro doctor     # checks agents, logins, integrations, terminal and tmux
 ```
 
-**Upgrading** while agents run: `ptyro update ptyro` (below) downloads the new release, checks it,
-puts it in place and upgrades the daemon live; every session keeps running. Running the install
+**Upgrading** while agents run: `ptyro update ptyro` (below; `C-q ^` in the TUI) downloads the new
+release, checks it, puts it in place and upgrades the daemon live; every session keeps running,
+and every open TUI restarts into the new ptyro with its view kept. ptyro tells you once when a
+release is out, with a desktop notification (`updates.notify`). Running the install
 script again, then `ptyro daemon upgrade`, does the same by hand.
 
 ### Agents and tools: `ptyro setup`
@@ -250,8 +252,9 @@ sessions run; `ptyro doctor` on a computer covers that computer's own.
 ```bash
 ptyro update              # update every agent that has a newer version (it shows each command and asks)
 ptyro update codex        # just one
-ptyro update ptyro        # ptyro itself
+ptyro update ptyro        # ptyro itself (and the machines linked here that are behind)
 ptyro update --check      # only look now, and say what's out of date
+ptyro machine update      # just the linked machines behind this one, each updating itself
 ```
 
 - **ptyro itself.** Its newer release is downloaded only once you say yes, checked against the
@@ -264,6 +267,12 @@ ptyro update --check      # only look now, and say what's out of date
   (cargo, a system package, Nix or Guix), ptyro says how to update it and never replaces it. In a folder only
   an administrator can write (`/usr/local/bin`), `ptyro update ptyro` in a terminal asks for your
   password (sudo); the web app shows the command to run there instead.
+- **Everything at once.** After the update every open TUI restarts into the new ptyro by itself,
+  once it's idle (not while a dialog or a chat draft is open), keeping its panes and selection.
+  The machines linked here (`ptyro machine`) on an older ptyro are offered in the same question;
+  each updates itself, with the same checks, and its link comes back by itself (`--here`: only
+  this machine). One left behind is brought up later with `ptyro machine update`, the TUI's row
+  menu, or the web's machine menu.
 - **Each the way it was installed.** The update is the vendor's own (`claude update`, Codex's
   installer again), or for an agent you installed with npm or Homebrew, that tool's
   (`npm install -g @openai/codex@latest`), with the move to the vendor's installer offered beside

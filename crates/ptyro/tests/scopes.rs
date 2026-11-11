@@ -261,6 +261,9 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"machine_remove","name":a}), FULL, true),
         s(json!({"t":"machine_hide","name":a,"workspace":"main","hidden":true}), FULL, true),
         s(json!({"t":"machine_retry","name":a}), FULL, true),
+        // Updating ptyro, here or there (SPEC §24.8): it replaces the binary.
+        s(json!({"t":"machine_update","name":a}), FULL, true),
+        s(json!({"t":"self_update"}), FULL, false),
         s(json!({"t":"device_revoke","id":a}), FULL, false),
         s(json!({"t":"save_view","name":"x","view":{}}), FULL, false),
         s(json!({"t":"reload_config"}), FULL, false),

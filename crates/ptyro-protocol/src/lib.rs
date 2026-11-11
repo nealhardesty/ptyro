@@ -40,7 +40,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 39 };
+pub const PROTO: Version = Version { major: 1, minor: 40 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -432,6 +432,16 @@ pub enum Request {
     MachineRetry {
         name: String,
     },
+    /// Have that machine update its own ptyro (1.40, SPEC §24.8): over a connection of its own,
+    /// whatever the link's state (a version mismatch included), it is sent `SelfUpdate`. Replies
+    /// `Session` (the session there, its name qualified `turkey:…`).
+    MachineUpdate {
+        name: String,
+    },
+    /// Update this machine's own ptyro (1.40): `ptyro update ptyro --yes --here` in a session of
+    /// its own on this daemon (it survives the daemon's live upgrade at its end). Refused for a
+    /// binary an administrator or a package manager owns, and a build. Replies `Session`.
+    SelfUpdate,
     /// What quick new (`SpawnSpec.again`) starts in `worktree` (an address; none: outside one):
     /// its last agent, else its project's default agent, else the default agent (1.26, UX3.7).
     /// `workspace` is no longer read (1.19 asked by workspace). Replies `LastLaunch`.

@@ -602,7 +602,7 @@ pub struct Config {
 
 /// Newer versions of your agents (BOOT5, SPEC §24.7): looked for at most once a day, offered,
 /// never installed without you.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Updates {
     /// `daily`: the daemon looks for newer versions once a day (`doctor` looks afresh); `off`:
@@ -613,6 +613,19 @@ pub struct Updates {
     /// Agents kept the way they were installed (BOOT7: `codex`): the move to the vendor's
     /// recommended installer isn't offered again, and they update the way they're installed.
     pub keep_installer: Vec<String>,
+    /// A desktop notification once per new ptyro release (SPEC §24.8), outside quiet hours.
+    pub notify: bool,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            check: UpdateCheck::default(),
+            ignore: Vec::new(),
+            keep_installer: Vec::new(),
+            notify: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

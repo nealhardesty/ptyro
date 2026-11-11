@@ -25,6 +25,7 @@ mod pad;
 pub mod paint;
 pub mod palette;
 mod quick;
+mod restart;
 mod runs;
 mod screens;
 mod sets;
@@ -74,6 +75,10 @@ pub enum AttachEnd {
     /// The user asked for the tour (`help.tour`): it runs in a ptyro of its own, then this TUI
     /// comes back.
     Tour,
+    /// An update replaced this TUI's binary and upgraded the daemon (`from` → `to`): the CLI
+    /// starts the new binary in its place, attached to the same workspace (`session`: raw mode's
+    /// one session), never the command that first started this one (SPEC §24.8a).
+    Restart { from: String, to: String, workspace: String, session: Option<String> },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94,6 +99,8 @@ pub struct Options {
     pub welcome: bool,
     /// Open this chat's view (`ptyro chat open`).
     pub chat: Option<String>,
+    /// Started in an older TUI's place (`from`, `to`: the version it meant to start).
+    pub restarted: Option<(String, String)>,
 }
 
 const FRAME: Duration = Duration::from_millis(8);
@@ -213,7 +220,9 @@ async fn event_loop(
         Err(_) => return Ok(AttachEnd::Lost("the daemon did not answer".into())),
     }
     app.restore_view().await;
-    app.welcome();
+    if !app.restarted() {
+        app.welcome();
+    }
     // Typed while we asked the terminal for its colours, before anything read keys.
     for k in &typed {
         app.on_key(k);

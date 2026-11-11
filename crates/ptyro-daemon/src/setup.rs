@@ -205,6 +205,7 @@ impl Daemon {
             loop {
                 if me.config().updates.check == ptyro_core::config::UpdateCheck::Daily {
                     let (paths, state) = (me.paths.clone(), me.paths.state.clone());
+                    let d = Arc::clone(&me);
                     let _ = tokio::task::spawn_blocking(move || {
                         let host = setup::host(&paths);
                         let now = updates::now();
@@ -217,12 +218,80 @@ impl Daemon {
                                 v.failed.len()
                             );
                         }
+                        d.announce_release(&state);
                     })
                     .await;
                 }
                 tokio::time::sleep(knob_ms("PTYRO_TEST_UPDATES_EVERY_MS", UPDATES_EVERY)).await;
             }
         });
+    }
+
+    /// `SelfUpdate` (SPEC §24.8): this machine's ptyro updates itself, in a session of its own
+    /// (`ptyro update ptyro --yes --here`: this machine only, so a machine asked by another never
+    /// asks its own links back). The session outlives the daemon's live upgrade at its end.
+    pub(crate) async fn self_update(self: &Arc<Self>) -> Result<Reply, Error> {
+        if let Some(by) = setup::lock::Lock::held_by(&self.paths.state) {
+            return Err(Error::conflict(setup::lock::busy(&by)));
+        }
+        let install = tokio::task::spawn_blocking(ptyro_agents::own::Install::here)
+            .await
+            .map_err(|e| Error::internal(e.to_string()))?;
+        let machine = self.machine();
+        match &install.how {
+            ptyro_agents::own::How::Admin => {
+                return Err(Error::invalid(format!(
+                    "{machine}'s ptyro ({}) can only be replaced as administrator: update it in a terminal on {machine}",
+                    install.path.display()
+                )));
+            }
+            ptyro_agents::own::How::Managed(m) => {
+                return Err(Error::invalid(format!(
+                    "{machine}'s ptyro was installed with {m}: update it that way on {machine}"
+                )));
+            }
+            ptyro_agents::own::How::Build => {
+                return Err(Error::invalid(format!(
+                    "{machine}'s ptyro is a build ({}): it updates by building again",
+                    install.path.display()
+                )));
+            }
+            ptyro_agents::own::How::Release | ptyro_agents::own::How::Brew => {}
+        }
+        let exe =
+            std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
+        let exe = ptyro_agents::own::installed_name(&exe).to_string_lossy().into_owned();
+        let home = ["HOME", "USERPROFILE"]
+            .into_iter()
+            .find_map(|v| std::env::var_os(v).filter(|h| !h.is_empty()))
+            .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+        let spec = ptyro_core::session::SpawnSpec {
+            argv: vec![exe, "update".into(), "ptyro".into(), "--yes".into(), "--here".into()],
+            cwd: home,
+            name: Some(self.free_name(None, "update-ptyro")),
+            confirmed: true,
+            ..ptyro_core::session::SpawnSpec::default()
+        };
+        let s = self.spawn(spec).await?;
+        Ok(Reply::Session { info: self.info(&s) })
+    }
+
+    /// A new ptyro release, once (`updates.notify`, SPEC §24.8): a desktop notification saying
+    /// how to update. In quiet hours it waits (not marked said), so it comes after them.
+    pub(crate) fn announce_release(&self, state: &std::path::Path) {
+        if self.quiet_now() {
+            return;
+        }
+        let Some(o) = updates::announce(state, &self.config().updates) else { return };
+        let how = match (&o.managed, o.admin) {
+            (Some(m), _) => format!("It was installed with {m}: update it that way."),
+            (None, true) => "It is replaced as administrator: update it in a terminal on this computer.".to_owned(),
+            (None, false) => "Update it from ptyro: the TUI's update (its health badge), or Health in the web app. Your sessions carry on.".to_owned(),
+        };
+        self.notify_desktop(
+            &format!("ptyro {} is out", o.latest),
+            &format!("You have {}. {how}", o.version),
+        );
     }
 
     /// `Updates` (BOOT5): what is out of date here, for a TUI's badge and start-up note, which

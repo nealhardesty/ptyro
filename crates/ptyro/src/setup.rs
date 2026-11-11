@@ -403,6 +403,8 @@ pub struct UpdateArgs {
     pub yes: bool,
     pub json: bool,
     pub tty: bool,
+    /// This machine only, not the machines linked to it (SPEC §24.8).
+    pub here: bool,
 }
 
 /// `ptyro update [NAME…] [--check]` (BOOT5, SPEC §24.7): look for newer versions afresh, then
@@ -516,6 +518,35 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         .cloned()
         .collect();
     let ptyro_todo = todo.iter().find(|o| o.id == own::ID).cloned();
+    // The machines linked here on an older ptyro than this one will run (SPEC §24.8): offered
+    // too, each updating itself. Not with `--here` (a machine asked by another), nor when only
+    // agents were named.
+    // Each of them installs the newest release (`SelfUpdate`), so they are offered only when
+    // this machine ends up on it too: otherwise they would pass it, and their links stay down
+    // the other way.
+    let target = ptyro_todo.as_ref().map_or_else(
+        || own::version_of(&install.path).unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_owned()),
+        |o| o.latest.clone(),
+    );
+    let linked = if a.here || !(ids.is_empty() || ptyro_named) {
+        Vec::new()
+    } else {
+        let behind = crate::linked::behind(ctx, &target).await;
+        if !behind.is_empty() && ptyro_latest.as_deref() != Some(target.as_str()) {
+            eprintln!(
+                "note: machines linked here run an older ptyro ({}), but this machine won't be on the newest release, so they aren't offered (they'd pass it): `ptyro machine update` asks them anyway",
+                behind
+                    .iter()
+                    .map(|b| format!("{} {}", b.name, b.version))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            Vec::new()
+        } else {
+            behind
+        }
+    };
+    let linked_names: Vec<String> = linked.iter().map(|b| b.name.clone()).collect();
     if !a.json {
         for id in ids.iter().filter(|id| !todo.iter().any(|o| &o.id == *id)) {
             eprintln!("{}", standing(id, &v, &survey));
@@ -526,10 +557,21 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
             say_where_each_stands(&v, &survey, &cfg, &[]);
         }
         drop(lock);
+        let mut ok = true;
         if let (Some(h), Some(now)) = (&half, own::version_of(&install.path)) {
-            return Ok(if crate::own::keep_in_step(h, &now, a.json).await { 0 } else { 1 });
+            ok = crate::own::keep_in_step(h, &now, a.json).await;
         }
-        return Ok(0);
+        // This machine is current; machines linked to it may not be.
+        if !linked.is_empty() {
+            eprintln!("\nThis machine runs ptyro {target}; machines linked here are behind:");
+            eprintln!("{}", crate::linked::question_line(&linked, &target));
+            if a.yes || confirm("Update them? [Y/n] ") {
+                ok &= crate::linked::update_them(ctx, &linked_names, a.json).await;
+            } else {
+                eprintln!("They weren't asked: `ptyro machine update` asks them later.");
+            }
+        }
+        return Ok(if ok { 0 } else { 1 });
     }
     let todo_ids: Vec<String> = todo.iter().map(|o| o.id.clone()).collect();
     let running = sessions_running(ctx, &todo_ids).await;
@@ -548,6 +590,9 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
                         .map_or("(version unknown)".into(), |v| format!("{v} → {}", o.latest))
                 );
             }
+        }
+        if !linked.is_empty() {
+            eprintln!("{}", crate::linked::question_line(&linked, &target));
         }
         for o in todo.iter().filter(|o| o.id != own::ID) {
             let how = o.command.as_deref().map(|c| format!(": `{c}`")).unwrap_or_default();
@@ -713,6 +758,17 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         && !crate::own::keep_in_step(h, v, a.json).await
     {
         failed.push("the other half".into());
+    }
+    // Then the machines linked here, once this one is on the release they will install (asked
+    // over connections of their own, so their links being down for the version doesn't matter).
+    if !linked.is_empty() {
+        if ptyro_todo.is_some() && ptyro_new.is_none() {
+            eprintln!(
+                "The machines linked here weren't asked, since this machine's ptyro wasn't updated: `ptyro machine update` asks them once it is."
+            );
+        } else if !crate::linked::update_them(ctx, &linked_names, a.json).await {
+            failed.push("a linked machine".into());
+        }
     }
     if !a.json {
         for id in &done {
@@ -1104,7 +1160,7 @@ fn answer(q: &str) -> Answer {
 }
 
 /// A `[Y/n]` question; nothing typed is yes, end of input is no.
-fn confirm(q: &str) -> bool {
+pub(crate) fn confirm(q: &str) -> bool {
     eprint!("{q}");
     let _ = std::io::stderr().flush();
     let mut s = String::new();

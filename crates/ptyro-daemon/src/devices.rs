@@ -269,7 +269,7 @@ pub fn needed(req: &Request) -> Scope {
         }
         ShellSplit { .. } | ShellJoin { .. } | ShellLayout { .. } => Scope::Full,
         // Everything else changes the machine, the config, the daemon or who may talk to it.
-        MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } => Scope::Full,
+        MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } | MachineUpdate { .. } | SelfUpdate => Scope::Full,
         // It copies coding history into chat.db, as `[chat] import` (a setting: full) does.
         ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).

@@ -306,6 +306,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `machine hide` | `machine.hide`: the row menu of one of its workspaces | `machine.hide`: a machine's menu → Hide WORKSPACE here |
 | `machine unhide` | `machine.unhide`: a picker of the hidden workspaces | `machine.unhide`: a machine's menu → Show WORKSPACE again |
 | `machine retry` | `machine.retry`: first in the row menu of its workspace while it's down | `machine.retry`: a machine's menu → Try its link now |
+| `machine update` | `machine.update`: first in the row menu of its workspace while it runs an older ptyro, or the palette (a picker of the machines); then `machine update` full sized (it asks first) | `machine.update`: a machine's menu → Update its ptyro (asks first) |
 | `machine pair` | `machine.pair`: a form with the address it reaches this machine at, then the code, full sized | `machine.pair`: More → Machines → Make a code: the address (optional), then the code |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
 | `open-url` (hidden) | waived: Windows runs it when a toast or a `ptyro:` link is clicked; the TUI opens sessions in tabs with `session.tab` | waived: Windows runs it when a toast is clicked; the web app opens a session on the computer with ⋯ → Open on the computer |

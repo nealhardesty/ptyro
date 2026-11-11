@@ -305,6 +305,26 @@ export function selfUpdate(o) {
         : `downloads the release, checks it against its SHA256SUMS (and its signed provenance where gh is installed), and replaces ${o.path ?? "ptyro"}`;
     return { kind: "run", what };
 }
+/// `a` is a later version than `b` (`0.0.69` > `0.0.68`), as the CLI compares them.
+export function newer(a, b) {
+    const parts = (v) => v.split(/[^0-9]+/).filter(Boolean).map(Number);
+    const x = parts(a), y = parts(b);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+        const d = (x[i] ?? -1) - (y[i] ?? -1);
+        if (d)
+            return d > 0;
+    }
+    return false;
+}
+/// The machines linked here that `ptyro update ptyro` brings to `target` too (SPEC §24.8): those
+/// reachable (online, or down only for their version) on an older ptyro.
+export function linkedBehind(machines, target) {
+    const out = [];
+    for (const m of machines)
+        if ((m.state === "online" || m.state === "mismatch") && m.version && newer(target, m.version))
+            out.push(`${m.name} ${m.version}`);
+    return out;
+}
 /// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
 /// update leaves them on the old version until they restart, so the page names them.
 export function runningAgent(sessions, id) {

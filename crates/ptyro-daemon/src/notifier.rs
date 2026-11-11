@@ -806,6 +806,43 @@ fn toast_env(note: &Note, remote: Option<&str>) -> Vec<(&'static str, String)> {
     env
 }
 
+impl Daemon {
+    /// A desktop notification that isn't about a session (a new ptyro release): the desktop
+    /// channel's own way (or `desktop_command`). The caller minds quiet hours ([`quiet_now`]).
+    pub(crate) fn notify_desktop(&self, title: &str, body: &str) {
+        let config = self.config();
+        let n = &config.notifications;
+        let note = Note {
+            session: String::new(),
+            session_name: String::new(),
+            kind: AttentionKind::Done,
+            title: title.to_owned(),
+            body: body.to_owned(),
+            profile: String::new(),
+            workspace: None,
+            project: None,
+            approve_url: None,
+            deny_url: None,
+        };
+        let r = desktop(&note, n.desktop_command.as_deref());
+        tracing::info!("desktop notification: {r}");
+    }
+
+    /// The quiet hours are on now.
+    pub(crate) fn quiet_now(&self) -> bool {
+        let config = self.config();
+        config
+            .notifications
+            .quiet_hours
+            .as_deref()
+            .and_then(|q| parse_quiet_hours(q).ok())
+            .is_some_and(|q| {
+                ptyro_pty::local_time_hm()
+                    .is_some_and(|(h, m)| in_quiet_hours(q, u16::from(h) * 60 + u16::from(m)))
+            })
+    }
+}
+
 fn desktop(note: &Note, custom: Option<&[String]>) -> String {
     // Natively on Windows (WIN10): PowerShell, with no window.
     if custom.is_none() && cfg!(windows) {

@@ -12,6 +12,7 @@ const ACTIONS = {
     "machine.add": "Show another machine's workspaces here: over ssh, or with the code `ptyro machine pair` printed on it",
     "machine.pair": "A code for another machine to show this one's workspaces (`ptyro machine add CODE` there)",
     "machine.retry": "Try a machine's link again now",
+    "machine.update": "Have a machine update its own ptyro: it downloads the newest release there, checks it against SHA256SUMS and upgrades its daemon live (its sessions carry on)",
     "machine.hide": "Don't show one of a machine's workspaces here (nothing changes there)",
     "machine.unhide": "Show a hidden workspace of a machine again",
     "machine.remove": "Stop showing a machine's workspaces here (nothing changes there)",
@@ -53,6 +54,7 @@ function machinesView() {
 function machineMenu(m) {
     menu(m.name, [
         { title: tip("machine.retry"), label: "Try its link now", hint: m.state === "online" ? "It is online" : m.fix ?? "", run: async () => { await ask({ t: "machine_retry", name: m.name }, `Trying ${m.name}…`); } },
+        { title: tip("machine.update"), label: "Update its ptyro", hint: m.version ? `It runs ${m.version}` : "Its version isn't known yet", run: () => confirm(`Update ptyro on ${m.name}?`, `${m.name} downloads the newest ptyro release, checks it against SHA256SUMS, replaces its binary and upgrades its daemon live: its sessions carry on, and its link comes back by itself. It runs in a session there, which shows here once its link is back.`, "Update", async () => { await ask({ t: "machine_update", name: m.name }, `${m.name} is updating itself`); }) },
         ...m.workspaces.filter((w) => !m.hidden.includes(w)).map((w) => ({ title: tip("machine.hide"), label: `Hide ${w} here`, hint: "Nothing changes there", run: async () => { await ask({ t: "machine_hide", name: m.name, workspace: w, hidden: true }, `${m.name} / ${w} is hidden here`); } })),
         ...m.hidden.map((w) => ({ title: tip("machine.unhide"), label: `Show ${w} again`, run: async () => { await ask({ t: "machine_hide", name: m.name, workspace: w, hidden: false }, `${m.name} / ${w} is shown again`); } })),
         { title: tip("machine.remove"), label: "Stop showing it here", danger: true, hint: "Nothing changes on it", run: () => confirm(`Stop mirroring ${m.name}?`, "Its workspaces leave this list. Nothing changes on it, and its pairing stays until you revoke it there.", "Stop", async () => { await ask({ t: "machine_remove", name: m.name }, `${m.name} is no longer shown here`); }) },
