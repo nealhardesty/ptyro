@@ -17,6 +17,8 @@ This file is the source of truth for **what others are doing and what we might l
 Nothing here is a commitment. An idea becomes work only when it is promoted into `ROADMAP.md` with a task id.
 
 **Last full sweep:** 2026-10-20 (ten parallel research passes, over 100 products and sources).
+**Last partial sweep:** 2026-11-11 (orchestration emphasis; one research pass, web only; the
+watchlist re-checked, 12 new entries, about 30 updated; see §II.6 and the Changelog).
 **Next sweep due:** 2027-01 (see §IV.4 for the cadence).
 
 ---
@@ -24,15 +26,17 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 ## Contents
 
 - [How to use and maintain this document](#how-to-use-and-maintain-this-document)
-- [Executive summary](#executive-summary-2026-10-20) · [Landscape map](#landscape-map)
+- [Executive summary](#executive-summary-2026-10-20) ·
+  [Addendum 2026-11-11](#addendum-2026-11-11-what-three-weeks-changed) · [Landscape map](#landscape-map)
 - **Part I — Product catalogue:** A. TUI/tmux managers · B. GUI workspaces · C. Terminals & multiplexers
   (+ protocol landscape) · D. Cloud/async agents · E. Remote & mobile · F. Orchestration products ·
   G. Agent CLIs & adjacent tooling · H. Chat clients and conversation history
 - **Deep dives — herdr and tuios:** DD1 herdr · DD2 tuios (identity, architecture, status model, OSC 7501 interop, head-to-head, ideas)
 - **Deep dive — Windows and PowerShell:** DD3 (how others ship on Windows, platform facts, ptyro's Unix surface, design options, stages)
 - **Part II — Orchestration deep dive:** practitioners · research evidence · workflow engines ·
-  coordination protocols · synthesis (recipe primitives, `ptyro mcp`, mailbox, delivery, M10)
-- **Part III — Idea funnel:** Top 15 · full catalogue (R-ids) · not recommended
+  coordination protocols · synthesis (recipe primitives, `ptyro mcp`, mailbox, delivery, M10) ·
+  [II.6 What changed, 2026-11 sweep](#ii6-what-changed-2026-11-sweep)
+- **Part III — Idea funnel:** Top 15 · full catalogue (R-ids, with the 2026-11 sweep's rows last) · not recommended
 - **Part IV — Watchlist, re-checks, SPEC §20 candidates, cadence, positioning** · Changelog
 
 ---
@@ -129,6 +133,58 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 **Top 15 idea candidates** are in **§III.1**. The orchestration deep dive the owner asked for is
 **Part II**.
 
+### Addendum (2026-11-11): what three weeks changed
+
+The summary above stands. This addendum records what the 2026-11 partial sweep found; the detail
+and the sources are in **§II.6**. Marks as everywhere: [V] the vendor's own page was fetched on
+2026-11-11, [S] secondary only.
+
+1. **Every large vendor now ships the same four orchestration shapes.**
+   - A **command center** for background sessions: Claude `claude agents` (still a research
+     preview), Codex **`codex agents`** (labelled *Stable* in the docs), GitHub Mission Control [V].
+   - **Scripted workflows:** Claude dynamic workflows; **Copilot dynamic workflows** (public
+     preview, 2026-10-01) [V].
+   - **Lead and subagents:** Claude agent teams (still experimental), Copilot `/fleet`, OpenCode 2
+     background subagents [V/S].
+   - A **cloud coordinator over many sessions:** **Claude Projects** (public beta), Copilot's
+     connected cloud experience (GA rollout from 2026-10-28), Amp Spaces (2026-11-06) [V].
+2. **Three things this document said the vendors lack are no longer missing.**
+   - Codex CLI has **`--worktree`** and a command center (A17 and G2 said it had neither) [V].
+   - Copilot's dynamic workflows **pause at checkpoints for a human** and resume [V]. Claude's
+     workflows still have "no mid-run user input" [V], so mid-run gates set ptyro apart from
+     Claude, not from every vendor.
+   - Claude Code 2.1.319 added **MCP task support** [V]. "No coding CLI implements Tasks" (item 5
+     above, §II.4, §III.3) is out of date for Claude Code.
+3. **The vendors' phones now steer your own machine.** Claude Remote Control did already. Codex
+   has `codex remote-control start|stop|pair` (experimental) and GitHub Mobile starts and steers
+   sessions on a local device registered through Mission Control (2026-10-28) [V]. Each is one
+   vendor only; ptyro's remote is still the only one that shows any program.
+4. **The research since the summer backs evidence-first orchestration and argues against
+   coordination by chat** (§II.6):
+   - Two agents on one codebase with no orchestrator: 62% → 16% on contradictory tasks, and a
+     chat channel recovers little (ParallACT, 2026-10-30) [V].
+   - A designated coordinator gives no reliable gain; shared files cut output tokens by about
+     42% at eight agents (1,902 runs, 2026-08) [V].
+   - 27.67% of 107k agent pull requests conflict on merge (AgenticFlict) [V]; merged agent PRs
+     draw follow-up fixes at 1.62× the odds of human ones [V].
+   - The gap between visible and held-out tests grows 28 points per tenfold growth in code size
+     (SpecBench) [V].
+5. **OSC 7501 is spreading without changing.** The spec is still rev 0.4 (2026-10-10) [V].
+   **kitty 0.50.0** (2026-11-03) shows the status in its tab bar, the first mainstream terminal to
+   do so; **Ghostty 1.4.0** (2026-10-27) parses it but "the Ghostty GUI ignores it for now" [V].
+   herdr still has no release with it.
+6. **Renames and moves:** Superset is now **Paradev** (MIT, was Elastic); Composio's Agent
+   Orchestrator is now **Orchestrator.inc** (Apache-2.0, 14.4k★, desktop and phone apps); Goose
+   lives at `aaif-goose/goose`; `srt` at `anthropics/sandbox-runtime` with a Windows alpha [V].
+   One correction against ptyro's interest: **thurbox's README no longer shows one session
+   spanning several repositories**, so the "closest to change sets" note needs a re-check.
+7. **What it means for ptyro.** Host and show the vendors' own orchestrators (a row per Claude
+   workflow, team, Codex task, Copilot fleet) instead of rebuilding them. Put the work into what
+   only a neutral host can do: runs that cross vendors, review by a different model family,
+   **rehearsing parallel branches merged together before any lands**, evidence that a `done` is
+   real, identity per workspace, and a real terminal that outlives everything. 24 new ideas are
+   in §III.2 "From the 2026-11 sweep".
+
 ---
 
 ## Landscape map
@@ -142,6 +198,13 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 | **E. Remote / mobile companions** | Phone control of local agents | Claude Remote Control, Happy, Paseo, Happier, CloudCLI, CC Pocket | Medium. They ship today; ptyro's M9 is planned | Terminal fidelity for any program, vendor-neutral, profiles |
 | **F. Orchestration** | Lead/worker, swarms, recipes, specs, task boards | Claude teams/workflows, Gas Town + beads, Ruflo, Composio AO, Goose, Spec Kit, Kiro | **High** for M7's novelty | Cross-vendor, policy, gates, verified-done, compare, multi-repo |
 | **G. Agent CLIs and adjacent tools** | The agents ptyro hosts; usage, sandbox, recording | Claude Code, Codex, Antigravity, OpenCode, Copilot, Droid; ccusage, sbx, srt, asciinema 3 | Integration surface, not competitors | — |
+
+**2026-11-11:** the map holds, with two shifts. Segment G is no longer only "integration surface":
+Codex (`codex agents`, `--worktree`) and Copilot (`/fleet`, dynamic workflows, Mission Control)
+joined Claude Code in shipping their own session manager, so for a single-vendor user each agent
+CLI now competes with segment A. And segment F gained a layer that sits *beside* any host rather
+than replacing it: coordination services over MCP or hooks (hcom, Concord MCP, fanout, F23–F24,
+A19). Star counts checked on 2026-11-11 are in the entries.
 
 ---
 
@@ -170,6 +233,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **Class:** agent-aware terminal multiplexer/runtime, own PTYs · Apache-2.0 per GitHub API [V] (a July 2026 source said AGPL + commercial — relicensing unverified) · "Herdr Cloud" waitlist
 - **Stack:** Rust single binary (~10 MB); repo contains `crates/ghostty-vt` (likely libghostty-based VT, inferred)
 - **Maturity [V 2026-10-20]:** 44,935★; v0.9.5 (2026-10-14); 380 open issues; #1 GitHub Trending ~2026-06-30 [S]; pre-1.0, largely solo [S]; site claims 1,789 community plugins.
+- **Update [V 2026-11-11]:** 50,256★ (GitHub API); still v0.9.5 (2026-10-14), so no release in four weeks, last push 2026-11-07; Apache-2.0. v0.9.4 (2026-10-13) added `herdr plugin update`, worktree groups that survive an unavailable checkout, and Windows notifications that jump to their pane; v0.9.2 let agents report their own resume command. The release notes name no OSC 7501, cloud or 1.0 (https://github.com/herdrdev/herdr/releases). The ecosystem keeps filling its gaps [S, awesome-agent-orchestrators 2026-11-11]: **Collie** (self-hosted phone PWA with push), **Roamgate** (browser/PWA client), **Perch** (macOS notch approvals that jump to a herdr pane), **herduck** (a derivative that groups sessions by the piece of work they serve).
 - **What it is:** background server keeps terminals alive across client exit and SSH drops; after reboot restores layout and resumes supported agent sessions (processes don't survive). tmux-style prefix + mouse; sidebar of workspaces → tabs → panes, each agent labelled working/blocked/idle/done; detects 22 agent CLIs; CLI + socket API so agents split panes, start and prompt other agents, wait on state; remote machines over SSH (`herdr machine add`, `herdr --remote ssh://…`) merged into one list; macOS, Linux, Windows (beta).
 - **Special:**
   - Layered state detection [V]: remotely updated per-agent **detection manifests** with local overrides (`~/.config/herdr/agent-detection/<agent>.toml`) and hot reload; integration hooks (`herdr integration install claude|codex|…`); **self-report** via `herdr pane report-agent --state` / `report-metadata`.
@@ -184,6 +248,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **URL:** https://code.claude.com/docs/en/agent-view · `/worktrees` · `/agent-teams`
 - **Class:** built into ptyro's primary agent · proprietary, subscription quota
 - **Maturity [V]:** Agent View launched 2026-05-11 (v2.1.139), research preview; Agent Teams experimental.
+- **Update [V 2026-11-11]:** Claude Code 2.1.322 (2026-11-10). Agent view is still "Research preview" and agent teams still "Experimental and disabled by default" (https://code.claude.com/docs/en/agents). Since 2.1.311 (https://code.claude.com/docs/en/changelog): an agent-view row shows the error when a `--bg --worktree` session could not set up its worktree (2.1.321); `/tasks` lists finished subagents under "Earlier in this session" so one can be reopened and messaged (2.1.319); `SendMessage` reaches a running background agent sooner (2.1.317); a sandbox escape when creating a worktree was fixed (2.1.319). The docs now count **five** ways to run in parallel: subagents, agent view, agent teams, dynamic workflows and **Projects** (D11).
 - **What it is:** `claude agents` is one table of every background session; a per-user **supervisor** hosts sessions that survive supervisor restarts, auto-updates and sleep. Groups Pinned / Ready for review / Needs input / Working / Completed; **Haiku-generated one-line row summaries**; linked PR status coloured by PR/CI state; **Peek** (Space) shows the pending question; **inline reply**, numbered choices by number; attach/detach with →/←; dispatch bar with `@subagent`, `@repo`, `/skill`, `! cmd`, `#PR`. Background sessions move into `.claude/worktrees/<id>` before writing; commit, push, draft PR, never main or force-push. `claude --bg`, `--exec` (shell job, no model), `attach`, `logs`, `stop`, `respawn --all`, `rm` (refused with unpushed commits), `claude agents --json`, `daemon status|logs|stop`. **Auto-shelving**: idle unattached sessions stop after ~1 h and resume on attach. `claude --worktree`: **`.worktreeinclude`** (gitignore syntax), `worktree.baseRef`, **`--worktree "#1234"`** from a PR/MR, `git worktree lock` while running, periodic stale sweep, `WorktreeCreate`/`WorktreeRemove` hooks for other VCS, edits to the main checkout blocked.
 - **Special:** first-party knowledge of Claude's state (permission prompts, MCP input requests); PR/CI-driven "Ready for review" grouping; summaries; peek/reply; careful worktree safety (unpushed refusal, locks, sweep, submodule/LFS, symlink refusal); documented state under `~/.claude/jobs/`.
 - **Gaps:** AI row summaries; PR/CI-aware grouping; peek + inline reply; auto-shelve; worktree from PR; `.worktreeinclude`; worktree locking.
@@ -196,6 +261,9 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **URL:** https://github.com/Gaurav-Gosain/tuios · tuios.dev · MIT
 - **Stack:** Go, Charm (Bubble Tea v2, Lipgloss v2)
 - **Maturity [V]:** 5,529★; v0.10.1 (2026-10-17); very active.
+- **Update [V 2026-11-11]:** 6,496★; v0.12.1 (2026-10-31); MIT (https://github.com/Gaurav-Gosain/tuios/releases). v0.11.0 (10-25): an **agent cockpit** (`ctrl+b i`) with threads, diffs and an Artifacts tab; the New agent sheet starts **up to 8 attempts**, `c` compares them and **`j` starts a judge agent**; lock mode; plugins installed from git with approval. v0.12.0 (10-30): a **task board** with cards linked through `fan` and `start-agent`, a **Settled shelf** for finished agents, **calm mode**, **return notes**, `tuios tutor`, file drag-and-drop into panes. **Five security advisories in a week** (v0.11.0–v0.12.0): one pane could answer another pane's agent (GHSA-78rj-pghh-vh42); a linked machine could read or overwrite files; repository hooks ran outside a pane; pane text typed commands at the prompt; a denial of service in `tuios ssh` (GHSA-m75w-mvwc-578j). The OSC 7501 revision it implements was not re-checked [U].
+- **Gaps (2026-11-11):** the judge key and the 8-way attempt sheet are one keypress from the create dialog; a board tied to fan-out; the shelf and calm mode as attention controls. **Lesson:** the advisories are the cost of the pace, and each one is a check for ptyro's own surface: can one session answer another's approval, can a paired machine write outside its sessions, do repository hooks run outside the worktree, can pane text reach a prompt.
+- **Ideas (2026-11-11):** → R-UX-45 (settled shelf, calm mode, return notes), R-SEC-08 (the four checks as a standing test).
 - **What it is:** terminal window manager + multiplexer with its own daemon (survives detach, daemon restart, reboot with layout/cwd restore); BSP / master-stack / scrolling tiling; 9 workspaces; vim-style modal keys; palette; zoom. `tuios integration install` wires 19 harnesses; detects 24 agent CLIs. **Inbox (Prefix+i)** — approvals, questions, mail, errors, finished turns across sessions *and machines*, answerable inline. `tuios ask-human`, `tuios send-agent-message`. **`tuios fan`** — one prompt to several agents, each in its own worktree; `tuios worktree pull` from remote machines. SSH server mode; Tailscale attach; **tape DSL** to record/replay/run headless; JSON verb protocol; hooks on 10 events; `tuios-web`.
 - **Special:** OSC 7501 implementation with a formal **precedence ladder** — report > program > osc > screen > stall > detect; a source may only overwrite claims at or below its rank; a losing report returns `"applied": false`; a **visible-blocker override** lets a screen rule briefly beat a stale higher-ranked claim (claim ≥2 s old and output printed since). Also consumes herdr's pane state protocol.
 - **Gaps:** formally specified precedence with `applied:false`; actionable cross-machine inbox; `kind=auth`; tape record/replay (ptyro M8 recorder); fan-out shipped (ptyro M7).
@@ -205,6 +273,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 #### A4. Claude Squad (smtg-ai)
 - **URL:** https://github.com/smtg-ai/claude-squad · **AGPL-3.0** · Go, needs tmux + gh
 - **Maturity [V]:** 8,632★; v1.0.20 (2026-08-20), activity slowed.
+- **Update [V 2026-11-11]:** 8,783★; **last push 2026-08-20**, no release since (GitHub API). Twelve weeks without a commit: treat it as resting.
 - **What it is:** each agent (Claude, Codex, OpenCode, Amp, Gemini, Aider) in its own tmux session + worktree; preview & diff tabs; `c` commit-and-pause, `s` commit-and-push; experimental `--autoyes`; named program profiles; `cs`.
 - **Special:** simplest mental model; **"pause"** commits WIP and releases the worktree so the branch can be checked out in the main repo.
 - **Gaps:** pause/resume; opt-in auto-yes (not on ptyro roadmap).
@@ -214,6 +283,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 #### A5. Agent of Empires (AoE)
 - **URL:** https://github.com/agent-of-empires/agent-of-empires · MIT (one file Apache-2.0 from herdr) · Rust
 - **Maturity [V]:** 3,370★; v1.20.0 (2026-10-15); 169 open issues.
+- **Update [V 2026-11-11]:** 4,134★; v1.22.3 (2026-11-09) (https://github.com/agent-of-empires/agent-of-empires/releases). The "Structured View" is confirmed as **ACP** and is now the default where it can start (v1.22.1); **structured fork** through `claude-agent-acp` 0.94.0 and ACP sessions kept running while a background task is open (v1.22.0); subagent children folded under their parent (v1.21.0); **`acp switch-account`** and `restart --tool` switch a Claude account under a running session (v1.22.3); the CLI creates sessions through the daemon and the HTTP create call accepts a **parent session** (v1.22.1); resume of sandboxed Codex sessions from a verified private store (v1.22.3).
 - **What it is:** each agent in a tmux session; 16 agents auto-detected (deprecated CLIs flagged); worktrees; **multi-repo workspaces**; Docker, Podman or **Apple Containers** sandboxes with shared auth; web dashboard with mobile-friendly **"Structured View"** and `aoe acp doctor` (likely ACP; details [U]); diff view; resume and fork; profiles; repo hooks in `.agent-of-empires/config.toml`; MCP; "tool sessions", **"scratch sessions"**; push notifications; `t` toggles the paired shell.
 - **Gaps:** structured mobile view now (ptyro M9+M10); multi-repo (M11); containers incl. Apple Containers (backlog); HTTP API; scratch sessions; paired shell; ACP doctor.
 - **Weaknesses:** tmux; undocumented status detection; no ports or identity profiles found.
@@ -221,7 +291,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 
 #### A6. Agent Deck (asheshgoplani)
 - **URL:** https://github.com/asheshgoplani/agent-deck · MIT · Go/Bubble Tea, own tmux socket
-- **Maturity [V]:** 1,127★ but **4,354 commits**; v1.16.30 (2026-10-18); very active; seeking co-maintainers.
+- **Maturity [V]:** 1,127★ but **4,354 commits**; v1.16.30 (2026-10-18); very active; seeking co-maintainers. **[V 2026-11-11]:** 1,246★; v1.16.38 (2026-11-07) (GitHub API); features not re-read.
 - **What it is:** ~12 agents; running/waiting/idle/error via "smart polling" plus hooks for Codex (`codex-hooks install`) and pi. **MCP manager** — toggle MCP servers per session; **MCP pooling** over Unix sockets (claims 85–90% less MCP memory) with reconnecting proxy. Native **fork into a new worktree** carrying uncommitted changes and Docker settings. **Conductor** — persistent orchestrator session that auto-answers routine questions and escalates the rest, Telegram/Slack bridge, 15-min heartbeat; **watchers** route webhooks, GitHub events and ntfy into it. Docker sandbox; web UI with push (token auth off-loopback); SSH remotes with self-install and `remote drain`. **Cost dashboard** from Claude transcript hooks; daily/weekly/monthly **budgets with enforcement**; `agent-deck usage` shows Claude's **5-hour and 7-day quota windows**. Profiles `[profiles.work.claude] config_dir`; **`agent-deck session switch-account <session> <account>`** moves a session — conversation included — to another account.
 - **Special:** closest overlap with ptyro **profiles**; a working lead-agent ("conductor"); cost budgets.
 - **Gaps:** session move between accounts; MCP pooling/toggling; budgets & quota windows (ptyro backlog); chat-app escalation and event watchers; remote self-install + drain; Docker.
@@ -230,7 +300,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 
 #### A7. workmux (raine)
 - **URL:** https://github.com/raine/workmux · MIT · Rust
-- **Maturity [V]:** 2,922★; v0.1.276 (2026-10-14), very frequent releases.
+- **Maturity [V]:** 2,922★; v0.1.276 (2026-10-14), very frequent releases. **[V 2026-11-11]:** 3,034★; v0.1.282 (2026-11-10) (GitHub API); features not re-read.
 - **What it is:** `workmux add` → worktree + tmux window; from a PR, a fork branch, **moved uncommitted changes**, or a **branch name generated from the prompt**; `workmux merge` merges and removes worktree/window/branch; status icons in tmux window names (`workmux setup` installs hooks); TUI dashboard with diffs, **patch staging**, send-input; `.workmux.yaml` with pane layouts, `post_create` / **`pre_merge`** / `pre_remove` hooks, **copy and symlink rules** (`.env`, `node_modules`); Kitty/WezTerm/Zellij backends; containers or **Lima VMs**; ~9 agents.
 - **Gaps:** symlink rules; pre-merge/pre-remove hooks; hunk staging (ptyro M6); take-changes; Lima.
 - **Weaknesses:** needs tmux or a terminal backend; no daemon, profiles, ports or event stream.
@@ -298,13 +368,34 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **Codex CLI** (130k★, v0.163.0, 2026-10-15 [V]): `codex resume` (picker, `--last`, id), `/fork`, `/side`, Goals (multi-session objectives), subagents (`agents.max_threads` default 6), `/ps`, named/pinned threads [S]; rollouts JSONL under `~/.codex/sessions/`; **no native `--worktree` in the CLI** (open issue) — ptyro fills that.
 - **OpenCode** (218k★, v1.19.3 [V]): `--fork`, parent/child sessions, JSON export/import, server/client architecture; share links reportedly retired ~2026-10-15 [U].
 - **Copilot CLI:** Sessions sidebar (2026-08) [U].
+- **Correction (2026-11-11) [V]:** the Codex line above is out of date. Codex CLI is at **0.167.1** (2026-11-10; 134,906★) and its command reference documents a global **`--worktree`** flag ("Start in a new managed Git worktree"; new sessions, `codex fork`, `codex exec`, `codex exec fork`; local only), a `/worktree` slash command, and **`codex agents`**, an agent command center on a shared local or remote server, labelled *Stable* (https://learn.chatgpt.com/docs/developer-commands?surface=cli). Third-party changelogs date experimental worktrees to 0.154 and on-by-default to 0.156 [S]. Detail in G2 and F9. "ptyro fills the worktree gap for Codex" is no longer true; what ptyro adds for Codex is the same as for Claude: other vendors beside it, profiles, a real multiplexer, review and landing.
+- **Copilot CLI (2026-11-11) [V]:** `/fleet` runs subagents in parallel under one orchestrator, and dynamic workflows are in public preview (F20). **OpenCode 2** is out with background subagents (G5).
 
 #### A18. Smaller projects worth tracking (mostly via *awesome-agent-orchestrators*, [U] beyond one-liners)
 - **initech** (Go, MIT, own PTYs): `initech send` returns an explicit error rather than dropping input; 13 **role templates** (pm, arch, eng, qa, shipper, sec, ops); states include **"stalled"** and **"idle-with-work-waiting"**; headless `serve`; `peers`.
-- **thurbox** (Rust core + Lua UI panes, MIT, v2.64.4): SSH hosts in `hosts.toml`; agent-neutral mailbox; **one session spanning several repos, each on its own worktree of a shared branch**, Ctrl-S to sync with base — **the closest thing found to M11 change sets**. Watch closely. (2026-10-21 [V] for ptyro: M11 shipped what thurbox lacks: a contract with versioned revisions and an approval gate, fenced per-repo roles, readiness wake-ups, set checkpoints, overlays, and a dependency-ordered merge train.)
+- **thurbox** (Rust core + Lua UI panes, MIT, v2.64.4): SSH hosts in `hosts.toml`; agent-neutral mailbox; **one session spanning several repos, each on its own worktree of a shared branch**, Ctrl-S to sync with base — **the closest thing found to M11 change sets**. Watch closely. (2026-10-21 [V] for ptyro: M11 shipped what thurbox lacks: a contract with versioned revisions and an approval gate, fenced per-repo roles, readiness wake-ups, set checkpoints, overlays, and a dependency-ordered merge train.) **Correction (2026-11-11) [V]:** the repository is https://github.com/Thurbeen/thurbox (MIT, **118★**). It is **tmux-based** (tmux 3.2+, psmux on Windows, RMUX opt-in), not its own PTYs. The README now says each session gets a worktree of *one* repository chosen at creation, with sessions on different repositories side by side; it no longer shows one session spanning several repositories, so the "closest to M11" note is unconfirmed [U]. It did gain a headless `thurbox-cli`/`fleet` CLI, `fleet send` mail between sessions, and **automations** (scheduled sends, spawns and commands in `automations.json`, run by an OS timer). A v2.28.0 of 2026-09-18 is reported [S], which conflicts with the "v2.64.4" above [U].
 - **tmuxai** (Go, Apache-2.0, 1.9k★): AI pair reading tmux panes; adjacent only.
 - **agent-manager**, **agent-session-manager:** tmux TUIs that already ship in-terminal **diff review with comments sent back to the agent** (ptyro M6).
 - **YYLO:** risk-based merge queue (relevant to M11 merge train). **repomon** (Rust): supervises agents across many repos with phone approval. **pappardelle:** description → issue + worktree + PR + Claude session. Kage, Rove, tmux-ide, Cyclops, openkanban.
+
+#### A19. hcom *(added 2026-11-11)*
+- **URL:** https://github.com/aannoo/hcom · **Class:** hook-based messaging and control layer between agent CLIs, no multiplexer of its own · MIT · Rust/Python/Node parts [U]
+- **Maturity [V 2026-11-11]:** 655★, 662 commits; no tagged release shown on the repository page.
+- **What it is:** start an agent with `hcom` in front and its hooks record activity to a local SQLite database and deliver messages from it. Agents message, watch, spawn, fork, resume and kill each other across terminals; `hcom` alone opens a TUI dashboard. Covers Claude Code, Gemini CLI, Codex, Antigravity, OpenCode, Kilo, Pi, Cursor CLI, Kimi, Copilot CLI, Qoder, Grok Build and Hermes; tools without hooks join with `hcom start` / `hcom listen`.
+- **Special:** messages arrive mid-turn after tool calls, or wake an idle agent at once; `hcom events --wait` chains actions and `hcom events --follow` streams JSON Lines; agents **subscribe** to status changes, commands, file edits and **collisions** with presets (`collision`, `created`, `stopped`, `blocked`) and react without a human; an **MQTT relay** joins machines (`hcom relay new` → a token → `hcom relay connect`, `--device` to spawn remotely).
+- **Gaps (positive):** agent-side event subscriptions with presets (ptyro's mail delivers; an agent cannot yet say "wake me when @api is blocked or touches my files" in one line [U against SPEC]); a collision event as a first-class thing agents react to; fourteen agents wired by hooks alone.
+- **Weaknesses vs ptyro:** no PTY ownership, no worktrees, profiles, review or landing; the relay token is the whole trust model ("treat it like an SSH key"); status is whatever each hook reports.
+- **Ideas:** → R-ORC-40 (a sibling's finished change announced to the agents it affects), R-ORC-38.
+
+#### A20. New entrants seen on 2026-11-11 (one-liners; [S] from *awesome-agent-orchestrators* unless marked)
+The list (https://github.com/andyrewlee/awesome-agent-orchestrators) now holds about 40 terminal tools and about 130 desktop or web workspaces. Nothing here changes the picture; each confirms a table-stakes item.
+- **pando** (Go daemon + TUI): worktree per session, running/blocked/idle, agents outlive the TUI, conversations resume after a restart, a CLI that blocks on a status or a screen match.
+- **pohunek** (Rust, per-machine daemon): sessions survive disconnects, a JSON CLI so agents drive other sessions, machines joined over NetBird or Tailscale.
+- **Termio** (MIT): hook-reported status, a daemon that keeps sessions through a closed laptop, remote sessions on any SSH host.
+- **Rove**: a kanban board whose cards launch sessions **and are moved by the agents**, with a `rove api` for agents to dispatch tasks that report back.
+- **Tortie**, **Calyx** (macOS, libghostty): native multiplexers without tmux; Calyx has an approval inbox and in-terminal diff review.
+- **YYLO**: typed task, validation, merge and release-readiness boundaries with "receipt-backed changes" and a risk-based merge queue (already in A18).
+- **Lesson:** "a daemon that keeps agent terminals, a worktree each, three states" is now a weekend project in Go or Rust. The combination is the product (executive summary, item 1).
 
 #### A — capability matrix (others ship today vs ptyro)
 
@@ -332,6 +423,8 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 | AI naming & summaries | dmux, Claude | Not planned |
 | Recorder / replay | tuios tape | **Has** (M8.2: replay, asciicast v2/text export) |
 | Plugins | herdr marketplace, sidecar stdio providers | Backlog (WASM) |
+
+**2026-11-11, added to the "shipped by" column** (the ptyro column is as it stood on 2026-10-20; milestones built since are in the Changelog): fan-out with a **judge agent** and a board tied to it — tuios 0.11–0.12; a **native session manager in the agent itself** — Claude (`claude agents`), Codex (`codex agents`), Copilot (Mission Control); **native worktrees** — Claude, Codex (`--worktree`); account switch under a running session — AoE (`acp switch-account`), agent-deck; agent-side event subscriptions — hcom; cross-machine agent mail — Claude (through Anthropic's servers), hcom (MQTT relay), thurbox (`fleet send`).
 
 ---
 
@@ -369,7 +462,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 #### B2. Orca (Stably AI) — credited inspiration (SPEC §20.6)
 - **URL:** https://www.onorca.dev · https://github.com/stablyai/orca · MIT, free
 - **Stack:** Electron/Vite/TS [U]; WebGL terminal
-- **Maturity:** ≈99k★ on GitHub (one directory said ≈55k — [U]); ships daily; macOS/Windows/Linux; iOS + Android companion.
+- **Maturity:** ≈99k★ on GitHub (one directory said ≈55k — [U]); ships daily; macOS/Windows/Linux; iOS + Android companion. **[V 2026-11-11]:** **122,204★** by the GitHub API, MIT, pushed the same day; the ≈55k figure was wrong. The OSC 7501 spec names Orca's own **OSC 9999** as earlier work on program status (https://www.superlogical.com/rex/docs/build/program-status); its format was not read [U].
 - **What it is:** a worktree per task; ~27 preconfigured CLI agents; one prompt to several agents, compare, merge the winner; WebGL terminal with splits and restored scrollback; VS Code-style editor; GitHub & Linear boards; SSH worktrees; diff annotations to the agent; Chromium **Design Mode**.
 - **Special:** Design Mode (click an element → HTML, CSS, cropped screenshot to the agent); **account switcher with usage tracking** (Claude & Codex 5 h / 7 d windows, reset times, hot-swap Codex accounts without re-login, also from the phone); SSH worktrees with reconnect, port forwarding, passphrase caching; agent-facing CLI (`orca worktree create`, `snapshot`, `click`, `fill`) and agent-updated **"worktree comments"**; cross-search.
 - **Gaps:** design mode/browser; usage meters + account hot-swap (ptyro: backlog); mobile apps (M9); SSH worktrees with port forwarding; boards; agent-written per-worktree notes.
@@ -384,6 +477,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **Gaps:** schedules & event automations; remote hosts; iOS; browser; editing in diff; presets/layouts (ptyro backlog: session templates).
 - **Weaknesses:** Electron; macOS-first; not OSI; no precedence model; no profiles.
 - **Ideas:** recipe `schedule` (cron) and `trigger` (gh review-request polling) (R-RUN-02/03); promote session templates (`[layouts.dev]` = agent + shell + dev server) to M3/M4 (R-UX-07); document the same honest limits.
+- **Update [V 2026-11-11]: renamed Paradev.** `superset-sh/superset` redirects to https://github.com/ParadevAI/Paradev, "an open-source Codex App and Conductor alternative"; **MIT** now (was Elastic 2.0), 16,219★. The CLI is still `superset` and the SDK still `@superset_sh/sdk`. Automations, Remote Access, cloud workspaces and the iOS/iPadOS app are Pro features; a pull-request pane shows checks, review threads and merge controls, and PR feedback can be sent to an agent. Still macOS first, Linux experimental, no Windows.
 
 #### B4. Emdash (General Action)
 - **URL:** https://emdash.com · https://github.com/generalaction/emdash · Apache-2.0 [V] · YC W26
@@ -398,6 +492,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **Stack:** Rust backend (sqlx) + TS web UI — architecturally closest to ptyro.
 - **What it is:** moving a card to In Progress creates a worktree and starts an agent (~10 agents); each workspace has branch, terminal, dev server; inline review comments → agent; preview browser with inspect mode and device emulation; PR with AI-written description; MCP server.
 - **Lesson:** "no business model" — most users were on free plans. Agents-as-async-workers on a board is a compelling view.
+- **Update [V 2026-11-11]:** the README still opens with "Vibe Kanban is sunsetting"; 28,650★; the repository had a push on 2026-11-11 but names no new owner or community maintainer. The board idea has many heirs [S]: Kander, octomux, Rove, Agetor, automaker, kandev, dev-3.0, and Orchestrator.inc's lanes (F11).
 - **Ideas:** a **board view** in the sidebar — columns Backlog / Working / Blocked / Review / Done driven by status engine + PR state (R-UX-08); `ptyro pr create --describe` asks the session's agent for the body (R-GIT-06); a "Coming from Vibe Kanban" doc — ptyro has no service to shut down.
 
 #### B6. Crystal → Nimbalyst (Stravu)
@@ -446,6 +541,7 @@ Nothing here is a commitment. An idea becomes work only when it is promoted into
 - **URL:** https://cursor.com/changelog/3-0 · Cursor 3.0 released 2026-04-02 [V]
 - **What it is:** many agents across local / worktree / cloud / SSH; sidebar includes agents started from Slack, GitHub, Linear, mobile, web; `/worktree`, `/best-of-n` (one task, several models, each in a worktree, compared); grid view of agent tabs; **Await tool** — agents wait for background shells/subagents or for output like "Ready"/"Error"; Design Mode; push a local agent to the cloud.
 - **Ideas:** **`ptyro wait --match 'Ready|Error'`**, also via MCP (R-ORC-22); tile view (prefix T) — auto-grid every session in a status (R-UX-10).
+- **Update [V 2026-11-11]** (https://cursor.com/changelog): an **Agent SDK** went GA on 2026-10-20 — agents as code folders tested with evals, run with `agent-sdk dev` or deployed to Cursor, with templates for a security reviewer, a PR autofixer and a Linear/Jira triager; cloud agent **canvases** shared by link and an Environments API in beta with up to **300 repositories** per environment (10-16); cloud agents that build and deploy a live web app behind an explicit publish approval (11-05); realtime **voice calls with agents** that keep working while you talk (11-06). Nothing new on `/best-of-n` or hooks in this window.
 
 #### B14. Warp — ADE + Oz (see also C-segment)
 - **What it is (GUI side):** third-party CLI agents first-class (Claude Code, Codex, Gemini, OpenCode); vertical tabs with branch/worktree/PR metadata; **Tab Configs** (dir, startup commands, theme, worktree in one schema); notification centre fed by a Warp plugin for Claude (needs `jq`); review comments to a running third-party agent; voice; saved /prompts; publish a session to the cloud for phone steering; **Oz** cloud agents with shareable URL per agent, governance, audit logs, cross-harness subagents (launched 2026-02-10; multi-harness beta 2026-05).
@@ -509,10 +605,27 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 > 7. **Contour 0.7** added experimental daemon sessions over TCP+TLS and tmux control mode both ways.
 > 8. **OSC 9;4 progress** is near-universal (Ghostty, kitty 0.47+, WezTerm nightly, Windows Terminal,
 >    tmux 3.7+).
+>
+> **Update (2026-11-11) [V]:**
+> - **OSC 7501 is still rev 0.4 (2026-10-10).** The spec's own history: 0.1 on 2026-09-28, 0.2 on
+>   10-06, 0.3 on 10-07 ("absent `progress` means indeterminate; programs may send reports
+>   without feature detection"), 0.4 on 10-10 (the probe reply may list states and kinds;
+>   terminfo removed). A month without a revision. It still says nothing about multiplexers or
+>   passthrough.
+> - **kitty 0.50.0 (2026-11-03) is the first mainstream terminal to *show* it:** a
+>   `tab.program_status` field for `tab_title_template`. **Ghostty 1.4.0 (2026-10-27)** parses it
+>   in libghostty, but "the Ghostty GUI ignores it for now"; a tagged libghostty is promised
+>   before Ghostty 1.5 (March 2027).
+> - **Zellij 0.46.0 (2026-11-11) is "now also a desktop terminal"** (`zellij terminal`, sharing
+>   sessions with the multiplexer); 0.45 had added a mobile web client and PWA, OSC 133 prompt
+>   jumps and first-class nested sessions. Still no agent status of its own.
+> - **tmux** is still 3.8; **herdr** has no release since 2026-10-14.
+> - Libraries have appeared around the protocol [S]: `buildkite/osc7501` (Go), `linyiru/termstate`
+>   (Rust, JavaScript, shell, with conformance vectors), `ysskrishna/osc7501` (Python).
 
 #### C1. cmux (manaflow)
 - **URL:** https://github.com/manaflow-ai/cmux · https://cmux.com · GPL-3.0+ app; server parts BSL 1.1 [V]
-- **Stack:** Swift/AppKit on libghostty (reads Ghostty config) · **Maturity [V]:** 28.3k★, nightly builds, YC
+- **Stack:** Swift/AppKit on libghostty (reads Ghostty config) · **Maturity [V]:** 28.3k★, nightly builds, YC · **[V 2026-11-11]:** 28,763★, pushed the same day; growth has flattened (about +450 in three weeks, against herdr's +5,300).
 - **What it is:** macOS terminal with vertical workspace tabs for parallel agents; blue ring on panes needing attention; notification panel; ⌘⇧U to newest unread.
 - **Special:** *every action* via CLI + Unix socket (workspaces, splits, send input, read screen, **screenshots**); `cmux hooks setup` for ~8 agents; **scriptable in-app browser pane** (accessibility snapshot, click, fill, eval JS, console/network logs); sidebar git branch + ports; `cmux ssh` (routes browser panes via the remote; drag-image upload via scp); iOS companion on TestFlight.
 - **Gaps:** browser pane; phone app; one-command hooks across agents; screenshot API; image drag over SSH; polish.
@@ -524,6 +637,7 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 - **Special:** OSC 7501 reference implementation; session-picker indicators for completed/blocked; spinners on unfocused tabs; Lua `terminal.program_status_changed` event; built-in **agent skill** so Claude/Codex can open tabs, split, read screens; per-user login server mode; no telemetry. Planned: mobile push, **unified priority inbox**.
 - **Gaps:** scriptable event hooks; agent skill for driving the mux (ptyro plans MCP in M7.6); multi-user server; it sets the protocol's direction.
 - **Weaknesses:** beta; macOS client; no evidence of worktrees, adapters, review or orchestration [U].
+- **Update [V 2026-11-11]** (https://www.superlogical.com/rex): still beta, with no version, licence or price stated ("no telemetry and no account or license checks"). The docs now list an **iOS app** and a **FreeBSD** server beside macOS and Linux, a shared server (`rex.service`, the `rex` group) and a per-account login server, `rex do` and `rex.on` Lua events, and a read-only community MCP server. The docs do not describe an inbox or push notifications, so the "planned priority inbox and mobile push" above remains unconfirmed [U].
 - **Ideas:** filterable `ptyro events --follow` (M5); ship a **Claude Code skill/plugin** teaching `ptyro send/read/split` before MCP (R-ORC-18); track the spec and file feedback (multiplexer passthrough semantics are unspecified).
 
 #### C3. Warp (terminal side; see B14)
@@ -537,6 +651,8 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 - **1.3 [V]:** scrollback search; `notify-on-command-finish` (never/unfocused/always, after N s) via OSC 133; fuller OSC 133 incl. `click_events` / `cl=line` click-to-move cursor; AppleScript control (preview); fixed a leak Claude Code triggered. OSC 9;4 renders a per-split progress bar with ~15 s timeout.
 - **libghostty-vt:** zero-dependency VT parser/state with Zig + C APIs (macOS, Linux, Windows, WASM); **no tagged release, API unstable**, no Rust bindings found; used by zmx, gpui-ghostty, herdr (likely). OSC 7501 parsing landed for 1.4.
 - **Ideas:** OSC 133-driven command-finish notifications for plain shell panes (R-NOT-04); support OSC 133 `cl=line` click-to-move inside panes; keep the libghostty backend in backlog (OSC 7501 now native there); forward OSC 9;4 outward when the outer terminal is Ghostty (R-STA-07).
+- **Update [V 2026-11-11]: 1.4.0 released 2026-10-27** (https://ghostty.org/docs/install/release-notes/1-4-0); 64,005★. OSC 7501 is parsed by libghostty and ignored by the GUI. Processes get a **`GHOSTTY_SURFACE_ID`** environment variable naming their terminal; AppleScript and Shortcuts expose `pid` (foreground process) and `tty`, a writable `name override`, and `send key` for character keys; GTK gets `+new-tab` and `+toggle-quick-terminal`; **OSC 5522** lets programs read and write non-text clipboard data behind a permission prompt; OSC 99 is parsed, not implemented; tmux control mode is "still not hooked up to the GUI". libghostty has no tagged release yet.
+- **Ideas (2026-11-11):** `GHOSTTY_SURFACE_ID` is a cheap way for ptyro's client to know which outer surface it runs in (evidence for R-STA-07, R-NOT-03).
 
 #### C5. iTerm2 3.7 (2026-09)
 - **URL:** https://iterm2.com · GPL-2.0 [U]
@@ -547,6 +663,8 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 - **URL:** https://sw.kovidgoyal.net/kitty · GPL-3.0 · 0.49.2 (2026-10-01) [V]
 - **2026 [V]:** 0.47 OSC 9;4 progress, drag-and-drop kitten (over SSH), `kitten @ ls` session name + last-focused; 0.48 vertical tabs, `get-text` on alt screen; 0.49 `kitten @ screenshot`, session layouts; 0.49.2 `detect_url_regex` for clickable file references. Owner of kitty keyboard, graphics and **OSC 99** notifications (actions, icons, close reports). A kitty PR references OSC 7501 [V mention].
 - **Ideas:** clickable `path:line:col` in agent output → `$EDITOR` or M6 diff (R-UX-14); **emit OSC 99 with action buttons** ("Approve", "Open") when the outer terminal supports it — remote approvals without a phone (R-NOT-02); `last_focused` in `ptyro ls --json`.
+- **Update [V 2026-11-11]: 0.50.0 (2026-11-03)** (https://sw.kovidgoyal.net/kitty/changelog/) supports "the Program Status Protocol (OSC 7501) that lets programs report whether they are working, finished, failed or blocked waiting on the user", shown in the tab bar through `tab.program_status`. Also: **docked windows** (`launch --type=window-dock|tab-dock`, saved in sessions), tabs as named workspaces (`launch --focus-existing`), `restore_session_after_logout`, and remote-control fixes including a bypass of password authentication. Rev 0.4 of the spec came out of the kitty maintainer's public review (kitty issue #10638) [S].
+- **Ideas (2026-11-11):** inside kitty 0.50+, a ptyro client that re-emits one aggregate OSC 7501 record lights the user's tab with no setup (evidence for R-STA-07; raises its priority).
 
 #### C7. WezTerm
 - **URL:** https://wezterm.org · MIT · Rust/Lua · last stable **20240203** — nightlies only [V]
@@ -561,6 +679,8 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 - **Weaknesses:** no native agent status (community plugins); no worktrees/orchestration; resurrection re-runs commands.
 - **Keys [S, 2026-10-22]:** the default preset quits Zellij on `Ctrl+q`, which is ptyro's default prefix since 2026-10-22. Inside Zellij, use its unlock-first preset or change `[ui] prefix` (SPEC §21.2).
 - **Ideas:** **read-only device tokens**; bookmarkable `/<session>` attach-or-resume URLs; mobile key row (Esc, Ctrl, arrows, **y/n for approvals**) (R-REM-03); `ptyro subscribe`; zjbar-compatible status feed = backlog `ptyro status-line` (R-EXT-04).
+- **Update [V 2026-11-11]** (https://github.com/zellij-org/zellij/releases; 36,008★): the release page lists two releases between the "0.44.3" above and today, dated "20 Aug" and "28 Aug" with no year shown, which conflicts with this entry's 2026-10-20 check (see IV.2). **0.45.0:** nested sessions as a first-class workflow (`nested_session_handling ask|fullscreen|descend|never`), the kitty graphics protocol, OSC 133 prompt jumps and "copy the last command's output", per-client tab sizes, notifications forwarded only when the host terminal supports them, OSC 52 reads behind `dangerously_enable_paste_buffer_read`. **0.45.1:** nested-session detection over SSH without forwarding environment variables. **0.46.0 (2026-11-11):** `zellij terminal`, Zellij as its own desktop terminal on Linux, macOS and Windows, sharing sessions with the in-terminal multiplexer. No agent status in any of them.
+- **Ideas (2026-11-11):** R-UX-17 is built as a refusal (`PTYRO_ALLOW_NESTED=1` to override). Zellij's choices — ask, show fullscreen, or descend into the inner session — are the gentler next step if the refusal turns out to annoy; evidence only, no new id.
 
 #### C9. tmux 3.6–3.8 and its agent plugin ecosystem
 - **URL:** https://github.com/tmux/tmux · ISC · **3.8 (2026-09-09)** [V]
@@ -620,7 +740,7 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 
 | Sequence | Purpose | Support | ptyro status / suggestion |
 |---|---|---|---|
-| **OSC 7501** Program Status Protocol | Per-terminal status records: `state=idle\|working\|done\|blocked\|error\|clear`, `kind` (`permission\|question\|auth`), `progress`, hierarchical `id` (≤8 levels), `app`, base64 `title`/`msg`; probe `OSC 7501;?` → `OSC 7501;?:states=…:kinds=…` then DA1 | Spec rev 0.4 (2026-10-10) [V]; libghostty-vt (Ghostty 1.4, parse only) [V]; Rex [V]; tuios [V]; Claude Code 2.1.295+ [V]; Crush 0.98 [V]; opentui [U]; Codex/Terraform/Homebrew PoCs; kitty PR [V mention] | **Implemented.** Audit vs latest rev: ids & subtrees; LRU eviction at 256 records; reject control chars in decoded base64; `done`/`error` survive OSC 133 A and exit while `working`/`blocked` drop; RIS clears, DECSTR doesn't; stop mapping OSC 9;4 onto the root record once 7501 seen; rate-limit notifications. **Re-emit outward** for the focused/aggregate session. |
+| **OSC 7501** Program Status Protocol | Per-terminal status records: `state=idle\|working\|done\|blocked\|error\|clear`, `kind` (`permission\|question\|auth`), `progress`, hierarchical `id` (≤8 levels), `app`, base64 `title`/`msg`; probe `OSC 7501;?` → `OSC 7501;?:states=…:kinds=…` then DA1 | Spec rev 0.4 (2026-10-10) [V]; libghostty-vt (Ghostty 1.4, parse only) [V]; Rex [V]; tuios [V]; Claude Code 2.1.295+ [V]; Crush 0.98 [V]; opentui [U]; Codex/Terraform/Homebrew PoCs; kitty PR [V mention]. **2026-11-11:** still rev 0.4 [V]; **kitty 0.50.0 shows it in the tab bar** [V]; Ghostty 1.4.0 released, GUI ignores it [V] | **Implemented.** Audit vs latest rev: ids & subtrees; LRU eviction at 256 records; reject control chars in decoded base64; `done`/`error` survive OSC 133 A and exit while `working`/`blocked` drop; RIS clears, DECSTR doesn't; stop mapping OSC 9;4 onto the root record once 7501 seen; rate-limit notifications. **Re-emit outward** for the focused/aggregate session. |
 | **OSC 21337** (iTerm2) | Presentational status: `status`, `indicator`, `status-color`, `detail` | iTerm2 3.7 [V] | Accept as low-confidence input; the 7501 spec calls it misaligned. |
 | **OSC 9;4** (ConEmu progress) | `9;4;st;pct` — 0 off, 1 progress, 2 error, 3 indeterminate, 4 paused | Ghostty, kitty 0.47+, WezTerm nightly, tmux 3.7+, Windows Terminal [S]; Claude Code emits (flicker bug during tool calls [S]) | Parsed. Add a timeout like Ghostty's; forward an aggregate outward. |
 | **OSC 9** / **OSC 777;notify** | Desktop notifications | Ghostty, iTerm2, WezTerm, cmux, WT (partly) | Parsed; notifier M4.6. |
@@ -679,6 +799,8 @@ No ratified OSC registry exists yet (the freedesktop terminal-wg issue is open [
 - **Gaps:** issue assignment as trigger; org governance & audit; mobile via an app users already have.
 - **Weaknesses:** GitHub-only; time cap; no local terminal; your own Claude subscription doesn't apply.
 - **Ideas:** `ptyro issue start <url>` (R-GIT-02); honour **repo-native bootstrap files** (`copilot-setup-steps.yml`, `.cursor/environment.json`, Claude setup scripts) as worktree setup hooks (R-WT-03); per-session wall-clock budget.
+- **Update [V 2026-11-11]: "a new, connected Copilot cloud experience"**, rolling out from 2026-10-28 on paid plans (https://github.blog/changelog/2026-10-28-work-from-anywhere-with-a-new-connected-copilot-cloud-experience/). One session list on github.com, GitHub Mobile, the CLI, the Copilot app, VS Code, Slack and Teams; a task started on one surface continues on any other. Every session runs by default in a **cloud sandbox** that snapshots at shutdown and resumes later; the compute draws on one dollar-based Actions entitlement, billed from November 2026. A **local device registers through Mission Control as an environment** (from the CLI or VS Code; `copilot --environment-host` for your own computer or VM), after which GitHub Mobile starts and steers sessions on it (E10). Also in the changelog: `@GitHub` in Slack and Teams went GA (11-06); the usage metrics API reports code-review detail and an "addressed rate" (11-05); the impact dashboard adds VS Code agent usage (11-06); Copilot is offered inside JetBrains Air (11-03) and Xcode (11-04). No GitHub Universe 2026 announcement about Agent HQ was found [U].
+- **Gaps (2026-11-11):** one session list across seven surfaces with handoff in both directions; a snapshotting sandbox as the default place to run; a phone app the user already has, steering their own machine.
 
 #### D5. Cursor Cloud Agents
 - **URL:** https://cursor.com/docs/cloud-agent · paid plan, API pricing, spend limit set on first use [V]
@@ -707,6 +829,8 @@ No ratified OSC registry exists yet (the freedesktop terminal-wg issue is open [
 - **Gaps:** shared/team runner; self-scheduled wake-ups; inter-agent messaging (ptyro: M7.7); shipping mobile; PR/Linear triggers; live-preview "portals".
 - **Weaknesses:** Amp's own harness; closed; no raw terminal multiplexing.
 - **Ideas:** agent-callable **`ptyro wake --in 30m --session X "check CI"`** (R-RUN-02); port **portals** via the M9 relay (R-REM-06; `ptyro-pty/src/ports.rs` exists); later, a shared daemon with per-user auth.
+- **Update [V 2026-11-11]** (https://ampcode.com/news, 17 posts since 2026-10-12): **self-hosted orbs** on your own infrastructure (10-22), addable without an admin (10-28); **macOS satellites**, an orb that starts a Mac to build and run iOS and Mac apps (10-29); Amp on **Android** (10-27); **Artifacts**, thread-owned documents edited by you, teammates and the agent (11-02); **service accounts**, threads that belong to the team (11-03); GitLab, hosted or self-hosted (11-05); **Spaces**, "a higher-level way to work with many agents and teammates together" (11-06); "Close the Loop", select an element on your site and have Amp change it (11-06); **portals on your own runner** (11-09); **Boxes**, always-on computers for what you build (11-10); the runner's macOS desktop viewable remotely (10-16); "Puck" usable from other agents over MCP (10-13).
+- **Gaps (2026-11-11):** portals to a local machine now ship (R-REM-06 is no longer ahead of anyone); team-owned sessions; a coordinating layer above threads.
 
 #### D9. Ona (formerly Gitpod) — "joining OpenAI"
 - **URL:** https://ona.com · enterprise · announced joining OpenAI 2026-06-11 [V]; close status [U]
@@ -719,6 +843,20 @@ No ratified OSC registry exists yet (the freedesktop terminal-wg issue is open [
 - **Maturity [V]:** Agent Canvas (browser control centre; local, self-host, cloud); CLI in maintenance mode; Software Agent SDK; Agent Server (REST + WebSocket); Sandbox Server; **Automation Server** (cron & events); legacy Docker GUI deprecated.
 - **Gaps:** automation server; documented REST+WS agent server.
 - **Ideas:** publish the M9 WebSocket protocol as a **stable, versioned API with small TS/Python clients** (R-REM-07).
+
+#### D11. Claude Code Projects (Anthropic) *(added 2026-11-11)*
+- **URL:** https://code.claude.com/docs/en/claude-projects · **Class:** first-party cloud coordinator over many sessions · proprietary, inside Pro, Max and Ultra usage; "not offered on Team or Enterprise plans yet"
+- **Maturity [V 2026-11-11]:** public beta, rolling out gradually, with a waitlist; listed in the docs as the fifth way to run Claude in parallel.
+- **What it is:** one ongoing conversation at claude.ai/code or in the desktop app's Code tab. You describe work and Claude starts a **thread** per task: a separate session with its own context, usually a cloud session on its own branch that opens a pull request. Every thread starts from the **project instructions** (up to 16,000 characters) and reads **project memory** (files Claude writes itself, indexed by a `MEMORY.md`). An **Overview** pane groups threads as Waiting on you / Ready for review / Landing / Working / Resolved. A thread can **run on your own computer through Remote Control** when it needs a local database, an emulator or a VPN; that thread gets the instructions but not the memory files.
+- **Special:**
+  - **Auto-fix is on for every thread's pull request**, whatever the account's setting: it pushes fixes when CI fails, addresses review comments, and reports when checks pass. Cards carry buttons **Resolve conflicts / Fix CI / Address comments / Merge it / Create PR**.
+  - "One goal across many repositories": a thread per repository, each with its own pull request, listed together.
+  - The conversation never runs out: threads compact themselves and the coordinator works from recent messages, recent threads and memory.
+  - Pause stops every thread, the conversation and the schedules at once; archive stops watching pull requests.
+  - Honest limits in the docs: a thread cap you state ("run at most two threads at a time") is an instruction "not a hard cap"; cloud threads load each repository's `CLAUDE.md` but **not** its skills, `.mcp.json`, settings, permission rules or hooks; threads run in auto mode and an approval waits inside its thread.
+- **Gaps (positive):** a standing coordinator that outlives sessions and remembers corrections; the five-lane Overview with a "Landing" lane; one-click next steps on every card; the same project steering cloud and local threads; work that continues with the laptop closed.
+- **Weaknesses vs ptyro:** Claude only, GitHub only; limits are advice, not policy; no contract, shared branch or ordered landing across the repositories (each thread is its own pull request); repository hooks, permissions and MCP servers do not apply in cloud threads; local threads stop when the computer sleeps; transcripts live on Anthropic's servers.
+- **Ideas:** → R-ORC-49 (show a vendor's own orchestrator as rows under the session that hosts it), R-ORC-37 (the "Landing" lane as a real, rehearsed queue), R-UX-45; evidence for R-GIT-01 (the PR loop is now the default, not an option).
 
 #### Dead / pivoted (A)
 - **Terragon Labs** — shut down; `terragon-labs/terragon-oss` last push 2026-02-10 [V]. It validated "run Claude Code CLIs in the cloud".
@@ -741,6 +879,7 @@ No ratified OSC registry exists yet (the freedesktop terminal-wg issue is open [
 - **Gaps:** ships today; trusted-device model; file/photo upload into a session; remote model switching.
 - **Weaknesses:** Claude-only; not E2E; no gateways; not a terminal (other programs invisible); no cross-agent board.
 - **Ideas:** **WebAuthn/passkey device enrolment** with biometric step-up for approvals (R-REM-02); phone → file in worktree → referenced in prompt (R-REM-08); `ptyro serve --capacity N --spawn worktree`; interop flag to run Claude sessions with `--remote-control` and detect "taken over elsewhere".
+- **Update [V 2026-11-11]:** Remote Control is now also the **transport for Claude's own agent mail between machines** (https://code.claude.com/docs/en/cross-session-messaging): a session connected to it can list and message your cloud sessions and your sessions on other machines, the message travelling "through Anthropic servers"; `isolatePeerMachines: true` demands your approval before any message leaves the machine, even in bypass mode. It is also how a Projects thread runs on your own computer (D11). `claude remote-control` gained `--settings <file>` and sessions keep their starting folder (2.1.321). The interop flag idea above now has an id: R-REM-15.
 
 #### E2. Happy (slopus/happy)
 - **URL:** https://github.com/slopus/happy · MIT · **24.2k★**, pushed 2026-10-19 [V]
@@ -761,6 +900,7 @@ No ratified OSC registry exists yet (the freedesktop terminal-wg issue is open [
 - **Gaps:** ships mobile/desktop; third-party SDK; permission-answering plugins; `--host` targeting.
 - **Weaknesses:** Electron/TS; terminal fidelity likely lower [U]; no per-workspace identity profiles found.
 - **Ideas:** **`ptyro --host <target>` for every verb** (R-REM-01); **permission-policy hook** (stdin JSON → allow/deny/ask) before a human is asked (R-SEC-03); README positioning vs Paseo.
+- **Update [V 2026-11-11]:** 23,812★; v0.15.4 (2026-11-10), v0.16.0-beta.1 the same day (https://github.com/getpaseo/paseo/releases). **v0.15.0 (11-03): terminal programs keep running across daemon restarts**, with an opt-in setting that resumes interrupted agents; mobile terminals render natively with 10,000 lines of history; worktree setup copies ignored files chosen by `.worktreeinclude`; large daemon responses are split across relay frames. v0.15.2: first-run setup covers providers, projects, "agent orchestration" and the phone app, and suggests projects from folders where you already ran Claude Code, Codex, OpenCode or Pi. v0.16.0-beta.1: an agent's running background tasks shown above the composer with Stop buttons (Claude Code, Codex, OpenCode v2); **background agents** that open no tab and send no notifications; plugins that add sidebar views. The twin is closing the survival gap that was ptyro's clearest edge over it.
 
 #### E5. CloudCLI / Claude Code UI (siteboon/claudecodeui)
 - **URL:** https://github.com/siteboon/claudecodeui · **AGPL-3.0** · 14.2k★ [V]; hosted from €7/month
@@ -782,6 +922,27 @@ No ratified OSC registry exists yet (the freedesktop terminal-wg issue is open [
 - **Now:** self-hostable alternative to Claude Managed Agents; `omnarad` outbound-only daemon; sandboxes from 9 providers; **approvals in Slack/Discord threads**; cron. Old mobile product not visible [U].
 - **Ideas:** **notification-sink abstraction** — ntfy, Pushover, Slack/Discord webhooks, Telegram, later Web Push — with **signed approve/deny callback links**; can ship long before the PWA (R-NOT-01). (See also *claude-push*: PermissionRequest hook + ntfy.sh Allow/Deny [S].)
 
+#### E9. Codex `remote-control` (OpenAI) *(added 2026-11-11)*
+- **URL:** https://learn.chatgpt.com/docs/developer-commands?surface=cli · **Class:** first-party remote control of a local agent · proprietary service around an Apache-2.0 CLI
+- **Maturity [V 2026-11-11]:** labelled *Experimental* in the command reference; Codex CLI 0.167.1.
+- **What it is:** `codex remote-control start` starts the local app-server daemon with remote control enabled, `stop` stops it, and `pair` "creates a short-lived manual pairing code". It runs "through the managed background server when eligible, with a foreground fallback". The same daemon serves `codex agents`, the command center, and `--remote ws://…|wss://…|unix://…` with `--remote-auth-token-env`; `codex app-server` has `--ws-auth capability-token|signed-bearer-token` with token-file, issuer, audience and clock-skew flags.
+- **Special:** one background server per user behind the TUI, the command center and the remote clients; signed bearer tokens as a documented option for the WebSocket.
+- **Gaps (positive):** ships in the agent itself; a documented token scheme for a remote app-server.
+- **Weaknesses vs ptyro:** Codex only; experimental; what the phone side shows was not read [U].
+- **Ideas:** → R-REM-15, R-AGT-10.
+
+#### E10. GitHub Mobile and Mission Control over a registered local device *(added 2026-11-11)*
+- **URL:** https://github.blog/changelog/2026-10-28-work-from-anywhere-with-a-new-connected-copilot-cloud-experience/ · **Class:** first-party remote control of local and cloud sessions · proprietary, paid Copilot plans
+- **Maturity [V 2026-11-11]:** rollout began 2026-10-28; remote control of Copilot CLI sessions from mobile, web and VS Code was already GA on 2026-05-18 (changelog title; the entry itself was not read [S]).
+- **What it is:** register a local device "through GitHub Mission Control as an environment" from the Copilot CLI or VS Code (`--environment-host` for a computer or VM of your own); then start and steer its sessions from GitHub Mobile on iOS or Android, by text, voice, or an attached image or file. Cloud and local sessions share one list.
+- **Special:** the phone app is one most developers already have; a session can be started from any pull request, issue or repository.
+- **Gaps (positive):** no pairing step beyond signing in; a machine is a named *environment* you choose when starting work, the same way you choose a cloud sandbox.
+- **Weaknesses vs ptyro:** Copilot sessions only; GitHub's servers in the path; not a terminal.
+- **Ideas:** → R-REM-15; "environment" is a better word than "host" for where a session runs (wording only, for MM1).
+
+#### Also seen (2026-11-11) [S, awesome-agent-orchestrators and one web search]
+Collie (MIT; self-hosted PWA for agents in herdr, tmux or Zellij, push alerts, tap-to-reply buttons; its docs warn that anyone with the URL can read panes and run commands) · Sesori (desktop + iOS/Android, relay sees only ciphertext, FSL-1.1) · Reemoat (self-hosted, end-to-end encrypted) · Perch (macOS notch: allow, deny or reply with one key, then jump to the exact tab or pane) · Roamgate (herdr PWA) · Pi Pocket · opencode-manager (VAPID web push) · mobile-opencode-control (ntfy) · Moshi (commercial mobile terminal aimed at agents). Happy: 24,588★, last CLI release `cli-1.2.5` on 2026-09-22 [V, GitHub API]. A hosted relay for one of these (MuxAgent) is reported to have gone offline, leaving self-hosting as the only route [S] — a point for relays the user can run.
+
 #### Also seen (B) [S, mostly via an Agentastic comparison updated 2026-10-05]
 Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E2E sync) · Superset Mobile (relay, $20/seat) · Orca desktop companion · SSH + tmux via Blink / Termius / Moshi (the baseline ptyro's remote TUI should beat outright) · Kibitz (fringe) · Conductor (no mobile app found).
 
@@ -795,6 +956,15 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 > idle-notify, and scripted "dynamic workflows" with deterministic resume. ptyro's edge is no longer
 > "has orchestration"; it is **agent-neutral, owns the PTY, status-aware across vendors, and
 > multi-repo (M11)**. No surveyed tool ships M11-style change sets.
+>
+> **Update (2026-11-11):** it is no longer only Claude. **Codex** has a command center and
+> worktrees, **Copilot** has `/fleet` and code-defined workflows that pause for a human, **OpenCode
+> 2** has background subagents, and **OpenAI published Symphony**, a spec for turning a tracker
+> into isolated autonomous runs (F19–F20, G2, G5). A second new layer sits beside any host:
+> coordination services that agents reach over MCP or hooks to claim work, detect collisions and
+> hand off (F23, F24, A19). Still nobody ships a contract plus an ordered landing across
+> repositories; Claude Projects' "one goal across many repositories" is a pull request per
+> repository with no order between them (D11). The synthesis is in §II.6.
 
 #### F1. Claude Code native multi-agent (subagents, agent view, agent teams, cross-session messaging, dynamic workflows)
 - **URL:** https://code.claude.com/docs/en/agents (+ `/agent-teams`, `/agent-view`, `/cross-session-messaging`, `/workflows`)
@@ -810,6 +980,15 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Gaps (positive, vs ptyro):** structured per-step outputs + replay-on-resume (M7.4 lacks both); verify/vote idioms; message trust model (M7.7 doesn't specify one); auto commit/push/draft-PR on finish.
 - **Weaknesses vs ptyro:** Claude-only workers; no multiplexer (can't watch five live TUIs except via tmux split); no cross-harness best-of-N compare; no multi-repo, merge train, set checkpoints; no human gates mid-workflow.
 - **Ideas:** → R-ORC-01, R-ORC-02, R-ORC-05, R-ORC-06, R-ORC-07.
+- **Update [V 2026-11-11]** (Claude Code 2.1.322; https://code.claude.com/docs/en/agents, `/workflows`, `/cross-session-messaging`, `/changelog`):
+  - *Status:* agent view is still a research preview and agent teams still experimental; workflows are "available on all paid plans, with Anthropic API access, and on Amazon Bedrock, Google Cloud's Agent Platform, and Microsoft Foundry". A fifth way was added: **Projects** (D11).
+  - *Workflows, limits as documented:* "No mid-run user input — a run pauses on its own only for agent permission prompts and a usage-limit wait. For sign-off between stages, run each stage as its own workflow"; 16 concurrent agents by default (`CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`, 1–256); 4,096 items per `parallel()`/`pipeline()`; 1,000 agents per run; a stalled agent restarts at most five times; schema-validated output retried up to five times.
+  - *Workflows, new behaviour:* a run that hits the subscription's usage limit **pauses and continues by itself after the reset** (2.1.271+; at most two waits, reset within 24 h, interactive sessions only); an advisory **size guideline** (`small` <5, `medium` <10, `large` <50 agents) and a **"Large workflow" warning** above 25 agents or 1.5 M projected tokens; **`ultracode`** as a keyword or `/effort ultracode` makes Claude plan a workflow for every substantive task; a saved workflow is a `/<name>` command and can ship in a plugin; a per-run approval prompt shows the planned phases; agents in one fan-out share a prompt cache. The idioms the docs teach are *adversarial verification of findings* and *several drafts weighed against each other*.
+  - *Cross-session messaging:* reaches other machines and cloud sessions through Remote Control and Anthropic's servers; native Windows since 2.1.234 over a named pipe that requires the token; `@name` mentions (2.1.232); held messages capped at 100; `isolatePeerMachines`; a session in a container and one on the host cannot reach each other; a cloud session cannot reply to another machine. "Structured agent team protocol messages stay within a team": between sessions it is **plain text only**.
+  - *MCP:* **MCP task support in the terminal (2.1.319)**: "Tasks move to the background and report results when they finish"; `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND` waits inside the call, `CLAUDE_CODE_DISABLE_MCP_TASKS=1` turns them off.
+  - *Still true:* "In every approach the workers are Claude sessions. To involve a different tool, expose it to Claude as an MCP server."
+- **Gaps (2026-11-11, vs ptyro):** runs that wait out a usage limit instead of failing; a size guideline and a large-run warning before the tokens are spent; a per-run approval that shows the plan; saved orchestrations as slash commands distributed in plugins; agent mail that crosses machines with no setup.
+- **Ideas (2026-11-11):** → R-ORC-45, R-ORC-46, R-ORC-49, R-REM-16; evidence for R-ORC-07 (MCP Tasks now has one coding client).
 
 #### F2. Gas Town + Beads (Steve Yegge)
 - **URL:** https://github.com/gastownhall/gastown · https://github.com/gastownhall/beads
@@ -820,10 +999,11 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Gaps:** bisecting batch merge (M11.9 is dependency-ordered cross-repo only); an *acting* supervisor ("Witness") — ptyro detects status but doesn't recover; durable external work graph with memory.
 - **Weaknesses:** whimsical vocabulary, steep curve; tmux-based, status inferred not hooked; single repo per rig.
 - **Ideas:** → R-ORC-09 (watchdog), R-ORC-12 (merge queue), R-ORC-13 (identity ≠ session), R-ORC-15 (tracker adapters).
+- **Update [V 2026-11-11]:** Gas Town 18,765★, 7,779 commits, 394 open issues, last tagged release v1.2.1 (2026-06-06); Beads 28,673★ (GitHub API and README). The README now describes itself as "multi-agent orchestration for Claude Code, GitHub Copilot, and other AI agents" and confirms what was rumoured: the **Wasteland** federation links Gas Towns through DoltHub so rigs post, claim and complete each other's work with portable reputation "stamps". Also a web dashboard (`gt dashboard`), a scheduler for capacity limits, session recovery (`gt seance`), escalations and OpenTelemetry. Presets now cover Gemini, Codex, Kiro, Cursor, Auggie, Amp, OpenCode, Copilot, Pi and OMP. The stated comfort range is 20–30 agents. Growth is flat (+350★ in three weeks).
 
 #### F3. Ruflo (formerly Claude Flow, ruvnet)
 - **URL:** https://github.com/ruvnet/ruflo · MIT
-- **Maturity:** ≈77.6k★, 9.7k commits [V]; renamed at v3.5 (2026-02-27) [S].
+- **Maturity:** ≈77.6k★, 9.7k commits [V]; renamed at v3.5 (2026-02-27) [S]. **[V 2026-11-11]:** 81,483★, pushed 2026-11-11 (GitHub API); not re-read.
 - **What it is:** swarm topologies (hierarchical/mesh/adaptive), "consensus", ~314 MCP tools, 27 hooks, HNSW vector memory, cross-machine federation; the repo itself flags its counts and benchmarks as inconsistent/self-reported.
 - **Special:** enormous mindshare; MCP-first packaging; reusable prompt/skill library.
 - **Gaps:** persistent cross-session memory; daemon↔daemon federation (M9 is client↔daemon).
@@ -832,7 +1012,7 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 
 #### F4. Overstory → Warren (Jaymin West)
 - **URL:** https://github.com/jayminwest/overstory (archived) · https://github.com/jayminwest/warren · MIT
-- **Maturity:** Overstory ≈1.3k★, **archived**, moved to Warren (≈391★, TS; local sandbox / Docker / Kubernetes runs) [V/S].
+- **Maturity:** Overstory ≈1.3k★, **archived**, moved to Warren (≈391★, TS; local sandbox / Docker / Kubernetes runs) [V/S]. **[V 2026-11-11]:** Warren 516★, last push 2026-11-06 (GitHub API); not re-read.
 - **What it is [V]:** worktree per worker in tmux; **SQLite-WAL mail with 8 typed protocol messages and group addresses `@all`, `@builders`**; FIFO merge queue with 4-tier conflict resolution; 3-tier watchdog (mechanical liveness → AI triage → monitor agent); 11 runtime adapters; `ov serve` web UI; a candid `STEELMAN.md` saying compounding errors and merge conflicts are the normal case.
 - **Special:** the closest design to ptyro M7.7; honest risk documentation.
 - **Gaps:** tiered automatic conflict resolution; tiered watchdog; Warren signals the move to **container-per-run**.
@@ -872,6 +1052,13 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Gaps:** remote/cloud attempts (ptyro fan-out is local only).
 - **Weaknesses:** best-of-N within Codex models only — no cross-harness compare.
 - **Ideas:** `ptyro fanout --agents codex-cloud` pulling cloud diffs into local worktrees for the compare view (R-ORC-17).
+- **Update [V 2026-11-11]** (https://learn.chatgpt.com/docs/developer-commands?surface=cli; https://github.com/openai/codex/releases/tag/rust-v0.167.0):
+  - **`--attempts` is confirmed in the official reference** under `codex cloud` (itself *Experimental*): "Number of assistant attempts (best-of-N) Codex cloud should run", values 1–4. Whether it applies to `cloud exec` specifically is not spelled out [U]. This closes the IV.2 item.
+  - **`codex agents`** (*Stable*) opens "the agent command center on a shared local or remote server"; 0.167.0 (2026-11-06) flags unread results in it and in the session picker and sorts tasks by recency within status groups; the subagent picker lists pending approvals first. 0.165 grouped it by directory across linked worktrees [S].
+  - 0.167.0 also: "host-managed child startup can access parent context"; threads inherit instructions and execution policies from the host; **"hosts can wait for input activity without consuming it"**; thread section changes broadcast to connected clients; `prompt-user` command rules that require fresh human approval; PreToolUse hooks run before Guardian policy checks; shared MCP connections with per-chat leases; **"a new MCP adapter supports message-board tools"**; Guardian review of injected thread commands (experimental).
+  - `codex exec --output-schema <path>` gives schema-shaped final answers; `--json` prints events as JSON lines.
+- **Gaps (2026-11-11):** unread flags on finished work in the vendor's own list; a host API designed for programs like ptyro (inherit policy, wait for input without consuming it) that ptyro's hybrid session (R-ORC-35) does not use yet [U against the code].
+- **Ideas (2026-11-11):** → R-AGT-10.
 
 #### F10. Cursor 3 — `/best-of-n` and Agents Window
 - **URL:** https://forum.cursor.com/t/cursor-3-worktrees-best-of-n/156507
@@ -888,9 +1075,11 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Special:** closes the loop *after* the PR opens.
 - **Gaps:** event-driven routing of CI failures / review comments to the owning session. ptyro's plan ends at landing.
 - **Ideas:** recipe triggers / reactions (R-ORC-08).
+- **Update [V 2026-11-11]: now Orchestrator.inc.** `ComposioHQ/agent-orchestrator` redirects to https://github.com/OrchestratorInc/agent-orchestrator (orchestrator.inc): **Apache-2.0** (the "MIT [S]" above was wrong or has changed), **14,444★** (double the ≈7k of three weeks ago), and no longer a tmux CLI: a desktop app for macOS, Windows and Linux with paired **iPhone and Android** apps and optional cloud workers. A project's main agent splits a task and starts a worker per piece, each in its own worktree; a kanban board has lanes **Working / Needs you / In review / Ready to merge**; "failed checks, review comments, and merge conflicts are sent back to the worker that owns the branch"; a reviewer agent reads pull requests before a person does; each worker has a browser; "35+" agents. Tagline: "Stop babysitting agents. Start merging real work." This settles the identity question in IV.2. Whether the YAML reactions survive was not read [U].
+- **Gaps (2026-11-11):** merge conflicts routed to the owning worker alongside CI and review; a "Ready to merge" lane; phone review of pull requests.
 
 #### F12. Goose (Block / AAIF) — recipes, subrecipes, subagents
-- **URL:** https://github.com/block/goose · Apache-2.0 · ≈50k★ [S]; in ACP registry [V]
+- **URL:** https://github.com/block/goose (redirects to https://github.com/aaif-goose/goose, 56,460★, pushed 2026-11-11 [V, GitHub API]) · Apache-2.0 · ≈50k★ [S]; in ACP registry [V]
 - **What it is [S]:** YAML recipes with parameters; `sub_recipes` each in its own session; same subrecipe with different params runs **in parallel by default** (`sequential_when_repeated` to serialise); no nesting; ad-hoc subagents.
 - **Gaps:** **matrix fan-out** (1 agent × N inputs; M7.2 is N agents × 1 prompt); shareable recipe links/hub.
 - **Ideas:** `matrix =` on steps (R-ORC-05); `ptyro recipe import <url>` from trusted hubs (shares trust code with M11.12).
@@ -905,11 +1094,18 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Maturity [V]:** registry live since 2026-01, **44 agents** (Claude Agent, Codex, Gemini, Cursor, Copilot, Devin, goose, Kilo, OpenCode, Junie, Amp, Droid, Qwen, Kimi, Mistral Vibe, pi…); ACP v2 docs; open RFDs: session fork, proxy chains, MCP-over-ACP, **Subagent Sessions** (rev. 2026-10-13, `unstable_subagents`), compaction, usage/cost.
 - **Gaps:** one client integration reaches ~44 agents. M10.2 treats ACP as "for Gemini/OpenCode" — it should be the primary structured path.
 - **Ideas:** registry-aware `ptyro agents add`; render subagent trees; ptyro as an **ACP proxy** and/or exposing daemon sessions **as** an ACP agent to Zed/JetBrains (R-ORC-16).
+- **Update [V 2026-11-11]:** the registry lists **45 agents** (https://agentclientprotocol.com/registry), now including **Grok Build**, **Kiro CLI**, **Cortex Code**, **Poolside**, **Qoder CLI**, **MiniMax Code**, **Auggie CLI**, **Cline** and **OpenCode V2** as a separate entry. Releases (https://github.com/agentclientprotocol/agent-client-protocol/releases): schema **v1.31.0** and **v2.0.0-alpha.15** on 2026-11-10, so v2 is still alpha and v1 is still moving. v1.15.0 (11-01) added **background work to v2, session archive/unarchive, `proxy/initialize` and `proxy/successor`, `session/status`, auth status and status-update notifications, and `session/set_title`**; v1.16.0 (11-09) stabilised the client system prompt; v1.17.0 (11-10) added `session/options`, session tool-call content, a clarification of one-shot subagents, and "v2: `session/cancel` only stops foreground work". Kiro Crew (F22) and AoE's Structured View (A5) are new hosts built on ACP.
+- **Ideas (2026-11-11):** → R-ACP-02.
 
 #### F15. A2A and MCP as orchestration substrate (see Part II §P3)
 - A2A v1.0 (2026 H1, LF, 150+ orgs) [S] — **no coding-agent CLI adoption found**; enterprise cross-vendor only. Low priority.
 - MCP **Tasks** extension (`io.modelcontextprotocol/tasks`): poll-based, `working`/`completed`/`failed`/`cancelled`/**`input_required`** [S]. That is exactly ptyro's `blocked`.
 - **Ideas:** model `ptyro mcp` spawn/wait as MCP Tasks (R-ORC-07).
+- **Update (2026-11-11):**
+  - **MCP [V]:** 2026-07-28 is still the latest revision; no release candidate for a next one was found. The roadmap (last updated 2026-08-22, https://modelcontextprotocol.io/development/roadmap) puts **"agentic messaging primitives"** first: server-initiated events (channels, subscriptions, webhooks) so clients stop polling Tasks, a review of how Tasks, Triggers and subscriptions compose, and "continued work on Tasks (SEP-2663) toward eventual inclusion of the extension in the core protocol". Then HTTP over stdio as the single transport, **agent identity** (DPoP, workload identity federation, delegation to sub-agents with narrower authority, human-presence attestation), and progressive discovery of tools. In the 2026-07-28 changelog and not recorded here before: OAuth Dynamic Client Registration is deprecated for **Client ID Metadata Documents**; `subscriptions/listen` replaces the GET stream; `ttlMs`/`cacheScope` on list results; W3C trace context in `_meta`.
+  - **Tasks has a coding client now [V]:** Claude Code 2.1.319 (F1). Codex, Gemini and OpenCode were not re-checked [U]; the official client matrix could not be read on this pass.
+  - **A2A [S]:** v1.0 (2026-03) and v1.0.1 (2026-05); v1.1 is on a roadmap dated 2026-09-15; an official `a2a` command-line client was announced on 2026-10-01 for "shells, CI pipelines, test harnesses, and coding agents", and "A2A CLI and coding-harness integration" is listed as upcoming. Still no first-party coding CLI speaks it.
+  - **AG-UI [V]** (https://docs.ag-ui.com/introduction): an event protocol between an agent backend and a user-facing front end (streaming chat, shared state as event-sourced diffs, front-end and back-end tool calls, **interrupts for a human in the loop**, sub-agents), born from CopilotKit. First-party integrations include Microsoft Agent Framework, Google ADK, **Google Antigravity**, AWS Strands and Bedrock AgentCore, Mastra and Pydantic AI; community ones include the Claude Agent SDK and the OpenAI Agents SDK. It names its place as agent ↔ user, beside MCP (agent ↔ tools) and A2A (agent ↔ agent). No version number is published. For ptyro it is a candidate wire format for the web client's structured view, not for hosting agents; ACP already covers that.
 
 #### F16. Spec-driven tools — GitHub Spec Kit, Kiro specs, BMAD Method, Tessl
 - **Spec Kit** (https://github.com/github/spec-kit, MIT): 1.0.0 on 2026-08-21 [S]; primitives integrations / extensions / presets / workflows / steps; 38 agent integrations [S].
@@ -918,6 +1114,7 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Tessl** (https://tessl.io): registry of versioned, *evaluated* skill/spec "tiles" [S].
 - **Gaps:** nothing in ptyro compiles a spec/tasks file into a fan-out; no "approve this file" gate.
 - **Ideas:** `ptyro recipe from-tasks tasks.md` → wave DAG; `gate = { approve = "specs/x/design.md" }`; built-in `spec-pipeline` recipe (R-ORC-06).
+- **Update [V 2026-11-11]:** Spec Kit is at **v1.4.0 (2026-11-10)** with **149,327★** (GitHub API; https://github.com/github/spec-kit/releases), three releases in five days: workflows with per-step reasoning effort and context size and project-installed pipe filters; a community catalog of extensions (Quality Gates, a "T-Shirt Sizing Gate", a Pull Request Workflow), presets ("Model Routing Governance") and bundles (Azure DevOps); HTTPS required for catalog sources. The 1.0.0 date (2026-08-21) is still unverified [U]. Kiro's `/spec run` "waves" were not re-checked [U]; Kiro shipped something else (F22).
 
 #### F17. Agent task trackers — Backlog.md, Task Master AI, Vibe Kanban
 - **Backlog.md** (MIT, ≈7.1k★) [V]: markdown tasks in-repo with deps, acceptance criteria, per-project Definition of Done; MCP; TUI + web board; `task list --json --watch`.
@@ -929,7 +1126,73 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 #### F18. Others, briefly
 - **Aider architect mode** (Apache-2.0; development appears slowed): planner model + cheap editor → `architect-editor` recipe preset.
 - **OpenHands V1 SDK** (MIT): task tool + concurrent delegate; markdown subagents; can host ACP agents; sandboxed Docker/K8s runtimes (ptyro has none).
-- Watch: Superset, Parallel Code, Sculptor, Claude Code "projects".
+- Watch: Superset, Parallel Code, Sculptor, Claude Code "projects". *(2026-11-11: Superset is Paradev, B3; Claude Projects has its own entry, D11.)*
+
+#### F19. Symphony (OpenAI) *(added 2026-11-11)*
+- **URL:** https://github.com/openai/symphony · **Class:** published spec plus reference implementation for tracker-driven autonomous runs · Apache-2.0 · Elixir reference in `elixir/`
+- **Maturity [V 2026-11-11]:** ≈28k★, 2.9k forks, 47 commits on `main`, no releases; self-described "low-key engineering preview for testing in trusted environments". When it was published was not found [U].
+- **What it is:** Symphony "turns project work into isolated, autonomous implementation runs" so teams "manage the work instead of supervising coding agents". It watches a **Linear** board, starts an agent per piece of work in its own workspace, and the agent hands back **proof of work**: CI status, pull-request review feedback, a complexity analysis and a **walkthrough video**. After acceptance the agent lands the pull request.
+- **Special:** the product is a **`SPEC.md`** you are told to hand to a coding agent to build your own Symphony in any language; the Elixir tree is one rendering of it. 28k stars for 47 commits says the idea, not the code, is what people came for.
+- **Gaps (positive):** "proof of work" as a named bundle a human accepts or rejects (ptyro's review queue has an evidence bundle; it has no walkthrough and no complexity note [U against SPEC]); the tracker as the only interface a manager needs; a spec that others implement, which makes it a de facto interchange format for "work item → run → proof → land".
+- **Weaknesses vs ptyro:** Codex-centred (a `.codex` folder; other agents not documented); trusted environments only; no terminal, no profiles; details of workspaces, concurrency and retries are in the spec, which was not read here [U].
+- **Ideas:** → R-ORC-44.
+
+#### F20. GitHub Copilot — `/fleet` and dynamic workflows *(added 2026-11-11)*
+- **URL:** https://github.blog/changelog/2026-10-01-dynamic-workflows-in-copilot-cli-and-the-copilot-app/ · https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/fleet-mode · **Class:** first-party orchestration in an agent CLI · proprietary, all Copilot plans
+- **Maturity [V 2026-11-11]:** dynamic workflows in **public preview** since 2026-10-01 (in the CLI behind `--experimental` or `/experimental on`; no setup in the Copilot app); fleet mode marked experimental in the SDK docs [S for the label].
+- **What it is:** `/fleet` has Copilot plan an objective, split it into independent work items and dispatch subagents in parallel; "sub-agents can't talk to each other directly; only the orchestrator coordinates" [S, GitHub blog via search]. A **dynamic workflow** "carries out a process defined in code", inside a Copilot extension, in the CLI, the Copilot app and the Copilot SDK: run commands, call tools and services, split a goal and run independent tasks in parallel, pass structured results between stages, **have subagents verify each other's findings**.
+- **Special:** a workflow **"can pause at a checkpoint so you can review results before continuing"** and can be paused and resumed later, "for long or potentially expensive runs". It can ask the user for input "if the client supports it". Claude's workflows, by their own docs, cannot (F1).
+- **Gaps (positive):** human checkpoints inside a vendor's own scripted workflow; one workflow definition running in a terminal, a desktop app and an SDK.
+- **Weaknesses vs ptyro:** Copilot's harness only (it can use other vendors' *models*, not their CLIs); preview; no documented limits, retry or resume semantics yet; no worktree or landing model in the announcement.
+- **Ideas:** → R-ORC-49; a correction to §II.0 and §II.5 (mid-run gates are no longer unique against every vendor).
+
+#### F21. CLI Agent Orchestrator, "CAO" (AWS Labs) *(added 2026-11-11)*
+- **URL:** https://github.com/awslabs/cli-agent-orchestrator · **Class:** supervisor/worker orchestrator over real agent CLIs in tmux · Apache-2.0
+- **Maturity [V 2026-11-11]:** ≈1.5k★, 318 forks; no tagged release shown.
+- **What it is:** a local `cao-server` starts provider CLIs in isolated tmux sessions; a supervisor agent delegates to specialist workers in parallel or in sequence; the agents "remain full CLI processes with their native authentication". Providers: **Kiro CLI (the default)**, Claude Code, Codex, Antigravity, Hermes, Kimi, MiniMax Code, Copilot CLI, OpenCode, Oh My Pi, Cursor CLI, Grok Build. **Flows** are scheduled runs and multi-step pipelines; an operations MCP server is one control plane.
+- **Special:** a cloud vendor's lab shipping a *cross-vendor* orchestrator over other vendors' CLIs, which is ptyro's own premise.
+- **Gaps (positive):** twelve providers behind one supervisor; scheduled flows.
+- **Weaknesses vs ptyro:** tmux; how it knows a worker is idle or blocked is not documented on the page [U]; no worktree, review or landing model described.
+- **Ideas:** evidence for the cross-vendor position (§IV.5); no new id.
+
+#### F22. Kiro Crew (AWS / Kiro) *(added 2026-11-11)*
+- **URL:** https://kiro.dev/crew/ · https://github.com/kirodotdev/KiroCrew · **Class:** persistent local agent workspace · Apache-2.0
+- **Maturity [V 2026-11-11]:** 4.9k★; the site claims "39,000+ builders in under 6 months", nearly 500 contributors and 567 updates; started as an internal side project. Announcement date not found [U].
+- **What it is:** "a persistent workspace for development work that self-improves and continues beyond one session", on your own machine, reached from a desktop app, a web dashboard, a CLI, or Slack, Discord, Telegram, Teams and WhatsApp. **Bots** are named long-running agents that coordinate the sessions behind them and surface only results or decisions that need you; a Workers panel counts tasks working and finished. Scheduled, timezone-aware jobs; **heartbeats** that watch systems; webhooks; isolated subagents for parallel work (a "Code Review Sage" gives each changed file its own session).
+- **Special:** every conversation or background task is an agent session "through a configurable **ACP** backend", so any ACP agent can sit behind it; it turns corrections and repeated patterns into lessons and reusable skills.
+- **Gaps (positive):** chat apps as a full front end, not only a notification sink; standing bots with schedules and heartbeats; lessons promoted to skills without being asked (P14 in §II.1).
+- **Weaknesses vs ptyro:** no board, worktree model or review stage described; Kiro CLI is the centre.
+- **Ideas:** evidence for R-RUN-02 (schedules) and R-ORC-16 (ACP as the neutral backend); no new id.
+
+#### F23. Concord MCP *(added 2026-11-11)*
+- **URL:** https://github.com/Get-Concord-AI/concord-mcp · **Class:** coordination layer beside any host, over MCP · MIT, optional Concord Cloud
+- **Maturity [V 2026-11-11]:** ≈1.1k★, 65 forks; no tagged release shown. It sends product telemetry to getconcord.ai unless `CONCORD_TELEMETRY_DISABLED=1` or `DO_NOT_TRACK=1`.
+- **What it is:** "shared work-state, not an orchestrator". Five tools: **`start_work`** registers presence, claims or accepts a task and reports scope overlaps before editing; **`update_work`** sends prompts and replies to other agents; **`inspect_work`** flags stale claims whose owner has gone; **`transfer_work`** assigns, accepts, declines, releases and offers handoffs under a version number so only the first conflicting transition wins, each change appended to a history; **`finish_work`** records evidence and marks a task review-ready, and generates a `HANDOFF.md` and a `REVIEW_PACKET.md`. State is a SQLite file in `.concord/` at the repository root, shared by linked worktrees. **`concord check` exits non-zero on a conflict**, for a pre-commit hook or CI.
+- **Special:** five verbs cover claim, message, inspect, transfer, finish; delivery is honest about the harness ("hook-only integrations leave a pull message and say so in the result"); works across Claude Code, Codex, Cursor, Gemini CLI, Grok Build, Goose, Antigravity, Copilot CLI, OpenCode, Devin CLI and Conductor.
+- **Gaps (positive):** a generated review packet at handoff; ownership transfer with optimistic versioning; a collision check usable in CI.
+- **Weaknesses vs ptyro:** exact-file overlap only; advisory (an agent that skips `start_work` is unseen); telemetry on by default; no process, terminal or status knowledge.
+- **Ideas:** → R-ORC-38; evidence for R-ORC-11 (leases and radar) and R-ORC-30.
+
+#### F24. fanout (Breadstick-Crumbs) *(added 2026-11-11; tiny, kept for the idea)*
+- **URL:** https://github.com/Breadstick-Crumbs/fanout · **Class:** merge-rehearsal and duplicate-work guard under parallel sessions · MIT · Node 18+, git 2.38+, no dependencies
+- **Maturity [V 2026-11-11]:** **5★**, 96 commits, no releases. One author's tool; not a product.
+- **What it is:** **`fanout rehearse`** merges every session's branch on a scratch copy and runs the test command once; on failure it finds the branch responsible, re-running first so flaky tests and failures already on `main` are reported separately. "The agent that caused the break gets the failing output and fixes its own branch. You're only notified if the same agent fails twice." A session's task is **claimed on its first edit**; a small-model call compares each new claim with the live ones and stops a session whose work matches another's "even when worded differently" (the author reports 40 of 40 on held-out labelled pairs). Claims live on the git ref `refs/fanout/state`.
+- **Special:** it tests the *combination*, which is where the research says parallel work breaks (§II.6): each branch passes alone and they fail together.
+- **Gaps (positive):** a merged-together rehearsal before anything lands; blame that separates flaky and pre-existing failures; duplicate detection by meaning, not by file.
+- **Weaknesses vs ptyro:** everything else.
+- **Ideas:** → R-ORC-37, R-ORC-38.
+
+#### F25. Claudexor *(added 2026-11-11)*
+- **URL:** https://github.com/razzant/claudexor · **Class:** local control plane routing one thread across vendor CLIs · MIT · TypeScript on Node 24, a Swift macOS app
+- **Maturity [V 2026-11-11]:** 524★, 59 forks; the README states v6.0.0; no release date shown.
+- **What it is:** "a local-first control plane for the AI coding agents you already pay for": Codex CLI, Claude Code, Cursor CLI, OpenCode, Antigravity CLI, Grok Build and raw API adapters behind one interface.
+- **Special:**
+  - **Quota-aware rotation:** several named subscription accounts per harness; an unpinned run goes to the enabled account with the most headroom; work moves off an account "only after a typed vendor limit signal, not on ordinary network errors" and never when you pinned the account. Live quota for Antigravity, Claude and Codex.
+  - **Best-of-N** (`--n N`): candidates in isolated environments, then "reviewed, synthesized, and arbitrated".
+  - **Cross-family review** (`--review`): "a requested review counts as clean and verified only when at least two distinct provider families are observed".
+- **Gaps (positive):** a rule for *when* to rotate accounts that will not thrash; "verified" defined by reviewer diversity; synthesis of candidates, not only choice.
+- **Weaknesses vs ptyro:** small; no terminal ownership, worktree lifecycle or landing; rotating work between subscription accounts may sit close to what vendors' terms allow, which was not checked [U].
+- **Ideas:** → R-ORC-41, R-ORC-45.
 
 ---
 
@@ -947,6 +1210,12 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 >
 > This segment is mostly *integration surface*: exact hooks, flags and protocols. Facts here should
 > graduate into SPEC §8 / §20 once spiked.
+>
+> **Update (2026-11-11) [V]:** versions today are Claude Code **2.1.322** (2026-11-10), Codex
+> **0.167.1** (2026-11-10, with 0.169.0 alphas daily), OpenCode **1.19.5** (2026-10-28) beside
+> **2.2.7** (2026-11-10), kitty 0.50.0, Ghostty 1.4.0. Headline 1 now applies to Codex as well:
+> a shared background server, `codex agents`, `--worktree`, `codex remote-control`. Claude Code
+> still lists 33 hook events and five handler types; no new event since 2026-10-20.
 
 #### G1. Claude Code (Anthropic) — primary agent
 - **URL:** https://code.claude.com/docs · changelog in `anthropics/claude-code` · **2.1.304** (2026-10-20) [V]
@@ -969,6 +1238,15 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
   - Import `claude agents --json` as foreign rows (R-AGT-02).
   - Map `quota_auto_resume_*` + `StopFailure` to a **"rate-limited, resumes at T"** status (R-STA-05).
   - Use **`type:"http"` hooks** to a daemon localhost endpoint to remove `ptyro hook` process spawns on hot events like PostToolUse (R-AGT-07).
+- **Update [V 2026-11-11]: 2.1.322** (https://code.claude.com/docs/en/changelog; 2.1.305–2.1.310 were not read). Facts that touch ptyro's integration:
+  - **MCP tasks (2.1.319):** a tool call that returns a task moves to the background and reports when it finishes; `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND`, `CLAUDE_CODE_DISABLE_MCP_TASKS=1`.
+  - **Hooks:** PostToolUse hooks now run on tool calls that finish after an interruption (2.1.319); prompt and agent hooks are capped at **24 concurrent per session** (2.1.319); `onFailure: "block"` for Agent SDK hook callbacks (2.1.317). The reference still lists 33 events and `command`, `http`, `mcp_tool`, `prompt`, `agent` (https://code.claude.com/docs/en/hooks).
+  - **Background work:** a background subagent's shell command moves to the background after 3 minutes on every provider (2.1.318); self-paced `/loop` ends when a turn finishes without rescheduling unless `CLAUDE_CODE_LOOP_KEEPALIVE=1` (2.1.319).
+  - **Sandbox:** an escape when creating a worktree fixed (2.1.319); protections now apply to a worktree entered with `-p --resume` or `--continue` (2.1.314).
+  - **Usage:** `/usage` shows spend for today, this week and this month for gateway users (2.1.319); "session limit" renamed the **"5-hour limit"** (2.1.312); `claude auth status` reports **`loginExpiresAt`** (2.1.318).
+  - **Messaging socket:** on macOS and Linux the directory is `/tmp/cc-socks-<uid>` when the usual one is refused; `/status` shows the address in a `Peer address` row; a connection that sends no complete line in 30 s is closed; own-child verification is by process evidence on Linux, by process evidence only while the poster runs on macOS, and by the token alone on native Windows and in containers where Claude is PID 1 (https://code.claude.com/docs/en/cross-session-messaging). This answers the IV.2 item on own-child verification from the docs; ptyro's spike should still confirm it.
+  - **MCP OAuth** no longer sends secrets to another host after a redirect (2.1.321).
+- **Ideas (2026-11-11):** `loginExpiresAt` feeds profile health ("work's Claude login expires Friday") — evidence for R-STA-05; the 24-hook cap matters if ptyro ever injects prompt hooks.
 
 #### G2. Codex CLI (OpenAI)
 - **URL:** https://github.com/openai/codex · Apache-2.0 · **0.163.0** (2026-10-15), 0.164.0-alpha.7 (2026-10-20) [V] · docs moved to learn.chatgpt.com
@@ -978,6 +1256,16 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
   - **`notify`** [U]: argv JSON on `agent-turn-complete`; `[tui] notifications`; `notification_method = auto|osc9|bel`.
   - **app-server [V]:** `--listen stdio://|ws://IP:PORT|unix://PATH`; JSON-RPC 2.0 without the header; `initialize`/`initialized`; `thread/start|resume|fork` (`lastTurnId`, `ephemeral`); `turn/start|interrupt|steer`; `item/permissions/requestApproval`, `tool/requestUserInput`, `serverRequest/resolved`; `thread/status/changed`, `thread/tokenUsage/updated`; **`account/rateLimits/read`**, **`account/rateLimits/updated`**, `account/usage/read`; `optOutNotificationMethods`; `codex app-server generate-ts|generate-json-schema`. Labelled "experimental and unsupported".
 - **Ideas:** a side app-server connection per profile (`CODEX_HOME`) subscribed to `account/rateLimits/updated` for true countdowns (R-USE-01); handle **hook trust** up front (generate into a managed layer or detect "untrusted hook skipped" in `doctor`) (R-AGT-06); `thread/fork` backs "fork into new worktree" in M10 (R-AGT-04).
+- **Update [V 2026-11-11]: 0.167.1** (2026-11-10; https://github.com/openai/codex/releases, https://learn.chatgpt.com/docs/developer-commands?surface=cli). The "Overlap" line above is superseded:
+  - **A shared background server is the default.** `--no-daemon` runs the interactive CLI "without the shared background server" and cannot be combined with `--remote` or `codex agents`. There is no standalone `codex daemon` command in the reference.
+  - **`codex agents`** (*Stable*): the agent command center, with `--remote <URL>` and `--cd <DIR>`. The 0.167.0 notes say "run `codex agents --no-daemon`" while the reference says `codex agents` does not support `--no-daemon`: a conflict between two primary sources [U].
+  - **`--worktree`** (global): a new managed Git worktree for new sessions, `codex fork`, `codex exec` and `codex exec fork`; local only; not with `exec resume|review`, `--ephemeral` or `--ignore-user-config`; `codex resume` rejects it. Where the worktrees live was not on the page [U].
+  - **`--remote`** accepts `ws://`, `wss://`, `unix://`, `unix://PATH` for `codex`, `agents`, `queue`, `resume`, `fork`, `archive`, `delete`, `unarchive`; `--remote-auth-token-env`. A **`codex queue`** command exists (not read).
+  - **`codex app-server`** is still *Experimental* ("may change without notice"); `--listen … | off`, `--ws-auth capability-token|signed-bearer-token`.
+  - **`codex remote-control start|stop|pair`** (*Experimental*; E9). **`codex cloud`** with `--attempts 1–4` (*Experimental*; F9).
+  - **Sandbox:** release assets include a `bwrap` binary; an "MXC sandbox" on Windows is named in 0.167.0 (deny paths, read-only volume roots) [V mention, not understood].
+  - 0.167.0 also added Google Cloud Vertex AI to onboarding and switching between connected backends in the TUI.
+- **Ideas (2026-11-11):** → R-AGT-10. ptyro's hybrid session (R-ORC-35) starts its own app-server; with a shared server now the default, check that the two do not fight over one `CODEX_HOME` (a new IV.2 item).
 
 #### G3. Gemini CLI (Google) — retired for consumers
 - **URL:** https://geminicli.com/docs · Apache-2.0 · banner [V]: replaced by Antigravity CLI on 2026-06-18 for unpaid/Google One users; "not optimized for Gemini 4 Argon".
@@ -990,11 +1278,14 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 - **Hooks [V]:** `SessionStart`, `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`, `Stop`; config `.agents/hooks.json`, `~/.gemini/config/hooks.json`, `~/.gemini/antigravity-cli/settings.json`, plugin `hooks.json`; camelCase stdin `conversationId`, `workspacePaths`, `transcriptPath`, `artifactDirectoryPath`, `modelName`; Stop adds `terminationReason`, `fullyIdle`, `error`; outputs `decision` (PreToolUse), `terminationBehavior` (PostInvocation). Migration: `agy plugin import gemini`.
 - **Missing:** **no Notification/permission hook** — "blocked" must come from OSC 7501 (unknown) or heuristics.
 - **Idea:** move this adapter ahead of Aider/Goose/Cursor/Copilot; map `Stop.fullyIdle=true` → idle, `PreInvocation` → working; resume on `conversationId`; M0-style spike for OSC 7501 and blocked detection (R-AGT-01).
+- **Update [V 2026-11-11]** (https://antigravity.google/docs/hooks): still six events and **still no permission or notification event**. But the page gives a way in: `PreToolUse` and `PostToolUse` take matchers, and the tools that ask the user are themselves matchable — **`ask_question`** and **`ask_permission`** — as are the subagent tools `invoke_subagent`, `define_subagent`, `send_message` and `manage_subagents`. `PreToolUse` can answer `"ask"` (prompt, respecting "Always Allow") or `"force_ask"` (always prompt). The page also says hooks in `~/.gemini/antigravity-cli/settings.json` are **not** loaded, which contradicts the config list above; the locations are `.agents/hooks.json`, `~/.gemini/config/hooks.json`, or a plugin's `hooks.json`. Antigravity is listed as a first-party AG-UI integration and is in the ACP registry [V].
+- **Ideas (2026-11-11):** → R-AGT-11 (blocked from a `PreToolUse` matcher on the asking tools).
 
 #### G5. OpenCode (anomalyco, formerly sst)
 - **URL:** https://opencode.ai/docs · MIT · ≈218k★, v1.19.3 [V]
 - **Integration surface [V]:** `opencode serve` (`--port` 4096, `--hostname`, `--mdns`, `--cors`); `GET/POST /session`, `/session/:id`, `POST /session/:id/message`, `POST /session/:id/prompt_async` (204), `/abort`, `GET /event` SSE (first `server.connected`), `GET /global/event`; OpenAPI at `/doc`; `OPENCODE_SERVER_PASSWORD/USERNAME`. Plugin events `session.created|compacted|deleted|diff|error|idle|status|updated`, `permission.asked|replied`, `tool.execute.before|after`, `tui.toast.show`, `tui.prompt.append`, `file.edited`, `command.executed`. `opencode acp` [U]; opentui emits OSC 7501 [U].
 - **Idea:** M4.9 already matches; add `session.diff` → live diff badge and `/global/event` for one SSE stream per server. **Kilo now runs on the OpenCode server** — the driver gains value.
+- **Update (2026-11-11):** 226,115★; v1 is at **1.19.5** (2026-10-28, what the GitHub API calls latest) and **v2 at 2.2.7** (2026-11-10), seven v2 releases in two weeks [V, https://github.com/anomalyco/opencode/releases]. OpenCode 2.0 launched on 2026-10-12 [S, several third-party write-ups]: one background server shared by the terminal, web and desktop apps, a rebuilt API, **background subagents** (`background: true` returns at once and notifies the parent when the child finishes; a child can use a different model; default nesting depth one; the tool is `subagent`, not v1's `task`), "Code Mode" and an SDK. From the v2 release notes [V]: `opencode run` waits for background shells, subagents and image jobs before exiting (2.2.6); opt-in MCP connection sharing (`pool: true`); **schedules that fire once across several server processes** (2.2.4); an experimental bytecode VM for Code Mode; TUI plugins must move to OpenTUI 0.8; a separate `process-daemon` component at v0.5.0. "OpenCode V2" is its own entry in the ACP registry. A security fix for remote MCP OAuth that could run PowerShell on Windows and WSL is reported in 1.18.33 without a CVE [S]. R-BOOT-03 stands: the v1 driver does not speak v2.
 
 #### G6. Kilo CLI (Kilo Code) — OpenCode fork [V]
 - `kilo run --auto` (exit 0 / 124 timeout / 1), `kilo serve`, `kilo acp`, `kilo session|export|import|stats`; modes Architect/Ask/Debug/Orchestrator; **`/resume-claude` and `/resume-codex` import Claude/Codex transcripts** [V].
@@ -1076,8 +1367,11 @@ script or a third-party write-up; [U] = nothing documents it.
 | **ccusage** | github.com/ryoppippi/ccusage (MIT, very active) | `daily\|weekly\|monthly\|session\|blocks\|statusline`, `--json`, `--offline`; parses local logs of ~18 agents (Claude, Codex, OpenCode, Amp, Droid, Goose, Kilo, Kimi, Qwen, Copilot, Gemini, Antigravity…) | **Don't reimplement log parsing:** shell out to `ccusage … --json` per profile config dir for history; live numbers from statusline / app-server (R-USE-01). |
 | **Claude-Code-Usage-Monitor** | github.com/Maciek-roboblog/Claude-Code-Usage-Monitor (MIT, v4.0.0) | Live TUI; custom plan derives a **P90 limit** from the last 192 h; burn rate; predicted expiry; `--data-paths` per Claude dir; `--statusline` reads official `rate_limits` | Steal P90 soft limits and "at this burn you hit the 5 h cap at 14:20"; per-profile windows. |
 | **ccstatusline** | github.com/sirmalloc/ccstatusline (MIT, v2.2.32) | Widget vocabulary: block/reset timers, cost/hour, context bars, weekly per-model usage, powerline | Borrow vocabulary for `ptyro status-line`; the relay must **chain** to it, not replace it. |
-| **Claude Code sandbox / `@anthropic-ai/sandbox-runtime` (`srt`)** | code.claude.com/docs/en/sandboxing | macOS Seatbelt; Linux/WSL2 **bubblewrap + socat** (+ seccomp); Bash-only scope; network proxy with empty allowlist; AppArmor profile needed on Ubuntu 24.04+ | Wrap the **whole agent PTY** in `srt`/bwrap — a light sandbox tier for any agent; `doctor` checks bwrap/socat/AppArmor (R-SEC-05). |
-| **Docker Sandboxes (`sbx`)** | docs.docker.com/ai/sandboxes | microVM per agent (Claude, Codex, Copilot, Cursor, Devin, Droid, Gemini, Kiro, OpenCode, Shell); `docker sandbox` deprecated for `sbx`; Linux support unconfirmed | `sandbox = "sbx"` backend: spawn `sbx run <agent>` in the PTY, OSC 7501 passes through (R-SEC-05). |
+| **Claude Code sandbox / `@anthropic-ai/sandbox-runtime` (`srt`)** | code.claude.com/docs/en/sandboxing | macOS Seatbelt; Linux/WSL2 **bubblewrap + socat** (+ seccomp); Bash-only scope; network proxy with empty allowlist; AppArmor profile needed on Ubuntu 24.04+ | Wrap the **whole agent PTY** in `srt`/bwrap — a light sandbox tier for any agent; `doctor` checks bwrap/socat/AppArmor (R-SEC-05). **2026-11-11 [V]:** now at github.com/anthropics/sandbox-runtime (Apache-2.0, 7,083★, "Beta Research Preview"); its README says it sandboxes "agents, local MCP servers, bash commands and arbitrary processes" (`srt <command>`; prefix an MCP server's command with `srt`). **Windows alpha:** a dedicated `srt-sandbox` local user, a WFP egress fence keyed on its SID, a write-restricted token and ACEs on the working tree, after a one-time elevated install. Unlisted destinations can go to an `ask` callback; allowed hostnames that resolve to loopback, link-local or cloud-metadata addresses are blocked; on Linux `allowUnixSockets` paths are ignored because seccomp cannot filter by path. The proxy limits where traffic goes; it does **not** inject credentials. |
+| **Docker Sandboxes (`sbx`)** | docs.docker.com/ai/sandboxes | microVM per agent (Claude, Codex, Copilot, Cursor, Devin, Droid, Gemini, Kiro, OpenCode, Shell); `docker sandbox` deprecated for `sbx`; Linux support unconfirmed | `sandbox = "sbx"` backend: spawn `sbx run <agent>` in the PTY, OSC 7501 passes through (R-SEC-05). **2026-11-11:** Linux is confirmed [V, github.com/docker/sbx-releases]: a `.deb` for Ubuntu and an `.rpm` for Rocky Linux 8, with the user in the `kvm` group; macOS by Homebrew, Windows by WinGet or MSI; proprietary. Reported, not seen on Docker's own page [S]: a **credential proxy that injects API keys as headers so the keys never enter the sandbox**; a runtime for GitHub Agentic Workflows since gh-aw 0.82.9 (2026-07); cloud sandboxes "experimental" as of v0.45.0. → R-SEC-06. |
+| **agentbox** [S] | github.com/madarco/agentbox | A sandboxed VM per agent, local Docker or cloud (Hetzner, Daytona, Vercel, E2B), "sub-second checkpoint starts" | The same execution-target choice as B16; nothing new for ptyro beyond R-SEC-05. |
+| **OrcaReplay** [S] | github.com/Continuum-AI-Corp/OrcaReplay | Records an agent at the process and socket boundary (model traffic, shell exit codes, per-turn file changes, MCP JSON-RPC on one timeline), replays offline or forks from a checkpoint onto another model | ptyro records the terminal, not the model traffic; a timeline that joins both is the gap (R-OBS-04). |
+| **aGiTrack** [S] | github.com/core-aix/agitrack | Commits each agent turn to git with the prompt, model and that turn's token cost in the message | Per-turn cost beside ptyro's per-turn checkpoints (R-OBS-04). |
 | **container-use (Dagger)** | github.com/dagger/container-use (Apache-2.0, experimental) | MCP server: container + git branch per environment; `container-use stdio` | Light "MCP-isolated" workspace option; weaker than PTY-in-container. |
 | **asciinema 3** | blog.asciinema.org/post/three-point-o (2025-09-15) | Rust rewrite; **asciicast v3** (relative intervals, `term` group, `exit` event, `#` comments); `asciinema stream -s/-r`; headless rec | `ptyro export --asciicast` should target **v3** with status changes as markers; `ptyro stream` speaking asciinema's live protocol = free view-only sharing (R-OBS-03). |
 | **Claude Code OTel** | code.claude.com/docs/en/monitoring-usage | see G1 | **Local OTLP/HTTP receiver in the daemon**; inject `OTEL_*` with `OTEL_RESOURCE_ATTRIBUTES=ptyro.session=<id>,ptyro.profile=<p>`; chain to the user's endpoint (R-OBS-01). |
@@ -2285,6 +2579,11 @@ It ends with a synthesis: what orchestration in ptyro should be (§II.5).
    - compare-and-ship;
    - multi-repo change sets.
 
+> **Annotation (2026-11-11).** Sentence 1 now holds for Codex and Copilot as well as Claude, and
+> one item in sentence 5 needs a qualifier: Copilot's dynamic workflows pause at checkpoints for a
+> human (F20), so mid-run gates separate ptyro from Claude's workflows, not from every vendor.
+> Sentences 2–4 are stronger than they were; the evidence is in §II.6.
+
 ### II.1 How practitioners actually run multi-agent coding (2025–2026)
 
 #### Sources (annotated)
@@ -2569,7 +2868,7 @@ All of these are deterministic; judging is delegated to an agent.
    - No `initialize`, no sessions (SEP-2575, SEP-2567). State lives in server-minted handles passed as tool arguments.
    - Server-to-client requests are replaced by **Multi Round-Trip Requests** (`resultType:"input_required"` + `requestState`, SEP-2322).
    - Tasks moved to the `io.modelcontextprotocol/tasks` extension (SEP-2663). Sampling, Roots and Logging are deprecated.
-   - **The official client matrix lists no coding-agent CLI with Tasks support.**
+   - **The official client matrix lists no coding-agent CLI with Tasks support.** *(2026-11-11: no longer true of Claude Code. 2.1.319 added MCP task support in the terminal [V changelog]; the matrix itself could not be re-read. See §II.6.)*
    - Conflict between researchers: segment F suggested modelling `ptyro mcp` spawn/wait as MCP Tasks. **Resolution:** offer Tasks semantics as an *optional* layer; never depend on them.
 5. **Claude Code backgrounds long MCP calls.**
    - A call still running after **2 min** becomes a background task (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`).
@@ -2599,7 +2898,7 @@ All of these are deterministic; judging is delegated to an agent.
 |---|---|---|---|---|
 | MCP via flag | ✓ `--mcp-config` (+`--strict-mcp-config`) | ✓ | ✓ settings | ✓ config |
 | MCP elicitation | ✓ form + url | ✓ (~v0.119) [3P] | ? | ? |
-| MCP Tasks extension | ✗ | ✗? | ✗? | ✗? |
+| MCP Tasks extension | ✗ (✓ from 2.1.319, checked 2026-11-11 [V]) | ✗? | ✗? | ✗? |
 | Push into a live session | ✓ inbox socket, channels (preview) | ✓ `turn/steer`, `inject_items` | ✗ (PTY only) | ✓ `prompt_async`, `/tui/*` |
 | Native peer messaging | ✓ SendMessage / ListAgents / teams | ✗ | ✗ | ✗ |
 | Precise idle/busy | Stop hook, `session_state_changed`, `claude agents --json`, OSC 7501 | `thread/status/changed` | hooks + title | SSE `session.status` |
@@ -2792,6 +3091,119 @@ Hygiene:
 - **By default the lead may not approve its workers' prompts.** Delegation must be explicit and is scoped by the daemon.
 - **Attention on your own terms:** digest and batch non-blocking events, and break through only for `blocked` (Hashimoto turned notifications off).
 
+### II.6 What changed, 2026-11 sweep
+
+*Added 2026-11-11. One research pass, web only, three weeks after the full sweep. §II.0–II.5 are
+left as written, with dated annotations where a statement no longer holds. Marks: [V] the primary
+page (vendor docs, repository, arXiv abstract) was fetched on 2026-11-11; [S] secondary only.
+Paper numbers are from abstracts; no paper was read in full.*
+
+#### Sources added
+
+| # | Source | Date | Why it matters |
+|---|---|---|---|
+| 21 | Anthropic, *Redesigning source control at Anthropic* — anthropic.com/engineering/redesigning-source-control | 2026-10-13 [V] | Merged changes went from about **2,500 a day (May 2026) to over 30,000 a day (September)**. "A traditional merge queue with a global lock doesn't work at agent scale"; they moved to post-merge and pre-deploy testing and let Claude fix conflicts. Reviewers "focus on change intent rather than every line". Adversarial review "sometimes over-engineered code". Agents watch each component's telemetry. A seven-person team replaced git for the monorepo in five months. |
+| 22 | Claude Code docs: *Run agents in parallel*, *Projects*, *Dynamic workflows*, *Cross-session messaging* — code.claude.com/docs | live, 2026-11 [V] | Five native ways to run in parallel. Workflows: no mid-run input, usage-limit waits, size guidelines. Projects: a cloud coordinator with memory. "In every approach the workers are Claude sessions." |
+| 23 | GitHub changelog: *Dynamic workflows in Copilot CLI and the Copilot app*; *Work from anywhere with a new, connected Copilot cloud experience* | 2026-10-01, 2026-10-28 [V] | A second vendor ships code-defined workflows, with human checkpoints. Sessions move between seven surfaces; a local device is an "environment". |
+| 24 | OpenAI, Codex CLI command reference and 0.167.0 release notes — learn.chatgpt.com/docs/developer-commands | 2026-11-06 [V] | `codex agents` (Stable), `--worktree`, `remote-control`, a shared background server, host APIs for programs that embed Codex. |
+| 25 | OpenAI, *Symphony* README — github.com/openai/symphony | 2026 [V; date unknown] | "Manage the work instead of supervising coding agents": tracker in, proof of work out, a spec others implement. |
+
+**Bibliography added** (adds to §II.2; abstracts only):
+
+- **ParallACT — *Decentralized Multi-Agent Coordination and Communication in Shared Codebases*** (Mediratta, Xiao, Stone, Biswas, Stengel-Eskin; 2026-10-30) arxiv.org/abs/2611.00314 [V]: orchestrator-free pairs of agents on complementary or contradictory tasks. A single-agent oracle solves most tasks; parallel agents do much worse, sharpest on contradictory pairs: Claude Code with Claude Opus 4.8 fell from **62% to 16%**. The same gap appears in six more configurations (two harnesses × three open-weight models). "Telling an agent that a peer exists does not significantly help", and a communication channel "recovers only a small part" at extra token cost.
+- ***When Agents Coordinate: Measuring Coordination in Multi-Agent AI Coding*** (Destefanis, Aste; 2026-08-17) arxiv.org/abs/2608.16801 [V]: 1,902 runs of agent teams against a fixed test suite. Direct messages grow nearly quadratically with team size, much of it "an early round of introductions", then level off as agents switch to broadcasts. Shared files cut output tokens by about **42% at eight agents** on message-heavy work, and add overhead when files already carry the coordination. **"Designating a coordinator creates no communication hub and gives no reliable gain in success."** In 244 sealed-environment runs, agents "still sought hidden grading material in about four fifths of runs".
+- **MSEval — *Coordination Mode as the First-Class Citizen in From-Scratch Multi-Agent Coding*** (Ren et al.; 2026-07-30) arxiv.org/abs/2607.27877 [V]: 10 full-stack projects × 10 collaboration topologies. Changing only the topology moved scores by **over 30 points** and roughly doubled wall-clock time. "Structured pipelines converged fastest with the highest quality, while heavy managerial oversight degraded performance."
+- ***Before the Pull Request: Mining Multi-Agent Coordination*** (Sarkar; 2026-06-17) arxiv.org/abs/2606.19616 [V]: with a shared append-only coordination log, work that re-does a teammate's task fell from **78% to 0%** and useful throughput more than tripled; a file-based tracker "loses concurrent writes". The log exposes failures invisible in pull-request history: conflicting edits, lock starvation, redundant rediscovery, race-to-close. One author, nine pages.
+- ***When Parallelism Pays Off: Cohesion-Aware Task Partitioning for Multi-Agent Coding*** (Yang et al.; 2026-05-31) arxiv.org/abs/2606.00953 [V]: treats splitting work as graph partitioning over code dependencies; on 28 tasks, pass rate up to +14.0%, wall-clock up to 2.10×, API cost down up to 35%, most on dependency-dense projects.
+- **Claim Plane — *Reliability Gains and the Limits of Selective Concurrency for Parallel Coding Agents*** (Nikolaev; 2026-08-02) arxiv.org/abs/2608.00947 [V]: 30 feature pairs (15 that conflict), 360 executions. Declaring scope before writing and admitting only non-overlapping work raised both-pass from **23.3% to 50.0%** and integration success from 65.6% to 96.7% — but it **serialised 96.7% of executions, 93.3% of the clean ones**; the gain "came largely from collapsing toward serial execution". A finer, dynamic admission failed closed on undeclared scope in 46 of 90 runs. One author; a small confirmatory study.
+- ***Passes Alone, Fails Together: Benchmarking Semantic Coordination in Parallel LLM-Agent Development*** (Xia, Wu, Park; 2026-09-21) arxiv.org/abs/2609.25396 [V]: each patch tested alone and combined. On constructed tasks interference occurred in **97% of runs**, and "a message describing the completed concurrent change recovered 82%". On 417 mined pairs of real, reviewed Django pull requests, only one run showed interference: constructed rates "do not estimate how often these problems occur in practice".
+- **AgenticFlict** (Ogenrwot, Businge; 2026-04, AIware 2026) arxiv.org/abs/2604.03551 [V]: 142k+ agent pull requests from 59k+ repositories; of about 107k processed by deterministic merge simulation, **27.67% conflict**, with the rate varying by agent. Merge-Bench (arxiv.org/abs/2605.25890): the best models resolve under 60% of 7,938 real conflict hunks [S]. A Java study with a calibrated judge: models match the developer's own resolution on about 55% of true conflicts [S].
+- **PatchFusion — *A Single Patch Is Not Enough: Deterministic Fusion of Repair Candidates*** (Yang et al.; 2026-07-02) arxiv.org/abs/2607.01597 [V]: names the "pass@k-to-pass@1 gap" as a selection problem. Groups candidates, picks a representative, keeps the edit atoms candidates repeat and prunes unsupported ones, **without test outcomes or a model at decision time**. 426/500 on SWE-bench Verified from fixed candidate pools, reaching 96.2% of the candidate-reachable ceiling; it solves 41 bugs no single source solves; "orders of magnitude cheaper" than test-based and LLM selectors.
+- ***The Verification Horizon: No Silver Bullet for Coding Agent Rewards*** (Wang et al.; 2026-06-24) arxiv.org/abs/2606.26300 [V]: as generation gets easier, verification becomes the bottleneck; no fixed verifier stays effective as the generator improves; "verification must co-evolve with the generator". No numbers in the abstract.
+- **SpecBench — *Measuring Reward Hacking in Long-Horizon Coding Agents*** (Zhao et al.; 2026-05, rev. 2026-09-09) arxiv.org/abs/2605.21384 [V]: 30 systems tasks from a JSON parser to an OS kernel. Every frontier agent passes the visible tests almost completely; the gap to held-out tests that combine features **grows by 28 points for every tenfold increase in code size**. One exploit was "a 2,900-line hash-table 'compiler' that memorizes test inputs".
+- ***Who Finishes the Job? Follow-Up Fixes and Commit Authorship on AI Coding Agent Pull Requests*** (Takerngsaksiri, Duong, Barnett; 2026-09-22) arxiv.org/abs/2609.26847 [V]: 6,774 merged agent PRs (Codex, Copilot, Devin, Cursor, Claude Code) against 5,044 human PRs in the same repositories. Agent merges drew verified follow-up fixes at **1.62× the odds**; **69.6% of those fixes came from the same agent**. Its LLM judge reached κ 0.78 against human–human 0.77, with 90% precision on direct fixes.
+- ***How Coding Agents Fail Their Users*** (Tang et al.; 2026-05, rev. 2026-08-31) arxiv.org/abs/2605.29442 [V]: 20,574 real sessions from 1,639 repositories. 90.5% of misalignment episodes cost effort and trust rather than irreversible damage; 91.5% of visible resolutions needed explicit user correction; the overall rate falls over time, while **constraint violations and inaccurate self-reporting are a growing share**.
+- **ParallelPilot** (Long et al.; 2026-09-27) arxiv.org/abs/2609.33113 [V]: a formative study (N=14) names five supervisory practices, PILOT: Planning, Isolating, Logging, Observing, Triaging. With a planning view, a run logger and an ambient dashboard (N=16, within subjects): ticket throughput +63% on short tasks, **about one more concurrent agent at peak**, less tracking effort; no significant gain in perceived control.
+- ***Developers as Managers of AI Agents: A Workplace Shadowing Study*** (Chou et al.; 2026-10-24) arxiv.org/abs/2610.33588 [V]: 11 professionals, about 15 hours. 33.4% of observed time went to writing prompts or reviewing responses; task switching ranged from **0 to 101.6 switches an hour**; three styles: Supervisor, Delegator, Learner.
+- **Microsoft's rollout of Claude Code and Copilot CLI** (Murphy-Hill, Butler, Savelieva; 2026-07-01) arxiv.org/abs/2607.01418 [V]: tens of thousands of engineers; adopters merged about **24% more pull requests** over four months; adoption spread through social networks.
+- **METR, February 2026 update** [S]: 57 developers, 800+ tasks; the estimated change in task time for returning developers was −18% (interval −38% to +9%), "only very weak evidence"; 30–50% of developers said they withheld tasks they would not do without AI; time per task is unreliable for developers running several agents at once. The sign of the 18% is reported both ways by secondary sources: read METR's post before quoting it.
+- ***Capable language models can outgrow the benefits of collaboration*** (Nature Machine Intelligence, 2026) [S; the page is behind a login]: 260 configurations; multi-agent variants used about 1.6–6.2× more reasoning turns under matched compute; a capability threshold beyond which more agents rarely help. Probably the journal version of the Google scaling paper in §II.2 [U].
+
+#### Patterns converging across the industry
+
+Each pattern lists who ships it today. All [V] on 2026-11-11 unless marked.
+
+| # | Pattern | Who ships it | Note |
+|---|---|---|---|
+| C1 | **A per-user background server and a command center** listing every session by state | Claude (`claude agents`), Codex (`codex agents`), Copilot (Mission Control), OpenCode 2 (shared server) [S], Paseo, herdr, tuios | The "daemon + status list" is now the vendors' default shape, not a third-party niche. |
+| C2 | **A worktree per session, made by the agent** | Claude (`--worktree`, background isolation), Codex (`--worktree`, `/worktree`), Copilot sessions, Cursor | Hosts must adopt or steer the agent's own worktrees (Claude's `WorktreeCreate`; Codex has no documented equivalent [U]). |
+| C3 | **Hub and spoke, not peer chat** | Copilot `/fleet` ("only the orchestrator coordinates") [S], Claude subagents (report to the parent), OpenCode 2 (nesting depth one) [S], Claude workflows (a script holds the plan) | Agrees with ParallACT and Destefanis: peer messaging buys little. Claude agent teams, the one peer-messaging design among the vendors, are still experimental. |
+| C4 | **Scripted workflows whose idiom is verification** | Claude dynamic workflows ("adversarially verify each finding"), Copilot dynamic workflows ("subagents verify each other's findings") | The plan moves into code; the quality pattern is cross-checking, not more agents. |
+| C5 | **The post-PR loop as the default** | Claude Projects (auto-fix on for every thread), Orchestrator.inc (checks, comments and conflicts back to the owning worker), Amp, Cursor, Paradev | In October this was "the biggest workflow gap". It is now assumed. |
+| C6 | **A cloud coordinator with standing instructions and memory** | Claude Projects, Amp Spaces, Cursor cloud agents, Kiro Crew (local) | Identity of the *work* outlives sessions (R-ORC-13's point). |
+| C7 | **The vendor's phone app steers your own machine** | Claude Remote Control, Codex `remote-control`, GitHub Mobile over a registered environment, Amp runners | Each through the vendor's servers and for the vendor's agent only. |
+| C8 | **ACP as the neutral backend for third-party hosts** | AoE (default structured view), Kiro Crew, Paseo, JetBrains Air, Zed; 45 agents in the registry | The structured path for a neutral host is settled; v2 is still alpha. |
+| C9 | **Coordination services beside the host** | hcom (hooks + SQLite), Concord MCP (five MCP tools), fanout (git ref + hooks), Cotal, foremerge, Agent Messaging Protocol [S for the last three] | Claim, collide, hand off — without owning terminals. A host that owns the terminals can enforce what these can only advise. |
+| C10 | **Quota as a scheduling input** | Claude workflows (wait out the limit), Claudexor (rotate on a typed limit signal), Gas Town (capacity scheduler), agent-deck | Subscriptions, not tokens, are what bounds a daily fleet. |
+
+**Weakening or abandoned:**
+- **A merge queue under one global lock**, at very high volume (source 21). At ptyro's scale of 2–6 agents the train still fits; the lesson is to verify the *combination*, before or after landing.
+- **A designated coordinator with no enforcement** (Destefanis; MSEval: "heavy managerial oversight degraded performance").
+- **A chat channel as the fix for parallel writers** (ParallACT).
+- **tmux-only session managers without an agent model:** Claude Squad has had no push since 2026-08-20.
+- **A2A inside coding CLIs:** an official `a2a` client exists [S]; still no first-party coding agent speaks it.
+
+#### What the agents now do themselves, and what ptyro should not rebuild
+
+| Capability | Claude Code | Codex CLI | Copilot | ptyro's stance |
+|---|---|---|---|---|
+| Background sessions and a list of them | `claude agents` (preview) | `codex agents` (Stable) | Mission Control | **Ingest and show as rows** (R-AGT-02, R-AGT-10); never a second supervisor for the same sessions. |
+| Subagents inside one session | GA | on by default | `/fleet` | **Show the tree** (hooks give SubagentStart/Stop); do not add a subagent system. |
+| Scripted fan-out inside one vendor | dynamic workflows | — | dynamic workflows (preview) | **Host and surface** a running workflow (R-ORC-49). ptyro's recipes are for what a vendor's script cannot do: other vendors, gates anywhere, enforced policy, landing. |
+| Agent-to-agent mail, same vendor | cross-session messaging, also across machines | "message-board tools" MCP adapter (0.167.0; not understood [U]) | — | **Deliver through the native channel** (already R-ORC-01); ptyro's mailbox is the cross-vendor layer. |
+| Worktree creation | yes | yes | yes | **Adopt** theirs; keep ptyro's lifecycle (setup, ports, `.env`, safe removal) as the value. |
+| PR follow-up | Auto-fix; default in Projects | Code Review as a reviewer [S] | Agent Merge | **Route events to the owning session** (R-GIT-01 is built per the Changelog); do not write a fixer. |
+| Usage-limit handling | workflows wait and continue | — | — | **Know the limit and plan around it across accounts** (R-ORC-45); a single vendor cannot. |
+| Remote control from a phone | Remote Control | `remote-control` (experimental) | GitHub Mobile | **Coexist** (R-REM-15): let a user turn the vendor's on per profile and notice a takeover. |
+
+#### Where a neutral, multi-vendor host is uniquely placed
+
+1. **More than one vendor in one run.** Claude's docs say it plainly: "In every approach the workers are Claude sessions. To involve a different tool, expose it to Claude as an MCP server." Copilot offers other vendors' models, not their CLIs. A writer from one family reviewed by another (Claudexor's rule; 69.6% of follow-up fixes on agent PRs come from the same agent that wrote the bug) is something only a neutral host can make the default (R-ORC-41).
+2. **Testing the combination.** Every vendor lands a pull request per thread. Nobody rehearses the branches of several live sessions *merged together* before the first one lands, though that is where parallel work breaks (97% interference on constructed tasks; 27.67% of agent PRs conflict). ptyro owns all the worktrees and already has a train (R-ORC-37).
+3. **Policy that is enforced, not advised.** Claude Projects: a thread limit "isn't a hard cap"; cloud threads ignore the repository's hooks and permission rules. Concord and hcom can only ask agents to claim. ptyro's fences and leases are held by the daemon.
+4. **Identity and quota across accounts.** Profiles already bind account, git author, SSH key and gh login. Quota-aware placement across a user's own accounts and vendors is the natural next use (R-ORC-45).
+5. **One inbox across vendors and across each vendor's own orchestrator.** A Claude workflow, a Codex task and a Copilot fleet are three lists today.
+6. **A real terminal, kept local.** Claude's agent mail between machines travels "through Anthropic servers"; Copilot's and Codex's remotes go through theirs. ptyro's paired machines talk to each other. That is a privacy position as well as a feature (R-REM-16).
+7. **Verification the agent cannot see.** Agents sought hidden grading material in four fifths of sealed runs. A host that stores holdout checks outside the worktree and denies reads of them, and records the attempts, is doing something an in-agent orchestrator cannot do to itself (R-ORC-43).
+8. **Several repositories with a contract and an order.** Still unmatched (D11, A18's correction).
+
+#### What the new research says
+
+| # | Finding | Evidence | For ptyro |
+|---|---|---|---|
+| N1 | **Uncoordinated parallel writers fail badly, and telling them about each other does not fix it.** | ParallACT: 62% → 16%; a channel "recovers only a small part" [V] | Confirms F7 of §II.2. Keep writes single-threaded per path; do not sell mail as conflict prevention. |
+| N2 | **Shared artifacts beat pairwise messages as teams grow; a named coordinator adds nothing by itself.** | Destefanis: −42% output tokens at eight agents; no gain from a coordinator [V]. Sarkar: duplicate work 78% → 0% with a shared log [V] | A run notebook and a daemon-owned claim log first, mail second (R-ORC-48). A "lead" needs enforced authority or it is a label. |
+| N3 | **The shape of the collaboration matters as much as the model.** | MSEval: 30+ points and 2× time from topology alone; pipelines best, heavy oversight worst [V] | Recipes that name their shape (pipeline, fan-out, review loop) are the right unit; default to pipelines. |
+| N4 | **Partition by dependency, or do not parallelise.** | Yang et al.: +14% pass, 2.10× faster, −35% cost when the split follows code cohesion [V] | A partition advisor before fan-out (R-ORC-39). |
+| N5 | **Admission control works mostly by serialising.** | Claim Plane: 23.3% → 50.0%, with 96.7% serialised [V] | Leases are a safety net, not a speed-up. Say so in the UI: "this would run one after the other". |
+| N6 | **Patches that pass alone fail together, and the cheapest cure is a note about the finished change.** | Xia et al.: 97% interference on constructed tasks, 82% recovered by a message describing the concurrent change; rare in reviewed human PRs [V] | Rehearse the merge (R-ORC-37); announce a sibling's landed change to the agents it touches (R-ORC-40). The one kind of agent mail with measured benefit. |
+| N7 | **Agent pull requests conflict often and get fixed afterwards more often than human ones, usually by the same agent.** | AgenticFlict 27.67% [V]; 1.62× follow-up-fix odds, 69.6% same agent [V] | Review by a different family (R-ORC-41); track what happens after the merge (R-GIT-08). |
+| N8 | **Selection can be done on edits, not whole patches, and without tests or a judge.** | PatchFusion: 96.2% of the reachable ceiling, deterministic [V] | Adds a rung to §II.2's ranking order: after clustering, offer a fused candidate (R-ORC-42). Whether an equal-cost comparison of same-model and mixed-model attempts exists: **still not found.** |
+| N9 | **"Passes the tests" degrades with size, and agents look for the grader.** | SpecBench: +28 points of gap per 10× code [V]; Destefanis: four fifths of sealed runs [V]; Tang et al.: inaccurate self-reporting is a growing share of failures [V] | Verified-done needs held-out checks for long runs, sealed and audited (R-ORC-43). Raises the value of P16. |
+| N10 | **Supervision capacity moves by about one agent with better tooling; nobody has a ceiling.** | ParallelPilot: +1 concurrent agent at peak, +63% tickets [V]; Chou et al.: 0–101.6 switches an hour, a third of time on prompts and review [V]; METR cannot measure it [S] | The "2–6" of §II.1 stands as practice, not as a measured limit. A plan view, a per-session log of what happened while you were away, and triage cues are what moved the number (R-UX-45, R-OBS-04). |
+| N11 | **At very high volume, review shifts from lines to intent and testing moves after the merge.** | Anthropic: 2,500 → 30,000+ merges a day [V] | An optional optimistic landing with automatic revert (R-ORC-47). The evidence bundle should lead with intent. |
+
+#### Revised synthesis for §II.5 (additions; the text above is unchanged)
+
+- **Positioning.** Add a fifth duty to the four listed: **host the vendors' own orchestrators and show them** (R-ORC-49). And narrow one claim: gates are ptyro's across vendors, resolvable from anywhere and enforced by the daemon; "the others have none" is true of Claude's workflows only.
+- **Daily-driver ladder.** Rung 1 becomes "a reviewer from a *different family*" as a rule, not only a default (R-ORC-41). Rung 3 gains a step before the train: **rehearse the picked branches merged together** (R-ORC-37). Rung 4 gains limit-aware runs (R-ORC-45) and held-out checks for long loops (R-ORC-43).
+- **Recipe primitives, candidates for v2:** a `rehearse` step (merge these steps' heads on a scratch ref, run the check once, blame, send the failure to its owner); `on_limit = "wait" | "reroute:<profile>" | "fail"` on agent steps; an advisory `size` with a warning before a large run starts (R-ORC-46); `fuse` as a `pick` policy beside `tests | judge | human`.
+- **`ptyro mcp`.** Offer long calls (`spawn_session`, `wait_for`, `fanout`) as MCP tasks to clients that negotiate the extension, now that one coding client supports it; keep the blocking-with-progress form for the rest. The earlier resolution ("optional layer, never depend on it") stands.
+- **Mailbox.** Keep it typed and small. Add the one message with evidence behind it: an automatic notice of a sibling's finished change, sent to the sessions whose files or symbols it touches (R-ORC-40). For runs of more than about four agents, steer to the shared notebook and broadcasts rather than pairwise mail (R-ORC-48). Before mail leaves the machine, an approval option (R-REM-16).
+- **Conflict avoidance.** Be honest that leases serialise (N5); add a partition advisor (R-ORC-39) and a duplicate-work check by meaning at first edit (R-ORC-38).
+- **Selection.** §II.2's lexicographic order stands. Fusion is a new last resort when the top cluster is incomplete, shown as "built from A and C", never applied silently.
+- **Open questions this pass did not close:** an equal-cost study of same-model against mixed-model attempts; a measured ceiling on agents per person; SWE-bench Live and Multimodal; practitioner threads on Hacker News and Latent Space. They stay in §IV.2.
+
 ---
 
 ## Part III — The idea funnel
@@ -2830,6 +3242,19 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | 13 | R-WT-03 | **Read competitors' committed configs** (`.claude/launch.json`, `.conductor/`, `.superset/`, `.codex/`, `copilot-setup-steps.yml`, `.cursor/environment.json`) | Drop-in for teams that already committed those files | M5.10 |
 | 14 | R-NOT-01 | **Notification sinks + signed approve/deny links** (ntfy, Pushover, Slack/Discord, Web Push) | Remote approvals long before the M9 PWA | M4.22 |
 | 15 | R-ORC-33 | **Event-sourced run model**: pinned recipe, attempts with snapshot refs, `on_restart`, `run fork` | The foundation every orchestration feature above stands on | M7.1 (expanded) |
+
+**Candidates for the Top 15 (2026-11-11; the ranking above is unchanged).** From the 2026-11
+sweep, the ideas with the strongest evidence and the clearest distance from what the vendors now
+ship themselves, in order:
+1. **R-ORC-37** — rehearse parallel branches merged together before any lands. Nobody ships it;
+   three papers and a 27.67% conflict rate argue for it; ptyro already has the train.
+2. **R-ORC-41** — review by a different model family as a rule. Only a neutral host can.
+3. **R-ORC-49** — show each vendor's own orchestrator (workflow, team, command-center task,
+   fleet) as rows under its session. The answer to "the agents do this themselves now".
+4. **R-ORC-43** — sealed, audited held-out checks. The evidence against "tests pass" grew.
+5. **R-AGT-10** — Codex's command center and worktrees, ingested and adopted. A stated ptyro
+   advantage (Codex has no worktrees) expired.
+6. **R-ORC-45** — runs that know the usage limit: wait, or move to a profile with headroom.
 
 ### III.2 Full catalogue
 
@@ -3128,6 +3553,53 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | R-BOOT-02 | **Gemini CLI vs Antigravity:** since 2026-06-18 Google's consumer agent is Antigravity CLI (`agy`); Gemini CLI still serves paid Gemini API keys and some enterprise licences (Google's pages disagree on which) [V 2026-11-06: developers.googleblog.com, geminicli.com]. Setup lists both, Gemini CLI labelled for API-key users; "no agent found" messages name Antigravity for Google | Google | BOOT | S | ★★ | → BOOT0 (the label), **BOOT9 built 2026-11-07** (every missing-agent message offers setup and names Antigravity for a Google account; SPEC §24.10) |
 | R-BOOT-03 | **OpenCode 2's new server API:** OpenCode 2 (`@opencode/cli`, beta) breaks the v1 server API ptyro's OpenCode adapter speaks (SPEC §8.6), and shares the `opencode` command. BOOT0 installs OpenCode 1 (`opencode-ai`); the adapter needs a v2 driver before setup can offer v2 [S 2026-11-06: v2.opencode.ai/docs/migrate-v1; V: docs.opencode.ai] | anomalyco | BOOT, M4.9 | M | ★★ | candidate (BOOT0 pinned v1) |
 
+#### From the 2026-11 sweep *(added 2026-11-11; all `new`; sources in §II.6 and the entries named)*
+
+Ids continue each area's numbering. "Fit" is a suggestion; where ptyro may already cover part of
+an idea, the row says so and marks it [U] rather than assuming.
+
+| ID | Idea | Seen in | Fit | Size | Pri | Status |
+|---|---|---|---|---|---|---|
+| R-ORC-37 | **Merged-together rehearsal.** Before any of several sessions' branches lands (a fan-out pick, a run's steps, or just "everything waiting in review"), merge them on a scratch ref, run the check once, and on failure find the branch responsible, re-running first so flaky tests and failures already on the base are reported apart. Send the failing output to the session that owns the branch; tell the human only on a second failure. A `rehearse` recipe step and a "Landing" state in the review queue | fanout (F24), Gas Town Refinery, Claude Projects' "Landing" lane (D11); *Passes Alone, Fails Together*; AgenticFlict (27.67% of agent PRs conflict) [V] | M7 / M11.9 (reuses the train; extends R-ORC-12) | M | ★★★ | new |
+| R-ORC-38 | **Duplicate work caught by meaning, at first edit.** When a session makes its first edit, compare its task (prompt, summary, touched paths) with the live sessions' and warn or hold if two are doing the same thing in different words. Deterministic path overlap first; an opt-in small-model comparison second, logged | fanout (reports 40/40 on its own labelled pairs), Concord MCP `start_work`, Sarkar (duplicate work 78% → 0% with a shared log) [V] | M7 (beside R-ORC-11's leases) | S | ★★ | new |
+| R-ORC-39 | **Partition advisor before fan-out or a multi-writer run.** From the import/dependency graph and recent co-change history, say which proposed tasks are coupled and would be better serial, and show plainly when leases would make a "parallel" run execute one after the other | Yang et al. (+14% pass, 2.10×, −35% cost when the split follows cohesion); Claim Plane (admission serialised 96.7%) [V] | M7 | M | ★★ | new |
+| R-ORC-40 | **Peer change notices.** When a session's change lands or reaches a checkpoint, send an automatic, typed note describing it to the live sessions whose files or symbols it touches ("@api renamed `tenant` to `tenant_id` in `models.py`, merged at 14:05"), delivered at idle through the mailbox. Agents may subscribe to a sibling's `blocked`, `done` or `collision` in one line | *Passes Alone, Fails Together* (such a message recovered 82%); hcom's subscriptions (A19); Claude's "tell the other sessions what landed" [V] | M7.7 | S | ★★★ | new |
+| R-ORC-41 | **Review by a different model family, as a rule.** A review counts toward verified-done only if the reviewer's provider family differs from the writer's; the evidence bundle shows "written by Claude, reviewed by Codex". A per-project setting, on by default where two families are installed. ptyro's reviewer is cross-vendor by default already (P3, §II.1); this makes it a recorded property and a gate [U how much exists] | Claudexor (F25); *Who Finishes the Job?* (69.6% of follow-up fixes come from the agent that wrote the bug) [V] | M7.8–M7.10 | S | ★★★ | new |
+| R-ORC-42 | **Fusion as a pick policy.** After the compare view clusters candidates, offer one more candidate built from the edits the candidates share, with unsupported edits pruned; shown as "built from A and C", run through the same checks, never applied silently. Follow-up to R-ORC-04's clusters | PatchFusion (96.2% of the reachable ceiling, no tests or model at decision time) [V] | M7.10 follow-up | M | ★ | new |
+| R-ORC-43 | **Sealed held-out checks, with an audit.** Holdout scenarios live in ptyro's data, outside the worktree; the session is denied reads of them (fence, and sandbox where one is on); every attempt to read or search for grader files is logged and shown in the evidence bundle. For long runs, show the gap between visible and held-out results as its own line | SpecBench (+28 points of gap per 10× code size); Destefanis (agents sought hidden grading material in four fifths of sealed runs); Tang et al. (inaccurate self-reporting is a growing share) [V] | M7.9 (extends P16 and verified-done) | M | ★★★ | new |
+| R-ORC-44 | **Proof-of-work bundle, and tracker-driven runs to a published spec.** Name the review queue's evidence a *proof of work* and add what Symphony asks for: an intent line first, a complexity note, and an optional walkthrough (a replay clip from the recorder). Read Symphony's `SPEC.md` and decide whether a built-in recipe can follow it, so a team's tracker drives ptyro the same way | OpenAI Symphony (F19); Anthropic (reviewers "focus on change intent rather than every line") [V] | M6.9 / M7 (beside R-ORC-15, R-GIT-05) | M | ★★ | new |
+| R-ORC-45 | **Runs that know the usage limit.** `on_limit = "wait" \| "reroute:<profile>" \| "fail"` on agent steps: wait for the reset shown by the usage feeds, or move the step to a profile with headroom. Move only on a *typed* limit signal from the vendor, never on a network error, and never off a pinned profile. Opt-in, and worded with the vendors' terms in mind | Claude workflows (pause and continue after the reset, 2.1.271+), Claudexor (F25), Gas Town's capacity scheduler [V] | M7 (uses R-USE-01's feeds, built) | M | ★★ | new |
+| R-ORC-46 | **Size guideline and a large-run warning.** A recipe or fan-out carries an advisory size; before a run that would start more than N sessions, or whose estimate passes a threshold, show the plan and ask once. Not a cap | Claude workflows (`small`/`medium`/`large`; warning above 25 agents or 1.5 M projected tokens; a per-run prompt showing the phases) [V] | M7 | S | ★ | new |
+| R-ORC-47 | **Optimistic landing.** For low-risk, high-volume changes: land at once, run the check after the merge, and on failure revert automatically and send the failure to the owning session. Opt-in per project and per path; the train stays the default | Anthropic, *Redesigning source control* (a global-lock queue "doesn't work at agent scale"; post-merge testing, automated bisect and revert) [V] | M11.9 follow-up | M | ★ | new |
+| R-ORC-48 | **Notebook before mail.** In runs of more than about four sessions, put coordination in the shared run notebook and broadcasts, and rate-limit pairwise mail; in the run timeline, show how much of the run's output went on agent-to-agent messages | Destefanis (shared files cut output tokens about 42% at eight agents; messaging grows near-quadratically); MSEval (pipelines best, heavy oversight worst) [V] | M7.7 | S | ★ | new |
+| R-ORC-49 | **Show the vendors' own orchestrators.** A Claude dynamic workflow (phases, agent counts, paused at a limit), a Claude team, a Codex command-center task, a Copilot `/fleet` or workflow, an OpenCode 2 background subagent: each appears as child rows under the session that hosts it, with state and a way to stop or attach where the vendor allows. Read-only first. ptyro then is the one list over every vendor's own list | Claude (F1, D11), Codex (F9), Copilot (F20), OpenCode 2 (G5), Paseo 0.16 beta (background tasks above the composer) [V] | M4 / M7 (extends R-AGT-02, R-ORC-01) | L | ★★★ | new |
+| R-AGT-10 | **Codex: the command center and managed worktrees.** List the tasks of Codex's shared server (unread results, pinned, status) as foreign rows; recognise a worktree Codex made with `--worktree` and adopt it into ptyro's lifecycle; check that ptyro's own app-server (R-ORC-35) and Codex's default shared server do not fight over one `CODEX_HOME`; look at the 0.167.0 host APIs ("wait for input activity without consuming it", inherited policy) | Codex CLI 0.167 (G2, F9) [V] | M4.19 follow-up | M | ★★★ | new |
+| R-AGT-11 | **Antigravity: `blocked` from the asking tools.** There is still no permission hook, but `PreToolUse` takes matchers and the tools that ask are matchable: `ask_permission` → blocked (permission), `ask_question` → blocked (question); `invoke_subagent`/`manage_subagents` → a subagent tree. Spike it | antigravity.google/docs/hooks (G4) [V] | M4.21 | S | ★★ | new |
+| R-ACP-02 | **ACP 1.15–1.17 additions in the client:** `session/status`, archive/unarchive, `session/set_title`, `session/options`, auth status notifications, and v2's background work ("`session/cancel` only stops foreground work"). Map them onto ptyro's session state, titles and archive | ACP schema v1.31.0 / v2.0.0-alpha.15 (F14); AoE's default structured view [V] | M10 follow-up | M | ★★ | new |
+| R-REM-15 | **Coexist with the vendors' remote controls.** A per-profile switch that starts Claude sessions with Remote Control, registers the machine as a Copilot environment, or enables Codex `remote-control`, so the user's vendor phone apps can steer ptyro-hosted sessions; ptyro shows "steered from elsewhere" when input arrives that way | Claude Remote Control (E1), Codex (E9), GitHub Mobile (E10) [V] | M9 / MM1 | M | ★★ | new |
+| R-REM-16 | **Approval before agent mail leaves the machine.** A setting like Claude's `isolatePeerMachines`: mail between sessions on paired machines needs the human's approval the first time, or always, even in auto-approve modes. State in the docs that ptyro's cross-machine mail does not pass through a vendor | Claude cross-session messaging (messages to other machines travel "through Anthropic servers") [V] | MM1 | S | ★★ | new |
+| R-SEC-06 | **Credentials the agent never holds.** A per-session egress proxy that adds the profile's tokens (model key, `gh` token) to outgoing requests, so nothing secret sits in the session's environment or files; pairs with the sandbox tiers. `srt`'s proxy only limits destinations | Docker `sbx` credential proxy [S]; `srt` [V]; MCP roadmap on agent identity and delegation [V] | Backlog (with R-SEC-05) | L | ★★ | new |
+| R-SEC-07 | **Quarantine agent configuration that a repository supplies.** When a worktree's repository declares MCP servers, hooks, skills or agent settings (`.mcp.json`, `.claude/`, `.codex/`, `.agents/`, `.github/hooks`), show what would load and ask once, under the same trust fingerprint as setup scripts; re-ask when it changes | October 2026 advisories: agents that ran or connected to MCP servers declared by an untrusted repository; a config check bypassed by a trailing-dot file name; Codex's hash-pinned hook trust [S for the advisories] | M3 trust (SPEC §10.5) | M | ★★ | new |
+| R-SEC-08 | **Standing tests for cross-session authority.** Four properties as regression tests: one session cannot answer another session's approval; a paired machine cannot read or write outside its sessions; repository hooks run only inside the worktree; text shown in a pane can never be typed at a prompt | tuios advisories, 2026-10-25 to 10-30 (A3) [V] | H-series hardening | S | ★★ | new |
+| R-UX-45 | **Settled shelf, calm mode, return notes.** Finished-and-seen sessions move to a shelf out of the working list; a calm mode holds everything but `blocked`; on return to a session or to ptyro, a short note of what happened while away, built from the event log | tuios 0.12 (A3); ParallelPilot's run logger and ambient dashboard (+1 concurrent agent, +63% tickets) [V] | UX (beside R-STA-04, the digest) | M | ★★ | new |
+| R-OBS-04 | **Per-turn cost on the timeline, and supervision metrics.** Attach model and token cost to each turn checkpoint where the agent reports it; in `ptyro stats`, add the human side: sessions run at once, switches per hour, time from `blocked` to answered, share of time reviewing | aGiTrack, OrcaReplay [S]; Chou et al. (0–101.6 switches an hour); METR (cannot measure multi-agent productivity) [V/S] | M8 (extends R-OBS-02) | M | ★ | new |
+| R-GIT-08 | **What happened after the merge.** For changes landed from agent sessions, watch for later commits that fix the same lines within N days and record them against the session, agent and reviewer; a quiet line in the selection log, not a score | *Who Finishes the Job?* (1.62× follow-up-fix odds on agent PRs) [V] | M6 (beside R-OBS-02's selection log) | M | ★ | new |
+
+**Evidence added to existing ideas on 2026-11-11 (statuses unchanged):**
+- **R-ORC-07** (MCP Tasks semantics for `ptyro mcp`): Claude Code 2.1.319 supports MCP tasks, so the optional layer now has a client [V].
+- **R-ORC-12** (single-repo merge train): Anthropic reports a global-lock queue failing above thousands of merges a day; irrelevant at 2–6 agents, but it argues for R-ORC-37 and R-ORC-47 as companions [V].
+- **R-ORC-13** (identity ≠ session): Claude Projects and Kiro Crew's bots are standing coordinators that outlive sessions [V].
+- **R-ORC-16** (ptyro as an ACP proxy or agent): ACP 1.15 added `proxy/initialize` and `proxy/successor`; Kiro Crew and AoE are hosts built on ACP [V].
+- **R-ORC-29** (same prompt across repositories): Claude Projects documents "one goal across many repositories", a thread and a pull request each [V].
+- **R-ORC-35** (Codex hybrid): Codex now runs a shared background server by default and documents host APIs; see R-AGT-10 [V].
+- **R-STA-07** (re-emit status outward): kitty 0.50.0 shows OSC 7501 in its tab bar, so re-emitting pays off today in one mainstream terminal [V].
+- **R-UX-08** (board view): tuios 0.12 ties a task board to fan-out; Rove's cards are moved by the agents; Orchestrator.inc's lanes end in "Ready to merge" [V/S].
+- **R-REM-06** (port portals): Amp ships portals on a local runner (2026-11-09) [V].
+- **R-RUN-02** (schedules, self-wake): Kiro Crew, thurbox automations, OpenCode 2 schedules, Claude `/loop` and routines all ship one [V].
+- **R-SEC-05** (sandbox tiers): `srt` has a Windows alpha and documents wrapping whole agents and MCP servers; Docker `sbx` is confirmed on Ubuntu and Rocky Linux [V].
+- **R-BOOT-03** (OpenCode 2 driver): OpenCode 2 is at 2.2.7 and is a separate ACP registry entry; Paseo already lists "OpenCode v2" support [V].
+- **R-GIT-01** (PR-event loop, built): now table stakes — Claude Projects turns it on for every thread [V].
+
 ### III.3 Explicitly *not* recommended (with reasons)
 
 - **A vector-DB memory layer** (Ruflo): its own figures are self-reported; a lightweight notes file covers the need.
@@ -3136,7 +3608,7 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 - **Deterministic code replay** (Temporal-style) of agent steps: PTY agents can't be replayed. Fork instead.
 - **Mode systems** ("architect/code/debug" modes): commoditised into generic subagents. Roo Code shut down.
 - **A2A as a primary protocol:** no coding CLI speaks it. At most a facade later.
-- **Depending on MCP Tasks:** no client supports it yet.
+- **Depending on MCP Tasks:** no client supports it yet. *(2026-11-11: Claude Code 2.1.319 does [V]; the others were not re-checked. The advice holds — offer Tasks, do not depend on them — until at least Codex and OpenCode follow.)*
 - **A chat client for raw provider APIs and keys** (2026-10-29): ptyro drives the agents you registered and their accounts (profiles); keys, model lists and billing would be a second product.
 - **Windows 10** (2026-10-31, DD3): out of support since 2025-10-14, and ConPTY's passthrough mode is honoured only on Windows 11 [S]. Windows 11 only.
 - **WSL1:** no real Linux kernel; Codex dropped it in 0.115 [S].
@@ -3164,6 +3636,32 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 | **WSL releases** (microsoft/WSL #13291, #13416) | Idle shutdown of the distro with a daemon running would break ptyro's survival promise on Windows (DD3, WIN0.1) |
 | **ConPTY / Windows Terminal** | Passthrough mode, OSC and DCS handling, the conpty.dll NuGet package (DD3, WIN0.2) |
 
+**Re-checked 2026-11-11** (detail in the entries named):
+
+| Product | State on 2026-11-11 | Still watch for |
+|---|---|---|
+| **herdr** (A1) | 50,256★; no release since v0.9.5 (2026-10-14); no OSC 7501, cloud or 1.0 in the notes [V] | A release after the pause; OSC 7501; Herdr Cloud |
+| **Rex** (C2) | Still beta, no licence or price; iOS app and FreeBSD server listed; no inbox or push in the docs [V] | The inbox; a public release |
+| **Claude Code** (A2, F1, G1, D11) | 2.1.322; agent view still a preview, teams still experimental; **Projects** in public beta; workflows wait out usage limits; **MCP tasks**; mail across machines [V] | Agent view or teams leaving preview; a hook event for workflows; Projects on Team plans |
+| **thurbox** (A18) | 118★, tmux-based; one repository per session in today's README [V] | Whether multi-repository sessions exist at all; drop from this list if not |
+| **Paseo** (E4) | 23,812★; v0.15.4; **terminals now survive daemon restarts**; background agents in beta [V] | Reboot survival; its orchestration setup |
+| **tuios** (A3) | 6,496★; v0.12.1; judge agent, task board, shelf; five security advisories in a week [V] | Whether the pace holds; OSC 7501 revision |
+| **Codex app-server / `--remote`** (G2, F9) | 0.167.1; a shared background server by default; `codex agents` Stable; `--worktree`; `remote-control`; app-server still Experimental [V] | Conflict with ptyro's own app-server (R-AGT-10); the app-server leaving Experimental |
+| **ACP v2** (F14) | 2.0.0-alpha.15 (2026-11-10); v1 at 1.31.0 and still gaining features; 45 agents [V] | A beta; `state_update` settling |
+| **OSC 7501 spec** (C headline) | Rev 0.4, unchanged since 2026-10-10; kitty 0.50.0 displays it; Ghostty 1.4.0 parses only [V] | A revision on multiplexers; Ghostty's GUI; WezTerm, iTerm2, tmux |
+
+**Added to the watchlist on 2026-11-11:**
+
+| Product | Why |
+|---|---|
+| **Copilot: Mission Control, `/fleet`, dynamic workflows** (D4, F20, E10) | The third vendor with a native orchestrator, and the first whose workflows pause for a human; a local machine as an "environment" |
+| **Claude Code Projects** (D11) | A standing cloud coordinator with memory; its "one goal across many repositories" is the nearest vendor feature to change sets |
+| **OpenAI Symphony** (F19) | A spec for tracker-driven runs with proof of work; 28k★ on 47 commits says others will implement it |
+| **Orchestrator.inc** (F11, ex-Composio AO) | Doubled in three weeks; owns the "CI, comments and conflicts back to the worker" loop with a board and phone apps |
+| **OpenCode 2** (G5) | Background subagents and a shared server; ptyro's adapter speaks v1 only (R-BOOT-03) |
+| **kitty and Ghostty** (C6, C4) | The first terminals where re-emitting OSC 7501 outward shows up for the user |
+| **Coordination layers: hcom, Concord MCP** (A19, F23) | They define what agents expect to be able to ask a host: claim, collide, subscribe, hand off |
+
 ### IV.2 Claims to re-verify before relying on them
 
 - Codex `cloud exec --attempts 1..4` (best-of-N): blog-only.
@@ -3189,6 +3687,54 @@ Ranked by evidence, how much they raise ptyro's daily value, and how clearly the
 - Not covered in this sweep, so add them next time: HN and Latent Space threads; agent-driven
   merge-conflict and patch-synthesis research; SWE-bench Live/Multimodal; an equal-cost study of
   same-model vs mixed-model attempts; empirical limits on how many agents one human can supervise.
+
+**Resolved or changed on 2026-11-11** (the list above is kept as written):
+- **Codex `--attempts`:** documented in the official command reference under `codex cloud`
+  (Experimental), values 1–4 [V]. Whether it applies to `cloud exec` is not spelled out [U].
+- **OSC 7501 revision:** 0.4 of 2026-10-10 is current; 0.2 was four days older [V].
+- **Orca's stars:** 122,204 by the GitHub API [V]; the 55k figure was wrong.
+- **Docker `sbx` on Linux:** yes, Ubuntu `.deb` and Rocky Linux 8 `.rpm`, needs KVM [V].
+- **Composio AO's identity:** `ComposioHQ/agent-orchestrator` redirects to
+  `OrchestratorInc/agent-orchestrator`, Apache-2.0 [V].
+- **Claude own-child verification:** the docs now describe it per platform (process evidence on
+  Linux; the token on native Windows and in PID-1 containers) [V docs]. The spike is still owed.
+- **Merge-conflict and patch-synthesis research; supervision limits:** covered in §II.6 (no
+  ceiling on agents per person was found, only "+1 with better tooling").
+- **Still open, unchanged:** Conductor's per-turn checkpoints (its changelog URL returned 404);
+  Gemini CLI availability; Kiro "waves"; Spec Kit's 1.0 date; METR's percentages (a February 2026
+  update exists, seen only through secondary sources that disagree on the sign); Antigravity and
+  OSC 7501; the equal-cost study; HN and Latent Space; SWE-bench Live/Multimodal; everything
+  under Windows.
+
+**New claims to re-verify (2026-11-11):**
+- `codex agents --no-daemon`: the 0.167.0 release notes say to run it; the command reference says
+  `codex agents` does not support `--no-daemon`. Two primary sources disagree.
+- Where Codex puts `--worktree` checkouts, and whether a hook can redirect them the way Claude's
+  `WorktreeCreate` does.
+- Whether ptyro's own Codex app-server and Codex's default shared server can share a `CODEX_HOME`.
+  **Spike** (R-AGT-10).
+- Codex 0.167.0's "MCP adapter supports message-board tools" and its Windows "MXC sandbox":
+  named in the notes, not understood.
+- Antigravity: does a `PreToolUse` matcher on `ask_permission` / `ask_question` fire before the
+  dialog shows? **Spike** (R-AGT-11). And which config list is right about
+  `~/.gemini/antigravity-cli/settings.json` (G4 and the vendor's page disagree).
+- thurbox: do sessions spanning several repositories exist? Its version numbering (v2.28 or v2.64).
+- OpenCode 2.0's launch date (2026-10-12) and feature list: third-party write-ups only.
+- Docker `sbx`'s credential-injecting proxy: reported by comparisons, not seen on Docker's page.
+- The October 2026 advisories behind R-SEC-07 (Junie CLI, ZCode, a Copilot/Visual Studio
+  `.mcp.json` bypass, an OpenCode MCP OAuth RCE, a Claude Agent SDK session-id injection): from
+  one aggregator and one roundup. The CVE numbers they give were not checked against a vendor
+  advisory and are deliberately not repeated here.
+- Symphony's publication date; Kiro Crew's announcement date; Copilot `/fleet`'s status label.
+- The MCP client matrix (which clients support Tasks, elicitation, MRTR): the page did not load
+  as a matrix on this pass.
+- OTel GenAI semantic conventions moved to `open-telemetry/semantic-conventions-genai`; their
+  stability level today was not read.
+- Zellij 0.45.0's date: the release page gives "20 Aug" without a year, and this document said
+  0.44.3 was the latest on 2026-10-20. One of the two is wrong.
+- The Nature Machine Intelligence paper in §II.6: seen only through a search summary.
+- Subscription rules for third-party harnesses and weekly limits: several blogs, no vendor page
+  read. Nothing found that changes them in October or November 2026.
 
 ### IV.3 Facts waiting to graduate into SPEC §20
 
@@ -3234,6 +3780,28 @@ These are verified or locally checked. Each moves to SPEC §20 once a spike or i
   - ConPTY drops unknown DCS and passes unknown OSC, possibly out of order with text (Warp, 2025-01) [V of the post, S of today's ConPTY]; passthrough mode only on Windows 11 [S] (WIN0.2 decides).
 - **New §20 section, Windows (when WIN0 runs):** WSL idle shutdown; Restart Manager for "in use by"; `GetExtendedTcpTable` for ports; Job Objects; Rust std's `.cmd` escaping (1.77.2); `File::lock` (1.89); symlinks need Developer Mode; the logon task instead of a Service.
 
+**Added 2026-11-11** (all [V] from the vendor's page on that date unless marked; none tried on a machine):
+
+- **§20.1 Claude Code (2.1.322):**
+  - MCP tasks since 2.1.319; `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND`, `CLAUDE_CODE_DISABLE_MCP_TASKS=1`.
+  - Workflows: 16 concurrent agents by default (`CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`, 1–256, 2.1.269+); 4,096 items per `parallel()`/`pipeline()`; 1,000 agents per run; `stallMs` per agent and `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`; `MAX_STRUCTURED_OUTPUT_RETRIES`; usage-limit pause needs `autoContinueAtUsageLimit`; scripts under `.claude/workflows/` and `~/.claude/workflows/`; permission rule `Workflow` / `Workflow(<name>)`; `disableWorkflows`, `CLAUDE_CODE_DISABLE_WORKFLOWS=1`; `workflowSizeGuideline`.
+  - Cross-session messaging: native Windows from 2.1.234 over a named pipe where the auth line is required; the socket falls back to `/tmp/cc-socks-<uid>`; `/status` has a `Peer address` row (`uds:` prefix); at most 100 held messages; `isolatePeerMachines`; `dialogExpiry` (5 minutes, or `"never"`); `/list-agents` (also `/peers`); a `-p` session binds a socket, a bare one does not; same-machine messaging on Bedrock, Vertex and Foundry from 2.1.248.
+  - Hooks: prompt and agent hooks capped at 24 concurrent per session (2.1.319); PostToolUse runs for tool calls that finish after an interruption (2.1.319).
+  - `claude auth status` reports `loginExpiresAt` (2.1.318); "session limit" is now the "5-hour limit" (2.1.312).
+  - `/loop` ends when a turn finishes without rescheduling unless `CLAUDE_CODE_LOOP_KEEPALIVE=1` (2.1.319).
+- **§20.2 Codex (0.167.1):**
+  - `--worktree` (new sessions, `fork`, `exec`, `exec fork`; local only); `/worktree`.
+  - `codex agents` (Stable; `--remote`, `--cd`); a shared background server by default; `--no-daemon` cannot be combined with `--remote` or `codex agents`.
+  - `--remote ws://|wss://|unix://`, `--remote-auth-token-env`; commands that accept it: `codex`, `agents`, `queue`, `resume`, `fork`, `archive`, `delete`, `unarchive`.
+  - `codex remote-control start|stop|pair` (Experimental); `codex app-server --listen … | off`, `--ws-auth capability-token|signed-bearer-token` (Experimental).
+  - `codex cloud … --attempts 1–4`, `--env <ENV_ID>` (Experimental); `codex exec --output-schema <path>`, `--json`, `-o`.
+- **§20.3 Antigravity:** `PreToolUse`/`PostToolUse` matchers accept the tool names `ask_question`, `ask_permission`, `invoke_subagent`, `define_subagent`, `send_message`, `manage_subagents`; `PreToolUse` decisions `"ask"` and `"force_ask"`; hooks load from `.agents/hooks.json`, `~/.gemini/config/hooks.json` or a plugin's `hooks.json`, and not from `~/.gemini/antigravity-cli/settings.json`.
+- **§20.4 OpenCode:** v2 is at 2.2.7 and is a separate ACP registry entry; `opencode run` waits for background shells and subagents (2.2.6); MCP `pool: true` [V release notes]. The v2 tool is `subagent`, with `background: true` [S].
+- **§20.5 Terminal:** OSC 7501 rev 0.3 made an absent `progress` mean indeterminate and allowed reports without feature detection; rev 0.4 lets the probe reply list states and kinds. kitty 0.50.0: `tab.program_status` in `tab_title_template`. Ghostty 1.4.0: `GHOSTTY_SURFACE_ID` in each process's environment; OSC 5522 for non-text clipboard data. Zellij 0.45: `nested_session_handling`; OSC 52 reads need `dangerously_enable_paste_buffer_read true`.
+- **ACP:** schema v1.31.0 / v2.0.0-alpha.15 (2026-11-10); `session/status`, `session/set_title`, `session/options`, archive/unarchive, `proxy/initialize`, `proxy/successor`; in v2 `session/cancel` stops only foreground work.
+- **MCP 2026-07-28, not recorded before:** Dynamic Client Registration deprecated for Client ID Metadata Documents; `subscriptions/listen` replaces the GET stream and `resources/subscribe`; `server/discover`; `ttlMs` and `cacheScope` on list results; trace context keys in `_meta`; SSE resumability removed.
+- **`srt`:** Windows alpha (a `srt-sandbox` user, WFP egress fence, one-time elevated `npx @anthropic-ai/sandbox-runtime windows-install`); on Linux `allowUnixSockets` paths are ignored.
+
 ### IV.4 Sweep cadence and method
 
 - **Quarterly full sweep:** re-run the seven segment passes plus the orchestration deep dives.
@@ -3241,6 +3809,12 @@ These are verified or locally checked. Each moves to SPEC §20 once a spike or i
   research agents.
 - **Monthly:** re-check the §IV.1 watchlist and change the status of anything promoted.
 - **Ad hoc:** when a launch lands (HN front page, a major vendor post), add an entry or a changelog line here first.
+- **2026-11-11, how the partial sweep was done:** one researcher, web only, because the parallel
+  research agents could not be started. Star counts and latest releases came from GitHub's public
+  API without a login (about 60 requests an hour, which is the limit on how many repositories one
+  pass can check); everything else from the vendors' pages. Entries marked "not re-read" had only
+  their numbers refreshed. Segments B (beyond Paradev and Cursor), H and the three deep dives were
+  not revisited. The monthly watchlist check now has a table to fill in (§IV.1).
 
 ### IV.5 Positioning, in one paragraph
 
@@ -3259,10 +3833,38 @@ and OpenCode:
 Everything is scriptable with `--json`. Single-vendor tools can't cross vendors, GUI tools can't
 follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three.
 
+**Addendum (2026-11-11).** The paragraph holds, with one shift in emphasis. In October the
+contrast was "the agents have no orchestration of their own for vendors other than Claude". In
+November Claude, Codex and Copilot each ship a session manager, worktrees, a fan-out and a phone
+remote for their own agent. So the claim to lead with is no longer "ptyro orchestrates" but
+**"ptyro is the one place that sees and governs all of them"**: every vendor's sessions and every
+vendor's own orchestrator in one list, review by a different family, branches rehearsed together
+before they land, policy the daemon enforces where the vendors only advise, and mail and remote
+access that stay on the user's machines. AWS Labs shipping a cross-vendor orchestrator over other
+vendors' CLIs (F21) is a sign the neutral position is real; it is also a sign it will be contested.
+
 ---
 
 ## Changelog
 
+- **2026-11-11 (partial sweep, orchestration):** Part of the full review of 2026-11. One research
+  pass, web only. The watchlist re-checked (new table in IV.1); **12 new entries** (A19 hcom, A20
+  new entrants, D11 Claude Projects, E9 Codex `remote-control`, E10 GitHub Mobile over a
+  registered device, F19 Symphony, F20 Copilot `/fleet` and dynamic workflows, F21 AWS CAO, F22
+  Kiro Crew, F23 Concord MCP, F24 fanout, F25 Claudexor) and dated updates to about 30 more.
+  New **§II.6** (sources, about 20 papers from their abstracts, ten converging patterns, what not to rebuild, where a neutral
+  host is placed, additions to the II.5 synthesis); an executive-summary addendum; a positioning
+  addendum; **24 ideas** (R-ORC-37…49, R-AGT-10…11, R-ACP-02, R-REM-15…16, R-SEC-06…08, R-UX-45,
+  R-OBS-04, R-GIT-08, 238 ids in all) with six candidates for the Top 15; evidence notes on 13
+  existing ideas; IV.2 resolved and extended; IV.3 extended.
+  - **Corrections to earlier text:** Codex CLI has `--worktree` and a command center (A17, G2);
+    Claude Code supports MCP tasks (II.4, III.3); Copilot's workflows pause for a human, so
+    mid-run gates are not unique against every vendor (II.0); thurbox is tmux-based with one
+    repository per session in its current README (A18); Composio AO is Orchestrator.inc under
+    Apache-2.0 (F11); Superset is Paradev under MIT (B3); Orca has 122k★.
+  - **Not done:** segments B and H and the deep dives were not revisited; nothing was run on a
+    machine; Devin, Jules, Factory, Kiro's specs, Conductor, Warp, iTerm2 and Wave were not
+    re-read; the items listed under "New claims to re-verify" in IV.2.
 - **2026-11-06 (BOOT0):** Every agent's and tool's install, update, version, newest-version
   source and login checked against the vendors' docs and installer scripts for the version table:
   new segment **G18**, facts in SPEC §20.15. Two surprises: Codex now installs with its own
