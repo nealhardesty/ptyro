@@ -99,7 +99,7 @@ pub fn add_problem(name: &str, own: &str) -> Option<String> {
         );
     }
     (crate::names::derive(own).as_deref() == Some(name))
-        .then(|| format!("{name} is this machine's own name: a machine can't mirror itself (another machine of that name? give it a name of its own here with --name)"))
+        .then(|| format!("{name} is this machine's own name: a machine can't mirror itself (another machine of that name? give it a name of its own here)"))
 }
 
 /// Why a machine named `name`, reached over `transport`, can't be added beside `added`: one by
@@ -112,13 +112,10 @@ pub fn already_added(
 ) -> Option<String> {
     if let Some(m) = added.iter().find(|m| crate::lookup::same(&m.name, name)) {
         return Some(if m.transport.same_place(transport) {
-            format!(
-                "{} is already added: remove it first to add it again (`ptyro machine rm {}`)",
-                m.name, m.name
-            )
+            format!("{} is already added: remove it first to add it again", m.name)
         } else {
             format!(
-                "a machine called {} is already added ({}): if this is another one, give it a name of its own here with --name (like {}-2); to replace it, `ptyro machine rm {}` first",
+                "a machine called {} is already added ({}): if this is another one, give it a name of its own here (like {}-2); to replace it, remove {} first",
                 m.name,
                 m.transport.label(),
                 m.name,
@@ -128,9 +125,8 @@ pub fn already_added(
     }
     added.iter().find(|m| m.transport.same_place(transport)).map(|m| {
         format!(
-            "{} is already added as {}: remove it first to add it again (`ptyro machine rm {}`)",
+            "{} is already added as {}: remove it first to add it again",
             transport.label(),
-            m.name,
             m.name
         )
     })

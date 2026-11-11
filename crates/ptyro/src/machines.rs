@@ -129,11 +129,20 @@ pub async fn add(
                     "the code doesn't say what that machine is called: give it a name here with --name (like laptop2)",
                 ));
             };
+            // The shared words say what to do; here they get the command line's way of doing it.
             if let Some(e) = ptyro_core::machine::add_problem(n, &me) {
-                return Err(Error::invalid(e));
+                return Err(Error::invalid(format!("{e}: `--name NAME`")));
             }
             if let Some(e) = ptyro_core::machine::already_added(&added, n, &transport) {
-                return Err(Error::conflict(e));
+                let m = added
+                    .iter()
+                    .find(|m| {
+                        ptyro_core::lookup::same(&m.name, n) || m.transport.same_place(&transport)
+                    })
+                    .map_or(n, |m| m.name.as_str());
+                return Err(Error::conflict(format!(
+                    "{e} (`ptyro machine rm {m}`; another machine: `--name {m}-2`)"
+                )));
             }
             let sent = ptyro_core::names::derive(&me);
             let (token, device) = claim(&code, sent.as_deref()).await?;
