@@ -736,6 +736,7 @@ fn a_wsl_half_that_cant_be_checked_is_said_and_one_without_ptyro_isnt() {
 
 /// `SelfUpdate` (what another machine sends, SPEC §24.8): the daemon runs `ptyro update ptyro
 /// --yes --here` in a session of its own, which checks the release and upgrades it live.
+#[cfg(unix)]
 #[test]
 fn a_daemon_asked_to_update_itself_does_in_a_session_its_upgrade_keeps() {
     use ptyro_testkit::TempDaemon;
