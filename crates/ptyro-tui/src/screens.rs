@@ -470,36 +470,38 @@ impl App {
                     purpose: Purpose::MachineUnhide,
                 });
             }
-            "machine.retry" | "machine.hide" | "machine.remove" => match self.machine_here() {
-                Some(m) => self.machine_on(action, m),
-                None if self.machines.is_empty() => self.toast_offer(
-                    "no other machines yet",
-                    false,
-                    crate::app::Offer {
-                        label: "add one".into(),
-                        then: crate::app::Then::Run(crate::keymap::Command {
-                            action: "machine.add",
-                            arg: None,
-                        }),
-                    },
-                ),
-                None => {
-                    let items = self
-                        .machines
-                        .iter()
-                        .map(|m| Item {
-                            label: m.name.clone(),
-                            detail: m.state.label().into(),
-                            key: None,
-                            target: Target::Machine(m.name.clone()),
-                        })
-                        .collect();
-                    self.overlay = Some(Overlay::Picker {
-                        palette: Palette::new("Which machine?", items),
-                        purpose: Purpose::MachinePick(action),
-                    });
+            "machine.retry" | "machine.hide" | "machine.remove" | "machine.update" => {
+                match self.machine_here() {
+                    Some(m) => self.machine_on(action, m),
+                    None if self.machines.is_empty() => self.toast_offer(
+                        "no other machines yet",
+                        false,
+                        crate::app::Offer {
+                            label: "add one".into(),
+                            then: crate::app::Then::Run(crate::keymap::Command {
+                                action: "machine.add",
+                                arg: None,
+                            }),
+                        },
+                    ),
+                    None => {
+                        let items = self
+                            .machines
+                            .iter()
+                            .map(|m| Item {
+                                label: m.name.clone(),
+                                detail: m.state.label().into(),
+                                key: None,
+                                target: Target::Machine(m.name.clone()),
+                            })
+                            .collect();
+                        self.overlay = Some(Overlay::Picker {
+                            palette: Palette::new("Which machine?", items),
+                            purpose: Purpose::MachinePick(action),
+                        });
+                    }
                 }
-            },
+            }
             other => self.toast(format!("{other}: not available")),
         }
     }
@@ -513,6 +515,8 @@ impl App {
                 Pending::Done(format!("trying {m} again")),
                 Request::MachineRetry { name: m },
             ),
+            // The CLI's own, full sized: it says what happens there and asks first.
+            "machine.update" => self.run_cli(&["machine".into(), "update".into(), m]),
             "machine.hide" => {
                 let Some((_, ws)) = ptyro_core::model::split_machine(&self.workspace)
                     .filter(|(x, _)| *x == m)

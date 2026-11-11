@@ -654,6 +654,12 @@ pub enum AppMsg {
     Health(Vec<crate::health::Check>),
     /// What `ptyro about --json` said (UX2.1); `None` if it could not run.
     About(Option<serde_json::Value>),
+    /// What this TUI's binary on disk answers to `--version`, after reaching a daemon of
+    /// another version (`daemon`): an update may have replaced it (SPEC §24.8).
+    Binary {
+        on_disk: Option<String>,
+        daemon: String,
+    },
     /// What the setup checklist found (BOOT2): the sides, the default place, and why that
     /// isn't the daemon's side; `None` if looking failed.
     SetupFound(Option<Box<SetupLook>>),
@@ -881,6 +887,12 @@ pub struct App {
     /// (which would start a new one).
     quitting: bool,
     pub lost_since: Option<Instant>,
+    /// The newer ptyro this TUI restarts into once it is idle (`restart.rs`).
+    pub restart_to: Option<String>,
+    /// It was restarted and isn't the version it was meant to be: no restart by itself again.
+    pub no_restart: bool,
+    /// The last key, paste or click (a restart waits for a quiet moment).
+    pub last_input: Instant,
     view_dirty_since: Option<Instant>,
     last_list: Instant,
     /// The sessions the last `List` reply named (to tell "gone" from "newer than the reply").
@@ -1026,6 +1038,9 @@ impl App {
             quit: None,
             quitting: false,
             lost_since: None,
+            restart_to: None,
+            no_restart: false,
+            last_input: Instant::now(),
             view_dirty_since: None,
             last_list: Instant::now(),
             last_listed: HashSet::new(),
@@ -1080,6 +1095,8 @@ impl App {
         {
             let _ = client.send(ClientMsg::ChatSubscribe { chat: id.clone() });
         }
+        // A daemon of another version: an update may have replaced this TUI's binary too.
+        self.check_binary();
         Ok(())
     }
 
@@ -1605,6 +1622,7 @@ impl App {
 
     /// Periodic work: toast expiry, debounced view saves, the sidebar's foreground names.
     pub fn tick(&mut self) {
+        self.maybe_restart();
         if let Some(mut tour) = self.tour.take() {
             if tour.advance(self) {
                 self.dirty = true;
@@ -2039,6 +2057,10 @@ impl App {
             }
             AppMsg::SetupFound(found) => {
                 self.setup_found(found);
+                return;
+            }
+            AppMsg::Binary { on_disk, daemon } => {
+                self.got_binary(on_disk, &daemon);
                 return;
             }
             AppMsg::About(doc) => {
@@ -2840,6 +2862,7 @@ impl App {
     // ── terminal input ──────────────────────────────────────────────────────
 
     pub fn on_key(&mut self, ck: &crossterm::event::KeyEvent) {
+        self.last_input = Instant::now();
         self.dirty = true;
         let Some(key) = crate::keys::key(ck) else { return };
         if key.kind == ptyro_core::input::KeyKind::Release {
@@ -3000,6 +3023,7 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: String) {
+        self.last_input = Instant::now();
         // Into the box that's open, new lines kept where it takes several (UX1.26); never on
         // to the session behind it.
         let lines = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -4685,6 +4709,13 @@ impl App {
                 if let Some(m) = self.machine_of_name(w) {
                     if m.state != ptyro_core::model::MachineState::Online {
                         v.insert(0, "machine.retry");
+                    }
+                    // On an older ptyro than this TUI's daemon: offered first (SPEC §24.8).
+                    let ours = self.client.as_ref().map(|c| c.daemon_version.clone());
+                    if let (Some(theirs), Some(ours)) = (m.version.as_deref(), ours)
+                        && crate::restart::newer(&ours, theirs)
+                    {
+                        v.insert(0, "machine.update");
                     }
                     v.extend(["machine.hide", "machine.remove"]);
                 } else {
@@ -6568,6 +6599,7 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, m: &crossterm::event::MouseEvent) {
+        self.last_input = Instant::now();
         let before = self.quick_stance();
         self.mouse_event(m);
         self.tuck_away(before);
@@ -8018,6 +8050,53 @@ mod tests {
         });
         key(&mut app, KeyCode::Char { c: ' ' }, Mods::NONE);
         assert!(matches!(&app.overlay, Some(Overlay::Prompt { text, .. }) if text == " "));
+    }
+
+    /// An update replaced this binary and upgraded the daemon: the TUI restarts into it, but
+    /// only when nothing of its own is half done (SPEC §24.8).
+    #[test]
+    fn a_replaced_binary_restarts_the_tui_once_it_is_idle() {
+        let mut app = app();
+        let quiet = || Instant::now() - Duration::from_secs(60);
+        app.last_input = quiet();
+        // The binary on disk doesn't answer the daemon's version: nothing happens.
+        app.got_binary(Some("9.9.8".into()), "9.9.9");
+        app.tick();
+        assert!(app.restart_to.is_none() && app.quit.is_none());
+        // It does, but a dialog is open: it waits.
+        app.run(&Command { action: "app.quit", arg: None });
+        app.got_binary(Some("9.9.9".into()), "9.9.9");
+        assert_eq!(app.restart_to.as_deref(), Some("9.9.9"));
+        app.tick();
+        assert!(app.quit.is_none(), "waits for the dialog");
+        app.overlay = None;
+        // A chat draft is kept too: it waits.
+        app.chat_drafts.insert("c1".into(), "half a thought".into());
+        app.tick();
+        assert!(app.quit.is_none(), "waits for the draft");
+        app.chat_drafts.clear();
+        // Someone typed a moment ago: it waits for a quiet moment.
+        app.last_input = Instant::now();
+        app.tick();
+        assert!(app.quit.is_none(), "waits while someone types");
+        app.last_input = quiet();
+        app.tick();
+        let Some(AttachEnd::Restart { from, to, workspace, session }) = &app.quit else {
+            panic!("no restart")
+        };
+        assert_eq!((from.as_str(), to.as_str()), (crate::restart::OURS, "9.9.9"));
+        assert_eq!(workspace, &app.workspace);
+        assert!(session.is_none(), "not raw: the workspace's view comes back");
+        // Started as another version than it is: it says so and never restarts by itself again.
+        let mut odd = super::tests::app();
+        odd.opts.restarted = Some(("0.0.1".into(), "9.9.9".into()));
+        assert!(odd.restarted());
+        odd.check_binary();
+        assert!(odd.no_restart);
+        // The version it already runs is no restart.
+        let mut same = super::tests::app();
+        same.got_binary(Some(crate::restart::OURS.into()), crate::restart::OURS);
+        assert!(same.restart_to.is_none());
     }
 
     #[test]

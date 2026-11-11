@@ -356,7 +356,7 @@ async fn dispatch(
                 None => new(&ctx, a).await,
             }
         }
-        Some(Cmd::Attach { session, workspace, raw, view_only, tab, pane }) => {
+        Some(Cmd::Attach { session, workspace, raw, view_only, restarted, tab, pane }) => {
             let client = ctx.connect(true).await?;
             if tab || pane {
                 let info = match &session {
@@ -383,7 +383,10 @@ async fn dispatch(
                     Error::new(ErrorCode::NotFound, "no sessions yet; start one with `ptyro new`")
                 })?),
             };
-            let tui = ptyro_tui::Options { raw, view_only, workspace, ..Default::default() };
+            let restarted = restarted
+                .and_then(|r| r.split_once(':').map(|(a, b)| (a.to_owned(), b.to_owned())));
+            let tui =
+                ptyro_tui::Options { raw, view_only, workspace, restarted, ..Default::default() };
             attach_with(&ctx, client, info, tui).await
         }
         Some(Cmd::List { json, all, status, project, workspace, chats }) => {
@@ -465,8 +468,8 @@ async fn dispatch(
             };
             crate::setup::install(&ctx, a).await
         }
-        Some(Cmd::Update { names, check, yes, json, tty }) => {
-            let a = crate::setup::UpdateArgs { names, check, yes, json, tty };
+        Some(Cmd::Update { names, check, yes, json, tty, here }) => {
+            let a = crate::setup::UpdateArgs { names, check, yes, json, tty, here };
             crate::setup::update(&ctx, a).await
         }
         Some(Cmd::Login { names, check, json, place, tty, installed }) => {
@@ -1390,12 +1393,15 @@ pub async fn attach_with(
         end = ptyro_tui::run(
             opts.clone(),
             &paths,
-            ptyro_tui::Options { welcome: false, ..tui.clone() },
+            ptyro_tui::Options { welcome: false, restarted: None, ..tui.clone() },
         )
         .await;
     }
     match end {
         Ok(AttachEnd::Tour) => unreachable!("handled above"),
+        Ok(AttachEnd::Restart { from, to, workspace, session }) => {
+            restart_tui(&restart_args(ctx, &tui, &from, &to, &workspace, session.as_deref()), &to)
+        }
         Ok(AttachEnd::Detached) => {
             eprintln!("[detached]");
             Ok(0)
@@ -1418,6 +1424,59 @@ pub async fn attach_with(
             Err(Error::new(ErrorCode::DaemonUnavailable, format!("lost the daemon: {reason}")))
         }
         Err(e) => Err(Error::internal(format!("terminal: {e:#}"))),
+    }
+}
+
+/// What the new TUI is started with: attached to the workspace this one showed (its view comes
+/// back from the daemon), never the command that started this one (`ptyro new …` would start
+/// another session); the same `--remote`, raw mode's one session, view-only.
+fn restart_args(
+    ctx: &Ctx,
+    tui: &ptyro_tui::Options,
+    from: &str,
+    to: &str,
+    workspace: &str,
+    session: Option<&str>,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(r) = &ctx.remote {
+        args.extend(["--remote".to_owned(), r.clone()]);
+    }
+    args.push("attach".into());
+    match session {
+        Some(s) => args.extend([s.to_owned(), "--raw".into()]),
+        None if !workspace.is_empty() => args.extend(["--workspace".into(), workspace.to_owned()]),
+        None => {}
+    }
+    if tui.view_only {
+        args.push("--view-only".into());
+    }
+    args.extend(["--restarted".into(), format!("{from}:{to}")]);
+    args
+}
+
+/// An update replaced this binary and upgraded the daemon: the new TUI takes this one's place,
+/// in this terminal (SPEC §24.8a). On Unix it replaces this process; on Windows, which can't, it
+/// runs in this console and its exit is this one's.
+fn restart_tui(args: &[String], to: &str) -> Result<i32, Error> {
+    let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
+    let exe = ptyro_agents::own::installed_name(&exe);
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(args);
+    let failed = |e: std::io::Error| {
+        Error::internal(format!(
+            "ptyro {to} is installed, but it didn't start in this TUI's place ({e}): run `ptyro` again"
+        ))
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(failed(cmd.exec()))
+    }
+    #[cfg(not(unix))]
+    {
+        let status = cmd.status().map_err(failed)?;
+        Ok(status.code().unwrap_or(1))
     }
 }
 
@@ -1915,6 +1974,9 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
         M::Retry { name } => {
             crate::machines::simple(ctx, Request::MachineRetry { name }, String::new()).await
         }
+        M::Update { names, all, yes, json } => {
+            crate::linked::machine_update(ctx, names, all, yes, json).await
+        }
         M::Pair { url, json } => crate::machines::pair(ctx, url, json).await,
     }
 }
@@ -1948,5 +2010,40 @@ mod path_tests {
             PathBuf::from(r"\\nas\share\x")
         );
         assert_eq!(plain_windows_path(Path::new("/home/me")), PathBuf::from("/home/me"));
+    }
+}
+
+#[cfg(test)]
+mod restart_tests {
+    use super::*;
+
+    /// A restart attaches to the workspace shown, never what first started the TUI.
+    #[test]
+    fn a_restart_attaches_to_the_same_place_never_reruns_the_command() {
+        let paths = ptyro_core::paths::Paths::resolve(|v| {
+            (v == "PTYRO_HOME").then(|| std::env::temp_dir().join("ptyro-restart-args"))
+        })
+        .unwrap();
+        let mut ctx = Ctx::local(paths);
+        let tui = ptyro_tui::Options::default();
+        assert_eq!(
+            restart_args(&ctx, &tui, "0.0.68", "0.0.69", "work", None),
+            ["attach", "--workspace", "work", "--restarted", "0.0.68:0.0.69"]
+        );
+        ctx.remote = Some("box".into());
+        let raw = ptyro_tui::Options { raw: true, view_only: true, ..Default::default() };
+        assert_eq!(
+            restart_args(&ctx, &raw, "0.0.68", "0.0.69", "work", Some("01abc")),
+            [
+                "--remote",
+                "box",
+                "attach",
+                "01abc",
+                "--raw",
+                "--view-only",
+                "--restarted",
+                "0.0.68:0.0.69"
+            ]
+        );
     }
 }

@@ -59,6 +59,8 @@ pub struct Versions {
     /// The agents installed another way that can't be offered the move, and why (BOOT7: said by
     /// `doctor`).
     pub unmovable: Vec<Unmovable>,
+    /// The newest ptyro a desktop notification announced (`updates.notify`): each release once.
+    pub announced: String,
 }
 
 /// An agent installed another way that isn't offered the move, and why.
@@ -612,6 +614,23 @@ pub fn note(state: &Path, cfg: &Updates) -> Vec<Outdated> {
             v.noted.insert(o.id.clone(), o.latest.clone());
         }
         said = fresh;
+    });
+    said
+}
+
+/// ptyro's own newer release, if it is offered and no desktop notification has announced it
+/// yet; now marked announced. Reads only the file.
+pub fn announce(state: &Path, cfg: &Updates) -> Option<Outdated> {
+    if cfg.check == UpdateCheck::Off || !cfg.notify || !path(state).exists() {
+        return None;
+    }
+    let mut said = None;
+    edit(state, |v| {
+        let mine = offered(v, cfg).into_iter().find(|o| o.id == own::ID);
+        if let Some(o) = mine.filter(|o| v.announced != o.latest) {
+            v.announced = o.latest.clone();
+            said = Some(o);
+        }
     });
     said
 }

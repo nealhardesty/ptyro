@@ -3374,6 +3374,12 @@ machine". The design is `docs/superpowers/specs/2026-11-06-bootstrap-agents-desi
   (`updates.self`, a session the page opens). Tested end to end against a fake release server on
   127.0.0.1 (`PTYRO_TEST_RELEASE_URL`), with a tampered download, a rollback, the daemon's live
   upgrade, both halves through `ptyro fake-wsl` and Homebrew's (`tests/boot6.rs`; SPEC §24.8).
+- [x] **BOOT10 Updating everywhere at once** (owner, 2026-11-11) **M**: open TUIs restart in place
+  onto the new binary with their view kept; a desktop notification once per release
+  (`updates.notify`); `C-q ^`; the machines linked here offered in the same update, each updating
+  itself (`SelfUpdate`, `MachineUpdate`, protocol 1.40; `ptyro machine update`, the TUI's
+  `machine.update`, the web's "Update its ptyro"). Still asks first. *Done (2026-11-11):* SPEC
+  §24.8a. *Not done:* a real TUI re-exec in a terminal isn't run by a test.
 - [x] **BOOT7 Moves to the recommended installer** **S**, for an agent installed another way
   (Claude Code through npm or Homebrew, for example). The offer can be dismissed. **[built
   2026-11-07]** (R-BOOT-01) An agent installed another way is a checklist row offering the move

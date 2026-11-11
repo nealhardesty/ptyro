@@ -312,6 +312,25 @@ export function selfUpdate(o: UpdateOffer): SelfUpdate | null {
   return { kind: "run", what };
 }
 
+/// `a` is a later version than `b` (`0.0.69` > `0.0.68`), as the CLI compares them.
+export function newer(a: string, b: string): boolean {
+  const parts = (v: string) => v.split(/[^0-9]+/).filter(Boolean).map(Number);
+  const x = parts(a), y = parts(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? -1) - (y[i] ?? -1);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
+/// The machines linked here that `ptyro update ptyro` brings to `target` too (SPEC §24.8): those
+/// reachable (online, or down only for their version) on an older ptyro.
+export function linkedBehind(machines: Iterable<{ name: string; state: string; version?: string | null }>, target: string): string[] {
+  const out: string[] = [];
+  for (const m of machines) if ((m.state === "online" || m.state === "mismatch") && m.version && newer(target, m.version)) out.push(`${m.name} ${m.version}`);
+  return out;
+}
+
 /// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
 /// update leaves them on the old version until they restart, so the page names them.
 export function runningAgent(sessions: Iterable<{ name: string; agent?: string | null; inner_agent?: string | null; machine?: string | null; state: { t: string } }>, id: string): string[] {

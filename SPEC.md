@@ -1183,6 +1183,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-11] Protocol 1.40** (additive, §24.8a): `SelfUpdate` → `Session` (this machine
+updates its own ptyro in a session) and `MachineUpdate{name}` → `Session` (that machine is asked
+to, over a connection of its own, whatever its link's state). Both `full`. An older daemon can't
+read either (its error is said with the fix: update that machine there once).
+
 **[built 2026-11-11] Protocol 1.39** (additive): `DeviceClaim.name` (absent: none), what a
 machine claiming a `machine pair` code calls itself; its device is named after it (§16.4b). Ignored
 for a person's device. `POST /api/pair` takes it as `name`. An older daemon ignores it and names
@@ -10403,6 +10408,79 @@ run on Windows too, with this build hard-linked as the installed one. Unit tests
 `checksum_for`, the administrator's command, `swap` keeping and restoring (with an injected check,
 on every platform), `sweep` removing only leftovers (`own.rs`); the TUI's finding and note
 (`app.rs`); the web's `selfUpdate` (`web/test/setup.mjs`).
+
+### 24.8a Updating everywhere at once (BOOT10) **[built 2026-11-11]**
+
+The owner (2026-11-11): one update should bring the whole setup along: the binary, the daemon,
+every open TUI and the machines linked here, with a desktop notification when a release is out.
+Still nothing is installed without a yes (the owner kept "always ask").
+
+- **Open TUIs restart in place** (`ptyro-tui/src/restart.rs`). Each (re)connect compares the
+  daemon's `Welcome.daemon_version` with the TUI's own; when they differ, the TUI asks its binary
+  on disk (`own::installed_name(current_exe)`, `--version`, off the event loop). If that now
+  answers the daemon's version (an update replaced it, then upgraded the daemon live), it says
+  "ptyro X is installed: this TUI restarts into it once you're idle" and, at the first tick when
+  nothing of its own is half done (30 s without a key, paste or click; no overlay, first run,
+  copy mode, pending prefix key, chat draft or tour), ends with `AttachEnd::Restart{from, to,
+  workspace, session}`, saving its view as on any exit. The CLI (`restart_args`, `restart_tui`)
+  starts the installed binary as `ptyro [--remote R] attach --workspace W [--view-only]
+  --restarted FROM:TO` (raw mode: `attach SESSION --raw`), **never the command that first started
+  it** (`ptyro new …` would start another session): on Unix it replaces the process (`exec`), on
+  Windows it runs in the same console and its exit is this one's (each restart adds a parent
+  there: a known cost). The new TUI restores the view (§11's `SaveView`), skips the welcome and
+  says "now ptyro Y (was X): restarted in place, your view kept"; one that isn't `TO` (a wrapper,
+  a binary replaced again) says so and never restarts by itself again, so a restart can't loop.
+  The hidden `--restarted` is a flag, not the environment, so nothing the TUI starts inherits
+  it. A daemon older than the TUI, or a binary that doesn't answer the daemon's version (a remote
+  daemon updated elsewhere; Homebrew's keg path on Linux), changes nothing.
+- **A desktop notification once per release** (`updates.notify`, default on, in the panel's
+  Updates section). After the daemon's hourly look (§24.7), `updates::announce` returns ptyro's
+  own finding if it is offered (not ignored, `updates.check` not off) and `versions.json`'s
+  `announced` isn't its version yet, and marks it. Sent through the desktop channel's own way
+  (or `notifications.desktop_command`) whatever `notifications.channels` says, but never in quiet
+  hours: then it isn't marked, so it comes after them. "ptyro 0.0.69 is out / You have 0.0.68.
+  Update it from ptyro: the TUI's update (its health badge), or Health in the web app. Your
+  sessions carry on." (an administrator's or a package manager's install says how instead; the
+  daemon's words name no CLI command or key, which can be rebound).
+- **`C-q ^`** (`^` in the sidebar) runs `app.update`: the TUI's update, in a split, as the
+  badge's fix and the start-up note's offer do.
+- **The machines linked here come along** (protocol 1.40):
+  - `SelfUpdate` → `Session`: the daemon starts `ptyro update ptyro --yes --here` in a session of
+    its own (`update-ptyro`, numbered when taken) in its home, after the same refusals as the
+    web's `updates.self` (an administrator's binary, a package manager's, a build), named after
+    the machine ("turkey's ptyro is a build …"). `--here`: that machine only, so a machine asked
+    by another never asks its own links back. The session outlives the live upgrade at its end.
+  - `MachineUpdate{name}` → `Session` (its name qualified, `turkey:update-ptyro`): this daemon
+    dials that machine over a connection of its own (`dial`, whatever the link's state, so a link
+    down for a version mismatch still carries it) and sends `SelfUpdate`. A machine from before
+    1.40 answers that it can't read the request: "turkey runs ptyro 0.0.68, from before a machine
+    could be updated from another: update it on turkey itself once, and from then on it can be
+    updated from here". Both `full` scope; agents can't send either ("ptyro is updated by a
+    person").
+  - `ptyro update` (all, or `ptyro` named; not `--here`) lists the linked machines reachable
+    (online, or down for their version) on a ptyro older than the one this machine will run, in
+    its question ("and the machines linked here, each updating itself (checked the same way):
+    turkey 0.0.68 → 0.0.69"), and on yes asks each **after** this machine's own update succeeded
+    (never when it failed: they'd pass it). Each installs the newest release, so they are offered
+    only when this machine ends on it too; otherwise (it skips that release, a package manager
+    owns it, a build) a note names them and `ptyro machine update` asks anyway. This machine
+    already current, it still offers them ("Update them? [Y/n]"). `--yes` (the web's
+    `updates.self`) includes them; the web's question names them.
+  - After asking, this daemon wakes that machine's link every 15 s for 5 minutes, so it comes back
+    soon after the other's live upgrade, not at the 5-minute mismatch retry. Another machine's
+    error text is shown with its control characters dropped.
+  - `ptyro machine update [NAME…] [--all] [-y] [--json]`: those named, or every linked machine
+    behind this one's version; asks first. The TUI's `machine.update` (first in a mirrored
+    workspace's row menu while its machine runs an older ptyro; the palette) runs it full sized;
+    the web's machine menu has "Update its ptyro" (asked first) sending `MachineUpdate`.
+- **Tests:** the TUI's decision (`a_replaced_binary_restarts_the_tui_once_it_is_idle`: waits for a
+  dialog and a chat draft, ignores a binary that isn't the daemon's version or is its own);
+  `a_new_ptyro_release_is_announced_once` (off, once, the next, ignored); `boot6.rs`
+  `a_daemon_asked_to_update_itself_does_in_a_session_its_upgrade_keeps` (`SelfUpdate` through the
+  fake release server, `--here`, checksum, live upgrade); `mm1.rs`
+  `another_machine_is_asked_to_update_itself_and_answers_for_itself` (over a real link; the
+  other's own refusal comes back); `linked.rs`'s which machines are behind. Not tested end to end:
+  a real TUI re-exec in a terminal (the decision and the `exec` are; the two aren't run together).
 
 ### 24.9 Moves to the recommended installer (BOOT7) **[built 2026-11-07]**
 

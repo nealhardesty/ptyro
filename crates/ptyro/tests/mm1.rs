@@ -394,3 +394,25 @@ async fn a_worktree_here_in_a_workspace_there_is_refused_with_the_fix() {
     let err = here.request(Request::Spawn { spec }).await.unwrap_err();
     assert!(err.message.contains("is on this machine"), "{}", err.message);
 }
+
+/// `MachineUpdate` (SPEC §24.8): this machine asks another, over a connection of its own, to
+/// update its ptyro; what the other says comes back with its machine named. (A build in
+/// `target/` never updates itself: the refusal is that one, from laptop2, not from here.)
+#[tokio::test]
+async fn another_machine_is_asked_to_update_itself_and_answers_for_itself() {
+    let t = Two::new();
+    let here = t.here.client().await.unwrap();
+    here.request(Request::MachineAdd {
+        name: None,
+        transport: MachineTransport::Ssh { target: "laptop2".into() },
+        token: None,
+        force: false,
+    })
+    .await
+    .unwrap();
+    until_state(&here, "laptop2", MachineState::Online).await;
+    let e = here.request(Request::MachineUpdate { name: "LAPTOP2".into() }).await.unwrap_err();
+    assert!(e.message.contains("laptop2's ptyro is a build"), "{e:?}");
+    let e = here.request(Request::MachineUpdate { name: "laptop9".into() }).await.unwrap_err();
+    assert_eq!(e.code, ptyro_core::ErrorCode::NotFound, "{e:?}");
+}

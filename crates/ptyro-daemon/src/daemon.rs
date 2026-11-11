@@ -1315,6 +1315,8 @@ impl Daemon {
             | Request::MachineRemove { .. }
             | Request::MachineHide { .. }
             | Request::MachineRetry { .. }) => self.handle_machines(req).await,
+            Request::MachineUpdate { name } => self.machine_update(&name).await,
+            Request::SelfUpdate => self.self_update().await,
             Request::SetupPlan { picks, wsl_picks } => self.setup_plan(picks, wsl_picks).await,
             Request::Updates { note } => self.updates(note).await,
             Request::SetupRun { picks, wsl_picks, moves } => {

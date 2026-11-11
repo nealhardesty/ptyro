@@ -733,3 +733,51 @@ fn a_wsl_half_that_cant_be_checked_is_said_and_one_without_ptyro_isnt() {
     assert!(!said.contains("WSL's ptyro"), "{said}");
     assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
 }
+
+/// `SelfUpdate` (what another machine sends, SPEC §24.8): the daemon runs `ptyro update ptyro
+/// --yes --here` in a session of its own, which checks the release and upgrades it live.
+#[test]
+fn a_daemon_asked_to_update_itself_does_in_a_session_its_upgrade_keeps() {
+    use ptyro_testkit::TempDaemon;
+    use std::time::{Duration, Instant};
+    let b = Box_::new(json!({ "platform": "linux" }));
+    std::fs::write(b.installed(), script("0.0.1")).unwrap();
+    executable(&b.installed());
+    b.publish(V);
+    b.release(V, &script(V), false);
+    let s = |p: PathBuf| p.display().to_string();
+    let env = [
+        ("SHELL".to_owned(), "/bin/sh".to_owned()),
+        ("HOME".into(), s(b.path("home"))),
+        ("PTYRO_TEST_SETUP".into(), s(b.path("fake"))),
+        ("PTYRO_TEST_LATEST".into(), s(b.path("registry"))),
+        ("PTYRO_TEST_RELEASE_URL".into(), b.server.url.clone()),
+        ("PTYRO_TEST_SELF_EXE".into(), s(b.installed())),
+        ("PTYRO_VERIFY".into(), "0".into()),
+        ("PTYRO_WSL".into(), s(b.path("no-wsl"))),
+    ];
+    let pairs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let d = TempDaemon::start_with_env(BIN, &pairs).unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let info = rt.block_on(async {
+        let c = d.client().await.unwrap();
+        match c.request(ptyro_protocol::Request::SelfUpdate).await.unwrap() {
+            ptyro_protocol::Reply::Session { info } => info,
+            r => panic!("{r:?}"),
+        }
+    });
+    assert_eq!(info.name, "update-ptyro");
+    assert!(info.argv.iter().any(|a| a == "--here"), "{:?}", info.argv);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let o = d.cmd().args(["read", "update-ptyro"]).output().unwrap();
+        let screen = String::from_utf8_lossy(&o.stdout).into_owned();
+        if screen.contains("upgraded in") {
+            assert!(screen.contains("checksum ok"), "{screen}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the update never finished:\n{screen}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
+}

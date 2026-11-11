@@ -8,7 +8,7 @@ import { fixLineEndings } from "./projects.js";
 import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, fixOf, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item, Sheet } from "./kit.js";
 import { qrMatrix } from "./qr.js";
-import { adminSteps, bannerWants, isHere, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
+import { adminSteps, bannerWants, isHere, linkedBehind, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import type { MoveOffer } from "./setupkit.js";
 import type { UpdateOffer } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
@@ -224,8 +224,10 @@ function askSelfUpdate(o: UpdateOffer): void {
     ], []);
     return;
   }
+  const linked = linkedBehind(data.machines.values(), o.latest);
   confirm(`Update ptyro to ${o.latest}?`, h("span", {},
-    `ptyro ${o.version} → ${o.latest} on the computer: it ${how.what}, then upgrades the daemon live. Every session carries on, and this page reconnects in a moment. On Windows with WSL, the other half is brought to ${o.latest} too.`),
+    `ptyro ${o.version} → ${o.latest} on the computer: it ${how.what}, then upgrades the daemon live. Every session carries on, open TUIs restart into it with their view kept, and this page reconnects in a moment. On Windows with WSL, the other half is brought to ${o.latest} too.`,
+    linked.length ? ` The machines linked here on an older ptyro update themselves too, each checked the same way: ${linked.join(", ")}.` : ""),
   "Update", () => void startSelfUpdate(), false);
 }
 
