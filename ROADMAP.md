@@ -2431,11 +2431,8 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
   *Done (2026-11-11):* SPEC §16.4b "Many machines pair with one", protocol 1.39; `tests/mm1_pair.rs`.
 - [ ] **MM1.D Pairing hardening** (from the MM1.C security review, 2026-11-11; all pre-existing,
   none exploitable without a code or the tailnet) — S each, decide which:
-  - A `*.ts.net` host whose chain lacks the pinned authority falls back to the public roots even
-    when the code carries `ca`: pin strictly when there is one (`machines.rs` `Pinned`).
-  - `http://` codes and links are accepted for any host (the token travels in clear): allow
-    plain HTTP only to loopback and Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48,
-    `*.ts.net`), checking first that no working link relies on it.
+  - ~~Strict pinning when the code carries an authority.~~ Done 2026-11-11.
+  - ~~Plain HTTP only to loopback and Tailscale addresses.~~ Done 2026-11-11.
   - A machine link has `full` scope, so any linked machine can revoke the others or make codes:
     consider a machine scope without `DevicePair`/`DeviceRevoke` (an owner decision: §16.4b says
     full).

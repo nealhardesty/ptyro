@@ -293,6 +293,30 @@ fn is_tailnet_name(host: &str) -> bool {
     host.trim_end_matches('.').to_ascii_lowercase().ends_with(".ts.net")
 }
 
+/// A server without the pinned authority may be checked against the public roots instead: only
+/// a Tailscale name (`*.ts.net`, whose certificate Tailscale gives it) from a code that pinned
+/// no authority. A code that carries one is held to it.
+fn public_roots_stand_in(fingerprint: Option<&str>, host: &str) -> bool {
+    fingerprint.is_none() && is_tailnet_name(host)
+}
+
+/// An address plain HTTP may go to: this computer (loopback), or a Tailscale address
+/// (100.64.0.0/10, fd7a:115c:a1e0::/48), whose traffic Tailscale encrypts.
+fn plain_ok(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback() || (o[0] == 100 && (o[1] & 0xc0) == 64)
+        }
+        std::net::IpAddr::V6(v6) => {
+            let s = v6.segments();
+            v6.is_loopback()
+                || v6.to_ipv4_mapped().is_some_and(|v4| plain_ok(std::net::IpAddr::V4(v4)))
+                || (s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0)
+        }
+    }
+}
+
 fn same_fingerprint(a: &str, b: &str) -> bool {
     let norm = |s: &str| {
         s.chars().filter(char::is_ascii_hexdigit).collect::<String>().to_ascii_uppercase()
@@ -313,7 +337,9 @@ impl rustls::client::danger::ServerCertVerifier for Pinned {
             intermediates.iter().find(|c| same_fingerprint(&crate::tls::fingerprint(c), f))
         });
         let Some(ca) = pinned else {
-            if matches!(server_name, rustls::pki_types::ServerName::DnsName(n) if is_tailnet_name(n.as_ref()))
+            // The public roots stand in only for a code that pinned nothing: one that carries an
+            // authority is held to it.
+            if matches!(server_name, rustls::pki_types::ServerName::DnsName(n) if public_roots_stand_in(self.fingerprint.as_deref(), n.as_ref()))
             {
                 let roots =
                     rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
@@ -414,9 +440,19 @@ fn parse_base(url: &str) -> Result<(bool, String, u16), Error> {
 /// sensible over Tailscale, which encrypts).
 async fn open(url: &str, fingerprint: Option<&str>) -> Result<(Box<dyn Io>, String, bool), Error> {
     let (tls, host, port) = parse_base(url)?;
-    let tcp = tokio::net::TcpStream::connect((host.as_str(), port)).await.map_err(|e| {
+    let unreachable = |e: std::io::Error| {
         Error::new(ptyro_core::ErrorCode::DaemonUnavailable, format!("{host}:{port}: {e}"))
-    })?;
+    };
+    let addrs: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host((host.as_str(), port)).await.map_err(unreachable)?.collect();
+    // Plain HTTP carries the code and the token as they are: only to this computer, or over
+    // Tailscale (which encrypts), whatever the name resolves to.
+    if !tls && (addrs.is_empty() || !addrs.iter().all(|a| plain_ok(a.ip()))) {
+        return Err(Error::invalid(format!(
+            "{url} is plain HTTP, which ptyro uses only to this computer or over Tailscale (it would carry the token unencrypted): pair again with `ptyro machine pair` there while `ptyro serve` uses HTTPS, or add it over ssh"
+        )));
+    }
+    let tcp = tokio::net::TcpStream::connect(addrs.as_slice()).await.map_err(unreachable)?;
     let authority = format!("{host}:{port}");
     if !tls {
         return Ok((Box::new(tcp), authority, false));
@@ -569,6 +605,13 @@ pub async fn bridge(url: String, fingerprint: Option<String>) -> Result<i32, Err
 mod tests {
     use super::*;
 
+    /// A plain-HTTP code to a LAN address is refused before anything is sent.
+    #[tokio::test]
+    async fn plain_http_off_this_computer_and_tailscale_is_refused() {
+        let Err(e) = open("http://192.0.2.10:7091", None).await else { panic!("opened") };
+        assert!(e.message.contains("only to this computer or over Tailscale"), "{e:?}");
+    }
+
     #[test]
     fn only_tailnet_names_may_skip_the_pin() {
         assert!(is_tailnet_name("box.tail1234.ts.net"));
@@ -598,6 +641,31 @@ mod tests {
         assert_eq!(Code::parse(&format!("  {}  ", c.text())), Some(c));
         assert!(Code::parse("ssh://laptop2").is_none());
         assert!(Code::parse("https://x/#machine=nope").is_none());
+        assert!(public_roots_stand_in(None, "box.tail1.ts.net"));
+        assert!(!public_roots_stand_in(Some("AB:CD"), "box.tail1.ts.net"), "a pin is kept");
+        assert!(!public_roots_stand_in(None, "box.example.com"));
+        // Plain HTTP only to this computer or a Tailscale address.
+        for ok in [
+            "127.0.0.1",
+            "::1",
+            "100.64.0.1",
+            "100.127.255.254",
+            "fd7a:115c:a1e0::1",
+            "::ffff:100.70.1.2",
+        ] {
+            assert!(plain_ok(ok.parse().unwrap()), "{ok}");
+        }
+        for bad in [
+            "10.0.0.204",
+            "192.168.1.5",
+            "100.128.0.1",
+            "100.63.255.255",
+            "8.8.8.8",
+            "fd7a:115c:a1e1::1",
+            "::ffff:10.0.0.1",
+        ] {
+            assert!(!plain_ok(bad.parse().unwrap()), "{bad}");
+        }
     }
 
     #[test]
