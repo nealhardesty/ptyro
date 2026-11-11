@@ -1153,8 +1153,9 @@ async fn api_host(
     respond(StatusCode::OK, "application/json", out.to_string())
 }
 
-/// `{"code": "ptp_…"}` → `{"token": "ptd_…", "device": DeviceInfo}`: the web app trades the
-/// pairing code from `ptyro pair` for its token, once. A wrong code counts as a failed login.
+/// `{"code": "ptp_…", "name"?}` → `{"token": "ptd_…", "device": DeviceInfo}`: the web app trades
+/// the pairing code from `ptyro pair` for its token, once; `ptyro machine add` does the same with
+/// a `machine pair` code, saying its own name. A wrong code counts as a failed login.
 async fn api_pair(
     req: Request<Incoming>,
     st: &State,
@@ -1165,12 +1166,15 @@ async fn api_pair(
     #[derive(serde::Deserialize)]
     struct Claim {
         code: String,
+        /// What a machine claiming a `machine pair` code calls itself (its device's name).
+        #[serde(default)]
+        name: Option<String>,
     }
     let body = match read_body(req.into_body(), 4096).await {
         Ok(b) => b,
         Err((code, why)) => return respond(code, "text/plain", why),
     };
-    let Ok(Claim { code }) = serde_json::from_slice(&body) else {
+    let Ok(Claim { code, name }) = serde_json::from_slice(&body) else {
         return respond(StatusCode::BAD_REQUEST, "text/plain", "expected {\"code\": …}");
     };
     // A local client of the daemon: the claim is the one thing it asks for here.
@@ -1180,7 +1184,7 @@ async fn api_pair(
         Ok(c) => c,
         Err(e) => return daemon_unavailable(&e),
     };
-    let claim = ptyro_protocol::Request::DeviceClaim { code, via: Some(via) };
+    let claim = ptyro_protocol::Request::DeviceClaim { code, via: Some(via), name };
     let out = tokio::time::timeout(Duration::from_secs(10), client.request(claim)).await;
     drop(login);
     match out {

@@ -65,6 +65,13 @@ ptyro machine rm laptop2
 - **Both ways, no hub.** Add each machine on the other and pair your phone with each: whichever
   is awake shows everything it can reach. A machine only ever offers its own workspaces, so
   two machines adding each other don't echo.
+- **One code per machine.** A code from `machine pair` works once, for 10 minutes, on the machine
+  you add it on (not the one that made it). Make one for each machine: codes don't cancel each
+  other, and each machine that claims one is a device of its own there, named after itself
+  (`ptyro devices ls` marks it `[machine link]`; `ptyro devices revoke bear` cuts just that one).
+  `machine add` checks first (its own code, already added, a bad name) and spends the code only
+  when it can keep it. `machine rm` leaves its device there until it is revoked there; paired
+  again, it comes back as `bear-2`.
 - **Offline.** An unreachable machine's workspaces stay listed as they were, marked "offline since
   14:02"; anything that would change them says so. The link retries by itself (up to every
   minute); `ptyro machine retry` (or the row menu) tries now.
@@ -74,7 +81,8 @@ ptyro machine rm laptop2
   desktop notifications, sinks and your paired devices), under its notification settings. A phone
   paired with both shows one notification for one alert.
 - **Trust.** A machine added with a code holds a token with `full` scope on the other: it can do
-  everything there. It is listed under `ptyro devices` as "machine"; revoke it there. A code
+  everything there. It is listed under `ptyro devices` there by its own name, marked `[machine link]`; revoke
+  it there (`ptyro devices revoke bear`), and the link here says so and how to pair again. A code
   works once, for 10 minutes, and pins the other machine's certificate (its own HTTPS); ssh needs
   nothing new.
 - **What stays per machine:** runs, recipes, change sets, messages and leases, the scratchpad,

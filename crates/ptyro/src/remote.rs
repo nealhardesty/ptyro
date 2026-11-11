@@ -559,13 +559,15 @@ pub async fn devices(ctx: &Ctx, cmd: Option<DevicesCmd>) -> Result<i32, Error> {
                     d.last_seen_ms.map_or_else(|| "never".into(), crate::cli::ago)
                 };
                 println!(
-                    "{:<13} {:<16} {:<8} {:<12} {:<5} {}",
+                    "{:<13} {:<16} {:<8} {:<12} {:<5} {}{}",
                     d.id,
                     d.name,
                     d.scope.label(),
                     seen,
                     if d.push > 0 { "on" } else { "-" },
-                    d.last_via.unwrap_or_default()
+                    d.last_via.unwrap_or_default(),
+                    // Another machine's link (`machine pair`), not a person's device.
+                    if d.machine { "  [machine link]" } else { "" }
                 );
             }
             Ok(0)

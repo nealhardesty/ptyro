@@ -345,6 +345,13 @@ impl MachineTransport {
             Self::Token { url, .. } => url.clone(),
         }
     }
+
+    /// The same machine reached the same way (`https://Turkey.ts.net:7091/` is
+    /// `https://turkey.ts.net:7091`): one machine is added once.
+    pub fn same_place(&self, other: &Self) -> bool {
+        let key = |t: &Self| t.label().trim_end_matches('/').to_ascii_lowercase();
+        key(self) == key(other)
+    }
 }
 
 /// Where a link to another machine stands.

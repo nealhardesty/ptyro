@@ -86,9 +86,68 @@ pub fn hue(name: &str) -> u16 {
     (h % 360) as u16
 }
 
+/// Why `name` can't name another machine added to this one (called `own`), or `None`. The
+/// daemon refuses these; `machine add` asks first, before it spends a one-time code.
+pub fn add_problem(name: &str, own: &str) -> Option<String> {
+    if let Err(e) = crate::names::validate(name) {
+        return Some(e);
+    }
+    // `c:7f3k` is a chat's address (SPEC §22.3): a machine called `c` would take every one.
+    if name == "c" {
+        return Some(
+            "`c` can't name a machine: `c:…` is how chats are addressed. Pick another name".into(),
+        );
+    }
+    (crate::names::derive(own).as_deref() == Some(name))
+        .then(|| format!("{name} is this machine's own name: a machine can't mirror itself (another machine of that name? give it a name of its own here with --name)"))
+}
+
+/// Why a machine named `name`, reached over `transport`, can't be added beside `added`: one by
+/// that name, or the same machine under another name. `machine add` asks first, before it
+/// spends a one-time code.
+pub fn already_added(
+    added: &[crate::model::MachineInfo],
+    name: &str,
+    transport: &crate::model::MachineTransport,
+) -> Option<String> {
+    if let Some(m) = added.iter().find(|m| crate::lookup::same(&m.name, name)) {
+        return Some(if m.transport.same_place(transport) {
+            format!(
+                "{} is already added: remove it first to add it again (`ptyro machine rm {}`)",
+                m.name, m.name
+            )
+        } else {
+            format!(
+                "a machine called {} is already added ({}): if this is another one, give it a name of its own here with --name (like {}-2); to replace it, `ptyro machine rm {}` first",
+                m.name,
+                m.transport.label(),
+                m.name,
+                m.name
+            )
+        });
+    }
+    added.iter().find(|m| m.transport.same_place(transport)).map(|m| {
+        format!(
+            "{} is already added as {}: remove it first to add it again (`ptyro machine rm {}`)",
+            transport.label(),
+            m.name,
+            m.name
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_machine_is_named_plainly_and_never_after_this_one() {
+        assert_eq!(add_problem("turkey", "bear"), None);
+        assert!(add_problem("bear", "bear").unwrap().contains("this machine's own name"));
+        assert!(add_problem("bear", "Bear").unwrap().contains("own name"), "derived, lowercased");
+        assert!(add_problem("c", "bear").unwrap().contains("chats"));
+        assert!(add_problem("Turkey Box", "bear").unwrap().contains("invalid name"));
+    }
 
     #[test]
     fn host_names_become_short_plain_names() {

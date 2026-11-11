@@ -2425,6 +2425,23 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
   no echoes). *Deviations:* an offline machine's screens are only what a client had; marking a
   mirrored inbox entry read isn't routed; the wizard offers this machine's agents in a remote
   workspace. Not looked at on two real laptops or a phone by the agent that built it.
+- [x] **MM1.C Many machines pair with one** (bug, owner report 2026-11-11) — S. A second machine
+  pairing with a host by code failed, and would have cut off the first: every machine device was
+  named `machine`, a new code cancelled an unclaimed one and a claim replaced the earlier link.
+  *Done (2026-11-11):* SPEC §16.4b "Many machines pair with one", protocol 1.39; `tests/mm1_pair.rs`.
+- [ ] **MM1.D Pairing hardening** (from the MM1.C security review, 2026-11-11; all pre-existing,
+  none exploitable without a code or the tailnet) — S each, decide which:
+  - A `*.ts.net` host whose chain lacks the pinned authority falls back to the public roots even
+    when the code carries `ca`: pin strictly when there is one (`machines.rs` `Pinned`).
+  - `http://` codes and links are accepted for any host (the token travels in clear): allow
+    plain HTTP only to loopback and Tailscale addresses (100.64.0.0/10, fd7a:115c:a1e0::/48,
+    `*.ts.net`), checking first that no working link relies on it.
+  - A machine link has `full` scope, so any linked machine can revoke the others or make codes:
+    consider a machine scope without `DevicePair`/`DeviceRevoke` (an owner decision: §16.4b says
+    full).
+  - `machine rm` could revoke its own device there over the link while it is up (keep the
+    claimed device's id), so re-pairing doesn't leave a stale `bear` beside `bear-2`.
+  - Behind a reverse proxy on loopback every client shares one login lockout.
 
 ## CHAT — Chat (proposed 2026-10-29; open)
 

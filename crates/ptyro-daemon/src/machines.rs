@@ -382,6 +382,15 @@ impl Daemon {
 
     /// At start: every machine's link.
     pub(crate) async fn start_machines(self: &Arc<Self>) {
+        // A token kept under its temporary name by an add that never finished (the daemon
+        // stopped in between) belongs to no machine: it goes.
+        if let Ok(dir) = std::fs::read_dir(self.paths.data.join("machines")) {
+            for e in dir.flatten() {
+                if e.file_name().to_string_lossy().starts_with(".adding-") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
         let Some(store) = &self.store else { return };
         let Ok(Some(v)) = store.kv_get(KV_KEY.into()).await else { return };
         let Ok(records) = serde_json::from_value::<Vec<MachineRecord>>(v) else { return };
@@ -513,6 +522,11 @@ impl Daemon {
             match self.dial(&name, &transport).await {
                 Err(e) => {
                     let fix = match kind_name(&transport) {
+                        // It answered, but refused this machine's token: revoked there (or
+                        // replaced by an older ptyro's pairing). Waiting won't bring it back.
+                        _ if e.message.contains("unauthorized") => format!(
+                            "{name} no longer accepts this machine's pairing (revoked there, or replaced by another machine's): `ptyro machine rm {name}` here, then `ptyro machine pair` on {name} and `ptyro machine add CODE` here"
+                        ),
                         "ssh" => format!(
                             "check that `ssh {} ptyro --version` works here without a password (keys or ssh-agent)",
                             ptyro_client::remote::parse(&transport.label()).0
@@ -1331,32 +1345,21 @@ impl Daemon {
         let cleanup = || {
             let _ = std::fs::remove_file(self.token_path(&probe));
         };
-        if let Err(e) = ptyro_core::names::validate(&name) {
+        if let Some(e) = ptyro_core::machine::add_problem(&name, &self.machine()) {
             cleanup();
             return Err(Error::invalid(e));
         }
-        // `c:7f3k` is a chat's address (SPEC §22.3): a machine called `c` would take every one.
-        if name == "c" {
+        if let Some(e) =
+            ptyro_core::machine::already_added(&self.machine_infos(), &name, &transport)
+        {
             cleanup();
-            return Err(Error::invalid(
-                "`c` can't name a machine: `c:…` is how chats are addressed. Pick another name",
-            ));
-        }
-        if ptyro_core::names::derive(&self.machine()).as_deref() == Some(name.as_str()) {
-            cleanup();
-            return Err(Error::invalid(format!(
-                "{name} is this machine's own name: a machine can't mirror itself"
-            )));
-        }
-        if self.links.locked().contains_key(&name) {
-            cleanup();
-            return Err(Error::conflict(format!(
-                "{name} is already added: remove it first to add it again"
-            )));
+            return Err(Error::conflict(e));
         }
         if token.is_some() {
-            std::fs::rename(self.token_path(&probe), self.token_path(&name))
-                .map_err(|e| Error::internal(format!("token: {e}")))?;
+            std::fs::rename(self.token_path(&probe), self.token_path(&name)).map_err(|e| {
+                cleanup();
+                Error::internal(format!("token: {e}"))
+            })?;
         }
         let record =
             MachineRecord { name: name.clone(), transport, added_ms: now_ms(), hidden: Vec::new() };

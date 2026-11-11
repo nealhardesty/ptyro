@@ -83,7 +83,7 @@ function addMachine(): void {
   form("Add a machine", [
     { key: "target", label: "ssh://HOST, or the code `ptyro machine pair` printed on it", required: true, hint: "Over ssh it needs a key or an agent, no password prompt. A code is claimed once, within 10 minutes." },
     { key: "name", label: "Name here (optional)", slug: "name", hint: `Default: what it calls itself. ${NAME_HINT}` },
-    { key: "force", label: "Keep it even if it doesn't answer now", type: "check", value: false },
+    { key: "force", label: "Keep it even if it doesn't answer now", type: "check", value: false, hint: "Over ssh. A code is spent once claimed, so its machine is always kept." },
   ], "Add", async (v) => {
     try {
       const r = await host("machine.add", { target: (v.target as string).trim(), name: (v.name as string)?.trim() || null, force: !!v.force });
@@ -105,7 +105,7 @@ async function showPairCode(url: string | null): Promise<void> {
     sheet("Add this machine on another", [
       h("p", { class: "intro" }, "On the other machine, within 10 minutes, once:"),
       h("pre", { class: "block" }, `ptyro machine add '${code}'`),
-      h("p", { class: "sub" }, "It gets full access to this machine's sessions; it's listed under Devices as \"machine\", where you can revoke it."),
+      h("p", { class: "sub" }, "It gets full access to this machine's sessions. A code is for one machine: make one for each. Under Devices it is listed by that machine's name, where you can revoke it."),
     ], [h("button", { class: "primary", onclick: () => void navigator.clipboard?.writeText(`ptyro machine add '${code}'`).then(() => ui.toast("Copied")) }, "Copy")]);
   } catch (e) { ui.toast(errText(e)); }
 }

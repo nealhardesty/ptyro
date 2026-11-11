@@ -1884,7 +1884,24 @@ async fn machine(ctx: &Ctx, cmd: Option<crate::MachineCmd>) -> Result<i32, Error
             };
             let name = m.name.clone();
             ask_first(&format!("Stop mirroring {name}? {}", ptyro_core::removal::MACHINE), yes)?;
-            let said = format!("{name} is no longer mirrored here (revoke its token there too)");
+            let said = match &m.transport {
+                // Its device there (named after this machine) stays until it is revoked there.
+                ptyro_core::model::MachineTransport::Token { .. } => {
+                    let me = match c.request(Request::Status).await {
+                        Ok(Reply::Status { status }) => {
+                            status.machine.as_deref().and_then(ptyro_core::names::derive)
+                        }
+                        _ => None,
+                    };
+                    format!(
+                        "{name} is no longer mirrored here. Its pairing with this machine stays on {name} until you revoke it there: `ptyro devices revoke {}` on {name} (Devices in its web app)",
+                        me.unwrap_or_else(|| "NAME".into())
+                    )
+                }
+                ptyro_core::model::MachineTransport::Ssh { .. } => {
+                    format!("{name} is no longer mirrored here")
+                }
+            };
             crate::machines::simple(ctx, Request::MachineRemove { name }, said).await
         }
         M::Hide { name, workspace } => {

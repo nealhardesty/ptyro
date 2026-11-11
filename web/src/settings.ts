@@ -340,9 +340,9 @@ function devicesView(): HTMLElement {
   return h("div", {}, ui.header("Devices", "#/more", h("button", { class: "icon plus", title: tip("pair.device"), "aria-label": "Pair another device", onclick: pairAnother }, "＋")),
     h("main", { class: "stack", title: tip("devices.list") }, conn.scope !== "full" ? h("p", { class: "empty" }, "Listing devices needs a device paired with --scope full.") :
       pending(devices, "") ?? (list!.length ? h("div", { class: "rows" }, ...list!.map((d) => row(
-        h("span", {}, d.name, " ", badge(d.scope, d.scope === "full" ? "warn" : ""), d.pending ? badge("waiting to pair", "info") : null),
+        h("span", {}, d.name, " ", badge(d.scope, d.scope === "full" ? "warn" : ""), d.machine ? badge("machine link", "info") : null, d.pending ? badge("waiting to pair", "info") : null),
         `${d.last_seen_ms ? `seen ${ago(d.last_seen_ms)} ago` : "never seen"}${d.last_via ? ` · ${d.last_via}` : ""}${d.push ? ` · ${d.push} notification${d.push === 1 ? "" : "s"}` : ""}`, null,
-        { onclick: () => menu(d.name, [{ title: tip("devices.revoke"), label: "Revoke", danger: true, hint: "Its token stops working at once", run: () => confirm(`Revoke device ${d.name}?`, "Its token stops working at once and its connections close. Pair it again to bring it back. If it's this device, you'll be signed out.", "Revoke", async () => { await ask({ t: "device_revoke", id: d.id }, "Revoked"); devices.reload(""); }) }]) }))) : h("p", { class: "empty" }, "No devices."))));
+        { onclick: () => menu(d.name, [{ title: tip("devices.revoke"), label: "Revoke", danger: true, hint: "Its token stops working at once", run: () => confirm(`Revoke device ${d.name}?`, d.machine ? `${d.name} stops showing this machine's workspaces at once. To bring it back: Machines → Make a code here, then add it on ${d.name}.` : "Its token stops working at once and its connections close. Pair it again to bring it back. If it's this device, you'll be signed out.", "Revoke", async () => { await ask({ t: "device_revoke", id: d.id }, "Revoked"); devices.reload(""); }) }]) }))) : h("p", { class: "empty" }, "No devices."))));
 }
 
 // a QR code, drawn here (qr.ts, no library)

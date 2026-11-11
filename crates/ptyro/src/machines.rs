@@ -89,24 +89,72 @@ pub async fn add(
     force: bool,
     json: bool,
 ) -> Result<i32, Error> {
-    let (transport, token, name) = match Code::parse(&target) {
+    let c = ctx.connect(true).await?;
+    let (transport, token, name, force) = match Code::parse(&target) {
         Some(code) => {
-            let token = claim(&code).await?;
-            let fingerprint = code.ca.clone();
-            (
-                MachineTransport::Token { url: code.base.clone(), fingerprint },
-                Some(token),
-                name.or(code.name.clone()),
-            )
+            // A code works once: everything that would refuse it after is asked before.
+            let me = match c.request(Request::Status).await {
+                Ok(Reply::Status { status }) => status.machine,
+                _ => None,
+            }
+            .ok_or_else(|| {
+                Error::new(
+                    ptyro_core::ErrorCode::DaemonUnavailable,
+                    "this machine's daemon didn't say its name, so the code wasn't used: try again (`ptyro doctor` if it keeps failing)",
+                )
+            })?;
+            // Its own code: made by this machine's serve (its certificate authority, or its
+            // address). Not by name: two machines may well share one (`ubuntu`).
+            let (own_base, _, own_ca, _) = crate::remote::served_base(ctx, None);
+            let own = match (&code.ca, &own_ca) {
+                (Some(a), Some(b)) => same_fingerprint(a, b),
+                _ => code.base.eq_ignore_ascii_case(own_base.trim_end_matches('/')),
+            };
+            if own {
+                return Err(Error::invalid(format!(
+                    "that code is this machine's own ({me} made it with `ptyro machine pair`), so it wasn't used: run `ptyro machine add` with it on the other machine"
+                )));
+            }
+            let transport =
+                MachineTransport::Token { url: code.base.clone(), fingerprint: code.ca.clone() };
+            let name = name.or(code.name.clone());
+            let added = match c.request(Request::MachineList).await? {
+                Reply::Machines { machines } => machines,
+                r => return Err(unexpected(r)),
+            };
+            // The name is known before the claim (the code's, or `--name`), so the daemon has
+            // nothing left to refuse it for afterwards.
+            let Some(n) = name.as_deref() else {
+                return Err(Error::invalid(
+                    "the code doesn't say what that machine is called: give it a name here with --name (like laptop2)",
+                ));
+            };
+            if let Some(e) = ptyro_core::machine::add_problem(n, &me) {
+                return Err(Error::invalid(e));
+            }
+            if let Some(e) = ptyro_core::machine::already_added(&added, n, &transport) {
+                return Err(Error::conflict(e));
+            }
+            let sent = ptyro_core::names::derive(&me);
+            let (token, device) = claim(&code, sent.as_deref()).await?;
+            // An older ptyro there names every machine `machine` and replaces the one before.
+            if sent.is_some() && device.as_deref() == Some("machine") {
+                eprintln!(
+                    "note: {n} runs an older ptyro: the next machine to pair with it will cut this one off. Update ptyro on {n} (`ptyro daemon upgrade` there) before pairing another"
+                );
+            }
+            // The code is spent now: the token is kept even if the machine doesn't answer this
+            // moment (the link keeps trying), never thrown away with a code that can't be used
+            // again.
+            (transport, Some(token), name, true)
         }
         None if target.contains("#machine=") => {
             return Err(Error::invalid(
                 "that looks like a machine code but isn't whole: copy all of what `ptyro machine pair` printed",
             ));
         }
-        None => (ssh_target(&target), None, name),
+        None => (ssh_target(&target), None, name, force),
     };
-    let c = ctx.connect(true).await?;
     let info = match c.request(Request::MachineAdd { name, transport, token, force }).await? {
         Reply::Machine { info } => info,
         r => return Err(unexpected(r)),
@@ -214,7 +262,7 @@ pub async fn pair(ctx: &Ctx, url: Option<String>, json: bool) -> Result<i32, Err
     println!("On the other machine, run (within 10 minutes, once):\n");
     println!("    ptyro machine add '{}'\n", code.text());
     println!(
-        "It mirrors this machine's workspaces over this web app's server, with full access: revoke it here with `ptyro devices revoke` (it's listed as \"machine\")."
+        "It mirrors this machine's workspaces over this web app's server, with full access. Each code is for one machine: make one per machine. Here it is listed under that machine's name (`ptyro devices ls`); `ptyro devices revoke NAME` cuts it off."
     );
     Ok(0)
 }
@@ -388,10 +436,20 @@ async fn open(url: &str, fingerprint: Option<&str>) -> Result<(Box<dyn Io>, Stri
     Ok((Box::new(stream), authority, true))
 }
 
-/// Trade a machine code for its token, at the machine that printed it (`POST /api/pair`).
-pub async fn claim(code: &Code) -> Result<String, Error> {
-    let (mut io, authority, _) = open(&code.base, code.ca.as_deref()).await?;
-    let body = serde_json::json!({ "code": code.code }).to_string();
+/// Trade a machine code for its token, at the machine that printed it (`POST /api/pair`),
+/// saying what this machine is called (`me`): its device there is named after it.
+pub async fn claim(code: &Code, me: Option<&str>) -> Result<(String, Option<String>), Error> {
+    let (mut io, authority, _) = open(&code.base, code.ca.as_deref()).await.map_err(|e| {
+        let there = code.name.as_deref().unwrap_or("the other machine");
+        Error::new(
+            e.code,
+            format!(
+                "{}, so the code wasn't used: on {there}, check that ptyro's web app server is on (`ptyro serve`, or `ptyro web on`), then try again within 10 minutes of making the code",
+                e.message
+            ),
+        )
+    })?;
+    let body = serde_json::json!({ "code": code.code, "name": me }).to_string();
     let req = format!(
         "POST /api/pair HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -407,22 +465,41 @@ pub async fn claim(code: &Code) -> Result<String, Error> {
     let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
     let status: u16 = head.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     if status != 200 {
-        let why = body.trim();
-        return Err(Error::new(
-            ptyro_core::ErrorCode::PermissionDenied,
-            format!(
-                "{} refused the code ({status}{}): codes work once, for 10 minutes; make a fresh one with `ptyro machine pair` there",
-                code.base,
-                if why.is_empty() { String::new() } else { format!(": {why}") }
-            ),
-        ));
+        return Err(refused(code, status, body.trim()));
     }
     let v: serde_json::Value = serde_json::from_str(body.trim())
         .map_err(|e| Error::internal(format!("unexpected answer from {}: {e}", code.base)))?;
-    v["token"]
+    let token = v["token"]
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| Error::internal(format!("{} answered without a token", code.base)))
+        .ok_or_else(|| Error::internal(format!("{} answered without a token", code.base)))?;
+    Ok((token, v["device"]["name"].as_str().map(str::to_owned)))
+}
+
+/// Why the machine that printed `code` didn't take it, and what to do, from its answer.
+fn refused(code: &Code, status: u16, why: &str) -> Error {
+    let there = code.name.as_deref().unwrap_or("the other machine");
+    let fresh = format!("make a fresh one with `ptyro machine pair` on {there} and use it here");
+    let message = match status {
+        401 => format!(
+            "{} didn't take the code: it is unknown there, already used (a code works once), older than 10 minutes, or retired by newer codes (8 wait at once). {fresh}",
+            code.base
+        ),
+        429 => format!(
+            "{} refused for now: too many wrong codes came from this address. Wait a minute, then {fresh}",
+            code.base
+        ),
+        0 => format!(
+            "{} didn't answer the code (is it `ptyro serve`?). Try again; if it still fails, {fresh}",
+            code.base
+        ),
+        _ => format!(
+            "{} refused the code ({status}{}). {fresh}",
+            code.base,
+            if why.is_empty() { String::new() } else { format!(": {why}") }
+        ),
+    };
+    Error::new(ptyro_core::ErrorCode::PermissionDenied, message)
 }
 
 /// `machine-bridge`: stdin/stdout ⇄ the machine's `ptyro serve` WebSocket. What it says on stderr
