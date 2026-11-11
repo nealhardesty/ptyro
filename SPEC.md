@@ -6122,7 +6122,10 @@ holding several machines) was not chosen.
   machine-bridge --url … [--fingerprint …]` (hidden), which speaks to the other machine's `ptyro
   serve` (`/ws`, one message per frame) over its HTTPS, accepting a server only if its chain holds
   the certificate authority with the paired fingerprint and that authority signed it for the name
-  connected to (`ws://` is plain, for Tailscale only). Hello kind `Machine`; over a token, the
+  connected to (`ws://` is plain, and goes only to loopback or Tailscale addresses, 100.64.0.0/10
+  and fd7a:115c:a1e0::/48, whatever the name resolves to; a code that pins an authority is always
+  held to it, and only one that pins none may be checked against the public roots, for a
+  `*.ts.net` name). Hello kind `Machine`; over a token, the
   device's `machine` flag (`DevicePair{machine: true}`, `ptyro machine pair`) marks it. The code
   `machine pair` prints is a link: `https://HOST:PORT/#machine=ptp_…&ca=FP&name=laptop2`;
   `machine add CODE` claims it once (`POST /api/pair`, the same pin) for the token.
