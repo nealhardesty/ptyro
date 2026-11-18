@@ -215,8 +215,14 @@ pub const ACTIONS: &[ActionSpec] = &[
         "sidebar.fold_all",
         "Sidebar: fold everything (workspaces, projects, worktrees, chats); again: unfold it as it was",
     ),
-    a("pane.split_right", "Split: open a session beside this pane"),
-    a("pane.split_down", "Split: open a session below this pane"),
+    a(
+        "pane.split_right",
+        "Split beside this pane: ⏎ a clone of its session, a new shell, or any session",
+    ),
+    a(
+        "pane.split_down",
+        "Split below this pane: ⏎ a clone of its session, a new shell, or any session",
+    ),
     a("pane.close", "Close this pane (the session keeps running)"),
     a("pane.zoom", "Zoom this pane to the whole screen (toggle)"),
     a("pane.next", "Focus the next pane"),

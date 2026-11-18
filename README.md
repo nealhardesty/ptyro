@@ -655,7 +655,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `n` / `C-n` / `N` | new task (say what to do) / quick new (another of this worktree's agent, no questions) / new worktree |
 | `a` / `p` | next session that needs you / peek and answer |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |
-| `v` / `s` | split side by side / stacked |
+| `v` / `s` | split side by side / stacked: `⏎` clones this pane's session, or pick `+ new shell` or any session (an agent with a shell beside it: `v`, `+ new shell`) |
 | `h` `l` / `z` / `c` | move between panes / zoom / close pane |
 | `Tab` | focus the sidebar (`⏎` open, `x` stop or remove, `e` why this status) |
 | `Z` | everything at once: every session and what it's doing, full-screen |

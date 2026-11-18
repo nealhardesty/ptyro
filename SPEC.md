@@ -3355,24 +3355,42 @@ learning anything up front.
 
 The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/screens.rs`.
 
-- **Full-sized panels; only a split command fills a split** (UX3.1). `show(id, None)` places a
-  session without a split (`place`): where it already shows (focused there); else, in a single
-  pane (a drawer aside), in that pane (`PaneState.last` remembers what it replaced); else full
-  sized in a fresh one-pane layout, whose `last` is the session that had focus in the split (a
-  SHELLS window shown in place of the screen keeps that way back too). `` ` `` (`session.last`)
-  goes back and forth: from a chat (or the chat list) to the session under it, the chat put aside
-  as it is (`App.chat_aside`: draft, scroll, a new chat's choices) and brought back by `` ` ``
-  again; a session shown from a chat puts the chat aside the same way, one shown from the panes
-  ends that. With no chat to go back to it shows the pane's previous session. **The kept split**
-  (`App.kept`, `SavedView.kept`: a split layout a full-sized panel replaced, swapped back whole by
-  `` ` ``) was removed on 2026-11-17 (pare-down): one way back, to a session, is easier to
-  predict; the layout per workspace is still saved and restored (`SaveView`/`LoadView`), and a
-  saved view's old `kept` is ignored. Everything goes through it: new sessions and worktrees, the
-  quick terminal's panel, ⏎ in the sidebar, `j`/`k`, `1`–`9`, the finder, attention.
+- **Full-sized panels; you choose what fills a split** (UX3.1, **[changed 2026-11-18]**). Two
+  ways to show a session, by what it is:
+  - **Something new** (`show(id, None)`, `place`): a session just started (`n`, `C-n`, `!`, the
+    wizard, a new worktree's agent), the quick terminal's panel, a tool. Where it already shows,
+    it is focused there; in a single pane (a drawer aside), it takes that pane
+    (`PaneState.last` remembers what it replaced); in a split, it opens full sized in a fresh
+    one-pane layout and **the split is kept** (`App.kept`, saved with the view as
+    `SavedView.kept`): `` ` `` swaps the kept split back whole (every pane, its share, its
+    focus, its drawer), and `` ` `` again swaps the panel back; picking any session of the kept
+    split brings the split back too, focused on it. A SHELLS window shown in place of the screen
+    keeps the screen it replaced the same way. A session that goes leaves the kept split (its
+    pane closes; with nothing left, nothing is kept).
+  - **A session you pick** (`pick`, `place_picked`): ⏎ or a click in the sidebar, `j`/`k`,
+    `1`–`9`, the finder (`/`), the palette, attention (`a`), `` ` `` back to a pane's previous
+    session. Where it already shows, it is focused there; in a kept split, that split comes back;
+    a pane of a SHELLS window shows its window; otherwise, **in a split of your own it takes the
+    focused pane** (the one a drawer hangs from, when the drawer has focus) and the split stays,
+    that pane's `last` being what it showed. On a SHELLS window's screen (the daemon's layout) a
+    session from elsewhere still opens full sized, the window kept. (Until 2026-11-18 a pick
+    opened full sized too, so a split could only ever hold clones.)
+  - `` ` `` (`session.last`) goes back and forth: from a chat (or the chat list) to the session
+    under it, the chat put aside as it is (`App.chat_aside`: draft, scroll, a new chat's choices)
+    and brought back by `` ` `` again; a session shown from a chat puts the chat aside the same
+    way, one shown from the panes ends that. Else the kept split, when there is one; else the
+    pane's previous session. The kept split was removed in the pare-down (2026-11-17) and came
+    back on 2026-11-18 (owner): it is the one way back to a layout after something new covers it.
   - Tools open full sized (`spawn_tool`, `SpawnSpec.tool`): `$EDITOR` on a file and
     `config edit` give the screen back when they exit (`App.tool_back`); `run_cli` (the CLI's long
     tail, health fixes) keeps its output until `` ` ``.
-  - `v` / `s` (`split_clone`): the focused pane's session (the selected row's, in the sidebar)
+  - `v` / `s` (`open_split_picker`, `Purpose::Split`) ask what goes in the new pane, beside or
+    below the focused one, in a short list: first (⏎) the clone, as `v` / `s` always did; then
+    `+ new shell` when the pane shows an agent (`split_shell`: a shell in the agent's worktree,
+    at its live directory); then every session not on screen, which `show(id, Some(dir))` puts
+    in the new pane. So an agent beside a shell is `v`, then `+ new shell` (or the shell's name).
+    The drawer can't be split and the pane count is checked before the list opens. The clone
+    (`split_clone`): the focused pane's session (the selected row's, in the sidebar)
     cloned beside or below it: an agent as the same agent and profile in the same worktree with a
     fresh conversation (`override_pin`/`confirmed`: its source already runs there); anything else
     as a shell in its directory; an empty pane a shell here. The pane count is checked first.

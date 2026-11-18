@@ -14,6 +14,8 @@ pub enum Target {
     Session(SessionId),
     /// Start a new shell session (offered by the split picker).
     NewShell,
+    /// The split picker's first choice: a clone of the session being split.
+    Clone,
     /// Wizard: an agent name (`claude`, `claude@work`), `@shell` or `@command`.
     Agent(String),
     /// Wizard: a new worktree of this project.

@@ -1,8 +1,8 @@
-//! Full-sized panels (UX3.1, SPEC §11.2i). Only a split command (`v`, `s`) puts something in a
-//! split, and what it puts there is a clone of the session it was split from. Anything else that
-//! opens (a new session, the quick terminal's panel, a tool's output, a session picked in the
-//! sidebar) opens full sized, in place of the split; `` ` `` goes back to the session that had
-//! focus there.
+//! Full-sized panels and the kept layout (UX3.1, SPEC §11.2i). Only a split command (`v`, `s`)
+//! puts something in a split, and what it puts there is a clone of the session it was split from.
+//! Anything else that opens (a new session, the quick terminal's panel, a tool's output, a
+//! session picked in the sidebar) opens full sized. A split layout it replaces is kept whole:
+//! `` ` `` brings it back, and so does opening one of its sessions.
 
 use std::collections::HashMap;
 
@@ -11,12 +11,13 @@ use ptyro_core::session::{SessionKind, SpawnSpec};
 use ptyro_protocol::Request;
 use serde::{Deserialize, Serialize};
 
-use crate::app::{App, Focus, PaneState, Pending};
+use crate::app::{App, Focus, Overlay, PaneState, Pending, Purpose};
 use crate::layout::{Dir, Layout, MAX_PANES, PaneId};
+use crate::palette::{Item, Palette, Target};
 use crate::quick::Drawer;
 use crate::tree::Row;
 
-/// A whole screen of panes (a SHELLS window's, as the daemon keeps it).
+/// A whole screen of panes: what `` ` `` swaps with the one showing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Screen {
     pub layout: Layout,
@@ -37,6 +38,33 @@ impl Screen {
             .find(|(_, s)| **s == Some(id))
             .map(|(p, _)| *p)
             .or_else(|| self.panes.iter().find(|(_, s)| **s == Some(id)).map(|(p, _)| *p))
+    }
+
+    /// Drop the panes showing `id` (their siblings take the space); `false` when nothing is left
+    /// worth going back to.
+    pub fn forget(&mut self, id: SessionId) -> bool {
+        let gone: Vec<PaneId> =
+            self.panes.iter().filter(|(_, s)| **s == Some(id)).map(|(p, _)| *p).collect();
+        for p in gone {
+            // The drawer goes with its host, and is gone itself when it showed `id`.
+            if let Some(d) = self.drawer.filter(|d| d.pane == p || d.host == p) {
+                self.drawer = None;
+                self.layout.close(d.pane);
+                self.panes.remove(&d.pane);
+                if d.pane == p {
+                    continue;
+                }
+            }
+            if self.layout.close(p) {
+                self.panes.remove(&p);
+            } else {
+                self.panes.insert(p, None);
+            }
+        }
+        if !self.layout.contains(self.focus) {
+            self.focus = self.layout.first();
+        }
+        self.panes.values().any(Option::is_some)
     }
 }
 
@@ -85,10 +113,14 @@ impl App {
     }
 
     /// Put `id` on screen without a split (UX3.1), and return its pane: where it already shows,
-    /// else in the one pane there is, else full sized in place of the split (the session that
-    /// had focus there is the new pane's way back).
+    /// else back in the kept layout that shows it, else in the one pane there is, else full
+    /// sized in place of the split, which is kept.
     pub(crate) fn place(&mut self, id: SessionId) -> PaneId {
         if let Some(p) = self.snapshot().shows(id) {
+            return p;
+        }
+        if let Some(p) = self.kept.as_ref().and_then(|k| k.shows(id)) {
+            self.swap_screens();
             return p;
         }
         // A pane of a SHELLS window: the whole window, as the daemon keeps it (SPEC §23.17).
@@ -99,6 +131,7 @@ impl App {
         }
         if self.is_split() {
             let back = self.way_back();
+            self.kept = Some(Box::new(self.snapshot()));
             self.apply_screen(Screen {
                 layout: Layout::default(),
                 panes: HashMap::from([(1, None)]),
@@ -116,16 +149,45 @@ impl App {
         }
     }
 
-    /// Show a SHELLS window's screen in place of this one; the session that had focus here, when
-    /// the window doesn't show it, is the way back (`` ` ``).
+    /// Where a session you picked goes (the sidebar, `/`, `1`–`9`, `j`/`k`, `` ` ``): as
+    /// [`Self::place`], except that in a split of your own it takes the focused pane (the one a
+    /// drawer hangs from, when the drawer has focus), so the split stays a split. A SHELLS
+    /// window's screen is the daemon's, so a session from elsewhere still opens full sized there.
+    pub(crate) fn place_picked(&mut self, id: SessionId) -> PaneId {
+        let window_here =
+            self.panes.values().filter_map(|p| p.session).any(|s| self.window_screen(s).is_some());
+        let elsewhere = self.snapshot().shows(id).is_some()
+            || self.kept.as_ref().is_some_and(|k| k.shows(id).is_some())
+            || self.window_screen(id).is_some();
+        if !self.is_split() || window_here || elsewhere {
+            return self.place(id);
+        }
+        match self.drawer {
+            Some(d) if d.pane == self.focused && self.layout.contains(d.host) => d.host,
+            _ => self.focused,
+        }
+    }
+
+    /// Show a SHELLS window's screen in place of this one, which is kept when it shows anything
+    /// (`` ` `` brings it back) and isn't the same window.
     pub(crate) fn apply_window(&mut self, screen: Screen) {
         let back = self.way_back().filter(|id| screen.shows(*id).is_none());
+        let now = self.snapshot();
         // The quick terminal's drawer isn't the window's: it stays open, under the same pane.
         let drawer = self.drawer.and_then(|d| {
             let quick = self.panes.get(&d.pane)?.session?;
             let host = self.panes.get(&d.host)?.session?;
             Some((quick, host))
         });
+        let same = now
+            .panes
+            .iter()
+            .filter(|(p, _)| self.drawer.is_none_or(|d| d.pane != **p))
+            .filter_map(|(_, s)| *s)
+            .all(|id| screen.shows(id).is_some());
+        if !same && now.panes.values().any(Option::is_some) {
+            self.kept = Some(Box::new(now));
+        }
         self.apply_screen(screen);
         if back.is_some()
             && let Some(p) = self.panes.get_mut(&self.focused)
@@ -146,8 +208,26 @@ impl App {
         }
     }
 
-    /// `` ` ``: the session this pane showed before. False when there's none.
+    /// Show the kept layout, keeping the screen it replaces in its place.
+    pub(crate) fn swap_screens(&mut self) {
+        let Some(kept) = self.kept.take() else { return };
+        let now = self.snapshot();
+        self.apply_screen(*kept);
+        self.kept = now.panes.values().any(Option::is_some).then(|| Box::new(now));
+    }
+
+    /// `` ` ``: the kept layout, else the session this pane showed before. False when there's
+    /// neither.
     pub(crate) fn go_back(&mut self) -> bool {
+        if self.kept.is_some() {
+            self.swap_screens();
+            self.focus = Focus::Pane;
+            if let Some(id) = self.focused_session() {
+                self.reveal(id);
+            }
+            self.view_changed();
+            return true;
+        }
         match self
             .panes
             .get(&self.focused)
@@ -155,11 +235,34 @@ impl App {
             .filter(|id| self.session(*id).is_some())
         {
             Some(id) => {
-                self.show(id, None);
+                self.pick(id);
                 true
             }
             None => false,
         }
+    }
+
+    /// A session left: the kept layout drops its panes, and goes when nothing is left in it.
+    pub(crate) fn forget_kept(&mut self, id: SessionId) {
+        if let Some(k) = self.kept.as_mut()
+            && !k.forget(id)
+        {
+            self.kept = None;
+        }
+    }
+
+    /// A saved view's kept layout, without the sessions that are gone.
+    pub(crate) fn restore_kept(&mut self, kept: Option<Screen>, known: &[SessionId]) {
+        self.kept = kept.and_then(|mut k| {
+            k.layout = k.layout.sanitize();
+            let gone: Vec<SessionId> =
+                k.panes.values().flatten().filter(|id| !known.contains(id)).copied().collect();
+            let mut left = k.panes.values().any(Option::is_some);
+            for id in gone {
+                left = k.forget(id);
+            }
+            left.then(|| Box::new(k))
+        });
     }
 
     /// A restored view's empty panes: a split's close (only a split command fills a split); the
@@ -237,21 +340,97 @@ impl App {
     /// `v` / `s` (UX3.1): split the focused pane and start a clone of what it shows there (the
     /// selected session in the sidebar): the same agent and profile in the same worktree, a
     /// fresh conversation; a shell (or anything else) gets a shell in its directory.
-    pub(crate) fn split_clone(&mut self, dir: Dir) {
+    /// Whether the focused pane can be split now; says why not when it can't.
+    fn can_split(&mut self) -> bool {
         if self.drawer.is_some_and(|d| d.pane == self.focused) {
             self.toast_err("the drawer can't be split: focus another pane first");
-            return;
+            return false;
         }
         if self.layout.panes().len() - usize::from(self.drawer.is_some()) >= MAX_PANES {
             self.toast_err(format!(
                 "at most {MAX_PANES} panes: close one to open another (it is in the sidebar)"
             ));
-            return;
+            return false;
         }
-        let source = match (self.focus, self.selected_row()) {
+        true
+    }
+
+    /// The session a split is made from: the selected row's in the sidebar, else the focused
+    /// pane's.
+    fn split_source(&self) -> Option<SessionId> {
+        match (self.focus, self.selected_row()) {
             (Focus::Sidebar, Some(Row::Session(id) | Row::Quick(id))) => Some(id),
             _ => self.focused_session(),
+        }
+    }
+
+    /// `v` / `s`: what goes in the new pane. ⏎ takes the first, a clone of the session split
+    /// (as `v` / `s` always did); then a new shell there, and every session not on screen, so
+    /// an agent and a shell (or any two sessions) sit side by side.
+    pub(crate) fn open_split_picker(&mut self, dir: Dir) {
+        if !self.can_split() {
+            return;
+        }
+        let source = self.split_source().and_then(|id| self.session(id)).cloned();
+        let side = if dir == Dir::Right { "beside" } else { "below" };
+        let mut items = vec![Item {
+            label: match &source {
+                Some(s) => format!("clone {}", s.name),
+                None => "a new shell".into(),
+            },
+            detail: match &source {
+                Some(s) if s.kind == SessionKind::Agent && s.agent.is_some() => {
+                    format!("{side}: the same agent in the same place, a fresh conversation")
+                }
+                Some(_) => format!("{side}: a new shell in its directory"),
+                None => format!("{side}: your shell, here"),
+            },
+            key: None,
+            target: if source.is_some() { Target::Clone } else { Target::NewShell },
+        }];
+        if source.as_ref().is_some_and(|s| s.kind == SessionKind::Agent) {
+            items.push(Item {
+                label: "+ new shell".into(),
+                detail: format!("{side}: a new shell in its worktree"),
+                key: None,
+                target: Target::NewShell,
+            });
+        }
+        let shown = self.snapshot();
+        items.extend(
+            self.session_items(false)
+                .into_iter()
+                .filter(|i| matches!(i.target, Target::Session(id) if shown.shows(id).is_none())),
+        );
+        let title = if dir == Dir::Right { "Split: beside it" } else { "Split: below it" };
+        self.overlay = Some(Overlay::Picker {
+            palette: Palette::new(title, items),
+            purpose: Purpose::Split(dir),
+        });
+    }
+
+    /// The split picker's `+ new shell`: a shell in the source session's worktree (its live
+    /// directory), in the new pane.
+    pub(crate) fn split_shell(&mut self, dir: Dir) {
+        if !self.can_split() {
+            return;
+        }
+        let spec = match self.split_source().and_then(|id| self.session(id)) {
+            Some(s) => SpawnSpec {
+                worktree: s.worktree.clone(),
+                cwd: s.live_cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| s.cwd.clone()),
+                ..SpawnSpec::default()
+            },
+            None => SpawnSpec { cwd: self.here(), ..SpawnSpec::default() },
         };
+        self.spawn_spec(spec, Some(dir));
+    }
+
+    pub(crate) fn split_clone(&mut self, dir: Dir) {
+        if !self.can_split() {
+            return;
+        }
+        let source = self.split_source();
         let spec = match source.and_then(|id| self.session(id)) {
             // A shell of SHELLS: a copy of it as a pane of its window (SPEC §23.17).
             Some(s) if s.loose && s.slot.is_some() => {
