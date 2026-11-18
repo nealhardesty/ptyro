@@ -371,6 +371,11 @@ sidebar_detail = "compact"` keeps one line per row.
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
 - From the shell: `ptyro status`.
+- `Ctrl-Q Ctrl-N` (`Ctrl-N` in the sidebar) is **quick new**: another of the agent this
+  worktree last started (`claude`, `codex@work`…) right there, no questions (`ptyro new
+  --again` from a shell, `+ claude` on the web). In a worktree that hasn't run one it starts the
+  project's default agent, else the default agent: Claude unless you pick another under
+  Configuration → Agents → Default agent (`[agents] default`).
 - `Ctrl-Q !` starts a new shell in this worktree, full sized, every press. With no worktree
   around (an empty pane, a shell of SHELLS), it starts one in SHELLS instead.
 - **SHELLS**, tmux's windows: numbered terminals that belong to the workspace, not a worktree.
@@ -647,7 +652,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `?` / `:` / `.` | every key / the command palette (any action, session, worktree, project or script) / what you can do with this session |
 | `d` | detach (everything keeps running) |
 | `C-d` | quit ptyro: stop every session and the daemon (asks first; agents hibernate) |
-| `n` / `N` | new task (say what to do) / new worktree |
+| `n` / `C-n` / `N` | new task (say what to do) / quick new (another of this worktree's agent, no questions) / new worktree |
 | `a` / `p` | next session that needs you / peek and answer |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |
 | `v` / `s` | split side by side / stacked |

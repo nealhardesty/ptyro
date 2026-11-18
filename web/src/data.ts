@@ -27,7 +27,11 @@ export const data = {
   agents: [] as Agent[],
   defaultAgent: "claude",
   machines: new Map<string, Machine>(),
+  /// What quick new starts in each worktree, by id (UX3.7: its last agent, else the default).
+  lastLaunch: new Map<string, LastLaunch | null>(),
 };
+
+export interface LastLaunch { agent?: string | null; profile?: string | null; argv?: string[] }
 
 /// `laptop2:work` → ["laptop2", "work"]; this machine's `work` → [null, "work"].
 export function splitMachine(name: string): [string | null, string] {
@@ -42,6 +46,18 @@ export const machineOf = (name: string | null | undefined): Machine | undefined 
 
 /// The workspace a worktree's sessions belong to: its project's first, else `main`.
 export const workspaceOf = (w: Worktree): string => [...data.workspaces.values()].find((x) => x.projects.includes(w.project))?.name ?? "main";
+
+/// What quick new starts in the worktree `wt`, for people: `claude`, `codex@work`.
+export function againLabel(wt: string): string {
+  const l = data.lastLaunch.get(wt);
+  if (!l?.agent) return data.defaultAgent;
+  return l.profile && !l.agent.includes("@") ? `${l.agent}@${l.profile}` : l.agent;
+}
+
+/// Ask the daemon what quick new starts in the worktree `wt`.
+export async function refreshLaunch(wt: string): Promise<void> {
+  try { data.lastLaunch.set(wt, (await conn.request({ t: "last_launch", workspace: "", worktree: wt })).launch ?? null); } catch { /* the default agent */ }
+}
 
 const byId = <T extends { id: string }>(list: T[]): Map<string, T> => new Map(list.map((x) => [x.id, x]));
 
@@ -69,8 +85,12 @@ export function onEvent(e: any): boolean {
     case "project_removed": data.projects.delete(e.id); break;
     case "workspace_updated": data.workspaces.set(e.info.id, e.info); break;
     case "workspace_removed": data.workspaces.delete(e.id); break;
-    case "worktree_updated": data.worktrees.set(e.info.id, e.info); break;
-    case "worktree_removed": data.worktrees.delete(e.id); break;
+    case "worktree_updated":
+      data.worktrees.set(e.info.id, e.info);
+      // A worktree just ready: what quick new starts there (its label).
+      if (e.info.state === "ready" && !data.lastLaunch.has(e.info.id)) void refreshLaunch(e.info.id).then(() => ui.render());
+      break;
+    case "worktree_removed": data.worktrees.delete(e.id); data.lastLaunch.delete(e.id); break;
     case "machine_updated": data.machines.set(e.info.name, e.info); break;
     case "machine_removed": data.machines.delete(e.name); break;
     default: return false;

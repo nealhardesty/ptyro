@@ -731,7 +731,7 @@ pub const SETTINGS: &[Setting] = &[
     s("remote.push_hosts", "remote", Kind::List, "More push services a device may use besides the browsers' own, like a self-hosted ntfy.").adv().or("none"),
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),
     // ── Agents ──
-    s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice.").or("claude").also("default agent claude codex opencode"),
+    s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice, and what quick new (`C-n`) starts in a worktree that hasn't run one yet. A project's own default agent wins there.").or("claude").also("default agent claude codex opencode quick new"),
     // ── Updates ──
     s("updates.check", "updates", pick(UPDATE_CHECK), "Look for newer versions of your agents (Claude Code, Codex, OpenCode) and of ptyro itself once a day. A newer one is offered with its one-step update at start-up, in the health badge (M), on the web's Health page and in `ptyro doctor`; nothing is downloaded or updated without you (ptyro's own update checks the release against its SHA256SUMS, then upgrades the daemon live). Offline, it stays quiet and looks again the next day.").also("update upgrade new version out of date outdated newer check latest self-update release"),
     s("updates.notify", "updates", Kind::Bool, "A desktop notification when a new ptyro release is out, once per release and outside quiet hours, saying how to update (the TUI's `C-q ^`, the web's Health page, or `ptyro update ptyro`). It is sent even when `notifications.channels` leaves the desktop out (that is for your sessions' alerts); turn this off to keep releases off the desktop. Either way the release is offered in the TUI, the web and `ptyro doctor`.").also("notify notification desktop alert release new version update self-update announce"),
@@ -772,6 +772,7 @@ pub const SETTINGS: &[Setting] = &[
     s("profiles.*.secret_ttl", "profiles", Kind::Duration, "Remember resolved secrets this long.").new_only().adv().or("resolve at every start"),
     // ── This project (.ptyro.toml) ──
     s("project.name", "project", Kind::Text, "What the project is called.").or("the folder's name"),
+    s("project.default_agent", "project", dynamic(Source::Agents), "What quick new (`C-n`) starts in this project's worktrees until one has run an agent.").or("your default agent").also("quick new default agent"),
     s("project.base", "project", Kind::Text, "What new worktrees start from, like origin/main.").or("the repository's main branch"),
     s("project.import", "project", Kind::Bool, "Read other tools' committed setup (Conductor, Cursor, Codex…) for scripts this file doesn't set.").or("on"),
     s("worktree.copy", "project", Kind::List, "Untracked files to copy into new worktrees, like .env.").or("none"),

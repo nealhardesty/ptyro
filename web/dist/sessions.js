@@ -3,7 +3,7 @@
 // at once.
 import { conn, host } from "./conn.js";
 import { css, F } from "./color.js";
-import { can, data, liveWorktrees, splitMachine } from "./data.js";
+import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
 import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, confirm, enc, errText, form, go, h, menu, pending, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
@@ -23,6 +23,7 @@ const ACTIONS = {
     "shell.here": "This worktree's quick terminal (its one shell), on a page of its own (the web has no split panes, so there is no drawer)",
     "shell.pane": "This worktree's quick terminal, on a page of its own; the same one the terminal's T and C-t show",
     "shell.new": "A new shell of its own in this worktree, besides its quick terminal (the terminal's !)",
+    "session.again": "Quick new: another of the agent this worktree last started (the default agent the first time), here, no questions",
     "session.explain": "Why the session has the status it has",
     "session.mute": "Silence the session's notifications for a while",
     "session.broadcast": "Type the same thing into several sessions",
@@ -279,10 +280,24 @@ function explainSession(s) {
         textSheet(`Why ${s.name} is ${s.status ? statusWord(s.status.status) : "like this"}`, lines.join("\n") || "No decisions recorded yet.");
     }, (e) => ui.toast(errText(e)));
 }
+/// Quick new (UX3.2, UX3.7): another of the agent `w` last started (with its profile and
+/// arguments), else its project's default agent, else the default agent. Asked for by name, so a
+/// `control` device may start it.
+export async function startAgain(w) {
+    await refreshLaunch(w.id);
+    const l = data.lastLaunch.get(w.id);
+    const spec = l?.agent ? { agent: l.agent, profile: l.profile ?? null, argv: l.argv ?? [] } : { agent: data.defaultAgent };
+    if (await startSession({ ...spec, worktree: w.id })) {
+        await refreshLaunch(w.id);
+        ui.render();
+    }
+}
 /// `!` (UX3.4): a new shell of its own in `w`, not its quick terminal.
 export async function newShell(w) {
     await startSession({ worktree: w.id });
 }
+/// The quick-new button's words: `+ claude`.
+export const againWords = (w) => `+ ${againLabel(w.id)}`;
 export async function openQuickShell(w, cwd = "") {
     const r = await ask({ t: "quick_shell", worktree: w?.id ?? null, cwd, create: true, env: {}, size: null, workspace: null });
     if (r?.info)
@@ -354,6 +369,7 @@ export function sessionMenu(s) {
         agentLive && { title: tip("session.hibernate"), label: "Hibernate", hint: "Stop it, keep it resumable", run: async () => notice(await ask({ t: "hibernate", addr: addr(s) }), "Hibernated") },
         agentLive && { title: tip("session.mute"), label: "Mute notifications…", run: () => muteSession(s) },
         w && { label: "Open its worktree", hint: `${w.project_slug}/${w.name}`, run: () => go(`#/wt/${enc(w.id)}`) },
+        w && { title: tip("session.again"), label: `Another ${againLabel(w.id)}`, hint: "The agent its worktree last started, there", run: () => void startAgain(w) },
         w && { title: tip("shell.new"), label: "A new shell in its worktree", hint: "Besides its quick terminal", run: () => void newShell(w) },
         s.worktree && { title: tip("session.shell"), label: "Its worktree's quick terminal", hint: "On a page of its own", run: () => void openQuickShell(w) },
         { title: tip("session.scrollback"), label: "Scrollback", hint: "Everything it printed, searchable", run: () => go(`#/scroll/${enc(s.id)}`) },

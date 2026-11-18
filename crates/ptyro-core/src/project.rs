@@ -17,6 +17,8 @@ pub const LOCAL_FILE: &str = ".ptyro.local.toml";
 #[serde(default, deny_unknown_fields)]
 pub struct ProjectSection {
     pub name: Option<String>,
+    /// Which *configured* agent new sessions use by default (quick new's first choice).
+    pub default_agent: Option<String>,
     /// Base for new worktrees, e.g. `origin/main`.
     pub base: Option<String>,
     /// Read other tools' committed config (Conductor, Superset, Codex, Claude Desktop, Cursor,
@@ -416,6 +418,7 @@ mod tests {
     const SPEC_EXAMPLE: &str = r#"
 [project]
 name = "myrepo"
+default_agent = "claude"
 base = "origin/main"
 
 [worktree]

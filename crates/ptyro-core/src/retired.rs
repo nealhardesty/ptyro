@@ -94,11 +94,6 @@ pub const RETIRED: &[Retired] = &[
         why: "after_turn scripts were removed; run a linter from your agent's own hooks",
     },
     Retired {
-        key: "project.default_agent",
-        removed: "2026-11-17",
-        why: "only quick new (`new --again`) read it, and quick new was removed; `[agents] default` picks the agent new sessions start",
-    },
-    Retired {
         key: "scripts.archive",
         removed: "2026-11-17",
         why: "archived worktrees, and the script that ran when one was archived or removed, were removed",
@@ -464,13 +459,15 @@ mod tests {
         assert!(!out.contains("after_turn") && out.contains("usage = true"), "{out}");
         let repo = "[project]\ndefault_agent = \"codex\"\nbase = \"origin/main\"\n\n[scripts]\nsetup = \"make\"\narchive = \"down\"\nafter_turn = \"lint\"\n";
         let keys: Vec<String> = found(repo).into_iter().map(|f| f.key).collect();
-        assert_eq!(keys, ["scripts.after_turn", "project.default_agent", "scripts.archive"]);
+        // Quick new came back (2026-11-18), and with it `project.default_agent`: kept, not retired.
+        assert_eq!(keys, ["scripts.after_turn", "scripts.archive"]);
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join(crate::project::FILE), repo).unwrap();
         let pc = crate::project::ProjectConfig::load(d.path(), d.path())
             .expect("an old repository file loads");
         assert_eq!(pc.scripts.setup.as_deref(), Some("make"));
         assert_eq!(pc.project.base.as_deref(), Some("origin/main"));
+        assert_eq!(pc.project.default_agent.as_deref(), Some("codex"));
     }
 
     /// Summaries (2026-11-17) load and are reported; a chat's titler is its own setting now,

@@ -52,10 +52,10 @@ removal in ROADMAP and mark the affected R- rows in RESEARCH.
 
 | Surface | What goes |
 |---|---|
-| CLI | `wt archive`, `wt restore`, `wt archive-rm`, `wt archives`, `wt pair`, `wt unpair`, `wt lock`, `wt unlock`, `wt rename-branch`, `wt retitle` (into `wt rename`), `project suggest`, `project line-endings`, `project discover`; `--take-changes` on `new` and `wt new`; `new --again` |
-| TUI | `worktree.archive`, `worktree.restore`, `worktree.archive_delete`, `worktree.pair`, `worktree.unpair`, `worktree.lock`, `worktree.unlock`, `worktree.rename_branch`, `worktree.retitle`, `project.suggest`, `project.line_endings`, `session.again` (`C-q C-n`), the restore picker |
+| CLI | `wt archive`, `wt restore`, `wt archive-rm`, `wt archives`, `wt pair`, `wt unpair`, `wt lock`, `wt unlock`, `wt rename-branch`, `wt retitle` (into `wt rename`), `project suggest`, `project line-endings`, `project discover`; `--take-changes` on `new` and `wt new`; `new --again` (restored 2026-11-18) |
+| TUI | `worktree.archive`, `worktree.restore`, `worktree.archive_delete`, `worktree.pair`, `worktree.unpair`, `worktree.lock`, `worktree.unlock`, `worktree.rename_branch`, `worktree.retitle`, `project.suggest`, `project.line_endings`, `session.again` (`C-q C-n`; restored 2026-11-18), the restore picker |
 | Web | `#/archives`, `worktree.archive/restore/archive_delete/pair/unpair/lock/unlock/rename_branch/retitle`, `project.suggest`, `project.line_endings`, the "+ claude" quick-new button |
-| Daemon | archive and restore in `worktrees.rs`, `suggest.rs`, pair mode, `again.rs`, port allocation and listening-port detection (`background.rs` ports part, `ptyro-pty/src/ports.rs`), the `after_turn` and `archive` lifecycle scripts, taking changes (`reset --hard`/`clean -fd` on the user's checkout) |
+| Daemon | archive and restore in `worktrees.rs`, `suggest.rs`, pair mode, `again.rs` (restored 2026-11-18), port allocation and listening-port detection (`background.rs` ports part, `ptyro-pty/src/ports.rs`), the `after_turn` and `archive` lifecycle scripts, taking changes (`reset --hard`/`clean -fd` on the user's checkout) |
 | Settings | `ports.*` (2), `worktrees.archive_on_merge`, `worktrees.archive_purge_days`, `worktrees.auto_rename_branch`, `worktree.share`/`share_mode` (pair mode; verify), `discover.roots`/`depth` (only if auto-registration doesn't use them) |
 | Tests | the archive, pair, lock, ports and suggest parts of `m3.rs` and `ux1.rs` |
 

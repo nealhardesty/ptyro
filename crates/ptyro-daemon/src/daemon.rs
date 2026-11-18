@@ -78,6 +78,8 @@ pub struct Daemon {
     pub(crate) last_notified: Mutex<HashMap<SessionId, u64>>,
     /// Approve/deny link nonces already used → their expiry.
     pub(crate) used_links: Mutex<HashMap<String, u64>>,
+    /// The agent each worktree last started, by worktree id (UX3.7, `again.rs`).
+    pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     /// Usage per (profile, agent).
     pub(crate) usage: Mutex<HashMap<(String, String), ptyro_core::status::Usage>>,
     pub(crate) codex_usage: Mutex<std::collections::HashSet<String>>,
@@ -205,6 +207,7 @@ impl Daemon {
             upstream_ids: Mutex::new(HashMap::new()),
             last_notified: Mutex::new(HashMap::new()),
             used_links: Mutex::new(HashMap::new()),
+            last_launch: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             codex_usage: Mutex::new(std::collections::HashSet::new()),
             sidecars: Mutex::new(HashMap::new()),
@@ -1146,8 +1149,14 @@ impl Daemon {
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
             Request::Spawn { spec } => {
-                let s = self.spawn(spec).await?;
-                Ok(Reply::Session { info: self.info(&s) })
+                let spec = if spec.again { self.resolve_again(spec).await? } else { spec };
+                let s = self.spawn(spec.clone()).await?;
+                let info = self.info(&s);
+                self.remember_launch(info.worktree.as_deref(), &spec).await;
+                Ok(Reply::Session { info })
+            }
+            Request::LastLaunch { worktree, .. } => {
+                Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }
             req @ (Request::MachineList
             | Request::MachineAdd { .. }

@@ -204,6 +204,7 @@ async fn dispatch(
             json,
             agent,
             profile,
+            again,
             wt,
             new_wt,
             project,
@@ -232,6 +233,7 @@ async fn dispatch(
                 argv,
                 agent,
                 profile,
+                again,
                 wt,
                 override_pin,
                 yes,
@@ -691,6 +693,8 @@ pub struct NewArgs {
     pub argv: Vec<String>,
     pub agent: Option<String>,
     pub profile: Option<String>,
+    /// Quick new (UX3.2, UX3.7): another of the agent the worktree last started.
+    pub again: bool,
     pub wt: Option<String>,
     pub override_pin: bool,
     pub yes: bool,
@@ -870,6 +874,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         size,
         prompt: a.prompt,
         title: a.title,
+        again: a.again,
         ..SpawnSpec::default()
     };
     let reply = with_confirmation(&client, Request::Spawn { spec }, false, |r| {

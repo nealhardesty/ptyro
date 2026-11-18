@@ -79,7 +79,8 @@ default = "nvim"
 code = { command = ["code", "{path}"] }
 
 [agents]
-default = "codex"                         # the default agent: `n`'s first choice (default: claude)
+default = "codex"                         # the default agent: `n`'s first choice, and what `C-n`
+                                          # starts where no agent has run (default: claude)
 
 [agents.claude]
 command = ["claude", "--model", "opus"]   # how to start an agent

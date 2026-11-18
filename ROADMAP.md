@@ -41,7 +41,7 @@ Conventions:
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done; removed 2026-11-17) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
-| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent; removed 2026-11-17), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
+| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent; removed 2026-11-17 by mistake, back 2026-11-18), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
@@ -370,7 +370,8 @@ branch named from the first prompt (M3.16's rename half), `project suggest` (UX1
 `project discover` (the command only: the first run and the project pickers still discover),
 `--take-changes` on `new` and `wt new` (UX1.10's "your changes"; it ran `git reset --hard` and
 `git clean -fd` on your checkout), quick new (`new --again`, `session.again` on `C-q C-n` and the
-sidebar's `C-n`, both now unbound, the web's "+ claude" button; UX3.2, UX3.7), `after_turn` and
+sidebar's `C-n`, the web's "+ claude" button; UX3.2, UX3.7; **back 2026-11-18**: the owner hadn't
+asked for it to go, so it returned whole, with `project.default_agent`, in protocol 1.50), `after_turn` and
 `archive` scripts (M4.14; `setup` and `run` scripts, trust, `wt run` and `.worktreeinclude` stay),
 and port blocks with listening-port detection (M3's ports, WIN7's port scan, the sidebar's `:5173`
 badges). **Scripts no longer get `PTYRO_PORT`, `PTYRO_PORT_COUNT` or `CONDUCTOR_PORT`:** one that
@@ -381,7 +382,8 @@ offers removing anyway, or committing and pushing first; `gc` offers remove or k
 retires 11 requests; store migration 10 drops the port columns and quick new's memory; retired
 keys (SPEC §13.8, now with `*` for any one name): `[ports]`, `ui.show_ports`,
 `worktrees.archive_purge_days`, `worktrees.auto_rename_branch`, `agents.*.after_turn`,
-`scripts.after_turn`, `scripts.archive`, and `project.default_agent` (only quick new read it).
+`scripts.after_turn`, `scripts.archive`, and `project.default_agent` (only quick new read it; back
+with quick new, 2026-11-18).
 Existing archives (their refs, `archive-extras/`) and a main checkout still paired are left as
 they are: `ptyro doctor` lists them, with the git commands that bring them back. The daemon still
 locks a worktree while sessions run in it. RESEARCH: R-WT-03's `autoPort`, R-WT-05's
