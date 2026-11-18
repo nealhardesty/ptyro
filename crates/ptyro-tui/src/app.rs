@@ -50,6 +50,9 @@ pub struct SavedView {
     pub drawer: Option<Drawer>,
     #[serde(default = "drawer_share")]
     pub drawer_share: f32,
+    /// The split layout a full-sized panel replaced (UX3.1).
+    #[serde(default)]
+    pub kept: Option<crate::screens::Screen>,
 }
 
 fn drawer_share() -> f32 {
@@ -193,6 +196,8 @@ pub fn work_source(text: &str) -> Option<(Option<u32>, Option<String>)> {
 #[derive(Debug, Clone)]
 pub enum Purpose {
     Palette,
+    /// What goes in a new split (`v`, `s`): a clone (⏎), a new shell, or a session.
+    Split(Dir),
     /// Show the pick in the focused pane.
     Show,
     /// Where a new workspace goes: this machine or another (MM1.B).
@@ -696,6 +701,8 @@ pub struct App {
     /// The quick terminal's drawer, when open, and the share of its host it takes (UX1.25).
     pub drawer: Option<Drawer>,
     pub drawer_share: f32,
+    /// The split layout a full-sized panel replaced, kept whole for `` ` `` (UX3.1).
+    pub kept: Option<Box<crate::screens::Screen>>,
     /// A session whose row is to be selected once the tree can place it (UX3.3).
     pub(crate) revealing: Option<(SessionId, Instant)>,
     /// Tools (an editor) whose screen goes back to what it replaced when they exit (UX3.1).
@@ -819,6 +826,7 @@ impl App {
             show: Default::default(),
             drawer: None,
             drawer_share: crate::quick::DRAWER_SHARE,
+            kept: None,
             revealing: None,
             tool_back: HashSet::new(),
             again: None,
@@ -1014,6 +1022,7 @@ impl App {
         self.focused = 1;
         self.zoom = false;
         self.drawer = None;
+        self.kept = None;
         let saved = match &self.client {
             Some(client) if !self.opts.raw => {
                 let load = |name: String| async move {
@@ -1058,6 +1067,7 @@ impl App {
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.show = saved.show;
             self.restore_drawer(saved.drawer, saved.drawer_share);
+            self.restore_kept(saved.kept, &ordered_all);
         }
         let ordered = self.ordered();
         // `ptyro shell` asks for a quick terminal: it opens in the drawer (UX1.25).
@@ -1372,6 +1382,7 @@ impl App {
             show: self.show,
             drawer: self.drawer,
             drawer_share: self.drawer_share,
+            kept: self.kept.as_deref().cloned(),
         };
         let view = serde_json::to_value(saved).ok()?;
         let last = serde_json::json!({ "workspace": self.workspace });
@@ -1519,6 +1530,7 @@ impl App {
                 if self.drawer_session() == Some(*id) {
                     self.hide_drawer();
                 }
+                self.forget_kept(*id);
                 self.move_on(*id, &order, true);
             }
         }
@@ -1629,6 +1641,7 @@ impl App {
                 }
                 // The order as it was, so "the next one" means the one after it in the sidebar.
                 let order = self.ordered();
+                self.forget_kept(id);
                 self.tool_back.remove(&id);
                 self.move_on(id, &order, true);
                 self.sessions.retain(|s| s.id != id);
@@ -2263,8 +2276,19 @@ impl App {
     // ── showing sessions ────────────────────────────────────────────────────
 
     /// Show `id`: in a new split when one is asked for, else without a split (UX3.1, `place`):
-    /// where it shows already, or full sized.
+    /// where it shows already, in the kept layout that has it, or full sized (the split it
+    /// replaces is kept). For something new: a session just started, a tool.
     pub fn show(&mut self, id: SessionId, split: Option<Dir>) {
+        self.show_in(id, split, false);
+    }
+
+    /// Show a session you picked (the sidebar, `/`, `1`–`9`, `j`/`k`): as [`Self::show`], but
+    /// in a split it takes the focused pane instead of the whole screen (`place_picked`).
+    pub fn pick(&mut self, id: SessionId) {
+        self.show_in(id, None, true);
+    }
+
+    fn show_in(&mut self, id: SessionId, split: Option<Dir>, picked: bool) {
         // A session shown takes the place of the chat panel, which `session.last` brings back;
         // shown from the panes, it ends a way back to a chat.
         if self.chat_panel.is_some() {
@@ -2293,6 +2317,7 @@ impl App {
                     return;
                 }
             },
+            None if picked => self.place_picked(id),
             None => self.place(id),
         };
         let p = self.panes.entry(pane).or_default();
@@ -2326,7 +2351,7 @@ impl App {
         let n = ordered.len() as isize;
         let cur = self.focused_session().and_then(|id| ordered.iter().position(|s| *s == id));
         let next = cur.map_or(0, |c| ((c as isize + step).rem_euclid(n)) as usize);
-        self.show(ordered[next], None);
+        self.pick(ordered[next]);
     }
 
     /// Move the sidebar selection, skipping group labels.
@@ -2740,7 +2765,7 @@ impl App {
             "session.focus" => {
                 let n = cmd.number().unwrap_or(1);
                 match self.numbered().get(n.saturating_sub(1)) {
-                    Some(id) => self.show(*id, None),
+                    Some(id) => self.pick(*id),
                     None => self.toast(format!("no session {n}")),
                 }
             }
@@ -2928,8 +2953,8 @@ impl App {
                 }
                 self.view_changed();
             }
-            "pane.split_right" => self.split_clone(Dir::Right),
-            "pane.split_down" => self.split_clone(Dir::Down),
+            "pane.split_right" => self.open_split_picker(Dir::Right),
+            "pane.split_down" => self.open_split_picker(Dir::Down),
             "pane.close" => {
                 if self.close_pane(self.focused) {
                     self.view_changed();
@@ -3078,7 +3103,7 @@ impl App {
                 }
                 Some(Row::Session(id)) if cmd.action == "nav.open" => {
                     self.sidebar_zoom = false;
-                    self.show(id, None)
+                    self.pick(id)
                 }
                 Some(Row::Quick(id)) if cmd.action == "nav.open" => {
                     self.sidebar_zoom = false;
@@ -4472,7 +4497,7 @@ impl App {
         });
     }
 
-    fn session_items(&self, include_new: bool) -> Vec<Item> {
+    pub(crate) fn session_items(&self, include_new: bool) -> Vec<Item> {
         let mut items: Vec<Item> = Vec::new();
         if include_new {
             items.push(Item {
@@ -4907,6 +4932,14 @@ impl App {
     }
 
     pub(crate) fn picked(&mut self, target: Target, purpose: Purpose) {
+        if let Purpose::Split(dir) = purpose {
+            return match target {
+                Target::Clone => self.split_clone(dir),
+                Target::NewShell => self.split_shell(dir),
+                Target::Session(id) => self.show(id, Some(dir)),
+                _ => {}
+            };
+        }
         match (target, purpose) {
             (Target::Agent(a), Purpose::Agent(mut w)) => {
                 w.agent = (a != "@shell").then_some(a);
@@ -5077,7 +5110,7 @@ impl App {
                 self.focus = Focus::Sidebar;
             }
             (Target::RunScript(wt, name), _) => self.run_script(wt, Some(name)),
-            (Target::Session(id), _) => self.show(id, None),
+            (Target::Session(id), _) => self.pick(id),
             (Target::Setting(key), _) => self.open_settings(Some(&key)),
             (Target::NewShell, _) => self.spawn(Vec::new(), None, None),
             _ => {}
@@ -5543,7 +5576,7 @@ impl App {
                     match rows.get(row).cloned() {
                         Some(Row::Session(id)) => {
                             self.set_sel(&rows, row);
-                            self.show(id, None);
+                            self.pick(id);
                         }
                         Some(Row::Quick(id)) => {
                             self.set_sel(&rows, row);
@@ -5885,6 +5918,7 @@ impl App {
         self.focused = 1;
         self.zoom = false;
         self.drawer = None;
+        self.kept = None;
         let ordered = self.ordered();
         let quick: Vec<SessionId> =
             self.sessions.iter().filter(|s| s.quick).map(|s| s.id).collect();
@@ -5912,6 +5946,8 @@ impl App {
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.show = saved.show;
             self.restore_drawer(saved.drawer, saved.drawer_share);
+            let known: Vec<SessionId> = ordered.iter().chain(&quick).copied().collect();
+            self.restore_kept(saved.kept, &known);
         }
         self.settle_empty_panes(&ordered);
         self.sync();
@@ -5951,7 +5987,7 @@ impl App {
                 self.toast(format!("→ {ws}"));
             }
         }
-        self.show(id, None);
+        self.pick(id);
     }
 
     /// Attention counts of other workspaces, for status-bar badges (`me ⚠1`).
@@ -9021,25 +9057,91 @@ mod tests {
         ));
     }
 
-    /// A session opened over a split takes the screen (2026-11-17: the split is no longer kept
-    /// to swap back; a saved view keeps a layout); ` goes back to the session that had focus.
+    /// A session you pick while split takes the focused pane: the split stays (owner,
+    /// 2026-11-18). Something new still opens full sized, the split kept for ` (below).
     #[test]
-    fn a_new_session_opens_full_sized_and_back_is_the_session_that_had_focus() {
+    fn a_session_picked_in_a_split_takes_the_focused_pane() {
+        let mut app = app();
+        let (a, b, right) = split_two(&mut app);
+        let c = placed("zephyr", Some("p1"), Some("p1-root"));
+        app.sessions.push(c.clone());
+        app.pick(c.id);
+        assert_eq!(app.layout.panes().len(), 2, "still a split");
+        assert_eq!((app.focused, app.focused_session()), (right, Some(c.id)));
+        let shown: HashSet<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
+        assert_eq!(shown, HashSet::from([a, c.id]), "{b} made way, its neighbour stays");
+        assert!(app.kept.is_none(), "nothing replaced the split");
+        // ` goes back in that pane to what it showed.
+        act(&mut app, "session.last");
+        assert_eq!((app.layout.panes().len(), app.focused_session()), (2, Some(b)));
+        // One already on screen is focused where it is.
+        app.pick(a);
+        assert_eq!((app.layout.panes().len(), app.focused_session()), (2, Some(a)));
+    }
+
+    /// `v` / `s` ask what goes in the new pane: ⏎ the clone, `+ new shell` there, or a session
+    /// not on screen, so an agent and a shell sit side by side.
+    #[test]
+    fn a_split_offers_a_clone_a_shell_or_a_session() {
+        let mut app = app();
+        let (a, b) = with_agents(&mut app);
+        let s = app.sessions.iter_mut().find(|s| s.id == a).unwrap();
+        (s.kind, s.agent) = (SessionKind::Agent, Some("claude".into()));
+        let wt = s.worktree.clone();
+        app.show(a, None);
+        act(&mut app, "pane.split_right");
+        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!("no picker") };
+        let targets: Vec<Target> =
+            (0..palette.filtered.len()).map(|i| palette.item(i).target.clone()).collect();
+        assert_eq!(targets[0], Target::Clone, "⏎ is the clone: {targets:?}");
+        assert!(targets.contains(&Target::NewShell), "{targets:?}");
+        assert!(targets.contains(&Target::Session(b)), "{targets:?}");
+        assert!(!targets.contains(&Target::Session(a)), "not what is on screen");
+        // A new shell: in the agent's worktree, in the new pane.
+        app.overlay = None;
+        while app.rx.try_recv().is_ok() {}
+        app.picked(Target::NewShell, Purpose::Split(Dir::Right));
+        let mut sent = None;
+        while let Ok(m) = app.rx.try_recv() {
+            if let AppMsg::Reply(Pending::Spawned { split, spec, .. }, _) = m {
+                sent = Some((split, spec));
+            }
+        }
+        let (split, spec) = sent.expect("a shell was started");
+        assert_eq!(split, Some(Dir::Right));
+        assert!(spec.agent.is_none() && spec.argv.is_empty(), "a shell: {spec:?}");
+        assert_eq!(spec.worktree, wt);
+        // A session: beside it, both on screen.
+        app.picked(Target::Session(b), Purpose::Split(Dir::Down));
+        let shown: HashSet<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
+        assert_eq!(shown, HashSet::from([a, b]));
+        assert_eq!(app.focused_session(), Some(b));
+    }
+
+    #[test]
+    fn a_new_session_opens_full_sized_and_back_brings_the_split_whole() {
         let mut app = app();
         let (a, b, _) = split_two(&mut app);
-        // Picking one already on screen focuses it where it is: nothing moves.
-        app.show(a, None);
-        assert_eq!(app.layout.panes().len(), 2);
-        assert_eq!(app.focused_session(), Some(a));
-        app.show(b, None);
         let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         assert_eq!(app.layout.panes().len(), 1, "full sized, not in a split");
         assert_eq!(app.focused_session(), Some(fresh.id));
+        assert!(app.kept.is_some(), "the split is kept");
+        // ` swaps: the split is back as it was, and ` again shows the panel.
         act(&mut app, "session.last");
-        assert_eq!((app.layout.panes().len(), app.focused_session()), (1, Some(b)));
+        assert_eq!(app.layout.panes().len(), 2);
+        let shown: HashSet<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
+        assert_eq!(shown, HashSet::from([a, b]));
         act(&mut app, "session.last");
         assert_eq!(app.focused_session(), Some(fresh.id));
+        // Picking a session of the kept split brings the split back, focused on it.
+        app.show(a, None);
+        assert_eq!(app.layout.panes().len(), 2);
+        assert_eq!(app.focused_session(), Some(a));
+        // Picking one already on screen focuses it where it is: nothing moves.
+        app.show(b, None);
+        assert_eq!(app.layout.panes().len(), 2);
+        assert_eq!(app.focused_session(), Some(b));
     }
 
     #[test]
@@ -9049,7 +9151,37 @@ mod tests {
         let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         assert_eq!(app.layout.panes().len(), 1);
+        assert!(app.kept.is_none());
         act(&mut app, "session.last");
+        assert_eq!(app.focused_session(), Some(a));
+    }
+
+    #[test]
+    fn the_kept_split_comes_back_with_the_view_and_forgets_gone_sessions() {
+        let mut app = app();
+        let (a, b, _) = split_two(&mut app);
+        let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
+        spawned(&mut app, &fresh, false);
+        let saved = serde_json::to_value(SavedView {
+            v: 1,
+            layout: app.layout.clone(),
+            panes: app.panes.iter().map(|(k, p)| (*k, p.session.map(|s| s.full()))).collect(),
+            focus: app.focused,
+            zoom: false,
+            sidebar: true,
+            sidebar_width: 30,
+            show: Default::default(),
+            drawer: None,
+            drawer_share: crate::quick::DRAWER_SHARE,
+            kept: app.kept.as_deref().cloned(),
+        })
+        .unwrap();
+        app.apply_view(Some(saved));
+        assert!(app.kept.as_ref().is_some_and(|k| k.shows(a).is_some() && k.shows(b).is_some()));
+        // `b` goes: the kept split loses its pane; back shows `a` alone.
+        app.on_event(DomainEvent::SessionRemoved { id: b });
+        act(&mut app, "session.last");
+        assert_eq!(app.layout.panes().len(), 1);
         assert_eq!(app.focused_session(), Some(a));
     }
 
@@ -9063,6 +9195,9 @@ mod tests {
         let mut sent = None;
         while app.rx.try_recv().is_ok() {}
         act(&mut app, "pane.split_right");
+        // It asks what goes there; ⏎ takes the first choice, the clone.
+        assert!(matches!(app.overlay, Some(Overlay::Picker { purpose: Purpose::Split(_), .. })));
+        key(&mut app, KeyCode::Enter, Mods::NONE);
         while let Ok(m) = app.rx.try_recv() {
             if let AppMsg::Reply(Pending::Spawned { split, spec, .. }, _) = m {
                 sent = Some((split, spec));
@@ -10406,6 +10541,7 @@ mod tests {
         app.show(one.id, None);
         while app.rx.try_recv().is_ok() {}
         app.run(&Command { action: "pane.split_right", arg: None });
+        key(&mut app, KeyCode::Enter, Mods::NONE);
         // `ShellSplit`: the daemon starts the copy where the shell is, and places it in the
         // window; no spawn in a directory that a worktree could claim (the old bug).
         let spec = spawn_asked(&mut app).expect("a pane was asked for");
@@ -10428,7 +10564,7 @@ mod tests {
         let left = rects.iter().find(|(p, _)| app.panes[p].session == Some(a.id)).unwrap().1;
         let right = rects.iter().find(|(p, _)| app.panes[p].session == Some(b.id)).unwrap().1;
         assert!(left.width < right.width, "30/70: {left:?} {right:?}");
-        // ` goes back to the agent.
+        // The agent's screen is kept: ` brings it back.
         app.run(&Command { action: "session.last", arg: None });
         assert_eq!(app.focused_session(), Some(agent));
         // A click on the window's first pane shows the window, that pane focused.
@@ -10494,12 +10630,14 @@ mod tests {
     }
 
     #[test]
-    fn news_about_a_window_keeps_the_quick_terminal_s_drawer() {
+    fn news_about_a_window_keeps_the_quick_terminal_s_drawer_and_the_kept_screen() {
         let mut app = app();
         let (agent, _) = with_agents(&mut app);
         app.show(agent, None);
         let (a, _) = window_of_two(&mut app);
         app.show(a.id, None);
+        let kept = app.kept.clone();
+        assert!(kept.is_some(), "the agent's screen is kept");
         // The quick terminal's drawer under pane 1.
         let host = app.focused;
         let quick = quick("dl.shell", None);
@@ -10520,6 +10658,7 @@ mod tests {
         let d = app.drawer.expect("the drawer stays open");
         assert_eq!(app.panes[&d.pane].session, Some(quick.id));
         assert_eq!(app.panes[&d.host].session, Some(a.id), "under the same pane");
+        assert_eq!(app.kept, kept, "the kept screen is still the agent's");
     }
 
     #[test]

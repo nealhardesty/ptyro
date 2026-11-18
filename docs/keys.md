@@ -48,11 +48,11 @@ action by name.
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent (SPEC §22) |
 | `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` rename (its title), `e` export, `A` archived ones |
 | `C-g` | search every chat: the chat list, every workspace and machine, typing its search |
-| `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
-| `1` … `9` | show the session numbered N in the sidebar here |
+| `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace in this pane, in sidebar order, across projects (quick terminals are skipped) |
+| `1` … `9` | show the session numbered N in the sidebar in this pane |
 | `/` | find a session (fuzzy) |
-| `` ` `` | back and forth: from a chat to the session under it and back to the chat (as you left it, draft and all); else the session this pane showed before |
-| `v` / `s` | split: a clone of this pane's session beside / below it (the same agent and profile in the same worktree, a fresh conversation; a shell gets a shell in its directory). Only a split puts anything in a split |
+| `` ` `` | back and forth: from a chat to the session under it and back to the chat (as you left it, draft and all); else the split that something new covered (whole, as you left it); else the session this pane showed before |
+| `v` / `s` | split beside / below, then pick what goes there: `⏎` a clone of this pane's session (the same agent and profile in the same worktree, a fresh conversation; a shell gets a shell in its directory), `+ new shell` (beside an agent: a shell in its worktree), or any session not on screen (type to filter) |
 | `h` / `l` | previous / next pane |
 | `Shift`+arrows | the pane in that direction |
 | `z` | zoom this pane (toggle) |
@@ -106,12 +106,23 @@ brackets: a click on a number shows that shell, a click on `＋` starts one.
 
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
 
-**Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
-they put there is a clone of the session they split. Everything else opens full sized: a new
-session (`n`, `C-n`, `!`, the wizard), the quick terminal's panel, a tool (an editor, a command's
-output, `config edit`), and a session you pick that isn't on screen; `` Ctrl-Q ` `` goes back to
-the session that had focus. An editor you opened from ptyro gives its screen back on its own when
-you quit it. A session you pick that is already on screen is focused where it is.
+**Splits.** You make a split with `v` (beside) or `s` (below), and choose what goes in it: `⏎`
+takes a clone of the pane's session, `+ new shell` a shell next to an agent, or type to pick any
+session. A session you pick later (`⏎` in the sidebar, `/`, `1`–`9`, `j`/`k`, `a`) shows in the
+focused pane, so the split stays. Something new opens full sized: a new session (`n`, `C-n`,
+`!`, the wizard), the quick terminal's panel, a tool (an editor, a command's output, `config
+edit`). The split it covers is **kept**: `` Ctrl-Q ` `` brings it back whole, as you left it, and
+`` ` `` again returns to the new thing; picking one of the kept split's sessions brings it back
+too. An editor you opened from ptyro gives its screen back on its own when you quit it.
+
+An agent with a shell beside it:
+
+1. Show the agent (`⏎` on it in the sidebar).
+2. `Ctrl-Q v`, then `+ new shell` (or the name of a shell you already have) and `⏎`.
+3. `Ctrl-Q h` / `l` moves between them; `Ctrl-Q z` zooms one; `Ctrl-Q c` closes a pane (its
+   session keeps running). Drag the divider to resize.
+
+For the worktree's one quick shell under the agent instead, `Ctrl-Q Ctrl-T` opens it in a drawer.
 
 ## In the sidebar
 

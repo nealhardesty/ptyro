@@ -41,7 +41,7 @@ Conventions:
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done; removed 2026-11-17) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
-| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent; removed 2026-11-17 by mistake, back 2026-11-18), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
+| **UX3** | Daily flow | Full-sized panels and splits only on request (you choose what fills one: a clone, a shell, any session; the split something new covers is kept), quick new (`C-n`, the worktree's agent; removed 2026-11-17 by mistake, back 2026-11-18), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
@@ -2259,6 +2259,14 @@ rules as everywhere: CLI, TUI and web, with the parity row.
 The owner asked for the smoothest, most obvious daily loop (RESEARCH R-UX-34…37). CLI, TUI and
 web, with the parity rows.
 
+- [x] **UX3.8 You choose what fills a split; picks stay in the split; the kept split is back** —
+  M. *R-UX-34, from the owner, 2026-11-18; amends UX3.1.* `v` / `s` ask what goes in the new pane
+  (⏎ the clone, `+ new shell` beside an agent, or any session not on screen); a session you pick
+  (sidebar, `/`, `1`–`9`, `j`/`k`, `a`) takes the focused pane in a split instead of the whole
+  screen; something new still opens full sized, and the split it covers is kept again
+  (`App.kept`, `SavedView.kept`) for `` ` ``. Before, a split could only hold clones and an agent
+  beside a shell couldn't be made. TUI only: the web has no panes (`docs/parity.md` covers no
+  CLI command here).
 - [x] **UX3.1 Full-sized panels; splits only on request** — M. *R-UX-34.* Nothing ptyro opens
   lands in a split. A new session (`n`, `C-n`, `!`, the wizard), the quick terminal's panel, a
   tool (`$EDITOR`, `config edit`, a `ptyro …` command's output, a health fix) and a session picked
@@ -2309,7 +2317,8 @@ web, with the parity rows.
   Health and made by the web's). Retired key: `themes`.
 - **The kept split** (UX3.1's `App.kept`, `SavedView.kept`): a panel opened over a split no
   longer keeps the split to swap back; `` ` `` (`session.last`) goes back to the session that had
-  focus (and still between a chat and its session). The per-workspace view stays.
+  focus (and still between a chat and its session). The per-workspace view stays. **Back
+  2026-11-18** (owner), with UX3.8.
 - **One way to run the web server:** `ptyro web on|off|status`. `ptyro serve` is hidden (the
   daemon runs it); `ptyro daemon start --serve` and the TUI's `remote.serve` are gone (the flag
   says to use `ptyro web on`). `[remote] serve` stays as the switch's state. `web on` is
