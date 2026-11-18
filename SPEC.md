@@ -1111,6 +1111,14 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-18] Protocol 1.50** (additive): quick new is back (owner, 2026-11-18: it was
+removed by mistake in 1.45). `last_launch` leaves `RETIRED_REQUESTS`; `Request::LastLaunch`,
+`Reply::LastLaunch`, `LastLaunch` and `SpawnSpec.again` return as they were in 1.26 (§11.2,
+quick new). The memory starts empty: store migration 10 deleted `kv` `last_agent`, so each
+worktree starts its project's default agent, else `[agents] default`, until it runs one. A 1.45–1.49
+daemon answers `last_launch` with "this ptyro no longer has quick new" and ignores `again` (it
+starts a shell): the TUI's label then falls back to the default agent.
+
 **[built 2026-11-18] Protocol 1.49** (a removal): the native Windows build (§16.2, §24.3). Setup
 loses its WSL/Windows sides: `Request::SetupPlan`/`SetupRun` lose `wsl_picks`; `Reply::SetupPlan`'s
 `Plan` loses `wsl`, its `Entry`, `LoginRow` and `checklist::Line` lose `side` (and `Line` loses
@@ -1151,7 +1159,7 @@ dormant one from the store does.
 
 **[built 2026-11-17] Protocol 1.45** (a removal): the worktree and project extras are gone
 (§10.3–§10.8): archived worktrees, pair mode, locking and renaming a branch by hand, setup
-suggestions, fixing line endings, ports and quick new. The requests `worktree_archive`,
+suggestions, fixing line endings, ports and quick new (quick new came back in 1.50). The requests `worktree_archive`,
 `worktree_restore`, `worktree_archive_delete`, `worktree_archive_get`, `worktree_archives`,
 `worktree_pair`, `worktree_lock`, `worktree_rename_branch`, `project_suggest`,
 `project_line_endings` and `last_launch`, the replies `Archives`, `Suggestions` and `LastLaunch`,
@@ -1310,7 +1318,7 @@ leaves it alone. An older daemon ignores the field and starts a shell.
 remembers the last agent per worktree id in `kv` (`last_agent`), from `Spawn` and `WorktreeNew`,
 never a shell, a command line, a tool or a quick terminal, and forgets a
 removed worktree's. `again` therefore always names an agent. An older client asking by workspace
-gets the default agent. (Quick new was removed 2026-11-17, protocol 1.45.)
+gets the default agent. (Quick new was removed 2026-11-17, protocol 1.45, and is back from 1.50.)
 
 **[built CHAT1] Protocol 1.22** (additive): chats (§22.14 as built). Requests `ChatNew`, `ChatList`,
 `ChatRead` (the draft's `ChatGet`: that name was a structured session's transcript already),
@@ -1337,7 +1345,7 @@ nothing has) and `tool` (a client's tool, not remembered). `LastLaunch{workspace
 `Spawn` per workspace, and a `WorktreeNew`'s agent, in `kv` (`last_launch`), never a tool, a quick
 terminal or the scratchpad's editor. `again` with no agent named is `full` scope (it may start a
 command line); the web asks `LastLaunch` and names the agent instead, which is `control`.
-(Quick new was removed 2026-11-17, protocol 1.45.)
+(Quick new was removed 2026-11-17, protocol 1.45, and is back from 1.50.)
 
 ### 6.5 Screen frames
 
@@ -3374,9 +3382,14 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
     applies to a single pane). A restored view closes a split's empty panes and fills only a
     single one.
   - Unchanged: the drawer (`C-t`), asked for by name.
-- **Quick new** (UX3.2, UX3.7; `session.again`): removed 2026-11-17, with the web's "+ claude"
-  and "Another …"; `n` starts an agent with every option shown. `C-n`, after the prefix and in the
-  sidebar, is unbound.
+- **Quick new** (UX3.2, **[changed UX3.7]**; `session.again`: `C-n` after the prefix and in the
+  sidebar, the row menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's
+  worktree (else here), full sized. It always starts an agent: the worktree's last one (with its
+  profile and arguments), else the project's `default_agent`, else `[agents] default`; `!` is the
+  shell key. The label comes from `LastLaunch { worktree }`, asked on attach, after each spawn,
+  and from `tick` whenever the context moves to another worktree (`App.again_for`). The web has it
+  as `+ claude` on a project's and a worktree's page and a session's ⋯ → Another …; the CLI as
+  `ptyro new --again`. (Removed 2026-11-17 by mistake, back 2026-11-18, protocol 1.50.)
 - **Created means shown** (UX3.3, `reveal`): `show` unfolds the session's workspace, project and
   worktree and selects its row; a row the tree can't place yet is retried on each event for 5 s
   (`App.revealing`). A new worktree with no session shown is selected (`reveal_worktree`). A new
@@ -4078,8 +4091,10 @@ roots = ["~/dev", "~/src"]
 auto_register = true             # the repository a session runs in becomes a project (§10.1)
 
 [agents]
-default = "claude"               # the default agent (UX3.7): `n`'s first choice. The older
-                                 # per-agent `default = true` still counts when this is unset.
+default = "claude"               # the default agent (UX3.7): `n`'s first choice, and what quick
+                                 # new starts in a worktree that hasn't run one; a project's
+                                 # default_agent wins in its worktrees. The older per-agent
+                                 # `default = true` still counts when this is unset.
 
 [agents.claude]
 adapter = "claude"
@@ -4151,6 +4166,7 @@ scope, as `!` does, while `WorktreeOpen` stays Control.
 ```toml
 [project]
 name = "myrepo"
+default_agent = "claude"
 base = "origin/main"
 
 [worktree]
@@ -4264,8 +4280,9 @@ which only acted when a pull request merged. The scratchpad (2026-11-17) retires
 the whole table; its editor setting is gone too (`[editors]` stays, for worktrees), and a
 `notifications.channels` that still names `inbox` loads and ignores it. The worktree and project
 extras (2026-11-17) retire `worktrees.archive_purge_days`, `worktrees.auto_rename_branch`,
-`ports` (the whole table), `ui.show_ports`, `scripts.after_turn`, `scripts.archive`,
-`agents.*.after_turn` and `project.default_agent` (`[agents] default` stays). The chat trims
+`ports` (the whole table), `ui.show_ports`, `scripts.after_turn`, `scripts.archive`
+and `agents.*.after_turn` (`project.default_agent` was retired with quick new and is back with it,
+2026-11-18). The chat trims
 (2026-11-17) retire `chat.preset`, `chat.import` and `chat.tools` (the whole table of tool
 presets): every chat now searches the web and reads the folders it was given. Removing Gemini CLI
 and Antigravity (2026-11-17, §8.6d) retires `profiles.*.gemini`: its directory stays where it is,
@@ -4452,7 +4469,7 @@ kept nothing in the database; its file is left as it is.
 
 **[built 2026-11-17] Store v10** (migration 10, the worktree and project extras removed): drops
 `worktree.port_base` and `worktree.port_count` (ports, §10.7) and deletes the `kv` row
-`last_agent` (quick new). kv `archive:list` and `pairs` stay, for `ptyro doctor` to say what was
+`last_agent` (quick new; quick new came back on 2026-11-18 and starts that memory afresh). kv `archive:list` and `pairs` stay, for `ptyro doctor` to say what was
 left behind (§10.8, §12.2); the archive refs and `data/archive-extras/` are left as they are.
 
 ---

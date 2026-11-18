@@ -14,7 +14,7 @@ use ptyro_core::model::{
     WorkspaceInfo, WorktreeInfo, WorktreeSpec,
 };
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
-use ptyro_core::session::{HistoryEntry, SessionInfo, SpawnSpec, Watch};
+use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec, Watch};
 use ptyro_core::status::{Alert, AttentionKind, Usage};
 use ptyro_core::{ClientId, Error, SessionId, TermSize};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 49 };
+pub const PROTO: Version = Version { major: 1, minor: 50 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -105,7 +105,6 @@ pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
     ("worktree_rename_branch", "renaming a worktree's branch"),
     ("project_suggest", "setup suggestions"),
     ("project_line_endings", "rewriting scripts' line endings"),
-    ("last_launch", "quick new (`new --again`)"),
     ("convert", "structured sessions (`convert`, `new --structured`)"),
     ("chat_get", "structured sessions' chat view"),
     ("summarize", "session summaries"),
@@ -526,6 +525,16 @@ pub enum Request {
     /// its own on this daemon (it survives the daemon's live upgrade at its end). Refused for a
     /// binary an administrator or a package manager owns, and a build. Replies `Session`.
     SelfUpdate,
+    /// What quick new (`SpawnSpec.again`) starts in `worktree` (an address; none: outside one):
+    /// its last agent, else its project's default agent, else the default agent (1.26, UX3.7;
+    /// removed in 1.45, back in 1.50). `workspace` is no longer read (1.19 asked by workspace).
+    /// Replies `LastLaunch`.
+    LastLaunch {
+        #[serde(default)]
+        workspace: String,
+        #[serde(default)]
+        worktree: Option<String>,
+    },
     /// Expand a selector (SPEC §2.3): names, handles, globs (`build-*`), the `@` selectors of
     /// `ptyro_core::selector::SELECTORS`; `,` joins several.
     Resolve {
@@ -1230,6 +1239,12 @@ pub enum Reply {
     },
     Machine {
         info: ptyro_core::model::MachineInfo,
+    },
+    /// What quick new starts there (always some, from 1.26; `None` from an older daemon: the
+    /// default agent).
+    LastLaunch {
+        #[serde(default)]
+        launch: Option<LastLaunch>,
     },
     Sessions {
         sessions: Vec<SessionInfo>,

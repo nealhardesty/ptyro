@@ -22,7 +22,7 @@ the default help).
 | `replay`, `export`, the web replay page | drop | |
 | Checkpoints (`checkpoint`) | keep | A native TUI picker instead of the CLI-in-a-split |
 | `retitle` (sessions, worktrees, chats) | merge into `rename` | One rename that offers the name and the title |
-| `new --again` | drop | |
+| `new --again` | keep | dropped 2026-11-17 by mistake; restored 2026-11-18 (owner) |
 | `--take-changes` (`new`, `wt new`) | drop | |
 | Bare `ptyro "task"` | keep, quoted only | One quoted argument is a task; several unknown words are an unknown command with a did-you-mean (fixes U-11) |
 | `adopt` | drop | The shell-wrapper auto-manage route was offered and declined |

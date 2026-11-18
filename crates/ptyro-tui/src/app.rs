@@ -467,6 +467,8 @@ pub enum Pending {
     ChatHits(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
+    /// What quick-new would start in the context's worktree (UX3.2), for its label.
+    Again(Option<String>),
     /// The daemon's agents out of date (BOOT5); `note`: the start-up note's too.
     Updates {
         note: bool,
@@ -698,6 +700,11 @@ pub struct App {
     pub(crate) revealing: Option<(SessionId, Instant)>,
     /// Tools (an editor) whose screen goes back to what it replaced when they exit (UX3.1).
     pub(crate) tool_back: HashSet<SessionId>,
+    /// What quick new (`session.again`) starts, and in which worktree (UX3.7); `None`: not
+    /// known yet (the default agent).
+    pub again: Option<(Option<String>, ptyro_core::session::LastLaunch)>,
+    /// The worktree quick new's label was last asked about.
+    pub(crate) again_for: Option<Option<String>>,
     /// The selected sidebar row, and its index when last set (the fallback once it's gone).
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
@@ -814,6 +821,8 @@ impl App {
             drawer_share: crate::quick::DRAWER_SHARE,
             revealing: None,
             tool_back: HashSet::new(),
+            again: None,
+            again_for: None,
             opts,
             connect,
             paths,
@@ -985,6 +994,7 @@ impl App {
             self.workspace = ws;
         }
         self.load_view().await;
+        self.refresh_again();
         // `ptyro chat open`: that chat, over the panes.
         if let Some(id) = self.opts.chat.take() {
             self.open_chat(&id);
@@ -1406,6 +1416,10 @@ impl App {
         if self.config.ui.clock {
             self.dirty = true;
         }
+        // Quick new's label follows the context to another worktree.
+        if self.client.is_some() && self.again_for.as_ref() != Some(&self.context().1) {
+            self.refresh_again();
+        }
         self.health_tick(self.started);
         self.setup_tick();
         self.sync_window();
@@ -1809,6 +1823,7 @@ impl App {
                     _ => None,
                 };
                 self.apply_view(view);
+                self.refresh_again();
                 return;
             }
         };
@@ -1920,6 +1935,7 @@ impl App {
                 if back {
                     self.tool_back.insert(id);
                 }
+                self.refresh_again();
                 self.upsert(info);
                 self.show(id, split);
             }
@@ -1957,6 +1973,7 @@ impl App {
                 }),
             ) => {
                 let pane_shown = agent.as_ref().or(setup.as_ref()).map(|s| s.id);
+                self.refresh_again();
                 upsert_by(&mut self.worktrees, info.clone(), |w| w.id.clone());
                 for s in [setup, agent].into_iter().flatten() {
                     self.upsert(s);
@@ -2219,6 +2236,14 @@ impl App {
                 }
             }
             (Pending::Saved, Ok(_)) => {}
+            (Pending::Again(wt), Ok(Reply::LastLaunch { launch })) => {
+                if self.again_for.as_ref() == Some(&wt) {
+                    self.again = launch.map(|l| (wt, l));
+                    self.dirty = true;
+                }
+            }
+            // Only a label: a worktree still being made says so elsewhere.
+            (Pending::Again(_), Err(_)) => {}
             // A refusal's way through (SPEC §6.6), else what its words suggest.
             (_, Err(e)) => match (self.retry.take(), &e.fix) {
                 (Some(req), Some(fix)) => {
@@ -2344,12 +2369,13 @@ impl App {
     }
 
     /// The workspace you're in (MM1.B: all are on screen at once) is the selected row's in the
-    /// sidebar, else the focused session's: what `n`, the status bar and new
+    /// sidebar, else the focused session's: what `n`, quick new, the status bar and new
     /// workspace-wide things go by.
     pub(crate) fn enter_workspace(&mut self, w: String) {
         if w != self.workspace {
             self.workspace = w;
             self.view_dirty_since.get_or_insert_with(Instant::now);
+            self.refresh_again();
         }
     }
 
@@ -2561,6 +2587,7 @@ impl App {
             "app.detach" => self.quit = Some(AttachEnd::Detached),
             "app.quit" => self.confirm_quit(),
             "session.new" => self.open_task(None),
+            "session.again" => self.quick_new(),
             "attention.next" => self.next_attention(),
             "peek" => {
                 let target = if self.focus == Focus::Sidebar {
@@ -3743,7 +3770,8 @@ impl App {
             }
             Row::Worktree(w) => {
                 let root = self.worktree(w).is_some_and(|w| w.is_root);
-                let mut v = vec!["session.new", "shell.new", "shell.drawer", "shell.pane"];
+                let mut v =
+                    vec!["session.new", "session.again", "shell.new", "shell.drawer", "shell.pane"];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.rename"]);
                 if !root {
                     v.push("worktree.remove");
@@ -3752,6 +3780,7 @@ impl App {
             }
             Row::Project(_) => vec![
                 "session.new",
+                "session.again",
                 "worktree.new",
                 "shell.new",
                 "shell.drawer",
@@ -3775,7 +3804,7 @@ impl App {
             // A workspace (MM1.B): start something in it, set it up; another machine's adds what
             // its link can do.
             Row::Workspace(w) => {
-                let mut v = vec!["session.new", "worktree.new", "project.add"];
+                let mut v = vec!["session.new", "session.again", "worktree.new", "project.add"];
                 if let Some(m) = self.machine_of_name(w) {
                     if m.state != ptyro_core::model::MachineState::Online {
                         v.insert(0, "machine.retry");
@@ -9115,7 +9144,7 @@ mod tests {
     }
 
     #[test]
-    fn bang_starts_another_shell_in_this_worktree() {
+    fn bang_starts_another_shell_in_this_worktree_and_c_n_starts_again() {
         let mut app = app();
         with_agents(&mut app);
         let spawns = |app: &mut App| {
@@ -9137,16 +9166,33 @@ mod tests {
             assert_eq!(spec.worktree.as_deref(), Some("p1-root"));
             assert!(spec.agent.is_none() && spec.argv.is_empty() && !spec.quick, "a plain shell");
         }
-        assert!(app.keymap.key_for("shell.new").is_some(), "shell.new has a key");
-        // Quick new was removed (2026-11-17): its C-n stays free, in both tables.
-        assert!(
-            app.keymap
-                .lookup(Table::Prefix, ptyro_core::config::parse_key("C-n").unwrap())
-                .is_none()
-        );
-        assert!(
-            app.keymap.lookup(Table::Nav, ptyro_core::config::parse_key("C-n").unwrap()).is_none()
-        );
+        act(&mut app, "session.again");
+        let v = spawns(&mut app);
+        assert!(v[0].1.again && v[0].1.worktree.as_deref() == Some("p1-root"));
+        // Its label says what it starts.
+        assert_eq!(app.again_label(), "claude");
+        let codex = ptyro_core::session::LastLaunch {
+            agent: Some("codex".into()),
+            profile: Some("work".into()),
+            ..Default::default()
+        };
+        app.again = Some((Some("p1-root".into()), codex.clone()));
+        assert_eq!(app.again_label(), "codex@work");
+        // Another worktree's answer isn't this one's.
+        app.again = Some((Some("p2-root".into()), codex));
+        assert_eq!(app.again_label(), "claude");
+        for a in ["shell.new", "session.again"] {
+            assert!(app.keymap.key_for(a).is_some(), "{a} has a key");
+        }
+        // C-n is quick new, after the prefix and in the sidebar.
+        for t in [Table::Prefix, Table::Nav] {
+            assert_eq!(
+                app.keymap
+                    .lookup(t, ptyro_core::config::parse_key("C-n").unwrap())
+                    .map(|c| c.action),
+                Some("session.again")
+            );
+        }
     }
 
     // ── many machines (MM1.B) ─────────────────────────────────────────────

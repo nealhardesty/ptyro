@@ -172,6 +172,8 @@ pub fn needed(req: &Request) -> Scope {
         | MachineList
         // What's installed on the machine, and what installing would run (BOOT1).
         | SetupPlan { .. }
+        // What quick new would start (UX3.2): only looks.
+        | LastLaunch { .. }
         // The agents out of date (BOOT5): only looks.
         | Updates { note: false } => Scope::Read,
         // Marking the start-up note said uses up the owner's once-per-version note.

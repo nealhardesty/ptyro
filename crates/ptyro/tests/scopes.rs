@@ -101,6 +101,7 @@ fn table() -> Vec<Sample> {
         ),
         s(json!({"t":"push_unsubscribe","endpoint":"https://push.invalid/x"}), READ, true),
         s(json!({"t":"push_test"}), READ, false),
+        s(json!({"t":"last_launch","workspace":"main"}), READ, true),
         // Finding the shell reads; starting one is a shell.
         s(
             json!({"t":"quick_shell","worktree":null,"cwd":"/nonexistent-scopes-test","create":false,"env":{},"size":null,"workspace":null}),

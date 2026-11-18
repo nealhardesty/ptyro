@@ -9,7 +9,7 @@ import type { Project, Worktree, Workspace } from "./data.js";
 import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
-import { newShell, newTask, openQuickShell, allSessions } from "./sessions.js";
+import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 import type { Session } from "./screen.js";
 
 const ACTIONS = {
@@ -189,7 +189,7 @@ function projectView(id: string): HTMLElement {
   h("main", { class: "stack", title: tip("project.show") },
     facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]),
     bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"),
-      ...((r) => r ? [h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)),
+      ...((r) => r ? [h("button", { title: tipOf("session.again"), onclick: () => void startAgain(r) }, againWords(r)), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)),
       h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Quick shell")),
     section("Scripts", pending(projectScripts, id) ?? (scripts.text.trim() ? h("div", {},
       h("div", { class: "bar" }, badge(scripts.trusted ? "trusted" : "not trusted", scripts.trusted ? "ok" : "warn"), h("span", { class: "sub" }, scripts.names.join(", "))),
@@ -367,6 +367,7 @@ function worktreeView(rest: string): HTMLElement {
   const overview = h("div", { class: "stack-in" },
     bar(
       h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"),
+      h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)),
       h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"),
       h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")),
     section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(

@@ -1,6 +1,7 @@
 //! The ptyro daemon (SPEC §4): owns every PTY and terminal state, serves clients over a Unix
 //! socket, and keeps sessions alive while no client is attached.
 
+mod again;
 mod agents;
 mod approvals;
 mod autoreg;
@@ -374,6 +375,7 @@ async fn serve(
     }
     daemon.load_devices().await;
     daemon.load_used_links().await;
+    daemon.load_last_launch().await;
     daemon.start_machines().await;
     daemon.load_declined().await;
     daemon.start_serve_supervisor();

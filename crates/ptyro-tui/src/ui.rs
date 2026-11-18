@@ -133,6 +133,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
         "start",
         &[
             ("session.new", "a task"),
+            ("session.again", "+ again"),
             ("shells.new", "a SHELLS shell"),
             ("worktree.new", "worktree"),
             ("project.add", "project"),
@@ -202,10 +203,15 @@ fn draw_which_key(app: &App, f: &mut Frame<'_>, area: Rect) {
     let key = |action: &str| {
         app.keymap.key_for(action).and_then(|k| k.strip_prefix(&prefix).map(str::to_owned))
     };
+    // Quick-new says what it starts: `+ claude`.
+    let label = |a: &str, label: &str| match a {
+        "session.again" => format!("+ {}", app.again_label()),
+        _ => label.to_owned(),
+    };
     let columns: Vec<(&str, Vec<(String, String)>)> = WHICH_KEY
         .iter()
         .map(|(group, items)| {
-            (*group, items.iter().filter_map(|(a, l)| Some((key(a)?, (*l).to_owned()))).collect())
+            (*group, items.iter().filter_map(|(a, l)| Some((key(a)?, label(a, l)))).collect())
         })
         .collect();
     let rows = columns.iter().map(|(_, v)| v.len()).max().unwrap_or(0) as u16;

@@ -465,7 +465,11 @@ pub struct SpawnSpec {
     /// Make it the quick terminal of where it starts (UX1.25; `QuickShell` reuses it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
-    /// A client's tool (an editor, a `ptyro …` command's output).
+    /// Quick new (UX3.2, UX3.7): start the agent its worktree last started (`agent`, `argv` and
+    /// `profile` come from that), else its project's default agent, else the default agent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub again: bool,
+    /// A client's tool (an editor, a `ptyro …` command's output): not remembered for `again`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tool: bool,
     /// A command line, as typed (with no `argv` or `agent`): the daemon runs it through its own
@@ -491,6 +495,33 @@ pub struct SpawnSpec {
     /// SPEC §23.17). Never on the wire.
     #[serde(skip)]
     pub pane_of: Option<SessionId>,
+}
+
+/// What a worktree last started (UX3.2, UX3.7), so `again` can start another of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastLaunch {
+    /// An agent (`claude`, `claude@work`); `None` with empty `argv`: a shell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// A command's argv (no `agent`), or an agent's extra arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+}
+
+impl LastLaunch {
+    /// For people: `claude`, `claude@work`, `shell`, `htop`.
+    pub fn label(&self) -> String {
+        match (&self.agent, self.argv.first()) {
+            (Some(a), _) => match &self.profile {
+                Some(p) if !a.contains('@') => format!("{a}@{p}"),
+                _ => a.clone(),
+            },
+            (None, None) => "shell".into(),
+            (None, Some(p)) => p.rsplit('/').next().unwrap_or(p).to_owned(),
+        }
+    }
 }
 
 /// How much of the session list to show (SPEC §11.2c, the sidebar's filter): everything, only
