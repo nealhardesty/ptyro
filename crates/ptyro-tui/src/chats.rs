@@ -1,6 +1,6 @@
 //! Chats in the TUI (SPEC §22.12, ROADMAP CHAT1.7): the CHATS section under each workspace in
 //! the sidebar, the chat list (`g`), and the chat view (`m` for a new one), which takes the place
-//! of the panes beside the sidebar. The view is the structured sessions' chat view (`chat.rs`)
+//! of the panes beside the sidebar. The view is `chat.rs`'s
 //! with a header and a composer of its own: ⏎ sends, Esc goes back; its other keys (and the
 //! list's) are the key map's `chat` and `chatlist` tables.
 
@@ -930,9 +930,9 @@ impl App {
         }
         match action {
             "chat.open" => self.open_chat(&id),
-            "chat.retitle" => {
+            "chat.rename" => {
                 self.overlay = Some(Overlay::Prompt {
-                    title: "Chat title (empty clears it; chat.autotitle makes one)".into(),
+                    title: "Rename the chat: its title, what people read (empty clears it; chat.autotitle makes one)".into(),
                     text: info.and_then(|c| c.title).unwrap_or_default(),
                     kind: PromptKind::ChatRetitle(id),
                 });
@@ -1519,7 +1519,7 @@ impl App {
             ("agent", Some(c)) => self.chat_picked(arg.to_owned(), true, Some(c)),
             ("tools", Some(_)) if arg.is_empty() => self.chat_action("chat.preset"),
             ("tools", Some(c)) => self.chat_picked(arg.to_owned(), false, Some(c)),
-            ("title", Some(_)) if arg.is_empty() => self.chat_action("chat.retitle"),
+            ("title", Some(_)) if arg.is_empty() => self.chat_action("chat.rename"),
             ("title", Some(c)) => self.request(
                 Pending::Done("retitled".into()),
                 Request::ChatUpdate {
@@ -2432,7 +2432,7 @@ impl App {
 /// [`App::chat_actions_for`] for what is left out where it doesn't apply.
 pub const CHAT_ACTIONS: &[&str] = &[
     "chat.open",
-    "chat.retitle",
+    "chat.rename",
     "chat.autotitle",
     "chat.pin",
     "chat.stop",
@@ -2873,7 +2873,7 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
             k("chat.pin", "pin"),
             k("chat.archive", if l.archived.is_some() { "unarchive" } else { "archive" }),
             k("chat.delete", "delete"),
-            k("chat.retitle", "title"),
+            k("chat.rename", "title"),
             k("chat.fork", "fork"),
             k("chat.list_state", "state"),
             k("chat.list_archived", "archived"),

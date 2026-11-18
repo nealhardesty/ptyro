@@ -671,13 +671,13 @@ fn shell(config: &Config, r: &mut Report) {
             });
             let text = match (&rc, has) {
                 (Some((f, _)), true) => format!("off; {} sets it up instead", f.display()),
-                (Some((f, line)), false) => format!(
-                    "off, and not in {}: shell sessions have no prompt marks (turn [shell] integration back on, or add `{line}` there)",
+                (Some((f, _)), false) => format!(
+                    "off, and not in {}: shell sessions have no prompt marks (turn it back on: `ptyro config set shell.integration true`)",
                     f.display()
                 ),
                 (None, _) => "off".to_owned(),
             };
-            // A choice, not a fault: a note (the TUI's own finding offers to add the line).
+            // A choice, not a fault: a note (the TUI's own finding opens the setting).
             r.add(S, "integration", Level::Note, text);
         }
     }

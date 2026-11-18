@@ -308,12 +308,6 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
-        id: "summaries",
-        title: "Summaries",
-        blurb: "A line about what each turn did, from a small model.",
-        scope: Scope::User,
-    },
-    Section {
         id: "chat",
         title: "Chat",
         blurb: "Quick conversations with your agents, kept and searchable.",
@@ -726,9 +720,6 @@ pub const SETTINGS: &[Setting] = &[
     // ── Checkpoints ──
     s("orchestration.checkpoints", "orchestration", Kind::Bool, "Save a restore point (a checkpoint) after every agent turn that changed its worktree."),
     // ── Summaries ──
-    s("summaries.enabled", "summaries", Kind::Bool, "A one-line `≈` summary after each agent turn, written by a small model on the session's own account. It sends a trimmed, redacted view of the session to the model's provider."),
-    s("summaries.daily_cap", "summaries", int(0, 100_000), "The most summaries made for each profile in a day, to cap the cost (about $0.0007 each with Haiku). 0 makes none.").unit("a day"),
-    s("summaries.command", "summaries", Kind::Argv, "The summarizer: reads the prompt on stdin, prints the summary.").adv(),
     // ── Chat ──
     s("chat.enabled", "chat", Kind::Bool, "Chats with your agents: a CHATS section under each workspace, `ptyro chat`, and the web's Chats page. Off hides them all; your chats stay saved.").also("ai assistant conversation history"),
     s("chat.recent", "chat", int(1, 100), "How many chats show under CHATS in the sidebar, after the pinned ones.").unit("chats"),
@@ -740,7 +731,7 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.hibernate_after", "chat", Kind::Duration, "An idle chat's agent stops after this long, so it costs nothing; the next message carries on.").new_only(),
     s("chat.seed_tokens", "chat", int(1000, 1_000_000), "When an agent has to be told the conversation again (it was lost, or you switched agents), at most this much of it is sent.").unit("tokens").adv(),
     s("chat.title", "chat", pick(CHAT_TITLE), "How a new chat gets its title."),
-    s("chat.title_command", "chat", Kind::Argv, "The titler: reads the prompt on stdin, prints the title.").or("the summaries' command").adv(),
+    s("chat.title_command", "chat", Kind::Argv, "The titler: reads the prompt on stdin, prints the title, on the chat's own account. Empty: a chat is titled by its first line.").adv(),
     s("chat.daily_cap", "chat", int(0, 100_000), "The most titles made for each profile in a day. 0 makes none (the first line is used).").unit("a day").adv(),
     s("chat.index_tools", "chat", Kind::Bool, "Also make what tools returned searchable (2 KB of it a message), not just their titles.").adv(),
     s("chat.meaning", "chat", Kind::Bool, "Meaning search: also find messages by what they are about, not only by their words (marked ≈). Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; your chats never leave this machine.").also("semantic embeddings ai similar search"),
@@ -760,7 +751,7 @@ pub const SETTINGS: &[Setting] = &[
     // ── Daemon and recording ──
     // ── Shells ──
     s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell; on Windows PowerShell 7, else Windows PowerShell, else cmd").eg("pwsh -Login").new_only(),
-    s("shell.integration", "shells", Kind::Bool, "Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts, after your own startup files: prompt jumps in copy mode, working and idle, each command and its exit code, and the directory. Nothing to add to your rc file or $PROFILE.").also("osc 133 prompt marks shell-init profile rc").new_only(),
+    s("shell.integration", "shells", Kind::Bool, "Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts, after your own startup files: prompt jumps in copy mode, working and idle, each command and its exit code, and the directory. Nothing to add to your rc file or $PROFILE.").also("osc 133 prompt marks profile rc").new_only(),
     s("shell.section", "shells", pick(SHELLS_SECTION), "Each workspace's SHELLS section in the sidebar: your numbered terminals that belong to no repository (any command), made with C-q C-c and reached with Alt-1…9.").also("shells tmux windows numbered terminals sidebar alt"),
     s("shell.notify_after", "shells", Kind::Duration, "A command in a SHELLS shell that ran at least this long tells you when it ends, if you weren't looking: done ✓ or error ✗ with its exit code. off: never.").also("notify long command finished done monitor activity bell"),
     s("shell.alt_digits", "shells", Kind::Bool, "Alt-1…9 and Alt-0 show shell 1–10 of the workspace's SHELLS with no prefix (an empty number starts one). Off leaves them to the program in the pane (readline's digit-argument, irssi and weechat windows); C-q e then a digit still works.").also("alt meta option digits keys jump windows tmux"),
@@ -771,7 +762,7 @@ pub const SETTINGS: &[Setting] = &[
     s("daemon.restore_on_start", "daemon", pick(RESTORE), "What agent sessions of an earlier daemon become when it starts.").restart(),
     s("daemon.hold_wsl", "daemon", Kind::Bool, "Inside WSL: keep WSL running while ptyro does, so agents keep working after you close the last terminal. Off, WSL stops everything about 15 seconds after the last terminal closes. Does nothing outside WSL.").also("wsl windows keep alive survive idle shutdown close terminal"),
     s("daemon.machine_name", "daemon", Kind::Text, "What to call this computer in the web page's title and the TUI, to tell several apart. Letters, digits, spaces; 24 characters at most.").also("hostname computer name machine tab title").or("this computer's name").eg("studio"),
-    s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output with timing, for replay and for scrolling back past what is in memory.").new_only(),
+    s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output, for scrolling back past what is in memory and for a stopped session's last screen.").new_only(),
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
     // ── Web app and remote ──
     s("client.default_remote", "remote", Kind::Text, "Where this ptyro's daemon is, when --remote and PTYRO_REMOTE don't say: `wsl://` (the default WSL distro), `wsl://<distro>`, an ssh host, or `local` (this computer's own daemon; on Windows the native one, still being built). On Windows, ptyro offers the WSL distro that has ptyro the first time, and keeps the answer here.").also("wsl windows daemon remote ssh host distro client local native").or("this computer's own daemon (on Windows, asked the first time)").eg("wsl://Ubuntu"),
@@ -802,7 +793,7 @@ pub const SETTINGS: &[Setting] = &[
     s("agents.*.hooks", "agents", Kind::Bool, "Wire ptyro's hooks, plugin or notify into the agent.").new_only().or("on"),
     s("agents.*.usage", "agents", Kind::Bool, "Report rate limits per profile.").new_only().or("on for Claude, off for Codex"),
     s("agents.*.record", "agents", Kind::Bool, "Record this agent's sessions.").new_only().or("on"),
-    s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol `ptyro new --structured` speaks with it.").new_only().or("from its adapter"),
+    s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol a chat speaks with it.").new_only().or("from its adapter"),
     // ── Themes ──
     s("themes.*.base", "themes", dynamic(Source::BuiltinThemes), "A built-in theme to start from.").or("none"),
     s("themes.*.accent", "themes", Kind::Color, "Highlights and the focused item."),

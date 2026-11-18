@@ -261,7 +261,6 @@ fn here_only(req: &Request) -> bool {
             | ProfileRename { .. }
             | Hook { .. }
             | StatusLine { .. }
-            | Report { .. }
             | Mute { .. }
             | Usage
             | Agents

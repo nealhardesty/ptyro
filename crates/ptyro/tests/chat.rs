@@ -218,14 +218,14 @@ fn titles_pins_archive_export_and_delete() {
     // A person's title is never replaced by an automatic one.
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(w.chats()[0]["title"], "Dinner ideas");
-    w.ok(&["chat", "retitle", "@last", "Cooking"]);
+    w.ok(&["chat", "rename", "@last", "Cooking"]);
     assert_eq!(w.chats()[0]["title"], "Cooking");
     // No title clears it, as for a session or a worktree; --auto asks for a new one.
-    w.ok(&["chat", "retitle", "@last"]);
+    w.ok(&["chat", "rename", "@last", "--title", ""]);
     assert!(w.chats()[0]["title"].is_null(), "{}", w.chats()[0]);
-    w.ok(&["chat", "retitle", "@last", "--auto"]);
+    w.ok(&["chat", "rename", "@last", "--auto"]);
     w.until("an automatic title", || w.chats()[0]["title"].is_string());
-    w.ok(&["chat", "retitle", "@last", "Cooking"]);
+    w.ok(&["chat", "rename", "@last", "--title", "Cooking"]);
     w.ok(&["chat", "pin", &addr]);
     assert_eq!(w.chats()[0]["pinned"], true);
     let md = w.ok(&["chat", "export", &addr]);
@@ -438,7 +438,7 @@ fn json_waits_for_the_answer_and_every_verb_can_say_it() {
     assert!(retried["answers"][0]["text"].as_str().unwrap().contains("again"), "{retried}");
     let forked = w.json(&["chat", "fork", &addr, "--timeout", "60", "--json", "a fork"]);
     assert!(forked["answers"][0]["text"].as_str().unwrap().contains("a fork"), "{forked}");
-    let renamed = w.json(&["chat", "retitle", &addr, "Named", "--json"]);
+    let renamed = w.json(&["chat", "rename", &addr, "Named", "--json"]);
     assert_eq!(renamed["chat"]["title"], "Named");
     let set = w.json(&["chat", "set", &addr, "--preset", "none", "--json"]);
     assert_eq!(set["chat"]["tools"], "none");

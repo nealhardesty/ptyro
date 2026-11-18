@@ -1,15 +1,13 @@
-//! M10 end-to-end tests: structured sessions. One opened in its native TUI to take over by hand,
-//! and back; every protocol's turn, permission request and
-//! answer (Claude stream-json, Codex app-server, Gemini ACP, OpenCode's server), the chat stream
-//! and the line editor, a live upgrade in the middle of a structured turn, hibernate/resume,
-//! an agent that fails to start, and a phone reading a transcript. Every agent is the fake.
+//! M10 end-to-end tests: the structured machinery chats run on (SPEC §22.2). A session of your
+//! own is no longer started structured (removed 2026-11-17), so it is tested through chats:
+//! every protocol's turn, permission request and answer (Claude stream-json, Codex app-server,
+//! Gemini ACP, OpenCode's server), and a chat's answer cut off by a live upgrade. A session started
+//! structured before the removal resumes in its agent's own terminal UI. Every agent is the fake.
 
 use std::path::PathBuf;
 use std::process::Output;
 use std::time::{Duration, Instant};
 
-use ptyro_core::input::{InputEvent, KeyCode, KeyEvent, Mods};
-use ptyro_protocol::{ClientMsg, ServerMsg};
 use ptyro_testkit::TempDaemon;
 use serde_json::Value;
 
@@ -22,7 +20,7 @@ struct World {
 }
 
 impl World {
-    fn new(extra: &str) -> Self {
+    fn new() -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-m10-").tempdir().unwrap();
         let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(
@@ -32,14 +30,14 @@ impl World {
         .unwrap();
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
-        let mut config =
-            String::from("[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n");
+        let mut config = String::from(
+            "[attention]\nmin_work = \"1s\"\n[chat]\ntitle = \"off\"\n[worktrees]\nfetch = false\n",
+        );
         for a in ["claude", "codex", "gemini", "opencode"] {
             config.push_str(&format!(
                 "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
-        config.push_str(extra);
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
     }
@@ -72,8 +70,28 @@ impl World {
         self.json(&["status", s, "--json"])["session"].clone()
     }
 
-    fn status(&self, s: &str) -> String {
-        self.info(s)["status"]["status"].as_str().unwrap_or_default().to_owned()
+    /// A chat, as `chat ls` has it.
+    fn chat_info(&self, id: &str) -> Value {
+        let all = self.json(&["chat", "ls", "--json"]);
+        all.as_array().unwrap().iter().find(|c| c["id"] == id).cloned().unwrap_or_default()
+    }
+
+    /// What the chat's agent said, oldest first.
+    fn answers(&self, addr: &str) -> Vec<String> {
+        let shown = self.json(&["chat", "show", addr, "--format", "json"]);
+        shown["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["t"] == "assistant")
+            .map(|n| n["text"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    /// The chat's engine: the hidden structured session it runs on.
+    fn engine(&self, id: &str) -> Value {
+        let all = self.json(&["ls", "--chats", "--json"]);
+        all.as_array().unwrap().iter().find(|s| s["chat"] == id).cloned().unwrap_or_default()
     }
 
     fn until(&self, what: &str, f: impl Fn() -> bool) {
@@ -83,293 +101,112 @@ impl World {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
-
-    fn chat(&self, s: &str) -> Vec<Value> {
-        self.json(&["read", s, "--chat", "--json"]).as_array().cloned().unwrap_or_default()
-    }
 }
 
-/// A structured session is taken over by hand in the agent's native TUI (the same
-/// conversation), then switched back.
-#[test]
-fn a_structured_session_is_taken_over_by_hand_and_back() {
-    let w = World::new("");
-    w.ok(&["new", "-d", "-n", "ans-claude", "--agent", "claude", "--structured"]);
-    w.ok(&["send", "ans-claude", "work 0.1 first", "--wait-ready", "--wait"]);
-
-    // Take one over by hand: the same conversation, in the agent's own TUI.
-    let conv = w.info("ans-claude")["conversation"].as_str().unwrap().to_owned();
-    w.ok(&["convert", "ans-claude", "--to", "tui"]);
-    let deadline = Instant::now() + WAIT;
-    let screen = loop {
-        let t = w.ok(&["read", "ans-claude"]);
-        if t.contains("resumed=true") {
-            break t;
-        }
-        assert!(Instant::now() < deadline, "never resumed in the TUI:\n{t}");
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    assert!(screen.contains(&format!("session={conv}")), "{screen}");
-    let i = w.info("ans-claude");
-    assert!(i["structured"].is_null(), "{i:#}");
-    assert_eq!(i["conversation"], conv.as_str());
-    w.ok(&["send", "ans-claude", "work 0.1 by hand", "--wait-ready", "--wait"]);
-    // And back to structured, still the same conversation.
-    w.ok(&["convert", "ans-claude", "--to", "structured"]);
-    w.until("structured again", || w.info("ans-claude")["structured"] == "stream-json");
-    assert_eq!(w.info("ans-claude")["conversation"], conv.as_str());
-    w.ok(&["send", "ans-claude", "hello again", "--wait-ready", "--wait"]);
-    assert!(
-        w.chat("ans-claude")
-            .iter()
-            .any(|i| i["t"] == "assistant" && i["text"] == "you said: hello again")
-    );
-    // Converting needs the mode to differ.
-    let again = w.cli(&["convert", "ans-claude", "--to", "structured"]);
-    assert_eq!(again.status.code(), Some(5), "{}", String::from_utf8_lossy(&again.stderr));
+/// A new chat with `agent`, answered: its id and address.
+fn new_chat(w: &World, agent: &str, first: &str) -> (String, String) {
+    let out = w.json(&["chat", "new", "--agent", agent, "--timeout", "60", "--json", first]);
+    let id = out["chat"]["id"].as_str().unwrap().to_owned();
+    (id, format!("c:{}", out["chat"]["handle"].as_str().unwrap()))
 }
 
-/// Every protocol: a turn, a permission request answered (allow, then deny), the transcript,
-/// the status from the protocol, the conversation id.
+/// Every protocol: a turn, a permission request answered (allow, then deny), the engine driven
+/// over the agent's protocol with its conversation id.
 #[test]
-fn every_protocol_turns_and_permissions() {
-    let w = World::new("");
+fn every_protocol_answers_a_chat_and_its_permission_requests() {
+    let w = World::new();
     for (agent, protocol) in [
         ("claude", "stream-json"),
         ("codex", "app-server"),
         ("gemini", "acp"),
         ("opencode", "opencode"),
     ] {
-        let name = format!("s-{agent}");
-        w.ok(&["new", "-d", "-n", &name, "--agent", agent, "--structured"]);
-        let out = w.ok(&["send", &name, "work 0.2 first", "--wait-ready", "--wait"]);
-        assert!(out.contains("idle"), "{agent}: {out}");
-        let i = w.info(&name);
-        assert_eq!(i["structured"], protocol);
-        assert_eq!(i["status"]["source"], "protocol", "{agent}: {i:#}");
-        assert!(i["conversation"].is_string(), "{agent}: {i:#}");
-        assert!(i["turns"].as_u64() >= Some(1), "{agent}: {i:#}");
+        let (id, addr) = new_chat(&w, agent, "work 0.2 first");
+        assert!(w.answers(&addr).iter().any(|a| a == "worked: first"), "{agent}");
+        let e = w.engine(&id);
+        assert_eq!(e["structured"], protocol, "{agent}: {e:#}");
+        assert!(e["conversation"].is_string(), "{agent}: {e:#}");
         for (cmd, decision, word) in [("ask rm one", "allow", "yes"), ("ask rm two", "deny", "no")]
         {
-            w.ok(&["send", &name, cmd, "--wait-ready"]);
-            w.until(&format!("{agent} blocked"), || w.status(&name) == "blocked");
-            w.ok(&["answer", &name, decision]);
-            w.until(&format!("{agent} answered {word}"), || {
-                w.chat(&name)
-                    .iter()
-                    .any(|i| i["t"] == "assistant" && i["text"] == format!("answer: {word}"))
+            w.ok(&["chat", "send", &addr, "--no-wait", cmd]);
+            w.until(&format!("{agent} asks"), || {
+                w.chat_info(&id)["attention"]["text"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("wants permission"))
             });
-            w.until(&format!("{agent} idle"), || w.status(&name) == "idle");
-        }
-        let chat = w.chat(&name);
-        let kinds: Vec<&str> = chat.iter().map(|i| i["t"].as_str().unwrap()).collect();
-        for k in ["user", "assistant", "tool", "permission", "turn_end"] {
-            assert!(kinds.contains(&k), "{agent}: {k} missing from {kinds:?}");
-        }
-        assert!(
-            chat.iter().filter(|i| i["t"] == "permission").all(|p| p["decided"].is_string()),
-            "{agent}: {chat:#?}"
-        );
-        // The terminal view shows it too.
-        let screen = w.ok(&["read", &name, "--scrollback", "200"]);
-        assert!(
-            screen.contains("› work 0.2 first")
-                && screen.contains("worked: first")
-                && screen.contains("wants permission"),
-            "{agent}:\n{screen}"
-        );
-    }
-    // An agent with no structured mode says so.
-    let out = w.cli(&["new", "-d", "-n", "nope", "--structured", "--", "sh"]);
-    assert!(!out.status.success());
-    w.ok(&["new", "-d", "-n", "x", "--agent", "claude"]);
-    let out = w.cli(&["read", "x", "--chat"]);
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not a structured session"));
-}
-
-/// A subscriber gets the transcript as it grows, the draft as it's typed, and keys answer an
-/// open permission request.
-#[tokio::test]
-async fn the_chat_stream_and_the_line_editor() {
-    let w = World::new("");
-    w.ok(&["new", "-d", "-n", "c1", "--agent", "claude", "--structured"]);
-    let id = w.info("c1")["id"].as_str().unwrap().to_owned();
-    let mut c = w.d.client().await.unwrap();
-    let pushes = c.pushes();
-    let sid = id.parse().unwrap();
-    c.send(ClientMsg::Subscribe { session: sid, size: None, control: true }).unwrap();
-    let key = |code: KeyCode, mods: Mods| ClientMsg::Input {
-        session: sid,
-        event: InputEvent::Key { key: KeyEvent::new(code, mods) },
-    };
-    for ch in "work 0.3 streamed".chars() {
-        c.send(key(KeyCode::Char { c: ch }, Mods::NONE)).unwrap();
-    }
-    // The draft arrives with the chat messages.
-    let mut st = Stream { pushes, items: Vec::new(), draft: String::new(), streaming: false };
-    st.until(|s| s.draft == "work 0.3 streamed").await;
-    c.send(key(KeyCode::Enter, Mods::NONE)).unwrap();
-    st.until(|s| s.draft.is_empty() && s.items.iter().any(|i| i["t"] == "turn_end")).await;
-    assert!(st.streaming, "text streamed in pieces before it was final");
-    assert!(
-        st.items.iter().any(|i| i["t"] == "assistant"
-            && i["text"] == "worked: streamed"
-            && i["streaming"] == false),
-        "{:#?}",
-        st.items
-    );
-    assert!(
-        st.items
-            .iter()
-            .any(|i| i["t"] == "tool" && i["status"] == "done" && i["title"] == "sleep 0.3"),
-        "{:#?}",
-        st.items
-    );
-    // A permission request, answered with a key.
-    for ch in "ask rm -rf build".chars() {
-        c.send(key(KeyCode::Char { c: ch }, Mods::NONE)).unwrap();
-    }
-    c.send(key(KeyCode::Enter, Mods::NONE)).unwrap();
-    st.until(|s| s.items.iter().any(|i| i["t"] == "permission" && i["decided"].is_null())).await;
-    c.send(key(KeyCode::Char { c: 'd' }, Mods::NONE)).unwrap();
-    st.until(|s| s.items.iter().any(|i| i["t"] == "assistant" && i["text"] == "answer: no")).await;
-    assert!(st.items.iter().any(|i| i["t"] == "permission" && i["decided"] == "deny"));
-    // A late subscriber gets everything at once.
-    let mut c2 = w.d.client().await.unwrap();
-    let mut p2 = c2.pushes();
-    c2.send(ClientMsg::Subscribe { session: sid, size: None, control: false }).unwrap();
-    let first = loop {
-        if let ServerMsg::Chat { reset: true, items, .. } =
-            tokio::time::timeout(WAIT, p2.recv()).await.unwrap().unwrap()
-        {
-            break items;
-        }
-    };
-    assert!(first.len() >= 8, "{first:#?}");
-}
-
-/// What a chat subscriber has seen.
-struct Stream {
-    pushes: tokio::sync::mpsc::UnboundedReceiver<ServerMsg>,
-    items: Vec<Value>,
-    draft: String,
-    streaming: bool,
-}
-
-impl Stream {
-    async fn until(&mut self, want: impl Fn(&Self) -> bool) {
-        let deadline = Instant::now() + WAIT;
-        while !want(self) {
-            let left = deadline.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(left, self.pushes.recv()).await {
-                Ok(Some(ServerMsg::Chat { items, draft, reset, .. })) => {
-                    if reset {
-                        self.items.clear();
-                    }
-                    for it in items {
-                        let v = serde_json::to_value(&it).unwrap();
-                        if v["t"] == "assistant" && v["streaming"] == true {
-                            self.streaming = true;
-                        }
-                        match self.items.iter().position(|x| x["id"] == v["id"]) {
-                            Some(i) => self.items[i] = v,
-                            None => self.items.push(v),
-                        }
-                    }
-                    self.draft = draft;
-                }
-                Ok(Some(_)) => {}
-                _ => panic!("timed out; items {:#?}, draft {:?}", self.items, self.draft),
-            }
+            w.ok(&["chat", "answer", &addr, decision]);
+            w.until(&format!("{agent} answered {word}"), || {
+                w.answers(&addr).iter().any(|a| *a == format!("answer: {word}"))
+            });
+            w.until(&format!("{agent} done"), || w.chat_info(&id)["status"] != "working");
         }
     }
 }
 
-/// A live upgrade in the middle of a structured turn: the driver parks between lines, its state
-/// and the pipes cross the exec, and the turn finishes on the new image with the transcript whole.
+/// A live upgrade in the middle of a chat's answer: the engine crosses the exec with its
+/// driver (the structured image), then is stopped (the new image has no follower for it, §22.4);
+/// the cut-off answer says so, and the next message carries on in the same conversation.
 #[test]
-fn a_structured_turn_survives_a_live_upgrade() {
-    let w = World::new("");
-    w.ok(&["new", "-d", "-n", "u1", "--agent", "codex", "--structured"]);
-    w.ok(&["send", "u1", "work 0.1 before", "--wait-ready", "--wait"]);
-    let before = w.info("u1");
-    w.ok(&["send", "u1", "work 2 across", "--wait-ready"]);
-    w.until("working", || w.status("u1") == "working");
+fn a_chats_answer_cut_off_by_a_live_upgrade_says_so_and_the_chat_goes_on() {
+    let w = World::new();
+    let (id, addr) = new_chat(&w, "codex", "work 0.1 before");
+    let before = w.engine(&id);
+    assert_eq!(before["structured"], "app-server");
+    w.ok(&["chat", "send", &addr, "--no-wait", "work 2 across"]);
+    w.until("working", || w.engine(&id)["status"]["status"] == "working");
     let up = w.json(&["daemon", "upgrade", "--json"]);
     assert_eq!(up["rolled_back"], false, "{up}");
-    w.until("the turn finished on the new image", || {
-        w.chat("u1").iter().any(|i| i["t"] == "assistant" && i["text"] == "worked: across")
+    w.until("the cut-off answer is closed", || {
+        let shown = w.json(&["chat", "show", &addr, "--format", "json"]);
+        shown["nodes"].as_array().unwrap().iter().any(|n| {
+            n["t"] == "notice"
+                && n["text"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("ptyro stopped before this was answered")
+        })
     });
-    let after = w.info("u1");
-    assert_eq!(after["pid"], before["pid"], "the same agent process");
-    assert_eq!(after["conversation"], before["conversation"]);
-    assert_eq!(after["structured"], "app-server");
-    let chat = w.chat("u1");
-    assert!(
-        chat.iter().any(|i| i["t"] == "assistant" && i["text"] == "worked: before"),
-        "the transcript came across: {chat:#?}"
-    );
-    w.until("idle", || w.status("u1") == "idle");
-    w.ok(&["send", "u1", "after the upgrade", "--wait-ready", "--wait"]);
-    assert!(w.chat("u1").iter().any(|i| i["text"] == "you said: after the upgrade"));
+    w.until("idle", || w.chat_info(&id)["status"] != "working");
+    let out = w.ok(&["chat", "send", &addr, "after the upgrade"]);
+    assert!(out.contains("you said: after the upgrade"), "{out}");
+    assert!(!out.contains("The conversation so far"), "a native resume needs no seed: {out}");
+    assert_eq!(w.engine(&id)["conversation"], before["conversation"]);
 }
 
-/// Hibernate and resume keep a session structured and its conversation; an agent that fails at
-/// start shows why; a phone reads the transcript.
+/// A session someone started structured before that was removed (2026-11-17) and left dormant:
+/// it resumes in its agent's own terminal UI, in the same conversation.
 #[test]
-fn resume_failures_and_remote_reading() {
-    let w = World::new(
-        "[agents.broken]\ncommand = [\"sh\", \"-c\", \"echo 'error: not logged in (run broken login)' >&2; exit 3\"]\nprotocol = \"acp\"\n",
-    );
-    w.ok(&["new", "-d", "-n", "h1", "--agent", "claude", "--structured"]);
-    w.ok(&["send", "h1", "remember this", "--wait-ready", "--wait"]);
+fn a_dormant_structured_session_from_before_resumes_in_its_own_ui() {
+    let mut w = World::new();
+    w.ok(&["new", "-d", "-n", "h1", "--agent", "claude"]);
+    w.ok(&["send", "h1", "work 0.1 remember-me", "--wait-ready", "--wait", "--timeout", "60s"]);
     let conv = w.info("h1")["conversation"].as_str().unwrap().to_owned();
     w.ok(&["hibernate", "h1"]);
     w.until("dormant", || w.info("h1")["state"]["t"] == "dormant");
-    w.ok(&["resume", "h1"]);
-    w.until("structured again", || {
-        w.info("h1")["structured"] == "stream-json" && w.info("h1")["state"]["t"] == "running"
-    });
-    assert_eq!(w.info("h1")["conversation"], conv.as_str());
-    w.ok(&["send", "h1", "still here", "--wait-ready", "--wait"]);
-
-    w.ok(&["new", "-d", "-n", "b1", "--agent", "broken", "--structured"]);
-    w.until("the failure is in the transcript", || {
-        w.chat("b1").iter().any(|i| {
-            i["t"] == "notice" && i["text"].as_str().unwrap_or("").contains("not logged in")
-        })
-    });
-
-    // A paired phone (read scope) reads the transcript.
-    let v = w.json(&["pair", "phone", "--scope", "read", "--json"]);
-    let code = v["url"].as_str().unwrap().split("#pair=").nth(1).unwrap().to_owned();
+    w.d.stop();
+    // As an older ptyro left it: launched over the agent's protocol.
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     rt.block_on(async {
-        // The code is traded for the token (what `ptyro serve` does for the web app).
-        let local = w.d.client().await.unwrap();
-        let claim = ptyro_protocol::Request::DeviceClaim { code, via: None, name: None };
-        let ptyro_protocol::Reply::Paired { token, .. } = local.request(claim).await.unwrap()
-        else {
-            panic!("not paired")
-        };
-        let mut opts =
-            ptyro_client::ConnectOptions::new(w.d.paths.clone(), ptyro_protocol::ClientKind::Web);
-        opts.autospawn = false;
-        opts.token = Some(token);
-        let c = ptyro_client::Client::connect(&opts).await.unwrap();
-        let r = c.request(ptyro_protocol::Request::ChatGet { addr: "h1".into() }).await.unwrap();
-        let ptyro_protocol::Reply::Transcript { items } = r else { panic!("{r:?}") };
-        assert!(items.iter().any(
-            |i| matches!(&i.body, ptyro_core::chat::ChatBody::User { text } if text == "still here")
-        ));
-        let typed = c
-            .request(ptyro_protocol::Request::SendText {
-                addr: "h1".into(),
-                text: "x".into(),
-                enter: true,
-                wait_ready_ms: None,
-            })
-            .await;
-        assert!(typed.is_err(), "read scope can't type");
+        let store = ptyro_store::Store::open(&w.d.paths.data.join("ptyro.db")).unwrap();
+        let mut r =
+            store.dormant().await.unwrap().into_iter().find(|r| r.name == "h1").expect("h1");
+        r.launch.get_or_insert_with(|| serde_json::json!({}))["structured"] = "stream-json".into();
+        store.save_session(r);
+        store.flush().await.unwrap();
     });
+    w.d.restart().unwrap();
+    w.ok(&["resume", "h1"]);
+    let deadline = Instant::now() + WAIT;
+    let screen = loop {
+        let t = w.ok(&["read", "h1"]);
+        if t.contains("resumed=true") {
+            break t;
+        }
+        assert!(Instant::now() < deadline, "never resumed in its own UI:\n{t}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(screen.contains(&format!("session={conv}")), "{screen}");
+    let i = w.info("h1");
+    assert!(i["structured"].is_null(), "{i:#}");
+    assert_eq!(i["conversation"], conv.as_str());
 }

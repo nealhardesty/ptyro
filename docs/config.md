@@ -83,7 +83,7 @@ env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "64000" }
 
 [agents.my-acp-agent]
 command = ["my-acp-agent"]
-protocol = "acp"                          # `--structured` speaks the Agent Client Protocol to it
+protocol = "acp"                          # a chat with it speaks the Agent Client Protocol
 
 [attention]
 scope = "current-first"                   # where `a` looks: current-first | current | global
@@ -96,13 +96,6 @@ scrollback_lines = 5000                   # kept in memory per session; older li
 # restore_on_start = "resume"             # relaunch every dormant agent when the daemon starts
 # machine_name = "studio"                 # what the web page's title and the TUI call this computer (default: its host name)
 # hold_wsl = false                        # inside WSL, let WSL stop ptyro ~15 s after the last terminal closes (default: keep it running)
-
-[summaries]
-enabled = true                            # a `≈` line after each agent turn, from a small model (default off)
-# daily_cap = 200                         # per profile, per day
-# command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]
-                                          # any command: the prompt on stdin, the summary on stdout;
-                                          # it runs on the session's profile account, with secrets redacted
 
 [recorder]
 enabled = true                            # record every session's output (per agent: record = false)

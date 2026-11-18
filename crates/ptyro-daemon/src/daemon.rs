@@ -915,18 +915,13 @@ impl Daemon {
             }
             None => spec.prompt.clone(),
         };
-        if spec.structured && agent.is_none() {
-            return Err(Error::invalid(
-                "structured mode drives an agent over its protocol: pick an agent",
-            ));
-        }
         let prompt_text = prompt.clone();
         let start = agent.map(|name| crate::launch::AgentStart {
             name,
-            resume: spec.resume.clone(),
+            resume: None,
             prompt,
             command: None,
-            structured: spec.structured,
+            structured: false,
             params: None,
             fork: false,
         });
@@ -968,7 +963,7 @@ impl Daemon {
         Ok(s)
     }
 
-    /// `Retitle` (UX1.24): a session's title, or a worktree's. Free text, at most 120
+    /// `Retitle` (UX1.24, `rename --title`): a session's title, or a worktree's. Free text, at most 120
     /// characters; empty or `None` clears it (a session then shows its window title).
     fn retitle(&self, addr: &str, title: Option<String>, worktree: bool) -> Result<Reply, Error> {
         let title = title.map(|t| ptyro_core::session::brief(&t, 120)).filter(|t| !t.is_empty());
@@ -1008,7 +1003,8 @@ impl Daemon {
             resume: None,
             prompt: None,
             command: None,
-            structured: meta.structured.is_some(),
+            // Only a chat's engine stays structured (see `resume`).
+            structured: meta.structured.is_some() && meta.place.chat.is_some(),
             params: None,
             fork: false,
         });
@@ -1428,22 +1424,6 @@ impl Daemon {
             Request::ProjectConfig { addr } => {
                 Ok(Reply::Text { text: self.project_config(&addr)? })
             }
-            // Reading a recording and running the emulator over it is work for a thread of its
-            // own, not for the one every other request waits on.
-            Request::Replay { addr } => {
-                let me = Arc::clone(self);
-                let replay = tokio::task::spawn_blocking(move || me.replay(&addr))
-                    .await
-                    .map_err(|e| Error::internal(e.to_string()))??;
-                Ok(Reply::Replay { replay })
-            }
-            Request::Export { addr, format } => {
-                let me = Arc::clone(self);
-                let text = tokio::task::spawn_blocking(move || me.export(&addr, &format))
-                    .await
-                    .map_err(|e| Error::internal(e.to_string()))??;
-                Ok(Reply::Text { text })
-            }
             Request::SelfTest { adapter } => {
                 Ok(Reply::SelfTest { result: self.self_test(&adapter).await? })
             }
@@ -1474,18 +1454,11 @@ impl Daemon {
                 self.hook(&session, &adapter, &event, payload, env).await
             }
             Request::StatusLine { session, payload } => self.statusline(&session, &payload),
-            Request::Report { addr, state, kind, msg, progress } => {
-                self.report(&addr, &state, kind, msg, progress).await
-            }
             Request::StatusExplain { addr } => {
                 let s = self.resolve(&addr)?;
                 Ok(Reply::Explain { lines: self.explain(&s) })
             }
             Request::Resume { addr } => self.resume(&addr).await,
-            Request::Convert { addr, structured, force } => {
-                self.convert(&addr, structured, force).await
-            }
-            Request::Adopt { addr } => self.adopt(&addr).await,
             req @ (Request::ShellMove { .. }
             | Request::ShellSplit { .. }
             | Request::ShellJoin { .. }
@@ -1497,16 +1470,6 @@ impl Daemon {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
             }
             Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
-            Request::Summarize { addr } => self.summarize_now(&addr).await,
-            Request::ChatGet { addr } => {
-                let s = self.resolve(&addr)?;
-                let st = s.structured.as_ref().ok_or_else(|| {
-                    Error::invalid(
-                        "not a structured session: only one started structured has a transcript",
-                    )
-                })?;
-                Ok(Reply::Transcript { items: st.chat.locked().items.clone() })
-            }
             Request::Hibernate { addr } => self.hibernate(&addr).await,
             Request::ClearAttention { addr } => {
                 let s = self.resolve(&addr)?;

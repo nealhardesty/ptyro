@@ -1296,7 +1296,6 @@ pub fn session_wizard(
         base: form.opt("base"),
         no_setup: form.get("setup").is_empty(),
         no_fetch: form.get("fetch").is_empty(),
-        structured: !form.get("structured").is_empty(),
         command,
         title: form.opt("title"),
         project: match &target {
@@ -1419,13 +1418,7 @@ impl App {
                 "Its name, a new worktree's too",
             )
             .with(w.name.clone().unwrap_or_default()),
-            Field::text("title", "Title", "(the task)", "What the sidebar says it is"),
-            Field::yes_no(
-                "structured",
-                "Structured",
-                false,
-                "The chat view: its tool calls shown as they happen",
-            ),
+            Field::text("title", "Title", "(the task)", "What people read: the sidebar says it"),
             Field::yes_no(
                 "setup",
                 "Setup script",

@@ -46,9 +46,8 @@ action by name.
 | `a` | jump to the session that needs you most (blocked first) |
 | `p` | peek at the session that needs you most (else this one) and answer it without switching |
 | `b` | broadcast one prompt into every session marked with `Space` in the sidebar |
-| `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
-| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones, `i` only the imported ones (again: every chat), `I` imports your agents' own histories (asks first, and takes `chat import`'s flags: `codex --since 30d --profile work --dry-run`; ⏎ alone imports everything) |
+| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` rename (its title), `e` export, `A` archived ones, `i` only the imported ones (again: every chat), `I` imports your agents' own histories (asks first, and takes `chat import`'s flags: `codex --since 30d --profile work --dry-run`; ⏎ alone imports everything) |
 | `C-g` | search every chat: the chat list, every workspace and machine, typing its search |
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
@@ -85,7 +84,7 @@ action by name.
 | `]` | paste what you last copied |
 | `x` / `X` | stop the session: an agent's turn is interrupted and it gets a moment to exit, then it's signalled (an exited one is removed instead; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now (SIGKILL). Both ask first unless `[ui] confirm_kill = false`, and both keep it listed; Stop and remove (`session.remove`, its row menu) forgets it too. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
-| `,` | rename the session (its address); `C-t` in the dialog edits its title instead |
+| `,` | rename the session: its name, the address you type to find it; `C-t` in the dialog edits its title instead, what people read |
 | `=` | take control: size the session to your pane (when another client resized it) |
 | `C-l` | redraw everything |
 
@@ -143,7 +142,6 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `c` | a new shell in SHELLS, in the selected row's directory (on a SHELLS heading: that workspace's) |
 | `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
 | `H` / `M` / `I` / `U` / `^` | home / mend what the health badge found / about ptyro / set up agents and tools / update them and ptyro |
-| `A` | adopt the Claude started by hand in this shell: a managed session, same conversation |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |
@@ -155,11 +153,6 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 In peek (`Ctrl-Q p`), with nothing typed and the session blocked, `y` allows a permission
 prompt, `a` always allows, `n` denies. Or type a reply and press `⏎`. `⏎` with nothing typed
 switches to the session; `Esc` closes peek.
-
-In a structured session's chat view, type into the pane and press `⏎` to send; `Shift-⏎` or
-`Alt-⏎` adds a line, `Esc` clears the draft, `PageUp` / `PageDown` scroll. On a permission card,
-with nothing typed: `a`, `y`, `1` or `⏎` allows, `A` or `2` always allows, `d`, `n`, `3` or `Esc`
-denies. `Ctrl-C` clears the draft, or interrupts the turn when the draft is empty.
 
 ## Chats (`Ctrl-Q m`, `Ctrl-Q g`)
 
@@ -262,7 +255,7 @@ current project's scripts; each line shows its key, so it teaches them. Actions 
 key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
-`session.mute`, `session.summarize` (a `≈` line from a small model), `notify.test`,
+`session.mute`, `notify.test`,
 `theme.next`, `config.edit`, `help.tour`.
 
 ## Other overlays

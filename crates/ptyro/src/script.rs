@@ -710,7 +710,6 @@ mod tests {
             last_reply: None,
             command: None,
             inner_agent: None,
-            summary: None,
             window_title: None,
             quick: false,
             model: None,

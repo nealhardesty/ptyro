@@ -134,7 +134,6 @@ Use these commands; they print JSON with `--json`:
 - `ptyro wait NAME --for idle --timeout 30m`: wait for its turn to end (exit 7 on timeout, 5 if it exited).
 - `ptyro read NAME --scrollback 200`: read what it printed.
 - `ptyro send NAME "TEXT" --wait-ready --wait`: give it the next instruction and wait for the turn.
-- `ptyro report --state working --msg "what you're doing"`: tell the human what you're doing.
 - `ptyro checkpoint ls`: your worktree after each of your turns (the human can restore one).
 
 Rules: never `ptyro stop`, `kill` or `rm` sessions, or `ptyro wt rm` worktrees, you didn't create; never answer

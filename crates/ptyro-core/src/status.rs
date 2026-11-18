@@ -72,7 +72,7 @@ pub enum SignalSource {
     /// A structured side channel the daemon holds (OpenCode SSE, Codex app-server).
     Sidecar,
     Osc,
-    /// `ptyro report` from inside the session (self report; herdr-compatible).
+    /// `ptyro report` from inside the session (removed 2026-11-17; kept so old events decode).
     Report,
     Title,
     /// A dialog recognised on screen (trust, login) before any hook spoke.

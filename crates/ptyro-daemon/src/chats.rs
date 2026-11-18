@@ -2910,19 +2910,15 @@ impl Daemon {
         answer: &str,
     ) -> Result<String, Error> {
         let config = self.config();
-        let argv = if config.chat.title_command.is_empty() {
-            config.summaries.command.clone()
-        } else {
-            config.chat.title_command.clone()
-        };
+        let argv = config.chat.title_command.clone();
         if argv.is_empty() {
             return Err(Error::invalid("no title command"));
         }
         // Titles and `chat find` count together, per profile per day (SPEC §22.13).
         self.count_cap(&format!("chat-cap:{profile}"), config.chat.daily_cap, "[chat] daily_cap")?;
         let plan = self.profile_plan(profile).await?;
-        let secrets = crate::summary::secrets(&plan);
-        let prompt = crate::summary::redact(
+        let secrets = crate::redact::secrets(&plan);
+        let prompt = crate::redact::redact(
             &format!(
                 "{TITLE_PROMPT}\n\n[user] {}\n[assistant] {}",
                 chats::clip(user, 2000),
@@ -2948,7 +2944,7 @@ impl Daemon {
         // Claude's JSON `result`, else the plain line it printed (a lone quoted line parses as
         // a JSON string, which has no `result`).
         let raw = String::from_utf8_lossy(&out.1).into_owned();
-        let text = crate::summary::parse(&raw)
+        let text = crate::redact::parse(&raw)
             .or(Some(raw))
             .map(|t| chats::clean_title(&t))
             .filter(|t| out.0 && !t.is_empty());

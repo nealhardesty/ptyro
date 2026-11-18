@@ -168,15 +168,12 @@ pub fn needed(req: &Request) -> Scope {
         | Agents
         | Editors
         | ProjectConfig { .. }
-        | Replay { .. }
-        | Export { .. }
         | Web { on: None, .. }
         | LoadView { .. }
         | PushKey
         | PushSubscribe { .. }
         | PushUnsubscribe { .. }
         | PushTest
-        | ChatGet { .. }
         | MachineList
         // What's installed on the machine, and what installing would run (BOOT1).
         | SetupPlan { .. }
@@ -196,11 +193,8 @@ pub fn needed(req: &Request) -> Scope {
         | Remove { .. }
         | Restart { .. }
         | Rename { .. }
-        | Convert { .. }
         | Retitle { .. }
-        | Summarize { .. }
-        | WorktreeOpen { .. }
-        | Adopt { .. } => Scope::Control,
+        | WorktreeOpen { .. } => Scope::Control,
         // Finding one reads; starting one is a shell: full.
         QuickShell { create: false, .. } => Scope::Read,
         // A configured agent (its command comes from the user's config) is control; any other
@@ -223,7 +217,7 @@ pub fn needed(req: &Request) -> Scope {
         ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
-        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
     }
 }
 
@@ -769,7 +763,6 @@ mod tests {
         assert_eq!(needed(&Request::Kill { addr: "x".into(), signal: None }), Scope::Control);
         assert_eq!(needed(&Request::Remove { addr: "x".into(), stop: false }), Scope::Control);
         assert_eq!(needed(&Request::Agents), Scope::Read);
-        assert_eq!(needed(&Request::Replay { addr: "x".into() }), Scope::Read);
         assert_eq!(needed(&Request::Editors), Scope::Read);
         assert_eq!(needed(&Request::Web { on: None, via: None }), Scope::Read);
         assert_eq!(needed(&Request::Web { on: Some(true), via: None }), Scope::Full);

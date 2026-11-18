@@ -31,8 +31,8 @@ so parsing never depends on where reads happened to split.
 - `--expect TEXT` makes the run fail when TEXT is missing from the final screen.
 
 The format is raw bytes only; the size lives in the file name. Any session ptyro recorded can
-become one: `ptyro export <session> --format ptylog -o crates/ptyro-term/tests/fixtures/<name>.<COLS>x<ROWS>.ptylog`
-writes its output bytes (the recording itself, `pty.log` in the session's data directory, also
+become one: `target/debug/ptyro-headless --from-recording <data dir>/sessions/<session id> --record crates/ptyro-term/tests/fixtures/<name>.<COLS>x<ROWS>.ptylog`
+(`make build` builds it; `ptyro ls --all --json` gives a session's id) writes its output bytes (the recording itself, `pty.log` in the session's data directory, also
 keeps timing and resizes; SPEC §7.6). **Review a capture before committing it.** Agent
 screens show account names, plan names, paths and prompt text, so record in a scratch directory
 with a throwaway prompt. Gemini's API-key dialog pre-fills the key in clear text (SPEC §8.5),

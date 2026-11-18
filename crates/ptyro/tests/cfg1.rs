@@ -169,7 +169,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
     assert!(ptyro(&["config", "set", "discover.roots", "~/a", "~/b"]).status.success());
     assert!(file().contains("roots = [\"~/a\", \"~/b\"]"), "{}", file());
     assert!(
-        ptyro(&["config", "set", "summaries.command", "--", "claude", "-p", "--model", "haiku"])
+        ptyro(&["config", "set", "chat.title_command", "--", "claude", "-p", "--model", "haiku"])
             .status
             .success()
     );

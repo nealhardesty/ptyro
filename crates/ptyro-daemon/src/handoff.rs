@@ -786,6 +786,20 @@ mod tests {
         assert_eq!(img.sessions[0].meta.name, "build");
     }
 
+    /// An older daemon's session that had a summary and was started structured (both removed
+    /// 2026-11-17) comes across; it keeps running as it is, and resumes in its own UI later.
+    #[test]
+    fn a_summarized_structured_session_from_an_older_daemon_comes_across() {
+        let mut v = as_value(&sample());
+        let meta = &mut v["sessions"][0]["meta"];
+        meta["summary"] = serde_json::json!({ "text": "fixing it", "turn": 2, "at_ms": 1 });
+        meta["summarizing"] = true.into();
+        meta["structured"] = "stream-json".into();
+        let img = decode(&encode(&v)).expect("it decodes");
+        assert_eq!(img.sessions[0].meta.structured.as_deref(), Some("stream-json"));
+        assert!(img.sessions[0].meta.place.chat.is_none());
+    }
+
     /// What the code writes now is what the fixture holds: a change to `Image` that alters the
     /// bytes fails here, so it is made on purpose (regenerate, and keep decoding the old one).
     #[test]

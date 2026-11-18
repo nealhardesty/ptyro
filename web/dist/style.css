@@ -180,7 +180,7 @@ pre.block { margin: 0; padding: 10px; background: var(--panel); border: 1px soli
 .intro, .confirm { margin: 0; color: var(--muted); }
 [hidden] { display: none !important; }
 
-/* scrollback, events, replay */
+/* scrollback, events */
 .scroll-wrap { display: grid; gap: 6px; }
 .sl-note { color: var(--muted); font-size: 12px; }
 .scrollback { background: var(--term-bg); color: var(--term-fg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
@@ -190,9 +190,6 @@ pre.block { margin: 0; padding: 10px; background: var(--panel); border: 1px soli
 .timeline { display: grid; gap: 2px; }
 .tl { display: grid; grid-template-columns: 70px 120px 1fr; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .tl time { color: var(--muted); } .tl span { color: var(--muted); word-break: break-word; }
-main.replay { display: grid; gap: 8px; padding: 8px; }
-.replay-bar { display: flex; gap: 10px; align-items: center; } .replay-bar input { flex: 1; }
-.replay-time { color: var(--muted); font-size: 12px; min-width: 90px; text-align: right; }
 
 /* projects, worktrees */
 .chips { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; }

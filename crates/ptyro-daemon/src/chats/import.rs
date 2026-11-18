@@ -167,7 +167,7 @@ fn tool_title(name: &str, input: &Value) -> String {
     };
     let line = raw.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     // A command line can carry a credential (`curl -H "Authorization: Bearer …"`).
-    chats::clip(&crate::summary::redact(line, &[]), 120)
+    chats::clip(&crate::redact::redact(line, &[]), 120)
 }
 
 /// A tool's output as text (a string, or blocks with `text`).

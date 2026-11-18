@@ -1,41 +1,33 @@
 // Sessions (ROADMAP WEB1.2): start a task, and everything a session's row menu does in the TUI
-// (stop, restart, rename, hibernate, convert, adopt…), plus its scrollback, events, replay and
-// export, and talking to several at once.
+// (stop, restart, rename, hibernate…), plus its scrollback and events, and talking to several
+// at once.
 import { conn, host } from "./conn.js";
 import { css, F } from "./color.js";
 import { can, data, liveWorktrees, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
-import { Screen } from "./screen.js";
-import { actions, NAME_HINT, slugInput, ago, confirmsKill, argWords, ask, badge, Cache, confirm, download, enc, errText, form, go, h, menu, pending, row, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, confirm, enc, errText, form, go, h, menu, pending, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
-    "session.menu": "More for this session: stop, restart, rename, summarize…",
+    "session.menu": "More for this session: stop, restart, rename, hibernate…",
     "session.stop": "Stop the session: its agent's turn is interrupted and it gets a moment to exit, then it's signalled; it stays listed",
     "session.kill": "Kill the session now (SIGKILL, no chance to clean up); it stays listed",
     "session.remove": "Remove the session from the list: an ended one is forgotten, a running one is stopped first",
     "session.restart": "Start the session's command again, in place",
-    "session.rename": "Change the session's name (its address)",
+    "session.rename": "Rename the session: its name is its address (what you type to find it), its title is what people read",
     "session.tab": "Open this session in a terminal on the computer: a new Windows Terminal tab (when the computer is WSL)",
-    "session.retitle": "Change what the session is titled",
     "session.resume": "Bring a hibernated agent back into its conversation",
     "session.hibernate": "Stop an idle agent and keep it resumable",
-    "session.convert": "Switch an agent between its terminal and the chat view",
-    "session.adopt": "Make an agent started by hand in this shell a session of its own",
     "session.shell": "A shell in this session's worktree",
     "shell.here": "This worktree's quick terminal (its one shell), on a page of its own (the web has no split panes, so there is no drawer)",
     "shell.pane": "This worktree's quick terminal, on a page of its own; the same one the terminal's T and C-t show",
     "shell.new": "A new shell of its own in this worktree, besides its quick terminal (the terminal's !)",
-    "session.summarize": "Summarize what the session is doing",
     "session.explain": "Why the session has the status it has",
     "session.mute": "Silence the session's notifications for a while",
     "session.broadcast": "Type the same thing into several sessions",
     "session.scrollback": "The session's scrollback, searchable",
     "session.events": "The session's events: status changes, turns, exits",
-    "session.replay": "Play the session's recording back",
-    "session.export": "Save the session's recording as text or asciicast",
-    "session.history": "Sessions from earlier, with their recordings",
     "session.find": "Find a session by name, title, project, agent or status",
     "sidebar.filter": "Show every session, only the running ones (a live process), or only the active ones (an agent working or waiting for you, a shell running a command)",
 };
@@ -96,7 +88,7 @@ export function newTask(where, task) {
     base.setAttribute("list", "branch-names");
     const args = input(h("input", { placeholder: "e.g. --model opus", autocapitalize: "off", spellcheck: "false" }));
     const box = () => input(h("input", { type: "checkbox" }));
-    const structured = box(), noSetup = box(), noFetch = box();
+    const noSetup = box(), noFetch = box();
     const check = (c, label, hint) => h("label", { class: "field check" }, c, h("span", {}, label), h("small", {}, hint));
     const err = h("p", { class: "form-err" });
     const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
@@ -106,9 +98,8 @@ export function newTask(where, task) {
     const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name, h("small", {}, NAME_HINT));
     const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
     const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
-    const agentOnly = [argsRow, check(structured, "Chat mode (full tool-call visibility)", "Drive the agent over its structured protocol and show a chat view")];
     const freshOnly = [baseRow, check(noSetup, "Skip setup scripts", "Don't run the project's setup script"), check(noFetch, "Don't fetch", "Don't fetch the base first")];
-    const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, "The account it runs under")), h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What it's for, for people to read; its name stays its address")), ...freshOnly, ...agentOnly));
+    const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, "The account it runs under")), h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What people read: what it's for; its name stays its address")), ...freshOnly, argsRow));
     // The profiles of the machine the place is on.
     const machineOfPlace = () => {
         const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
@@ -133,8 +124,6 @@ export function newTask(where, task) {
         prompt.hidden = agent.value === "@shell" || agent.value === "@command";
         for (const r of freshOnly)
             r.hidden = !fresh;
-        for (const r of agentOnly)
-            r.hidden = !isAgent;
         // A new worktree's agent takes no extra arguments (`worktree_new` has none).
         argsRow.hidden = !isAgent || fresh;
         name.placeholder = fresh ? "a friendly name is picked for you" : "the session's name; a friendly one is picked for you";
@@ -190,21 +179,19 @@ export function newTask(where, task) {
         const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
         const prof = profile.value || undefined;
         const label = title.value.trim() || text || undefined;
-        // For an agent: chat mode (`ptyro new --structured`).
-        const agentBits = () => isAgent ? { structured: structured.checked } : {};
         try {
             if (kind === "w") {
                 const w = data.worktrees.get(id);
                 const spec = { worktree: w.id, cwd: "", profile: prof, name: name.value.trim() || undefined, title: label };
                 if (isAgent)
-                    Object.assign(spec, { agent: a, prompt: text, argv: argWords(args.value) }, agentBits());
+                    Object.assign(spec, { agent: a, prompt: text, argv: argWords(args.value) });
                 else if (a === "@command")
                     spec.command = command.value.trim();
                 s.close();
                 await startSession(spec);
             }
             else {
-                const wt = { project: id, name: name.value.trim() || undefined, agent: isAgent ? a : undefined, prompt: isAgent ? text : undefined, title: label, profile: prof, base: base.value.trim() || undefined, ...agentBits() };
+                const wt = { project: id, name: name.value.trim() || undefined, agent: isAgent ? a : undefined, prompt: isAgent ? text : undefined, title: label, profile: prof, base: base.value.trim() || undefined };
                 if (noSetup.checked)
                     wt.setup = false;
                 if (noFetch.checked)
@@ -251,16 +238,28 @@ export function newTask(where, task) {
 // ── a session's menu ────────────────────────────────────────────────────────────────────────
 const notice = (r, ok) => { if (r)
     ui.toast(ok); };
+/// One sheet for both: its name (the address) and its title (what people read).
 export function renameSession(s) {
     // Another machine's session is renamed there, by the name it has there (MM1.B).
-    form("Rename", [{ key: "name", label: "Name", value: splitMachine(s.name)[1], required: true, slug: "name", hint: `Its address: what you type to find it, unique in its project. ${NAME_HINT}` }], "Rename", async (v) => {
-        await conn.request({ t: "rename", addr: addr(s), name: v.name });
-        ui.toast(`Renamed to ${v.name}`);
-    });
-}
-export function retitleSession(s) {
-    form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty clears it." }], "Save", async (v) => {
-        await conn.request({ t: "retitle", addr: addr(s), title: v.title || null, worktree: false });
+    const bare = splitMachine(s.name)[1];
+    form("Rename", [
+        { key: "name", label: "Name", value: bare, required: true, slug: "name", hint: `Its address: what you type to find it, unique in its project. ${NAME_HINT}` },
+        { key: "title", label: "Title", value: s.title ?? "", hint: "What people read: what it's for. Empty clears it." },
+    ], "Save", async (v) => {
+        const name = String(v.name ?? "").trim(), title = String(v.title ?? "").trim();
+        const said = [];
+        let at = addr(s);
+        if (name && name !== bare) {
+            const r = await conn.request({ t: "rename", addr: at, name });
+            at = r?.info?.id ?? at;
+            said.push(`Renamed to ${name}`);
+        }
+        if (title !== (s.title ?? "")) {
+            await conn.request({ t: "retitle", addr: at, title: title || null, worktree: false });
+            said.push(title ? "title set" : "title cleared");
+        }
+        if (said.length)
+            ui.toast(said.join(", ").replace(/^t/, "T"));
     });
 }
 export function muteSession(s) {
@@ -279,16 +278,6 @@ function explainSession(s) {
         const lines = r.lines.map((l) => `${new Date(l.at_ms).toLocaleTimeString()}  ${l.applied ? "✓" : "·"} ${l.source}: ${l.signal}\n      ${l.reason}`);
         textSheet(`Why ${s.name} is ${s.status ? statusWord(s.status.status) : "like this"}`, lines.join("\n") || "No decisions recorded yet.");
     }, (e) => ui.toast(errText(e)));
-}
-async function summarize(s) {
-    const r = await ask({ t: "summarize", addr: addr(s) });
-    if (r)
-        textSheet(`${s.name}, in a line`, r.info?.summary?.text ?? "(no summary: set `[summaries] command` in your config)");
-}
-// Mid-turn, the daemon refuses with a way through (SPEC §6.6), which `ask` offers.
-async function convert(s) {
-    const to = !s.structured;
-    await ask({ t: "convert", addr: addr(s), structured: to, force: false }, to ? "Now a chat" : "Now a terminal");
 }
 /// `!` (UX3.4): a new shell of its own in `w`, not its quick terminal.
 export async function newShell(w) {
@@ -361,10 +350,7 @@ export function sessionMenu(s) {
     const items = [
         dormant && { title: tip("session.resume"), label: "Resume", hint: "Back into its conversation", run: async () => notice(await ask({ t: "resume", addr: addr(s) }), "Resumed") },
         ended && { title: tip("session.restart"), label: "Restart", hint: "Run its command again, in place", run: async () => notice(await ask({ t: "restart", addr: addr(s) }), "Restarted") },
-        agentLive && { title: tip("session.convert"), label: s.structured ? "Show the terminal UI" : "Show as a chat", hint: "Continues the same conversation", run: () => convert(s) },
-        live(s) && s.inner_agent === "claude" && { title: tip("session.adopt"), label: "Adopt the agent running here", hint: "Manage it like one started by ptyro", run: async () => notice(await ask({ t: "adopt", addr: addr(s) }), "Adopted") },
         { title: tip("session.explain"), label: "Why this status?", run: () => explainSession(s) },
-        live(s) && { title: tip("session.summarize"), label: "Summarize", run: () => void summarize(s) },
         agentLive && { title: tip("session.hibernate"), label: "Hibernate", hint: "Stop it, keep it resumable", run: async () => notice(await ask({ t: "hibernate", addr: addr(s) }), "Hibernated") },
         agentLive && { title: tip("session.mute"), label: "Mute notifications…", run: () => muteSession(s) },
         w && { label: "Open its worktree", hint: `${w.project_slug}/${w.name}`, run: () => go(`#/wt/${enc(w.id)}`) },
@@ -372,25 +358,14 @@ export function sessionMenu(s) {
         s.worktree && { title: tip("session.shell"), label: "Its worktree's quick terminal", hint: "On a page of its own", run: () => void openQuickShell(w) },
         { title: tip("session.scrollback"), label: "Scrollback", hint: "Everything it printed, searchable", run: () => go(`#/scroll/${enc(s.id)}`) },
         { title: tip("session.events"), label: "Events", run: () => go(`#/events/${enc(s.id)}`) },
-        { title: tip("session.replay"), label: "Replay", hint: "Its recording, played back", run: () => go(`#/replay/${enc(s.id)}`) },
-        { title: tip("session.export"), label: "Save its recording…", run: () => exportSession(s.id, s.name) },
         can("full") && { title: tip("session.tab"), label: "Open on the computer", hint: "A new Windows Terminal tab there", run: () => void openOnComputer(s) },
         ...shellMenuItems(s),
         { title: tip("session.rename"), label: "Rename…", run: () => renameSession(s) },
-        { title: tip("session.retitle"), label: "Set title…", run: () => retitleSession(s) },
         live(s) && { title: tip("session.stop"), label: "Stop", danger: true, hint: "Interrupt it, then end it; it stays listed", run: () => end(s, "stop") },
         live(s) && { title: tip("session.kill"), label: "Kill", danger: true, hint: "SIGKILL now; it stays listed", run: () => end(s, "kill") },
         { title: tip("session.remove"), label: live(s) ? "Stop and remove" : "Remove", danger: true, hint: live(s) ? "Stop it, then forget it" : "Forget it", run: () => void remove(s) },
     ];
     menu(s.name, items);
-}
-export function exportSession(id, name) {
-    menu(`Save ${name}'s recording`, [
-        { label: "Text", hint: "What the screen ended up showing, with its scrollback", run: async () => { const r = await ask({ t: "export", addr: id, format: "text" }); if (r)
-                download(`${name}.txt`, r.text); } },
-        { label: "asciicast", hint: "Plays in asciinema", run: async () => { const r = await ask({ t: "export", addr: id, format: "asciicast" }); if (r)
-                download(`${name}.cast`, r.text, "application/x-asciicast"); } },
-    ]);
 }
 // ── several at once ─────────────────────────────────────────────────────────────────────────
 /// Sessions marked in the list for `broadcast`.
@@ -495,129 +470,6 @@ function eventsView(id) {
     const s = sessionsRef().get(id);
     return h("div", { class: "page" }, ui.header(s ? `${s.name} · events` : "Events", `#/s/${enc(id)}`, h("button", { class: "icon", onclick: () => events.reload(id) }, "↻")), h("main", { class: "stack", title: tip("session.events") }, body));
 }
-const replays = new Cache((id) => conn.request({ t: "replay", addr: id }).then((r) => r.replay));
-let player = null;
-/// Draw the replay's current step: its frames are applied from the start (cheap: they're deltas).
-function seek(p, to) {
-    const steps = p.doc.steps;
-    to = Math.max(0, Math.min(steps.length - 1, to));
-    if (to < p.at || p.at < 0) {
-        p.screen = new Screen();
-        p.at = -1;
-    }
-    for (let i = p.at + 1; i <= to; i++)
-        p.screen.apply({ session: "replay", seq: i, keyframe: steps[i].keyframe, delta: steps[i].delta });
-    p.at = to;
-    p.slider.value = String(to);
-    p.label.textContent = `${(steps[to].at_ms / 1000).toFixed(1)}s / ${(p.doc.duration_ms / 1000).toFixed(1)}s`;
-    drawReplay(p);
-}
-function drawReplay(p) {
-    // The live-screen painter is the app's; a replay draws the cell grid itself, simply.
-    const s = p.screen, c = p.canvas, ctx = c.getContext("2d");
-    if (!ctx)
-        return;
-    const cs = getComputedStyle(document.documentElement);
-    const FG = cs.getPropertyValue("--term-fg").trim() || "#e6edf3", BG = cs.getPropertyValue("--term-bg").trim() || "#0d1117";
-    const family = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    const wrap = c.parentElement;
-    const dpr = window.devicePixelRatio || 1;
-    ctx.font = `100px ${family}`;
-    const ratio = ctx.measureText("M").width / 100;
-    const px = Math.max(5, Math.min(15, (wrap.clientWidth - 8 || 360) / (s.size.cols * ratio)));
-    const cw = px * ratio, ch = Math.round(px * 1.25);
-    const w = Math.ceil(cw * s.size.cols), hh = ch * s.size.rows;
-    c.style.width = `${w}px`;
-    c.style.height = `${hh}px`;
-    if (c.width !== Math.ceil(w * dpr))
-        c.width = Math.ceil(w * dpr);
-    if (c.height !== Math.ceil(hh * dpr))
-        c.height = Math.ceil(hh * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, w, hh);
-    ctx.textBaseline = "top";
-    s.rows.forEach((row, y) => row.forEach((cell, x) => {
-        if (cell.spacer)
-            return;
-        const st = s.styles.get(cell.s) ?? {};
-        const flags = st.flags ?? 0;
-        let fg = css(st.fg, FG), bg = css(st.bg, BG);
-        if (flags & F.INVERSE)
-            [fg, bg] = [bg, fg];
-        if (bg !== BG) {
-            ctx.fillStyle = bg;
-            ctx.fillRect(x * cw, y * ch, cw * (cell.wide ? 2 : 1) + 0.5, ch);
-        }
-        if (!cell.t || cell.t === " ")
-            return;
-        ctx.font = `${flags & F.ITALIC ? "italic " : ""}${flags & F.BOLD ? "bold " : ""}${px}px ${family}`;
-        ctx.globalAlpha = flags & F.DIM ? 0.6 : 1;
-        ctx.fillStyle = fg;
-        ctx.fillText(cell.t, x * cw, y * ch + (ch - px) / 2);
-        ctx.globalAlpha = 1;
-    }));
-}
-/// Players that may have a timer running: leaving the page stops them.
-const players = new Set();
-window.addEventListener("hashchange", () => { for (const p of players) {
-    clearTimeout(p.timer);
-    p.playing = false;
-} players.clear(); });
-function play(p) {
-    clearTimeout(p.timer);
-    players.add(p);
-    if (!p.playing)
-        return;
-    const steps = p.doc.steps;
-    if (p.at >= steps.length - 1) {
-        p.playing = false;
-        ui.render();
-        return;
-    }
-    const gap = Math.min(1200, Math.max(30, (steps[p.at + 1].at_ms - steps[p.at].at_ms) / p.speed));
-    p.timer = window.setTimeout(() => { seek(p, p.at + 1); play(p); }, gap);
-}
-function replayView(id) {
-    const s = sessionsRef().get(id);
-    const doc = replays.get(id);
-    const failed = pending(replays, id, "Loading the recording…");
-    const head = ui.header(s ? `${s.name} · replay` : "Replay", `#/s/${enc(id)}`, h("button", { class: "icon", title: tip("session.export"), onclick: () => exportSession(id, s?.name ?? id) }, "⤓"));
-    if (failed)
-        return h("div", { class: "page" }, head, h("main", { class: "stack" }, failed));
-    if (!doc.steps.length)
-        return h("div", { class: "page" }, head, h("main", { class: "stack" }, h("p", { class: "empty" }, "That recording is empty.")));
-    if (!player || player.id !== id || player.doc !== doc) {
-        clearTimeout(player?.timer);
-        const canvas = h("canvas", { class: "term" });
-        const slider = h("input", { type: "range", min: 0, max: doc.steps.length - 1, value: 0, "aria-label": "Position" });
-        const p = { id, doc, screen: new Screen(), at: -1, playing: false, speed: 1, timer: 0, canvas, label: h("span", { class: "replay-time" }), slider };
-        slider.addEventListener("input", () => { p.playing = false; seek(p, Number(slider.value)); ui.render(); });
-        player = p;
-        requestAnimationFrame(() => seek(p, 0));
-    }
-    const p = player;
-    const toggle = h("button", { class: "primary", onclick: () => {
-            if (!p.playing && p.at >= doc.steps.length - 1)
-                seek(p, 0);
-            p.playing = !p.playing;
-            play(p);
-            ui.render();
-        } }, p.playing ? "Pause" : "Play");
-    const speeds = [1, 2, 4, 8].map((x) => h("button", { class: p.speed === x ? "on" : "", onclick: () => { p.speed = x; ui.render(); } }, `${x}×`));
-    return h("div", { class: "page" }, head, h("main", { class: "replay", title: tip("session.replay") }, h("div", { class: "term-wrap" }, p.canvas), h("div", { class: "replay-bar" }, toggle, p.slider, p.label), h("div", { class: "keys" }, ...speeds), doc.truncated ? h("p", { class: "empty" }, "This recording is long: the replay covers its start.") : null));
-}
-// ── earlier sessions ────────────────────────────────────────────────────────────────────────
-const history = new Cache(() => conn.request({ t: "history", limit: 200 }).then((r) => r.entries));
-function historyView() {
-    const entries = history.get("");
-    const body = pending(history, "") ?? (entries.length ? h("div", { class: "rows" }, ...entries.map((e) => row(h("span", {}, e.name, " ", badge(e.state.t ?? String(e.state), e.current ? "ok" : "")), `${e.kind} · ${e.argv.join(" ").slice(0, 80)}`, e.ended_ms ? ago(e.ended_ms) : "", { onclick: () => menu(e.name, [
-            e.current && { label: "Open", run: () => go(`#/s/${enc(e.id)}`) },
-            { label: "Replay", run: () => go(`#/replay/${enc(e.id)}`) },
-            { label: "Save its recording…", run: () => exportSession(e.id, e.name) },
-        ]) }))) : h("p", { class: "empty" }, "No earlier sessions."));
-    return h("div", { class: "page" }, ui.header("Earlier sessions", true), h("main", { class: "stack", title: tip("session.history") }, body));
-}
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
 let sessionsRef = () => new Map();
 /// Every session the app knows.
@@ -626,5 +478,3 @@ export const allSessions = () => sessionsRef();
 export function useSessions(get) { sessionsRef = get; setSessionNames((id) => get().get(id)?.name ?? id); }
 views.set("scroll", scrollView);
 views.set("events", eventsView);
-views.set("replay", replayView);
-views.set("history", () => historyView());

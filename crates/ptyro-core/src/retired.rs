@@ -103,6 +103,11 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "archived worktrees, and the script that ran when one was archived or removed, were removed",
     },
+    Retired {
+        key: "summaries",
+        removed: "2026-11-17",
+        why: "session summaries were removed; a chat's titler is `chat.title_command`",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
@@ -376,6 +381,18 @@ mod tests {
             .expect("an old repository file loads");
         assert_eq!(pc.scripts.setup.as_deref(), Some("make"));
         assert_eq!(pc.project.base.as_deref(), Some("origin/main"));
+    }
+
+    /// Summaries (2026-11-17) load and are reported; a chat's titler is its own setting now,
+    /// with the command the summaries had as its default.
+    #[test]
+    fn the_summaries_are_retired_and_the_chat_titler_stands_alone() {
+        let old = "[summaries]\nenabled = true\ndaily_cap = 50\ncommand = [\"my-llm\"]\n\n[chat]\ntitle = \"auto\"\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert_eq!(c.chat.title, "auto");
+        assert_eq!(found(old).into_iter().map(|f| f.key).collect::<Vec<_>>(), ["summaries"]);
+        assert!(find("summaries.command").is_some());
+        assert_eq!(crate::config::Config::default().chat.title_command[..2], ["claude", "-p"]);
     }
 
     #[test]

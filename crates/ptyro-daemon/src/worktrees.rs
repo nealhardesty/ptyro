@@ -441,7 +441,6 @@ impl Daemon {
                 workspace: Some(workspace.clone()),
                 confirmed: true,
                 prompt: spec.prompt.clone(),
-                structured: spec.structured,
                 ..SpawnSpec::default()
             };
             match (&setup, start) {

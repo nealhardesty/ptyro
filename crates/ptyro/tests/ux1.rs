@@ -371,48 +371,6 @@ async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() 
     .await;
 }
 
-/// UX1.4: adopting the Claude started by hand: it exits, and a managed session resumes the
-/// conversation it was in (its newest transcript for that directory).
-// Unix: the session's shell is a sh script written as `$SHELL` (Windows starts PowerShell).
-#[cfg(unix)]
-#[tokio::test]
-async fn adopting_a_hand_started_claude_resumes_its_conversation() {
-    let w = World::new("exec sleep 60");
-    let claude = w.home().join("claude");
-    named(&claude);
-    let work = w.home().join("work");
-    std::fs::create_dir_all(&work).unwrap();
-    let script = format!("exec {} fake-agent --no-probe --claude-screen", claude.display());
-    std::fs::write(w.home().join("fake-shell"), format!("#!/bin/sh\n{script}\n")).unwrap();
-    // Claude's transcript of the conversation it's in, where Claude keeps them.
-    let slug: String = work
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
-        .collect();
-    let transcripts = w.home().join(".claude/projects").join(slug);
-    std::fs::create_dir_all(&transcripts).unwrap();
-    std::fs::write(transcripts.join("conv-1234.jsonl"), "{}\n").unwrap();
-    let c = w.d.client().await.unwrap();
-    let sh = SpawnSpec {
-        cwd: work.clone(),
-        name: Some("sh".into()),
-        size: Some(TermSize::new(100, 20)),
-        ..SpawnSpec::default()
-    };
-    spawn(&c, sh).await;
-    wait_for(&c, "sh", "Claude in its foreground", |s| s.inner_agent.is_some()).await;
-    let adopted = match c.request(Request::Adopt { addr: "sh".into() }).await.unwrap() {
-        Reply::Session { info } => info,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(adopted.agent.as_deref(), Some("claude"));
-    assert_eq!(adopted.conversation.as_deref(), Some("conv-1234"));
-    w.d.wait_for_text(&c, &adopted.name, "session=conv-1234", WAIT).await.unwrap();
-    let screen = w.d.wait_for_text(&c, &adopted.name, "resumed=", WAIT).await.unwrap();
-    assert!(screen.contains("resumed=true"), "{screen}");
-}
-
 /// UX1.24: a name says what it's for and a title says it in words; both survive a restart.
 #[tokio::test]
 async fn sessions_and_worktrees_are_named_and_titled_after_what_they_are_for() {
@@ -730,52 +688,6 @@ async fn a_fresh_ptyro_opens_the_first_run_once() {
     assert!(!r.screen.contains("Welcome to ptyro"), "{}", r.screen);
 }
 
-/// UX1.3: with `[summaries]` on, a finished turn gets a line from the summarizer, which reads a
-/// redacted prompt on stdin; `Summarize` asks for one now.
-// Unix: the summarizer stand-in is a sh script that saves its stdin.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_finished_turn_is_summarized_in_a_line() {
-    let dir = tempfile::tempdir().unwrap();
-    let (prompt, script) = (dir.path().join("prompt.txt"), dir.path().join("summarizer"));
-    std::fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\ncat > '{}'\necho '{{\"type\":\"result\",\"is_error\":false,\"result\":\"Fixing the flaky login test.\"}}'\n",
-            prompt.display()
-        ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let extra = format!("[summaries]\nenabled = true\ncommand = ['{}']\n", script.display());
-    let w = World::with_config("exec sleep 30", &extra);
-    let c = w.d.client().await.unwrap();
-    let agent = SpawnSpec {
-        agent: Some("claude".into()),
-        cwd: std::env::temp_dir(),
-        name: Some("cl".into()),
-        size: Some(TermSize::new(100, 20)),
-        prompt: Some("work 0.3 fix login, key sk-ant-api03-abcdefghijklmnopqrst".into()),
-        ..SpawnSpec::default()
-    };
-    spawn(&c, agent).await;
-    let s = wait_for(&c, "cl", "summarized", |s| s.summary.is_some()).await;
-    let sm = s.summary.unwrap();
-    assert_eq!(sm.text, "Fixing the flaky login test.");
-    assert_eq!(sm.turn, s.turns);
-    let sent = std::fs::read_to_string(&prompt).unwrap();
-    assert!(sent.contains("Asked to: work 0.3 fix login"), "{sent}");
-    assert!(sent.contains("<redacted>") && !sent.contains("sk-ant-api03"), "{sent}");
-
-    // On request, too.
-    std::fs::remove_file(&prompt).unwrap();
-    match c.request(Request::Summarize { addr: "cl".into() }).await.unwrap() {
-        Reply::Session { info } => assert!(info.summary.is_some()),
-        other => panic!("{other:?}"),
-    }
-    assert!(prompt.exists());
-}
-
 async fn quick(
     c: &Client,
     worktree: Option<&str>,
@@ -858,13 +770,13 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
     assert_ne!(loose.id, shell.id);
     assert_eq!(loose.name, "myrepo.shell");
 
-    // Quiet: an error says nothing; an agent in it that waits for you does.
-    let report = |state: &str| Request::Report {
+    // Quiet: an error says nothing; an agent in it that waits for you does (a program's own
+    // OSC 7501 report, under its own id so the shell's prompt doesn't speak over it).
+    let report = |state: &str| Request::SendText {
         addr: shell.id.full(),
-        state: state.into(),
-        kind: None,
-        msg: None,
-        progress: None,
+        text: format!("printf '\\033]7501;state={state}:id=tool\\007'"),
+        enter: true,
+        wait_ready_ms: None,
     };
     c.request(report("error")).await.unwrap();
     let s = wait_for(&c, &shell.name, "errored", |s| {

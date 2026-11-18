@@ -998,21 +998,13 @@ fn session_details(
             _ => {}
         }
     }
-    // An agent started by hand in a shell: a guess off its screen, and what adopting gives.
-    if s.inner_agent.as_deref() == Some("claude") {
-        items.push(("◌", "by hand · A adopts it: hooks, resume".into(), t.dim));
-    } else if let Some(a) = &s.inner_agent {
+    // An agent started by hand in a shell: its status is a guess off its screen.
+    if let Some(a) = &s.inner_agent {
         items.push(("◌", format!("{a} by hand, status off its screen"), t.dim));
     }
     // No line for its title: the pane's header says it, and the sidebar stays compact.
     let working = s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Working);
-    // A small model's line on it (UX1.3): this turn's says what its last reply would.
-    let summary = s.summary.as_ref().filter(|_| !working && live);
-    if let Some(sm) = summary {
-        items.push(("≈", sm.text.clone(), t.text));
-    }
-    let summarized = summary.is_some_and(|sm| sm.turn >= s.turns);
-    if let Some(reply) = s.last_reply.as_ref().filter(|_| !working && !summarized) {
+    if let Some(reply) = s.last_reply.as_ref().filter(|_| !working) {
         items.push(("last", reply.clone(), t.dim));
     }
     if s.kind == SessionKind::Shell
@@ -1126,24 +1118,6 @@ fn draw_panes(app: &App, f: &mut Frame<'_>) {
         };
         if let Some(c) = state.and_then(|p| p.copy.as_ref()) {
             paint::copy(c, f.buffer_mut(), inner, t, app.depth);
-            continue;
-        }
-        if app.chat_shown(id) {
-            let empty = crate::chat::ChatView::default();
-            let view = app.chats.get(&id).unwrap_or(&empty);
-            let c = crate::chat::draw(
-                view,
-                f.buffer_mut(),
-                inner,
-                &app.theme,
-                app.depth,
-                focused && app.overlay.is_none() && !app.prefix,
-            );
-            if c.is_some() {
-                cursor = c;
-            }
-            let found = crate::about::urls_in(f.buffer_mut(), inner);
-            app.links.borrow_mut().extend(found);
             continue;
         }
         let Some(cache) = app.caches.get(&id) else { continue };

@@ -1589,25 +1589,17 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
     // Only what's installed on this computer: at least the file manager, the default among them.
     assert!(e["names"].as_array().unwrap().iter().any(|n| *n == e["default"]), "{e}");
 
-    // A session's recording: exported as text and asciicast, replayed as screen frames. A
-    // control device stops what it started.
+    // A page from an older web app asks for what this ptyro no longer has (replaying and
+    // exporting recordings, removed 2026-11-17): it is told so, plainly. A control device stops
+    // what it started.
     w.ok(&["new", "-d", "-n", "rec", "--", "sh", "-c", "echo recorded-line; sleep 30"]);
     w.wait_screen("rec", "recorded-line");
-    let t = tab.ok(json!({ "t": "export", "addr": "rec", "format": "text" })).await;
-    assert!(t["text"].as_str().unwrap().contains("recorded-line"), "{t}");
-    let c = tab.ok(json!({ "t": "export", "addr": "rec", "format": "asciicast" })).await;
-    assert!(c["text"].as_str().unwrap().starts_with("{\"version\":2"), "{c}");
-    let o = tab.request(json!({ "t": "export", "addr": "rec", "format": "mp4" })).await;
-    assert_eq!(o["t"], "err", "{o}");
-    let r = tab.ok(json!({ "t": "replay", "addr": "rec" })).await;
-    let steps = r["replay"]["steps"].as_array().unwrap();
-    assert!(!steps.is_empty() && steps[0]["keyframe"] == true, "{r}");
-    assert!(steps[1..].iter().all(|s| s["keyframe"] == false));
-    let shown = serde_json::to_string(&r).unwrap();
-    assert!(
-        shown.contains("recorded-line") || shown.contains("recorded"),
-        "the replay carries the output"
-    );
+    for old in [json!({ "t": "replay", "addr": "rec" }), json!({ "t": "summarize", "addr": "rec" })]
+    {
+        let o = tab.request(old).await;
+        assert_eq!(o["t"], "err", "{o}");
+        assert!(o.to_string().contains("no longer has"), "{o}");
+    }
     tab.ok(json!({ "t": "kill", "addr": "rec", "signal": null })).await;
     tab.ok(json!({ "t": "remove", "addr": "rec" })).await;
 

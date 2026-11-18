@@ -53,7 +53,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.add", "Add a git repository to this workspace (discovered under discover.roots)"),
     a("project.trust", "Review and trust this project's scripts"),
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
-    a("worktree.retitle", "Change this worktree's title: what it's for, for people to read"),
     a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to remove it"),
     a("shell.new", "New shell: another one of its own in this worktree, full sized"),
     a(
@@ -129,16 +128,8 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("attention.next", "Jump to the session that needs you most (blocked first)"),
     a("peek", "Peek at a session's screen and what it wants; reply or answer inline"),
     a("session.resume", "Resume a dormant agent into its conversation"),
-    a(
-        "session.adopt",
-        "Adopt the Claude started by hand in this shell: a managed session, same conversation",
-    ),
     a("session.hibernate", "Stop an idle agent, keeping it resumable"),
     a("session.explain", "Why is it in this state? The status engine's recent decisions"),
-    a(
-        "session.summarize",
-        "Summarize it: what it's doing, in a line, from a small model ([summaries])",
-    ),
     a(
         "session.mute",
         "Mute this session's notifications for an hour (its row still shows when it wants you)",
@@ -160,8 +151,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Remove the session from the list: an ended one (a dormant one asks first: its conversation is forgotten), or stop a running one first",
     ),
     a("session.restart", "Run an exited session's command again"),
-    a("session.rename", "Rename the session: its address (C-t in the dialog: its title)"),
-    a("session.retitle", "Change the session's title: what it's about, for people to read"),
+    a(
+        "session.rename",
+        "Rename the session: its name, its address (C-t in the dialog: its title, what people read)",
+    ),
     a("session.take_control", "Take control: resize the session to this pane"),
     a("focus.toggle", "Move focus between the sidebar and the pane"),
     a("sidebar.toggle", "Show or hide the sidebar"),
@@ -246,7 +239,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("copy.page_up", "Copy mode, one page up"),
     a("paste.buffer", "Paste the last yanked text into the session"),
     a("view.redraw", "Redraw everything (fresh keyframes)"),
-    a("view.chat", "Structured session: chat view ⇄ terminal view"),
     a("theme.next", "Switch to the next theme"),
     a(
         "config.panel",
@@ -279,7 +271,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Chats: this workspace's (Tab: every one), searchable; open, pin, archive, delete",
     ),
     a("chat.open", "Open this chat"),
-    a("chat.retitle", "Change this chat's title (empty clears it)"),
+    a("chat.rename", "Rename this chat: its title, what people read (empty clears it)"),
     a("chat.autotitle", "A new automatic title for this chat, made from the conversation"),
     a("chat.pin", "Pin this chat to the top of CHATS, or unpin it"),
     a(
@@ -353,12 +345,6 @@ pub const ACTIONS: &[ActionSpec] = &[
         "The chat list: only the chats that need you, then the working, unread, pinned ones, then all",
     ),
     // ── UX1.21: everything else the CLI does, in the TUI ──
-    a(
-        "session.convert",
-        "Switch this agent between its own terminal UI and structured mode, same conversation",
-    ),
-    a("session.replay", "Play this session's recording back, in a split"),
-    a("session.export", "Export this session's recording (asciicast, text or a test fixture)"),
     a("session.events", "What happened in this session: its last events, in a split"),
     a("checkpoint.list", "This session's checkpoints: its worktree after every turn"),
     a("checkpoint.diff", "What changed since a checkpoint"),
@@ -377,7 +363,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.workspaces", "Which workspaces this project is in: tick them"),
     a(
         "worktree.rename",
-        "Rename this worktree: its address (its branch and directory stay; C-t: its title)",
+        "Rename this worktree: its name, the address (branch and directory stay); C-t: its title, what people read (the main checkout has only a title)",
     ),
     a("workspace.rename", "Rename this workspace"),
     a(
@@ -543,7 +529,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "PageUp", "copy.page_up"),
     (Table::Prefix, "]", "paste.buffer"),
     (Table::Prefix, "C-l", "view.redraw"),
-    (Table::Prefix, "t", "view.chat"),
     (Table::Nav, "j", "nav.down"),
     (Table::Nav, "Down", "nav.down"),
     (Table::Nav, "k", "nav.up"),
@@ -593,7 +578,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "^", "app.update"),
     (Table::Nav, "C", "config.panel"),
     (Table::Nav, "P", "project.add"),
-    (Table::Nav, "A", "session.adopt"),
     (Table::Nav, ">", "sidebar.wider"),
     (Table::Nav, "<", "sidebar.narrower"),
     (Table::Nav, "v", "pane.split_right"),
@@ -618,7 +602,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::ChatList, "*", "chat.pin"),
     (Table::ChatList, "x", "chat.archive"),
     (Table::ChatList, "X", "chat.delete"),
-    (Table::ChatList, ",", "chat.retitle"),
+    (Table::ChatList, ",", "chat.rename"),
     (Table::ChatList, "f", "chat.fork"),
     (Table::ChatList, "e", "chat.export"),
     (Table::ChatList, "A", "chat.list_archived"),

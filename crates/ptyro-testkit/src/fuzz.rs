@@ -164,7 +164,6 @@ pub fn record(data: &[u8]) {
     if std::fs::write(dir.join("pty.log"), &file).is_ok()
         && let Ok(recs) = ptyro_term::record::read_dir(&dir)
     {
-        let _ = ptyro_term::record::asciicast(&recs, "fuzz");
         let mut e = AlacrittyEmulator::new(TermSize::new(40, 10), 100);
         // Cap the replayed size: a fuzzed resize record may ask for anything.
         let recs: Vec<_> = recs

@@ -172,7 +172,7 @@ reset: build ## Start ptyro over: stop it, remove its worktrees, service, config
 verify-claude: build ## Check the Claude adapter against the real Claude Code here (one tiny turn)
 	scripts/verify-claude.sh
 
-verify-structured: build ## Check structured mode against the real agents here (one tiny Claude turn; Codex/Gemini handshakes)
+verify-structured: build ## Check structured mode, what chats run on, against the real agents here (one tiny chat each)
 	scripts/verify-structured.sh
 
 spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, and an index over NODES (default 100000) chat nodes

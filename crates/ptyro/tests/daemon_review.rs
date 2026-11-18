@@ -1,5 +1,5 @@
 //! End-to-end checks for what the full-codebase review found in the daemon: a program in one
-//! session can't report for another, a recording is found by session id and never by path.
+//! session can't report for another.
 
 use std::time::{Duration, Instant};
 
@@ -42,7 +42,7 @@ fn wait_for(path: &std::path::Path, what: &str) -> String {
     }
 }
 
-/// `ptyro report` from inside session A is A's own word; for session B it is refused, since it
+/// A hook from inside session A counts for A; one that names session B is refused, since it
 /// would forge what B's notifications and its sidebar row believe.
 #[tokio::test]
 async fn a_program_reports_only_for_its_own_session() {
@@ -52,44 +52,31 @@ async fn a_program_reports_only_for_its_own_session() {
     std::fs::create_dir_all(&out).unwrap();
     let home = ptyro_core::os::canonicalize(d.home.path()).unwrap();
     let b = shell(&c, &home, "bee", "sleep 120".into()).await;
-    let (o1, o2) = (out.join("other"), out.join("own"));
-    shell(
+    let done = out.join("done");
+    let a = shell(
         &c,
         &home,
         "aye",
         format!(
-            "'{BIN}' report --state working --session {b} > '{o1}' 2>&1; echo exit=$? >> '{o1}'; \
-             '{BIN}' report --state working > '{o2}' 2>&1; echo exit=$? >> '{o2}'; sleep 120",
-            o1 = o1.display(),
-            o2 = o2.display()
+            "PTYRO_SESSION_ID={b} '{BIN}' hook claude Notification </dev/null; \
+             '{BIN}' hook claude Notification </dev/null; echo exit=$? > '{o}'; sleep 120",
+            o = done.display()
         ),
     )
     .await;
-    let other = wait_for(&o1, "reporting for another session");
-    assert!(
-        other.contains("can only report for its own session") && !other.contains("exit=0"),
-        "{other}"
-    );
-    let own = wait_for(&o2, "reporting for its own session");
-    assert!(own.contains("exit=0"), "its own word is taken: {own}");
-}
-
-/// A recording is looked up by a session's id; an address that is a path reads no directory.
-#[tokio::test]
-async fn a_recording_is_found_by_id_and_never_by_path() {
-    let d = TempDaemon::start(BIN).unwrap();
-    let c = d.client().await.unwrap();
-    // A directory outside `sessions/` that holds what looks like a recording.
-    let other = d.paths.data.join("elsewhere");
-    std::fs::create_dir_all(&other).unwrap();
-    std::fs::write(other.join("pty.log"), b"not yours").unwrap();
-    for addr in ["../elsewhere", "../../elsewhere", "/etc", "a/b", ""] {
-        let e = c.request(Request::Replay { addr: addr.into() }).await.unwrap_err();
-        assert!(e.to_string().contains("no recording"), "{addr:?}: {e}");
-        let e = c
-            .request(Request::Export { addr: addr.into(), format: "text".into() })
-            .await
-            .unwrap_err();
-        assert!(e.to_string().contains("no recording"), "{addr:?}: {e}");
+    wait_for(&done, "both hooks sent");
+    let hooks = |id: String| {
+        let c = &c;
+        async move {
+            let r = c.request(Request::Events { session: Some(id), limit: None }).await.unwrap();
+            let Reply::Events { events } = r else { panic!("{r:?}") };
+            events.iter().filter(|e| e.kind == "hook").count()
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while hooks(a.clone()).await == 0 {
+        assert!(Instant::now() < deadline, "its own hook never counted");
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    assert_eq!(hooks(b).await, 0, "a hook for another session is refused");
 }

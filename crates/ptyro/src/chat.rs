@@ -288,13 +288,17 @@ pub enum ChatCmd {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
     },
-    /// Change a chat's title; no title clears it, --auto asks for a new automatic one
-    Retitle {
+    /// Rename a chat: a chat's name is its title, what people read (it is found by its handle,
+    /// `c:7f3k`); `--title ""` clears it, `--auto` asks for a new automatic one
+    Rename {
         #[arg(add = ArgValueCandidates::new(complete::chats))]
         chat: String,
         /// The new title (several words are joined)
-        #[arg(conflicts_with = "auto")]
-        title: Vec<String>,
+        #[arg(conflicts_with_all = ["auto", "title"], required_unless_present_any = ["auto", "title"])]
+        name: Vec<String>,
+        /// The new title, as the words do; `--title ""` clears it
+        #[arg(long, conflicts_with = "auto")]
+        title: Option<String>,
         /// A new automatic title, made from the conversation (`[chat] title`)
         #[arg(long)]
         auto: bool,
@@ -654,10 +658,11 @@ pub async fn run(ctx: &Ctx, cmd: Option<ChatCmd>, plain: NewArgs) -> Result<i32,
             done(ctx, Request::ChatAnswer { chat, decision, node }).await
         }
         ChatCmd::Stop { chat } => done(ctx, Request::ChatStop { chat }).await,
-        ChatCmd::Retitle { chat, title, auto, json } => {
+        ChatCmd::Rename { chat, name, title, auto, json } => {
+            let title = title.unwrap_or_else(|| name.join(" "));
             update_as(ctx, &chat, false, json, |r| {
                 if let Request::ChatUpdate { title: t, auto_title, .. } = r {
-                    *t = Some(title.join(" "));
+                    *t = Some(title);
                     *auto_title = auto;
                 }
             })

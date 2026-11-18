@@ -23,8 +23,7 @@ const ACTIONS = {
     "worktree.status": "Where the worktree stands: what is left to commit or push (✓ pushed when nothing is)",
     "worktree.run": "Run one of the project's scripts in this worktree",
     "worktree.open": "Open the worktree in an editor installed on the computer, its file manager, a terminal app there, or a new shell",
-    "worktree.rename": "Rename the worktree: its address (project/name). Its branch and its directory stay",
-    "worktree.retitle": "Change what the worktree is titled",
+    "worktree.rename": "Rename the worktree: its name is its address (its branch and directory stay), its title is what people read",
     "worktree.gc": "Stale worktrees: merged, abandoned or missing; remove them or keep them",
     "workspace.switch": "Show one workspace's projects, or all of them",
     "workspace.new": "A new workspace",
@@ -307,23 +306,34 @@ async function openIn(w) {
         { title: tipOf("shell.new"), label: "shell", hint: "A new shell in it", run: () => void newShell(w) },
     ]);
 }
+/// One sheet for both: its name (the address) and its title (what people read). The main
+/// checkout is always `@root`: only its title changes.
 function renameWorktree(w) {
-    form(`Rename ${w.name}`, [{ key: "name", label: "Name", value: w.name, required: true, slug: "name", hint: `Its address: ${w.project_slug}/name, unique in its project. Its branch and its directory stay, so what runs in it carries on. ${NAME_HINT}` }], "Rename", async (v) => {
-        if (v.name === w.name)
-            return;
-        await conn.request({ t: "worktree_rename", addr: w.id, name: v.name });
-        ui.toast(`Renamed to ${v.name}`);
+    const titleField = { key: "title", label: "Title", value: w.title ?? "", hint: "What people read: what it's for. Empty clears it." };
+    const fields = w.is_root ? [titleField] : [
+        { key: "name", label: "Name", value: w.name, required: true, slug: "name", hint: `Its address: ${w.project_slug}/name, unique in its project. Its branch and its directory stay, so what runs in it carries on. ${NAME_HINT}` },
+        titleField,
+    ];
+    form(w.is_root ? `Title of ${w.project_slug}/@root` : `Rename ${w.name}`, fields, "Save", async (v) => {
+        const name = String(v.name ?? "").trim(), title = String(v.title ?? "").trim();
+        const said = [];
+        if (!w.is_root && name && name !== w.name) {
+            await conn.request({ t: "worktree_rename", addr: w.id, name });
+            said.push(`Renamed to ${name}`);
+        }
+        if (title !== (w.title ?? "")) {
+            await conn.request({ t: "retitle", addr: w.id, title: title || null, worktree: true });
+            said.push(title ? "title set" : "title cleared");
+        }
+        if (said.length)
+            ui.toast(said.join(", ").replace(/^t/, "T"));
     });
-}
-function retitleWorktree(w) {
-    form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for, for people to read. Empty clears it." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: v.title || null, worktree: true }));
 }
 function worktreeMenu(w) {
     menu(w.title || w.name, [
         { title: tip("worktree.open"), label: "Open in…", hint: "An editor, the file manager, a terminal or a shell", run: () => openIn(w) },
         { title: tip("worktree.run"), label: "Run a script…", run: () => runScript(w) },
-        !w.is_root && { title: tip("worktree.retitle"), label: "Set title…", run: () => retitleWorktree(w) },
-        !w.is_root && { title: tip("worktree.rename"), label: "Rename…", hint: "Its address; the branch stays", run: () => renameWorktree(w) },
+        { title: tip("worktree.rename"), label: w.is_root ? "Set title…" : "Rename…", hint: w.is_root ? "What people read" : "Its name and title; the branch stays", run: () => renameWorktree(w) },
         !w.is_root && { title: tip("worktree.remove"), label: "Remove…", danger: true, run: () => remove(w) },
     ]);
 }
