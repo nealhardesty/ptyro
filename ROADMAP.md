@@ -2319,6 +2319,19 @@ web, with the parity rows.
   gutter without scrolling sideways on a phone.
 RESEARCH: R-UX-34's kept split marked built and removed.
 
+- [x] **The doctor backs up the config before a fix** — S. *From the owner, 2026-11-18: "Have
+  doctor back up config before fixes."* A doctor's fix that changes a config file (the pare-down's
+  retired keys, stale bindings, removed agents, an unknown theme) copies that file beside itself
+  first (`<file>.bak-YYYYMMDD-HHMMSS`, UTC, mode 0600, the newest five kept; a repository's kept
+  out of git), and the fix's result says where; if the copy fails, nothing is changed. New:
+  `ptyro doctor --fix`, which makes every such fix (before, the CLI only printed them). The TUI's
+  health list runs the command with a hidden `--backup`, the web's Health page sends
+  `settings.apply` with `backup: true`; an ordinary `ptyro config` change makes no copy (SPEC
+  §13.8). Also: `scripts/sandbox.sh` no longer writes the retired `[ports]`.
+  *Done (2026-11-18):* `Layer::backup` and `apply_backed_up` in
+  `crates/ptyro-core/src/settings/ops.rs`; tests in `settings/tests.rs`, `tests/cfg1.rs`
+  (`doctor_fix_*`), `tests/m9.rs` (the settings panel's calls) and the TUI's `health.rs`.
+
 ## UX4 — Sidebar filter, quick shell stays (2026-10-30)
 
 The owner asked for a way to see just the running sessions and just the active ones, and for the

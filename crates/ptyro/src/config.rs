@@ -87,10 +87,20 @@ fn value_of(key: &str, words: &[String]) -> String {
     }
 }
 
-/// Make the change and say what happened and when it applies.
-fn change(layer: &Layer, op: &Op, what: &str) -> Result<(), Error> {
-    let done = settings::apply(layer, op, &lookups(), &extra_for(layer)).map_err(invalid)?;
-    if done.changed {
+/// Make the change and say what happened and when it applies. `backup` (a doctor's fix): copy
+/// the file aside first, once: it is cleared when the copy is made, so a command's later changes
+/// don't copy it again.
+fn change(layer: &Layer, op: &Op, what: &str, backup: &mut bool) -> Result<(), Error> {
+    let done = if *backup {
+        settings::apply_backed_up(layer, op, &lookups(), &extra_for(layer))
+    } else {
+        settings::apply(layer, op, &lookups(), &extra_for(layer))
+    }
+    .map_err(invalid)?;
+    if let Some(copy) = &done.backup {
+        *backup = false;
+        eprintln!("{what} (the file as it was is in {})", copy.display());
+    } else if done.changed {
         eprintln!("{what}");
     }
     for n in &done.notes {
@@ -113,7 +123,7 @@ fn bound_key(layer: &Layer, key: &str) -> Option<String> {
 
 /// Make a key run `value` (`none` unbinds), or with `None` put it back to its default, saying
 /// what it ran before when that was something else.
-fn bind(layer: &Layer, name: &str, value: Option<String>) -> Result<i32, Error> {
+fn bind(layer: &Layer, name: &str, value: Option<String>, backup: &mut bool) -> Result<i32, Error> {
     let before = settings::view(layer, &lookups()).bindings;
     let was =
         value.as_ref().and_then(|v| settings::owner(&before, name).filter(|b| b.action != *v));
@@ -127,7 +137,7 @@ fn bind(layer: &Layer, name: &str, value: Option<String>) -> Result<i32, Error> 
     if let Some(b) = was {
         eprintln!("note: {name} ran {}: {}", b.action, b.help);
     }
-    change(layer, &Op::Bind { changes: vec![(name.to_owned(), value)] }, &what)?;
+    change(layer, &Op::Bind { changes: vec![(name.to_owned(), value)] }, &what, backup)?;
     Ok(0)
 }
 
@@ -174,17 +184,18 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
             let layer = layer(ctx, project.as_deref(), false).await?;
             get(&layer, &key, explain, json)
         }
-        ConfigCmd::Set { key, value, project, shared } => {
+        ConfigCmd::Set { key, value, project, shared, mut backup } => {
             let layer = layer(ctx, project.as_deref(), shared).await?;
             let v = value_of(&key, &value);
             if let Some(name) = bound_key(&layer, &key) {
-                return bind(&layer, &name, Some(v));
+                return bind(&layer, &name, Some(v), &mut backup);
             }
-            change(&layer, &Op::Set { key: key.clone(), value: v }, &format!("{key} is set"))?;
+            let op = Op::Set { key: key.clone(), value: v };
+            change(&layer, &op, &format!("{key} is set"), &mut backup)?;
             elsewhere(ctx, project.is_none(), &key, &format!("set {key} {}", value.join(" ")));
             Ok(0)
         }
-        ConfigCmd::Unset { keys, project, shared } => {
+        ConfigCmd::Unset { keys, project, shared, mut backup } => {
             let layer = layer(ctx, project.as_deref(), shared).await?;
             // Keys go back to their defaults in one change: the file is checked as a whole, so
             // several bindings to actions ptyro no longer has (`ptyro doctor`'s fix) go together.
@@ -192,12 +203,12 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
             match bound.as_slice() {
                 [] => {}
                 [one] => {
-                    bind(&layer, one, None)?;
+                    bind(&layer, one, None, &mut backup)?;
                 }
                 many => {
                     let changes = many.iter().map(|n| (n.clone(), None)).collect();
                     let what = format!("{} are back to their defaults", many.join(", "));
-                    change(&layer, &Op::Bind { changes }, &what)?;
+                    change(&layer, &Op::Bind { changes }, &what, &mut backup)?;
                 }
             }
             for key in keys {
@@ -209,7 +220,7 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                 } else {
                     format!("{key} is back to its default")
                 };
-                change(&layer, &Op::Unset { key: key.clone() }, &done)?;
+                change(&layer, &Op::Unset { key: key.clone() }, &done, &mut backup)?;
                 elsewhere(ctx, project.is_none(), &key, &format!("unset {key}"));
             }
             Ok(0)
@@ -245,23 +256,25 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                                 .into(),
                         )
                     })?),
+                    &mut false,
                 );
             }
             change(
                 &layer,
                 &Op::Add { path: collection.clone(), name: name.clone(), fields: f },
                 &format!("added {collection} {name}"),
+                &mut false,
             )?;
             Ok(0)
         }
-        ConfigCmd::Rm { collection, name, project, shared, yes } => {
+        ConfigCmd::Rm { collection, name, project, shared, yes, mut backup } => {
             // Found first, then asked: one that isn't there is refused without a question.
             let layer = layer(ctx, project.as_deref(), shared).await?;
             let op = Op::Remove { path: collection.clone(), name: name.clone() };
             settings::preview(&layer, &op, &lookups(), &extra_for(&layer)).map_err(invalid)?;
             let q = format!("Remove {collection} {name}? {}", ptyro_core::removal::CONFIG_ENTRY);
             crate::cli::ask_first(&q, yes)?;
-            change(&layer, &op, &format!("removed {collection} {name}"))?;
+            change(&layer, &op, &format!("removed {collection} {name}"), &mut backup)?;
             Ok(0)
         }
         ConfigCmd::Rename { collection, from, to, project, shared } => {
@@ -270,6 +283,7 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                 &layer,
                 &Op::Rename { path: collection.clone(), from: from.clone(), to: to.clone() },
                 &format!("{from} is now {to}"),
+                &mut false,
             )?;
             Ok(0)
         }

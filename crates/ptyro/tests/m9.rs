@@ -1714,6 +1714,38 @@ fn the_web_settings_panel_logic_and_calls_work() {
         let (code, v) = host(serve.port, Some(&ctl), &json!({ "op": op, "scope": "user" }));
         assert_eq!(v["error"]["code"], "permission_denied", "{op}: {code} {v}");
     }
+    // The Health page's fix (`backup`): the file copied aside first, once, private, and the reply
+    // says where. An ordinary change makes no copy.
+    let dir = w.d.paths.config.clone();
+    let copies = || -> Vec<PathBuf> {
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("config.toml.bak-"))
+            .collect()
+    };
+    let change = |value: &str, backup: bool| {
+        let change = json!({ "t": "set", "key": "ui.mouse", "value": value });
+        let body =
+            json!({ "op": "settings.apply", "scope": "user", "change": change, "backup": backup });
+        let (_, v) = host(serve.port, Some(&full), &body);
+        assert_eq!(v["t"], "ok", "{v}");
+        v["reply"].clone()
+    };
+    let r = change("on", false);
+    assert!(r["backup"].is_null() && copies().is_empty(), "{r}");
+    let was = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    let r = change("off", true);
+    let made = copies();
+    assert_eq!(made.len(), 1);
+    assert_eq!(r["backup"].as_str(), Some(made[0].to_str().unwrap()), "{r}");
+    assert_eq!(std::fs::read_to_string(&made[0]).unwrap(), was);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&made[0]).unwrap().permissions().mode() & 0o777, 0o600);
+    }
 }
 
 /// The web app's own logic, with no daemon: its helpers and request timeouts (`kit.mjs`), and that

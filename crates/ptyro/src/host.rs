@@ -142,11 +142,16 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
                     .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
                 return Ok(json!({ "ok": true }));
             }
-            let done = ptyro_core::settings::apply(&layer, &op, &lk, &extra)
-                .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
+            // `backup`: a doctor's fix (the Health page), the file copied aside first.
+            let done = if a["backup"].as_bool().unwrap_or(false) {
+                ptyro_core::settings::apply_backed_up(&layer, &op, &lk, &extra)
+            } else {
+                ptyro_core::settings::apply(&layer, &op, &lk, &extra)
+            }
+            .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
             Ok(json!({
                 "changed": done.changed, "notes": done.notes, "apply": done.apply,
-                "before": done.before, "after": done.after,
+                "before": done.before, "after": done.after, "backup": done.backup,
                 "view": settings_view(&layer),
             }))
         }

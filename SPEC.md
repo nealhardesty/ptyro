@@ -3894,7 +3894,8 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
     TUI's "unknown action" message names `ptyro doctor`; its health view runs the fix, and the
     web's Health page applies it (`settings.apply`).
 
-  A `problem` exits 1.
+  A `problem` exits 1. `--fix` then makes each config change the findings name, the file copied
+  aside first (§13.8), and exits with the first failure's code (0 when all were made).
 - **`install-service`:**
   - **systemd:** writes `<config>/systemd/user/ptyro.service` (`$XDG_CONFIG_HOME` or `~/.config`) with
     - `ExecStart=<ptyro> daemon start --foreground`;
@@ -4310,9 +4311,10 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
 - **Surfaces**: `ptyro config list|get|set|unset|add|rm|rename|schema` (the CLI; `--project` for
   a repository, `--shared` for the committed file); the TUI's panel, `C-q C` and the palette
   (every setting is a palette entry, `setting ui.theme`); the web's Settings page, over the host
-  calls `settings.schema`, `settings.view`, `settings.apply` (`dry` only checks) and
-  `settings.restore`, which need full scope. The first `config edit` starts from a commented
-  file generated from the table (`settings::starter`).
+  calls `settings.schema`, `settings.view`, `settings.apply` (`dry` only checks; `backup`, a
+  doctor's fix, copies the file aside first, §13.8) and `settings.restore`, which need full
+  scope. The first `config edit` starts from a commented file generated from the table
+  (`settings::starter`).
 - **What applies when** is true to the code: `daemon.log_level` follows the file while the daemon
   runs (`PTYRO_LOG` wins when set); a `[remote]` change starts a supervised web app again
   with it; `notifications.callback.*` binds when the daemon starts, so a change says so and
@@ -4355,6 +4357,23 @@ TUI shows `ptyro-dark`), `ptyro config check` refuses it with the fix, and `ptyr
 makes. A `[keys]` line bound to `theme.next` or `remote.serve` is a stale binding (§11.2,
 `ptyro config unset keys…`). A `*` in a retired
 key stands for any one name (`agents.*.after_turn` matches `agents.claude.after_turn`). The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
+
+**A doctor's fix copies the file aside first** (owner, 2026-11-18). A fix that changes a config
+file (the `ptyro config set|unset|rm …` a finding names: a retired key, stale bindings, a removed
+agent, an unknown theme) is made in three places: `ptyro doctor --fix` (every such fix, one after
+another, each printed as `$ ptyro config …`; the other findings stay yours to act on), the TUI's
+health list (⏎ runs the command in a split) and the web's Health page (`settings.apply` with
+`backup: true`). All three go through `settings::apply_backed_up`: when the change would alter
+the file, the file it edits (your `config.toml`, or a repository's `.ptyro.toml` /
+`.ptyro.local.toml`) is first copied beside it as `<file>.bak-YYYYMMDD-HHMMSS` (UTC; `.1`, `.2`…
+for a second copy in the same second), mode 0600, under the config's lock. Only the newest five
+(`BACKUPS_KEPT`) are kept; a repository's copies are kept out of git (`.git/info/exclude`,
+`/.ptyro*.toml.bak-*`). A file that isn't there yet has nothing to copy. If the copy fails,
+nothing is written and the error says so ("couldn't back up FILE first, so it wasn't changed").
+The result says where the copy is: the CLI's line ("KEY is removed (ptyro no longer uses it) (the
+file as it was is in PATH)"), which the TUI's split shows, and the web's toast. The CLI and the
+TUI pass a hidden `--backup` to `config set|unset|rm` (one copy per command, however many changes
+it makes); a change you make yourself, with `ptyro config` or either settings panel, makes no copy.
 
 ### 13.6 The scratchpad **[built NOTE1, removed 2026-11-17]**
 

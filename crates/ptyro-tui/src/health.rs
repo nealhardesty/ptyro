@@ -96,6 +96,17 @@ pub fn suggested_cli(c: &Check) -> Option<Vec<String>> {
     (!words.is_empty() && !words.iter().any(|w| w.starts_with('<'))).then_some(words)
 }
 
+/// A fix that changes a config file (`config set|unset|rm`) copies it aside first, as `ptyro
+/// doctor --fix` and the web's Health page do; its output, in the split, says where (SPEC §13.8).
+fn backed_up(mut args: Vec<String>) -> Vec<String> {
+    let config = args.first().is_some_and(|a| a == "config")
+        && args.get(1).is_some_and(|a| matches!(a.as_str(), "set" | "unset" | "rm"));
+    if config {
+        args.push("--backup".into());
+    }
+    args
+}
+
 /// The path in "`<path> is 644: …`" (the doctor's wording; on Windows "`<path> is readable by
 /// Everyone: …`"): everything before the mode, so a path with a space in it stays whole.
 fn private_path(text: &str) -> Option<&str> {
@@ -475,7 +486,7 @@ impl App {
     pub(crate) fn fix(&mut self, i: usize) {
         let Some(f) = self.health.findings.get(i).cloned() else { return };
         match f.fix {
-            Some(Fix::Cli(args)) => self.run_cli(&args),
+            Some(Fix::Cli(args)) => self.run_cli(&backed_up(args)),
             Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
             Some(Fix::Setting(key)) => self.open_settings(Some(key)),
             Some(Fix::Setup { names, place }) => {
@@ -688,6 +699,11 @@ mod tests {
                 ["config", "unset", "themes", "-p", "app", "--shared"].map(String::from).to_vec()
             ))
         );
+        // ⏎ runs it with the file copied aside first; a fix that changes no config doesn't.
+        let Some(Fix::Cli(args)) = gone.fix else { panic!() };
+        assert_eq!(backed_up(args).last().map(String::as_str), Some("--backup"));
+        assert_eq!(backed_up(vec!["daemon".into(), "upgrade".into()]), ["daemon", "upgrade"]);
+        assert_eq!(backed_up(vec!["config".into(), "edit".into()]), ["config", "edit"]);
         // A placeholder it can't fill: no fix rather than a wrong one.
         assert!(suggested_cli(&check("x", "y", "warn", "run `ptyro thing <name>`")).is_none());
     }
