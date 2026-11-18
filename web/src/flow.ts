@@ -22,12 +22,7 @@ export async function withConfirm(req: any, key: string): Promise<any | undefine
 /// Start a session (`Spawn`); returns it, or `undefined` when it didn't start (a toast says why).
 export async function startSession(spec: any, then: "open" | "stay" = "open"): Promise<any | undefined> {
   const full = { cwd: "", argv: [], ...spec };
-  let r = await withConfirm({ t: "spawn", spec: full }, "spec");
-  if (r?.t === "queued") {
-    const again = await confirmed("Waiting for review", `${r.unreviewed} worktrees are waiting for you to review them. Start this one anyway?`, "Start anyway", false);
-    if (!again) return undefined;
-    r = await withConfirm({ t: "spawn", spec: { ...full, unqueued: true } }, "spec");
-  }
+  const r = await withConfirm({ t: "spawn", spec: full }, "spec");
   const info = r?.info;
   if (info && then === "open") go(`#/s/${enc(info.id)}`);
   return info;

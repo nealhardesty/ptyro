@@ -75,7 +75,6 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("chatkit"),
     js!("projects"),
     js!("qr"),
-    js!("review"),
     js!("screen"),
     js!("sessions"),
     js!("shells"),

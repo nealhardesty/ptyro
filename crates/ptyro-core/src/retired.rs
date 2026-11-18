@@ -38,6 +38,26 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "mail between agents was removed with the rest of orchestration",
     },
+    Retired {
+        key: "github",
+        removed: "2026-11-17",
+        why: "pull requests, checks and their watcher were removed; `gh` is used only to start work from an issue",
+    },
+    Retired {
+        key: "review",
+        removed: "2026-11-17",
+        why: "the review queue and its hold on new sessions were removed",
+    },
+    Retired {
+        key: "worktrees.archive_on_merge",
+        removed: "2026-11-17",
+        why: "it archived a worktree when its pull request merged, and pull requests were removed",
+    },
+    Retired {
+        key: "verify",
+        removed: "2026-11-17",
+        why: "verified-done (a check an agent's turn had to pass) was removed",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
@@ -215,6 +235,24 @@ mod tests {
         )
         .expect("the notification kinds runs had are ignored, not an error");
         assert!(c.notifications.on.contains(&"blocked".to_owned()));
+    }
+
+    /// The settings of pull requests, review and verified-done (2026-11-17) load and are
+    /// reported, an empty `[github]` header included; a repository's `[verify]` too.
+    #[test]
+    fn the_ship_and_review_keys_are_retired() {
+        let old = "[github]\npoll = \"60s\"\ndraft = true\nmerge_method = \"squash\"\nwatch = true\nescalate_after = \"2h\"\nlog_lines = 80\n\n[review]\nmax_unreviewed = 2\ndigest = \"30m\"\n\n[worktrees]\narchive_on_merge = true\nfetch = false\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert!(!c.worktrees.fetch, "the rest of [worktrees] is still read");
+        let keys: Vec<String> = found(old).into_iter().map(|f| f.key).collect();
+        assert_eq!(keys, ["github", "review", "worktrees.archive_on_merge"]);
+        assert!(find("github.merge_method").is_some() && find("review.digest").is_some());
+        let (out, _) = strip(old).unwrap();
+        assert!(!out.contains("github") && out.contains("fetch = false"), "{out}");
+        crate::config::Config::parse("[github]\n").expect("an empty header left behind loads");
+        let repo = "[verify]\ncheck = \"test\"\nmax_bounces = 3\nauto = true\n";
+        assert!(!crate::project::ProjectConfig::parse(repo).unwrap().contains_key("verify"));
+        assert_eq!(found(repo)[0].key, "verify");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! The first run and home (ROADMAP UX1.19): what `ptyro init` asks, as a screen of checkboxes
 //! the first time `ptyro` opens with no config; and home, one list of what to do next (who needs
-//! you, PRs, recent projects, repositories found) when there's nothing to work on yet.
+//! you, recent projects, repositories found) when there's nothing to work on yet.
 //!
 //! The first run's first part is the setup checklist (BOOT2, `setup_list.rs`): the agents and
 //! tools to install. The same screen with only that part is `app.setup` (`U`).
@@ -488,22 +488,6 @@ impl App {
                 detail: why,
                 key: None,
                 target: Target::Session(id),
-            });
-        }
-        for w in self.worktrees.iter().filter(|w| w.pr.is_some()) {
-            let pr = w.pr.as_ref().expect("filtered");
-            let (pass, fail, pending) = pr.tally();
-            let checks = match (fail, pending, pass) {
-                (f, _, _) if f > 0 => format!("✗{f} failing"),
-                (_, p, _) if p > 0 => "checks running".into(),
-                (_, _, p) if p > 0 => "checks pass".into(),
-                _ => pr.state.to_lowercase(),
-            };
-            items.push(Item {
-                label: format!("#{} {}", pr.number, w.qualified()),
-                detail: format!("{} · {checks}", pr.title),
-                key: None,
-                target: Target::Worktree(w.id.clone()),
             });
         }
         let mut projects = self.projects.clone();

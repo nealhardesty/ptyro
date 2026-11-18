@@ -393,8 +393,8 @@ fn clone_tree_copies() {
 }
 
 /// Config an agent could write (`.git/config` is in its worktree's reach) names code: hooks and
-/// `core.fsmonitor`. What ptyro runs by itself (status, diffs, checkpoints) runs neither; what
-/// the user asked for (a commit here) runs their hooks.
+/// `core.fsmonitor`. What ptyro runs by itself (status, checkpoints) runs neither; what the
+/// user asked for (a new worktree's checkout here) runs their hooks.
 #[cfg(unix)] // execute bits
 #[test]
 fn background_calls_run_no_repository_code() {
@@ -417,7 +417,6 @@ fn background_calls_run_no_repository_code() {
     f.git.run(&f.root, &["config", "core.fsmonitor", &monitor.to_string_lossy()]).unwrap();
     std::fs::write(f.root.join("README"), "changed\n").unwrap();
     f.git.status(&f.root, Some("origin/main")).unwrap();
-    f.git.diff(&f.root, "HEAD", true).unwrap();
     let snap = f.git.checkpoint(&f.root, "ckpt").unwrap();
     f.git.update_ref(&f.root, "refs/ptyro/test", &snap.commit).unwrap();
     let seen = || {
@@ -429,8 +428,10 @@ fn background_calls_run_no_repository_code() {
         v
     };
     assert!(seen().is_empty(), "background git ran {:?}", seen());
-    f.git.commit(&f.root, "asked for", &[], true).unwrap();
-    assert!(seen().contains(&"pre-commit".to_owned()), "{:?}", seen());
+    let wt = f.base.join("wts/hooked");
+    let source = Source::NewBranch { branch: "hooked".into(), base: "HEAD".into() };
+    f.git.worktree_add(&f.root, &wt, &source).unwrap();
+    assert!(seen().contains(&"post-checkout".to_owned()), "{:?}", seen());
     assert!(!seen().contains(&"fsmonitor".to_owned()), "{:?}", seen());
 }
 

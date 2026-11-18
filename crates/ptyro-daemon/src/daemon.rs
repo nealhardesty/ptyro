@@ -100,15 +100,8 @@ pub struct Daemon {
     pub(crate) oc_pending: Mutex<crate::sidecar::Pending>,
     /// Problems worth showing in `ptyro doctor` (deduplicated).
     pub(crate) warnings: Mutex<Vec<String>>,
-    /// The PR-event loop's memory per worktree (M6.10).
-    pub(crate) pr_watches: Mutex<crate::github::Watches>,
-    /// Line comments per worktree, waiting to be sent (M6.3).
-    pub(crate) review_comments: Mutex<HashMap<String, Vec<ptyro_core::model::ReviewComment>>>,
-    pub(crate) reviewed: Mutex<crate::review::Reviewed>,
     /// Pair mode per project (M6.7).
-    pub(crate) pairs: Mutex<crate::review::Pairs>,
-    /// Agent spawns held by `review.max_unreviewed` (M6.9).
-    pub(crate) spawn_queue: Mutex<std::collections::VecDeque<ptyro_core::session::SpawnSpec>>,
+    pub(crate) pairs: Mutex<crate::pair::Pairs>,
     // ── live upgrade (M8.1) ──
     pub(crate) upgrading: std::sync::atomic::AtomicBool,
     /// Tells every PTY reader to park.
@@ -239,11 +232,7 @@ impl Daemon {
             sidecar_live: Mutex::new(std::collections::HashSet::new()),
             oc_pending: Mutex::new(HashMap::new()),
             warnings: Mutex::new(Vec::new()),
-            pr_watches: Mutex::new(HashMap::new()),
-            review_comments: Mutex::new(HashMap::new()),
-            reviewed: Mutex::new(HashMap::new()),
             pairs: Mutex::new(HashMap::new()),
-            spawn_queue: Mutex::new(std::collections::VecDeque::new()),
             upgrading: std::sync::atomic::AtomicBool::new(false),
             io_pause,
             io: crate::session::IoControl {
@@ -777,7 +766,6 @@ impl Daemon {
     /// directory, under the profile SPEC §10.10 picks.
     pub async fn spawn(self: &Arc<Self>, spec: SpawnSpec) -> Result<Arc<Session>, Error> {
         let config = self.config();
-        let verify = spec.verify.clone();
         let (agent, agent_profile) = match spec.agent.as_deref() {
             Some(a) => {
                 let (a, p) = ptyro_agents::split_agent(a);
@@ -1000,10 +988,6 @@ impl Daemon {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).title = title;
             s.save(None);
         }
-        match verify {
-            Some(check) => self.set_verify(&s, Some(check), None)?,
-            None => self.auto_verify(&s),
-        }
         Ok(s)
     }
 
@@ -1204,11 +1188,6 @@ impl Daemon {
             | Request::PushSubscribe { .. }
             | Request::PushUnsubscribe { .. }
             | Request::PushTest) => self.handle_devices(req, caller).await,
-            Request::SetVerify { addr, check, max_bounces } => {
-                let s = self.resolve(&addr)?;
-                self.set_verify(&s, check, max_bounces)?;
-                Ok(Reply::Session { info: self.info(&s) })
-            }
             req @ (Request::ChatNew { .. }
             | Request::ChatList { .. }
             | Request::ChatRead { .. }
@@ -1234,14 +1213,6 @@ impl Daemon {
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
             Request::Spawn { spec } => {
                 let spec = if spec.again { self.resolve_again(spec).await? } else { spec };
-                // `review.max_unreviewed`: a new agent waits while too much waits for review.
-                if spec.agent.is_some()
-                    && !spec.unqueued
-                    && let Some(unreviewed) = self.review_gate()
-                {
-                    let position = self.queue_spawn(spec);
-                    return Ok(Reply::Queued { position, unreviewed });
-                }
                 let s = self.spawn(spec.clone()).await?;
                 let info = self.info(&s);
                 self.remember_launch(info.worktree.as_deref(), &spec).await;
@@ -1262,23 +1233,7 @@ impl Daemon {
             Request::LastLaunch { worktree, .. } => {
                 Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
             }
-            req @ (Request::WorktreeDiff { .. }
-            | Request::WorktreeLog { .. }
-            | Request::WorktreeCommit { .. }
-            | Request::WorktreeIntegrate { .. }
-            | Request::WorktreePair { .. }
-            | Request::PrGet { .. }
-            | Request::PrCreate { .. }
-            | Request::PrFix { .. }
-            | Request::PrAutomerge { .. }
-            | Request::PrWatch { .. }
-            | Request::PrReply { .. }
-            | Request::ReviewAdd { .. }
-            | Request::ReviewList { .. }
-            | Request::ReviewRemove { .. }
-            | Request::ReviewSend { .. }
-            | Request::ReviewQueue
-            | Request::ReviewDone { .. }) => self.handle_review(req).await,
+            Request::WorktreePair { addr, off, refresh } => self.pair(&addr, off, refresh).await,
             Request::List => {
                 let sessions = self.sessions().iter().map(|s| self.info(s)).collect();
                 Ok(Reply::Sessions { sessions })

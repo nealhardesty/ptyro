@@ -147,7 +147,7 @@ fn numbers_step_with_plus_and_minus_and_stay_in_range() {
 #[test]
 fn a_text_box_says_why_a_value_is_wrong_as_you_type_and_saves_a_good_one() {
     let mut t = T::new("");
-    t.go("github.poll");
+    t.go("notifications.coalesce");
     t.press("<Enter>");
     // The box starts on the current value; clear it and type something that isn't a duration.
     t.press("<BS><BS>soon");
@@ -159,7 +159,7 @@ fn a_text_box_says_why_a_value_is_wrong_as_you_type_and_saves_a_good_one() {
     assert!(t.p.modal.is_some(), "the box stays open with what was typed");
     // Fix it in place.
     t.press("<BS><BS><BS><BS><BS>2m<Enter>");
-    assert!(t.file().contains("poll = \"2m\""), "{}", t.file());
+    assert!(t.file().contains("coalesce = \"2m\""), "{}", t.file());
 }
 
 #[test]

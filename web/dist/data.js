@@ -154,15 +154,6 @@ export function leftWords(l) {
         v.push("✓ pushed");
     return v.join(" ");
 }
-/// Its work has shipped (`WorktreeInfo::shipped`): the PR merged, or integrated and unchanged since.
-export function shipped(w) {
-    if (w.is_root)
-        return false;
-    if (w.pr?.state === "MERGED")
-        return true;
-    const st = w.status;
-    return !!(w.integrated && st && repoLeft(st).uncommitted === 0 && st.head && w.integrated.startsWith(st.head));
-}
 export const projectOf = (w) => data.projects.get(w.project);
 export const liveWorktrees = () => [...data.worktrees.values()].filter((w) => w.state !== "removed");
 /// Does this device's scope allow `need`? (The daemon decides; this only hides what would fail.)

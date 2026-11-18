@@ -25,7 +25,6 @@ the one that needs you.
   scraping. An inbox and notifications tell you who needs you.
 - **Work and personal, never crossed.** Profiles keep accounts, git author, SSH keys and secrets
   apart, per repository.
-- **Review and ship without leaving.** Diff, line comments for the agent, commit, PR, CI fixes.
 - **Your phone.** A web app shows every agent and answers its permission prompts.
 - **Scriptable.** Every action is a command, most with `--json`.
 
@@ -65,7 +64,7 @@ Google, or any other tool named here; their names and trademarks belong to their
   vendor's recommended way for your platform, from a table checked against each vendor's
   documentation (SPEC §24.1).
 - **A modern terminal:** Ghostty, kitty, WezTerm, Alacritty, iTerm2, foot… Inside tmux works too.
-- **Optional:** the [GitHub CLI](https://cli.github.com) (`gh`) for PRs and checks;
+- **Optional:** the [GitHub CLI](https://cli.github.com) (`gh`) to start work from an issue;
   [Tailscale](https://tailscale.com) for the phone app.
 
 ## Install
@@ -226,7 +225,7 @@ ptyro login --check                           # where each login stands, changin
   page offer the move too.
 - **Something missing? It says so, with the fix.** Anything that finds no agent, or an agent
   or tool that isn't installed (a new chat, a session of an agent you don't have, `ptyro
-  doctor`, the health badge, a pull request without `gh`), offers setup rather than a command to
+  doctor`, the health badge, an issue to start from without `gh`), offers setup rather than a command to
   copy: in a terminal, `ptyro setup` or `ptyro install codex`; in the TUI, `Ctrl-Q u` on its
   message opens the checklist with it ticked; on the web, a Set up button does the same. With a
   Google account, the agent to pick is Antigravity (Gemini CLI now serves only Gemini API keys and
@@ -402,7 +401,7 @@ ptyro                   # open the TUI (a shell session to start with)
 The very first time, with no config yet, ptyro shows what it found as a list to tick: the agents
 and tools to install (the setup checklist, [above](#agents-and-tools-ptyro-setup)), the accounts
 in your shell setup and your repositories, and writes the config from that. Outside a
-repository, it opens **home**: who needs you, PRs, recent projects and repositories found, each a
+repository, it opens **home**: who needs you, recent projects and repositories found, each a
 `⏎` away from a task (`Ctrl-Q H` brings it back).
 
 The repository you're in becomes a **project** by itself, so it shows in the sidebar ready for
@@ -411,7 +410,7 @@ it). `Ctrl-Q P` adds another repository; `[discover] auto_register = false` turn
 
 Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). Pause after it and a menu of
 the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` lets you try the whole loop
-(a task, its permission prompt, the review, finishing and cleaning up) with a pretend agent in a
+(a task, its permission prompt, cleaning up, a shell of your own) with a pretend agent in a
 throwaway repository, deleted afterwards. The
 status bar says what you'd do next with what's selected (`C-q p answer it`).
 
@@ -543,10 +542,10 @@ command = "pnpm dev --port $PTYRO_PORT"   # Ctrl-Q r runs it
 default = true
 ```
 
-When the work is done, `F` on its row (or `ptyro wt finish`) commits what's left, asking its agent
-for the message, and opens a PR (or integrates it). Once the PR merges, `x` cleans it up by
-**archiving**: its branch and a snapshot of every file are kept, the checkout goes, and `ptyro wt
-restore` brings it back as it was. `ptyro wt rm` refuses to remove a worktree with running
+ptyro makes and removes worktrees; committing, pushing and merging are yours, with git. When the
+work is done, **archiving** (`worktree.archive` in its row menu, `ptyro wt archive`) keeps its
+branch and a snapshot of every file, the checkout goes, and `ptyro wt restore` brings it back as
+it was. `ptyro wt rm` refuses to remove a worktree with running
 sessions, uncommitted or unpushed work, or stashes, lists exactly what would be lost, and offers
 archiving instead. Either way the checkout goes, build output (`target/`, `node_modules/`) with
 it, so disk comes back. `ptyro gc` (`Ctrl-Q G`) lists the stale ones, biggest on disk first, to
@@ -610,7 +609,7 @@ A worktree's row says what is left to do with its work, in the TUI, on the web a
 `ptyro wt ls`: `● 3` three files are not committed, `↑2` two commits are not pushed (`not pushed ↑2`
 when the branch has no upstream yet), and a quiet `✓ pushed` when everything is committed and
 on the remote. The `+N −M` line counts show only while something is left, so a worktree you have
-pushed stops looking like work in progress. A merged one says so (`merged`, `in main`).
+pushed stops looking like work in progress.
 
 Notifications always go to the inbox, and by default to your terminal and its bell. Add desktop
 notifications or a push service such as ntfy:
@@ -627,28 +626,16 @@ on = ["blocked"]
 
 `ptyro notify test` checks your setup, and `ptyro usage` shows each profile's rate limits.
 
-### Review and ship
+### Starting from GitHub
 
-`Ctrl-Q D` opens the **inspector** on a worktree: the diff (against the base, unpushed, or
-just the agent's last turn), line comments sent to the agent as one prompt, commit, PR and
-checks. `Ctrl-Q Q` lists worktrees waiting for your review.
+`ptyro new --issue URL` starts from a GitHub issue (with `gh`), `--pr N` from a pull request's
+branch, and `ptyro wt pair` shows an agent's work in your main checkout, for your IDE and dev
+server.
 
-```bash
-ptyro wt diff myrepo/brisk-rook --against last-turn   # what the agent's last turn changed
-ptyro review add myrepo/brisk-rook src/auth.rs:42 "this leaks the handle"
-ptyro review send myrepo/brisk-rook        # every comment, as one prompt
-ptyro pr create myrepo/brisk-rook          # push + PR; CI failures go back to the agent
-ptyro wt integrate myrepo/brisk-rook       # rebase onto main and fast-forward it
-```
+### Checkpoints
 
-PRs need `gh`. `ptyro new --issue URL` starts from a GitHub issue, and `ptyro wt pair` shows an
-agent's work in your main checkout, for your IDE and dev server.
-
-### Verified-done and checkpoints
-
-**Verified-done** (`--verify "cargo test"`) means an agent's turn only counts as done when the
-check passes. Every turn that changed the worktree leaves a checkpoint you can restore
-(`ptyro checkpoint ls`, `ptyro checkpoint restore`).
+Every agent turn that changed the worktree leaves a checkpoint you can diff and restore
+(`ptyro checkpoint ls`, `ptyro checkpoint diff`, `ptyro checkpoint restore`).
 
 ### Chats
 
@@ -727,7 +714,7 @@ echo $PTYRO_SCRATCHPAD           # every shell and agent can find the file (plai
 ```
 
 In the TUI, `C-q ;` shows the pad and `C-q '` adds a line without opening it; `C-q "` lists the
-open items, and `⏎` on one starts an agent on it in a new worktree, ticked once its PR merges.
+open items, and `⏎` on one starts an agent on it in a new worktree, ticked once that is removed.
 The web app has a Notes view that saves as you type (and merges with whoever else is writing),
 and your phone's share sheet can send links and text to it. Old copies are kept
 (`ptyro scratchpad log`, `restore`). Settings: `[scratchpad]` in the config (`docs/config.md`).
@@ -757,8 +744,7 @@ The web app does everything the CLI does, laid out for a phone, and its session 
 The rest of the app: a tab for sessions (blocked ones
 on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
 scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
-an issue or your changes; finish it into a PR; archive it), the diff with line comments for the
-agent, commits and checks, the review queue, and **More**:
+an issue or your changes; its checkpoints; archive it), and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
@@ -766,7 +752,7 @@ Allow / Deny where the platform shows actions.
 **Several machines, one place.** `ptyro machine add ssh://laptop2` (or, without ssh, `ptyro
 machine pair` on laptop2 and `ptyro machine add CODE` here) and laptop2's workspaces show here
 beside yours, in the TUI's sidebar, the CLI and the web app: `laptop2 / work`, its sessions as
-`laptop2:fix-flaky-test`. Start, type, answer and review there from here; its alerts reach you
+`laptop2:fix-flaky-test`. Start, type and answer there from here; its alerts reach you
 through this machine. Pair your phone with each laptop and whichever is awake shows everything it
 can reach. An asleep machine's workspaces stay listed, marked offline, and come back by
 themselves; both must run the same ptyro (it says which to update). See
@@ -840,7 +826,6 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `C-z` | fold the whole sidebar to one line a workspace (`Z` in the sidebar); again: unfold it as it was |
 | `f` | sidebar filter: all → only running sessions → only active ones (working, waiting for you, running a command); or click `all` / `running` / `active` under the sidebar title |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
-| `D` / `Q` | inspector / review queue |
 | `w` / `o` / `r` | switch workspace / open in an editor, the file manager, a terminal app or a shell / run the default run script |
 | `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
 | `m` / `g` | a new chat / the chat list |
@@ -935,7 +920,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | File | What's in it |
 |---|---|
 | [`docs/commands.md`](docs/commands.md) | Every command, how to name sessions, and the exit codes |
-| [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, inspector, copy mode, mouse, rebinding |
+| [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |

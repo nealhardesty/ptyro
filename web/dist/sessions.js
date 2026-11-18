@@ -31,7 +31,6 @@ const ACTIONS = {
     "session.summarize": "Summarize what the session is doing",
     "session.explain": "Why the session has the status it has",
     "session.mute": "Silence the session's notifications for a while",
-    "session.verify": "Hold the session's turns until a check passes",
     "session.broadcast": "Type the same thing into several sessions",
     "session.scrollback": "The session's scrollback, searchable",
     "session.events": "The session's events: status changes, turns, exits",
@@ -97,7 +96,6 @@ export function newTask(where, task) {
     const title = input(h("input", { placeholder: "default: the task", autocapitalize: "sentences" }));
     const base = input(h("input", { placeholder: "default: the project's base, e.g. origin/main", autocapitalize: "off", spellcheck: "false" }));
     base.setAttribute("list", "branch-names");
-    const verify = input(h("input", { placeholder: "e.g. cargo test, or a run script's name", autocapitalize: "off", spellcheck: "false" }));
     const args = input(h("input", { placeholder: "e.g. --model opus", autocapitalize: "off", spellcheck: "false" }));
     const box = () => input(h("input", { type: "checkbox" }));
     const structured = box(), noSetup = box(), noFetch = box();
@@ -109,9 +107,8 @@ export function newTask(where, task) {
     slugInput(name, "name");
     const nameRow = h("label", { class: "field" }, h("span", {}, "Name (optional)"), name, h("small", {}, NAME_HINT));
     const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
-    const verifyRow = h("label", { class: "field" }, h("span", {}, "Done when"), verify, h("small", {}, "Verified-done: a turn counts as done only once this passes; failures go back to the agent"));
     const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
-    const agentOnly = [verifyRow, argsRow, check(structured, "Chat mode (full tool-call visibility)", "Drive the agent over its structured protocol and show a chat view")];
+    const agentOnly = [argsRow, check(structured, "Chat mode (full tool-call visibility)", "Drive the agent over its structured protocol and show a chat view")];
     const freshOnly = [baseRow, check(noSetup, "Skip setup scripts", "Don't run the project's setup script"), check(noFetch, "Don't fetch", "Don't fetch the base first")];
     const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, "The account it runs under")), h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What it's for, for people to read; its name stays its address")), ...freshOnly, ...agentOnly));
     // The profiles of the machine the place is on.
@@ -195,8 +192,8 @@ export function newTask(where, task) {
         const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
         const prof = profile.value || undefined;
         const label = title.value.trim() || text || undefined;
-        // For an agent: verified-done and chat mode (`ptyro new --verify --structured`).
-        const agentBits = () => isAgent ? { verify: verify.value.trim() || undefined, structured: structured.checked } : {};
+        // For an agent: chat mode (`ptyro new --structured`).
+        const agentBits = () => isAgent ? { structured: structured.checked } : {};
         try {
             if (kind === "w") {
                 const w = data.worktrees.get(id);
@@ -280,15 +277,6 @@ export function muteSession(s) {
         { label: "Until I unmute it", run: mute(null, false, "Muted") },
         { label: "Unmute", run: mute(null, true, "Notifications back on") },
     ]);
-}
-export function verifySession(s) {
-    form(`Verify ${s.name}`, [
-        { key: "check", label: "Check", value: s.verify?.check ?? "", placeholder: "e.g. cargo test", hint: "Its turns count as done only once this command passes. Empty turns it off." },
-        { key: "max", label: "Bounces", type: "number", value: "", placeholder: "default", hint: "How many times a failing check sends it back to work" },
-    ], "Save", async (v) => {
-        await conn.request({ t: "set_verify", addr: addr(s), check: v.check || null, max_bounces: v.max ? Number(v.max) : null });
-        ui.toast(v.check ? "Verifying" : "Verification off");
-    });
 }
 function explainSession(s) {
     conn.request({ t: "status_explain", addr: addr(s) }).then((r) => {
@@ -397,7 +385,6 @@ export function sessionMenu(s) {
         live(s) && { title: tip("session.summarize"), label: "Summarize", run: () => void summarize(s) },
         agentLive && { title: tip("session.hibernate"), label: "Hibernate", hint: "Stop it, keep it resumable", run: async () => notice(await ask({ t: "hibernate", addr: addr(s) }), "Hibernated") },
         agentLive && { title: tip("session.mute"), label: "Mute notifications…", run: () => muteSession(s) },
-        agentLive && can("full") && { title: tip("session.verify"), label: "Verify when done…", hint: s.verify ? `Checking: ${s.verify.check}` : "Hold its turns until a check passes", run: () => verifySession(s) },
         w && { label: "Open its worktree", hint: `${w.project_slug}/${w.name}`, run: () => go(`#/wt/${enc(w.id)}`) },
         w && { title: tip("session.again"), label: `Another ${againLabel(w.id)}`, hint: "The agent its worktree last started, there", run: () => void startAgain(w) },
         w && { title: tip("shell.new"), label: "A new shell in its worktree", hint: "Besides its quick terminal", run: () => void newShell(w) },

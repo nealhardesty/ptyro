@@ -161,32 +161,9 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `ptyro profile ls --json` → `[{name, label, color?, defined, isolate, dirs: {agent: path}, git_email?, matches: {remotes, paths}, vars}]`
 - `ptyro profile env P --json` → `{VAR: value}` (secrets as `<secret:NAME>`)
 
-## Review and ship (M6)
-
-- `ptyro wt diff W --json` → DiffDoc `{against, from, truncated, files: [DiffFile]}`:
-  - `against` is `base`, `upstream`, `last_turn` or `head`;
-  - DiffFile is `{path, old_path?, status, added, removed, binary, hunks: [Hunk]}`, where
-    `status` is `added`, `deleted`, `modified`, `renamed` or `untracked`;
-  - Hunk is `{header, old_start, new_start, lines: [{kind, old?, new?, text}]}`, where `kind`
-    is `context`, `added` or `removed`.
-- `ptyro wt log W --json` → `[{sha, subject, author, at_ms, added, removed, files}]`, newest
-  first.
-- `ptyro pr status W --json` → PrInfo or `null`:
-  - fields: `{number, url, title, state, draft, review?, checks: [CheckRun], automerge, ours, at_ms}`;
-  - `state` is `OPEN`, `CLOSED` or `MERGED`; `ours` means ptyro opened it and watches it.
-  - Worktrees carry the same object as `pr` (`wt ls --json`).
-- `ptyro pr checks W --json` → `[CheckRun{name, bucket, link?, workflow?}]`, where `bucket` is
-  `pass`, `fail`, `pending`, `skipping` or `cancel`.
-- `ptyro review ls W --json` → `[{id, path, line, code?, text, at_ms}]`.
-- `ptyro review queue --json` → `[{worktree: Worktree, session?, score, reasons, last_message?, waiting_ms}]`,
-  best first.
-
-## Checkpoints and verified-done (M7)
+## Checkpoints (M7)
 
 - `ptyro checkpoint ls --json` → `[{n, session, at_ms, turn, sha, ref, head, files}]`.
-- `ptyro status S --json` sessions gain `verify` (`{check, max_bounces, bounces, state, last?:
-  {command, exit_code, tail, tree?, at_ms, duration_ms}}`; `state` is `pending`, `checking`,
-  `passed`, `bounced` or `failed`), when set.
 
 ## Remote (M9)
 
@@ -232,12 +209,12 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 | Code | Meaning |
 |---|---|
 | `0` | ok (for `wait`: the condition was met) |
-| `1` | error (for `doctor`: a problem was found; for `pr checks`: a check fails) |
+| `1` | error (for `doctor`: a problem was found) |
 | `2` | usage: bad arguments or values |
 | `3` | not found |
 | `4` | ambiguous: a name, handle or selector matched several (the message lists them) |
 | `5` | conflict: unsaved work, a profile question, or (`wait`) a session exited first |
 | `6` | untrusted scripts |
-| `7` | timeout (`wait`, `send --wait-ready`), `wait --stall` saw no output, or (`pr checks`) checks still running |
+| `7` | timeout (`wait`, `send --wait-ready`), or `wait --stall` saw no output |
 | `8` | no daemon |
 | `9` | protocol mismatch: the daemon speaks another major protocol version (`ptyro daemon restart --hibernate`); within a major version, `ptyro daemon upgrade` switches it over without stopping sessions |

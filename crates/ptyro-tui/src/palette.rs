@@ -75,8 +75,8 @@ pub struct Palette {
     pub filtered: Vec<usize>,
     pub selected: usize,
     matcher: Matcher,
-    /// A short choice (finish: `p` a PR, `i` integrate): with nothing typed, an item's one-letter
-    /// key picks it. Off, typing always filters (the palette's keys are only shown).
+    /// A short choice (open a worktree in: `!` a new shell): with nothing typed, an item's
+    /// one-letter key picks it. Off, typing always filters (the palette's keys are only shown).
     hotkeys: bool,
 }
 
@@ -219,13 +219,13 @@ mod tests {
     #[test]
     fn a_short_choice_picks_by_its_key_and_the_palette_only_filters() {
         let keyed = |label: &str, k: &str| Item { key: Some(k.into()), ..item(label) };
-        let items = || vec![keyed("a pull request", "p"), keyed("integrate", "i")];
-        let mut p = Palette::new("Finish", items()).with_hotkeys();
+        let items = || vec![keyed("a new shell", "p"), keyed("its folder", "i")];
+        let mut p = Palette::new("Open in", items()).with_hotkeys();
         assert!(
-            matches!(p.key(KeyEvent::char('i')), Picked::Pick(Target::Theme(t)) if t == "integrate")
+            matches!(p.key(KeyEvent::char('i')), Picked::Pick(Target::Theme(t)) if t == "its folder")
         );
         // Once a filter is typed (starting with a letter that isn't a key), letters filter.
-        let mut p = Palette::new("Finish", items()).with_hotkeys();
+        let mut p = Palette::new("Open in", items()).with_hotkeys();
         typed(&mut p, "rq");
         assert_eq!(p.query, "rq");
         typed(&mut p, "i");

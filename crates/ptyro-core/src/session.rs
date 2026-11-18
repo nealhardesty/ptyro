@@ -175,9 +175,6 @@ pub struct SessionInfo {
     /// When it last changed its screen (`wait --stall`).
     #[serde(default)]
     pub last_output_ms: Option<u64>,
-    /// Verified-done (M7.9): the check its turns must pass, and how the last one went.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verify: Option<Verify>,
     /// Its permission prompt is held for an exact answer from any client (M9.5): `answer`
     /// reaches the agent as a decision, not keystrokes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -395,61 +392,6 @@ fn claude_label(id: &str) -> Option<String> {
     Some(if v.is_empty() { parts[at].to_owned() } else { format!("{} {v}", parts[at]) })
 }
 
-/// A session's verified-done check (M7.9): a turn counts as done only once `check` passes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Verify {
-    /// What runs (`scripts.run.test` resolved to its command).
-    pub check: String,
-    pub max_bounces: u32,
-    /// Bounces since the last prompt ptyro typed.
-    pub bounces: u32,
-    pub state: VerifyState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last: Option<Evidence>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum VerifyState {
-    /// No turn has ended since it was set (or since the last prompt).
-    #[default]
-    Pending,
-    /// The check is running.
-    Checking,
-    /// The last turn's check passed: done (verified).
-    Passed,
-    /// It failed and the agent was sent back to fix it.
-    Bounced,
-    /// It failed and the bounces ran out: done (claimed), not verified.
-    Failed,
-}
-
-impl VerifyState {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Checking => "checking",
-            Self::Passed => "passed",
-            Self::Bounced => "bounced",
-            Self::Failed => "failed",
-        }
-    }
-}
-
-/// What a check found, kept as evidence.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Evidence {
-    pub command: String,
-    pub exit_code: i32,
-    /// The output's last lines.
-    pub tail: String,
-    /// The worktree's tree (HEAD plus uncommitted work) it ran against.
-    #[serde(default)]
-    pub tree: Option<String>,
-    pub at_ms: u64,
-    pub duration_ms: u64,
-}
-
 /// A status newer than the last prompt ptyro typed (and none waiting to be typed).
 fn fresh(s: &SessionInfo) -> bool {
     !s.prompt_pending
@@ -547,12 +489,6 @@ pub struct SpawnSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub size: Option<TermSize>,
-    /// Start even when `review.max_unreviewed` worktrees wait for review (M6.9).
-    #[serde(default)]
-    pub unqueued: bool,
-    /// Verified-done: its turns count as done only once this check passes (M7.9).
-    #[serde(default)]
-    pub verify: Option<String>,
     /// Drive the agent over its structured protocol instead of its terminal UI (M10).
     #[serde(default)]
     pub structured: bool,

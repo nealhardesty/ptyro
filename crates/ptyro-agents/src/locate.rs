@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(setup_offer("`ptyro install codex` moves it to the vendor's installer"), None);
         assert_eq!(setup_offer("`ptyro update codex` updates it"), None);
         assert_eq!(
-            setup_offer("PR features (`wt new --pr`) need it; `ptyro install gh` installs it"),
+            setup_offer("starting from an issue needs it; `ptyro install gh` installs it"),
             Some(vec!["gh".to_owned()]),
             "the offer, wherever it is in the message"
         );

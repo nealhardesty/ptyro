@@ -252,17 +252,10 @@ pub struct WorktreeInfo {
     /// `git worktree lock`ed by ptyro while sessions run in it.
     #[serde(default)]
     pub locked: bool,
-    /// Its pull request, when `gh` found one (M6.5).
-    #[serde(default)]
-    pub pr: Option<PrInfo>,
     /// What it's for, for people to read (UX1.24): the prompt it was made for, a PR's or an
     /// issue's title, or `--title`. The `name` is its address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// The commit ptyro integrated into the main branch (`wt integrate`, finish): its work is
-    /// in main for as long as the worktree stays there, clean.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub integrated: Option<String>,
 }
 
 impl WorktreeInfo {
@@ -277,24 +270,6 @@ impl WorktreeInfo {
     /// `myrepo/brisk-rook`, `myrepo/@root`.
     pub fn qualified(&self) -> String {
         format!("{}/{}", self.project_slug, self.name)
-    }
-
-    /// Its work has shipped, so cleaning it up loses nothing: its PR merged, or ptyro
-    /// integrated it into the main branch and nothing changed since.
-    pub fn shipped(&self) -> bool {
-        if self.is_root {
-            return false;
-        }
-        if self.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
-            return true;
-        }
-        match (&self.integrated, &self.status) {
-            (Some(at), Some(s)) => {
-                s.dirty() == 0
-                    && s.head.as_deref().is_some_and(|h| !h.is_empty() && at.starts_with(h))
-            }
-            _ => false,
-        }
     }
 }
 
@@ -520,9 +495,6 @@ pub struct WorktreeSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub workspace: Option<String>,
-    /// For its agent: verified-done (M7.9), as in [`crate::session::SpawnSpec`].
-    #[serde(default)]
-    pub verify: Option<String>,
     /// Start the agent in structured mode (M10).
     #[serde(default)]
     pub structured: bool,
@@ -658,52 +630,6 @@ pub struct ArchiveEntry {
     pub base: Option<String>,
 }
 
-/// What a diff is taken against (SPEC §11.5 inspector, M6.2).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DiffAgainst {
-    /// The merge base with the project base (`origin/main`): everything this worktree changed,
-    /// committed or not.
-    #[default]
-    Base,
-    /// The branch's upstream: what isn't pushed yet (and uncommitted work).
-    Upstream,
-    /// The state when the agent's last turn started: what that turn did.
-    LastTurn,
-    /// `HEAD`: uncommitted work only.
-    Head,
-}
-
-impl DiffAgainst {
-    pub fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "base" => Self::Base,
-            "upstream" => Self::Upstream,
-            "last-turn" | "last_turn" | "turn" => Self::LastTurn,
-            "head" | "uncommitted" => Self::Head,
-            _ => return None,
-        })
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Base => "base",
-            Self::Upstream => "upstream",
-            Self::LastTurn => "last turn",
-            Self::Head => "uncommitted",
-        }
-    }
-
-    pub fn next(self) -> Self {
-        match self {
-            Self::Base => Self::Upstream,
-            Self::Upstream => Self::LastTurn,
-            Self::LastTurn => Self::Head,
-            Self::Head => Self::Base,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LineKind {
@@ -748,100 +674,13 @@ pub struct DiffFile {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffDoc {
-    pub against: DiffAgainst,
-    /// The commit compared with (the merge base, the upstream, …).
+    /// The commit compared from (a checkpoint's).
     #[serde(default)]
     pub from: Option<String>,
     pub files: Vec<DiffFile>,
     /// Files or hunks left out because the diff was too big.
     #[serde(default)]
     pub truncated: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CommitInfo {
-    pub sha: String,
-    pub subject: String,
-    pub author: String,
-    pub at_ms: u64,
-    pub added: u32,
-    pub removed: u32,
-    pub files: u32,
-}
-
-/// One CI check of a PR (`gh pr checks`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CheckRun {
-    pub name: String,
-    /// `pass`, `fail`, `pending`, `skipping`, `cancel`.
-    pub bucket: String,
-    #[serde(default)]
-    pub link: Option<String>,
-    #[serde(default)]
-    pub workflow: Option<String>,
-}
-
-/// A worktree's pull request (M6.5).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PrInfo {
-    pub number: u32,
-    pub url: String,
-    pub title: String,
-    /// `OPEN`, `CLOSED`, `MERGED`.
-    pub state: String,
-    #[serde(default)]
-    pub draft: bool,
-    /// `APPROVED`, `CHANGES_REQUESTED`, `REVIEW_REQUIRED`.
-    #[serde(default)]
-    pub review: Option<String>,
-    #[serde(default)]
-    pub checks: Vec<CheckRun>,
-    /// Auto-merge is on.
-    #[serde(default)]
-    pub automerge: bool,
-    /// ptyro opened it (its PR-event loop watches it).
-    #[serde(default)]
-    pub ours: bool,
-    pub at_ms: u64,
-}
-
-impl PrInfo {
-    /// (passed, failed, pending).
-    pub fn tally(&self) -> (usize, usize, usize) {
-        let n = |b: &[&str]| self.checks.iter().filter(|c| b.contains(&c.bucket.as_str())).count();
-        (n(&["pass"]), n(&["fail", "cancel"]), n(&["pending"]))
-    }
-}
-
-/// A line comment on a worktree's diff, waiting to be sent to its agent (M6.3).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReviewComment {
-    pub id: u32,
-    pub path: String,
-    /// The line in the new file (the old one for a removed line).
-    pub line: u32,
-    /// The line's text, so the agent sees what was meant even after edits.
-    #[serde(default)]
-    pub code: Option<String>,
-    pub text: String,
-    pub at_ms: u64,
-}
-
-/// A worktree waiting for review, ranked (M6.9, R-ORC-24).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReviewItem {
-    pub worktree: WorktreeInfo,
-    #[serde(default)]
-    pub session: Option<String>,
-    /// Higher first.
-    pub score: i32,
-    /// Why it ranks where it does ("checks pass", "small diff", "+12 −3 in 2 files").
-    pub reasons: Vec<String>,
-    /// What the agent last said, briefly.
-    #[serde(default)]
-    pub last_message: Option<String>,
-    /// Finished this long ago.
-    pub waiting_ms: u64,
 }
 
 #[cfg(test)]

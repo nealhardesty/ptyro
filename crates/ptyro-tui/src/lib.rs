@@ -11,7 +11,6 @@ mod clock;
 pub mod copy;
 mod form;
 mod health;
-mod inspector;
 pub mod keymap;
 mod keys;
 pub mod layout;

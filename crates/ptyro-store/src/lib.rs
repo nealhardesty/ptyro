@@ -205,6 +205,12 @@ const MIGRATIONS: &[M] = &[
     DELETE FROM trust WHERE scope LIKE 'recipe:%';
     DELETE FROM inbox WHERE kind IN ('gate', 'run');",
     ),
+    // Pull requests, review and integrating were removed (2026-11-17): the PR watcher's memory,
+    // the unsent line comments, when each worktree was last reviewed, and which worktrees were
+    // integrated. Branches, commits and worktrees aren't ptyro's database: they stay.
+    M::up(
+        "DELETE FROM kv WHERE key IN ('pr_watches', 'review_comments', 'reviewed', 'worktrees:integrated');",
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -824,9 +830,7 @@ impl Store {
                     last_used_ms: opt_ms(r.get(14)?),
                     status: None,
                     locked: false,
-                    pr: None,
                     title: r.get(15)?,
-                    integrated: None,
                 });
             }
             let mut st = c.prepare("SELECT project_id, scope, fingerprint, approved_at FROM trust")?;
@@ -1131,7 +1135,7 @@ mod tests {
     async fn orchestration_tables_recipe_trust_and_run_entries_are_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ptyro.db");
-        database_at(&path, MIGRATIONS.len() - 1);
+        database_at(&path, 6);
         {
             let c = Connection::open(&path).unwrap();
             c.execute_batch(
@@ -1153,14 +1157,38 @@ mod tests {
         assert_eq!(s.history(10).await.unwrap().len(), 1, "sessions stay");
     }
 
+    /// Removing pull requests and review takes what they kept in `kv` out, and nothing else.
+    #[tokio::test]
+    async fn the_review_and_pr_state_is_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ptyro.db");
+        database_at(&path, 7);
+        {
+            let c = Connection::open(&path).unwrap();
+            for k in ["pr_watches", "review_comments", "reviewed", "worktrees:integrated", "pairs"]
+            {
+                c.execute(
+                    "INSERT INTO kv (key, value, updated_at) VALUES (?1, '{}', 1)",
+                    params![k],
+                )
+                .unwrap();
+            }
+        }
+        let s = Store::open(&path).unwrap();
+        for gone in ["pr_watches", "review_comments", "reviewed", "worktrees:integrated"] {
+            assert_eq!(s.kv_get(gone.into()).await.unwrap(), None, "{gone}");
+        }
+        assert!(s.kv_get("pairs".into()).await.unwrap().is_some(), "pair mode's stays");
+        assert!(s.kv_get("k".into()).await.unwrap().is_some());
+    }
+
     /// Removing change sets takes their runs (with their events and mail) and their templates'
     /// trust out of the database, and nothing else.
     #[tokio::test]
     async fn change_set_runs_and_template_trust_are_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ptyro.db");
-        let before = MIGRATIONS.len() - 2;
-        database_at(&path, before);
+        database_at(&path, 5);
         {
             let c = Connection::open(&path).unwrap();
             c.execute_batch(
@@ -1409,9 +1437,7 @@ mod tests {
             last_used_ms: None,
             status: None,
             locked: false,
-            pr: None,
             title: Some("Fix the login bug".into()),
-            integrated: None,
         };
         s.save_worktree(wt.clone());
         s.save_trust(TrustRow {

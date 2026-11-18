@@ -343,6 +343,12 @@ async fn a_removed_request_is_answered_with_what_went() {
         (serde_json::json!({ "t": "msg_post", "to": "@user", "body": "hi" }), "agent mail"),
         (serde_json::json!({ "t": "lease_list" }), "file leases"),
         (serde_json::json!({ "t": "lead", "lead": "x", "op": { "op": "policy" } }), "lead agents"),
+        // Pull requests, review, the inspector, landing and verified-done (the same day).
+        (serde_json::json!({ "t": "pr_create", "addr": "w", "draft": true }), "pull requests"),
+        (serde_json::json!({ "t": "review_queue" }), "the review queue"),
+        (serde_json::json!({ "t": "worktree_diff", "addr": "w" }), "the diff inspector"),
+        (serde_json::json!({ "t": "worktree_finish", "addr": "w" }), "finishing worktrees"),
+        (serde_json::json!({ "t": "set_verify", "addr": "a", "check": "true" }), "verified-done"),
     ]
     .into_iter()
     .enumerate()

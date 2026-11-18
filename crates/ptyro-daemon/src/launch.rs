@@ -603,10 +603,9 @@ impl Daemon {
             stale_after_ms,
             record,
         };
-        // A relaunch in place keeps the session's check and its place in SHELLS.
+        // A relaunch in place keeps the session's place in SHELLS.
         let carried = self.session(l.id).map(|old| {
-            let m = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (m.verify.clone(), m.shelf.clone())
+            old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).shelf.clone()
         });
         let spawned_session = match structured {
             Some((protocol, opts, http)) => {
@@ -642,9 +641,8 @@ impl Daemon {
         // Its number in SHELLS (SPEC §23), before anyone can see it: a new one's, else the one
         // a restart keeps (no longer lost).
         let pending = crate::shells::take_pending(l.id);
-        if let Some((verify, shelf)) = carried.filter(|_| l.replace) {
+        if let Some(shelf) = carried.filter(|_| l.replace) {
             let mut m = session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            m.verify = verify;
             m.shelf = shelf.map(|f| crate::session::Shelf { lost: false, ..f });
         }
         if let Some(shelf) = pending {

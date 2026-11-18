@@ -25,8 +25,8 @@ pub enum GitError {
     Io(#[from] std::io::Error),
 }
 
+pub mod diff;
 pub mod orch;
-pub mod review;
 
 pub type Result<T, E = GitError> = std::result::Result<T, E>;
 

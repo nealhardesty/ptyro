@@ -283,7 +283,6 @@ fn here_only(req: &Request) -> bool {
             | NotifyTest
             | Doctor
             | SelfTest { .. }
-            | ReviewQueue
             | MachineList
             | MachineAdd { .. }
             | MachineRemove { .. }

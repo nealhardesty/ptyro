@@ -69,8 +69,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"workspace_list"}), READ, true),
         s(json!({"t":"worktree_list","project":null}), READ, true),
         s(json!({"t":"worktree_get","addr":a}), READ, true),
-        s(json!({"t":"worktree_diff","addr":a,"against":"base"}), READ, true),
-        s(json!({"t":"worktree_log","addr":a}), READ, true),
         s(json!({"t":"checkpoint_list","addr":a}), READ, true),
         s(json!({"t":"chat_list","all":true}), READ, true),
         s(json!({"t":"chat_read","chat":a}), READ, true),
@@ -105,9 +103,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"replay","addr":a}), READ, true),
         s(json!({"t":"export","addr":a,"format":"text"}), READ, true),
         s(json!({"t":"web","on":null,"via":null}), READ, true),
-        s(json!({"t":"review_list","addr":a}), READ, true),
-        s(json!({"t":"review_queue"}), READ, true),
-        s(json!({"t":"pr_get","addr":a,"refresh":false}), READ, true),
         s(json!({"t":"load_view","name":a}), READ, true),
         s(json!({"t":"push_key"}), READ, true),
         s(
@@ -158,12 +153,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"remove","addr":a}), CONTROL, true),
         s(json!({"t":"restart","addr":a}), CONTROL, true),
         s(json!({"t":"rename","addr":a,"name":"x"}), CONTROL, true),
-        s(
-            json!({"t":"review_add","addr":a,"path":"a","line":1,"code":null,"text":"x"}),
-            CONTROL,
-            true,
-        ),
-        s(json!({"t":"review_send","addr":a,"session":null,"note":null}), CONTROL, true),
         s(json!({"t":"convert","addr":a,"structured":false,"force":false}), CONTROL, true),
         s(json!({"t":"retitle","addr":a,"title":"x","worktree":false}), CONTROL, true),
         s(json!({"t":"summarize","addr":a}), CONTROL, true),
@@ -179,16 +168,11 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"adopt","addr":a}), CONTROL, true),
         // A configured agent (its command comes from the user's config) is control…
         s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude"}))}), CONTROL, false),
-        // …any other command line, or a verify check, is full.
+        // …any other command line is full.
         s(json!({"t":"spawn","spec":spawn_spec(json!({"argv":["true"]}))}), FULL, false),
         s(json!({"t":"spawn","spec":spawn_spec(json!({}))}), FULL, false),
         s(
             json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude","argv":["x"]}))}),
-            FULL,
-            false,
-        ),
-        s(
-            json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude","verify":"true"}))}),
             FULL,
             false,
         ),
@@ -268,7 +252,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"worktree_archive","addr":a,"stop_sessions":false}), FULL, false),
         s(json!({"t":"worktree_restore","addr":a}), FULL, false),
         s(json!({"t":"worktree_archive_delete","addr":a}), FULL, false),
-        s(json!({"t":"worktree_finish","addr":a,"integrate":false}), FULL, false),
         s(json!({"t":"profile_env","name":a}), FULL, false),
         s(json!({"t":"profile_rename","old":a,"new":"x"}), FULL, false),
         s(json!({"t":"profile_resolve","spec":spawn_spec(json!({}))}), FULL, false),
@@ -286,30 +269,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"notify_test"}), FULL, false),
         s(json!({"t":"doctor"}), FULL, false),
         s(json!({"t":"self_test","adapter":a}), FULL, false),
-        s(
-            json!({"t":"worktree_commit","addr":a,"message":"x","paths":[],"all":false}),
-            FULL,
-            false,
-        ),
-        s(
-            json!({"t":"worktree_integrate","addr":a,"into":null,"cherry_pick":false,"push":false}),
-            FULL,
-            false,
-        ),
         s(json!({"t":"worktree_pair","addr":a,"off":true,"refresh":false}), FULL, false),
-        s(
-            json!({"t":"pr_create","addr":a,"draft":true,"title":null,"body":null,"base":null}),
-            FULL,
-            false,
-        ),
-        s(json!({"t":"pr_fix","addr":a}), FULL, false),
-        s(json!({"t":"pr_automerge","addr":a,"method":null,"off":true}), FULL, false),
-        s(json!({"t":"pr_watch","addr":a,"off":true}), FULL, false),
-        s(json!({"t":"pr_reply","addr":a,"comment":null,"text":"x"}), FULL, false),
-        s(json!({"t":"review_remove","addr":a,"id":null}), FULL, false),
-        s(json!({"t":"review_done","addr":a}), FULL, false),
         s(json!({"t":"checkpoint_restore","addr":a,"n":null,"turn":null}), FULL, false),
-        s(json!({"t":"set_verify","addr":a,"check":null,"max_bounces":null}), FULL, false),
     ]
 }
 

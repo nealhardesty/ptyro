@@ -395,13 +395,11 @@ impl Daemon {
             last_used_ms: None,
             status: None,
             locked: false,
-            pr: None,
             title: spec
                 .title
                 .clone()
                 .or_else(|| spec.prompt.clone())
                 .map(|t| ptyro_core::session::brief(&t, 120)),
-            integrated: None,
         };
         self.put_worktree(wt.clone());
         let progress = |step: &str| {
@@ -551,19 +549,10 @@ impl Daemon {
                 workspace: Some(workspace.clone()),
                 confirmed: true,
                 prompt: spec.prompt.clone(),
-                verify: spec.verify.clone(),
                 structured: spec.structured,
                 ..SpawnSpec::default()
             };
             match (&setup, start) {
-                _ if self.review_gate().is_some() => {
-                    let n = self.review_gate().unwrap_or(0);
-                    let pos = self.queue_spawn(spawn);
-                    agent_pending = true;
-                    notes.push(format!(
-                        "{n} worktrees wait for review (review.max_unreviewed): the agent starts when you've reviewed one (queued #{pos})"
-                    ));
-                }
                 (Some(s), StartAgents::AfterSetup) => {
                     agent_pending = true;
                     let (me, s) = (Arc::clone(self), Arc::clone(s));
@@ -581,6 +570,10 @@ impl Daemon {
             }
         }
         progress("ready");
+        // Made, so nothing writes this worktree again under the lookup's feet.
+        if let (Some(n), None) = (spec.pr, &wt.title) {
+            self.title_from_pr(&wt, n);
+        }
         // Started from a scratchpad item (NOTE1.3): the item says where it is being worked.
         if let Some(line) = spec.pad_item {
             self.pad_started(line, &wt.qualified());
@@ -835,7 +828,7 @@ impl Daemon {
         }
         self.drop_worktree(wt.clone());
         self.forget_launch(&wt.id).await;
-        self.pad_finished(&wt.qualified(), wt.pr.as_ref().map(|p| u64::from(p.number)));
+        self.pad_finished(&wt.qualified());
         notes.insert(0, format!("removed {}", wt.qualified()));
         Ok(Reply::Removed { notes })
     }
@@ -1000,9 +993,7 @@ impl Daemon {
                     last_used_ms: None,
                     status: None,
                     locked: false,
-                    pr: None,
                     title: None,
-                    integrated: None,
                 });
             }
         }
@@ -1014,7 +1005,7 @@ impl Daemon {
         }
     }
 
-    /// Stale worktrees (SPEC §10.8): gone from disk, branch merged (a squash-merged PR too), or
+    /// Stale worktrees (SPEC §10.8): gone from disk, branch merged, or
     /// unused for a while; a locked one is being kept, so only its missing directory counts.
     /// Each comes with what it takes on disk, the biggest first.
     pub(crate) async fn gc(self: &Arc<Self>) -> Result<Reply, Error> {
@@ -1054,17 +1045,6 @@ impl Daemon {
                 if let Some(base) = merged {
                     reasons.push(format!("branch merged into {base}"));
                 }
-            }
-            // A squash or rebase merge leaves the branch's commits out of the base: the PR says.
-            if w.path.exists() && reasons.is_empty() && w.shipped() {
-                reasons.push(
-                    if w.pr.as_ref().is_some_and(|p| p.state == "MERGED") {
-                        "its PR merged"
-                    } else {
-                        "integrated into the main branch"
-                    }
-                    .to_owned(),
-                );
             }
             let has_sessions = !self.sessions_in(&w.id).is_empty();
             let last = w.last_used_ms.unwrap_or(w.created_ms);
@@ -1338,9 +1318,6 @@ impl Daemon {
                 })
                 .await?;
                 Ok(Reply::Branches { names })
-            }
-            Request::WorktreeFinish { addr, integrate } => {
-                self.finish_worktree(&addr, integrate).await
             }
             Request::WorktreeRefresh { addr } => {
                 let wt = self.find_worktree(&addr)?;

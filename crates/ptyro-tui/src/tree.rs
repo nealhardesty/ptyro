@@ -514,7 +514,6 @@ mod tests {
             last_prompt_ms: None,
             turns: 0,
             last_output_ms: None,
-            verify: None,
             held: false,
             structured: None,
             task: None,
@@ -556,9 +555,7 @@ mod tests {
             last_used_ms: None,
             status: None,
             locked: false,
-            pr: None,
             title: None,
-            integrated: None,
         }
     }
 

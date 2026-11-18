@@ -48,8 +48,6 @@ action by name.
 | `p` | peek at the session that needs you most (else this one) and answer it without switching |
 | `i` | the inbox: everything that wanted you, per workspace |
 | `b` | broadcast one prompt into every session marked with `Space` in the sidebar |
-| `D` | the inspector: diff, comments, commit, PR, checks, ports, events |
-| `Q` | the review queue |
 | `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
 | `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones, `i` only the imported ones (again: every chat), `I` imports your agents' own histories (asks first, and takes `chat import`'s flags: `codex --since 30d --profile work --dry-run`; ⏎ alone imports everything) |
@@ -114,7 +112,6 @@ setting is. A shell's pane header is the strip of its workspace's shells, the sh
 brackets: a click on a number shows that shell, a click on `＋` starts one.
 
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
-`Ctrl-Q D` closes its view again when it is already open.
 
 **Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
 they put there is a clone of the session they split. Everything else opens full sized: a new
@@ -137,10 +134,9 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `b` | broadcast one prompt into the marked sessions |
 | `n` / `C-n` / `N` | new task here / quick new (another of this worktree's agent, here) / new worktree |
 | `a` `p` `i` `e` | next attention / peek / inbox / why this status |
-| `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill a session now. Its pane shows the next session |
+| `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
-| `D` | inspector |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `Z` | fold everything: every workspace, project, worktree and CHATS section, so the sidebar is one line a workspace (the selection moves to the row it folded into); `Z` again unfolds it as it was before, and whatever arrived meanwhile opens too |
@@ -149,7 +145,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
 | `;` / `'` | the scratchpad / add a line to it |
-| `F` / `!` | finish this worktree (commit, then a PR or integrate) / a new shell in it, full sized |
+| `!` | a new shell in this worktree, full sized |
 | `c` | a new shell in SHELLS, in the selected row's directory (on a SHELLS heading: that workspace's) |
 | `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
 | `H` / `M` / `I` / `U` / `^` | home / mend what the health badge found / about ptyro / set up agents and tools / update them and ptyro |
@@ -177,25 +173,6 @@ denies. `Ctrl-C` clears the draft, or interrupts the turn when the draft is empt
 `p` peeks at it, `n` notes it to the scratchpad (a line you
 can edit, with a link back to the session), `r` marks it read, `R` marks all read, `q` or `Esc`
 closes.
-
-## The inspector (`Ctrl-Q D`)
-
-Tabs `1`–`5` (or `Tab` / `Shift-Tab`): Diff, Commits, Checks, Ports, Events.
-
-| Key | Does |
-|---|---|
-| `j` / `k`, `d` / `u` (`PageDown` / `PageUp`) | move a line / 20 lines |
-| `n` / `p` (`]` / `[`, `J` / `K`, `Right` / `Left`) | next / previous file |
-| `a` | what to diff against: base, unpushed, last turn, uncommitted |
-| `s` | side by side |
-| `c` or `⏎` / `x` | comment on a line / drop a comment |
-| `S` | send every comment to the agent as one prompt (once its turn is over) |
-| `Space` / `C` | mark files / commit them (or everything) as the worktree's profile |
-| `E` / `A` | commit in your editor / ask the agent to commit |
-| `P` | push and open a PR (a draft while `[github] draft = true`, the default) |
-| `I` | integrate: rebase onto main and fast-forward it |
-| `f` / `m` / `w` | Checks tab: send failing logs to the agent / auto-merge / watch |
-| `r` / `q` | refresh / close |
 
 ## Chats (`Ctrl-Q m`, `Ctrl-Q g`)
 
@@ -322,7 +299,6 @@ key include: `project.add`
 
 ## Other overlays
 
-- **Review queue** (`Ctrl-Q Q`): `⏎` opens the inspector, `d` marks it reviewed.
 - **Tour** (`ptyro tour`, `help.tour`): a coach in the corner says what to do next, with your keys;
   it never takes keys itself. Leave with `Ctrl-Q d`; everything the tour made is deleted.
   `help.tour` again starts it over.

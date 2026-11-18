@@ -68,7 +68,7 @@ impl Daemon {
         // agent's refusals, never a client that merely *says* it is a hook (`kind` comes from
         // the client's own Hello). What it sends is its own session's, though: a process placed
         // in one session can't report a status, a hook or a statusline for another, which would
-        // forge what a notification or the review queue believes.
+        // forge what a notification or the sidebar believes.
         if let Request::Hook { session: target, .. }
         | Request::StatusLine { session: target, .. }
         | Request::Report { addr: target, .. } = req

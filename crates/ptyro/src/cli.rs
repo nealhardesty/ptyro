@@ -292,8 +292,6 @@ async fn dispatch(
             take_changes,
             pr,
             issue,
-            unqueued,
-            verify,
             structured,
             argv,
         }) => {
@@ -322,8 +320,6 @@ async fn dispatch(
                 take_changes,
                 pr,
                 issue,
-                unqueued,
-                verify,
                 structured,
                 welcome: false,
                 pad_item: None,
@@ -580,15 +576,7 @@ async fn dispatch(
             crate::backup::run(&ctx, opts, json).await
         }
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
-        Some(Cmd::Pr { cmd }) => crate::ship::pr(&ctx, cmd).await,
-        Some(Cmd::WatchPr { worktree, off }) => {
-            crate::ship::pr(&ctx, crate::ship::PrCmd::Watch { worktree, off }).await
-        }
-        Some(Cmd::Review { cmd }) => crate::ship::review(&ctx, cmd).await,
         Some(Cmd::Checkpoint { cmd }) => crate::checkpoint::checkpoint(&ctx, cmd).await,
-        Some(Cmd::Verify { session, check, off, max_bounces }) => {
-            crate::checkpoint::verify(&ctx, session, check, off, max_bounces).await
-        }
         Some(Cmd::Mcp { chat: _ }) => crate::mcp::serve(&ctx).await,
         Some(Cmd::Proxy) => crate::remote::proxy(&ctx).await,
         Some(Cmd::Convert { session, to, force }) => {
@@ -998,9 +986,6 @@ pub struct NewArgs {
     pub welcome: bool,
     pub pr: Option<u32>,
     pub issue: Option<String>,
-    pub unqueued: bool,
-    /// Verified-done check (M7.9).
-    pub verify: Option<String>,
     /// Structured mode (M10).
     pub structured: bool,
     /// Started from the scratchpad item on this line (NOTE1.3).
@@ -1188,8 +1173,6 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         size,
         prompt: a.prompt,
         title: a.title,
-        unqueued: a.unqueued,
-        verify: a.verify,
         structured: a.structured,
         again: a.again,
         ..SpawnSpec::default()
@@ -1201,12 +1184,6 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         }
     })
     .await?;
-    if let Reply::Queued { position, unreviewed } = reply {
-        eprintln!(
-            "queued (#{position}): {unreviewed} worktrees wait for review (review.max_unreviewed); it starts when you've reviewed one (`ptyro review queue`), or pass --unqueued"
-        );
-        return Ok(0);
-    }
     let info = session_of(reply)?;
     if attaching {
         let tui = ptyro_tui::Options { welcome: a.welcome, ..Default::default() };

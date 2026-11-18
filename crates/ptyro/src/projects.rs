@@ -173,15 +173,9 @@ pub enum WsCmd {
 }
 
 #[derive(Subcommand)]
+// Parsed once per command line: boxing `New` would buy nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum WtCmd {
-    /// Finish a worktree: commit what's left (its agent asked to; else its title is the message),
-    /// then push and open a PR (default) or --integrate into the main branch
-    Finish {
-        worktree: Option<String>,
-        /// Rebase onto the main branch and fast-forward it, instead of a PR
-        #[arg(long)]
-        integrate: bool,
-    },
     /// Archive a worktree: a snapshot of its files and its branch are kept, the worktree goes;
     /// `wt restore` brings it back as it was. Never loses work, so it doesn't refuse like `rm`
     Archive {
@@ -312,56 +306,6 @@ pub enum WtCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show the worktree's changes against its base
-    Diff {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: Option<String>,
-        /// base (default: everything since the base), upstream (unpushed), last-turn (what the
-        /// agent's last turn did), head (uncommitted only)
-        #[arg(long, default_value = "base", value_parser = ["base", "upstream", "last-turn", "head"])]
-        against: String,
-        /// Files and line counts only
-        #[arg(long)]
-        stat: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Commits since the base
-    Log {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Commit as the worktree's profile: `-m MSG` with --all or files, or --ask-agent
-    Commit {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: Option<String>,
-        #[arg(short, long, required_unless_present = "ask_agent")]
-        message: Option<String>,
-        /// Stage everything first (new files too)
-        #[arg(long)]
-        all: bool,
-        /// Stage these files first
-        #[arg(last = true)]
-        paths: Vec<String>,
-        /// Ask the worktree's agent to commit its work instead (once its turn is over)
-        #[arg(long, conflicts_with_all = ["message", "all"])]
-        ask_agent: bool,
-    },
-    /// Rebase onto the main branch and fast-forward it (or --cherry-pick the commits there)
-    Integrate {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: String,
-        /// The target branch (default: the project's default branch)
-        #[arg(long)]
-        into: Option<String>,
-        #[arg(long)]
-        cherry_pick: bool,
-        /// Push the target branch afterwards
-        #[arg(long)]
-        push: bool,
-    },
     /// Pair mode: the project's main checkout shows this worktree (your IDE and dev server see
     /// the agent's work); `unpair` brings your own work back
     Pair {
@@ -481,10 +425,7 @@ fn status_line(w: &WorktreeInfo) -> String {
         if l.open() && s.insertions + s.deletions > 0 {
             parts.push(format!("+{} -{}", s.insertions, s.deletions));
         }
-        // A merged or integrated worktree says so itself (it is not "pushed", it is in).
-        if w.shipped() {
-            parts.push("shipped".into());
-        } else if !l.quiet() {
+        if !l.quiet() {
             parts.push(l.words());
         }
         if s.base_behind > 0 {
@@ -926,8 +867,8 @@ pub async fn new_in_new_worktree(
     // The worktree takes the profile asked for (`--profile`, or `claude@work`'s), so the session
     // started in it below agrees with its pin.
     let agent_profile = a.agent.as_deref().and_then(|x| ptyro_agents::split_agent(x).1);
-    // No agent here: the session is started below like any `ptyro new`, so its name, command,
-    // --unqueued and output are the usual ones.
+    // No agent here: the session is started below like any `ptyro new`, so its name, command
+    // and output are the usual ones.
     let spec = WorktreeSpec {
         project,
         name: (!name.is_empty()).then_some(name),
@@ -1031,20 +972,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                     status_line(w)
                 );
             }
-            Ok(0)
-        }
-        WtCmd::Finish { worktree, integrate } => {
-            let addr = wt_addr(worktree)?;
-            eprintln!(
-                "finishing {addr}: committing what's left, then {}…",
-                if integrate { "integrating" } else { "a PR" }
-            );
-            let Reply::Notes { notes: n } =
-                c.request(Request::WorktreeFinish { addr, integrate }).await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            notes(&n);
             Ok(0)
         }
         WtCmd::Archive { worktree, stop_sessions } => {
@@ -1286,13 +1213,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 let words = s.left().words();
                 println!(
                     "  to do     {}",
-                    if info.shipped() {
-                        "nothing: shipped".to_owned()
-                    } else if words.is_empty() {
-                        "nothing yet".to_owned()
-                    } else {
-                        words
-                    }
+                    if words.is_empty() { "nothing yet".to_owned() } else { words }
                 );
                 if let (Some(h), Some(subj)) = (&s.head, &s.subject) {
                     println!("  last      {h} {subj}");
@@ -1303,28 +1224,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 info.state.label(),
                 if info.locked { ", locked (sessions running)" } else { "" }
             );
-            Ok(0)
-        }
-        WtCmd::Diff { worktree, against, stat, json } => {
-            crate::ship::diff(ctx, &c, wt_addr(worktree)?, &against, stat, json).await
-        }
-        WtCmd::Log { worktree, json } => crate::ship::log(&c, wt_addr(worktree)?, json).await,
-        WtCmd::Commit { worktree, message, all, paths, ask_agent } => {
-            crate::ship::commit(&c, wt_addr(worktree)?, message, all, paths, ask_agent).await
-        }
-        WtCmd::Integrate { worktree, into, cherry_pick, push } => {
-            let Reply::Notes { notes: n } = c
-                .request(Request::WorktreeIntegrate {
-                    addr: addr_here(worktree)?,
-                    into,
-                    cherry_pick,
-                    push,
-                })
-                .await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            notes(&n);
             Ok(0)
         }
         WtCmd::Pair { worktree, refresh } => {

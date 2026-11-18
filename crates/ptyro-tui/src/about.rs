@@ -667,18 +667,5 @@ mod tests {
         );
         // Pushed and clean: done, and the line counts go quiet.
         assert_eq!(stat(&wt(st(json!({"upstream": "origin/x", "pushed": true})))), " ✓ pushed");
-        // An open PR's badge says it for the row; a merged one says it too.
-        let mut with_pr = wt(st(json!({"upstream": "origin/x", "pushed": true})));
-        with_pr.pr = serde_json::from_value(json!({
-            "number": 7, "state": "OPEN", "url": "u", "title": "t", "at_ms": 0
-        }))
-        .ok();
-        assert_eq!(stat(&with_pr), "", "{:?}", with_pr.pr);
-        let mut merged = wt(st(json!({"modified": 1})));
-        merged.pr = serde_json::from_value(json!({
-            "number": 7, "state": "MERGED", "url": "u", "title": "t", "at_ms": 0
-        }))
-        .ok();
-        assert_eq!(stat(&merged), "", "shipped: no counts");
     }
 }

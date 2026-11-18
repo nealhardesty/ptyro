@@ -9,4 +9,4 @@ ptyro-protocol 0
 ptyro-pty 0
 ptyro-store 0
 ptyro-term 3
-ptyro-tui 16
+ptyro-tui 15

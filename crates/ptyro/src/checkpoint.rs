@@ -1,10 +1,10 @@
-//! Checkpoints and verified-done from the shell (SPEC §15.3, M7.9): `ptyro checkpoint` lists,
-//! diffs and restores the per-turn checkpoints of a session's worktree; `ptyro verify` sets the
-//! check an agent's turns must pass.
+//! Checkpoints from the shell (SPEC §15.3): `ptyro checkpoint` lists, diffs and restores the
+//! per-turn checkpoints of a session's worktree.
 
 use std::io::IsTerminal;
 
 use clap::Subcommand;
+use ptyro_core::model::{DiffDoc, LineKind};
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 
@@ -59,6 +59,43 @@ fn notes(r: Reply) -> Result<i32, Error> {
     }
 }
 
+/// A diff as `git diff` would print it, coloured on a terminal.
+fn render_diff(doc: &DiffDoc, color: bool) -> String {
+    let (g, r, c, b, z) = if color {
+        ("\x1b[32m", "\x1b[31m", "\x1b[36m", "\x1b[1m", "\x1b[0m")
+    } else {
+        ("", "", "", "", "")
+    };
+    let mut out = String::new();
+    for f in &doc.files {
+        let from = f.old_path.as_deref().unwrap_or(&f.path);
+        out.push_str(&format!("{b}diff --ptyro a/{from} b/{} ({}){z}\n", f.path, f.status));
+        if f.binary {
+            out.push_str("Binary file\n");
+            continue;
+        }
+        for h in &f.hunks {
+            out.push_str(&format!("{c}{}{z}\n", h.header));
+            for l in &h.lines {
+                let (mark, col) = match l.kind {
+                    LineKind::Added => ('+', g),
+                    LineKind::Removed => ('-', r),
+                    LineKind::Context => (' ', ""),
+                };
+                out.push_str(&format!(
+                    "{col}{mark}{}{}\n",
+                    l.text,
+                    if col.is_empty() { "" } else { z }
+                ));
+            }
+        }
+    }
+    if doc.truncated {
+        out.push_str("… (too big: the rest is left out)\n");
+    }
+    out
+}
+
 pub async fn checkpoint(ctx: &Ctx, cmd: CheckpointCmd) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
     match cmd {
@@ -111,7 +148,7 @@ pub async fn checkpoint(ctx: &Ctx, cmd: CheckpointCmd) -> Result<i32, Error> {
                     );
                 }
             } else {
-                print!("{}", crate::ship::render_diff(&doc, std::io::stdout().is_terminal()));
+                print!("{}", render_diff(&doc, std::io::stdout().is_terminal()));
             }
             Ok(0)
         }
@@ -132,31 +169,4 @@ pub async fn checkpoint(ctx: &Ctx, cmd: CheckpointCmd) -> Result<i32, Error> {
             notes(c.request(Request::CheckpointRestore { addr, n, turn }).await?)
         }
     }
-}
-
-pub async fn verify(
-    ctx: &Ctx,
-    session: String,
-    check: Option<String>,
-    off: bool,
-    max_bounces: Option<u32>,
-) -> Result<i32, Error> {
-    if check.is_none() && !off {
-        return Err(Error::invalid(
-            "give the check (`scripts.run.test`, a run script, a command), or --off",
-        ));
-    }
-    let c = ctx.connect(false).await.map_err(no_daemon)?;
-    let info = crate::cli::session_of(
-        c.request(Request::SetVerify { addr: session, check: check.filter(|_| !off), max_bounces })
-            .await?,
-    )?;
-    match info.verify {
-        Some(v) => eprintln!(
-            "{}: its turns are done when `{}` passes (bounced back up to {}×)",
-            info.name, v.check, v.max_bounces
-        ),
-        None => eprintln!("{}: verified-done off", info.name),
-    }
-    Ok(0)
 }

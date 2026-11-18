@@ -8,7 +8,7 @@ ptyro reads two kinds of file. Both are optional.
 | File | Whose | What goes in it |
 |---|---|---|
 | `~/.config/ptyro/config.toml` | yours | the UI, agents, profiles, notifications, the daemon, remote access |
-| `.ptyro.toml` in a repository | the project's (committed) | worktree setup, scripts, ports, prompt snippets, verified-done |
+| `.ptyro.toml` in a repository | the project's (committed) | worktree setup, scripts, ports, prompt snippets |
 | `.ptyro.local.toml` beside it | yours (not committed) | overrides for `.ptyro.toml` |
 
 **You don't have to edit these files.** Settings (`C-q C` in the TUI, More → Settings on the
@@ -61,7 +61,6 @@ tint_borders = true       # colour pane dividers with the session's profile
 [worktrees]
 location = "sibling"      # data (default: ptyro's data dir) | sibling (<repo>.worktrees/) | in-repo
 branch_template = "{user}/{name}"   # {name} {user} {date} {issue} {slug}; default {name}
-archive_on_merge = true   # archive a worktree once its PR merges (default false); `wt restore` brings it back
 
 [ports]
 range = "20000-29999"     # each worktree gets `count` ports from here
@@ -95,15 +94,6 @@ protocol = "acp"                          # `--structured` speaks the Agent Clie
 [attention]
 scope = "current-first"                   # where `a` looks: current-first | current | global
 
-[github]
-draft = true                              # new PRs are drafts
-merge_method = "squash"                   # for `ptyro pr automerge`
-escalate_after = "2h"                     # a PR still red after this asks for you
-
-[review]
-max_unreviewed = 3                        # hold new agents while 3 worktrees wait for review
-digest = "30m"                            # "ready for review" digest, at most this often
-
 [orchestration]
 checkpoints = true                        # a checkpoint after every agent turn that changed files
 
@@ -125,7 +115,7 @@ enabled = true                            # a `≈` line after each agent turn, 
 # editor = "nvim"                         # a command line; default: [editors], $VISUAL, $EDITOR, nvim/vim/nano/vi
 # path = "~/Sync/pad.md"                  # default: scratchpad.md in ptyro's data directory
 # keep = 30                               # days of saved copies (the newest 20 always stay)
-# tick_on_finish = false                  # leave an item open when its worktree is merged or removed
+# tick_on_finish = false                  # leave an item open when its worktree is removed
 
 [recorder]
 enabled = true                            # record every session's output (per agent: record = false)
@@ -262,9 +252,6 @@ default = true
 [scripts.run.test]
 command = "cargo test"
 
-[verify]
-check = "test"                       # "done" means this run script passes (with --verify)
-auto = true                          # ...for every agent session in this project
 ```
 
 - **Files git doesn't carry.** Anything listed in `.worktreeinclude` (gitignore syntax) that git
@@ -272,12 +259,12 @@ auto = true                          # ...for every agent session in this projec
 - **Scripts run only once you trust them.** ptyro shows the exact script text first, and asks
   again whenever it changes (`ptyro project trust`).
 - **Trusting a command trusts the files it runs.** Trust pins the text (`cargo test`,
-  `./scripts/lint.sh`), not what those commands read, and agents edit the checkout. Scripts,
-  `after_turn` and `[verify]` checks run as you, with your full environment and network,
+  `./scripts/lint.sh`), not what those commands read, and agents edit the checkout. Scripts
+  and `after_turn` run as you, with your full environment and network,
   outside any sandbox an agent runs in, right after an agent's turn. Trust a project only if
   you'd run its build and tests yourself after any agent's edit. (ptyro's own background `git`
-  calls run no hooks and no `core.fsmonitor`; a commit, push, merge or new worktree you ask for
-  runs your hooks as git would.)
+  calls run no hooks and no `core.fsmonitor`; a new worktree you ask for runs your hooks as git
+  would.)
 - **Other tools' config is read too.** Conductor (`.conductor/settings.toml`), Superset
   (`.superset/config.json`), the Codex app (`.codex/environments/`), Claude Desktop
   (`.claude/launch.json`), Cursor (`.cursor/environment.json`) and Copilot

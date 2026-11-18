@@ -24,8 +24,6 @@ pub enum Make {
     Profile(Option<Box<Form>>),
     /// `chat import`, asked first (SPEC §22.10): what to bring in.
     ChatImport,
-    /// A PR for this worktree (by id).
-    PrCreate(String),
     /// A project, into the chosen workspace.
     ProjectAdd,
     /// Which workspaces this project (by id) is in.
@@ -799,17 +797,6 @@ impl App {
     pub(crate) fn form_submit(&mut self, mut form: Box<Form>) {
         match form.make.clone() {
             Make::Cli(base) => return self.run_cli(&form.cli_args(&base)),
-            Make::PrCreate(addr) => {
-                self.toast("pushing and opening a PR…");
-                let req = Request::PrCreate {
-                    addr,
-                    draft: !form.get("draft").is_empty(),
-                    title: form.opt("title"),
-                    body: form.opt("body"),
-                    base: form.opt("base"),
-                };
-                return self.request(Pending::Done(String::new()), req);
-            }
             Make::ProjectAdd => {
                 let path = form.get("path").trim().to_owned();
                 let path = match path.strip_prefix("~/") {
@@ -1155,27 +1142,6 @@ impl App {
 }
 
 impl App {
-    /// `P` in the inspector: push and open a PR, its title, body, base and whether a draft.
-    pub(crate) fn open_pr_form(&mut self, worktree: String) {
-        let name = self.worktree(&worktree).map_or_else(|| worktree.clone(), |w| w.qualified());
-        let fields = vec![
-            Field::text("title", "Title", "(from the commits)", "The PR's title"),
-            Field::text("body", "Body", "(from the commits)", "What it says"),
-            Field::text("base", "Into", "(the base's branch)", "The branch it merges into"),
-            Field::yes_no(
-                "draft",
-                "Draft",
-                self.config.github.draft,
-                "A draft isn't ready for review yet (the default: github.draft)",
-            ),
-        ];
-        let mut form = Form::new(format!("Open a PR for {name}"), fields, Make::PrCreate(worktree));
-        form.verb = "push and open";
-        self.open(form);
-    }
-}
-
-impl App {
     /// Adding a project: where it is (`path`, when picked) and which workspace it joins.
     pub(crate) fn open_project_form(&mut self, path: Option<std::path::PathBuf>) {
         let fields = vec![
@@ -1331,7 +1297,6 @@ pub fn session_wizard(
         base: form.opt("base"),
         no_setup: form.get("setup").is_empty(),
         no_fetch: form.get("fetch").is_empty(),
-        verify: form.opt("verify"),
         structured: !form.get("structured").is_empty(),
         command,
         title: form.opt("title"),
@@ -1459,12 +1424,6 @@ impl App {
             )
             .with(w.name.clone().unwrap_or_default()),
             Field::text("title", "Title", "(the task)", "What the sidebar says it is"),
-            Field::text(
-                "verify",
-                "Verify",
-                "(none)",
-                "Verified-done: its turns count as done only when this check passes",
-            ),
             Field::yes_no(
                 "structured",
                 "Structured",

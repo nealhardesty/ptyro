@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use ptyro_core::chats::{ChatInfo, ChatNode};
 use ptyro_core::input::InputEvent;
 use ptyro_core::model::{
-    CommitInfo, DiffAgainst, DiffDoc, GcEntry, PrInfo, ProfileInfo, ProfileReason, ProjectInfo,
-    RemoveOpts, ReviewComment, ReviewItem, ScriptsInfo, WorkspaceInfo, WorktreeInfo, WorktreeSpec,
+    DiffDoc, GcEntry, ProfileInfo, ProfileReason, ProjectInfo, RemoveOpts, ScriptsInfo,
+    WorkspaceInfo, WorktreeInfo, WorktreeSpec,
 };
 use ptyro_core::scratchpad::{Item, Snapshot};
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
@@ -36,7 +36,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 42 };
+pub const PROTO: Version = Version { major: 1, minor: 43 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -68,6 +68,24 @@ pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
     ("radar", "the collision radar"),
     ("lead_start", "lead agents"),
     ("lead", "lead agents"),
+    ("worktree_diff", "the diff inspector"),
+    ("worktree_log", "the diff inspector"),
+    ("worktree_commit", "committing from ptyro"),
+    ("worktree_integrate", "integrating worktrees"),
+    ("worktree_finish", "finishing worktrees"),
+    ("pr_get", "pull requests"),
+    ("pr_create", "pull requests"),
+    ("pr_fix", "pull requests"),
+    ("pr_automerge", "pull requests"),
+    ("pr_watch", "pull requests"),
+    ("pr_reply", "pull requests"),
+    ("review_add", "review"),
+    ("review_list", "review"),
+    ("review_remove", "review"),
+    ("review_send", "review"),
+    ("review_queue", "the review queue"),
+    ("review_done", "the review queue"),
+    ("set_verify", "verified-done"),
 ];
 
 /// A checkpoint of a session's worktree, taken after an agent turn (SPEC §15.3).
@@ -766,13 +784,6 @@ pub enum Request {
         #[serde(default)]
         project: Option<String>,
     },
-    /// Finish a worktree (UX1.12): commit what's left (its agent asked for the message, else
-    /// its title is the message), then open a PR, or `integrate` into the main branch.
-    WorktreeFinish {
-        addr: String,
-        #[serde(default)]
-        integrate: bool,
-    },
 
     // ── profiles (SPEC §10.10) ──
     ProfileList,
@@ -930,38 +941,7 @@ pub enum Request {
         adapter: String,
     },
 
-    // ── review and ship (SPEC §10.11, M6) ──
-    /// The worktree's changes against `against` (its working tree included).
-    WorktreeDiff {
-        addr: String,
-        #[serde(default)]
-        against: DiffAgainst,
-    },
-    /// Commits since the base, newest first.
-    WorktreeLog {
-        addr: String,
-    },
-    /// Stage (`all`, or `paths`) and commit as the worktree's profile.
-    WorktreeCommit {
-        addr: String,
-        message: String,
-        #[serde(default)]
-        paths: Vec<String>,
-        #[serde(default)]
-        all: bool,
-    },
-    /// Rebase onto the base and fast-forward `into` (default: the project's default branch), or
-    /// cherry-pick the commits there.
-    WorktreeIntegrate {
-        addr: String,
-        #[serde(default)]
-        into: Option<String>,
-        #[serde(default)]
-        cherry_pick: bool,
-        /// Push the target branch afterwards.
-        #[serde(default)]
-        push: bool,
-    },
+    // ── pair mode (SPEC §10.11) ──
     /// Pair mode: show the worktree's state in the project's main checkout, and (`off`) put the
     /// main checkout back, carrying edits made there into the worktree.
     WorktreePair {
@@ -971,80 +951,6 @@ pub enum Request {
         /// Re-sync the main checkout with the worktree.
         #[serde(default)]
         refresh: bool,
-    },
-    /// The worktree's pull request (`refresh` asks `gh` now).
-    PrGet {
-        addr: String,
-        #[serde(default)]
-        refresh: bool,
-    },
-    /// Push the branch and open a pull request.
-    PrCreate {
-        addr: String,
-        #[serde(default)]
-        draft: bool,
-        #[serde(default)]
-        title: Option<String>,
-        #[serde(default)]
-        body: Option<String>,
-        #[serde(default)]
-        base: Option<String>,
-    },
-    /// Send the failing checks' logs to the worktree's agent.
-    PrFix {
-        addr: String,
-    },
-    /// `gh pr merge --auto` (or turn it off).
-    PrAutomerge {
-        addr: String,
-        #[serde(default)]
-        method: Option<String>,
-        #[serde(default)]
-        off: bool,
-    },
-    /// Feed the PR's new failures and review comments to the worktree's agent (`off` stops).
-    PrWatch {
-        addr: String,
-        #[serde(default)]
-        off: bool,
-    },
-    /// Reply on a review thread (or the PR) with "via ptyro".
-    PrReply {
-        addr: String,
-        #[serde(default)]
-        comment: Option<u64>,
-        text: String,
-    },
-    ReviewAdd {
-        addr: String,
-        path: String,
-        line: u32,
-        #[serde(default)]
-        code: Option<String>,
-        text: String,
-    },
-    ReviewList {
-        addr: String,
-    },
-    /// Remove one comment, or all of them.
-    ReviewRemove {
-        addr: String,
-        #[serde(default)]
-        id: Option<u32>,
-    },
-    /// Batch the comments into one prompt for the worktree's agent (or `session`).
-    ReviewSend {
-        addr: String,
-        #[serde(default)]
-        session: Option<String>,
-        #[serde(default)]
-        note: Option<String>,
-    },
-    /// Worktrees ready for review, ranked.
-    ReviewQueue,
-    /// Mark a worktree reviewed (its current turn).
-    ReviewDone {
-        addr: String,
     },
     // ── checkpoints (SPEC §15.3) ──
     /// Checkpoints of a session (or of every session in a worktree).
@@ -1066,14 +972,6 @@ pub enum Request {
         n: Option<u32>,
         #[serde(default)]
         turn: Option<u32>,
-    },
-    /// Verified-done for a session (`None` turns it off).
-    SetVerify {
-        addr: String,
-        #[serde(default)]
-        check: Option<String>,
-        #[serde(default)]
-        max_bounces: Option<u32>,
     },
     // ── Chats (1.22, SPEC §22.14). A `chat` is an address: `7f3k`, `c:7f3k`, a title that
     // matches one chat, `@last`, or `laptop2:c:7f3k` for another machine's. ──
@@ -1741,29 +1639,8 @@ pub enum Reply {
     Diff {
         doc: DiffDoc,
     },
-    Commits {
-        commits: Vec<CommitInfo>,
-    },
-    Committed {
-        sha: String,
-    },
     Notes {
         notes: Vec<String>,
-    },
-    Pr {
-        #[serde(default)]
-        info: Option<PrInfo>,
-    },
-    Comments {
-        comments: Vec<ReviewComment>,
-    },
-    ReviewQueue {
-        items: Vec<ReviewItem>,
-    },
-    /// The spawn waits: `max_unreviewed` worktrees wait for review (M6.9).
-    Queued {
-        position: u32,
-        unreviewed: u32,
     },
     Doctor {
         report: DaemonDoctor,
@@ -1774,7 +1651,7 @@ pub enum Reply {
     Checkpoints {
         checkpoints: Vec<Checkpoint>,
     },
-    /// What a hook should print for the agent (a Stop bounce, a PreToolUse denial).
+    /// What a hook should print for the agent (a phone's answer to a permission prompt).
     HookOutput {
         stdout: String,
     },

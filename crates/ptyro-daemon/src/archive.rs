@@ -1,25 +1,19 @@
-//! Finishing and cleaning up a worktree (ROADMAP UX1.12, SPEC §10.8):
-//! - **finish**: commit what's left (its agent asked to, else with its title as the message),
-//!   then open a PR or integrate into the main branch;
+//! Archiving a worktree (ROADMAP UX1.12, SPEC §10.8):
 //! - **archive**: a snapshot of its files (committed or not, untracked included) under
 //!   `refs/ptyro/archive/<name>`, its branch kept, the worktree removed. It loses nothing, so it
 //!   never refuses the way `wt rm` must;
 //! - **restore**: the branch checked out again and the snapshot put back as uncommitted work;
 //! - **delete an archive**: its snapshot and kept files go, and its branch when that is merged
-//!   or pushed; `[worktrees] archive_purge_days` does it on its own to archives that old;
-//! - **archive on merge** (`[worktrees] archive_on_merge`): when its PR merges and nothing runs
-//!   in it.
+//!   or pushed; `[worktrees] archive_purge_days` does it on its own to archives that old.
 
 use ptyro_core::sync::MutexExt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use ptyro_core::model::{ArchiveEntry, RemoveOpts, WorktreeInfo, WorktreeSpec};
-use ptyro_core::session::SessionKind;
-use ptyro_core::status::AgentStatus;
 use ptyro_core::{Error, lookup, now_ms};
 use ptyro_git::{BranchFate, Git};
-use ptyro_protocol::{DomainEvent, Reply, Request};
+use ptyro_protocol::{DomainEvent, Reply};
 use sha2::Digest;
 
 use crate::daemon::Daemon;
@@ -28,8 +22,6 @@ use crate::worktrees::blocking;
 
 /// The kv key of the archived worktrees.
 const ARCHIVES: &str = "archive:list";
-/// How long `finish` waits for an agent to commit before committing what's left itself.
-const COMMIT_WAIT: Duration = Duration::from_secs(600);
 
 impl Daemon {
     /// The archived worktrees. A list that can't be read is an error, not an empty list: the
@@ -222,7 +214,7 @@ impl Daemon {
         let i = self.archive_index(&list, addr)?;
         let e = list[i].clone();
         // The branch must still be where the snapshot was taken: restoring puts the files back
-        // over its tip, and a branch that has moved on (an integrate, a commit from another
+        // over its tip, and a branch that has moved on (a rebase, a commit from another
         // checkout) would otherwise be reset backwards.
         if let Some(p) = self.project_by_id(&e.project) {
             let (root, branch, snap) = (p.root.clone(), e.branch.clone(), e.snapshot.clone());
@@ -432,121 +424,6 @@ impl Daemon {
             .filter(|e| project.is_none_or(|p| self.archive_in(e, p)))
             .collect();
         Ok(Reply::Archives { entries })
-    }
-
-    /// Finish: commit what's left, then a PR or integrating (see the module docs).
-    pub(crate) async fn finish_worktree(
-        self: &Arc<Self>,
-        addr: &str,
-        integrate: bool,
-    ) -> Result<Reply, Error> {
-        let wt = self.find_worktree(addr)?;
-        if wt.is_root {
-            return Err(Error::invalid("finish a worktree, not the main checkout"));
-        }
-        let mut notes = Vec::new();
-        if self.dirty(&wt).await? {
-            // Its agent knows what it did: ask it to commit, and wait for that turn.
-            let agent = self
-                .sessions_in(&wt.id)
-                .into_iter()
-                .filter(|s| s.kind() == SessionKind::Agent && s.is_live())
-                .max_by_key(|s| s.id.created_ms());
-            if let Some(a) = agent.filter(|a| a.status() != Some(AgentStatus::Working)) {
-                self.progress(&wt, "asking its agent to commit");
-                let turns = a.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns;
-                self.send_when_ready(
-                    &a,
-                    "[via ptyro] Please commit all your work now: stage what belongs together, and write a clear commit message (subject line under 72 characters, then why). Don't push.",
-                    true,
-                    120_000,
-                )
-                .await?;
-                let (start, deadline) = (Instant::now(), Instant::now() + COMMIT_WAIT);
-                let mut worked = false;
-                while Instant::now() < deadline {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    worked |= a.status() == Some(AgentStatus::Working);
-                    let done =
-                        a.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns
-                            > turns
-                            && a.status() != Some(AgentStatus::Working);
-                    // Never started on it in a minute: it isn't going to; commit here instead.
-                    let ignored = !worked && start.elapsed() > Duration::from_secs(60);
-                    if done || ignored || !a.is_live() {
-                        break;
-                    }
-                }
-                if !self.dirty(&wt).await? {
-                    notes.push(format!(
-                        "{} committed its work",
-                        a.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name
-                    ));
-                }
-            }
-            if self.dirty(&wt).await? {
-                // Whatever is left: committed as the worktree's profile, its title the message.
-                let message = wt.title.clone().unwrap_or_else(|| format!("Work on {}", wt.name));
-                let reply = self
-                    .handle_review(Request::WorktreeCommit {
-                        addr: wt.id.clone(),
-                        message: message.clone(),
-                        paths: Vec::new(),
-                        all: true,
-                    })
-                    .await?;
-                if let Reply::Committed { sha } = reply {
-                    notes.push(format!("committed {} \"{message}\"", &sha[..10.min(sha.len())]));
-                }
-            }
-        }
-        let reply = if integrate {
-            self.progress(&wt, "integrating into the main branch");
-            self.handle_review(Request::WorktreeIntegrate {
-                addr: wt.id.clone(),
-                into: None,
-                cherry_pick: false,
-                push: false,
-            })
-            .await?
-        } else {
-            self.progress(&wt, "pushing and opening a PR");
-            let draft = self.config().github.draft;
-            self.pr_create(&wt.id, draft, wt.title.clone(), None, None).await?
-        };
-        match reply {
-            Reply::Notes { notes: n } => notes.extend(n),
-            Reply::Pr { info: Some(pr) } => notes.push(format!("PR #{}: {}", pr.number, pr.url)),
-            _ => {}
-        }
-        Ok(Reply::Notes { notes })
-    }
-
-    /// Uncommitted or untracked changes in `wt`.
-    async fn dirty(&self, wt: &WorktreeInfo) -> Result<bool, Error> {
-        let (path, base) = (wt.path.clone(), wt.base.clone());
-        let s =
-            blocking(move || Git::new().status(&path, base.as_deref())).await?.map_err(git_err)?;
-        Ok(s.dirty() > 0)
-    }
-
-    /// `[worktrees] archive_on_merge`: its work shipped (its PR merged, or it was integrated
-    /// into the main branch) and nothing runs in it, so archive it. The caller decides that it
-    /// just shipped.
-    pub(crate) fn archive_if_merged(self: &Arc<Self>, wt: &WorktreeInfo) {
-        if !wt.shipped() || !self.config().worktrees.archive_on_merge {
-            return;
-        }
-        if !self.busy_in(wt).is_empty() {
-            return;
-        }
-        let (me, id, label) = (Arc::clone(self), wt.id.clone(), wt.qualified());
-        tokio::spawn(async move {
-            match me.archive_worktree(&id, false).await {
-                Ok(_) => tracing::info!("archived {label}: its work shipped"),
-                Err(e) => tracing::warn!("archive on merge, {label}: {}", e.message),
-            }
-        });
     }
 }
 

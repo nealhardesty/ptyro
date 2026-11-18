@@ -1,10 +1,10 @@
 // Projects, worktrees and workspaces (ROADMAP WEB1.3): the sidebar's tree as the Projects tab,
-// a worktree's page, and everything the TUI does to them: new, finish, archive, restore, remove,
+// a worktree's page, and everything the TUI does to them: new, archive, restore, remove,
 // scripts, ports, pair mode, locks, checkpoints and the clean-up.
 import { conn } from "./conn.js";
-import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
+import { data, leftWords, liveWorktrees, machineOf, repoLeft, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
-import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, webHref, withFix } from "./kit.js";
+import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 const ACTIONS = {
@@ -20,9 +20,9 @@ const ACTIONS = {
     "project.rename": "Rename the project: its address, which finds its worktrees and sessions (project/name)",
     "project.suggest": "What a first worktree could use: a setup script, files to copy",
     "worktree.new": "A new worktree in this project, with an agent in it if you like",
-    "worktree.show": "A worktree's page: status, sessions, changes and what to do next",
+    "worktree.show": "A worktree's page: its status, its sessions and what to do next",
     "worktree.remove": "Remove the worktree (it refuses to lose work; archive keeps it)",
-    "worktree.status": "Where the worktree stands: what is left to commit or push (✓ pushed when nothing is), its pull request",
+    "worktree.status": "Where the worktree stands: what is left to commit or push (✓ pushed when nothing is)",
     "worktree.pair": "Pair mode: show the worktree's state in the project's main checkout",
     "worktree.unpair": "Put the main checkout back, carrying edits made there into the worktree",
     "worktree.run": "Run one of the project's scripts in this worktree",
@@ -32,7 +32,6 @@ const ACTIONS = {
     "worktree.rename": "Rename the worktree: its address (project/name). Its branch and its directory stay",
     "worktree.rename_branch": "Rename the worktree's branch (until it's pushed)",
     "worktree.retitle": "Change what the worktree is titled",
-    "worktree.finish": "Finish: commit what's left, then open a PR or merge into the main branch",
     "worktree.archive": "Archive: keep its work and its branch, remove the worktree",
     "worktree.restore": "Bring an archived worktree back as it was",
     "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
@@ -54,43 +53,29 @@ const statusOf = (s) => (s.state.t !== "running" ? s.state.t : s.status?.status 
 /// The sessions running in a worktree, but not its quick shell.
 const sessionsIn = (w) => [...allSessions().values()].filter((s) => s.worktree === w.id && !s.quick);
 /// What is left to do, short (UX2.2): `+12 −3 · ↑2 ● 4`, or a quiet `✓ pushed`. The line counts
-/// show only while something is uncommitted or unpushed; a merged one says `shipped`.
+/// show only while something is uncommitted or unpushed.
 function summary(w) {
     const st = w.status;
     if (!st)
         return w.state === "ready" ? "" : w.state;
     const parts = [];
     const l = repoLeft(st);
-    if (shipped(w))
-        parts.push("shipped");
-    else {
-        if ((l.uncommitted || l.unpushed) && (st.insertions || st.deletions))
-            parts.push(`+${st.insertions} −${st.deletions}`);
-        const words = leftWords(l);
-        if (words)
-            parts.push(words);
-    }
+    if ((l.uncommitted || l.unpushed) && (st.insertions || st.deletions))
+        parts.push(`+${st.insertions} −${st.deletions}`);
+    const words = leftWords(l);
+    if (words)
+        parts.push(words);
     if (st.behind)
         parts.push(`${st.behind} behind`);
     if (st.conflicts)
         parts.push(`${st.conflicts} conflicts`);
     return parts.join(" · ") || "clean";
 }
-export function prBadge(w) {
-    const pr = w.pr;
-    if (!pr)
-        return null;
-    const checks = pr.checks ?? [];
-    const failed = checks.filter((c) => ["fail", "cancel"].includes(c.bucket)).length;
-    const pending = checks.filter((c) => c.bucket === "pending").length;
-    const kind = pr.state === "MERGED" ? "info" : failed ? "bad" : pending ? "warn" : checks.length ? "ok" : "";
-    return badge(`#${pr.number} ${pr.state === "OPEN" ? (pr.draft ? "draft" : "open") : pr.state.toLowerCase()}${failed ? ` · ${failed} failing` : ""}`, kind);
-}
 function worktreeRow(w) {
     const sess = sessionsIn(w);
     const worst = ["blocked", "errored", "working", "starting", "done", "idle"].find((k) => sess.some((s) => statusOf(s) === k));
     const glyph = worst ? h("span", { class: `glyph ${worst}` }, STATUS_GLYPH[worst]) : null;
-    return row(h("span", {}, glyph, glyph ? " " : "", w.is_root ? "main checkout" : w.title || w.name, w.locked ? " 🔒" : "", " ", prBadge(w)), [w.is_root ? w.branch ?? "" : w.title ? w.name : "", summary(w), sess.length ? `${sess.length} session${sess.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · "), w.last_used_ms ? ago(w.last_used_ms) : "", { href: `#/wt/${enc(w.id)}`, cls: w.state !== "ready" ? "dim" : "" });
+    return row(h("span", {}, glyph, glyph ? " " : "", w.is_root ? "main checkout" : w.title || w.name, w.locked ? " 🔒" : ""), [w.is_root ? w.branch ?? "" : w.title ? w.name : "", summary(w), sess.length ? `${sess.length} session${sess.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · "), w.last_used_ms ? ago(w.last_used_ms) : "", { href: `#/wt/${enc(w.id)}`, cls: w.state !== "ready" ? "dim" : "" });
 }
 // ── the Projects tab ────────────────────────────────────────────────────────────────────────
 let wsFilter = "";
@@ -285,10 +270,6 @@ function workspacesView() {
         ]) })))));
 }
 // ── a worktree ──────────────────────────────────────────────────────────────────────────────
-/// Waiting for something that can take minutes (finish asks the agent to commit first).
-function busy(title, text) {
-    return sheet(title, [h("p", { class: "intro" }, "⏳ ", text, " You can leave this page; it carries on.")]);
-}
 function showNotes(title, notes) {
     if (!notes.length)
         ui.toast(title);
@@ -296,34 +277,6 @@ function showNotes(title, notes) {
         ui.toast(notes[0]);
     else
         textSheet(title, notes.join("\n"));
-}
-function finish(w) {
-    menu(`Finish ${w.title || w.name}`, [
-        { label: "Open a pull request", hint: "Commits what's left (the agent writes the message), pushes, opens the PR", run: async () => {
-                const b = busy("Finishing…", "Asking the agent to commit what's left, then opening the PR.");
-                try {
-                    const r = await conn.request({ t: "worktree_finish", addr: w.id, integrate: false });
-                    b.close();
-                    showNotes("Finished", r.notes ?? []);
-                }
-                catch (e) {
-                    b.close();
-                    ui.toast(errText(e));
-                }
-            } },
-        { label: "Merge into the main branch", hint: "Rebases onto it and fast-forwards, no PR", run: async () => {
-                const b = busy("Finishing…", "Asking the agent to commit what's left, then merging.");
-                try {
-                    const r = await conn.request({ t: "worktree_finish", addr: w.id, integrate: true });
-                    b.close();
-                    showNotes("Merged", r.notes ?? []);
-                }
-                catch (e) {
-                    b.close();
-                    ui.toast(errText(e));
-                }
-            } },
-    ]);
 }
 function archive(w) {
     const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
@@ -445,10 +398,8 @@ function worktreeView(rest) {
     const sess = sessionsIn(w);
     const proj = data.projects.get(w.project);
     const st = w.status;
-    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)), h("button", { title: tip("worktree.finish"), onclick: () => finish(w) }, "Finish"), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
+    const overview = h("div", { class: "stack-in" }, bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"), h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"), h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")), section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(h("span", {}, h("span", { class: `glyph ${statusOf(s)}` }, STATUS_GLYPH[statusOf(s)] ?? "·"), " ", s.name, s.agent ? h("small", {}, ` ${s.agent}`) : null), s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")), section("Status", h("div", { title: tip("worktree.status") }, facts([
         ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
-        ["Pull request", w.pr ? (webHref(w.pr.url) ? h("a", { href: webHref(w.pr.url), target: "_blank", rel: "noreferrer" }, `#${w.pr.number} ${w.pr.title}`) : h("span", {}, `#${w.pr.number} ${w.pr.title}`)) : null],
-        ["Merged into main", w.integrated ? w.integrated.slice(0, 8) : null],
         ["Ports", w.ports ? `${w.ports.base}–${w.ports.base + w.ports.count - 1}` : null],
         ["Profile", w.profile], ["Path", w.path], ["State", w.state === "ready" ? null : w.state]
     ]))));
@@ -546,7 +497,7 @@ export function diffText(doc) {
     const files = (doc.files ?? []);
     if (!files.length)
         return "No changes.";
-    return files.map((f) => `${f.path}${f.old_path ? ` (from ${f.old_path})` : ""}\n${(f.hunks ?? []).map((hk) => `${hk.header ?? ""}\n${(hk.lines ?? []).map((l) => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`).join("\n")}`).join("\n")}`).join("\n\n");
+    return files.map((f) => `${f.path}${f.old_path ? ` (from ${f.old_path})` : ""}\n${(f.hunks ?? []).map((hk) => `${hk.header ?? ""}\n${(hk.lines ?? []).map((l) => `${l.kind === "added" ? "+" : l.kind === "removed" ? "-" : " "}${l.text}`).join("\n")}`).join("\n")}`).join("\n\n");
 }
 wtTabs.push({ id: "checkpoints", label: "Checkpoints", render: checkpointsTab });
 views.set("p", () => projectsView());

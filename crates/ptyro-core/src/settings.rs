@@ -74,8 +74,6 @@ pub enum Source {
     Editors,
     /// Every TUI action (`session.next`…), for key bindings.
     Actions,
-    /// The project's run scripts.
-    RunScripts,
     /// Chat tool presets: the built-in ones and yours.
     ChatPresets,
 }
@@ -301,12 +299,6 @@ pub const SECTIONS: &[Section] = &[
         id: "worktrees",
         title: "Worktrees and ports",
         blurb: "Where new work goes and how it is named.",
-        scope: Scope::User,
-    },
-    Section {
-        id: "github",
-        title: "GitHub and review",
-        blurb: "Pull requests, checks and the review queue.",
         scope: Scope::User,
     },
     Section {
@@ -588,8 +580,6 @@ const START_AGENTS: &[Choice] = &[
     c("after_setup", "once the setup script has run"),
     c("immediately", "straight away, while setup runs"),
 ];
-const MERGE: &[Choice] =
-    &[c("squash", "one commit"), c("merge", "a merge commit"), c("rebase", "rebase onto the base")];
 const PAD_MODE: &[Choice] = &[
     c("drawer", "below the pane, like the quick terminal"),
     c("popup", "a window over everything"),
@@ -737,7 +727,6 @@ pub const SETTINGS: &[Setting] = &[
     s("worktrees.watch", "worktrees", Kind::Bool, "Refresh a repository's status when its files change, not only every few seconds.").adv(),
     s("worktrees.stale_days", "worktrees", int(1, 3650), "`ptyro gc` reports a worktree with no sessions after this long.").unit("days"),
     s("worktrees.auto_rename_branch", "worktrees", Kind::Bool, "Name the branch after the first prompt, until it is pushed."),
-    s("worktrees.archive_on_merge", "worktrees", Kind::Bool, "Archive a worktree when its pull request merges and nothing runs in it."),
     s("worktrees.archive_purge_days", "worktrees", int(0, 36_500), "Delete archived worktrees after this many days, and their branches when merged into their base or the same as their pushed copy. 0 keeps them.").unit("days"),
     s("ports.range", "worktrees", Kind::Text, "The ports handed out to worktrees, LOW-HIGH (LOW at least 1024).").new_only(),
     s("ports.count", "worktrees", int(1, 1000), "Ports for each worktree.").new_only().unit("ports"),
@@ -745,15 +734,6 @@ pub const SETTINGS: &[Setting] = &[
     s("discover.depth", "worktrees", int(1, 10), "How deep to look in them.").unit("folders deep"),
     s("discover.auto_register", "worktrees", Kind::Bool, "Make the repository a session runs in a project by itself."),
     s("compat.conductor_env", "worktrees", Kind::Bool, "Also set CONDUCTOR_* variables, so Conductor's setup scripts run unchanged.").adv().new_only(),
-    // ── GitHub and review ──
-    s("github.poll", "github", Kind::Duration, "How often to ask GitHub (through `gh`) about a worktree's pull request, never more than once a minute for one.").adv(),
-    s("github.draft", "github", Kind::Bool, "New pull requests are drafts."),
-    s("github.merge_method", "github", pick(MERGE), "How `ptyro pr automerge` merges."),
-    s("github.watch", "github", Kind::Bool, "Tell an agent about new CI failures and review comments on the pull requests ptyro opened."),
-    s("github.escalate_after", "github", Kind::Duration, "Ask for your attention when a pull request stays failing or unanswered this long."),
-    s("github.log_lines", "github", int(1, 2000), "Lines of a failing check's log sent to the agent.").adv().unit("lines"),
-    s("review.max_unreviewed", "github", int(0, 100), "Hold new agent sessions while this many worktrees are waiting for your review. 0 never holds.").unit("worktrees"),
-    s("review.digest", "github", Kind::Duration, "A digest of what is ready for review, at most this often. `off` for never."),
     // ── Checkpoints ──
     s("orchestration.checkpoints", "orchestration", Kind::Bool, "Save a restore point (a checkpoint) after every agent turn that changed its worktree."),
     // ── Summaries ──
@@ -789,7 +769,7 @@ pub const SETTINGS: &[Setting] = &[
     s("scratchpad.editor", "scratchpad", Kind::Text, "The editor for the notes file, as a command line like `nvim` or `code -w`. (Worktrees open in the editor under Editors, below.)").or("your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi").eg("nvim"),
     s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file lives. Point it into a synced folder to share it between machines.").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
     s("scratchpad.keep", "scratchpad", int(1, 3650), "How long saved copies of the notes are kept (the newest 20 always stay).").unit("days"),
-    s("scratchpad.tick_on_finish", "scratchpad", Kind::Bool, "Tick an item once the worktree started from it is merged or cleaned up."),
+    s("scratchpad.tick_on_finish", "scratchpad", Kind::Bool, "Tick an item once the worktree started from it is removed."),
     s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree (the notes file has its own, above). Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
     s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),
     s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
@@ -890,9 +870,6 @@ pub const SETTINGS: &[Setting] = &[
     s("worktree.share_mode", "project", pick(SHARE_MODE), "How those are shared."),
     s("worktree.start_agents", "project", pick(START_AGENTS), "When agents start in a new worktree here.").or("your worktrees setting"),
     s("worktree.branch_template", "project", Kind::Text, "How branches here are named.").or("your worktrees setting"),
-    s("verify.check", "project", dynamic(Source::RunScripts), "A run script that must pass before an agent's turn counts as done.").or("none"),
-    s("verify.max_bounces", "project", int(0, 100), "How many times a failing check sends the agent back to fix it before giving up.").or("the default").unit("times"),
-    s("verify.auto", "project", Kind::Bool, "Verify every agent session in this project's worktrees, not only those started with a check."),
     // ── Project scripts ──
     s("scripts.setup", "scripts", Kind::Script, "Runs once in each new worktree.").or("none"),
     s("scripts.archive", "scripts", Kind::Script, "Runs before a worktree is archived or removed.").or("none"),
@@ -986,12 +963,7 @@ pub struct Lookups {
 }
 
 /// What a [`Source`] offers, from the config and what the caller knows.
-pub fn options(
-    source: Source,
-    config: &Config,
-    project: Option<&ProjectConfig>,
-    lk: &Lookups,
-) -> Vec<(String, String)> {
+pub fn options(source: Source, config: &Config, lk: &Lookups) -> Vec<(String, String)> {
     let named =
         |names: Vec<String>, what: &str| names.into_iter().map(|n| (n, what.to_owned())).collect();
     match source {
@@ -1033,10 +1005,6 @@ pub fn options(
                 (p, format!("{what}{mine}"))
             })
             .collect(),
-        Source::RunScripts => named(
-            project.map(|p| p.scripts.run.keys().cloned().collect()).unwrap_or_default(),
-            "run script",
-        ),
     }
 }
 

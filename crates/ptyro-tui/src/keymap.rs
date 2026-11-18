@@ -63,10 +63,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
     a("worktree.retitle", "Change this worktree's title: what it's for, for people to read"),
     a(
-        "worktree.finish",
-        "Finish this worktree: commit what's left (its agent writes the message), then a PR or integrate",
-    ),
-    a(
         "worktree.archive",
         "Archive this worktree: its branch and a snapshot of its files are kept, the checkout goes",
     ),
@@ -212,7 +208,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Sidebar: list only the active sessions (an agent working or waiting for you, a shell running a command)",
     ),
     a("toast.act", "Do what the last message offers: undo it, or fix what it reports"),
-    a("home", "Home: who needs you, PRs, recent projects and repositories found, in one list"),
+    a("home", "Home: who needs you, recent projects and repositories found, in one list"),
     a(
         "app.about",
         "About ptyro: version, repository, where its files live, the daemon and web app, a bug report to copy",
@@ -307,13 +303,8 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("broadcast", "Type one prompt into every marked session (each once it's ready)"),
     a(
         "help.tour",
-        "The tour: start a task, answer it, review, finish and clean up, with a pretend agent",
+        "The tour: start a task, answer it, clean up, and keep a shell, with a pretend agent",
     ),
-    a(
-        "inspector",
-        "Inspector: the worktree's diff (comment, commit, PR), commits, checks, ports, events",
-    ),
-    a("review.queue", "Worktrees ready for review, best first"),
     a(
         "chat.new",
         "New chat with your agent, in this workspace: type, ⏎ sends (C-o picks the agent and its tools)",
@@ -403,12 +394,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("session.replay", "Play this session's recording back, in a split"),
     a("session.export", "Export this session's recording (asciicast, text or a test fixture)"),
-    a("session.verify", "Verified-done: its turns count as done only when a check passes"),
+    a("session.events", "What happened in this session: its last events, in a split"),
     a("checkpoint.list", "This session's checkpoints: its worktree after every turn"),
     a("checkpoint.diff", "What changed since a checkpoint"),
     a("checkpoint.restore", "Put the worktree back to a checkpoint (asks first)"),
-    a("pr.reply", "Reply on this worktree's PR (marked \"via ptyro\")"),
-    a("pr.open", "Go to a PR's worktree and session, or start one on it"),
     a("project.show", "This project: its root, branches, pin and config, in a split"),
     a("project.config", "This project's effective config, and where each value comes from"),
     a(
@@ -550,8 +539,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "i", "inbox"),
     (Table::Prefix, "p", "peek"),
     (Table::Prefix, "b", "broadcast"),
-    (Table::Prefix, "D", "inspector"),
-    (Table::Prefix, "Q", "review.queue"),
     (Table::Prefix, "m", "chat.new"),
     (Table::Prefix, "g", "chat.list"),
     (Table::Prefix, "C-g", "chat.search"),
@@ -615,7 +602,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "Enter", "nav.open"),
     (Table::Nav, "Space", "nav.select"),
     (Table::Nav, "b", "broadcast"),
-    (Table::Nav, "D", "inspector"),
     (Table::Nav, "m", "chat.new"),
     (Table::Nav, "*", "chat.pin"),
     (Table::Nav, "h", "nav.collapse"),
@@ -659,7 +645,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "U", "app.setup"),
     (Table::Nav, "^", "app.update"),
     (Table::Nav, "C", "config.panel"),
-    (Table::Nav, "F", "worktree.finish"),
     (Table::Nav, "P", "project.add"),
     (Table::Nav, "A", "session.adopt"),
     (Table::Nav, ">", "sidebar.wider"),
