@@ -169,21 +169,6 @@ pub fn typed(raw: &str) -> String {
     out
 }
 
-/// The same for a git branch name: it keeps case and `/`, swaps what git refuses in a ref
-/// (whitespace, control characters, `~ ^ : ? * [ \`) for `-`, and drops that, or a `-`, at the
-/// start.
-pub fn branch_typed(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for c in raw.chars() {
-        let bad = c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c);
-        if out.is_empty() && (bad || c == '-') {
-            continue;
-        }
-        out.push(if bad { '-' } else { c });
-    }
-    out
-}
-
 /// The fix a refused name's error offers: `raw` turned into a valid name, when that changes it
 /// and works (`My Feature/2` → `my-feature-2`).
 pub fn tidy(raw: &str) -> Option<String> {
@@ -363,9 +348,6 @@ mod tests {
         assert_eq!(typed("my_fix"), "my_fix", "what a name can hold is kept as typed");
         assert_eq!(typed("brisk-rook.v1"), "brisk-rook.v1", "a valid name is left alone");
         assert_eq!(typed("12"), "12", "all digits is still the name's problem to explain");
-        assert_eq!(branch_typed("fix this/Now: ok"), "fix-this/Now--ok");
-        assert_eq!(branch_typed("-x"), "x");
-        assert_eq!(branch_typed(" x"), "x");
         // A character at a time ends where all at once does.
         let mut one = String::new();
         for c in "  My Feature/2".chars() {

@@ -391,7 +391,7 @@ function gcView() {
         ? h("div", { class: "rows" }, ...entries.map((e) => row(e.worktree.title || e.worktree.name, `${e.worktree.project_slug} · ${e.reasons.join(", ")}`, sizeOf(e), {
             onclick: () => menu(e.worktree.title || e.worktree.name, [
                 { title: tip("worktree.remove"), label: "Remove…", hint: "It refuses to lose work, saying what", danger: true, run: () => remove(e.worktree) },
-                { label: "Keep it", hint: "Leave it as it is", run: () => ui.toast("Kept") },
+                { label: "Keep it", hint: "Leave it as it is; worktrees.stale_days (Settings → worktrees) says when one counts as stale", run: () => ui.toast("Kept") },
                 { label: "Open", run: () => go(`#/wt/${enc(e.worktree.id)}`) },
             ])
         })))
@@ -410,9 +410,9 @@ const checkpoints = new Cache((id) => conn.request({ t: "checkpoint_list", addr:
 function checkpointsTab(w) {
     const cps = checkpoints.get(w.id);
     return pending(checkpoints, w.id) ?? (cps.length ? h("div", { class: "rows", title: tip("checkpoint.list") }, ...[...cps].reverse().map((c) => row(`#${c.n} · turn ${c.turn}`, `${c.files} file${c.files === 1 ? "" : "s"} · ${c.session}`, ago(c.at_ms), { onclick: () => menu(`Checkpoint ${c.n}`, [
-            { title: tip("checkpoint.diff"), label: "What changed since", run: async () => { const r = await ask({ t: "checkpoint_diff", addr: w.id, n: c.n, to: null }); if (r)
+            { title: tip("checkpoint.diff"), label: "What changed since", run: async () => { const r = await ask({ t: "checkpoint_diff", addr: c.session, n: c.n, to: null }); if (r)
                     textSheet(`Since checkpoint ${c.n}`, diffText(r.doc ?? r)); } },
-            { title: tip("checkpoint.restore"), label: "Put the worktree back to this", danger: true, run: () => confirm(`Restore checkpoint ${c.n}?`, "The worktree goes back to how it was then. Where it is now is checkpointed first, so you can undo this.", "Restore", async () => { await ask({ t: "checkpoint_restore", addr: w.id, n: c.n, turn: null }, "Restored"); checkpoints.reload(w.id); }) },
+            { title: tip("checkpoint.restore"), label: "Put the worktree back to this", danger: true, run: () => confirm(`Restore checkpoint ${c.n}?`, "The worktree goes back to how it was then. Where it is now is checkpointed first, so you can undo this.", "Restore", async () => { await ask({ t: "checkpoint_restore", addr: c.session, n: c.n, turn: null }, "Restored"); checkpoints.reload(w.id); }) },
         ]) }))) : h("p", { class: "empty" }, "No checkpoints yet: one is taken at the end of each agent turn."));
 }
 /// A diff document as unified text.

@@ -2332,6 +2332,22 @@ RESEARCH: R-UX-34's kept split marked built and removed.
   `crates/ptyro-core/src/settings/ops.rs`; tests in `settings/tests.rs`, `tests/cfg1.rs`
   (`doctor_fix_*`), `tests/m9.rs` (the settings panel's calls) and the TUI's `health.rs`.
 
+- [x] **What the pare-down's review found, fixed** — M. *Nine reviews of batches 1–9
+  (2026-11-18).* A removed top-level command (`cs`, `msg`, `run`, `pr`, `scratchpad`, `inbox`,
+  … one table, `REMOVED_COMMANDS`) says it was removed, with what to use, whatever follows it,
+  and starts nothing. A `[keys]` line naming a removed action blocks no other config change
+  (a write is refused only for a problem it makes), its message names its own
+  `ptyro config unset`, and renamed actions keep working under their old names. Older clients
+  still decode a checkpoint diff (`DiffDoc.against` is sent again). A retired `[summaries]
+  command` keeps titling chats until doctor moves it to `chat.title_command`; chats made with a
+  preset of your own never gain web search. Doctor reads project files the way the loader does,
+  offers fixes for `updates.*` lists naming removed agents and for a Gemini of your own without
+  `--acp`, drops what archives and pair mode left once the repository has resolved it, and
+  `ptyro uninstall` lists the old Gemini/Antigravity integrations it leaves. Retired keys keep
+  their lines (later parse errors point at the file's own). Also the Windows build of
+  `ptyro-pty`'s tests, the web's checkpoint diff and restore (they sent the worktree, not the
+  session), and dead code the batches left.
+
 ## UX4 — Sidebar filter, quick shell stays (2026-10-30)
 
 The owner asked for a way to see just the running sessions and just the active ones, and for the

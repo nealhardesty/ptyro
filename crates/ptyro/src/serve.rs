@@ -1031,8 +1031,13 @@ async fn api_request(
         Err((code, why)) => return respond(code, "text/plain", why),
     };
     let Ok(request) = serde_json::from_slice::<ptyro_protocol::Request>(&body) else {
+        // A page loaded from an older ptyro: reloading it gets this one's.
         let retired = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| {
-            v["t"].as_str().and_then(ptyro_protocol::retired_request).map(|e| e.message)
+            v["t"].as_str().and_then(ptyro_protocol::retired_what).map(|what| {
+                format!(
+                    "this ptyro no longer has {what} (removed 2026-11-17); this page is from an older ptyro: reload it"
+                )
+            })
         });
         return match retired {
             Some(why) => respond(StatusCode::GONE, "text/plain", why),

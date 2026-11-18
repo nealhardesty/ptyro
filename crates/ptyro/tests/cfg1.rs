@@ -417,3 +417,114 @@ fn doctor_fix_copies_the_config_aside_and_an_ordinary_change_does_not() {
     assert!(set.status.success() && text(&set).contains("as it was"), "{}", text(&set));
     assert_eq!(backups(&dir).len(), 2);
 }
+
+/// What archives and pair mode (removed 2026-11-17) left in ptyro's records is said by the
+/// doctor until the repository has resolved it: an archive whose snapshot ref was deleted, and a
+/// main checkout back on its branch, leave the record (and the doctor's report) for good; a
+/// checkout still showing the worktree names the files ptyro copied in.
+#[test]
+fn what_archives_and_pair_mode_left_goes_once_the_repository_resolves_it() {
+    let home = tempfile::Builder::new().prefix("ptyro-left-").tempdir().unwrap();
+    let h = ptyro_core::os::canonicalize(home.path()).unwrap();
+    let repo = h.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("a"), "a").unwrap();
+    git(&repo, &["add", "a"]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
+    git(&repo, &["update-ref", "refs/ptyro/archive/kept", "HEAD"]);
+    let mut d = TempDaemon::start_with(BIN, &[], None).unwrap();
+    let run = |d: &TempDaemon, args: &[&str]| d.cmd().args(args).output().unwrap();
+    assert!(run(&d, &["project", "add", repo.to_str().unwrap()]).status.success());
+    let ls: serde_json::Value =
+        serde_json::from_slice(&run(&d, &["project", "ls", "--json"]).stdout).unwrap();
+    let id = ls[0]["id"].as_str().unwrap().to_owned();
+    // The main checkout detached (as pair mode left it), with a file ptyro copied in.
+    git(&repo, &["checkout", "-q", "--detach"]);
+    std::fs::write(repo.join("copied.txt"), "x").unwrap();
+    d.stop();
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let db = d.paths.data.join("ptyro.db");
+    rt.block_on(async {
+        let store = ptyro_store::Store::open(&db).unwrap();
+        let entry = |name: &str| {
+            serde_json::json!({ "project": id, "project_slug": "repo", "name": name,
+                "branch": name, "snapshot": format!("refs/ptyro/archive/{name}") })
+        };
+        store
+            .kv_set("archive:list".into(), serde_json::json!([entry("kept"), entry("gone")]))
+            .await
+            .unwrap();
+        let pair = serde_json::json!({ "worktree": "w", "orig": "main", "orig_is_branch": true,
+            "copied": ["copied.txt", "not-there.txt"] });
+        store.kv_set("pairs".into(), serde_json::json!({ id.clone(): pair })).await.unwrap();
+        store.flush().await.unwrap();
+    });
+    d.restart().unwrap();
+    let said = text(&run(&d, &["doctor", "--quick"]));
+    assert!(
+        said.contains("1 worktree(s) archived") && said.contains("refs/ptyro/archive/kept"),
+        "{said}"
+    );
+    assert!(!said.contains("refs/ptyro/archive/gone"), "{said}");
+    assert!(said.contains("still shows") && said.contains("copied.txt"), "{said}");
+    assert!(said.contains("checkout --force main") && said.contains("its branch main"), "{said}");
+    assert!(!said.contains("not-there.txt"), "{said}");
+    // Back on its branch: the warning goes, and stays gone.
+    git(&repo, &["checkout", "-q", "main"]);
+    let said = text(&run(&d, &["doctor", "--quick"]));
+    assert!(!said.contains("still shows"), "{said}");
+    d.stop();
+    rt.block_on(async {
+        let store = ptyro_store::Store::open(&db).unwrap();
+        assert_eq!(store.kv_get("pairs".into()).await.unwrap(), Some(serde_json::json!({})));
+        let list = store.kv_get("archive:list".into()).await.unwrap().unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+    });
+}
+
+/// A `[keys]` line bound to an action ptyro no longer has blocks no other change, and its error
+/// names the line that removes it; `doctor --fix` takes out every such line, a key with a dot or
+/// a quote in it too, and one with an action's old name (`chat.retitle`) still runs it, so it
+/// stays.
+#[test]
+fn a_key_bound_to_a_removed_action_blocks_nothing_and_doctor_removes_it() {
+    const OLD: &str = "[keys]\n\"C-.\" = \"app.backup\"\n\"'\" = \"help.tour\"\n\"chatlist:e\" = \"chat.retitle\"\n";
+    let d = TempDaemon::start_with(BIN, &[], Some(OLD)).unwrap();
+    let run = |args: &[&str]| d.cmd().args(args).output().unwrap();
+    let file = || std::fs::read_to_string(d.paths.config.join("config.toml")).unwrap();
+    let check = run(&["config", "check"]);
+    assert!(
+        !check.status.success() && text(&check).contains("`ptyro config unset keys.C-.`"),
+        "{}",
+        text(&check)
+    );
+    let set = run(&["config", "set", "ui.mouse", "off"]);
+    assert!(set.status.success(), "{}", text(&set));
+    // A change that makes a problem of its own is still refused.
+    let bad = run(&["config", "set", "keys.d", "no.such.action"]);
+    assert!(!bad.status.success(), "{}", text(&bad));
+
+    let fix = run(&["doctor", "--quick", "--fix"]);
+    let now = file();
+    assert!(
+        !now.contains("app.backup") && !now.contains("help.tour") && now.contains("chat.retitle"),
+        "{}\n{now}",
+        text(&fix)
+    );
+    assert!(now.contains("mouse = false"), "{now}");
+    let check = run(&["config", "check"]);
+    assert!(check.status.success(), "{}", text(&check));
+
+    // A removed command says so, whatever follows it, and starts nothing.
+    for argv in [&["pad", "add", "-"][..], &["inbox", "--json"], &["cs", "ls"]] {
+        let o = run(argv);
+        assert!(
+            o.status.code() == Some(2) && text(&o).contains("was removed on 2026-11-17"),
+            "{argv:?}: {}",
+            text(&o)
+        );
+    }
+    let ls = run(&["list", "--json"]);
+    assert_eq!(String::from_utf8_lossy(&ls.stdout).trim(), "[]", "{}", text(&ls));
+}

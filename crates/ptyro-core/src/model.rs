@@ -606,11 +606,39 @@ pub struct DiffDoc {
     /// Files or hunks left out because the diff was too big.
     #[serde(default)]
     pub truncated: bool,
+    /// Always `"base"`, never read: a ptyro from before 2026-11-17 requires the field (what the
+    /// diff was against, when there were several kinds) to decode the diff at all.
+    #[serde(default, skip_deserializing, serialize_with = "against_base")]
+    pub against: (),
+}
+
+fn against_base<S: serde::Serializer>(_: &(), s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str("base")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ptyro from before 2026-11-17 decodes a checkpoint diff: it requires `against`.
+    #[test]
+    fn an_older_client_decodes_a_diff() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum OldAgainst {
+            Base,
+        }
+        #[derive(Deserialize)]
+        struct OldDiffDoc {
+            against: OldAgainst,
+            files: Vec<DiffFile>,
+        }
+        let doc = DiffDoc { from: Some("abc".into()), ..DiffDoc::default() };
+        let json: OldDiffDoc = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert!(matches!(json.against, OldAgainst::Base) && json.files.is_empty());
+        let back: DiffDoc = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert_eq!(back, doc);
+    }
 
     #[test]
     fn slugs() {

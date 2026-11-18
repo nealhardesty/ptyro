@@ -531,7 +531,9 @@ fn get(layer: &Layer, key: &str, explain: bool, json: bool) -> Result<i32, Error
 
 /// Validate the file, including key bindings and action names; returns notes.
 fn check(path: &std::path::Path) -> Result<Vec<String>, String> {
-    let mut notes = check_config(Config::load(path).map_err(|e| e.to_string())?, path)?;
+    let config = Config::load(path).map_err(|e| e.to_string())?;
+    semantic_config(&config)?;
+    let mut notes = check_config(config, path);
     if let Ok(text) = std::fs::read_to_string(path) {
         notes.extend(old_remote_keys(&text));
         notes.extend(retired_keys(&text));
@@ -559,15 +561,23 @@ fn old_remote_keys(text: &str) -> Vec<String> {
     out
 }
 
-/// `check` for text that isn't saved yet (the web app's editor).
+/// `check` for text that isn't saved yet (the web app's editor). A key binding or theme that the
+/// saved file already gets wrong is a note, not a refusal: the edit didn't make it, and the note
+/// names its fix.
 pub(crate) fn check_text(text: &str, path: &std::path::Path) -> Result<Vec<String>, String> {
-    let mut notes = check_config(Config::parse(text).map_err(|e| e.to_string())?, path)?;
+    let config = Config::parse(text).map_err(|e| e.to_string())?;
+    let was = std::fs::read_to_string(path).unwrap_or_default();
+    settings::only_new(&semantic, &was)(text)?;
+    let mut notes = semantic_config(&config)
+        .err()
+        .map_or_else(Vec::new, |e| e.lines().map(str::to_owned).collect());
+    notes.extend(check_config(config, path));
     notes.extend(old_remote_keys(text));
     notes.extend(retired_keys(text));
     Ok(notes)
 }
 
-fn check_config(config: Config, path: &std::path::Path) -> Result<Vec<String>, String> {
+fn check_config(config: Config, path: &std::path::Path) -> Vec<String> {
     let mut notes: Vec<String> = config
         .reserved_in_use()
         .into_iter()
@@ -575,11 +585,10 @@ fn check_config(config: Config, path: &std::path::Path) -> Result<Vec<String>, S
             format!("[{section}] is accepted but not used until {milestone}")
         })
         .collect();
-    semantic_config(&config)?;
     if !path.exists() {
         notes.push(format!("create {} to change settings (`ptyro config edit`)", path.display()));
     }
-    Ok(notes)
+    notes
 }
 
 /// Write the config (or any file that may hold secrets) atomically: the file 0600, directories

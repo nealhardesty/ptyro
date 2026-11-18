@@ -106,18 +106,85 @@ where
     Err(e)
 }
 
-/// Commands that were removed (the pare-down, 2026-11-17), each with what to use instead.
-const REMOVED_COMMANDS: &[(&str, &str)] = &[
-    ("init", "`ptyro setup` does what it did: your agents, accounts, preferences and repositories"),
-    ("tour", "`?` in the TUI lists the keys, and `ptyro --help` the commands"),
+/// Commands that were removed (the pare-down, 2026-11-17): the names they answered to, what
+/// each was, and what to use instead (empty when nothing replaces it).
+const REMOVED_COMMANDS: &[(&[&str], &str, &str)] = &[
     (
-        "backup",
+        &["init"],
+        "it set ptyro up",
+        "`ptyro setup` does what it did: your agents, accounts, preferences and repositories",
+    ),
+    (
+        &["tour"],
+        "a guided tour with a pretend agent",
+        "`?` in the TUI lists the keys, and `ptyro --help` the commands",
+    ),
+    (
+        &["backup"],
+        "it saved ptyro's state to a .tar.gz",
         "`ptyro about` says where ptyro keeps its config and data, to copy while the daemon is stopped",
     ),
-    ("integrations", "Claude Code, Codex and OpenCode need nothing installed for ptyro"),
+    (
+        &["integrations"],
+        "Gemini and Antigravity extensions",
+        "Claude Code, Codex and OpenCode need nothing installed for ptyro",
+    ),
+    (
+        &["cs", "changeset"],
+        "change sets across several repositories",
+        "a worktree per repository, `ptyro wt new`",
+    ),
+    (&["msg"], "mail between agents", "`ptyro send SESSION TEXT` types into a session"),
+    (&["run", "runs"], "runs of recipes and fan-outs", ""),
+    (&["recipe", "recipes"], "multi-step workflows", ""),
+    (
+        &["fanout"],
+        "one task to several agents",
+        "`ptyro new -a AGENT` starts each one in its own worktree",
+    ),
+    (
+        &["compare", "pick", "iterate", "discard"],
+        "a fan-out's candidates",
+        "`ptyro wt ls`, and `ptyro wt rm` for the ones you don't keep",
+    ),
+    (
+        &["gate", "gates"],
+        "questions runs waited on",
+        "`ptyro answer` answers an agent's permission prompt",
+    ),
+    (&["lease", "leases"], "file leases between agents", ""),
+    (&["radar"], "overlapping changes between worktrees", ""),
+    (&["pr", "watch-pr"], "pull requests", "`gh pr` creates and watches them"),
+    (
+        &["review"],
+        "the review queue and line comments",
+        "`ptyro checkpoint diff` shows what an agent changed",
+    ),
+    (&["verify"], "verified-done checks", ""),
+    (&["scratchpad", "pad"], "the scratchpad", ""),
+    (
+        &["inbox"],
+        "the inbox",
+        "`ptyro status` says what every agent is doing, and `ptyro events` what happened",
+    ),
+    (
+        &["adopt"],
+        "it made a hand-started Claude a managed session",
+        "start it with `ptyro new -a claude`",
+    ),
+    (&["report", "report-agent"], "a program's own state report", ""),
+    (
+        &["replay", "export"],
+        "session recordings",
+        "`ptyro read SESSION --scrollback` prints what a session shows",
+    ),
+    (&["convert"], "it switched an agent between chat view and its own UI", ""),
+    (&["summarize"], "one-line session summaries", "`ptyro status` says what every agent is doing"),
+    (&["retitle"], "it is part of rename now", "`ptyro rename SESSION --title TITLE`"),
 ];
 
-/// The error for a removed command (`ptyro init`), when the command line names one.
+/// The error for a removed command (`ptyro init`), when the command line names one, whatever
+/// follows it (`ptyro inbox --json`, `ptyro pad add -`).
 fn removed_command(argv: &[std::ffi::OsString]) -> Option<String> {
     let mut words = argv.iter().skip(1).map(|a| a.to_string_lossy());
     let first = loop {
@@ -129,10 +196,27 @@ fn removed_command(argv: &[std::ffi::OsString]) -> Option<String> {
             w => break w,
         }
     };
-    REMOVED_COMMANDS
-        .iter()
-        .find(|(c, _)| *c == first)
-        .map(|(c, instead)| format!("`ptyro {c}` was removed on 2026-11-17: {instead}"))
+    let (names, what, instead) = REMOVED_COMMANDS.iter().find(|(n, ..)| n.contains(&&*first))?;
+    let instead = match names[0] {
+        "scratchpad" => format!("your notes file stays where it was: {}", scratchpad_file()),
+        _ if instead.is_empty() => "nothing replaces it".to_owned(),
+        _ => instead.to_string(),
+    };
+    Some(format!("`ptyro {first}` was removed on 2026-11-17 ({what}): {instead}"))
+}
+
+/// Where the old scratchpad kept its notes: the retired `[scratchpad] path`, else
+/// `scratchpad.md` in ptyro's data directory.
+fn scratchpad_file() -> String {
+    let Ok(paths) = ptyro_core::paths::Paths::from_env() else { return "scratchpad.md".into() };
+    let text =
+        std::fs::read_to_string(ptyro_core::config::Config::path(&paths)).unwrap_or_default();
+    let set = toml::from_str::<toml::Table>(&text)
+        .ok()
+        .and_then(|t| Some(t.get("scratchpad")?.get("path")?.as_str()?.to_owned()));
+    set.map_or_else(|| paths.data.join("scratchpad.md"), |p| ptyro_core::config::expand_home(&p))
+        .display()
+        .to_string()
 }
 
 #[derive(Subcommand)]
@@ -1322,6 +1406,18 @@ mod tests {
         assert!(said(&["ptyro", "--remote", "box", "tour"]).unwrap().contains("`ptyro tour`"));
         assert!(said(&["ptyro", "integrations", "ls"]).is_some());
         assert!(said(&["ptyro", "backup"]).is_some());
+        // Every name a removed command answered to, with whatever follows it.
+        let inbox = said(&["ptyro", "inbox", "--json"]).unwrap();
+        assert!(
+            inbox.contains("`ptyro inbox` was removed") && inbox.contains("ptyro status"),
+            "{inbox}"
+        );
+        let pad = said(&["ptyro", "pad", "add", "-"]).unwrap();
+        assert!(pad.contains("`ptyro pad`") && pad.contains("notes file stays"), "{pad}");
+        assert!(said(&["ptyro", "lease", "ls"]).unwrap().contains("nothing replaces it"));
+        for c in ["cs", "changeset", "msg", "run", "fanout", "recipe", "pr", "review", "verify"] {
+            assert!(said(&["ptyro", c, "ls"]).is_some(), "{c}");
+        }
         assert_eq!(said(&["ptyro", "setup"]), None);
         assert_eq!(said(&["ptyro", "chat", "new", "backup"]), None, "only the command word");
         assert_eq!(said(&["ptyro"]), None);

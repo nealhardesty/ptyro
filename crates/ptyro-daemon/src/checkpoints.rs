@@ -153,7 +153,7 @@ impl Daemon {
                         .diff_between(&path, &base, &to, false, &[])
                         .map_err(crate::registry::git_err)?;
                     let (files, truncated) = ptyro_git::diff::parse_diff(&text);
-                    Ok(DiffDoc { from: Some(base), files, truncated })
+                    Ok(DiffDoc { from: Some(base), files, truncated, against: () })
                 })
                 .await??;
                 Ok(Reply::Diff { doc })

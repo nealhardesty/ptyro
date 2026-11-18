@@ -74,6 +74,16 @@ impl App {
         self.check_drawer();
     }
 
+    /// The session a way back (`` ` ``) returns to: the focused one, or, when the quick
+    /// terminal's drawer has focus, the session of the pane it hangs under (the drawer is that
+    /// pane's, not a place of its own).
+    fn way_back(&self) -> Option<SessionId> {
+        match self.drawer {
+            Some(d) if d.pane == self.focused => self.panes.get(&d.host).and_then(|p| p.session),
+            _ => self.focused_session(),
+        }
+    }
+
     /// Put `id` on screen without a split (UX3.1), and return its pane: where it already shows,
     /// else in the one pane there is, else full sized in place of the split (the session that
     /// had focus there is the new pane's way back).
@@ -88,7 +98,7 @@ impl App {
             return p;
         }
         if self.is_split() {
-            let back = self.focused_session();
+            let back = self.way_back();
             self.apply_screen(Screen {
                 layout: Layout::default(),
                 panes: HashMap::from([(1, None)]),
@@ -109,7 +119,7 @@ impl App {
     /// Show a SHELLS window's screen in place of this one; the session that had focus here, when
     /// the window doesn't show it, is the way back (`` ` ``).
     pub(crate) fn apply_window(&mut self, screen: Screen) {
-        let back = self.focused_session().filter(|id| screen.shows(*id).is_none());
+        let back = self.way_back().filter(|id| screen.shows(*id).is_none());
         // The quick terminal's drawer isn't the window's: it stays open, under the same pane.
         let drawer = self.drawer.and_then(|d| {
             let quick = self.panes.get(&d.pane)?.session?;

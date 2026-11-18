@@ -147,15 +147,12 @@ async fn fix_configs(ctx: &Ctx, r: &Report) -> Result<i32, Error> {
 }
 
 /// The config change a finding names: the words after `ptyro` in its first `` `ptyro config
-/// set|unset|rm …` ``, quotes taken off a word as a shell would (`'keys."C-."'`).
+/// set|unset|rm …` ``, quotes taken off as a shell would (`'keys.C- '`).
 fn config_fix(text: &str) -> Option<Vec<String>> {
     let start = text.find("`ptyro config ")? + 1;
     let end = start + text[start..].find('`')?;
-    let words: Vec<String> = text[start..end]
-        .split_whitespace()
-        .skip(1)
-        .map(|w| w.strip_prefix('\'').and_then(|w| w.strip_suffix('\'')).unwrap_or(w).to_owned())
-        .collect();
+    let mut words = ptyro_tui::keymap::shell_words(&text[start..end]);
+    words.remove(0);
     matches!(words.get(1).map(String::as_str), Some("set" | "unset" | "rm")).then_some(words)
 }
 
@@ -272,40 +269,32 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
     })
     .await
     .unwrap_or_default();
-    // A name the ignore list holds that isn't an agent (a typo) skips nothing: say so.
-    for i in &cfg.ignore {
-        let name = i.split_once('@').map_or(i.as_str(), |(n, _)| n);
-        let agent = ptyro_agents::setup::resolve(name)
+    // A name the ignore list holds that isn't an agent (a typo, or one ptyro no longer has)
+    // skips nothing: say so, with the change that takes it out.
+    let agent = |name: &str| {
+        ptyro_agents::setup::resolve(name)
             .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent)
-            || name.trim().eq_ignore_ascii_case(ptyro_agents::own::ID);
-        if !agent {
-            r.add(
-                S,
-                "ignore",
-                Level::Warn,
-                format!(
-                    "updates.ignore holds {i:?}, which isn't something ptyro updates (claude, codex, opencode, ptyro): it skips nothing"
-                ),
-            );
-        }
-    }
+    };
+    stray_names(
+        r,
+        "ignore",
+        &cfg.ignore,
+        |i| {
+            let name = i.split_once('@').map_or(i, |(n, _)| n);
+            agent(name) || name.trim().eq_ignore_ascii_case(ptyro_agents::own::ID)
+        },
+        "which isn't something ptyro updates (claude, codex, opencode, ptyro): it skips nothing",
+    );
     // Installed another way (BOOT7): the move to the recommended installer, offered as a note
     // (a normal state, so it never counts as a warning), unless kept; one out of date says it
     // with its update below.
-    for k in &cfg.keep_installer {
-        let agent = ptyro_agents::setup::resolve(k)
-            .is_ok_and(|it| it.kind == ptyro_agents::catalog::Kind::Agent);
-        if !agent {
-            r.add(
-                S,
-                "keep_installer",
-                Level::Warn,
-                format!(
-                    "updates.keep_installer holds {k:?}, which isn't an agent (claude, codex, opencode): it keeps nothing"
-                ),
-            );
-        }
-    }
+    stray_names(
+        r,
+        "keep_installer",
+        &cfg.keep_installer,
+        agent,
+        "which isn't an agent (claude, codex, opencode): it keeps nothing",
+    );
     for m in v.movable.iter().filter(|m| !m.kept(&cfg)) {
         if v.outdated.iter().any(|o| o.id == m.id && !updates::ignored(&cfg.ignore, o)) {
             continue;
@@ -577,7 +566,9 @@ async fn scripts(ctx: &Ctx, r: &mut Report) {
         for (file, shared) in
             [(ptyro_core::project::FILE, true), (ptyro_core::project::LOCAL_FILE, false)]
         {
-            if let Ok(text) = std::fs::read_to_string(p.root.join(file)) {
+            // Read as the loader reads them (`ProjectConfig::load`).
+            let path = p.root.join(file);
+            if let Ok(Some(text)) = ptyro_core::imports::read_repo_file(&p.root, &path, !shared) {
                 retired(&text, Some((&p.slug, shared)), r);
             }
         }
@@ -615,6 +606,9 @@ async fn scripts(ctx: &Ctx, r: &mut Report) {
 /// `data`). `project`: a repository's file (its slug; `true` for the committed `.ptyro.toml`).
 fn retired(text: &str, project: Option<(&str, bool)>, r: &mut Report) {
     for f in ptyro_core::retired::found(text) {
+        if project.is_none() && f.key == "summaries" && old_titler(text, r) {
+            continue;
+        }
         let (name, unset) = match project {
             None => ("config retired".to_owned(), format!("ptyro config unset {}", f.key)),
             Some((slug, shared)) => (
@@ -633,6 +627,42 @@ fn retired(text: &str, project: Option<(&str, bool)>, r: &mut Report) {
             "shared": project.is_some_and(|(_, s)| s),
         }));
     }
+}
+
+/// `[summaries] command`, retired, still titles your chats while `chat.title_command` names no
+/// titler (it did before 2026-11-17, and it may be a model of your own rather than Claude):
+/// taking it out would send chat text to Claude instead. So, first, the change that keeps it,
+/// in `chat.title_command` (or, when it was empty, titles off); `[summaries]` is then an
+/// ordinary retired key. `false` when there is nothing to keep.
+fn old_titler(text: &str, r: &mut Report) -> bool {
+    let Some(argv) = ptyro_core::config::old_titler(text) else { return false };
+    let titles_off = Config::parse(text).is_ok_and(|c| c.chat.title == "off");
+    if argv == Config::default().chat.title_command || (argv.is_empty() && titles_off) {
+        return false;
+    }
+    let (set, value, said) = if argv.is_empty() {
+        (
+            "chat.title",
+            "off".to_owned(),
+            "it is empty, so chats are titled by their first line".to_owned(),
+        )
+    } else {
+        let json = serde_json::to_string(&argv).unwrap_or_default();
+        ("chat.title_command", json, format!("chats are titled by `{}`", argv.join(" ")))
+    };
+    let shown = if value.starts_with('[') { format!("'{value}'") } else { value.clone() };
+    r.add(
+        "ptyro",
+        "config retired",
+        Level::Warn,
+        format!(
+            "[summaries] is no longer used (removed 2026-11-17: session summaries were removed), but its command still titles your chats ({said}): keep it, `ptyro config set {set} {shown}`; then `[summaries]` can go"
+        ),
+    );
+    r.add_data(serde_json::json!({
+        "set": set, "value": value, "hint": "Keeps the titler [summaries] command chose",
+    }));
+    true
 }
 
 fn crlf_text(files: &[String]) -> String {
@@ -664,14 +694,59 @@ fn port_vars_text(slug: &str, scripts: &str) -> Option<String> {
             })
         })
         .collect();
-    let first = used.first()?;
+    if used.is_empty() {
+        return None;
+    }
     Some(format!(
         "{slug}'s scripts use ${}, which ptyro no longer sets (worktrees' port blocks were \
-         removed 2026-11-17), so {} empty now: give the port in the script (`${{{first}:-3000}}` \
-         keeps a default), in its .ptyro.toml or in Settings, under its scripts",
+         removed 2026-11-17), so {} empty now: give the port in the script (the number, or \
+         `${{PORT:-3000}}`, a variable of your own with a default), in its .ptyro.toml or in \
+         Settings, under its scripts",
         used.join(", $"),
         if used.len() == 1 { "it is" } else { "they are" }
     ))
+}
+
+/// `updates.<list>` entries `ok` refuses, as one warning with the change that keeps only the
+/// others (`ptyro config set`, or `unset` when none is left). One that names an agent ptyro no
+/// longer has (Gemini CLI, Antigravity: removed 2026-11-17) says so instead of `why`.
+fn stray_names(r: &mut Report, list: &str, names: &[String], ok: impl Fn(&str) -> bool, why: &str) {
+    let (good, bad): (Vec<&String>, Vec<&String>) = names.iter().partition(|n| ok(n));
+    if bad.is_empty() {
+        return;
+    }
+    let key = format!("updates.{list}");
+    let removed = bad.iter().all(|n| {
+        let n = n.split_once('@').map_or(n.as_str(), |(n, _)| n).trim();
+        n == "agy" || ptyro_core::config::REMOVED_AGENTS.iter().any(|(r, _)| *r == n)
+    });
+    let why = if removed {
+        "which ptyro no longer has (Gemini CLI and Antigravity were removed 2026-11-17)"
+    } else {
+        why
+    };
+    let shown: Vec<String> = bad.iter().map(|n| format!("{n:?}")).collect();
+    let value = serde_json::to_string(&good).unwrap_or_default();
+    let fix = if good.is_empty() {
+        format!("`ptyro config unset {key}`")
+    } else {
+        format!("`ptyro config set {key} '{value}'`")
+    };
+    r.add(
+        "updates",
+        list,
+        Level::Warn,
+        format!(
+            "{key} holds {}, {why}: {fix} takes {} out",
+            shown.join(", "),
+            if bad.len() == 1 { "it" } else { "them" }
+        ),
+    );
+    r.add_data(if good.is_empty() {
+        serde_json::json!({ "unset": key })
+    } else {
+        serde_json::json!({ "set": key, "value": value, "hint": "Keeps the names that are still agents" })
+    });
 }
 
 /// Shell sessions (WIN1, SPEC §8.7): the shell they run exists, and whether ptyro's integration
@@ -1647,11 +1722,7 @@ fn stale_keys(config: &Config, r: &mut Report) {
         return;
     }
     let said: Vec<String> = stale.iter().map(|(k, a)| format!("{k} runs {a}")).collect();
-    // A key with a dot in it (`C-.`) is quoted, as `ptyro config` takes it.
-    let args: Vec<String> = stale
-        .iter()
-        .map(|(k, _)| if k.contains('.') { format!("'keys.\"{k}\"'") } else { format!("keys.{k}") })
-        .collect();
+    let args: Vec<String> = stale.iter().map(|(k, _)| ptyro_tui::keymap::key_setting(k)).collect();
     r.add(
         "ptyro",
         "config keys",
@@ -1703,6 +1774,10 @@ fn removed_agents(config: &Config, r: &mut Report) {
     use ptyro_core::config::removed_agent;
     const S: &str = "agents";
     let gone = |name: &str| removed_agent(&config.agents, name).map(|(_, label)| label);
+    // An adapter is a built-in integration: one of yours named `gemini` doesn't bring it back.
+    // `agy` is the name Antigravity's program has.
+    let gone_adapter =
+        |a: &str| a == "agy" || ptyro_core::config::REMOVED_AGENTS.iter().any(|(n, _)| *n == a);
     let to = kept_agent(config);
     let default = ptyro_agents::default_agent(config);
     if let Some(label) = gone(&default) {
@@ -1729,7 +1804,7 @@ fn removed_agents(config: &Config, r: &mut Report) {
                 ),
             );
             r.add_data(serde_json::json!({ "remove": "agents", "name": n }));
-        } else if let Some(a) = def.adapter.as_deref().filter(|a| gone(a).is_some()) {
+        } else if let Some(a) = def.adapter.as_deref().filter(|a| gone_adapter(a)) {
             r.add(
                 S,
                 name,
@@ -1739,6 +1814,30 @@ fn removed_agents(config: &Config, r: &mut Report) {
                 ),
             );
             r.add_data(serde_json::json!({ "unset": format!("agents.{name}.adapter") }));
+        }
+        // Gemini CLI as an ACP agent of your own: ptyro added its `--acp` while Gemini was built
+        // in, and no longer does.
+        let argv: Vec<String> = def.command.as_ref().map_or_else(Vec::new, |c| {
+            c.argv().join(" ").split_whitespace().map(str::to_owned).collect()
+        });
+        let program = argv.first().and_then(|p| Path::new(p).file_stem()?.to_str());
+        if def.protocol.as_deref() == Some("acp")
+            && program == Some("gemini")
+            && !argv.iter().any(|a| a == "--acp" || a == "--experimental-acp")
+        {
+            let with = serde_json::to_string(&[argv.clone(), vec!["--acp".to_owned()]].concat())
+                .unwrap_or_default();
+            r.add(
+                S,
+                name,
+                Level::Warn,
+                format!(
+                    "[agents.{name}] runs Gemini CLI over ACP, but its command has no `--acp`, which ptyro added while Gemini was built in (removed 2026-11-17), so its chats can't start: `ptyro config set agents.{name}.command '{with}'`"
+                ),
+            );
+            r.add_data(serde_json::json!({
+                "set": format!("agents.{name}.command"), "value": with, "hint": "Adds --acp to its command",
+            }));
         }
     }
     let chat = ptyro_agents::split_agent(&config.chat.agent).0;
@@ -1760,36 +1859,59 @@ fn removed_agents(config: &Config, r: &mut Report) {
 /// both were removed (2026-11-17). They are the person's files, so they stay; say once where
 /// they are and how to take them out.
 fn old_integrations(ctx: &Ctx, config: &Config, r: &mut Report) {
-    // The default account's, and each profile's that ptyro kept for it.
+    for (name, _, text) in old_integrations_found(&ctx.paths, config) {
+        r.add("agents", name, Level::Note, text);
+    }
+}
+
+/// Each of those found, as `(its name, the Gemini home it is in, what to say with the command
+/// that removes it)`, for the
+/// doctor and for `ptyro uninstall`'s "Kept". Looked for in the default account's Gemini home,
+/// each profile's that ptyro kept for it, and each a profile named (`[profiles.X] gemini`,
+/// retired, so read from the file).
+pub(crate) fn old_integrations_found(
+    paths: &ptyro_core::paths::Paths,
+    config: &Config,
+) -> Vec<(&'static str, PathBuf, String)> {
     let mut homes = vec![expand_home("~/.gemini")];
     for p in config.profiles.keys() {
-        homes.push(ctx.paths.data.join("profiles").join(p).join("gemini").join(".gemini"));
+        homes.push(paths.data.join("profiles").join(p).join("gemini").join(".gemini"));
     }
+    let text = std::fs::read_to_string(Config::path(paths)).unwrap_or_default();
+    let table = toml::from_str::<toml::Table>(&text).unwrap_or_default();
+    let profiles = table.get("profiles").and_then(toml::Value::as_table);
+    for p in profiles.into_iter().flat_map(|t| t.values()) {
+        let Some(g) = p.get("gemini") else { continue };
+        if let Some(dir) = g.as_str().or_else(|| g.get("dir").and_then(toml::Value::as_str)) {
+            homes.push(expand_home(dir).join(".gemini"));
+        }
+    }
+    homes.dedup();
+    let mut out = Vec::new();
     for home in homes {
         if home.join("extensions").join("ptyro").exists() {
-            r.add(
-                "agents",
+            out.push((
                 "gemini extension",
-                Level::Note,
+                home.clone(),
                 format!(
                     "Gemini CLI still has ptyro's extension ({}), which does nothing now: `gemini extensions uninstall ptyro` removes it",
                     home.join("extensions").join("ptyro").display()
                 ),
-            );
+            ));
         }
         let hooks = home.join("config").join("hooks.json");
         if std::fs::read_to_string(&hooks).is_ok_and(|t| t.contains("hook antigravity")) {
-            r.add(
-                "agents",
+            out.push((
                 "antigravity hooks",
-                Level::Note,
+                home.clone(),
                 format!(
                     "{} still runs ptyro's hooks for Antigravity, which do nothing now: remove the entries that run `ptyro hook antigravity`",
                     hooks.display()
                 ),
-            );
+            ));
         }
     }
+    out
 }
 
 /// Logged in, and as whom, from the tool's own status command.
@@ -2095,7 +2217,9 @@ mod tests {
     fn scripts_reading_the_old_port_variables_are_flagged() {
         let text = super::port_vars_text("web", "pnpm dev --port $PTYRO_PORT").unwrap();
         assert!(text.starts_with("web's scripts use $PTYRO_PORT, which ptyro no longer sets"));
-        assert!(text.contains("${PTYRO_PORT:-3000}"), "{text}");
+        assert!(text.contains("${PORT:-3000}"), "{text}");
+        // What it suggests is no longer flagged.
+        assert!(super::port_vars_text("web", "pnpm dev --port ${PORT:-3000}").is_none());
         let text = super::port_vars_text("w", "n=$PTYRO_PORT_COUNT; x $CONDUCTOR_PORT").unwrap();
         assert!(text.contains("$PTYRO_PORT_COUNT, $CONDUCTOR_PORT,"), "{text}");
         assert!(!text.contains("$PTYRO_PORT,"), "{text}");
@@ -2168,6 +2292,80 @@ mod tests {
             check.data,
             Some(serde_json::json!({ "set": "ui.theme", "value": "ptyro-dark" }))
         );
+    }
+
+    /// A retired `[summaries] command` that still titles chats is kept, moved into
+    /// `chat.title_command`, before `[summaries]` is reported as a key to remove; the fix reads
+    /// back as the command `doctor --fix` and the TUI run.
+    #[test]
+    fn the_old_summaries_titler_is_moved_before_it_goes() {
+        use super::{Report, config_fix, retired};
+        let mut r = Report::default();
+        retired("[summaries]\ncommand = [\"ollama\", \"run\", \"llama3\"]\n", None, &mut r);
+        let [check] = &r.0[..] else { panic!("{:?}", r.0) };
+        assert!(check.text.contains("still titles your chats"), "{}", check.text);
+        assert_eq!(
+            config_fix(&check.text).unwrap(),
+            ["config", "set", "chat.title_command", r#"["ollama","run","llama3"]"#]
+        );
+        // Moved: `[summaries]` is an ordinary retired key, its fix the unset.
+        let mut r = Report::default();
+        let moved = "[summaries]\ncommand = [\"ollama\"]\n[chat]\ntitle_command = [\"ollama\"]\n";
+        retired(moved, None, &mut r);
+        assert_eq!(config_fix(&r.0[0].text).unwrap(), ["config", "unset", "summaries"]);
+        // An empty one meant no titles: they go off first.
+        let mut r = Report::default();
+        retired("[summaries]\ncommand = []\n", None, &mut r);
+        assert_eq!(config_fix(&r.0[0].text).unwrap(), ["config", "set", "chat.title", "off"]);
+    }
+
+    /// `updates.ignore` and `updates.keep_installer` naming an agent ptyro no longer has, or no
+    /// agent at all, are one warning each with the change that keeps the rest.
+    #[test]
+    fn update_lists_naming_no_agent_say_how_to_take_them_out() {
+        use super::{Report, config_fix, stray_names};
+        let mut r = Report::default();
+        let names = ["gemini".to_owned(), "codex".to_owned()];
+        stray_names(&mut r, "ignore", &names, |n| n == "codex", "a typo");
+        let [check] = &r.0[..] else { panic!("{:?}", r.0) };
+        assert!(check.text.contains("\"gemini\", which ptyro no longer has"), "{}", check.text);
+        assert_eq!(
+            config_fix(&check.text).unwrap(),
+            ["config", "set", "updates.ignore", r#"["codex"]"#]
+        );
+        let mut r = Report::default();
+        stray_names(&mut r, "keep_installer", &["codx".to_owned()], |_| false, "a typo");
+        assert!(r.0[0].text.contains("\"codx\", a typo"), "{}", r.0[0].text);
+        assert_eq!(
+            config_fix(&r.0[0].text).unwrap(),
+            ["config", "unset", "updates.keep_installer"]
+        );
+    }
+
+    /// Gemini CLI as an ACP agent of your own needs its `--acp` in the command now, and an
+    /// adapter ptyro no longer has is reported even beside an `[agents.gemini]` of your own.
+    #[test]
+    fn a_gemini_of_your_own_gets_its_acp_flag_and_old_adapters_are_found() {
+        use super::{Report, config_fix, removed_agents};
+        let c = ptyro_core::config::Config::parse(
+            "[agents.gemini]\ncommand = [\"gemini\"]\nprotocol = \"acp\"\n\n[agents.g2]\ncommand = [\"x\"]\nadapter = \"gemini\"\n\n[agents.g3]\ncommand = [\"/opt/bin/gemini\", \"--acp\"]\nprotocol = \"acp\"\nadapter = \"agy\"\n",
+        )
+        .unwrap();
+        let mut r = Report::default();
+        removed_agents(&c, &mut r);
+        let fixes: Vec<Vec<String>> = r.0.iter().filter_map(|c| config_fix(&c.text)).collect();
+        assert!(
+            fixes.contains(&vec![
+                "config".into(),
+                "set".into(),
+                "agents.gemini.command".into(),
+                r#"["gemini","--acp"]"#.into()
+            ]),
+            "{fixes:?}"
+        );
+        assert!(fixes.iter().any(|f| f.last().is_some_and(|k| k == "agents.g2.adapter")));
+        assert!(fixes.iter().any(|f| f.last().is_some_and(|k| k == "agents.g3.adapter")));
+        assert_eq!(fixes.len(), 3, "g3 has its flag: {fixes:?}");
     }
 
     #[test]

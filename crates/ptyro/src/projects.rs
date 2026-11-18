@@ -1059,7 +1059,7 @@ fn ask_remove(what: &str) -> bool {
     if !std::io::stdin().is_terminal() {
         return false;
     }
-    eprint!("{what}: r remove · ⏎ keep ");
+    eprint!("{what}: r remove · ⏎ keep (worktrees.stale_days says when one is stale) ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     let _ = std::io::stdin().lock().read_line(&mut line);

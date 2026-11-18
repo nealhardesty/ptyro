@@ -363,6 +363,57 @@ pub fn spec(id: &str) -> Option<&'static ActionSpec> {
     ACTIONS.iter().find(|s| s.id == id)
 }
 
+/// Actions that were renamed (2026-11-17): a `[keys]` line written with the old name still runs
+/// the action under its new one.
+const RENAMED: &[(&str, &str)] = &[
+    ("chat.retitle", "chat.rename"),
+    ("session.retitle", "session.rename"),
+    ("worktree.retitle", "worktree.rename"),
+];
+
+/// The action a `[keys]` line names: by its id, or by the name it had before a rename.
+fn bound_action(name: &str) -> Option<&'static ActionSpec> {
+    let name = RENAMED.iter().find(|(old, _)| *old == name).map_or(name, |(_, new)| new);
+    spec(name)
+}
+
+/// A `[keys]` name as a `ptyro config` command line takes it: `keys.C-.` (everything after
+/// `keys.` is the name), in quotes when the shell would otherwise split or change it.
+pub fn key_setting(name: &str) -> String {
+    let setting = format!("keys.{name}");
+    if name.chars().all(|c| c.is_ascii_alphanumeric() || "-_:.+,=@%/^".contains(c)) {
+        setting
+    } else if !name.contains('\'') {
+        format!("'{setting}'")
+    } else {
+        format!("\"{setting}\"")
+    }
+}
+
+/// A command line as a shell splits it: words between spaces, quotes taken off (`'keys.C- '`
+/// is one word). What the TUI and `ptyro doctor --fix` run of a command a message names.
+pub fn shell_words(line: &str) -> Vec<String> {
+    let (mut words, mut word, mut quote, mut any) = (Vec::new(), String::new(), None, false);
+    for c in line.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => word.push(c),
+            (None, '\'' | '"') => (quote, any) = (Some(c), true),
+            (None, c) if c.is_whitespace() => {
+                if any || !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                any = false;
+            }
+            (None, c) => word.push(c),
+        }
+    }
+    if any || !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Table {
     Prefix,
@@ -661,7 +712,7 @@ impl Keymap {
                 Some((n, a)) => (n, Some(a.trim().to_owned())),
                 None => (value, None),
             };
-            match spec(name) {
+            match bound_action(name) {
                 Some(s) => {
                     if s.arg == Arg::Number && arg.as_deref().and_then(|a| a.parse::<usize>().ok()).is_none() {
                         errors.push(format!("keys.{spec_key:?}: {name} needs a number, e.g. \"{name} 1\""));
@@ -670,7 +721,8 @@ impl Keymap {
                     map.bindings.insert(slot(table, &k), (k, Command { action: s.id, arg }));
                 }
                 None => errors.push(format!(
-                    "keys.{spec_key:?}: unknown action {name:?}: ptyro no longer has it, or it is misspelt (`ptyro doctor` finds every such key and the line that removes them; `{} ?` or the palette lists the actions)",
+                    "keys.{spec_key:?}: unknown action {name:?}: ptyro no longer has it, or it is misspelt: `ptyro config unset {}` removes the line (`ptyro doctor` finds every such key; `{} ?` or the palette lists the actions)",
+                    key_setting(spec_key),
                     key_label(&map.prefix)
                 )),
             }
@@ -769,7 +821,7 @@ pub fn stale_bindings(config: &Config) -> Vec<(String, String)> {
         .iter()
         .filter_map(|(k, v)| {
             let name = v.split_whitespace().next()?;
-            (name != "none" && spec(name).is_none()).then(|| (k.clone(), name.to_owned()))
+            (name != "none" && bound_action(name).is_none()).then(|| (k.clone(), name.to_owned()))
         })
         .collect()
 }
@@ -783,24 +835,41 @@ mod tests {
         KeyEvent::new(KeyCode::Char { c }, Mods(mods))
     }
 
-    /// `docs/keys.md` is the page people read for keys: every default key after the prefix is in it.
     /// `[keys]` lines bound to actions the TUI doesn't have (a release removed them, or a typo)
-    /// are found for `ptyro doctor`, and the TUI's message names it.
+    /// are found for `ptyro doctor`, and the TUI's message names the line that removes each. One
+    /// that names an action by the name it had before a rename still runs it.
     #[test]
     fn keys_bound_to_actions_that_are_gone_are_found() {
         let c = Config::parse(
-            "[keys]\n\"S\" = \"sets\"\n\"nav:j\" = \"nav.down\"\n\"x\" = \"none\"\n\"T\" = \"help.tour\"\n\"Y\" = \"theme.next\"\n\"W\" = \"remote.serve\"\n",
+            "[keys]\n\"S\" = \"sets\"\n\"nav:j\" = \"nav.down\"\n\"x\" = \"none\"\n\"T\" = \"help.tour\"\n\"Y\" = \"theme.next\"\n\"W\" = \"remote.serve\"\n\"C-.\" = \"app.backup\"\n\"chat:e\" = \"chat.retitle\"\n\"nav:E\" = \"worktree.retitle\"\n",
         )
         .unwrap();
         let names: Vec<String> = stale_bindings(&c).into_iter().map(|(_, a)| a).collect();
-        assert_eq!(names, ["sets", "help.tour", "remote.serve", "theme.next"]);
+        assert_eq!(names, ["app.backup", "sets", "help.tour", "remote.serve", "theme.next"]);
         let errors = validate(&c);
+        assert_eq!(errors.len(), 5, "{errors:?}");
         assert!(
             errors.iter().all(|e| e.contains("`ptyro doctor` finds every such key")),
             "{errors:?}"
         );
+        assert!(
+            errors.iter().any(|e| e.contains("`ptyro config unset keys.C-.` removes the line")),
+            "{errors:?}"
+        );
+        let (map, _) = Keymap::new(&c);
+        let renamed = map.lookup(Table::Chat, key("e")).map(|c| c.action);
+        assert_eq!(renamed, Some("chat.rename"), "an old name still runs its action");
+        // The fix as a command line, and back: a name the shell would split is quoted.
+        assert_eq!(key_setting("nav:j"), "keys.nav:j");
+        assert_eq!(key_setting("C- "), "'keys.C- '");
+        assert_eq!(key_setting("'"), "\"keys.'\"");
+        for name in ["C-.", "C- ", "'", "\"", "nav:j"] {
+            let line = format!("config unset {}", key_setting(name));
+            assert_eq!(shell_words(&line), ["config", "unset", &format!("keys.{name}")], "{line}");
+        }
     }
 
+    /// `docs/keys.md` is the page people read for keys: every default key after the prefix is in it.
     #[test]
     fn the_keys_page_lists_every_default_key() {
         const DOC: &str = include_str!("../../../docs/keys.md");

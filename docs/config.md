@@ -33,8 +33,9 @@ configuration with defaults filled in, and `ptyro config path` prints where it i
 A setting of a feature ptyro no longer has doesn't break your file: it is ignored, and
 `ptyro config check`, `ptyro doctor` and the health views name it with the fix
 (`ptyro config unset KEY`, or Remove on the web). A misspelt setting is still an error. The
-same goes for a `[keys]` line bound to an action ptyro no longer has, and for a default agent
-(or `chat.agent`) that names one it no longer has built in: `ptyro doctor` names the change.
+same goes for a `[keys]` line bound to an action ptyro no longer has (it blocks no other change
+to the file, and its message names the `ptyro config unset` that removes it), and for a default
+agent (or `chat.agent`) that names one it no longer has built in: `ptyro doctor` names the change.
 
 When the doctor's fix is made for you (`ptyro doctor --fix`, ⏎ in the TUI's health list, or the
 fix's button on the web's Health page), the file it changes is copied beside it first, as

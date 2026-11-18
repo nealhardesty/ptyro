@@ -1274,7 +1274,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_foreground_program_its_session_and_its_ports_are_known() {
+    async fn the_foreground_program_and_its_session_are_known() {
         let mut c = start(&["cmd.exe", "/d", "/k", "prompt $G"]);
         read_until(&mut c.reader, ">").await;
         assert_eq!(foreground_pid(&c.master), Some(c.pid), "the shell, with nothing running");
@@ -1290,25 +1290,6 @@ mod tests {
         assert_eq!(session_leader(fg), Some(c.pid));
         assert_eq!(session_leader(std::process::id()), None, "this test runs in no session");
         signal_group(c.pid, Signal::KILL).unwrap();
-        // A listener inside a session is that session's port.
-        let mut p = start(&[
-            "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            "$l = [System.Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start(); Write-Output ('port=' + $l.LocalEndpoint.Port + '='); Start-Sleep 30",
-        ]);
-        let out = read_until(&mut p.reader, "=\r").await;
-        let port: u16 = out
-            .split("port=")
-            .nth(1)
-            .and_then(|s| s.split('=').next())
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        let ports = crate::listening_ports(&[p.pid]);
-        assert!(ports[&p.pid].contains(&port), "{ports:?} lacks {port}");
-        signal_group(p.pid, Signal::KILL).unwrap();
     }
 
     #[test]

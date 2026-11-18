@@ -754,12 +754,14 @@ impl Chat {
     pub const FIND: &'static str = "find";
 
     /// What a chat may use, by the `tools` its row keeps: web search, and its folders when it
-    /// has some. `none` (a chat made with no tools before 2026-11-17) keeps none, and `find`
-    /// has only what its launch adds.
+    /// has some. That is `chat` (what a chat keeps now), or `read`, the other built-in preset
+    /// that had web search before presets were removed (2026-11-17). Any other name (`none`, a
+    /// preset of your own, which may have had no web search) keeps none, so no chat gains web
+    /// search on an upgrade; and `find` has only what its launch adds.
     pub fn tools_for(tools: &str, has_folders: bool) -> ChatTools {
         match tools {
-            "none" | Self::FIND => ChatTools::default(),
-            _ => ChatTools { web: true, read: has_folders },
+            "chat" | "read" => ChatTools { web: true, read: has_folders },
+            _ => ChatTools::default(),
         }
     }
 
@@ -1147,6 +1149,23 @@ impl std::str::FromStr for Access {
 /// is read as what they meant, and `ptyro config check` says so.
 const LEGACY_REMOTE_KEYS: [&str; 5] = ["listen", "tailscale", "local", "insecure", "trusted_proxy"];
 
+/// The titler an older config chose with the retired `[summaries] command` (perhaps a model of
+/// the person's own rather than Claude), while `[chat] title_command` chooses none: before
+/// 2026-11-17 chats were titled by it when `title_command` was unset or empty, and they still
+/// are, until `ptyro doctor` moves it into `title_command`. `None` when the file doesn't set it.
+pub fn old_titler(text: &str) -> Option<Vec<String>> {
+    let t: toml::Table = toml::from_str(text).ok()?;
+    let argv = t.get("summaries")?.get("command")?.as_array()?;
+    let argv: Vec<String> =
+        argv.iter().map(|v| v.as_str().map(str::to_owned)).collect::<Option<_>>()?;
+    let chosen = t
+        .get("chat")
+        .and_then(|c| c.get("title_command"))
+        .and_then(toml::Value::as_array)
+        .is_some_and(|a| !a.is_empty());
+    (!chosen).then_some(argv)
+}
+
 /// A config's text with the old `[remote]` keys turned into `access` and `port` (unless the file
 /// already has them), and a note for each key that was dropped. `None` when it has none.
 pub fn migrate_remote(text: &str) -> Option<(String, Vec<String>)> {
@@ -1512,9 +1531,14 @@ impl Config {
         let text = migrated.as_ref().map_or(text, |(t, _)| t.as_str());
         // Keys a removed feature had are ignored here, and reported by `config check` and the
         // doctor; any other key it doesn't know is still an error.
+        let titler = old_titler(text);
         let stripped = crate::retired::strip(text);
         let text = stripped.as_ref().map_or(text, |(t, _)| t.as_str());
-        let config: Self = toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())?;
+        let mut config: Self =
+            toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())?;
+        if let Some(argv) = titler {
+            config.chat.title_command = argv;
+        }
         config.validate()?;
         Ok(config)
     }
@@ -2317,10 +2341,11 @@ mod tests {
         let web = ChatTools { web: true, read: false };
         assert_eq!(Chat::tools_for("chat", false), web);
         assert_eq!(Chat::tools_for("chat", true), ChatTools { web: true, read: true });
-        // A row from before presets went: `read` and your own are the same chat now; `none`
-        // stays without tools, and `find` has only its history tools.
+        // A row from before presets went: `read` is the same chat now; `none` and a preset of
+        // your own (which may have had no web) stay without tools, and `find` has only its
+        // history tools.
         assert_eq!(Chat::tools_for("read", false), web);
-        assert_eq!(Chat::tools_for("mine", true), ChatTools { web: true, read: true });
+        assert_eq!(Chat::tools_for("mine", true), ChatTools::default());
         assert_eq!(Chat::tools_for("none", true), ChatTools::default());
         assert_eq!(Chat::tools_for(Chat::FIND, false), ChatTools::default());
     }

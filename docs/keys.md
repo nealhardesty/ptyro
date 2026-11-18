@@ -66,7 +66,7 @@ action by name.
 | `e` | the shells menu: the workspace's SHELLS by number; a digit shows one, `c` a new shell, `!` a command (`htop`, `ssh prod`), `s` a scratch shell. `C-q e 3` works where Alt doesn't |
 | `C-t` | this worktree's quick terminal (one per worktree) in a drawer below a pane of its project (VS Code's toggle). Again focuses it, and once more hides it (the shell keeps running). When none of the project is open it is a panel of its own, and a note says so. With no worktree here it asks for a project first |
 | `T` | this worktree's quick terminal full sized. Again goes back |
-| `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
+| `H` | home: who needs you, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
 | `U` | set up agents and tools: the setup checklist (Agents, Tools, Already here). `Space` ticks (`←`/`→` picks the side, WSL or Windows, on Windows), `⏎` installs what's ticked in a split (live output, sudo's prompt there, then the logins), `s` not now. The first run opens with the same checklist at its top |
 | `^` | update: your agents and ptyro itself, when newer versions are out (looked for once a day), in a split. It shows each update's command and asks first; ptyro's own is checked against its SHA256SUMS, the daemon upgrades live, and every open TUI restarts into the new ptyro with its view kept |
@@ -203,7 +203,7 @@ Enter sends a prompt. To start a new line instead:
 | Where | New line | Notes |
 |---|---|---|
 | An agent's pane (Claude Code, Codex) | `Shift+Enter`, `Alt+Enter`, `Ctrl+J`; in Claude also `\` then Enter | All four verified through ptyro (Claude Code 2.1.309, Codex 0.164, 2026-10-23). |
-| ptyro's own boxes: the task box, peek's reply, a broadcast, a review comment, a commit message | `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | The box grows as you type (up to a third of the screen), and a paste keeps its new lines. Names, titles and command lines stay on one line. The hint line names the key your terminal can send. |
+| ptyro's own boxes: the task box, peek's reply, a broadcast | `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | The box grows as you type (up to a third of the screen), and a paste keeps its new lines. Names, titles and command lines stay on one line. The hint line names the key your terminal can send. |
 | `ptyro send` | a real new line in the text: `ptyro send s $'line 1\nline 2'`, or a quoted string over two lines | Multi-line text is pasted, bracketed when the program asked for it, so nothing is sent early. Enter is pressed once afterwards (not with `--no-enter`). |
 | The web app | `Shift+Enter` | Enter (or Send) sends. |
 

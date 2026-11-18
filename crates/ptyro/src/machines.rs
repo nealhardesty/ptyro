@@ -237,7 +237,7 @@ pub async fn pair(ctx: &Ctx, url: Option<String>, json: bool) -> Result<i32, Err
     let (base, notes, ca, serving) = crate::remote::served_base(ctx, url.clone());
     if !serving && url.is_none() {
         return Err(Error::invalid(
-            "this machine's web app server isn't running, and a code is claimed from it: turn it on (`ptyro serve`, or `[remote] serve = true`), or skip pairing and add this machine over ssh on the other one (`ptyro machine add ssh://THIS-HOST`)",
+            "this machine's web app server isn't running, and a code is claimed from it: turn it on (`ptyro web on`), or skip pairing and add this machine over ssh on the other one (`ptyro machine add ssh://THIS-HOST`)",
         ));
     }
     let c = ctx.connect(true).await.map_err(no_daemon)?;

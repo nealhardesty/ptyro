@@ -317,10 +317,10 @@ impl App {
         );
     }
 
-    /// Whether a chat reads the folders it is given: every chat does, but one made with no
-    /// tools before 2026-11-17 (SPEC §22.5).
+    /// Whether a chat reads the folders it is given: every chat does, but one made before
+    /// 2026-11-17 with no tools or a preset of your own (SPEC §22.5).
     pub(crate) fn chat_reads(&self, c: &ChatInfo) -> bool {
-        c.tools != "none"
+        ptyro_core::config::Chat::tools_for(&c.tools, true).read
     }
 
     /// A chat by id: listed, or held by the chat panel (archived, or opened from the archive).
