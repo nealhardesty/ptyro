@@ -84,17 +84,27 @@ const showNotes = (title: string, notes: string[]): void => { if (notes.length <
 
 function moreView(): HTMLElement {
   const scope = SCOPES.find(([k]) => k === conn.scope);
-  const items: [string, string, string, string?][] = [
-    ["Health", "What's wrong, with its fixes", "#/health"],
-    ["Usage", "Your accounts' limits", "#/usage"],
-    ["Devices", "Phones and browsers paired with ptyro", "#/devices"],
-    ["Machines", "Other machines whose workspaces show here", "#/machines"],
-    ["Profiles", "Accounts agents run under", "#/profiles"],
-    ["Settings", "Every option, searchable, with what it does", "#/settings"],
-    ["Web app", "The server your phone opens: up, its address, on or off", "#/web"],
-    ["Daemon", "Version, logs, restart, login service", "#/daemon"],
-    ["About", "Version, where to report a problem, where things live", "#/about"],
-    ["Set up ptyro", "Install agents and tools; your accounts and repositories", "#/setup"],
+  // Grouped, so a phone sees each kind of page together (one list of ten read as a wall).
+  const version = status.get("")?.version;
+  const groups: [string, [string, string, string][]][] = [
+    ["Status", [
+      ["Health", "What's wrong, with its fixes", "#/health"],
+      ["Usage", "Your accounts' limits", "#/usage"],
+    ]],
+    ["Phones and other machines", [
+      ["Web app", "On or off, its address, who can reach it", "#/web"],
+      ["Devices", "Phones and browsers paired with ptyro", "#/devices"],
+      ["Machines", "Other machines whose workspaces show here", "#/machines"],
+    ]],
+    ["Set up", [
+      ["Settings", "Every option, searchable, with what it does", "#/settings"],
+      ["Profiles", "Accounts agents run under", "#/profiles"],
+      ["Set up ptyro", "Install agents and tools; your accounts and repositories", "#/setup"],
+    ]],
+    ["ptyro", [
+      ["Daemon", "Logs, restart, upgrade, login service", "#/daemon"],
+      ["About", `${version ? `ptyro ${version}: ` : ""}where to report a problem, where things live`, "#/about"],
+    ]],
   ];
   return h("div", {}, ui.header("More", false), h("main", { class: "stack", title: tip("more") },
     section("This device", facts([
@@ -108,9 +118,8 @@ function moreView(): HTMLElement {
       ]) }, "🔔 Notifications"),
       h("button", { class: "deny", onclick: () => confirm("Forget this device?", "It stops showing your sessions until you pair it again. Revoking it on the Devices page ends the pairing for good.", "Forget", () => ui.forget()) }, "Forget this device"))),
     conn.scope !== "full" ? h("p", { class: "intro" }, "Some pages here change the machine and need a device paired with ", h("code", {}, "ptyro pair --scope full"), ".") : null,
-    h("div", { class: "rows" }, ...items.map(([t, s, href]) => row(t, s, "›", { href }))),
-    // The version, quietly, where people look first (UX2.1).
-    h("p", { class: "sub more-version" }, "ptyro ", status.get("")?.version ?? "", " · ", h("a", { href: "#/about", title: tip("app.about") }, "About"))));
+    // The version, on About, where people look first (UX2.1).
+    ...groups.map(([title, items]) => section(title, h("div", { class: "rows joined" }, ...items.map(([t, s, href]) => row(t, s, "›", { href })))))));
 }
 
 // ── health ──────────────────────────────────────────────────────────────────────────────────
@@ -661,8 +670,8 @@ async function showLogs(): Promise<void> {
 
 const ACCESS: [string, string, string][] = [
   ["tailscale", "My Tailscale network", "This computer and your tailnet (your phone, signed in to Tailscale), not the Wi-Fi"],
-  ["open", "Every network", "The Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token"],
   ["localhost", "This computer only", "Nothing else can reach it"],
+  ["open", "Every network", "The Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token"],
 ];
 
 async function setWeb(on: boolean, via?: string): Promise<void> {
@@ -680,11 +689,11 @@ async function setWeb(on: boolean, via?: string): Promise<void> {
 /// Who can reach it (`remote.access`): the current one is marked, and picking another applies at once.
 function pickAccess(current: string | null, title: string): void {
   const items = ACCESS.map(([v, label, hint]): Item => ({ label: v === current ? `${label} (now)` : label, hint, run: () => void setWeb(true, v) }));
-  menu(title, current ? items : [{ label: "Pick for me", hint: "Tailscale if it is up here, else every network", run: () => void setWeb(true) }, ...items]);
+  menu(title, current ? items : [{ label: "Pick for me", hint: "Tailscale if it is up here, else this computer only", run: () => void setWeb(true) }, ...items]);
 }
 
 function turnWebOn(): void {
-  pickAccess(null, "Run the web app with the daemon: who can reach it?");
+  pickAccess(null, "Turn the web app on: who can reach it?");
 }
 
 function turnWebOff(): void {
@@ -708,10 +717,10 @@ function webView(): HTMLElement {
     const state = w.up ? badge("up", "ok") : w.wanted ? badge(w.last_exit ? "failing" : "starting", w.last_exit ? "bad" : "info") : badge("off", "");
     const byHand = w.by_hand && !w.wanted;
     const lines: string[] = [];
-    if (w.by_hand && w.wanted) lines.push(`A \`ptyro serve\` you started by hand (pid ${w.by_hand}) holds the port. Stop it (Ctrl-C) and the daemon's takes over.`);
-    if (byHand) lines.push(`This page comes from a \`ptyro serve\` you started by hand (pid ${w.by_hand}): it ends with that terminal, and it won't be back after a restart. Have the daemon run it instead.`);
+    if (w.by_hand && w.wanted) lines.push(`A web server started by hand (pid ${w.by_hand}) holds the port. Stop it (Ctrl-C) and the daemon's takes over.`);
+    if (byHand) lines.push(`This page comes from a web server started by hand (pid ${w.by_hand}): it ends with that terminal, and it won't be back after a restart. Turn the web app on to have the daemon run it.`);
     return h("div", { class: "stack-in", title: tip("web.status") },
-      h("p", { class: "pr-head" }, state, " ", w.up ? "The web app is running" : w.wanted ? "The daemon is starting the web app" : "The daemon isn't serving the web app"),
+      h("p", { class: "pr-head" }, state, " ", w.up ? "The web app is on" : w.wanted ? "The daemon is starting the web app" : "The web app is off"),
       facts([
         ["Address", w.url ? h("span", {}, h("code", {}, w.url), " ", h("button", { class: "small", onclick: () => void navigator.clipboard?.writeText(w.url).then(() => ui.toast("Copied"), () => ui.toast("Couldn't copy")) }, "Copy")) : null],
         ["Who can reach it", w.access ? h("span", {}, ACCESS.find((a) => a[0] === w.access)?.[1] ?? w.access, " ", h("button", { class: "small", title: "remote.access", onclick: () => pickAccess(w.access, "Who can reach the web app?") }, "Change")) : null],
@@ -727,7 +736,7 @@ function webView(): HTMLElement {
       !w.wanted ? h("p", { class: "intro" }, "Turning it on makes the daemon run a web server: it listens on a port and comes back whenever the daemon does. Nothing opens to anyone until you pair a device, and each can be revoked.") : null,
       w.wanted && !w.up && w.last_exit ? h("p", { class: "intro" }, "It keeps trying again, a little slower each time. The log says why; ", h("a", { href: "#/health" }, "Health"), " has the fix.") : null,
       full ? bar(
-        w.wanted ? h("button", { class: "deny", title: tip("web.off"), onclick: turnWebOff }, "Stop serving") : h("button", { class: "primary", title: tip("web.on"), onclick: turnWebOn }, "Run it with the daemon"),
+        w.wanted ? h("button", { class: "deny", title: tip("web.off"), onclick: turnWebOff }, "Turn off") : h("button", { class: "primary", title: tip("web.on"), onclick: turnWebOn }, "Turn on"),
         h("button", { title: tip("pair.device"), onclick: pairAnother }, "Pair a device…"),
         w.up ? h("button", { title: tip("pair.open"), onclick: openOnComputer }, "Open on the computer") : null,
         h("button", { title: tip("web.logs"), onclick: () => void showWebLogs() }, "Log")) : h("p", { class: "intro" }, "Turning it on or off needs a device paired with ", h("code", {}, "ptyro pair --scope full"), "."));

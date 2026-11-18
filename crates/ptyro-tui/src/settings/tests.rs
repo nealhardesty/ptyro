@@ -213,17 +213,20 @@ fn a_set_toggles_each_choice_and_saves_them_together() {
     );
 }
 
+/// The theme is a pick of the three built in, under Interface (2026-11-17: themes of your
+/// own, and trying one on as the cursor moves, were removed).
 #[test]
-fn the_theme_shows_as_the_cursor_moves_over_it_and_goes_back_on_esc() {
+fn the_theme_is_a_pick_of_the_three_built_in() {
     let mut t = T::new("");
     t.go("ui.theme");
-    let acts = t.press("<Enter>");
-    assert_eq!(acts, [Action::Theme(Some("ptyro-dark".into()))]);
-    let acts = t.press("<Down>");
-    assert_eq!(acts, [Action::Theme(Some("ptyro-light".into()))]);
-    let acts = t.press("<Esc>");
-    assert_eq!(acts, [Action::Theme(None)]);
-    assert!(t.file().is_empty());
+    assert_eq!(t.p.section().id, "interface");
+    t.press("<Enter>");
+    let Some(Modal::Pick(p)) = &t.p.modal else { panic!("no picker") };
+    let items: Vec<&str> = p.items.iter().map(|(v, _)| v.as_str()).collect();
+    assert_eq!(items, ["ptyro-dark", "ptyro-light", "high-contrast"]);
+    assert!(t.press("<Down>").is_empty() && t.file().is_empty(), "moving changes nothing");
+    t.press("<Enter>");
+    assert!(t.file().contains("theme = \"ptyro-light\""), "{}", t.file());
 }
 
 #[test]
@@ -245,10 +248,10 @@ fn undo_puts_the_file_back_exactly() {
 #[test]
 fn a_change_the_semantic_check_refuses_is_refused_with_the_reason() {
     let mut t = T::new("");
-    // (The themes list only offers real ones; a typed name goes through the same check.)
+    // (The theme's list only offers real ones; a typed name is refused with them named.)
     let e = t.p.find_entry("ui.theme").unwrap();
     let acts = t.p.set(&e, "no-such-theme");
-    assert!(acts.is_empty() && t.err().contains("unknown theme"), "{}", t.err());
+    assert!(acts.is_empty() && t.err().contains("isn't one of"), "{}", t.err());
     assert!(t.file().is_empty());
     // A key bound to an action that doesn't exist.
     let layer = t.p.user.clone();
@@ -264,7 +267,7 @@ fn a_change_the_semantic_check_refuses_is_refused_with_the_reason() {
 #[test]
 fn an_agent_is_added_edited_renamed_and_removed_without_touching_the_file() {
     let mut t = T::new("# keep me\n[ui]\nmouse = false\n");
-    t.press("<Down><Down><Down>");
+    t.press("<Down><Down>");
     assert_eq!(t.p.section().id, "agents");
     t.press("<Enter>");
     // The default agent comes first, then the list of agents.
@@ -683,32 +686,7 @@ fn escape_walks_back_out_and_the_mouse_picks_rows() {
 }
 
 #[test]
-fn the_themes_section_picks_the_theme_and_a_new_theme_starts_from_one_you_choose() {
-    let mut t = T::new("");
-    t.go("ui.theme");
-    assert_eq!(t.p.section().id, "themes");
-    t.press("<Enter>");
-    assert!(matches!(t.p.modal, Some(Modal::Pick(_))));
-    t.press("<Esc>");
-    let col = settings::collection("themes").unwrap();
-    t.p.add(col);
-    for c in "mine".chars() {
-        t.press(&c.to_string());
-    }
-    t.press("<Enter>");
-    let Some(Modal::Pick(p)) = &t.p.modal else { panic!("no base picker") };
-    assert!(p.title.contains("mine") && p.items.iter().any(|(v, _)| v == "ptyro-light"));
-    t.press("j");
-    t.press("<Enter>");
-    assert!(
-        t.file().contains("[themes.mine]") && t.file().contains("base = \"ptyro-light\""),
-        "{}",
-        t.file()
-    );
-}
-
-#[test]
-fn a_new_agent_asks_which_program_it_runs_and_a_new_theme_is_put_in_use() {
+fn a_new_agent_asks_which_program_it_runs() {
     let mut t = T::new("");
     t.p.add(settings::collection("agents").unwrap());
     t.press("pair<Enter>");
@@ -718,18 +696,6 @@ fn a_new_agent_asks_which_program_it_runs_and_a_new_theme_is_put_in_use() {
     t.press("aider --model sonnet<Enter>");
     let c = Config::parse(&t.file()).unwrap();
     assert_eq!(c.agents["pair"].command.as_ref().unwrap().argv(), ["aider", "--model", "sonnet"]);
-
-    t.p.add(settings::collection("themes").unwrap());
-    t.press("mine<Enter><Enter>");
-    assert!(t.file().contains("theme = \"mine\""), "{}", t.file());
-    assert!(t.note().contains("now in use"), "{}", t.note());
-    // Removing the theme in use says so, and the default comes back instead of a broken config.
-    t.p.drill = None;
-    t.p.ask_remove("themes", "mine");
-    assert!(matches!(&t.p.modal, Some(Modal::Confirm { text, .. }) if text.contains("in use")));
-    t.press("y");
-    assert!(!t.file().contains("mine") && !t.file().contains("theme ="), "{}", t.file());
-    assert!(t.note().contains("default theme is back"), "{}", t.note());
 }
 
 #[test]

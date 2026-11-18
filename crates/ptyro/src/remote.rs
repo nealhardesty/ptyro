@@ -458,7 +458,7 @@ pub async fn pair(
         println!("Scan with the phone's camera, or open:\n  {link}\n");
     }
     println!(
-        "The link works once, for {minutes} minutes, and needs `ptyro serve` running. Waiting \
+        "The link works once, for {minutes} minutes, and needs the web app on (`ptyro web on`). Waiting \
          for {} to open it (Ctrl-C stops waiting; the link keeps working)…",
         device.name
     );

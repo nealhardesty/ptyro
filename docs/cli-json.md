@@ -150,7 +150,7 @@ Conventions:
   of that name that opening the link replaces (null otherwise); `notes` are fixes for a `--url`
   whose port doesn't match; `machine` is the computer's short name. `url` carries a
   one-time pairing code in its fragment (`#pair=ptp_…`), not the token: the web app trades it
-  for the token (`POST /api/pair` on `ptyro serve`) once, before `expires_ms` (10 minutes).
+  for the token (`POST /api/pair` on the web app's server) once, before `expires_ms` (10 minutes).
   `device.pending` is true until then.
 - `ptyro devices ls --json` → `[DeviceInfo]`: `{id, name, scope, created_ms, last_seen_ms?,
   last_via?, push, pending}`. `scope` is `read`, `approve`, `control` or `full`; `last_via` is

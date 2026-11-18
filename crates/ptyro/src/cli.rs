@@ -24,28 +24,11 @@ pub fn parse_size(s: &str) -> Result<TermSize, String> {
     Ok(TermSize::new(cols, rows))
 }
 
-pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
-    if serve {
-        // Written before it starts, so the daemon reads it as its first config.
-        let paths = match Paths::from_env() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("ptyro: {e}");
-                return 1;
-            }
-        };
-        match ptyro_core::config::set_serve(&ptyro_core::config::Config::path(&paths), true, None) {
-            Ok(notes) => notes.iter().for_each(|n| eprintln!("web app: {n}")),
-            Err(e) => {
-                eprintln!("ptyro: {}", e.message);
-                return e.code.exit_code();
-            }
-        }
-    }
+pub fn daemon_start(foreground: bool, spawned: bool) -> i32 {
     // Typed at a prompt: start it in the background, as any client would, and say so. Only
     // `--foreground` (service managers, debugging) keeps it in this terminal.
     if !foreground && !spawned {
-        return start_detached(serve);
+        return start_detached();
     }
     // Leave the client's session and process group so its terminal closing can't hang us up.
     // Done before any runtime exists: we never fork an initialized tokio process. (On Windows the
@@ -66,17 +49,6 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
         Err(e) => {
             eprintln!("ptyro: {e:#}");
             if e.to_string().contains("already running") {
-                if serve {
-                    // The daemon that is running reads the config it was just given.
-                    eprintln!(
-                        "ptyro: the daemon was already running; the web app starts in it now (`ptyro web`)"
-                    );
-                    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
-                    if let (Ok(rt), Ok(paths)) = (rt, Paths::from_env()) {
-                        let ctx = Ctx::local(paths);
-                        let _ = rt.block_on(crate::webapp::ask(&ctx, Some(true), None));
-                    }
-                }
                 ErrorCode::Conflict.exit_code()
             } else {
                 1
@@ -87,7 +59,7 @@ pub fn daemon_start(foreground: bool, spawned: bool, serve: bool) -> i32 {
 
 /// `ptyro daemon start`: the daemon detached (`--spawned`, as a client starts it), this command
 /// returning once it accepts connections.
-fn start_detached(serve: bool) -> i32 {
+fn start_detached() -> i32 {
     let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {
@@ -115,11 +87,6 @@ fn start_detached(serve: bool) -> i32 {
             match status(client).await {
                 Ok(pid) => eprintln!("ptyro: daemon already running (pid {pid})"),
                 Err(_) => eprintln!("ptyro: daemon already running"),
-            }
-            if serve {
-                // The daemon that is running reads the config it was just given.
-                eprintln!("ptyro: the web app starts in it now (`ptyro web`)");
-                let _ = crate::webapp::ask(&ctx, Some(true), None).await;
             }
             return ErrorCode::Conflict.exit_code();
         }

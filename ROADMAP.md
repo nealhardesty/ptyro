@@ -2297,6 +2297,28 @@ web, with the parity rows.
   reporting. `ptyro about [--json]` (`usage`), the TUI's `I` overlay (from that document), and
   the web's More → About (live from `Usage`, linking to the meters page).
 
+**Removed and tightened (2026-11-17): TUI and web compaction, pare-down batch 9.** Deep, not wide
+(`docs/review-2026-11/pare-down.md`): the two clients should feel tighter, not only smaller.
+- **Themes:** the three built-ins (`ptyro-dark`, `ptyro-light`, `high-contrast`) and `NO_COLOR`
+  stay; themes of your own (`[themes.*]`, M2.14's user half), theme editing in both settings
+  panels, `theme.next`, the palette's theme lines and the panel's live preview went. `ui.theme`
+  is a pick of the three, under Interface. A `ui.theme` naming another loads (the TUI shows
+  ptyro-dark); `ptyro doctor` sets it (`ptyro config set ui.theme ptyro-dark`, run by the TUI's
+  Health and made by the web's). Retired key: `themes`.
+- **The kept split** (UX3.1's `App.kept`, `SavedView.kept`): a panel opened over a split no
+  longer keeps the split to swap back; `` ` `` (`session.last`) goes back to the session that had
+  focus (and still between a chat and its session). The per-workspace view stays.
+- **One way to run the web server:** `ptyro web on|off|status`. `ptyro serve` is hidden (the
+  daemon runs it); `ptyro daemon start --serve` and the TUI's `remote.serve` are gone (the flag
+  says to use `ptyro web on`). `[remote] serve` stays as the switch's state. `web on` is
+  Tailscale first: with nothing chosen it picks Tailscale when it is running, else this computer
+  only (it was every interface).
+- **The web app:** More's ten pages are four groups (Status; Phones and other machines; Set up;
+  ptyro), the version is on About (no separate footer), the header's 🔔 shows only on top-level
+  pages until notifications are on (More → This device keeps them), and pages keep a 16 px side
+  gutter without scrolling sideways on a phone.
+RESEARCH: R-UX-34's kept split marked built and removed.
+
 ## UX4 — Sidebar filter, quick shell stays (2026-10-30)
 
 The owner asked for a way to see just the running sessions and just the active ones, and for the

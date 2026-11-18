@@ -67,9 +67,6 @@ const fn c(value: &'static str, help: &'static str) -> Choice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
-    Themes,
-    /// The themes built in: what a theme of yours can start from.
-    BuiltinThemes,
     Agents,
     Editors,
     /// Every TUI action (`session.next`…), for key bindings.
@@ -93,7 +90,7 @@ pub enum Kind {
     Choice {
         choices: &'static [Choice],
     },
-    /// One of what exists: themes, agents, editors, actions.
+    /// One of what exists: agents, editors, actions.
     Dynamic {
         source: Source,
     },
@@ -258,12 +255,6 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
-        id: "themes",
-        title: "Themes",
-        blurb: "Pick the colour scheme, or make your own.",
-        scope: Scope::User,
-    },
-    Section {
         id: "agents",
         title: "Agents",
         blurb: "The programs ptyro starts, and how.",
@@ -359,7 +350,7 @@ pub fn section(id: &str) -> Option<&'static Section> {
     SECTIONS.iter().find(|s| s.id == id)
 }
 
-/// A group of named things made by the person: agents, profiles, themes… The settings of each
+/// A group of named things made by the person: agents, profiles, editors… The settings of each
 /// are the entries whose key starts `<path>.*.`.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Collection {
@@ -370,8 +361,6 @@ pub struct Collection {
     pub layout: Layout,
     /// A name already in use by the table itself (`editors.default`).
     pub reserved: &'static [&'static str],
-    /// Settings written when one is added (a command to run, a type…), so it is valid at once.
-    pub starter: &'static [(&'static str, &'static str)],
     /// The heading over its list.
     pub title: &'static str,
     /// What to say while there are none: what they are for, and what already works without one.
@@ -396,19 +385,8 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "binding",
         layout: Layout::Map(Kind::Dynamic { source: Source::Actions }),
         reserved: &[],
-        starter: &[],
         title: "Key bindings",
         empty: "No key is bound. Add one to make a shortcut.",
-    },
-    Collection {
-        path: "themes",
-        section: "themes",
-        noun: "theme",
-        layout: Layout::Tables,
-        reserved: &["ptyro-dark", "ptyro-light", "high-contrast"],
-        starter: &[("base", "ptyro-dark")],
-        title: "Your themes",
-        empty: "None yet. ptyro-dark, ptyro-light and high-contrast are built in; add one to make colours of your own.",
     },
     Collection {
         path: "agents",
@@ -416,7 +394,6 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "agent",
         layout: Layout::Tables,
         reserved: &["default"],
-        starter: &[],
         title: "Your agents",
         empty: "None added. claude, codex and opencode work as they are: add one only to change how an agent starts, or to run another program.",
     },
@@ -426,7 +403,6 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "profile",
         layout: Layout::Tables,
         reserved: &[],
-        starter: &[],
         title: "Profiles",
         empty: "None. One account needs no profile; add one to keep another account's logins and git identity apart.",
     },
@@ -436,7 +412,6 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "sink",
         layout: Layout::Array,
         reserved: &[],
-        starter: &[],
         title: "Notification services",
         empty: "None. Add one (ntfy, Slack, Pushover…) to be told when you are away from this screen.",
     },
@@ -446,7 +421,6 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "editor",
         layout: Layout::Tables,
         reserved: &["default"],
-        starter: &[],
         title: "Your editors",
         empty: "None added. nvim, vim, hx, code, zed and cursor are built in (whichever is installed); add one to use another.",
     },
@@ -456,7 +430,6 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "run script",
         layout: Layout::Tables,
         reserved: &[],
-        starter: &[],
         title: "Run scripts",
         empty: "None. A run script is a named command, like a dev server or the tests, that you start from a worktree.",
     },
@@ -466,7 +439,6 @@ pub const COLLECTIONS: &[Collection] = &[
         noun: "prompt",
         layout: Layout::Map(Kind::Script),
         reserved: &[],
-        starter: &[],
         title: "Prompts",
         empty: "None. A prompt is saved text a new session can start from.",
     },
@@ -591,6 +563,12 @@ const SHARE_MODE: &[Choice] = &[
     c("symlink", "a symlink"),
     c("copy", "clone where possible, else a full copy"),
 ];
+/// The themes built into the TUI (`ptyro_tui::theme::BUILTIN`).
+const THEMES: &[Choice] = &[
+    c("ptyro-dark", "light text on a dark background"),
+    c("ptyro-light", "dark text on a light background"),
+    c("high-contrast", "the terminal's own bright colours, for the strongest contrast"),
+];
 const ACCESS: &[Choice] = &[
     c("localhost", "this computer only: nothing else can reach the web app"),
     c(
@@ -649,8 +627,8 @@ const SINK_HOOK: &[&str] = &["slack", "discord"];
 
 pub const SETTINGS: &[Setting] = &[
     // ── Interface ──
-    s("ui.theme", "themes", dynamic(Source::Themes), "The terminal screen's colour scheme. Make your own below.").also("color colour dark light appearance"),
     s("ui.prefix", "interface", Kind::Keys, "The keys that start a ptyro command (then a key; `?` lists them all). Any of them works; the first is the one hints show.").also("shortcut hotkey leader modifier keybinding"),
+    s("ui.theme", "interface", pick(THEMES), "The terminal screen's colour scheme. NO_COLOR in the environment turns colour off whatever this says.").also("color colour dark light appearance theme contrast"),
     s("ui.sidebar", "interface", Kind::Bool, "Show the session list down the side (`\\` toggles it)."),
     s("ui.sidebar_width", "interface", int(12, 120), "How wide the sidebar is.").unit("columns"),
     s("ui.sidebar_detail", "interface", pick(DETAIL), "How much each session row says under its first line (its task, what it is on, its last reply)."),
@@ -744,7 +722,7 @@ pub const SETTINGS: &[Setting] = &[
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
     // ── Web app and remote ──
     s("client.default_remote", "remote", Kind::Text, "Where this ptyro's daemon is, when --remote and PTYRO_REMOTE don't say: `wsl://` (the default WSL distro), `wsl://<distro>`, an ssh host, or `local` (this computer's own daemon; on Windows the native one, still being built). On Windows, ptyro offers the WSL distro that has ptyro the first time, and keeps the answer here.").also("wsl windows daemon remote ssh host distro client local native").or("this computer's own daemon (on Windows, asked the first time)").eg("wsl://Ubuntu"),
-    s("remote.serve", "remote", Kind::Bool, "Run the web app (for your phone or another computer) from the daemon, and keep it running."),
+    s("remote.serve", "remote", Kind::Bool, "The web app (for your phone or another computer) is on: the daemon runs its server and starts it again whenever the daemon starts. This is what `ptyro web on` and `ptyro web off` switch.").also("web app server phone serve on off start"),
     s("remote.access", "remote", pick(ACCESS), "Who can reach the web app. It is always HTTPS (ptyro makes the certificate; trust it once from /ca.crt on a phone).").also("tailscale tailnet lan wifi network phone listen bind interface localhost open"),
     s("remote.port", "remote", int(1024, 65535), "The port the web app listens on, whoever may reach it. Pairing links and QR codes use it too.").also("listen bind address https"),
     s("remote.public_url", "remote", Kind::Text, "The address QR codes and links point at.").adv().or("worked out from how it is reached").eg("https://ptyro.example.com"),
@@ -772,24 +750,6 @@ pub const SETTINGS: &[Setting] = &[
     s("agents.*.usage", "agents", Kind::Bool, "Report rate limits per profile.").new_only().or("on for Claude, off for Codex"),
     s("agents.*.record", "agents", Kind::Bool, "Record this agent's sessions.").new_only().or("on"),
     s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol a chat speaks with it.").new_only().or("from its adapter"),
-    // ── Themes ──
-    s("themes.*.base", "themes", dynamic(Source::BuiltinThemes), "A built-in theme to start from.").or("none"),
-    s("themes.*.accent", "themes", Kind::Color, "Highlights and the focused item."),
-    s("themes.*.text", "themes", Kind::Color, "Ordinary text."),
-    s("themes.*.dim", "themes", Kind::Color, "Quiet text."),
-    s("themes.*.border", "themes", Kind::Color, "Pane borders."),
-    s("themes.*.border_focus", "themes", Kind::Color, "The focused pane's border."),
-    s("themes.*.bar_fg", "themes", Kind::Color, "Status bar text."),
-    s("themes.*.bar_bg", "themes", Kind::Color, "Status bar background."),
-    s("themes.*.selection_fg", "themes", Kind::Color, "Selected text."),
-    s("themes.*.selection_bg", "themes", Kind::Color, "Selection background."),
-    s("themes.*.search", "themes", Kind::Color, "Search matches."),
-    s("themes.*.working", "themes", Kind::Color, "A session that is working."),
-    s("themes.*.blocked", "themes", Kind::Color, "A session waiting on you."),
-    s("themes.*.idle", "themes", Kind::Color, "A session that is idle."),
-    s("themes.*.done", "themes", Kind::Color, "A session that finished."),
-    s("themes.*.error", "themes", Kind::Color, "A session that failed."),
-    s("themes.*.exited", "themes", Kind::Color, "A session that ended."),
     // ── Profiles ──
     s("profiles.*.label", "profiles", Kind::Text, "A name to show.").new_only().or("the profile's name"),
     s("profiles.*.color", "profiles", Kind::Color, "Its colour on borders and badges.").new_only(),
@@ -851,13 +811,13 @@ pub fn matches(pattern: &str, key: &str) -> bool {
 
 /// The setting a concrete key is.
 /// Whether the client (the TUI, the CLI) reads `key` from its own computer's file, rather than
-/// the daemon from its own: the screen, keys, themes, the clipboard and where the daemon is. With
+/// the daemon from its own: the screen, keys, the clipboard and where the daemon is. With
 /// a remote daemon (`ptyro.exe` and WSL, or ssh) the two files differ, so the settings panel and
 /// `config set` say whose a setting is (ROADMAP WIN3). `ui.shell_exit` is the daemon's: it
 /// decides what happens to a shell that exits.
 pub fn read_by_client(key: &str) -> bool {
     let top = key.split('.').next().unwrap_or(key);
-    matches!(top, "ui" | "keys" | "themes" | "clipboard" | "client") && key != "ui.shell_exit"
+    matches!(top, "ui" | "keys" | "clipboard" | "client") && key != "ui.shell_exit"
 }
 
 pub fn find(key: &str) -> Option<&'static Setting> {
@@ -900,11 +860,9 @@ pub fn fields_of(c: &Collection) -> impl Iterator<Item = &'static Setting> + '_ 
 
 // ── values ────────────────────────────────────────────────────────────────────────────────
 
-/// Pieces a caller knows that this crate doesn't: the themes built into the TUI, the TUI's
-/// actions. Used to offer choices and to check names; the full check is the config's own.
+/// Pieces a caller knows that this crate doesn't: the TUI's actions. Used to offer choices and to check names; the full check is the config's own.
 #[derive(Debug, Clone, Default)]
 pub struct Lookups {
-    pub themes: Vec<String>,
     pub actions: Vec<(String, String)>,
     /// The default key bindings, named as `[keys]` names them (`d`, `nav:j`): `(name, action)`.
     pub keys: Vec<(String, String)>,
@@ -915,21 +873,6 @@ pub fn options(source: Source, config: &Config, lk: &Lookups) -> Vec<(String, St
     let named =
         |names: Vec<String>, what: &str| names.into_iter().map(|n| (n, what.to_owned())).collect();
     match source {
-        Source::BuiltinThemes => {
-            lk.themes.iter().map(|t| (t.clone(), "built in".to_owned())).collect()
-        }
-        Source::Themes => {
-            let mut v: Vec<(String, String)> =
-                lk.themes.iter().map(|t| (t.clone(), "built in".to_owned())).collect();
-            v.extend(
-                config
-                    .themes
-                    .keys()
-                    .filter(|k| !lk.themes.contains(k))
-                    .map(|k| (k.clone(), "yours".to_owned())),
-            );
-            v
-        }
         Source::Agents => {
             let mut names: BTreeSet<String> =
                 ["claude", "codex", "opencode"].map(String::from).into();
@@ -1301,7 +1244,7 @@ pub fn check(scope: Scope, text: &str) -> Result<(), String> {
     }
 }
 
-/// The caller's own check of a whole new file (key bindings and themes, which need the TUI to
+/// The caller's own check of a whole new file (key bindings and the theme, which need the TUI to
 /// judge them); `&|_| Ok(())` for none.
 pub type Extra<'a> = &'a dyn Fn(&str) -> Result<(), String>;
 
@@ -1523,10 +1466,8 @@ pub fn add(
             if item_at(&doc, &full).is_some() {
                 return Err(format!("there is already a {} called {name:?}", col.noun));
             }
-            let mut all: Vec<(&str, &str)> = col.starter.to_vec();
-            all.extend_from_slice(fields);
             for need in required(path, "") {
-                if !all.iter().any(|(k, _)| k == need) {
+                if !fields.iter().any(|(k, _)| k == need) {
                     return Err(format!("a {} needs its {need}", col.noun));
                 }
             }
@@ -1535,7 +1476,7 @@ pub fn add(
             if let Some(t) = lookup_mut(&mut doc, &full).and_then(toml_edit::Item::as_table_mut) {
                 t.set_implicit(false);
             }
-            for (k, v) in all {
+            for &(k, v) in fields {
                 let sk = format!("{path}.{name}.{k}");
                 let st = find(&sk).ok_or_else(|| unknown(&sk))?;
                 put(
@@ -1783,11 +1724,10 @@ fn line_of(text: &str, doc: &toml_edit::Document<String>, seg: &[String]) -> Opt
 
 /// What a fresh member of a collection holds, field by field.
 fn member_default(path: &str) -> Value {
-    use crate::config::{AgentDef, ProfileDef, ThemeDef};
+    use crate::config::{AgentDef, ProfileDef};
     match path {
         "agents" => serde_json::to_value(AgentDef::default()),
         "profiles" => serde_json::to_value(ProfileDef::default()),
-        "themes" => serde_json::to_value(ThemeDef::default()),
         "editors" => Ok(serde_json::json!({ "command": null, "inside": false })),
         "scripts.run" => Ok(serde_json::json!({ "command": null, "default": false })),
         _ => Ok(Value::Null),

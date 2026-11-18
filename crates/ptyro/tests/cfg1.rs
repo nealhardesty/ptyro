@@ -65,7 +65,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
     let r = ptyro_testkit::headless::run(
         s.send_when("▾ main", "\x11C")
             // The panel; ⏎ moves to the settings. Down to `clock` and ⏎ turns it off.
-            .send_when("Settings — your config", "\rjjjjj\r")
+            .send_when("Settings — your config", "\rjjjjjj\r")
             // `on_stop` is five below it: pick `stay` from its list.
             .send_when("ui.clock = off", "jjjjj\rj\r")
             // A number: search for it, jump there, and step it.
@@ -151,7 +151,7 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
         (vec!["config", "set", "ui.sidebar_width", "3"], "outside 12 to 120"),
         (vec!["config", "set", "ui.on_stop", "never"], "isn't one of next, stay"),
         (vec!["config", "set", "ui.thme", "x"], "Did you mean ui.theme"),
-        (vec!["config", "set", "ui.theme", "nonesuch"], "unknown theme"),
+        (vec!["config", "set", "ui.theme", "nonesuch"], "isn't one of ptyro-dark"),
         (vec!["config", "set", "scripts.setup", "x"], "-p ."),
     ] {
         let o = ptyro(&args);

@@ -11,10 +11,9 @@ use ptyro_protocol::{Reply, Request};
 use crate::ConfigCmd;
 use crate::cli::Ctx;
 
-/// What the settings schema can't know: the themes and actions the TUI has.
+/// What the settings schema can't know: the actions the TUI has.
 pub(crate) fn lookups() -> Lookups {
     Lookups {
-        themes: ptyro_tui::theme::BUILTIN.iter().map(|s| (*s).to_owned()).collect(),
         actions: ptyro_tui::keymap::ACTIONS
             .iter()
             .map(|a| (a.id.to_owned(), a.desc.to_owned()))
@@ -23,7 +22,7 @@ pub(crate) fn lookups() -> Lookups {
     }
 }
 
-/// The checks only the TUI can make of a whole user config: key bindings and themes.
+/// The checks only the TUI can make of a whole user config: key bindings and the theme.
 pub(crate) fn semantic(text: &str) -> Result<(), String> {
     let config = Config::parse(text)?;
     semantic_config(&config)
@@ -34,13 +33,8 @@ fn semantic_config(config: &Config) -> Result<(), String> {
     if !problems.is_empty() {
         return Err(problems.join("\n"));
     }
-    if !ptyro_tui::theme::exists(config, &config.ui.theme) {
-        return Err(format!(
-            "ui.theme: unknown theme {:?} (built in: {}; or define [themes.{}])",
-            config.ui.theme,
-            ptyro_tui::theme::BUILTIN.join(", "),
-            config.ui.theme
-        ));
+    if !ptyro_tui::theme::exists(&config.ui.theme) {
+        return Err(format!("ui.theme: {}", ptyro_tui::theme::unknown(&config.ui.theme)));
     }
     Ok(())
 }

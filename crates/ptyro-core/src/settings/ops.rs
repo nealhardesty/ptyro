@@ -236,9 +236,8 @@ fn compute(
     // bad key binding can still have its other settings changed.
     let broken_before = extra(before).is_err();
     let extra = |new: &str| if broken_before { Ok(()) } else { extra(new) };
-    // The theme in use goes with its theme, the default agent with its agent: back to the
-    // default when it is removed, to the new name when it is renamed (otherwise the config would
-    // name one that isn't there).
+    // The default agent goes with its agent: back to the default when it is removed, to the new
+    // name when it is renamed (otherwise the config would name one that isn't there).
     let (moved, then) = match follow(scope, before, op)? {
         Some((text, then)) => (Some(text), then),
         None => (None, None),
@@ -281,14 +280,10 @@ fn compute(
     Ok(after)
 }
 
-/// The theme `ui.theme` names in `text`, if the file sets it.
 /// Settings that name a member of a collection: (collection, setting, what it is, what is
 /// back when the member goes). The setting follows its member when that is renamed or removed.
 type Follow = (&'static str, &'static str, &'static str, &'static str);
-const FOLLOWS: &[Follow] = &[
-    ("themes", "ui.theme", "the theme in use", "the default theme"),
-    ("agents", "agents.default", "the default agent", "claude"),
-];
+const FOLLOWS: &[Follow] = &[("agents", "agents.default", "the default agent", "claude")];
 
 /// The member `key` names in `text`.
 fn in_use(text: &str, key: &str) -> Option<String> {
@@ -311,7 +306,7 @@ fn followed<'a>(before: &str, op: &'a Op) -> Option<(&'static Follow, Option<&'a
 /// `before` without the setting, and the setting with its member's new name to put back.
 type Moved<'a> = (String, Option<(&'static str, &'a str)>);
 
-/// A setting that names the member `op` removes or renames (`ui.theme`, `agents.default`): `before`
+/// A setting that names the member `op` removes or renames (`agents.default`): `before`
 /// with it taken off that member, and what to set it to once `op` is done (the new name, for a
 /// rename; nothing for a removal, so its default is back). Taking it off first and putting it
 /// back after keeps every step a config that loads. `None`: nothing names the member.
@@ -431,8 +426,6 @@ pub fn restore(
 impl Source {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Themes => "themes",
-            Self::BuiltinThemes => "builtin_themes",
             Self::Agents => "agents",
             Self::Editors => "editors",
             Self::Actions => "actions",
@@ -440,8 +433,7 @@ impl Source {
     }
 }
 
-const SOURCES: [Source; 5] =
-    [Source::Themes, Source::BuiltinThemes, Source::Agents, Source::Editors, Source::Actions];
+const SOURCES: [Source; 3] = [Source::Agents, Source::Editors, Source::Actions];
 
 /// Everything the panel needs to show a family of settings.
 #[derive(Debug, Clone)]

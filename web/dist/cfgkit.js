@@ -87,7 +87,6 @@ export function summary(path, name, fields) {
     };
     switch (path) {
         case "agents": return get("command") ?? get("adapter") ?? "runs as its name";
-        case "themes": return get("base") ? `based on ${get("base")}` : "colours of your own";
         case "editors":
         case "scripts.run": return get("command") ?? "";
         case "profiles": return get("label") ?? get("git.email") ?? "";

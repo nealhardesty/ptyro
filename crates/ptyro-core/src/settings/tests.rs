@@ -6,7 +6,7 @@ fn none(_: &str) -> Result<(), String> {
 
 /// Every leaf of the config structs, with `*` for the names in a table.
 fn fields() -> BTreeSet<String> {
-    use crate::config::{AgentDef, EditorDef, GitIdentity, ProfileDef, SinkDef, ThemeDef};
+    use crate::config::{AgentDef, EditorDef, GitIdentity, ProfileDef, SinkDef};
     fn walk(prefix: &str, v: &Value, out: &mut BTreeSet<String>) {
         match v {
             Value::Object(m) if !m.is_empty() => {
@@ -32,7 +32,6 @@ fn fields() -> BTreeSet<String> {
     walk("agents.*", &j(AgentDef::default()), &mut out);
     walk("profiles.*", &j(ProfileDef::default()), &mut out);
     walk("profiles.*.git", &j(GitIdentity::default()), &mut out);
-    walk("themes.*", &j(ThemeDef::default()), &mut out);
     walk("editors.*", &j(EditorDef { command: Vec::new(), inside: false }), &mut out);
     walk("scripts.run.*", &serde_json::json!({ "command": null, "default": false }), &mut out);
     let secret = || crate::config::Secret::Literal(String::new());
@@ -201,7 +200,7 @@ fn bad_values_are_refused_with_the_reason() {
             || err("notifications.quiet_hours", "late").contains("HH:MM")
     );
     assert!(err("ui.nonsense", "1").contains("no such setting"));
-    assert!(err("ui.theme", "").contains("pick one"));
+    assert!(err("ui.theme", "").contains("isn't one of"));
     assert!(err("worktrees.stale_days", "0").contains("outside 1 to 3650"));
     assert!(err("agents.claude.env", "x").contains("edit it in the file"));
     // A project setting is not a user setting, and the other way round.
@@ -539,7 +538,7 @@ fn the_view_opens_even_when_the_config_does_not_load() {
         "ptyro-dark",
         "defaults are shown meanwhile"
     );
-    assert!(v.options.iter().any(|(s, _)| *s == "themes"));
+    assert!(v.options.iter().any(|(s, _)| *s == "agents"));
     let j = v.to_json();
     assert!(j["entries"].as_array().unwrap().len() > 70 && j["problem"].is_string());
     assert!(schema_json(Scope::User)["settings"].as_array().unwrap().len() > 100);
@@ -630,15 +629,13 @@ fn a_partial_override_in_one_repository_file_is_fine_when_the_other_completes_it
 }
 
 #[test]
-fn names_with_dots_builtin_theme_names_and_credential_accounts_are_refused() {
+fn names_with_dots_reserved_names_and_credential_accounts_are_refused() {
     let lk = Lookups::default();
     assert!(
         add(Scope::User, "", "agents", "my.agent", &[], &lk, &none).unwrap_err().contains("dot")
     );
     assert!(
-        add(Scope::User, "", "themes", "ptyro-light", &[], &lk, &none)
-            .unwrap_err()
-            .contains("taken")
+        add(Scope::User, "", "agents", "default", &[], &lk, &none).unwrap_err().contains("taken")
     );
     let text = "[profiles.w]\nclaude = { dir = \"~/c\", token = \"t\" }\n";
     assert!(
@@ -679,34 +676,20 @@ fn a_config_with_one_bad_binding_can_still_have_other_settings_changed() {
     );
 }
 
+/// `ui.theme` is a pick of the three built-in themes (2026-11-17: themes of your own were
+/// removed); anything else is refused with them named.
 #[test]
-fn the_theme_in_use_follows_its_theme_when_that_is_renamed_or_removed() {
+fn the_theme_is_one_of_the_built_ins() {
     let lk = Lookups::default();
-    let dir = tempfile::tempdir().unwrap();
-    let user = Layer::User(dir.path().join("config.toml"));
-    user.write("[ui]\ntheme = \"mine\"\n\n[themes.mine]\naccent = \"#ff0000\"\n").unwrap();
-    // The real check (the TUI's) refuses a config naming a theme that doesn't exist.
-    let known = |t: &str| {
-        let c = Config::parse(t)?;
-        if c.themes.contains_key(&c.ui.theme) || c.ui.theme.starts_with("ptyro-") {
-            Ok(())
-        } else {
-            Err(format!("unknown theme {:?}", c.ui.theme))
-        }
-    };
-    let op = Op::Rename { path: "themes".into(), from: "mine".into(), to: "yours".into() };
-    let d = apply(&user, &op, &lk, &known).unwrap();
-    assert!(user.read().unwrap().contains("theme = \"yours\""), "{}", user.read().unwrap());
-    assert!(d.notes.iter().any(|n| n.contains("still the theme in use")), "{:?}", d.notes);
-    let op = Op::Remove { path: "themes".into(), name: "yours".into() };
-    let d = apply(&user, &op, &lk, &known).unwrap();
-    let text = user.read().unwrap();
-    assert!(!text.contains("theme") && !text.contains("yours"), "{text}");
-    assert!(d.notes.iter().any(|n| n.contains("default theme is back")), "{:?}", d.notes);
+    let out = set(Scope::User, "", "ui.theme", "high-contrast", &lk, &none).unwrap();
+    assert!(out.contains("theme = \"high-contrast\""), "{out}");
+    let e = set(Scope::User, "", "ui.theme", "mine", &lk, &none).unwrap_err();
+    assert!(e.contains("ptyro-dark") && e.contains("ptyro-light"), "{e}");
+    assert!(find("themes.mine.accent").is_none());
 }
 
 /// `[agents] default` (the Default agent setting): set from the panel, never listed as an agent,
-/// and it follows its agent when that is renamed or removed, as the theme does.
+/// and it follows its agent when that is renamed or removed.
 #[test]
 fn the_default_agent_is_a_setting_and_follows_its_agent() {
     let lk = Lookups::default();
@@ -743,7 +726,6 @@ fn key_lk() -> Lookups {
     let pairs =
         |v: &[(&str, &str)]| v.iter().map(|(a, b)| ((*a).to_owned(), (*b).to_owned())).collect();
     Lookups {
-        themes: Vec::new(),
         actions: pairs(&[
             ("app.detach", "Detach (sessions keep running)"),
             ("palette", "Command palette"),
@@ -880,14 +862,9 @@ fn a_key_already_in_use_is_named() {
 
 #[test]
 fn whose_setting_it_is() {
-    for k in [
-        "ui.theme",
-        "ui.mouse",
-        "keys.prefix",
-        "themes.mine.bg",
-        "clipboard.allow_write",
-        "client.default_remote",
-    ] {
+    for k in
+        ["ui.theme", "ui.mouse", "keys.prefix", "clipboard.allow_write", "client.default_remote"]
+    {
         assert!(read_by_client(k), "{k}");
     }
     for k in [

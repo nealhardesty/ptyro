@@ -9,7 +9,7 @@ There are two ways in:
 | From | How | Auth | Encryption |
 |---|---|---|---|
 | Another computer | `ptyro --remote host …` (the CLI and the TUI) | your ssh login | ssh |
-| A phone or any browser | `ptyro serve` + the web app | a paired device token | HTTPS: ptyro's own certificate, or Tailscale's, or your proxy's |
+| A phone or any browser | `ptyro web on` + the web app | a paired device token | HTTPS: ptyro's own certificate, or Tailscale's, or your proxy's |
 
 Everything is off until you turn it on. The daemon's clients reach it through a local socket;
 it opens a TCP port of its own only for approve/deny links in notifications, when you set
@@ -87,30 +87,31 @@ ptyro machine rm laptop2
   nothing new.
 - **What stays per machine:** the agents and editors offered in the new-task wizard.
 
-## From your phone: `ptyro serve`
+## From your phone: `ptyro web on`
 
-### 1. Serve, over HTTPS
+### 1. Turn it on, over HTTPS
 
-Phones need HTTPS to install the app and to show notifications, so `ptyro serve` is **always
-HTTPS**, with a certificate it makes (or one of your own, below). There is no plain-HTTP mode.
+`ptyro web on` is the one switch: the daemon runs the web app's server, now and whenever it
+starts (`ptyro web off` stops it; `ptyro web` says how it is). Phones need HTTPS to install the
+app and to show notifications, so the server is **always HTTPS**, with a certificate it makes (or
+one of your own, below). There is no plain-HTTP mode.
 
 You choose two things, and each is one setting (Settings → remote in the TUI and the web app,
 `ptyro config set` on the command line):
 
 | `remote.access` | who can reach the web app |
 |---|---|
-| `localhost` (the default) | this computer only (`127.0.0.1`) |
-| `tailscale` | this computer and your Tailscale network: it listens on loopback and this computer's Tailscale addresses, nothing else, so the Wi-Fi never sees it. If Tailscale comes up after the server, it starts listening there by itself |
-| `open` | every network interface (`0.0.0.0`): the Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token |
+| `tailscale` (what `ptyro web on` picks when Tailscale is running) | this computer and your Tailscale network: it listens on loopback and this computer's Tailscale addresses, nothing else, so the Wi-Fi never sees it. If Tailscale comes up after the server, it starts listening there by itself |
+| `localhost` (the default otherwise) | this computer only (`127.0.0.1`) |
+| `open` (only when you choose it) | every network interface (`0.0.0.0`): the Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token |
 
 `remote.port` is the port, `7091` unless you change it. The address phones open is
 `https://<this computer>:<port>`: its Tailscale name for `tailscale`, its LAN address for `open`.
 
 ```bash
-ptyro web on --access tailscale    # or localhost, open; nothing given: Tailscale if it is up, else open
-ptyro config set remote.access open
+ptyro web on                     # Tailscale if it is running here, else this computer only
+ptyro web on --access open       # or choose: tailscale, localhost, open (the Wi-Fi too)
 ptyro config set remote.port 8443
-ptyro serve --access open --port 8443   # by hand, for one run (the daemon's own is `ptyro web on`)
 ```
 
 **Tailscale's certificate (nothing to install).** With `access = tailscale`, and "HTTPS
@@ -137,14 +138,14 @@ it is in use.
   against the public roots) as well as the CA pinned in its code.
 - **A phone that used ptyro's certificate before (Android Chrome).** After the switch, Chrome can
   keep showing "Connection is not secure", or ptyro's old certificate in the certificate details,
-  and say "This app cannot be installed", although `serve` now sends Tailscale's certificate (an
+  and say "This app cannot be installed", although the server now sends Tailscale's certificate (an
   Incognito tab shows it). Chrome remembers how the site was secured until Chrome itself stops,
   and deleting cookies doesn't clear it. **Force-stop Chrome** (Settings → Apps → Chrome → Force
   stop), open the address again, and Install is offered. Once nothing uses ptyro's CA on that
   phone, you can remove it (Settings → Security → Encryption & credentials → Trusted credentials
   → User).
 
-**ptyro's certificate.** The first time, `ptyro serve` makes a small certificate authority (CA)
+**ptyro's certificate.** The first time, the server makes a small certificate authority (CA)
 and a certificate it signs for this machine: `localhost`, its name (and `<name>.local`), its LAN
 and Tailscale addresses. They're kept in `~/.local/share/ptyro/serve/tls/` (the keys `0600`); the
 certificate is renewed before it ends, and when the machine's addresses change, and the CA stays
@@ -159,30 +160,30 @@ and its SHA-256, so you can check it's yours:
 - **A desktop browser:** add `ca.crt` to the system's trusted roots (macOS: Keychain Access →
   System → drag it in → Always Trust), or accept the warning once.
 
-Then open the address `ptyro pair` shows. Anyone who could reach `serve` still needs a paired
+Then open the address `ptyro pair` shows. Anyone who could reach the server still needs a paired
 device's token; the certificate only keeps it private on the way.
 
 **What trusting the CA means.** A device that trusts `ca.crt` trusts that CA for *every* site, not
 only yours: whoever can read its key (`~/.local/share/ptyro/serve/tls/ca-key.pem`, mode 0600,
 valid ten years) could make a certificate for any site that such a device would accept. So keep
-that directory out of backups and synced folders. To start over, stop `ptyro serve`, delete
-`~/.local/share/ptyro/serve/tls/`, start it again, and trust the new `ca.crt` on each device
+that directory out of backups and synced folders. To start over, `ptyro web off`, delete
+`~/.local/share/ptyro/serve/tls/`, `ptyro web on` again, and trust the new `ca.crt` on each device
 (then remove the old one). Prefer your own certificate when you can: it needs no CA on your
 phone.
 
-**Your own certificate.** (It takes the place of Tailscale's too.) `ptyro serve --cert fullchain.pem --key privkey.pem` (or
-`tls_cert` and `tls_key` under `[remote]`) uses a certificate you have, from Let's Encrypt or
+**Your own certificate.** (It takes the place of Tailscale's too.) `tls_cert` and `tls_key` under
+`[remote]` (Settings → remote) use a certificate you have, from Let's Encrypt or
 your company's CA, say: phones that trust its issuer need nothing installed, and there's no
 `/ca.crt`. The files are read again every 12 hours, so a renewed certificate is picked up.
 
-**Have the daemon run it.** `ptyro web on` (or the question in `ptyro setup`, or `ptyro daemon start
---serve`, or More → Web app in the web app, or `remote.web_on` in the TUI) sets `[remote] serve = true`
-in `~/.config/ptyro/config.toml`. The daemon then starts `ptyro serve` itself, restarts it if it
-dies, and keeps it through live upgrades and restarts. Its log is `~/.local/state/ptyro/serve.log`.
+**On and off.** `ptyro web on` (or the question in `ptyro setup`, More → Web app in the web app,
+or `remote.web_on` in the TUI) sets `[remote] serve = true` in `~/.config/ptyro/config.toml`. The
+daemon then runs the server itself, restarts it if it dies, and keeps it through live upgrades
+and restarts. Its log is `~/.local/state/ptyro/serve.log`.
 
 ```bash
-ptyro web on                    # on: your Tailscale network if it is running here, else every network
-ptyro web on --access localhost # or choose: tailscale, open (the Wi-Fi too), localhost (this computer only)
+ptyro web on                    # on: your Tailscale network if it is running here, else this computer only
+ptyro web on --access open      # or choose: tailscale, localhost, open (the Wi-Fi too)
 ptyro web                       # how it is: up at <address>, since when, who runs it, what's wrong
 ptyro pair                      # then a QR code for the phone (or `ptyro web on --pair`)
 ptyro web off                   # stop it; paired devices stay paired
@@ -195,7 +196,7 @@ paired once and stays paired. Nothing opens to anyone until a device is paired, 
 revoked. Turning it off from the web app ends the page you are looking at, so it asks first.
 
 If it won't start, `ptyro web` and `ptyro doctor` say why: most often the port is taken (a
-`ptyro serve` you started by hand, which `ptyro web` names with its pid; or another program).
+server started by hand, which `ptyro web` names with its pid; or another program).
 Stop it, or set another `remote.port`; the daemon tries again on its own.
 
 ```toml
@@ -221,7 +222,7 @@ shows Tailscale's own certificate, or else ptyro's, trusted once; `tailscale ser
 and reverse-proxy modes are not offered. To put your own TLS proxy in front, point it at the
 HTTPS port, set `public_url` to the proxy's address, and use your own certificate for it.
 
-**Host names.** `ptyro serve` answers only requests addressed to an IP address, `localhost`, the
+**Host names.** The server answers only requests addressed to an IP address, `localhost`, the
 `public_url` host, or this machine's Tailscale name (`box.tailnet.ts.net`, `box`); anything else
 gets `421`. That stops DNS rebinding: a web page whose own name is made to resolve to
 127.0.0.1 can't talk to ptyro under that name. A proxy that rewrites `Host` to its upstream
@@ -237,7 +238,7 @@ ptyro devices                    # what's paired, last seen, from where, push on
 ptyro devices revoke 3f9a1c2b7e04  # the token stops working at once; open connections close
 ```
 
-`ptyro serve` must be running when the phone opens the link. The QR code carries a **pairing
+The web app must be on (`ptyro web on`) when the phone opens the link. The QR code carries a **pairing
 code**, not the device's token, in the URL's fragment (`#pair=ptp_…`). Browsers never send
 fragments to a server, so it doesn't reach logs or proxies. The app trades the code for the
 device's token once (`POST /api/pair`), stores the token, and removes the code from the address
@@ -276,7 +277,8 @@ Pairing and revoking work from the machine itself, and from a device paired with
 ### 3. Use it
 
 On iPhone: Share → Add to Home Screen, then open it from the home screen (iOS only allows push
-notifications there). Tap 🔔 to turn notifications on; a test notification arrives.
+notifications there). Tap 🔔 in the header (or More → This device → Notifications) to turn
+notifications on; a test notification arrives. The 🔔 goes once they are on.
 
 - **The list.** Blocked agents are at the top, with Allow / Deny right on the card.
 - **A session.** Its live screen is drawn from the daemon's own frames, at the session's size:
@@ -284,7 +286,7 @@ notifications there). Tap 🔔 to turn notifications on; a test notification arr
   ^C), and the permission card with its context.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
-- **"Offline: reconnecting…"** means the page (kept on the phone) can't reach `serve`. Opened
+- **"Offline: reconnecting…"** means the page (kept on the phone) can't reach the server. Opened
   at a `*.ts.net` name or a Tailscale address, it adds a hint, because the usual cause is
   Tailscale being off on the phone: turn it on and the page reconnects by itself.
 
@@ -331,7 +333,7 @@ a device with less sees the pages and is told what it lacks.
   the daemon (logs, upgrade, restart, login service), and first-run setup.
 
 Changing the machine (the config file, profiles, the login service, the daemon's restart) goes
-through `POST /api/host`, which `ptyro serve` accepts from a `full` device only, and
+through `POST /api/host`, which the server accepts from a `full` device only, and
 only when it runs on the same machine as the daemon (not with `--remote`).
 
 ### Remote approvals
@@ -349,14 +351,14 @@ through their protocol for a chat's agent.
 
 | Threat | Mitigation |
 |---|---|
-| Someone on the network reaches `ptyro serve` | Nothing gets past the first message without a valid device token; static files only otherwise. Listening is loopback/Tailscale-only unless `--insecure`. |
+| Someone on the network reaches the web app's server | Nothing gets past the first message without a valid device token; static files only otherwise. Listening is loopback/Tailscale-only unless `--insecure`. |
 | Token theft from logs or proxies | Tokens travel only in the WebSocket's first message or a request header, never a URL. The link `ptyro pair` prints holds a pairing code instead, in the fragment (never sent). Stored hashed. |
 | The pairing link read off a screen, scrollback or recording | It is a code, not the token: claimed once, within 10 minutes, then worthless. `ptyro pair` reports who claimed it and from where; failed claims count toward the lockout. During those minutes it *is* a credential, so prefer a plain terminal. |
-| Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and `ptyro serve` takes at most 256 connections. |
+| Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and the server takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
 | A paired phone changing the machine | The config file, profiles, the login service, and the daemon's restart need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
-| A browser posing as a local client | `ptyro serve` rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
+| A browser posing as a local client | The server rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
 | A device doing more than intended | Scopes, enforced in the daemon for every request and keystroke. Unknown requests need `full`. Remote actions on a session go to its event log (`ptyro events --session S`) with the device's name. |
 | Cross-site WebSocket hijacking | No cookies: authentication is in-band, so a hostile page has nothing to ride on. |
 | DNS rebinding (a page whose name resolves to your machine) | Requests must be addressed to an IP, `localhost`, `public_url`'s host or the tailnet name; others get 421. |

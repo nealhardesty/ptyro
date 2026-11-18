@@ -186,11 +186,10 @@ See [`remote.md`](remote.md).
 
 | Command | Does |
 |---|---|
-| `ptyro serve [--access localhost\|tailscale\|open] [--port N] [--cert PEM --key PEM]` | the web app and the protocol over WebSocket for paired devices, always HTTPS with a certificate ptyro makes (phones trust its CA once, from `/ca.crt`); `--access` and `--port` default to `[remote] access` and `port`; `--cert`/`--key` use your own certificate |
 | `ptyro pair [-n NAME] [--scope read\|approve\|control\|full] [--url URL] [--json] [--open]` | pair a phone or browser: a QR code with a one-time code (10 minutes; scope `full` by default, with a warning; a name that exists is replaced), then waits for the device; `--open` pairs this computer's own browser instead (inside WSL, the Windows one; it offers to have Windows trust ptyro's certificate first) |
 | `ptyro devices [ls \| revoke ID [-y] \| push-test]` | paired devices |
 | `ptyro machine [ls \| add (ssh://HOST \| CODE) [-n NAME] \| rm M [-y] \| hide M WS \| unhide M WS \| retry M \| update [M…] [--all] [-y] \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version, and `update` has those named (none: every one behind this machine's version) update their own ptyro, each checking the release there and upgrading its daemon live, even while its link is down for its version |
-| `ptyro web [on\|off\|status] [--access localhost\|tailscale\|open] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
+| `ptyro web [on\|off\|status] [--access tailscale\|localhost\|open] [--pair] [--json]` | the one switch for the web app: the daemon runs its server (always HTTPS, with a certificate ptyro makes or Tailscale's; phones trust ptyro's CA once, from `/ca.crt`), now and whenever it starts; on, off, or where it is and what to do next. `on` picks Tailscale if it is running here, else this computer only, unless `--access` or `[remote] access` says |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there; `--remote wsl://[distro]` is the daemon in a WSL distro (what `ptyro.exe` on Windows uses; `client.default_remote` keeps one) |
 
 ## Setup, config and the daemon
@@ -208,7 +207,7 @@ See [`remote.md`](remote.md).
 | `ptyro config get KEY [--explain] [-p P] [--json]` | one value, bare for scripts; `--explain`: what it does, its default, where it is set, when a change applies |
 | `ptyro config set KEY VALUE… [-p P [--shared]]` | change a setting: checked first, the file's comments kept, live where it can be; words make a list or a command (after `--` if one starts with a dash); `-p P` (a project's name or path, `.` for the one you're in) writes your `.ptyro.local.toml`, `--shared` the committed `.ptyro.toml` |
 | `ptyro config unset KEY… [-p P [--shared]]` | back to the default |
-| `ptyro config add COLLECTION [NAME] [FIELD=VALUE…]` / `rm COLLECTION NAME [-y]` / `rename COLLECTION FROM TO` (each with `[-p P [--shared]]`) | an agent, theme, editor, key binding, notification service (`notifications.sinks`, `type=ntfy url=…`), run script or prompt |
+| `ptyro config add COLLECTION [NAME] [FIELD=VALUE…]` / `rm COLLECTION NAME [-y]` / `rename COLLECTION FROM TO` (each with `[-p P [--shared]]`) | an agent, editor, key binding, notification service (`notifications.sinks`, `type=ntfy url=…`), run script or prompt |
 | `ptyro config schema [-p P]` | every setting's description as JSON, for tools that build forms |
 | `ptyro daemon start [--foreground]` / `status [--json]` / `logs [--lines N] [-f]` | the background daemon (it starts by itself); `status` includes its health |
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |

@@ -232,7 +232,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("copy.page_up", "Copy mode, one page up"),
     a("paste.buffer", "Paste the last yanked text into the session"),
     a("view.redraw", "Redraw everything (fresh keyframes)"),
-    a("theme.next", "Switch to the next theme"),
     a(
         "config.panel",
         "Settings: every option, searchable, edited in place (no file to know about)",
@@ -344,7 +343,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("profile.rename", "Rename a profile"),
     a("profile.login", "Log a profile in to an agent (or gh), in a split"),
     a("profile.sync", "Copy a profile's agent settings from the default one"),
-    a("remote.serve", "Serve the web app for your phone (Tailscale or a listen address)"),
     a("remote.web", "The web app's server: is it up, at what address, and what to do next"),
     a("remote.web_on", "Have the daemon run the web app's server, now and whenever it starts"),
     a("remote.web_off", "Stop the daemon running the web app's server (devices stay paired)"),
@@ -791,13 +789,11 @@ mod tests {
     #[test]
     fn keys_bound_to_actions_that_are_gone_are_found() {
         let c = Config::parse(
-            "[keys]\n\"S\" = \"sets\"\n\"nav:j\" = \"nav.down\"\n\"x\" = \"none\"\n\"T\" = \"help.tour\"\n",
+            "[keys]\n\"S\" = \"sets\"\n\"nav:j\" = \"nav.down\"\n\"x\" = \"none\"\n\"T\" = \"help.tour\"\n\"Y\" = \"theme.next\"\n\"W\" = \"remote.serve\"\n",
         )
         .unwrap();
-        assert_eq!(
-            stale_bindings(&c),
-            [("S".to_owned(), "sets".to_owned()), ("T".to_owned(), "help.tour".to_owned())]
-        );
+        let names: Vec<String> = stale_bindings(&c).into_iter().map(|(_, a)| a).collect();
+        assert_eq!(names, ["sets", "help.tour", "remote.serve", "theme.next"]);
         let errors = validate(&c);
         assert!(
             errors.iter().all(|e| e.contains("`ptyro doctor` finds every such key")),
@@ -877,7 +873,6 @@ mod tests {
     fn the_listed_defaults_are_the_keymaps_own() {
         use ptyro_core::settings::{self, Lookups};
         let lk = Lookups {
-            themes: Vec::new(),
             actions: ACTIONS.iter().map(|a| (a.id.to_owned(), a.desc.to_owned())).collect(),
             keys: default_keys(),
         };

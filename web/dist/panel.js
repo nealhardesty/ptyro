@@ -18,7 +18,7 @@ const ACTIONS = {
     "settings.reset": "Put a setting back to its default (remove it from the file)",
     "settings.undo": "Undo the last settings change, putting the file back as it was",
     "settings.search": "Find a setting by its name, what it does or its value",
-    "settings.add": "Add an agent, theme, editor, key binding, notification service, run script or prompt",
+    "settings.add": "Add an agent, editor, key binding, notification service, run script or prompt",
     "settings.remove": "Remove one of those, and everything set in it",
     "settings.rename": "Give one of those another name",
     "settings.keys": "Press the keys you want instead of typing their names",
@@ -522,9 +522,6 @@ function addMember(c, scope) {
         let why = "";
         if (!(await change(scope, { t: "add", path: c.path, name, fields }, `added ${c.noun} ${name}`.trim(), { at: (m) => { why = m; } })))
             throw new Error(why);
-        // A theme just made is the one in use, so editing its colours shows at once.
-        if (c.path === "themes" && (await change("user", { t: "set", key: "ui.theme", value: name }, `ui.theme = ${name}`, { quiet: true })))
-            page?.snack(`Added theme ${name}, now in use: change its colours and watch them change`, true);
         if (c.layout === "tables")
             go(`#/settings/${c.path}/${enc(name)}`);
         else
@@ -544,9 +541,7 @@ function addMember(c, scope) {
         return;
     }
     const extra = needed(c.path, "");
-    // A theme starts as a copy of one that exists.
-    const bases = c.path === "themes" ? (view.options.find((o) => o.source === "builtin_themes")?.options ?? []) : [];
-    const fields = [{ key: "name", label: "Name", required: true, slug: "name", hint: NAME_HINT }, ...(bases.length ? [{ key: "base", label: "Start from", type: "select", options: bases.map(([v, d]) => [v, d ? `${v} — ${d}` : v]), value: c.starter.find(([k]) => k === "base")?.[1] }] : []), ...extra.map((f) => ({ key: f, label: f, required: true })), ...(c.path === "agents" ? [{ key: "command", label: "Command", hint: "optional: the program and its arguments; default, its own name" }] : [])];
+    const fields = [{ key: "name", label: "Name", required: true, slug: "name", hint: NAME_HINT }, ...extra.map((f) => ({ key: f, label: f, required: true })), ...(c.path === "agents" ? [{ key: "command", label: "Command", hint: "optional: the program and its arguments; default, its own name" }] : [])];
     form(`New ${c.noun}`, fields, "Add", async (v) => {
         const { name, ...rest } = v;
         await finish(String(name), Object.fromEntries(Object.entries(rest).filter(([, x]) => typeof x === "string" && x !== "")));
@@ -763,7 +758,7 @@ function build(rest) {
                     if (!(await changeHeld(scope, { t: "rename", path, from: name, to: String(v.to) }, `${name} is now ${v.to}`, { at: (m) => { why = m; } })))
                         throw new Error(why);
                     go(`#/settings/${path}/${enc(String(v.to))}`);
-                }) }, "Rename") : null, h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, `Everything set in it goes too.${path === "themes" && view.entries.some((x) => x.key === "ui.theme" && x.value === name) ? " It is the theme in use: the default comes back." : path === "agents" && view.entries.some((x) => x.key === "agents.default" && x.value === name) ? " It is the default agent: claude comes back." : ""}`, "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`))
+                }) }, "Rename") : null, h("button", { class: "deny", title: tip("settings.remove"), onclick: () => confirm(`Remove ${c.noun} ${name}?`, `Everything set in it goes too.${path === "agents" && view.entries.some((x) => x.key === "agents.default" && x.value === name) ? " It is the default agent: claude comes back." : ""}`, "Remove", async () => { if (await changeHeld(scope, { t: "remove", path, name }, `removed ${c.noun} ${name}`))
                     go(`#/settings/${c.section}`); }) }, "Remove"));
         return [actionsBar, ...cards(fields, view, scope)];
     }

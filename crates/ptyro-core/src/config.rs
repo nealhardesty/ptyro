@@ -546,30 +546,6 @@ pub fn in_quiet_hours(window: (u16, u16), now: u16) -> bool {
     if a <= b { now >= a && now < b } else { now >= a || now < b }
 }
 
-/// A user theme: any subset of colour tokens, on top of a built-in `base`.
-/// Colours: `#rrggbb`, a 0–255 palette index, or a name (`red`, `bright-blue`, `default`).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct ThemeDef {
-    pub base: Option<String>,
-    pub accent: Option<String>,
-    pub text: Option<String>,
-    pub dim: Option<String>,
-    pub border: Option<String>,
-    pub border_focus: Option<String>,
-    pub bar_fg: Option<String>,
-    pub bar_bg: Option<String>,
-    pub selection_fg: Option<String>,
-    pub selection_bg: Option<String>,
-    pub search: Option<String>,
-    pub working: Option<String>,
-    pub blocked: Option<String>,
-    pub idle: Option<String>,
-    pub done: Option<String>,
-    pub error: Option<String>,
-    pub exited: Option<String>,
-}
-
 /// Sections parsed but used only by later milestones (SPEC §13.2).
 /// Sections a config may hold before the milestone that uses them (none left since M9).
 pub const RESERVED_SECTIONS: &[(&str, &str)] = &[];
@@ -583,7 +559,6 @@ pub struct Config {
     /// `chat:` in a chat and `chatlist:` in the chat list); the value
     /// `"none"` unbinds a default.
     pub keys: BTreeMap<String, String>,
-    pub themes: BTreeMap<String, ThemeDef>,
     pub profiles: BTreeMap<String, ProfileDef>,
     pub worktrees: Worktrees,
     pub discover: Discover,
@@ -809,11 +784,11 @@ impl Chat {
     }
 }
 
-/// Turn `[remote] serve` on or off in the config file (`ptyro web`, `ptyro daemon start --serve`,
-/// and the daemon's own `Request::Web`; WEB1.9), keeping the rest of the file as it is. When
-/// turning it on, `access` (`localhost`, `tailscale` or `open`) says who can reach it; left out,
-/// the file's own `[remote] access` stands, else Tailscale when it is up on this machine, else
-/// open. A file still written with the old keys (`listen`, `tailscale`, `local`) is moved to
+/// Turn `[remote] serve` on or off in the config file (`ptyro web`, and the daemon's own
+/// `Request::Web`; WEB1.9), keeping the rest of the file as it is. When turning it on, `access`
+/// (`localhost`, `tailscale` or `open`) says who can reach it; left out, the file's own
+/// `[remote] access` stands, else Tailscale when it is up on this machine, else this computer
+/// only (the default, so nothing is written and a Tailscale set up later is taken next time). A file still written with the old keys (`listen`, `tailscale`, `local`) is moved to
 /// `access` and `port` on the way. Returns what that chose, for the person to read.
 pub fn set_serve(path: &Path, on: bool, access: Option<&str>) -> Result<Vec<String>, crate::Error> {
     // Only a file that isn't there is empty: one that can't be read (permissions, not UTF-8) must
@@ -850,7 +825,13 @@ pub fn set_serve(path: &Path, on: bool, access: Option<&str>) -> Result<Vec<Stri
             (Some(a), _) => Some(a),
             (None, true) => None,
             (None, false) if tailscale_running() => Some(Access::Tailscale),
-            (None, false) => Some(Access::Open),
+            (None, false) => {
+                notes.push(format!(
+                    "reachable from {} (Tailscale isn't running here), over HTTPS; for a phone, set up Tailscale and `ptyro web on` again, or `ptyro web on --access open`",
+                    Access::Localhost.blurb()
+                ));
+                None
+            }
         };
         if let Some(pick) = pick {
             remote.insert("access", toml_edit::value(pick.as_str()));
@@ -1718,13 +1699,6 @@ impl Config {
                 _ => {}
             }
         }
-        for (name, t) in &self.themes {
-            for (token, value) in t.tokens() {
-                if let Some(v) = value {
-                    parse_color(v).map_err(|e| format!("themes.{name}.{token}: {e}"))?;
-                }
-            }
-        }
         Ok(())
     }
 
@@ -2201,29 +2175,6 @@ pub fn config_home_in(home: &Path, xdg: Option<&Path>) -> PathBuf {
     xdg.filter(|x| x.is_absolute()).map_or_else(|| home.join(".config"), Path::to_path_buf)
 }
 
-impl ThemeDef {
-    pub fn tokens(&self) -> [(&'static str, &Option<String>); 16] {
-        [
-            ("accent", &self.accent),
-            ("text", &self.text),
-            ("dim", &self.dim),
-            ("border", &self.border),
-            ("border_focus", &self.border_focus),
-            ("bar_fg", &self.bar_fg),
-            ("bar_bg", &self.bar_bg),
-            ("selection_fg", &self.selection_fg),
-            ("selection_bg", &self.selection_bg),
-            ("search", &self.search),
-            ("working", &self.working),
-            ("blocked", &self.blocked),
-            ("idle", &self.idle),
-            ("done", &self.done),
-            ("error", &self.error),
-            ("exited", &self.exited),
-        ]
-    }
-}
-
 /// A colour from config: `#rrggbb`, `0`–`255`, or a name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigColor {
@@ -2486,8 +2437,6 @@ mod tests {
         assert!(e.contains("ui.prefix"), "{e}");
         let e = Config::parse("[ui]\nprefix = []\n").unwrap_err();
         assert!(e.contains("ui.prefix"), "{e}");
-        let e = Config::parse("[themes.mine]\naccent = \"#12345\"\n").unwrap_err();
-        assert!(e.contains("themes.mine.accent"), "{e}");
     }
 
     #[test]

@@ -98,7 +98,7 @@ if (mode === "units") {
   assert.ok(schema.user.settings.length > 100 && schema.project.settings.length >= 12);
   assert.ok(schema.user.sections.some((s) => s.id === "interface") && schema.project.sections.some((s) => s.id === "scripts"));
   const theme = schema.user.settings.find((s) => s.key === "ui.theme");
-  assert.deepEqual(theme.kind, { t: "dynamic", source: "themes" });
+  assert.deepEqual(theme.kind.choices.map((c) => c.value), ["ptyro-dark", "ptyro-light", "high-contrast"]);
   assert.equal(schema.user.settings.find((s) => s.key === "ui.on_stop").kind.choices[1].value, "stay");
   assert.equal(schema.user.settings.find((s) => s.key === "ui.sidebar_width").kind.min, 12);
   assert.equal(schema.user.collections.find((c) => c.path === "keys").layout.map.t, "dynamic");
@@ -107,13 +107,12 @@ if (mode === "units") {
   const entry = (k) => view.entries.find((e) => e.key === k);
   assert.equal(entry("ui.theme").origin, "default");
   assert.equal(entry("ui.theme").shown, "ptyro-dark");
-  assert.ok(view.options.find((o) => o.source === "themes").options.some(([n]) => n === "ptyro-light"));
   assert.ok(view.options.find((o) => o.source === "actions").options.length > 100);
   assert.equal(view.layer.kind, "user");
 
   // A wrong value says why, and a dry run checks without writing.
   await assert.rejects(call("settings.apply", { scope: "user", change: { t: "set", key: "ui.sidebar_width", value: "3" } }), /outside 12 to 120/);
-  await assert.rejects(call("settings.apply", { scope: "user", dry: true, change: { t: "set", key: "ui.theme", value: "nonesuch" } }), /unknown theme/);
+  await assert.rejects(call("settings.apply", { scope: "user", dry: true, change: { t: "set", key: "ui.theme", value: "nonesuch" } }), /isn.t one of ptyro-dark/);
   assert.deepEqual(await call("settings.apply", { scope: "user", dry: true, change: { t: "set", key: "ui.theme", value: "ptyro-light" } }), { ok: true });
   assert.equal((await call("settings.view", { scope: "user" })).entries.find((e) => e.key === "ui.theme").origin, "default", "the dry run wrote nothing");
 

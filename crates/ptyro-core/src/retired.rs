@@ -128,6 +128,11 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "Gemini CLI is no longer built in; its directory stays where it is, and an agent of your own sets its variables with `[agents.NAME] env`",
     },
+    Retired {
+        key: "themes",
+        removed: "2026-11-17",
+        why: "themes of your own were removed; `ui.theme` picks ptyro-dark, ptyro-light or high-contrast, and NO_COLOR still turns colour off",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
@@ -433,6 +438,17 @@ mod tests {
         assert_eq!(removed("claude"), None);
         let e = crate::config::Config::parse("[agents]\ndefault = \"nope\"\n").unwrap_err();
         assert!(e.contains("no agent named \"nope\""), "{e}");
+    }
+
+    /// Themes of your own (2026-11-17): `[themes.*]` loads and is reported; `ui.theme` still
+    /// loads whatever it names (the TUI falls back to the default; `ptyro doctor` sets it).
+    #[test]
+    fn user_themes_are_retired() {
+        let old = "[ui]\ntheme = \"mine\"\n\n[themes.mine]\nbase = \"ptyro-light\"\naccent = \"#ff0000\"\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert_eq!(c.ui.theme, "mine");
+        assert_eq!(found(old).into_iter().map(|f| f.key).collect::<Vec<_>>(), ["themes"]);
+        assert!(find("themes.mine.accent").is_some());
     }
 
     #[test]

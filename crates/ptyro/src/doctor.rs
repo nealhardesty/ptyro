@@ -135,6 +135,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
                 retired(&text, None, &mut r);
             }
             stale_keys(&c, &mut r);
+            unknown_theme(&c, &mut r);
             removed_agents(&c, &mut r);
             // Every shell ptyro starts reads its integration (SPEC §8.7): a folder others can
             // write to is one they could slip a line into, until ptyro writes it again.
@@ -792,16 +793,16 @@ fn remote(ctx: &Ctx, config: &Config, r: &mut Report) {
     let Some(ends) = crate::tls::expires(&crate::tls::dir(&ctx.paths.data)) else { return };
     let days = (ends - time::OffsetDateTime::now_utc()).whole_days();
     let (level, text) = if days < 0 {
-        (Level::Problem, "ptyro serve's certificate has ended: `ptyro serve` makes a new one when it starts (`ptyro daemon restart` restarts a managed one)".to_owned())
+        (Level::Problem, "the web app's certificate has ended: its server makes a new one when it starts, `ptyro daemon restart`".to_owned())
     } else if days < crate::tls::RENEW_DAYS {
         (
             Level::Warn,
             format!(
-                "ptyro serve's certificate ends in {days} days and wasn't renewed: `ptyro serve` renews it when it starts (`ptyro daemon restart` restarts a managed one)"
+                "the web app's certificate ends in {days} days and wasn't renewed: its server renews it when it starts, `ptyro daemon restart`"
             ),
         )
     } else {
-        (Level::Ok, format!("ptyro serve's HTTPS certificate is good for {days} more days"))
+        (Level::Ok, format!("the web app's HTTPS certificate is good for {days} more days"))
     };
     r.add("remote", "certificate", level, text);
 }
@@ -1612,6 +1613,25 @@ fn stale_keys(config: &Config, r: &mut Report) {
     }));
 }
 
+/// A `ui.theme` that isn't one of the three built in (a theme of your own, removed 2026-11-17,
+/// or a typo): the TUI shows the default, and this says so with the change that makes it one
+/// (the TUI runs it; the web makes it from `data.set`).
+fn unknown_theme(config: &Config, r: &mut Report) {
+    let name = &config.ui.theme;
+    if ptyro_tui::theme::exists(name) {
+        return;
+    }
+    r.add(
+        "ptyro",
+        "theme",
+        Level::Warn,
+        format!(
+            "ui.theme is {name:?}, which isn't a theme ptyro has (themes of your own were removed 2026-11-17), so the TUI shows ptyro-dark: `ptyro config set ui.theme ptyro-dark` (or ptyro-light, high-contrast)"
+        ),
+    );
+    r.add_data(serde_json::json!({ "set": "ui.theme", "value": "ptyro-dark" }));
+}
+
 /// The kept agent a setting that names a removed one switches to: Claude Code if it is
 /// installed, else the first installed of Codex and OpenCode, else Claude Code.
 fn kept_agent(config: &Config) -> &'static str {
@@ -2047,6 +2067,36 @@ mod tests {
         );
         (one.bytes, one.bytes_partial) = (Some(2048), true);
         assert!(stale_text(&[one], 14).contains("taking at least 2.0 KiB"));
+    }
+
+    /// A `ui.theme` naming a theme of your own (removed 2026-11-17) is one warning with the
+    /// change that fixes it, for the TUI to run and the web to make; a built-in one is quiet.
+    #[test]
+    fn an_unknown_theme_is_found_with_its_fix() {
+        use super::{Report, unknown_theme};
+        let mut r = Report::default();
+        unknown_theme(
+            &ptyro_core::config::Config::parse("[ui]\ntheme = \"high-contrast\"\n").unwrap(),
+            &mut r,
+        );
+        assert!(r.0.is_empty());
+        let c = ptyro_core::config::Config::parse(
+            "[ui]\ntheme = \"mine\"\n\n[themes.mine]\naccent = \"#ff0000\"\n",
+        )
+        .unwrap();
+        unknown_theme(&c, &mut r);
+        let [check] = &r.0[..] else { panic!("{:?}", r.0) };
+        assert!(
+            check.text.ends_with(
+                "`ptyro config set ui.theme ptyro-dark` (or ptyro-light, high-contrast)"
+            ),
+            "{}",
+            check.text
+        );
+        assert_eq!(
+            check.data,
+            Some(serde_json::json!({ "set": "ui.theme", "value": "ptyro-dark" }))
+        );
     }
 
     #[test]

@@ -12,7 +12,6 @@ use crate::keymap::Command;
 pub enum Target {
     Action(Command),
     Session(SessionId),
-    Theme(String),
     /// Start a new shell session (offered by the split picker).
     NewShell,
     /// Wizard: an agent name (`claude`, `claude@work`), `@shell` or `@command`.
@@ -200,7 +199,7 @@ mod tests {
             label: label.into(),
             detail: String::new(),
             key: None,
-            target: Target::Theme(label.into()),
+            target: Target::Script(label.into()),
         }
     }
 
@@ -216,7 +215,7 @@ mod tests {
         let items = || vec![keyed("a new shell", "p"), keyed("its folder", "i")];
         let mut p = Palette::new("Open in", items()).with_hotkeys();
         assert!(
-            matches!(p.key(KeyEvent::char('i')), Picked::Pick(Target::Theme(t)) if t == "its folder")
+            matches!(p.key(KeyEvent::char('i')), Picked::Pick(Target::Script(t)) if t == "its folder")
         );
         // Once a filter is typed (starting with a letter that isn't a key), letters filter.
         let mut p = Palette::new("Open in", items()).with_hotkeys();
@@ -240,7 +239,7 @@ mod tests {
         assert_eq!(p.item(0).label, "pane.split_right");
         assert_eq!(
             p.key(KeyEvent::new(KeyCode::Enter, Mods::NONE)),
-            Picked::Pick(Target::Theme("pane.split_right".into()))
+            Picked::Pick(Target::Script("pane.split_right".into()))
         );
         typed(&mut p, "zzzz");
         assert!(p.filtered.is_empty());

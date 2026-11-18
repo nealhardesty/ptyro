@@ -493,7 +493,7 @@ impl Daemon {
                             ptyro_client::remote::parse(&transport.label()).0
                         ),
                         _ => format!(
-                            "check that {name} is awake and its web app's server is on (`ptyro serve`)"
+                            "check that {name} is awake and its web app is on (`ptyro web on` there)"
                         ),
                     };
                     self.set_link_state(&name, MachineState::Offline, Some(e.message), Some(fix));
