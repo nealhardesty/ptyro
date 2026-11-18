@@ -722,6 +722,9 @@ enum Cmd {
         quick: bool,
         #[arg(long)]
         json: bool,
+        /// Then make the fixes it names that change a config file, each file copied aside first
+        #[arg(long, conflicts_with = "json")]
+        fix: bool,
     },
     /// Take ptyro off this computer: stops the daemon and every session, removes its worktrees,
     /// config, data, login service and shell lines, and the binary when it was
@@ -920,6 +923,9 @@ enum ConfigCmd {
         /// With --project: the committed `.ptyro.toml` instead of your `.ptyro.local.toml`
         #[arg(long, requires = "project")]
         shared: bool,
+        /// Copy the file aside first (`<file>.bak-<when>`): how a doctor's fix is made
+        #[arg(long, hide = true)]
+        backup: bool,
     },
     /// Put a setting back to its default (remove it from the file)
     Unset {
@@ -930,6 +936,9 @@ enum ConfigCmd {
         project: Option<String>,
         #[arg(long, requires = "project")]
         shared: bool,
+        /// Copy the file aside first (`<file>.bak-<when>`): how a doctor's fix is made
+        #[arg(long, hide = true)]
+        backup: bool,
     },
     /// Add an agent, editor, key binding, notification sink, run script or prompt
     Add {
@@ -961,6 +970,9 @@ enum ConfigCmd {
         /// Don't ask
         #[arg(short, long)]
         yes: bool,
+        /// Copy the file aside first (`<file>.bak-<when>`): how a doctor's fix is made
+        #[arg(long, hide = true)]
+        backup: bool,
     },
     /// Give one of those another name
     Rename {

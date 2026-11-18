@@ -882,3 +882,103 @@ fn whose_setting_it_is() {
     let client = settings(Scope::User).filter(|s| read_by_client(s.key)).count();
     assert!(client > 10 && client < settings(Scope::User).count() / 2, "{client}");
 }
+
+/// The `.bak-` copies of `file` in `dir`, oldest first.
+fn backups(dir: &std::path::Path, file: &str) -> Vec<std::path::PathBuf> {
+    let prefix = format!("{file}.bak-");
+    let mut v: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with(&prefix))
+        .collect();
+    v.sort();
+    v
+}
+
+#[cfg(unix)] // file modes
+#[test]
+fn a_doctors_fix_copies_the_file_aside_first_and_an_ordinary_change_does_not() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    let set = |v: &str| Op::Set { key: "ui.theme".into(), value: v.into() };
+    // No file yet: nothing to copy, and the change is made.
+    assert_eq!(apply_backed_up(&user, &set("ptyro-light"), &lk, &none).unwrap().backup, None);
+    // An ordinary change makes no copy.
+    apply(&user, &set("high-contrast"), &lk, &none).unwrap();
+    assert!(backups(dir.path(), "config.toml").is_empty());
+    // A fix makes exactly one, of the file as it was, private.
+    let was = user.read().unwrap();
+    let d = apply_backed_up(&user, &set("ptyro-dark"), &lk, &none).unwrap();
+    let copies = backups(dir.path(), "config.toml");
+    assert_eq!(copies.len(), 1);
+    assert_eq!(d.backup.as_ref(), Some(&copies[0]));
+    assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), was);
+    let mode = std::os::unix::fs::PermissionsExt::mode(
+        &std::fs::metadata(&copies[0]).unwrap().permissions(),
+    ) & 0o777;
+    assert_eq!(mode, 0o600);
+    // A fix that changes nothing copies nothing.
+    let same = apply_backed_up(&user, &set("ptyro-dark"), &lk, &none).unwrap();
+    assert!(!same.changed && same.backup.is_none());
+    assert_eq!(backups(dir.path(), "config.toml").len(), 1);
+}
+
+#[test]
+fn only_the_newest_copies_are_kept() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    std::fs::write(user.path(), "[ui]\nmouse = true\n").unwrap();
+    for d in 10..17 {
+        std::fs::write(dir.path().join(format!("config.toml.bak-202001{d}-000000")), "old")
+            .unwrap();
+    }
+    // Not one of ptyro's copies: left alone.
+    std::fs::write(dir.path().join("config.toml.bak-mine"), "keep").unwrap();
+    let op = Op::Set { key: "ui.mouse".into(), value: "off".into() };
+    let d = apply_backed_up(&user, &op, &lk, &none).unwrap();
+    let left = backups(dir.path(), "config.toml");
+    assert_eq!(left.len(), BACKUPS_KEPT + 1, "{left:?}");
+    assert!(left.contains(&d.backup.unwrap()));
+    assert!(!dir.path().join("config.toml.bak-20200110-000000").exists());
+    assert!(dir.path().join("config.toml.bak-20200116-000000").exists());
+    assert!(dir.path().join("config.toml.bak-mine").exists());
+}
+
+#[cfg(unix)] // a folder you can't write to
+#[test]
+fn a_copy_that_fails_leaves_the_file_as_it_was() {
+    use std::os::unix::fs::PermissionsExt;
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = dir.path().join("cfg");
+    std::fs::create_dir(&cfg).unwrap();
+    let user = Layer::User(cfg.join("config.toml"));
+    std::fs::write(user.path(), "[ui]\nmouse = true\n").unwrap();
+    std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let op = Op::Set { key: "ui.mouse".into(), value: "off".into() };
+    let r = apply_backed_up(&user, &op, &lk, &none);
+    std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if rustix::process::geteuid().is_root() {
+        return; // root writes anywhere
+    }
+    let e = r.unwrap_err();
+    assert!(e.contains("couldn't back up") && e.contains("wasn't changed"), "{e}");
+    assert_eq!(user.read().unwrap(), "[ui]\nmouse = true\n");
+}
+
+#[test]
+fn a_repositorys_copies_are_kept_out_of_git() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+    std::fs::write(dir.path().join(crate::project::FILE), "[project]\nbase = \"main\"\n").unwrap();
+    let shared = Layer::Shared(dir.path().to_path_buf());
+    let op = Op::Unset { key: "project.base".into() };
+    let d = apply_backed_up(&shared, &op, &lk, &none).unwrap();
+    assert!(d.backup.unwrap().starts_with(dir.path()));
+    let exclude = std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
+    assert!(exclude.contains("/.ptyro*.toml.bak-*"), "{exclude}");
+}

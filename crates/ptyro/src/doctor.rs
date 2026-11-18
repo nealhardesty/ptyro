@@ -1,6 +1,7 @@
 //! `ptyro doctor` and `ptyro profile doctor` (M5.6): everything that makes ptyro misbehave
-//! without saying so, checked in one place. Nothing here changes anything, and secrets are never
-//! read: logins are asked of each tool's own status command (`claude auth status`,
+//! without saying so, checked in one place. Nothing here changes anything (but `--fix`, which
+//! makes the config changes the findings name, each file copied aside first), and secrets are
+//! never read: logins are asked of each tool's own status command (`claude auth status`,
 //! `codex login status`, `gh auth status`) under the profile's config dir.
 
 use std::path::{Path, PathBuf};
@@ -97,12 +98,65 @@ fn first_version(text: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool) -> Result<i32, Error> {
+pub async fn run_cmd(ctx: &Ctx, quick: bool, json: bool, fix: bool) -> Result<i32, Error> {
     // `doctor` looks for newer versions afresh (BOOT5); `--quick` (the health badge) reads what
     // was remembered.
     let r = collect(ctx, quick, true, !quick).await;
     print(&r, json);
+    if fix {
+        return fix_configs(ctx, &r).await;
+    }
     Ok(exit_code(&r))
+}
+
+/// `--fix`: each config change a finding names (`` `ptyro config set|unset|rm …` ``), made as the
+/// TUI's health list and the web's Health page make it, with its file copied aside first (SPEC
+/// §13.8). The other fixes stay the person's to make.
+async fn fix_configs(ctx: &Ctx, r: &Report) -> Result<i32, Error> {
+    use clap::Parser;
+    let fixes: Vec<Vec<String>> =
+        r.0.iter().filter(|c| c.level >= Level::Warn).filter_map(|c| config_fix(&c.text)).collect();
+    if fixes.is_empty() {
+        eprintln!("\nnothing for doctor to change in a config file: each finding says what to do");
+        return Ok(exit_code(r));
+    }
+    let mut code = 0;
+    for args in fixes {
+        eprintln!("\n$ ptyro {}", args.join(" "));
+        let argv = std::iter::once("ptyro".to_owned()).chain(args).chain(["--backup".to_owned()]);
+        let cmd = match crate::Cli::try_parse_from(argv) {
+            Ok(crate::Cli { cmd: Some(crate::Cmd::Config { cmd }), .. }) => cmd,
+            Ok(_) => continue,
+            Err(e) => {
+                eprintln!("{}", e.to_string().trim_end());
+                if code == 0 {
+                    code = ErrorCode::Invalid.exit_code();
+                }
+                continue;
+            }
+        };
+        if let Err(e) = crate::config::run(ctx, cmd).await {
+            eprintln!("ptyro: {}", e.message);
+            if code == 0 {
+                code = e.code.exit_code();
+            }
+        }
+    }
+    eprintln!("\nrun `ptyro doctor` to check again");
+    Ok(code)
+}
+
+/// The config change a finding names: the words after `ptyro` in its first `` `ptyro config
+/// set|unset|rm …` ``, quotes taken off a word as a shell would (`'keys."C-."'`).
+fn config_fix(text: &str) -> Option<Vec<String>> {
+    let start = text.find("`ptyro config ")? + 1;
+    let end = start + text[start..].find('`')?;
+    let words: Vec<String> = text[start..end]
+        .split_whitespace()
+        .skip(1)
+        .map(|w| w.strip_prefix('\'').and_then(|w| w.strip_suffix('\'')).unwrap_or(w).to_owned())
+        .collect();
+    matches!(words.get(1).map(String::as_str), Some("set" | "unset" | "rm")).then_some(words)
 }
 
 /// Every check, in order. `terminal`: also the terminal this process runs in (a web page has
@@ -1896,6 +1950,23 @@ mod tests {
         assert_eq!(super::fix_for("git"), "; `ptyro install git` installs it");
         assert_eq!(super::fix_for("gh"), "; `ptyro install gh` installs it");
         assert_eq!(super::fix_for("my-own-tool"), "");
+    }
+
+    /// `--fix` makes the config changes the findings name, and only those.
+    #[test]
+    fn fix_takes_the_config_change_a_finding_names() {
+        let fix = super::config_fix;
+        assert_eq!(
+            fix("x is no longer used: remove it, `ptyro config unset x -p app --shared`"),
+            Some(["config", "unset", "x", "-p", "app", "--shared"].map(String::from).to_vec())
+        );
+        assert_eq!(
+            fix("[keys] binds …: remove them, `ptyro config unset keys.F9 'keys.\"C-.\"'`"),
+            Some(["config", "unset", "keys.F9", "keys.\"C-.\""].map(String::from).to_vec())
+        );
+        assert_eq!(fix("old: `ptyro daemon upgrade`"), None);
+        assert_eq!(fix("`ptyro config edit` opens it"), None);
+        assert_eq!(fix("nothing to run"), None);
     }
 
     #[test]

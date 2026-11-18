@@ -88,9 +88,61 @@ impl Layer {
             }
         }
         if let Self::Local(root) = self {
-            exclude_from_git(root);
+            exclude_from_git(root, &format!("/{}", project::LOCAL_FILE));
         }
         Ok(())
+    }
+
+    /// A dated copy of the file beside it, private to you, before a doctor's fix changes it
+    /// (`config.toml.bak-20261118-153012`, UTC); the newest [`BACKUPS_KEPT`] are kept. `None`:
+    /// there is no file yet, so nothing to copy. A repository's copies are kept out of git.
+    pub fn backup(&self) -> Result<Option<PathBuf>, String> {
+        self.check_plain()?;
+        let path = self.path();
+        let fail = |e: std::io::Error| {
+            format!("couldn't back up {} first, so it wasn't changed: {e}", path.display())
+        };
+        let text = match std::fs::read(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(fail(e)),
+        };
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let t = time::OffsetDateTime::now_utc();
+        let stamp = format!(
+            "{name}.bak-{:04}{:02}{:02}-{:02}{:02}{:02}",
+            t.year(),
+            u8::from(t.month()),
+            t.day(),
+            t.hour(),
+            t.minute(),
+            t.second()
+        );
+        // Two in the same second: `.1`, `.2`… after it (they sort after it, so pruning agrees).
+        let mut n = 0;
+        let copy = loop {
+            let copy =
+                path.with_file_name(if n == 0 { stamp.clone() } else { format!("{stamp}.{n}") });
+            match crate::os::private(std::fs::OpenOptions::new().write(true).create_new(true))
+                .open(&copy)
+            {
+                Ok(mut f) => {
+                    use std::io::Write;
+                    if let Err(e) = f.write_all(&text).and_then(|()| f.sync_all()) {
+                        let _ = std::fs::remove_file(&copy);
+                        return Err(fail(e));
+                    }
+                    break copy;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 9 => n += 1,
+                Err(e) => return Err(fail(e)),
+            }
+        };
+        if let Self::Shared(root) | Self::Local(root) = self {
+            exclude_from_git(root, "/.ptyro*.toml.bak-*");
+        }
+        prune_backups(&path, &name);
+        Ok(Some(copy))
     }
 
     /// Hold the file's lock while it is read, changed and written, so two changes made at the
@@ -119,8 +171,9 @@ impl Layer {
     }
 }
 
-/// `.ptyro.local.toml` is never committed by accident: `.git/info/exclude`, never `.gitignore`.
-fn exclude_from_git(root: &Path) {
+/// `.ptyro.local.toml` (and a doctor's copies) are never committed by accident: `line` in
+/// `.git/info/exclude`, never `.gitignore`.
+fn exclude_from_git(root: &Path, line: &str) {
     let git = root.join(".git");
     if !git.is_dir() {
         return;
@@ -128,7 +181,6 @@ fn exclude_from_git(root: &Path) {
     let info = git.join("info");
     let _ = std::fs::create_dir_all(&info);
     let path = info.join("exclude");
-    let line = format!("/{}", project::LOCAL_FILE);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     if text.lines().any(|l| l.trim() == line) {
         return;
@@ -137,9 +189,31 @@ fn exclude_from_git(root: &Path) {
     if !new.is_empty() && !new.ends_with('\n') {
         new.push('\n');
     }
-    new.push_str(&line);
+    new.push_str(line);
     new.push('\n');
     let _ = std::fs::write(path, new);
+}
+
+/// How many copies of a file [`Layer::backup`] keeps.
+pub const BACKUPS_KEPT: usize = 5;
+
+/// Keep the newest [`BACKUPS_KEPT`] `<name>.bak-<stamp>` files beside `path`.
+fn prune_backups(path: &Path, name: &str) {
+    let Some(dir) = path.parent() else { return };
+    let prefix = format!("{name}.bak-");
+    let mut found: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let stamp = e.file_name().to_string_lossy().strip_prefix(&prefix)?.to_owned();
+            stamp.starts_with(|c: char| c.is_ascii_digit()).then(|| (stamp, e.path()))
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, old) in found.into_iter().skip(BACKUPS_KEPT) {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 /// One change.
@@ -198,6 +272,8 @@ pub struct Done {
     pub notes: Vec<String>,
     /// The slowest way any of it applies.
     pub apply: Apply,
+    /// The copy made first ([`apply_backed_up`]).
+    pub backup: Option<PathBuf>,
 }
 
 /// How a change applies: the slowest of its settings; a collection's members apply as their
@@ -370,6 +446,28 @@ pub fn preview(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result
 /// Make `op` in `layer`'s file and write it. Nothing is written unless the whole new file is
 /// valid (`extra` is the caller's own check of it).
 pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<Done, String> {
+    apply_with(layer, op, lk, extra, false)
+}
+
+/// [`apply`], with the file copied aside first ([`Layer::backup`]) when it changes: how a
+/// doctor's fix is made (SPEC §13.8), by `ptyro doctor --fix`, the TUI's health list and the
+/// web's Health page. Nothing is written if the copy fails.
+pub fn apply_backed_up(
+    layer: &Layer,
+    op: &Op,
+    lk: &Lookups,
+    extra: Extra<'_>,
+) -> Result<Done, String> {
+    apply_with(layer, op, lk, extra, true)
+}
+
+fn apply_with(
+    layer: &Layer,
+    op: &Op,
+    lk: &Lookups,
+    extra: Extra<'_>,
+    backup: bool,
+) -> Result<Done, String> {
     // The user's config is shared with the daemon's own edits and every other client; a
     // repository's files are not given a stray lock file.
     let _lock = if matches!(layer, Layer::User(_)) { layer.lock() } else { None };
@@ -379,7 +477,11 @@ pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<D
     let keys = op.keys();
     let apply = applies(&keys);
     let mut notes = Vec::new();
+    let mut copy = None;
     if changed {
+        if backup {
+            copy = layer.backup()?;
+        }
         layer.write(&after)?;
         notes.push(apply.says().to_owned());
         if matches!(layer, Layer::Shared(_)) {
@@ -398,7 +500,7 @@ pub fn apply(layer: &Layer, op: &Op, lk: &Lookups, extra: Extra<'_>) -> Result<D
     } else {
         notes.push("already like that".to_owned());
     }
-    Ok(Done { before, after, changed, notes, apply })
+    Ok(Done { before, after, changed, notes, apply, backup: copy })
 }
 
 /// Put a file back as it was (undo), after checking it still loads. With `expect`, only when

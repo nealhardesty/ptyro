@@ -36,6 +36,13 @@ A setting of a feature ptyro no longer has doesn't break your file: it is ignore
 same goes for a `[keys]` line bound to an action ptyro no longer has, and for a default agent
 (or `chat.agent`) that names one it no longer has built in: `ptyro doctor` names the change.
 
+When the doctor's fix is made for you (`ptyro doctor --fix`, ⏎ in the TUI's health list, or the
+fix's button on the web's Health page), the file it changes is copied beside it first, as
+`config.toml.bak-20261118-153012` (the time in UTC; `.ptyro.toml.bak-…` for a repository's
+file, kept out of git), readable only by you. The fix's message says where the copy is. The
+newest five copies are kept. If the copy can't be made, the fix isn't either. Changes you make
+yourself, with `ptyro config` or the settings panels, make no copy.
+
 The full schema is in [`SPEC.md`](../SPEC.md) §13. This page covers the settings people change
 most; `ptyro config show` lists every key with the value in effect.
 

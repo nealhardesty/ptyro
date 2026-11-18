@@ -1,6 +1,6 @@
 #!/bin/sh
 # A throwaway ptyro (its own daemon, store, config and worktrees under target/sandbox) with a
-# demo repository: try projects, worktrees, scripts, ports and profiles without touching your real
+# demo repository: try projects, worktrees, scripts and profiles without touching your real
 # ptyro state. Agents keep your real $HOME, so `claude` etc. stay logged in.
 #
 #   make sandbox            open the TUI on the sandbox
@@ -52,8 +52,6 @@ TOML
   git remote set-head origin --auto >/dev/null 2>&1 || true
   cat > "$PTYRO_HOME/config/config.toml" <<'TOML'
 # The sandbox's ptyro config: `ptyro config edit` (with PTYRO_HOME set) or edit this file.
-[ports]
-range = "28000-28999"
 TOML
   "$bin" project add "$dir/demo" >/dev/null
   echo "sandbox ready: $dir (project 'demo')"

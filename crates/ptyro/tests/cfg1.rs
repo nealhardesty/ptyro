@@ -363,3 +363,57 @@ fn a_retired_key_loads_is_reported_and_unset_removes_it() {
     let typo = run(&["config", "check"]);
     assert!(!typo.status.success() && text(&typo).contains("mousse"), "{}", text(&typo));
 }
+
+/// The `.bak-` copies beside `config.toml`.
+fn backups(dir: &Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("config.toml.bak-"))
+        .collect()
+}
+
+/// `ptyro doctor --fix` makes the config changes its findings name, the file copied aside first
+/// (once, private, as it was), and says where; the TUI's health list runs the same command with
+/// `--backup`. An ordinary `config set` makes no copy.
+#[test]
+fn doctor_fix_copies_the_config_aside_and_an_ordinary_change_does_not() {
+    const OLD: &str = "# mine\n[ui]\nmouse = false\n\n[retired_for_tests]\nold = 1\n";
+    let knob = [("PTYRO_TEST_RETIRED", "1")];
+    let d = TempDaemon::start_with(BIN, &knob, Some(OLD)).unwrap();
+    let run = |args: &[&str]| d.cmd().env("PTYRO_TEST_RETIRED", "1").args(args).output().unwrap();
+    let dir = d.paths.config.clone();
+
+    let fix = run(&["doctor", "--quick", "--fix"]);
+    let said = text(&fix);
+    let copies = backups(&dir);
+    assert_eq!(copies.len(), 1, "{said}");
+    assert_eq!(std::fs::read_to_string(&copies[0]).unwrap(), OLD);
+    assert!(
+        said.contains("$ ptyro config unset retired_for_tests")
+            && said.contains(&format!("the file as it was is in {}", copies[0].display())),
+        "{said}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    let now = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    assert!(!now.contains("retired_for_tests") && now.contains("# mine"), "{now}");
+
+    // Nothing left to fix: no second copy.
+    let again = run(&["doctor", "--quick", "--fix"]);
+    assert!(text(&again).contains("nothing for doctor to change"), "{}", text(&again));
+    assert_eq!(backups(&dir).len(), 1);
+
+    // An ordinary change, yours: no copy. The same change as a fix (`--backup`): one more.
+    let set = run(&["config", "set", "ui.mouse", "on"]);
+    assert!(set.status.success() && !text(&set).contains("as it was"), "{}", text(&set));
+    assert_eq!(backups(&dir).len(), 1);
+    let set = run(&["config", "set", "ui.mouse", "off", "--backup"]);
+    assert!(set.status.success() && text(&set).contains("as it was"), "{}", text(&set));
+    assert_eq!(backups(&dir).len(), 2);
+}

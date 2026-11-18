@@ -131,15 +131,22 @@ function fixesFor(c) {
     if (c.section === "ptyro" && c.name === "config mode")
         out.push({ label: "Make it private (mode 600)", hint: "Saves it again as it is", run: async () => { const g = await doHost("config.get"); if (g && await doHost("config.save", { text: g.text }, "Saved: only you can read it"))
                 health.reload(""); } });
+    // A doctor's fix, made here as `ptyro doctor --fix` makes it: the file copied aside first, and
+    // the toast says where (SPEC §13.8).
+    const backedUp = async (where, change, done) => {
+        const r = await doHost("settings.apply", { ...where, change, backup: true });
+        if (!r)
+            return;
+        ui.toast(r.backup ? `${done}. The file as it was is in ${r.backup}` : done);
+        health.reload("");
+    };
     // A key a removed feature had (SPEC §13.8): taken out of its file, as `ptyro config unset` would.
     const gone = c.data?.retired;
     if (gone)
-        out.push({ label: `Remove ${gone}`, hint: "ptyro no longer uses it", run: async () => { if (await doHost("settings.apply", { ...(c.data.project ? { scope: "project", project: c.data.project, shared: !!c.data.shared } : { scope: "user" }), change: { t: "unset", key: gone } }, `Removed ${gone}`))
-                health.reload(""); } });
+        out.push({ label: `Remove ${gone}`, hint: "ptyro no longer uses it", run: () => backedUp(c.data.project ? { scope: "project", project: c.data.project, shared: !!c.data.shared } : { scope: "user" }, { t: "unset", key: gone }, `Removed ${gone}`) });
     // Keys bound to actions ptyro no longer has, and settings that name an agent it no longer has
     // (2026-11-17): the change the doctor names, made here, as `ptyro config` would.
-    const fix = (label, hint, change, done) => { out.push({ label, hint, run: async () => { if (await doHost("settings.apply", { scope: "user", change }, done))
-            health.reload(""); } }); };
+    const fix = (label, hint, change, done) => { out.push({ label, hint, run: () => backedUp({ scope: "user" }, change, done) }); };
     const unbind = c.data?.unbind;
     if (unbind)
         fix(`Remove ${unbind.length === 1 ? "that key" : `those ${unbind.length} keys`}`, unbind.join(", "), { t: "bind", changes: unbind.map((k) => [k, null]) }, "Removed");

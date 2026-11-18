@@ -414,7 +414,9 @@ async fn dispatch(
             crate::logins::login(&ctx, a).await
         }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
-        Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
+        Some(Cmd::Doctor { quick, json, fix }) => {
+            crate::doctor::run_cmd(&ctx, quick, json, fix).await
+        }
         // Kill is immediate and keeps the session listed, as in the TUI and the web (SPEC §7.3).
         Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
