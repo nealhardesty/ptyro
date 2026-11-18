@@ -349,6 +349,14 @@ fn compute(
         Some((key, to)) => super::set(scope, &after, key, to, lk, &extra)?,
         None => after,
     };
+    // Turning the web app on here picks who can reach it as `ptyro web on` does: Tailscale,
+    // when it runs on this machine and nothing was chosen, so a phone gets Tailscale's
+    // certificate rather than nothing it can reach.
+    let after = if turns_serve_on(scope, op, &after) && crate::config::tailscale_running() {
+        super::set(scope, &after, "remote.access", "tailscale", lk, &extra)?
+    } else {
+        after
+    };
     // A repository's two files are one config: a partial override is fine when the other file
     // completes it, and the merge is what must load.
     if let Layer::Shared(_) | Layer::Local(_) = layer {
@@ -440,6 +448,17 @@ fn follow_note(before: &str, op: &Op) -> Option<String> {
     })
 }
 
+/// `op` turns the web app on (`remote.serve`) in the user's config, and `after` doesn't say who
+/// can reach it (`remote.access`).
+fn turns_serve_on(scope: Scope, op: &Op, after: &str) -> bool {
+    matches!(op, Op::Set { key, value } if key == "remote.serve"
+        && super::truthy(value.trim()) == Ok(true))
+        && scope == Scope::User
+        && super::parse_doc(after)
+            .ok()
+            .is_some_and(|d| d.get("remote").and_then(|r| r.get("access")).is_none())
+}
+
 /// Whether `.ptyro.toml` and `.ptyro.local.toml`, merged, make a project config that loads.
 fn check_merged(shared: &str, local: &str) -> Result<(), String> {
     fn merge(into: &mut toml::Table, from: toml::Table) {
@@ -520,6 +539,13 @@ fn apply_with(
             ));
         }
         notes.extend(follow_note(&before, op));
+        if turns_serve_on(layer.scope(), op, &before) && !turns_serve_on(layer.scope(), op, &after)
+        {
+            notes.push(
+                "reachable from this computer and your Tailscale network (`[remote] access = \"tailscale\"`), with Tailscale's certificate"
+                    .to_owned(),
+            );
+        }
         if keys.iter().any(|k| k.starts_with("scripts.")) {
             notes.push(
                 "its scripts changed, so ptyro asks you to trust them again before they run"
@@ -690,4 +716,23 @@ pub fn schema_json(scope: Scope) -> Value {
             .filter(|c| super::section(c.section).is_some_and(|s| s.scope == scope))
             .collect::<Vec<_>>(),
     })
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use super::*;
+
+    /// Settings turning the web app on pick Tailscale only when nothing says who can reach it,
+    /// and only in your own config (SPEC §16.3).
+    #[test]
+    fn turning_the_web_app_on_picks_who_can_reach_it_only_when_unchosen() {
+        let on = Op::Set { key: "remote.serve".into(), value: "true".into() };
+        let off = Op::Set { key: "remote.serve".into(), value: "false".into() };
+        assert!(turns_serve_on(Scope::User, &on, "[remote]\nserve = true\n"));
+        assert!(turns_serve_on(Scope::User, &on, ""));
+        assert!(!turns_serve_on(Scope::User, &on, "[remote]\nserve = true\naccess = \"open\"\n"));
+        assert!(!turns_serve_on(Scope::User, &off, "[remote]\nserve = false\n"));
+        let port = Op::Set { key: "remote.port".into(), value: "7091".into() };
+        assert!(!turns_serve_on(Scope::User, &port, "[remote]\nport = 7091\n"));
+    }
 }

@@ -4672,6 +4672,9 @@ is "the web is up when the daemon is".
   More → Web app are its doors. All of them are `Request::Web` (§6.4) or the same `set_serve` on
   the config file, so they cannot disagree. `[remote] serve` stays: it is the switch's state,
   which the daemon reads (Settings → remote shows it, saying `ptyro web on|off` switches it).
+  Turning it on there (or with `ptyro config set remote.serve true`) picks who can reach it as
+  `set_serve` does (2026-11-18): `[remote] access = "tailscale"` when Tailscale runs here and no
+  `access` is written, so a phone gets Tailscale's certificate (`settings::ops`, `turns_serve_on`).
   `ptyro serve` is hidden (what the daemon runs, `--managed`; the tests; a machine's link
   reaches it); `ptyro daemon start --serve` and the TUI's `remote.serve` (which ran `ptyro serve`
   in a pane) were removed: the flag says to use `ptyro web on`, and a `[keys]` binding to
@@ -4841,6 +4844,12 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   (§20.9).
 - **Pairing:** `ptyro pair` prints a QR code (`qrcode`, Dense1x2) for `<base>/#pair=<code>`. The
   base is `--url`, `[remote] public_url`, or the address `access` makes reachable (below).
+  - **It turns the web app on** (owner, 2026-11-18: "just turn it on, don't ask"). A code lasts
+    minutes and a device can only use it through the web app, so with the web app off `ptyro
+    pair` turns it on first (`Request::Web`, as `ptyro web on`: Tailscale when it runs here; it
+    stays on), says so on stderr, then pairs. If it doesn't start, it refuses with why, before
+    any code is made. The TUI's `remote.pair` and `remote.pair.browser` run it, so they do the
+    same; the web's Devices ＋ is only reachable through a running web app.
   - **Default scope is `full`, with a warning.** With no `--scope`, `ptyro pair` (and the TUI's
     `remote.pair`, which runs it, and the web's Devices ＋ form, which preselects `full`) pairs
     with `full`, because the whole web app needs it, and says so in plain words: "This device gets

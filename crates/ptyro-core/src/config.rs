@@ -887,7 +887,7 @@ pub fn tailnet_cert_domain_from(status: &serde_json::Value) -> Result<String, St
 }
 
 /// Tailscale is installed and connected on this machine.
-fn tailscale_running() -> bool {
+pub(crate) fn tailscale_running() -> bool {
     crate::os::tailscale()
         .args(["status", "--json"])
         .output()

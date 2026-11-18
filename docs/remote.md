@@ -99,7 +99,7 @@ You choose two things, and each is one setting (Settings → remote in the TUI a
 | `remote.access` | who can reach the web app |
 |---|---|
 | `tailscale` (what `ptyro web on` picks when Tailscale is running) | this computer and your Tailscale network: it listens on loopback and this computer's Tailscale addresses, nothing else, so the Wi-Fi never sees it. If Tailscale comes up after the server, it starts listening there by itself |
-| `localhost` (the default otherwise) | this computer only (`127.0.0.1`) |
+| `localhost` (the default otherwise; turning `remote.serve` on in Settings picks `tailscale` the same way) | this computer only (`127.0.0.1`) |
 | `open` (only when you choose it) | every network interface (`0.0.0.0`): the Wi-Fi or LAN too, and anything else that reaches this computer. Devices still need a pairing token |
 
 `remote.port` is the port, `7091` unless you change it. The address phones open is

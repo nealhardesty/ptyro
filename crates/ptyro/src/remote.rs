@@ -319,14 +319,26 @@ pub async fn pair(
     json: bool,
     open: bool,
 ) -> Result<i32, Error> {
-    // This computer's browser opens the address it serves on, even a localhost one; nothing to
-    // open while no server runs (checked before a pairing code is made).
-    if open && !served_base(ctx, url.clone()).3 {
-        return Err(Error::new(
-            ErrorCode::Unsupported,
-            "the web app isn't running, so there is nothing to open: `ptyro web on` starts it \
-             (and keeps it on), then `ptyro pair --open` again",
-        ));
+    // A paired device opens the web app, so pairing turns it on (and keeps it on) when it is
+    // off, as `ptyro web on` does: who can reach it is picked the same way (Tailscale when it
+    // runs here). A code nothing could use is never handed out.
+    if !served_base(ctx, url.clone()).3 {
+        let (web, notes) = crate::webapp::ask(ctx, Some(true), None).await.map_err(no_daemon)?;
+        if !web.up {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!(
+                    "the web app, which a paired device opens, didn't start: {}",
+                    crate::webapp::next(&web)
+                ),
+            ));
+        }
+        eprintln!(
+            "Turned the web app on for the device to open (it stays on; `ptyro web off` turns it off)."
+        );
+        for n in notes {
+            eprintln!("  {n}");
+        }
     }
     // No scope named: the default, with its warning. A named one is the owner's choice.
     let defaulted = scope.is_none();
