@@ -13,12 +13,12 @@ Conventions:
   machine's daemon over ssh, or `--remote wsl://[distro]` for the daemon in a WSL distro (from
   Windows, or from another distro). Without either, `client.default_remote` is used if set.
 - Listing and query commands take `--json`; the shapes are in [`cli-json.md`](cli-json.md).
-- Aliases: `a` (attach), `ls` (list), `runs`, `recipes`, `changeset`, `gates`, `leases`,
+- Aliases: `a` (attach), `ls` (list), `runs`, `recipes`, `gates`, `leases`,
   `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
 - Durations look like `30s`, `10m`, `2h`.
 - Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
   words): `chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`. `-y`/`--yes` doesn't ask; with no
+  `machine rm`, `discard`, `config rm`, `review rm --all`. `-y`/`--yes` doesn't ask; with no
   terminal to ask and no `--yes`, the command refuses (exit 5) and changes nothing. They act on an
   exact address only: a chat's handle, id or `@last`, never words from its title.
 - A flag's value goes after a space or an `=`: `--project app` and `--project=app` are the same,
@@ -56,8 +56,7 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 A long flag is a switch in every command or takes a value in every command, never one here and
 the other there (owner, 2026-11-10; `a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere`).
 So `--pr N` is a PR number (`new`, `wt new`) and `pick --open-pr` opens one; `--lead` makes a
-lead (`new`) and `cs new --lead-as AGENT` picks its agent; `--keep` keeps a chat and
-`cs rm --keep-member M` a member; `--chat` reads a transcript and `chat search --in CHAT` narrows
+lead (`new`); `--keep` keeps a chat; `--chat` reads a transcript and `chat search --in CHAT` narrows
 a search; `--timeout D` is how long to wait (`msg check` too). An optional value reads the same
 everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`
 (bare: the scrollback kept in memory; N can reach back into the recording).
@@ -82,11 +81,11 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
   `ptyro wait --for` the status ones (`working` to `error`).
 - **`W`** (a worktree) is `project/name` (`myrepo/@root` is the main checkout), a unique name, or
   a path. It defaults to the worktree you're in.
-- **A name you give** (a session, worktree, workspace, profile, change set, `fanout --prefix`,
+- **A name you give** (a session, worktree, workspace, profile, `fanout --prefix`,
   machine or device) is `a-z 0-9 . _ -`, 1–64 characters. It is kept exactly as you wrote it
-  (`cs new my_fix` makes `my_fix`). A bad one is refused, and the error offers the fix:
+  (`ws new my_fix` makes `my_fix`). A bad one is refused, and the error offers the fix:
   `invalid name "My Feature": … try "my-feature"`.
-- **Everything else you name** (projects, workspaces, profiles, chats, runs, change sets, devices,
+- **Everything else you name** (projects, workspaces, profiles, chats, runs, devices,
   archives, machines) resolves the same way: the exact name (a project's slug), then
   `project/name` where there is one, then the full id, then the end of the id, **at least 4
   characters** (`7f3k`, `c:7f3k`, `r-k3x9`). Case doesn't matter. When several match, ptyro lists
@@ -244,22 +243,6 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro verify SESSION [CHECK] [--max-bounces N]` / `--off` | verified-done for a session |
 | `ptyro mcp` | the MCP server a lead agent gets (started for it) |
 
-## Change sets
-
-See [`changesets.md`](changesets.md) for the walkthrough.
-
-| Command | Does |
-|---|---|
-| `ptyro cs new NAME --projects A,B… [--template T] [--layout lead\|solo\|manual] [--lead-as AGENT] [--agent M=A]… [--depends M:D+E]… [--base M=REF]… [--prompt GOAL \| --prompt-file F \| --from-issue N] [--gates contract,push,land \| --no-gates] [--integration CMD]… [--overlay] [-w WS] [--trust FP] [--json]` | start a change set (`--trust`: the fingerprint of a hub template you reviewed) |
-| `ptyro cs ls` / `show SET` (alias `status`) / `log SET [-f]` | change sets / one set with its issues and actions / its ledger |
-| `ptyro cs msg SET TO TEXT [--kind K] [--interrupt]` | a message on the set (`TO`: a member, `@lead`, `@all`) |
-| `ptyro cs ready SET [NOTE]` / `blocked SET ON [NOTE]` (both `[--member M]`) / `assign SET M TASK` / `ask SET QUESTION [--option O]…` | from inside the set: readiness, blockers, a member's task, a question for you |
-| `ptyro cs contract SET [show [--rev N] \| edit \| diff [FILE] [--a REV] [--b REV] \| history \| submit [-m MSG] \| revise FILE [--diff] [--affects …] [-m MSG] \| approve [--note N] \| reject NOTE]` | the contract and its revisions |
-| `ptyro cs diff SET M` / `check SET` / `overlay SET [auto\|go\|rust\|node\|python\|compose\|off] [--member M]` | a member's changes / integration and contract checks / build against siblings |
-| `ptyro cs checkpoint SET [LABEL]` / `checkpoints SET` / `restore SET N [--force]` | undo across every repo |
-| `ptyro cs commit SET -m MSG` / `push SET [-y]` / `pr SET [--draft]` / `land SET [-y] [--no-wait]` | lockstep git and the merge train |
-| `ptyro cs add SET PROJECT [-a A] [--depends-on M]` / `drop SET M [--ignore-dependents] [--force] [-y]` / `rm SET [--keep-member M] [--force] [-y]` / `templates` | membership, removal (asks unless `-y`), templates. `--force` discards unsaved work, as `wt rm --force`; `--ignore-dependents` drops a member others depend on and never discards work |
-
 ## Remote and phone
 
 See [`remote.md`](remote.md).
@@ -311,7 +294,7 @@ See [`remote.md`](remote.md).
 | Code | Meaning |
 |---|---|
 | `0` | ok (`wait`: got there) |
-| `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `run wait`: the run failed; `radar`: a predicted conflict; `cs check`: not ok; `daemon upgrade`: rolled back) |
+| `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `run wait`: the run failed; `radar`: a predicted conflict; `daemon upgrade`: rolled back) |
 | `2` | invalid arguments |
 | `3` | not found |
 | `4` | ambiguous: a name, handle or selector matched several, or a removal was given words from a title instead of an address (the message lists the candidates) |

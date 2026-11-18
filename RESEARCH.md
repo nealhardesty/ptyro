@@ -3363,16 +3363,16 @@ ship themselves, in order:
 | R-ORC-09 | **Watchdog**: derived `stalled` / `spinning` / `zombie`; nudge → handoff → escalate; `restart = { on = ["crash","stall"], backoff = "10s..5m", max = 5 }` | Gas Town Witness, Agent Farm, Overstory, amux | M7 | M | ★★★ | new |
 | R-ORC-10 | Context-window % column (Claude statusline `context_window.used_percentage`) | Agent Farm | M4 | S | ★★ | new |
 | R-ORC-11 | **Collision radar + file leases + conflict ladder**:<br>• live overlap matrix and `git merge-tree` predictions between siblings, auto-message both agents<br>• daemon leases enforced via PreToolUse/BeforeTool<br>• merge ladder: clean → rebase → rerere → agent in temp worktree → human | Sculptor, mcp_agent_mail, Overstory | M6 / M7 | M | ★★★ | **→ M7.13, built** (2026-10-20) |
-| R-ORC-12 | **Single-repo merge train**: `ptyro land --train --batch --bisect --on-eject=send`, speculative prefixes; reuses M11.9 | Gas Town Refinery, GitHub merge queue, Mergify, Graphite | M6 / M7 | L | ★★ | **enabled by M11.9** (2026-10-21): the change-set train (gates, CI waits, resumable stop report) is the building block; a single-repo `ptyro land --train` remains |
+| R-ORC-12 | **Single-repo merge train**: `ptyro land --train --batch --bisect --on-eject=send`, speculative prefixes; reuses M11.9 | Gas Town Refinery, GitHub merge queue, Mergify, Graphite | M6 / M7 | L | ★★ | **enabled by M11.9** (2026-10-21): the change-set train (gates, CI waits, resumable stop report) is the building block; a single-repo `ptyro land --train` remains. The M11.9 train was built, removed 2026-11-17 (pare-down), so the idea no longer has a building block |
 | R-ORC-13 | Separate **role/identity from session** in the run model (a respawned session inherits role and brief); `ptyro handoff <session>` (fresh session + generated progress brief) | Gas Town polecats, Anthropic resets | M7.1 | M | ★★ | new |
-| R-ORC-14 | **Run timeline / trace view** for every run (not just change sets): span waterfall, hook-derived tool spans, gate wait times | disler observability, Burr, OTel GenAI | M7 / M8 | M | ★★ | **partly built M11.11** (2026-10-21): the change-set view draws the ledger as a timeline with messages as arrows between lanes; a timeline for every run remains |
+| R-ORC-14 | **Run timeline / trace view** for every run (not just change sets): span waterfall, hook-derived tool spans, gate wait times | disler observability, Burr, OTel GenAI | M7 / M8 | M | ★★ | **partly built M11.11** (2026-10-21): the change-set view draws the ledger as a timeline with messages as arrows between lanes; a timeline for every run remains. The change-set timeline was built, removed 2026-11-17 (pare-down) |
 | R-ORC-15 | **Daemon-owned task board**:<br>• leases tied to liveness, `ready` = deps satisfied<br>• adapters: beads (`bd ready`/`--claim`), Backlog.md (`--json --watch`), Task Master<br>• `--task <src>:<id>`, Definition-of-Done gate | beads, Backlog.md, Task Master, Claude teams | M7 | L | ★★ | merged → Backlog "Tasks" (promote) |
 | R-ORC-16 | ptyro as an **ACP proxy** and/or exposing daemon sessions *as* ACP agents to Zed/JetBrains | ACP proxy-chains RFD | Backlog | L | ★ | new |
 | R-ORC-17 | Cloud attempts in fan-out (`--agents codex-cloud`), pulling diffs into local worktrees for compare | Codex cloud | Backlog | M | ★ | new |
 | R-ORC-18 | Ship a **ptyro agent skill / AGENTS.md snippet** teaching `ptyro send/read/wait --json`, before `ptyro mcp` | herdr, Rex, Orca | M5 | S | ★★ | **built M5.9** (2026-10-20): the AGENTS.md/skill snippet in `docs/scripting.md` |
 | R-ORC-19 | Human-driven `ptyro last <session>` and `ptyro handoff <from> <to>`: deliver only when idle, with a provenance header | ccmux | M5 | S | ★★ | new |
 | R-ORC-20 | Shared context: `.ptyro/context/` hand-off folder (git-excluded), run notebook `$PTYRO_RUN_DIR/notes.md`, project `decisions` log via `ptyro mcp log_decision`, opt-in post-run lessons summariser | Conductor `.context`, Nimbalyst wiki, Letta | M7+ | M | ★ | new |
-| R-ORC-21 | Role briefs as presets (pm, arch, eng, qa, reviewer, frontend/backend) for recipes and change sets; name recipe shapes plainly (fan-out, pipeline, lead/worker, review-loop) | ccswarm, initech, BMAD | M7.8 | S | ★ | new |
+| R-ORC-21 | Role briefs as presets (pm, arch, eng, qa, reviewer, frontend/backend) for recipes and change sets; name recipe shapes plainly (fan-out, pipeline, lead/worker, review-loop) | ccswarm, initech, BMAD | M7.8 | S | ★ | new (its change-set half is moot: change sets were removed 2026-11-17, pare-down) |
 | R-ORC-22 | `ptyro wait --match '<regex>'` on screen or scrollback, also via MCP | Cursor Await tool, herdr `wait-output` | M5 | S | ★★ | **built M5.2** (2026-10-20): `wait --match REGEX [--scrollback]` (MCP waits for M7) |
 | R-ORC-23 | **Verified-done**: status splits into `done(claimed)` and `done(verified)`, with stored evidence (command, exit code, output tail); `done_when` Stop-hook `decision:block` bounce for Claude, follow-up send for the others | Anthropic harness posts, Claude hooks, StrongDM | M7 (hooks M4) | M | ★★★ | **→ M7.9, built** (2026-10-20) |
 | R-ORC-24 | **Review queue**: one ranked "ready for review" lane (tests green, small diff, evidence attached, cost, touched files); `max_unreviewed` policy throttles spawns; digest notifications | Willison, Osmani, Every, METR | M6 / M7 | M | ★★★ | **built M6.9** (2026-10-20); verified-done waits for M7.9 |
@@ -3827,8 +3827,7 @@ and OpenCode:
 - verified-done;
 - ranked review;
 - fan-out with honest comparison;
-- loops and recipes with human gates and daemon-enforced policy;
-- one change across many repos.
+- loops and recipes with human gates and daemon-enforced policy.
 
 Everything is scriptable with `--json`. Single-vendor tools can't cross vendors, GUI tools can't
 follow you over SSH, and tmux plugins can't enforce policy. ptyro does all three.
@@ -3952,3 +3951,7 @@ vendors' CLIs (F21) is a sign the neutral position is real; it is also a sign it
   (amends R-UX-37 / UX3.4), and the quick terminal stays as it is. R-UX-03's scratch sessions
   join as SH.7. R-UX-42 (a tmux key preset) is recorded, not promoted. tmux 3.6b's window keys
   and defaults were checked on this machine and moved to SPEC §20.14.
+- **2026-11-17 (pare-down, batch 1):** change sets (M11) are removed: the owner went deep, not
+  wide, and never used them (ROADMAP M11, "Removed"). R-ORC-14's change-set timeline and the
+  M11.9 train that R-ORC-12 was to build on are gone with them; R-ORC-21's change-set half is
+  moot. The competitive notes above that name M11 as a ptyro strength are history now.

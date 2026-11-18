@@ -224,44 +224,6 @@ Pinned by `crates/ptyro/tests/m7.rs` (`snapshots/m7__m7-cli-json.snap`).
   {command, exit_code, tail, tree?, at_ms, duration_ms}}`; `state` is `pending`, `checking`,
   `passed`, `bounced` or `failed`) and `run` (`r-7f3a2c/impl`), when set.
 
-## Change sets (M11)
-
-Pinned by `crates/ptyro/tests/m11.rs`.
-
-- `ptyro cs new … --json`, `ptyro cs show SET --json` → `ChangeSetInfo`; `ptyro cs ls --json` →
-  `[ChangeSetInfo]`, newest first:
-  - `ChangeSetInfo` is `{run, status, set: ChangeSet, report: Report, live: {member:
-    MemberLive}, lead?, sessions: {member: session name}, gates: [GateInfo], job?}`. `status` is
-    the run's; `job` is `push` or `land` while one runs.
-  - `ChangeSet` is `{name, root, layout, workspace?, profile, goal?, template?, lead_agent?,
-    gates, integration, members: [Member], contract: [ContractRev], checkpoints:
-    [SetCheckpoint], checks: [CheckResult], phase, train?}`. `layout` is `lead`, `solo` or
-    `manual`; `phase` is `drafting`, `working`, `landing`, `landed` or `removed`.
-  - `Member` is `{name, project, agent?, depends_on, overlay?, base?, contract_check?,
-    worktree?, path, branch, start?, session?, contract_rev, ready? (ms), ready_rev, blocked_on,
-    failed?, conflict?, check?: CheckResult, commit?, pushed?, pr?, pr_url?, landed?,
-    out_of_order?, no_remote}`.
-  - `ContractRev` is `{n, at_ms, by, sha, text, diff, affects, summary?, approved?}` (`affects`
-    empty: everyone).
-  - `SetCheckpoint` is `{n, label?, at_ms, reason, members: {member: [head, snapshot]}}`;
-    `reason` is `manual`, `contract`, `land` or `restore`.
-  - `CheckResult` is `{command, ok, exit_code?, tail, at_ms, duration_ms}`.
-  - `Train` is `{order, done, stopped?: [member, why], started_ms}`.
-  - `Report` is `{state, issues: [{state, member?, detail, action}], members: {member: word},
-    ready: [ready, total]}`. Issue states: `land_stopped`, `member_conflict`, `member_failed`,
-    `out_of_order`, `missing_worktree`, `integration_failed`, `check_failed`, `stale_contract`,
-    `out_of_fence`, `no_remote`, `blocked_on`. Without one, `state` is `drafting`,
-    `contract_review`, `working`, `ready`, `landing`, `landed` or `removed`.
-  - `MemberLive` is `{status?, dirty, ahead, out_of_fence, missing}`.
-- `ptyro cs log SET --json` → NDJSON `{seq, at_ms, t, kind, from?, to?, text}`; `t` is `event`
-  (a run event, `seq` > 0) or `message` (`kind` is the message's kind).
-- `ptyro cs check SET --json` → `{ok, integration: [CheckResult], members: {member:
-  CheckResult}}`; the exit code is 1 when `ok` is false.
-- `ptyro cs checkpoints SET --json` → `[SetCheckpoint]`.
-- `ptyro cs templates --json` → `[{name, description?, source, path, members, untrusted?,
-  error?}]`; `source` is `user` or `hub:<project>`.
-- `ptyro run show R --json` for a set's run carries the same `ChangeSet` as `state.changeset`.
-
 ## Remote (M9)
 
 - `ptyro pair -n NAME --json` → `{device: DeviceInfo, url, expires_ms, ca, machine, warning, replaces, notes}`.
@@ -297,7 +259,8 @@ Pinned by `crates/ptyro/tests/m11.rs`.
   - `generation`: live upgrades since the daemon started; `upgraded_ms`: when the last one happened (or `null`); `rolled_back`: the last upgrade was refused by the new binary and rolled back.
   - `metrics`: `{rss_kib, open_fds, tasks_alive, loop_lag_ms_max, loop_lag_ms_p99, pty_readers, bytes_read, frames_sent, crashes, scrollback_bytes, sessions: [[name, bytes]]}`. Event-loop lag covers the last minute; the totals carry across upgrades.
 - `ptyro daemon upgrade --json` → `{from, to, pid, sessions, rolled_back, ms}` once the new image answers (exit 1 if `rolled_back`).
-- `ptyro config check --json` → `{path, exists, ok, notes, error?}`
+- `ptyro config check --json` → `{path, exists, ok, notes, error?, retired: [{key, removed, why}]}`
+  (`retired`: keys of a removed feature the file still sets; ignored, `config unset` removes one)
 - `ptyro config show --json` → the effective configuration, defaults filled in.
 
 ## Exit codes

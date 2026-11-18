@@ -1531,6 +1531,14 @@ pub fn set(
 
 /// Remove `key` from the file, so the default (or the next layer) applies again.
 pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<String, String> {
+    // A key a removed feature had (SPEC §13.8) is no setting any more: unsetting it removes it.
+    if crate::retired::find(key).is_some() {
+        let mut doc = parse_doc(text)?;
+        if !crate::retired::remove(&mut doc, key) {
+            return Err(format!("{key} isn't set in the file"));
+        }
+        return finish(scope, key, doc.to_string(), extra);
+    }
     target(scope, key)?;
     let mut doc = parse_doc(text)?;
     let seg = split(key);

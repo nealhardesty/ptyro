@@ -294,6 +294,51 @@ async fn an_incompatible_protocol_major_is_rejected() {
     assert!(matches!(msg, ServerMsg::Reject { .. }), "{msg:?}");
 }
 
+/// A request an older ptyro had (change sets' `cs`, removed 2026-11-17) gets an answer that says
+/// so; one that never existed is still "couldn't read". Neither leaves its caller waiting.
+#[tokio::test]
+async fn a_removed_request_is_answered_with_what_went() {
+    use futures::{SinkExt, StreamExt};
+    use ptyro_protocol::{
+        ClientInfo, ClientKind, Encoding, Outcome, PROTO, decode, encode, framing,
+    };
+    let d = TempDaemon::start(BIN).unwrap();
+    let mut opts = ptyro_client::ConnectOptions::new(d.paths.clone(), ClientKind::Test);
+    opts.autospawn = false;
+    let stream = ptyro_client::connect_raw(&opts).await.unwrap();
+    let mut framed = tokio_util::codec::Framed::new(stream, framing());
+    let hello = ClientMsg::Hello {
+        proto: PROTO,
+        client: ClientInfo {
+            kind: ClientKind::Test,
+            version: "x".into(),
+            pid: 1,
+            outer: None,
+            token: None,
+            via: None,
+        },
+        features: vec![],
+    };
+    framed.send(encode(&hello, Encoding::Json).unwrap()).await.unwrap();
+    let mut answer = async |id: u32, req: serde_json::Value| {
+        let msg = serde_json::json!({ "t": "request", "id": id, "req": req });
+        framed.send(encode(&msg, Encoding::Json).unwrap()).await.unwrap();
+        loop {
+            let bytes = tokio::time::timeout(WAIT, framed.next()).await.unwrap().unwrap().unwrap();
+            if let Ok((ServerMsg::Response { id: got, outcome: Outcome::Err { error } }, _)) =
+                decode::<ServerMsg>(&bytes)
+                && got == id
+            {
+                return error.message;
+            }
+        }
+    };
+    let gone = answer(7, serde_json::json!({ "t": "cs", "op": { "op": "list" } })).await;
+    assert!(gone.contains("no longer has change sets"), "{gone}");
+    let typo = answer(8, serde_json::json!({ "t": "no_such_request" })).await;
+    assert!(typo.contains("couldn't read this request"), "{typo}");
+}
+
 #[test]
 fn only_one_daemon_per_home_and_stale_sockets_are_recovered() {
     let mut d = TempDaemon::start(BIN).unwrap();

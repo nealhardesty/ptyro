@@ -187,6 +187,14 @@ const MIGRATIONS: &[M] = &[
         "ALTER TABLE session ADD COLUMN title TEXT;
     ALTER TABLE worktree ADD COLUMN title TEXT;",
     ),
+    // Change sets were removed (2026-11-17): their runs, their events and mail, and the trust
+    // given to hub templates. Their worktrees and git refs aren't ptyro's database: they stay.
+    M::up(
+        "DELETE FROM run_event WHERE run_id IN (SELECT id FROM run WHERE kind = 'changeset');
+    DELETE FROM run_message WHERE run_id IN (SELECT id FROM run WHERE kind = 'changeset');
+    DELETE FROM run WHERE kind = 'changeset';
+    DELETE FROM trust WHERE scope LIKE 'changeset:%';",
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -1096,6 +1104,33 @@ mod tests {
             s.flush().await.unwrap();
             assert_eq!(s.history(10).await.unwrap().len(), 2, "from v{version}");
         }
+    }
+
+    /// Removing change sets takes their runs (with their events and mail) and their templates'
+    /// trust out of the database, and nothing else.
+    #[tokio::test]
+    async fn change_set_runs_and_template_trust_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ptyro.db");
+        let before = MIGRATIONS.len() - 1;
+        database_at(&path, before);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "INSERT INTO run (id, kind, name, status, state, created_at) VALUES ('r-cs', 'changeset', 'login', 'running', '{}', 1);
+                 INSERT INTO run_event (run_id, seq, at, kind, payload) VALUES ('r-cs', 1, 1, 'cs', '{}');
+                 INSERT INTO run_message (id, run_id, at, sender, recipient, address, kind, body) VALUES ('m-cs', 'r-cs', 1, '@user', 's', 'api', 'assign', 'b');
+                 INSERT INTO run_message (id, run_id, at, sender, recipient, address, kind, body) VALUES ('m-1', NULL, 1, '@user', 's', 'x', 'note', 'b');
+                 INSERT INTO trust (project_id, scope, fingerprint, approved_at) VALUES ('p1', 'changeset:billing', 'f', 1);",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(count(&s, "run").await, 1, "the recipe run stays");
+        assert_eq!(count(&s, "run_event").await, 0);
+        assert_eq!(count(&s, "run_message").await, 1, "mail outside a change set stays");
+        let trust = s.load_registry().await.unwrap().trust;
+        assert_eq!(trust.iter().map(|t| t.scope.as_str()).collect::<Vec<_>>(), ["scripts"]);
     }
 
     /// An older database is copied beside itself before its migrations run, once, and only the

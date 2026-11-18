@@ -35,10 +35,10 @@ recipes, or coordinate one change across several repositories.
 ## Status
 
 Pre-1.0 (version 0.0.x), public for early testing. Every
-feature milestone (M1–M11) is built and covered by tests, most of them against scripted fake
+feature milestone (M1–M10) is built and covered by tests, most of them against scripted fake
 agents. Day-to-day use so far is mainly Claude Code on Linux. Some features have not been run
 against the real thing yet: the phone app on a real phone, OpenCode, Gemini and Codex structured
-turns, a real merge train, and macOS by hand. [`docs/compat.md`](docs/compat.md) records what has
+turns, and macOS by hand. [`docs/compat.md`](docs/compat.md) records what has
 been tried, and [`ROADMAP.md`](ROADMAP.md) what's next. Bug reports are very welcome.
 
 ptyro is an independent project. It is not affiliated with or endorsed by Anthropic, OpenAI,
@@ -667,23 +667,6 @@ done when the check passes. Agents can message each other, claim files, and ever
 checkpoint you can restore. `Ctrl-Q O` shows every run. Try it with fake agents:
 `make orchestrate-demo`.
 
-### Change sets: one change across several repos
-
-A change set puts a worktree of each repo side by side on one branch. A lead agent writes the
-contract between them; once you approve it, one agent per repo implements its part, building
-against the others' unpushed code. Checkpoints cover every repo, and a merge train lands the PRs
-in dependency order.
-
-```bash
-ptyro cs new add-user-tier --projects api,sdk,web --overlay --prompt "users get a tier: free or pro"
-ptyro cs contract add-user-tier approve    # after reading the lead's CONTRACT.md
-ptyro cs status add-user-tier              # members, gates, and what needs doing
-ptyro cs pr add-user-tier && ptyro cs land add-user-tier
-```
-
-`Ctrl-Q S` shows the set as swimlanes. `make changeset-demo` runs one with fake agents. The
-guide: [`docs/changesets.md`](docs/changesets.md).
-
 ### Chats
 
 A quick, general chat with the agents you already run, on their accounts, kept and searchable,
@@ -792,7 +775,7 @@ The rest of the app: a tab for sessions (blocked ones
 on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
 scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
 an issue or your changes; finish it into a PR; archive it), the diff with line comments for the
-agent, commits and checks, the review queue, runs, fan-outs and change sets, and **More**:
+agent, commits and checks, the review queue, runs and fan-outs, and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
@@ -875,7 +858,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `f` | sidebar filter: all → only running sessions → only active ones (working, waiting for you, running a command); or click `all` / `running` / `active` under the sidebar title |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |
-| `O` / `S` | runs / change sets |
+| `O` | runs |
 | `w` / `o` / `r` | switch workspace / open in an editor, the file manager, a terminal app or a shell / run the default run script |
 | `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
 | `m` / `g` | a new chat / the chat list |
@@ -976,7 +959,6 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
-| [`docs/changesets.md`](docs/changesets.md) | Change sets: one change across several repos, from contract to merge train |
 | [`docs/uninstall.md`](docs/uninstall.md) | What `ptyro uninstall` and `ptyro backup` remove, keep and save |
 | [`docs/compat.md`](docs/compat.md) | Which programs and terminals work inside ptyro, and how well |
 | [`docs/fixtures.md`](docs/fixtures.md) | Recording and sanitising test fixtures |
@@ -1036,7 +1018,6 @@ WSL works meanwhile.
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
-| `make changeset-demo` (`ARGS=tui\|clean`) | a change set across three repos, contract to merge train, with fake agents |
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |

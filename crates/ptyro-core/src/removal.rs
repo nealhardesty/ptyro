@@ -16,7 +16,7 @@ pub const PROJECT_RELEASE: &str = "Sessions let go keep running, outside any pro
 pub const WORKTREE: &str = "Its directory is deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept.";
 /// `wt rm --keep-branch`.
 pub const WORKTREE_KEEP_BRANCH: &str = "Its directory is deleted; its branch is kept.";
-/// After a removal of worktrees that refuses to lose work (`wt rm`, `cs`, `discard`).
+/// After a removal of worktrees that refuses to lose work (`wt rm`, `discard`).
 pub const SAFE: &str = "Nothing is removed if that would lose work.";
 /// The same, forced (`--force`, the web's "Remove anyway").
 pub const FORCED: &str = "Work that isn't saved anywhere else is thrown away.";
@@ -33,10 +33,6 @@ pub const DEVICE: &str =
     "Its token stops working at once and its connections close. Pair it again to bring it back.";
 /// `machine rm`.
 pub const MACHINE: &str = "Its workspaces leave this list. Nothing changes on it, and its pairing stays until you revoke it there.";
-/// `cs rm`, then `SAFE` or `FORCED`.
-pub const SET: &str = "Every member's worktree is removed, or none is.";
-/// `cs drop`, then `SAFE` or `FORCED`.
-pub const SET_MEMBER: &str = "It leaves the set and its worktree is removed.";
 /// `discard RUN CANDIDATE`, then `SAFE` or `FORCED`.
 pub const DISCARD: &str = "Its agent stops and its worktree is removed.";
 /// `discard RUN`: every candidate not picked; then `SAFE` or `FORCED`.
@@ -85,8 +81,6 @@ pub const DIALOGS: &[(&str, &[&str])] = &[
     ("Remove profile", &[PROFILE, PROFILE_FORCE]),
     ("Revoke device", &[DEVICE]),
     ("Stop mirroring", &[MACHINE]),
-    ("Remove change set", &[SET, SAFE]),
-    ("from change set", &[SET_MEMBER, SAFE]),
     ("Discard candidate", &[DISCARD, SAFE]),
     ("Discard every candidate", &[DISCARD_REST, SAFE]),
     ("Remove ${c.noun}", &[CONFIG_ENTRY]),

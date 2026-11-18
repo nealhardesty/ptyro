@@ -206,9 +206,6 @@ impl Daemon {
             | Request::RecipeRun { trust: Some(_), .. } => {
                 return refuse("repository scripts and recipes are trusted by a person");
             }
-            Request::Cs { op: ptyro_run::wire::CsOp::New { spec } } if spec.trust.is_some() => {
-                return refuse("repository templates are trusted by a person");
-            }
             Request::Upgrade { binary: Some(_) } => {
                 return refuse("the daemon is upgraded to another binary by a person");
             }
@@ -282,8 +279,7 @@ impl Daemon {
             | Request::Radar { .. }
             | Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
-            | Request::Lead { .. }
-            | Request::Cs { .. } => true,
+            | Request::Lead { .. } => true,
             // Shipping, only with `destructive`.
             Request::WorktreeRemove { .. }
             | Request::WorktreeArchive { .. }
@@ -658,11 +654,7 @@ impl Daemon {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .messaging
                     .clone();
-                let Some(sock) = sock else {
-                    // A change set's interrupt: stop the turn, deliver once it's idle (M11.6).
-                    self.cs_interrupt(&s, &msgs);
-                    continue;
-                };
+                let Some(sock) = sock else { continue };
                 if send_socket(&sock, &text).await.is_err() {
                     continue;
                 }

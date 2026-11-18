@@ -51,7 +51,6 @@ action by name.
 | `D` | the inspector: diff, comments, commit, PR, checks, ports, events |
 | `Q` | the review queue |
 | `O` | runs: fan-outs and recipes, their steps and gates, the comparison |
-| `S` | change sets: members as swimlanes, gates, issues, the ledger |
 | `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
 | `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones, `i` only the imported ones (again: every chat), `I` imports your agents' own histories (asks first, and takes `chat import`'s flags: `codex --since 30d --profile work --dry-run`; ⏎ alone imports everything) |
@@ -116,7 +115,7 @@ setting is. A shell's pane header is the strip of its workspace's shells, the sh
 brackets: a click on a number shows that shell, a click on `＋` starts one.
 
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
-`Ctrl-Q D`, `O` and `S` close their view again when it is already open.
+`Ctrl-Q D` and `O` close their view again when it is already open.
 
 **Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
 they put there is a clone of the session they split. Everything else opens full sized: a new
@@ -133,7 +132,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | Key | Does |
 |---|---|
 | `j` / `k`, `g` / `G` | next / previous, first / last |
-| `⏎` | open the session or change set, or fold and unfold a workspace, project or worktree |
+| `⏎` | open the session, or fold and unfold a workspace, project or worktree |
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
 | `Space` | mark a session for broadcast; on a workspace, project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
@@ -142,10 +141,10 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
-| `D` `O` `S` | inspector / runs / change sets |
+| `D` `O` | inspector / runs |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
-| `Z` | fold everything: every workspace, change set, project, worktree and CHATS section, so the sidebar is one line a workspace (change sets stay at the top, folded; the selection moves to the row it folded into); `Z` again unfolds it as it was before, and whatever arrived meanwhile opens too |
+| `Z` | fold everything: every workspace, project, worktree and CHATS section, so the sidebar is one line a workspace (the selection moves to the row it folded into); `Z` again unfolds it as it was before, and whatever arrived meanwhile opens too |
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
@@ -248,7 +247,7 @@ Every key in this section, the view's and the list's, is in the key map: the `ch
 "chat.pin"` (`"none"` unbinds), and in the settings panel's Keys section. The hints on screen
 show the keys as they are bound.
 
-## Runs (`Ctrl-Q O`) and change sets (`Ctrl-Q S`)
+## Runs (`Ctrl-Q O`)
 
 - **Runs:** `⏎` opens a run, `c` opens the comparison, `x` cancels, `F` starts a fan-out.
   - In a run: `1`–`9` answer a gate (`n` with a note), `⏎` shows the step's session, `D`
@@ -256,8 +255,6 @@ show the keys as they are bound.
   - In the comparison: `m` merges, `C` cherry-picks, `p` opens a PR (each asks first), `d`
     discards one, `X` discards the rest, `i` / `I` sends a follow-up to one / all, `R` re-runs
     the evidence, `D` inspects, `⏎` shows the candidate's session.
-- **Change sets:** `⏎` shows a member's agent, `m` sends a message, `1`–`9` answer the gate,
-  `c` runs checks, `p` takes a checkpoint, `r` refreshes, `Esc` goes back.
 
 ## Several lines in one prompt
 

@@ -96,7 +96,7 @@ pub fn validate(name: &str) -> Result<(), String> {
 }
 
 /// [`validate`] for a name that is kept shorter than 64 because more is appended to it (a
-/// change set's members, a fan-out's agents): at most `max` characters, `why` saying so when
+/// fan-out's agents): at most `max` characters, `why` saying so when
 /// it's longer, and the fix offered fits.
 pub fn validate_within(name: &str, max: usize, why: &str) -> Result<(), String> {
     let n = name.chars().count();

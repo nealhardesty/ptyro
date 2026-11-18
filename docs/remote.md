@@ -85,7 +85,7 @@ ptyro machine rm laptop2
   it there (`ptyro devices revoke bear`), and the link here says so and how to pair again. A code
   works once, for 10 minutes, and pins the other machine's certificate (its own HTTPS); ssh needs
   nothing new.
-- **What stays per machine:** runs, recipes, change sets, messages and leases, the scratchpad,
+- **What stays per machine:** runs, recipes, messages and leases, the scratchpad,
   and the agents and editors offered in the new-task wizard.
 
 ## From your phone: `ptyro serve`
@@ -330,8 +330,7 @@ a device with less sees the pages and is told what it lacks.
 - **Projects**: the sidebar's tree. A worktree's page has its sessions and status; **Changes** is
   the diff, where tapping a line comments for the agent and one button sends them all; **Commits**,
   **Checks** (the PR and its CI), **Finish** (a PR, or merge into main), archive, remove.
-- **Runs** and **Sets**: fan-outs and recipes, gates waiting for you, the compare-and-pick view,
-  change sets with their contract, checks, checkpoints and merge train.
+- **Runs**: fan-outs and recipes, gates waiting for you, the compare-and-pick view.
 - **More**: health (each finding with its fix), usage, devices (pair another with a link and a QR
   code), profiles and logins, the config editor (checked as you save, applied at once),
   integrations, the daemon (logs, upgrade, restart, login service), first-run setup, and a tour.

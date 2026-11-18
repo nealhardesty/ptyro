@@ -126,11 +126,6 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
                 if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
             crate::runs::draw(app, f, Rect { height: h, ..area });
         }
-        if app.sets_view.is_some() {
-            let h =
-                if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
-            crate::sets::draw(app, f, Rect { height: h, ..area });
-        }
         if app.config.ui.status_bar && area.height > 2 {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
@@ -278,7 +273,6 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("inspector", "diff & ship"),
             ("review.queue", "to review"),
             ("runs", "runs"),
-            ("sets", "change sets"),
             ("script.run", "run script"),
             ("worktree.open", "open in…"),
             ("worktree.gc", "clean up"),
@@ -975,22 +969,6 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     spans.push(b);
                 }
                 Line::from(spans)
-            }
-            // A change set (M11.11): its state and readiness; amber when it wants you.
-            Row::Set(run) => {
-                let Some(r) = app.runs.iter().find(|r| r.state.id == *run) else { continue };
-                let Some(c) = &r.state.changeset else { continue };
-                let (label, attention) = app.set_label(r);
-                let arrow = if app.collapsed.contains(run) { "▸" } else { "▾" };
-                Line::from(vec![
-                    Span::styled(format!(" {arrow} "), fg(app, t.dim)),
-                    Span::styled("◆ ", fg(app, if attention { t.blocked } else { t.accent })),
-                    Span::styled(c.name.clone(), fg(app, t.text).add_modifier(Modifier::BOLD)),
-                    Span::styled(
-                        format!(" {label}"),
-                        fg(app, if attention { t.blocked } else { t.dim }),
-                    ),
-                ])
             }
         };
         firsts.push((i, line));

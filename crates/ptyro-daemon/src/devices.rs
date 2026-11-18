@@ -120,12 +120,6 @@ fn is_always(decision: &str) -> bool {
     ptyro_agents::Decision::parse(decision) == Some(ptyro_agents::Decision::Always)
 }
 
-/// A gate that lets code ship (a change set's push or its merge train) is answered with control
-/// or better; the other gates are approve's.
-fn ships_code(step: &str) -> bool {
-    step.starts_with("push-") || step.starts_with("land-")
-}
-
 /// The scope a request needs from a device. The match is exhaustive, with no catch-all: a new
 /// request is a compile error until someone decides its scope here (`tests/scopes.rs` then
 /// checks the decision against a table and against a daemon). What reaches the machine itself,
@@ -248,14 +242,13 @@ pub fn needed(req: &Request) -> Scope {
         QuickShell { create: false, .. } => Scope::Read,
         // A configured agent (its command comes from the user's config) is control; any other
         // command line is full.
-        // A verify check, a lead or `ptyro mcp` is a command line of its own: full.
+        // A verify check or a lead (`ptyro mcp`) is a command line of its own: full.
         Spawn { spec }
             if spec.agent.is_some()
                 && spec.argv.is_empty()
                 && spec.command.is_none()
                 && spec.verify.is_none()
-                && spec.lead.is_none()
-                && !spec.mcp =>
+                && spec.lead.is_none() =>
         {
             Scope::Control
         }
@@ -274,7 +267,7 @@ pub fn needed(req: &Request) -> Scope {
         ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
-        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } | Cs { .. } => Scope::Full,
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } => Scope::Full,
     }
 }
 
@@ -381,15 +374,6 @@ impl Daemon {
                     need.label(),
                     need.label()
                 ),
-            ));
-        }
-        if let Request::GateResolve { id, .. } = req
-            && g.scope < Scope::Control
-            && self.find_gate(id.trim()).is_some_and(|(_, step, _)| ships_code(&step))
-        {
-            return Err(Error::new(
-                ErrorCode::PermissionDenied,
-                "this gate lets code ship: answering it needs control (pair this device again with control, on the computer that runs ptyro)",
             ));
         }
         if need >= Scope::Approve
@@ -830,9 +814,6 @@ mod tests {
         assert_eq!(needed(&ans("allow")), Scope::Approve);
         assert_eq!(needed(&ans("always")), Scope::Control);
         assert_eq!(needed(&ans("a")), Scope::Control);
-        assert!(
-            ships_code("push-1700000000000") && ships_code("land-api") && !ships_code("review")
-        );
         assert_eq!(needed(&Request::Upgrade { binary: None }), Scope::Full);
         assert_eq!(needed(&Request::DeviceList), Scope::Full);
         // Stopping what you started is control's, as the scope's description says; starting any

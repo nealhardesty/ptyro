@@ -7,7 +7,6 @@ mod chat;
 mod cli;
 mod complete;
 mod config;
-mod cs;
 mod doctor;
 mod host;
 mod init;
@@ -473,13 +472,6 @@ enum Cmd {
         /// `[CANDIDATE]` TEXT
         #[arg(required = true, num_args = 1..=2)]
         args: Vec<String>,
-    },
-    /// Change sets: one change across several repositories, with a lead, a contract, a
-    /// ledger, set checkpoints and a dependency-ordered ship train
-    #[command(alias = "changeset")]
-    Cs {
-        #[command(subcommand)]
-        cmd: cs::CsCmd,
     },
     /// Gates: questions runs wait on, answered from here, the TUI or your phone
     #[command(alias = "gates")]

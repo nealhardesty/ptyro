@@ -2683,7 +2683,6 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
         && !app.prefix
         && app.focus == Focus::Pane
         && app.orch.is_none()
-        && app.sets_view.is_none()
         && app.inspector.is_none()
         && app.pad_popup.is_none()
         && !app.sidebar_zoom;

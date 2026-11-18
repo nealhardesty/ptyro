@@ -336,8 +336,6 @@ pub enum PromptKind {
     RenameProject(String),
     /// Typed in the runs view (M7).
     Orch(crate::runs::OrchInput),
-    /// Typed in the change-set view (M11).
-    Sets(crate::sets::SetsInput),
     /// A chat's title (by id); empty clears it (`chat.autotitle` makes a new one).
     ChatRetitle(String),
     /// One more folder this chat (`None`: the new chat being written) may read (`none`: none).
@@ -607,8 +605,6 @@ pub enum Pending {
     DeepScrollback(PaneId, SessionId),
     /// The compare doc of this run.
     Compare(String),
-    /// A change set's ledger, for the set view (M11).
-    CsLog(String),
     /// The context worktree's scripts, for an open palette (UX1.18).
     PaletteScripts(String),
     /// Archived worktrees, for the restore picker (UX1.12), or the delete one.
@@ -797,8 +793,6 @@ pub struct App {
     pub inspector: Option<crate::inspector::Inspector>,
     /// Runs (`O`), drawn over the panes (M7).
     pub orch: Option<crate::runs::Orch>,
-    /// The change-set view (`S`, M11.11).
-    pub sets_view: Option<crate::sets::Sets>,
     /// Chats not archived (SPEC §22.12): the CHATS sections and the chat list.
     pub chat_list: Vec<ptyro_core::chats::ChatInfo>,
     /// The chat list or a chat, over the panes.
@@ -807,8 +801,6 @@ pub struct App {
     pub chat_aside: Option<crate::chats::ChatPanel>,
     /// Drafts of chats not shown, by chat id (`""`: the new chat's), for when they open again.
     pub chat_drafts: HashMap<String, String>,
-    /// Change sets in the sidebar.
-    pub set_nodes: Vec<crate::sets::SetNode>,
     /// Close the inspector when the session it asked for appears (`E`: commit in the editor).
     pub close_inspector_after: bool,
     /// Show the agent that starts in this worktree as soon as it does (after setup).
@@ -969,12 +961,10 @@ impl App {
             marked: Vec::new(),
             inspector: None,
             orch: None,
-            sets_view: None,
             chat_list: Vec::new(),
             chat_panel: None,
             chat_aside: None,
             chat_drafts: HashMap::new(),
-            set_nodes: Vec::new(),
             close_inspector_after: false,
             follow,
             resolved: None,
@@ -1155,7 +1145,6 @@ impl App {
             client.request(Request::RunList { active: false, limit: Some(100) }).await
         {
             self.runs = runs;
-            self.refresh_set_nodes();
         }
         // The morning digest (M7.12): what runs did while nobody watched.
         let unread = |k: ptyro_core::status::AttentionKind| {
@@ -2379,15 +2368,8 @@ impl App {
                 }
                 self.toast(format!("comments sent to {} (typed once its turn is over)", info.name));
             }
-            (Pending::CsLog(run), Ok(Reply::Cs { value })) => {
-                if let Ok(entries) = serde_json::from_value(value) {
-                    self.got_ledger(&run, entries);
-                }
-            }
-            (Pending::Done(msg), Ok(Reply::Cs { .. })) => self.toast(msg),
             (Pending::Runs, Ok(Reply::Runs { runs })) => {
                 self.keeping_run_selection(|app| app.runs = runs);
-                self.refresh_set_nodes();
                 if let Some(o) = &mut self.orch {
                     o.loading = false;
                 }
@@ -2925,14 +2907,6 @@ impl App {
             }
             return;
         }
-        if self.sets_view.is_some() && !self.prefix {
-            if self.keymap.is_prefix(key) {
-                self.start_prefix(key);
-            } else {
-                self.sets_key(key);
-            }
-            return;
-        }
         if self.inspector.is_some() && !self.prefix {
             if self.keymap.is_prefix(key) {
                 self.start_prefix(key);
@@ -3013,13 +2987,10 @@ impl App {
         self.forward(InputEvent::Key { key });
     }
 
-    /// A full-screen view (inspector, runs, change sets, first run) is drawn over the panes:
+    /// A full-screen view (inspector, runs, first run) is drawn over the panes:
     /// the mouse and pastes are not for what is hidden under it.
     fn full_view(&self) -> bool {
-        self.inspector.is_some()
-            || self.orch.is_some()
-            || self.sets_view.is_some()
-            || self.first_run.is_some()
+        self.inspector.is_some() || self.orch.is_some() || self.first_run.is_some()
     }
 
     pub fn on_paste(&mut self, text: String) {
@@ -3759,15 +3730,6 @@ impl App {
                     self.open_runs();
                 }
             }
-            "sets" => {
-                if self.sets_view.take().is_none() {
-                    let run = match self.selected_row() {
-                        Some(Row::Set(r)) if self.focus == Focus::Sidebar => Some(r),
-                        _ => None,
-                    };
-                    self.open_sets(run);
-                }
-            }
             // From an offer: that chat, or that search.
             "chat.open" if cmd.arg.is_some() => self.open_chat(cmd.arg.as_deref().unwrap_or("")),
             "chat.search" if cmd.arg.is_some() => {
@@ -3794,12 +3756,11 @@ impl App {
                     self.sidebar_zoom = false;
                     self.toggle_quick(Some(id), None, None);
                 }
-                Some(Row::Set(run)) if cmd.action == "nav.open" => self.open_sets(Some(run)),
                 Some(Row::ShellNew(_)) if cmd.action == "nav.open" => {
                     self.sidebar_zoom = false;
                     self.shells_new(None, false);
                 }
-                // A workspace, project, worktree, change set or CHATS heading: ⏎ (and Space)
+                // A workspace, project, worktree or CHATS heading: ⏎ (and Space)
                 // fold it, h/l close and open it; `all chats…` (or the chat list's key) lists
                 // a workspace's chats.
                 Some(r) if r.fold_key().is_some() => {
@@ -4296,7 +4257,7 @@ impl App {
             }),
             Row::ChatAll(_) => with("chat.list", "every chat here").map(|l| format!("⏎ {l}")),
             Row::ChatNew(_) => Some("⏎ start a chat".into()),
-            Row::Set(_) | Row::Group(_) => None,
+            Row::Group(_) => None,
         }
     }
 
@@ -4473,15 +4434,8 @@ impl App {
             // Every option `ptyro profile new` takes, on one screen (SPEC §11.5a).
             "profile.new" => self.open_profile_form("", None),
             // The CLI's creating commands, every option on one screen (SPEC §11.5a).
-            "sets.new" => self.open_set_form(),
             "recipe.run" => self.ask_recipes(),
             "remote.pair" => self.open_pair_form(),
-            "set.add" => match self.current_set() {
-                Some(set) => self.open_set_add_form(set),
-                None => {
-                    self.toast_err("pick a change set first (in the sidebar), then run this again")
-                }
-            },
             "session.lead" => match self.selected_session_name() {
                 Some(s) => self.open_lead_form(s),
                 None => {
@@ -4701,7 +4655,6 @@ impl App {
                 v.extend(["session.rename", "session.explain", "session.stop"]);
                 v
             }
-            Row::Set(_) => vec!["sets"],
             // A workspace (MM1.B): start something in it, set it up; another machine's adds what
             // its link can do.
             Row::Workspace(w) => {
@@ -4756,7 +4709,6 @@ impl App {
             Row::Quick(_) => Some("Quick terminal".into()),
             Row::Worktree(w) => self.worktree(w).map(|w| format!("Worktree {}", w.qualified())),
             Row::Project(p) => self.project(p).map(|p| format!("Project {}", p.slug)),
-            Row::Set(_) => Some("Change set".into()),
             Row::Workspace(w) => Some(format!("Workspace {}", crate::ui::workspace_label(w))),
             Row::Chat(id) => self.chat(id).map(|c| format!("Chat {}", c.label())),
             Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => Some("Chats".into()),
@@ -6338,7 +6290,6 @@ impl App {
                 }
             }
             PromptKind::Orch(input) => self.orch_input(input, text),
-            PromptKind::Sets(input) => self.sets_input(input, text),
             PromptKind::ChatEdit(chat, node) => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -6736,10 +6687,6 @@ impl App {
                             self.set_sel(&rows, row);
                             self.toggle_quick(Some(id), None, None);
                         }
-                        Some(Row::Set(run)) => {
-                            self.set_sel(&rows, row);
-                            self.open_sets(Some(run));
-                        }
                         Some(r @ (Row::Chat(_) | Row::ChatNew(_) | Row::ChatAll(_))) => {
                             self.set_sel(&rows, row);
                             self.chat_row_open(&r);
@@ -6929,7 +6876,6 @@ impl App {
             worktrees: &self.worktrees,
             sessions: &self.sessions,
             collapsed: &self.collapsed,
-            sets: &self.set_nodes,
             show: self.show,
             chats: &self.chat_list,
             recent: self.config.chat.enabled.then_some(self.config.chat.recent as usize),
@@ -7022,7 +6968,6 @@ impl App {
                     return (first, root);
                 }
                 Row::Group(_)
-                | Row::Set(_)
                 | Row::Chats(_)
                 | Row::Chat(_)
                 | Row::ChatNew(_)
@@ -8860,7 +8805,6 @@ mod tests {
             ("app.rs", include_str!("app.rs")),
             ("inspector.rs", include_str!("inspector.rs")),
             ("runs.rs", include_str!("runs.rs")),
-            ("sets.rs", include_str!("sets.rs")),
         ] {
             let lines: Vec<&str> = src.lines().collect();
             for (i, l) in lines.iter().enumerate() {
@@ -10052,9 +9996,9 @@ mod tests {
         assert_eq!(app.last_cli.clone().unwrap(), ["verify", "worker"]);
         // Nothing selected that it needs: it says what to pick.
         app.last_cli = None;
-        app.run(&Command { action: "set.push", arg: None });
+        app.run(&Command { action: "project.show", arg: None });
         assert!(app.last_cli.is_none());
-        assert!(app.toast.as_ref().unwrap().text.contains("pick a change set first"));
+        assert!(app.toast.as_ref().unwrap().text.contains("pick a project first"));
     }
 
     #[test]

@@ -177,8 +177,6 @@ store.set("k", "v");
   const err = Object.assign(new Error("x is still running: stop it first"), { code: "conflict", fix: { fix: "stop", label: "Stop and remove" } });
   assert.deepEqual(withFix({ t: "remove", addr: "x", stop: false }, fixOf(err)), { t: "remove", addr: "x", stop: true });
   assert.deepEqual(withFix({ t: "worktree_remove", addr: "w", opts: { force: false, stop_sessions: false } }, { fix: "force", label: "Remove anyway" }).opts, { force: true, stop_sessions: false });
-  assert.deepEqual(withFix({ t: "cs", op: { op: "rm", set: "s", force: false } }, { fix: "force", label: "Remove the set anyway" }).op.force, true);
-  assert.equal(withFix({ t: "cs", op: { op: "new", spec: { name: "s", trust: null } } }, { fix: "trust", label: "Trust and go on", fingerprint: "ab12" }).op.spec.trust, "ab12");
   assert.equal(withFix({ t: "kill", addr: "x", signal: null }, { fix: "stop", label: "Stop and remove" }), null);
   assert.equal(fixOf(new Error("plain")), undefined);
 }

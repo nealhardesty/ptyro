@@ -28,7 +28,6 @@ mod quick;
 mod restart;
 mod runs;
 mod screens;
-mod sets;
 pub mod settings;
 mod setup_list;
 mod shells;

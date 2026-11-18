@@ -238,9 +238,9 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `recipe run` | `recipe.run`: pick the recipe, then a form with a field per variable, the project, the base (and trust, for a repo's); then the runs view (`O`) | `recipe.run`: a recipe's menu: its variables, the project; More options: base; then the run |
 | `recipe validate` | waived: for recipe authors, in their editor or CI | waived: for recipe authors, in their editor or CI |
 | `recipe graph` | waived: draws a recipe as Mermaid text for documents | waived: draws a recipe as Mermaid text for documents |
-| `gate ls` | `runs` (`O`): open gates show on their run; the status bar counts them | `gate.list`: open gates sit on top of the Runs and Sets tabs, and on their run |
+| `gate ls` | `runs` (`O`): open gates show on their run; the status bar counts them | `gate.list`: open gates sit on top of the Runs tab, and on their run |
 | `gate resolve` | `runs` (`O`): `1`–`9` answer, `n` with a note | `gate.resolve`: answer on the gate's card, with a note if you like |
-| `msg send` | `session.message`; to a change set's members, `sets` `m` | `session.message`: ⋯ → Message |
+| `msg send` | `session.message` | `session.message`: ⋯ → Message |
 | `msg check` | waived: an agent's own mailbox; your messages reach the inbox | waived: an agent's own mailbox; your messages reach the inbox |
 | `msg ls` | `inbox` (`i`): messages to you | `inbox`: messages to you |
 | `msg ack` | waived: an agent acknowledging its own mail | waived: an agent acknowledging its own mail |
@@ -253,42 +253,6 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `checkpoint restore` | `checkpoint.restore` (it asks first, full sized) | `checkpoint.restore`: a checkpoint's menu (asks first; the state now is checkpointed) |
 | `verify` | `session.verify` | `session.verify`: ⋯ → Verify when done |
 | `mcp` | waived: the MCP server a lead agent talks to; ptyro starts it for the agent | waived: the MCP server a lead agent talks to; ptyro starts it for the agent |
-
-## Change sets
-
-| Command | In the TUI | On the web |
-|---|---|---|
-| `cs new` | `sets.new`: a form with every option: name, projects (ticks), goal or issue, template, layout, lead agent, members' agents, bases and dependencies, approvals (ticks), integration check, overlay, workspace | `set.new`: ＋ on the Sets tab: its name, projects (each with its agent, base and dependencies) or template, goal, layout, lead agent; More options: from an issue, approvals (ticks), integration checks, overlay, workspace |
-| `cs templates` | `sets.templates` | `set.templates`: 📋 on the Sets tab |
-| `cs ls` | `sets` (`S`) | `sets`: the Sets tab |
-| `cs show` | `sets` (`S`): `⏎` on a set | `set.show`: tap a set: members, gates, issues with what to do |
-| `cs log` | `sets` (`S`): the ledger, as a timeline | `set.log`: a set's ⋯ → Ledger |
-| `cs msg` | `sets` (`S`): `m` | `set.message`: Message on a set, or on a member |
-| `cs check` | `sets` (`S`): `c` | `set.check`: a set's Check |
-| `cs checkpoint` | `sets` (`S`): `p` | `set.checkpoint`: a set's ⋯ → Checkpoint now |
-| `cs checkpoints` | `set.checkpoints` | `set.checkpoints`: a set's ⋯ → Checkpoints |
-| `cs restore` | `set.restore` | `set.restore`: a checkpoint's menu (asks first) |
-| `cs diff` | `sets` (`S`): `⏎` on a member, then `inspector` (`D`) on its worktree | `set.diff`: a member's menu → What it changed |
-| `cs contract show` | `set.contract` → show | `set.contract`: a set's Contract page |
-| `cs contract edit` | `set.contract` → edit (your editor, full sized) | `set.contract_edit`: the Contract page: Edit saves a revision |
-| `cs contract diff` | `set.contract` → diff | `set.contract`: the Contract page: Diff |
-| `cs contract history` | `set.contract` → history | `set.contract`: the Contract page: History, tap a revision |
-| `cs contract approve` | `sets` (`S`): `1`–`9` answer the contract gate | `set.contract_approve`: Approve on the Contract page, or on the gate's card |
-| `cs contract reject` | `sets` (`S`): answer the contract gate with a note | `set.contract_reject`: Send back… on the Contract page, with a note |
-| `cs contract submit` | waived: the lead agent submits the contract | waived: the lead agent submits the contract |
-| `cs contract revise` | waived: the lead agent revises the contract | waived: the lead agent revises the contract |
-| `cs ready` | waived: run by a member agent inside the set | waived: run by a member agent inside the set |
-| `cs blocked` | waived: run by a member agent inside the set | waived: run by a member agent inside the set |
-| `cs assign` | waived: run by the lead agent inside the set | waived: run by the lead agent inside the set |
-| `cs ask` | waived: run by an agent inside the set; the question reaches you as a gate | waived: run by an agent inside the set; the question reaches you as a gate |
-| `cs overlay` | `set.overlay` | `set.overlay`: a set's ⋯ menu, or a member's |
-| `cs commit` | `set.commit` | `set.commit`: a set's Ship… → Commit |
-| `cs push` | `set.push` (or the push gate in `sets`) | `set.push`: a set's Ship… → Push (or the push gate's card) |
-| `cs pr` | `set.pr` | `set.pr`: a set's Ship… → Open the pull requests |
-| `cs land` | `set.land` (or the land gate in `sets`) | `set.land`: a set's Ship… → Land (or the land gate's card) |
-| `cs add` | `set.add`: a form with the project, its agent and what it depends on | `set.add`: a set's ⋯ → Add a project |
-| `cs drop` | `set.drop` (asks in the split) | `set.drop`: a member's menu → Take it out of the set |
-| `cs rm` | `set.remove` (asks in the split) | `set.remove`: a set's ⋯ → Remove the set |
 
 ## Remote, phone and recordings
 

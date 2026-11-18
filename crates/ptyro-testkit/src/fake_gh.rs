@@ -13,9 +13,6 @@
 //! | `issue.json` | `gh issue view` |
 //! | `head.txt` | the branch's real tip: a `pr merge --match-head-commit` for another commit fails |
 //! | `body.txt`, `replies.txt` | what was posted (written; `pr edit --body` rewrites it) |
-//!
-//! With `PTYRO_FAKE_GH_PER_REPO=1` each repository (the basename of the directory gh runs in)
-//! gets its own state directory and PR number, for change sets' one-PR-per-member (M11).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -31,20 +28,11 @@ fn arg<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 pub fn main(args: &[String]) -> i32 {
-    let Some(mut dir) = std::env::var_os("PTYRO_FAKE_GH").map(PathBuf::from) else {
+    let Some(dir) = std::env::var_os("PTYRO_FAKE_GH").map(PathBuf::from) else {
         eprintln!("fake-gh: PTYRO_FAKE_GH is not set");
         return 2;
     };
-    let mut number = 7;
-    if std::env::var_os("PTYRO_FAKE_GH_PER_REPO").is_some() {
-        let repo = std::env::current_dir()
-            .ok()
-            .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
-            .unwrap_or_default();
-        number = 10 + repo.bytes().map(u32::from).sum::<u32>() % 90;
-        dir = dir.join(repo);
-        let _ = std::fs::create_dir_all(&dir);
-    }
+    let number = 7;
     if let Ok(mut f) =
         std::fs::OpenOptions::new().create(true).append(true).open(dir.join("calls.log"))
     {

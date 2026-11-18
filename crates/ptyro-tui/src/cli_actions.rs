@@ -1,11 +1,11 @@
 //! The CLI's long tail in the TUI (ROADMAP UX1.21): each action is a `ptyro …` command whose
-//! arguments come from what's selected (the session, worktree, project or change set), a pick
+//! arguments come from what's selected (the session, worktree or project), a pick
 //! from a list, or a question; it then runs in a split (`run_cli`), so interactive commands
 //! (logins, a QR code to scan, a confirmation) work there and the output stays readable.
 //!
 //! Template words:
 //! - a literal goes as it is;
-//! - `{session}`, `{worktree}`, `{project}`, `{set}`: the selected one's name;
+//! - `{session}`, `{worktree}`, `{project}`: the selected one's name;
 //! - `{profile}`, `{agent}`: picked from a list;
 //! - `{choose:Label:a|b|c}`: picked from those;
 //! - `{ask:Label}`: typed; nothing typed leaves the word out (an optional argument);
@@ -63,25 +63,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("run.fork", &["run", "fork", "{ask:Run id (r-…)}", "--from", "{ask:From which step}"]),
     ("leases", &["lease", "ls"]),
     ("radar", &["radar", "--project", "{project}"]),
-    ("sets.templates", &["cs", "templates"]),
-    ("set.checkpoints", &["cs", "checkpoints", "{set}"]),
-    ("set.restore", &["cs", "restore", "{set}", "{ask:Back to which set checkpoint (its number)}"]),
-    ("set.contract", &["cs", "contract", "{set}", "{choose:Contract:show|edit|diff|history}"]),
-    (
-        "set.overlay",
-        &[
-            "cs",
-            "overlay",
-            "{set}",
-            "{choose:Build against siblings:auto|go|rust|node|python|compose|off}",
-        ],
-    ),
-    ("set.commit", &["cs", "commit", "{set}", "-m", "{ask:Commit message for every member}"]),
-    ("set.push", &["cs", "push", "{set}"]),
-    ("set.pr", &["cs", "pr", "{set}"]),
-    ("set.land", &["cs", "land", "{set}"]),
-    ("set.drop", &["cs", "drop", "{set}", "{ask:Member to drop}"]),
-    ("set.remove", &["cs", "rm", "{set}"]),
     ("remote.serve", &["serve"]),
     ("remote.web", &["web", "status"]),
     ("remote.web_on", &["web", "on"]),
@@ -119,31 +100,6 @@ impl App {
         }
     }
 
-    /// The selected change set's name: the open set view's, else the sidebar's set row.
-    pub(crate) fn current_set(&self) -> Option<String> {
-        let run = self.sets_view.as_ref().and_then(|v| v.run.clone()).or_else(|| {
-            match self.selected_row() {
-                Some(Row::Set(r)) => Some(r),
-                _ => None,
-            }
-        });
-        let named = |r: &str| {
-            self.runs
-                .iter()
-                .find(|x| x.state.id == r)
-                .and_then(|x| x.state.changeset.as_ref())
-                .map(|c| c.name.clone())
-        };
-        run.as_deref().and_then(named).or_else(|| {
-            // Just one: that one.
-            let mut sets = self.runs.iter().filter_map(|r| r.state.changeset.as_ref());
-            match (sets.next(), sets.next()) {
-                (Some(c), None) => Some(c.name.clone()),
-                _ => None,
-            }
-        })
-    }
-
     pub(crate) fn selected_session_name(&self) -> Option<String> {
         let id = match (self.focus, self.selected_row()) {
             (crate::app::Focus::Sidebar, Some(Row::Session(id) | Row::Quick(id))) => Some(id),
@@ -170,7 +126,6 @@ impl App {
                     .0
                     .and_then(|p| self.project(&p).map(|p| p.slug.clone()))
                     .ok_or_else(|| missing("a project")),
-                "{set}" => self.current_set().ok_or_else(|| missing("a change set")),
                 "{profile}" => {
                     let items =
                         self.profiles.iter().map(|p| (p.name.clone(), p.label.clone())).collect();
@@ -367,9 +322,9 @@ mod tests {
         super::add_answer(&mut done, "out.txt", false);
         assert_eq!(done.last().map(String::as_str), Some("out.txt"));
         // A positional that is empty leaves nothing behind either.
-        let mut done = words(&["cs", "new", "x"]);
+        let mut done = words(&["ws", "new", "x"]);
         super::add_answer(&mut done, "", false);
-        assert_eq!(done, words(&["cs", "new", "x"]));
+        assert_eq!(done, words(&["ws", "new", "x"]));
         let mut done = words(&["recipe", "run", "r"]);
         super::add_answer(&mut done, "a=1, b=2", true);
         assert_eq!(done, words(&["recipe", "run", "r", "--var", "a=1", "--var", "b=2"]));
@@ -406,7 +361,6 @@ mod tests {
                             "{session}"
                                 | "{worktree}"
                                 | "{project}"
-                                | "{set}"
                                 | "{profile}"
                                 | "{agent}"
                                 | "{vars}"

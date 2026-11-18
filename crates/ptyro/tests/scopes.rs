@@ -202,7 +202,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"adopt","addr":a}), CONTROL, true),
         // A configured agent (its command comes from the user's config) is control…
         s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude"}))}), CONTROL, false),
-        // …any other command line, a verify check, a lead or `ptyro mcp` is full.
+        // …any other command line, a verify check or a lead (`ptyro mcp`) is full.
         s(json!({"t":"spawn","spec":spawn_spec(json!({"argv":["true"]}))}), FULL, false),
         s(json!({"t":"spawn","spec":spawn_spec(json!({}))}), FULL, false),
         s(
@@ -216,11 +216,6 @@ fn table() -> Vec<Sample> {
             false,
         ),
         s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude","lead":{}}))}), FULL, false),
-        s(
-            json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude","mcp":true}))}),
-            FULL,
-            false,
-        ),
         // ── full ──
         // SHELLS (SPEC §23.12): numbering, placing and watching act like starting one.
         s(json!({"t":"shell_move","addr":"%1","slot":2}), FULL, false),
@@ -362,7 +357,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"set_verify","addr":a,"check":null,"max_bounces":null}), FULL, false),
         s(json!({"t":"lead_start","addr":a,"policy":null}), FULL, false),
         s(json!({"t":"lead","lead":a,"op":{"op":"list_sessions"}}), FULL, false),
-        s(json!({"t":"cs","op":{"op":"list"}}), FULL, false),
     ]
 }
 

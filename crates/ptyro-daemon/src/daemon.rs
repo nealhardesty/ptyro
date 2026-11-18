@@ -150,9 +150,6 @@ pub struct Daemon {
     pub(crate) wsl_hold: crate::wsl_hold::Holder,
     /// The scratchpad's revisions and write lock (NOTE1).
     pub(crate) pad_state: crate::scratchpad::PadState,
-    // ── change sets (M11) ──
-    /// Per set name: its actor's memory and the push or land in progress.
-    pub(crate) cs: Mutex<HashMap<String, crate::changesets::CsLive>>,
     /// Launches in flight: sessions relaunching, and the (project, name) of sessions being
     /// started (`launch.rs` `Claim`).
     #[allow(clippy::type_complexity)]
@@ -288,7 +285,6 @@ impl Daemon {
             serve_child: crate::serve_child::ServeChild::default(),
             wsl_hold: crate::wsl_hold::Holder::default(),
             pad_state: crate::scratchpad::PadState::default(),
-            cs: Mutex::new(HashMap::new()),
             launching: Mutex::new(Default::default()),
             kv_gens: Arc::new(Mutex::new(HashMap::new())),
             kv_writer: Arc::new(tokio::sync::Mutex::new(())),
@@ -989,7 +985,7 @@ impl Daemon {
             resume: spec.resume.clone(),
             prompt,
             command: None,
-            mcp: spec.lead.is_some() || spec.mcp,
+            mcp: spec.lead.is_some(),
             structured: spec.structured,
             params: None,
             fork: false,
@@ -1271,7 +1267,6 @@ impl Daemon {
             | Request::LeadStart { .. }
             | Request::Lead { .. }
             | Request::SetVerify { .. }) => self.handle_mail(req, caller).await,
-            Request::Cs { op } => self.handle_cs(op, caller).await,
             req @ (Request::ChatNew { .. }
             | Request::ChatList { .. }
             | Request::ChatRead { .. }
@@ -1910,7 +1905,6 @@ mod tests {
             "codex \x2d-version",                  // another program
             "ptyro \x2d-version`",                 // a shell command to try over ssh
             "msg send {} \\\"…\\\" \x2d-reply-to", // the reply line of mail to an agent
-            "\x2d-kind contract_change",           // a change set's agent, told how to ask its lead
             "claude \x2d-lead`",                   // an agent's `ptyro mcp` / lead refusal
             "daemon restart \x2d-hibernate",       // an upgrade's finding: the TUI and web offer it
         ];

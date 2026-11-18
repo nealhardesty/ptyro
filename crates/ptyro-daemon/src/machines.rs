@@ -309,7 +309,6 @@ fn here_only(req: &Request) -> bool {
             | LeaseList
             | Radar { .. }
             | Lead { .. }
-            | Cs { .. }
             | MachineList
             | MachineAdd { .. }
             | MachineRemove { .. }

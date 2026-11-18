@@ -1784,6 +1784,10 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
         let migrated = migrate_remote(text);
         let text = migrated.as_ref().map_or(text, |(t, _)| t.as_str());
+        // Keys a removed feature had are ignored here, and reported by `config check` and the
+        // doctor; any other key it doesn't know is still an error.
+        let stripped = crate::retired::strip(text);
+        let text = stripped.as_ref().map_or(text, |(t, _)| t.as_str());
         let config: Self = toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())?;
         config.validate()?;
         Ok(config)

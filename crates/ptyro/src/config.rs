@@ -197,11 +197,12 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                     bind(&layer, &name, None)?;
                     continue;
                 }
-                change(
-                    &layer,
-                    &Op::Unset { key: key.clone() },
-                    &format!("{key} is back to its default"),
-                )?;
+                let done = if ptyro_core::retired::find(&key).is_some() {
+                    format!("{key} is removed (ptyro no longer uses it)")
+                } else {
+                    format!("{key} is back to its default")
+                };
+                change(&layer, &Op::Unset { key: key.clone() }, &done)?;
                 elsewhere(ctx, project.is_none(), &key, &format!("unset {key}"));
             }
             Ok(0)
@@ -282,7 +283,10 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
                 Ok(n) => (true, n, None),
                 Err(e) => (false, Vec::new(), Some(e)),
             };
-            let v = serde_json::json!({ "path": path, "exists": path.exists(), "ok": ok, "notes": notes, "error": error });
+            // The keys a removed feature had, apart from the notes, for a client to offer removing.
+            let retired =
+                ptyro_core::retired::found(&std::fs::read_to_string(&path).unwrap_or_default());
+            let v = serde_json::json!({ "path": path, "exists": path.exists(), "ok": ok, "notes": notes, "error": error, "retired": retired });
             println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             Ok(if ok { 0 } else { ErrorCode::Invalid.exit_code() })
         }
@@ -509,8 +513,18 @@ fn check(path: &std::path::Path) -> Result<Vec<String>, String> {
     let mut notes = check_config(Config::load(path).map_err(|e| e.to_string())?, path)?;
     if let Ok(text) = std::fs::read_to_string(path) {
         notes.extend(old_remote_keys(&text));
+        notes.extend(retired_keys(&text));
     }
     Ok(notes)
+}
+
+/// The keys a removed feature had that the file still sets (SPEC §13.8): ignored, each with the
+/// command that takes it out.
+pub(crate) fn retired_keys(text: &str) -> Vec<String> {
+    ptyro_core::retired::found(text)
+        .iter()
+        .map(|f| f.note(&format!("ptyro config unset {}", f.key)))
+        .collect()
 }
 
 /// What `[remote]`'s old keys (`listen`, `tailscale`, `local`, `insecure`, `trusted_proxy`) were
@@ -528,6 +542,7 @@ fn old_remote_keys(text: &str) -> Vec<String> {
 pub(crate) fn check_text(text: &str, path: &std::path::Path) -> Result<Vec<String>, String> {
     let mut notes = check_config(Config::parse(text).map_err(|e| e.to_string())?, path)?;
     notes.extend(old_remote_keys(text));
+    notes.extend(retired_keys(text));
     Ok(notes)
 }
 

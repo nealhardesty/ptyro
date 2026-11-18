@@ -1,5 +1,5 @@
 //! One way to find what a user names (SPEC §2.3), for every kind of thing: sessions, worktrees,
-//! projects, workspaces, profiles, chats, runs, change sets, devices, archives and machines.
+//! projects, workspaces, profiles, chats, runs, devices, archives and machines.
 //!
 //! The order: an exact name, then the qualified form where the kind has one (`project/name`),
 //! then a full id, then a handle (the end of an id, at least [`MIN_SUFFIX`] characters, with

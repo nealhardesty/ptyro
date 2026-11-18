@@ -162,7 +162,6 @@ impl App {
     pub fn inspect(&mut self, worktree: String) {
         // One full-screen view at a time.
         self.orch = None;
-        self.sets_view = None;
         self.inspector = Some(Inspector::new(worktree));
         self.inspector_load();
     }

@@ -25,8 +25,6 @@ pub enum Row {
     Quick(SessionId),
     /// A non-selectable label (`other sessions`).
     Group(String),
-    /// A change set (its run id), above its lead (M11.11).
-    Set(String),
     /// A workspace's CHATS heading (SPEC §22.12); ⏎ folds it, like a project's.
     Chats(String),
     /// A chat (its id).
@@ -49,7 +47,7 @@ impl Row {
     /// The key that folds this row in `collapsed`, for a row that folds.
     pub fn fold_key(&self) -> Option<String> {
         match self {
-            Self::Set(id) | Self::Project(id) | Self::Worktree(id) => Some(id.clone()),
+            Self::Project(id) | Self::Worktree(id) => Some(id.clone()),
             Self::Workspace(ws) => Some(fold_key(ws)),
             Self::Chats(ws) => Some(chats_key(ws)),
             Self::Shells(ws) => Some(shells_key(ws)),
@@ -96,8 +94,6 @@ pub struct Inputs<'a> {
     pub sessions: &'a [SessionInfo],
     /// Collapsed project and worktree ids, and folded workspaces (`fold_key`).
     pub collapsed: &'a HashSet<String>,
-    /// Change sets still going (M11): shown first, each with its lead.
-    pub sets: &'a [crate::sets::SetNode],
     /// The sidebar's filter: everything, what is running, or what is busy now. A header with
     /// nothing under it is dropped while it filters.
     pub show: Show,
@@ -198,14 +194,10 @@ impl Inputs<'_> {
         self.show != Show::All
     }
 
-    fn led(&self, s: &SessionInfo) -> bool {
-        self.sets.iter().any(|n| n.lead.as_deref() == Some(s.id.full().as_str()))
-    }
-
-    /// Every key that folds a row the sidebar can show: change sets, workspaces, their CHATS
-    /// sections, projects and worktrees (`sidebar.fold_all`).
+    /// Every key that folds a row the sidebar can show: workspaces, their CHATS sections,
+    /// projects and worktrees (`sidebar.fold_all`).
     pub fn fold_keys(&self) -> HashSet<String> {
-        let mut keys: HashSet<String> = self.sets.iter().map(|n| n.run.clone()).collect();
+        let mut keys: HashSet<String> = HashSet::new();
         for ws in self.workspaces {
             keys.insert(fold_key(&ws.name));
             if self.recent.is_some() {
@@ -248,25 +240,12 @@ impl Inputs<'_> {
 
     fn build(&self, honour_collapse: bool) -> Vec<Row> {
         let mut rows = Vec::new();
-        for n in self.sets {
-            let lead =
-                n.lead.as_ref().and_then(|l| self.sessions.iter().find(|s| s.id.full() == *l));
-            if self.filtering() && !lead.is_some_and(|s| self.show.keeps(s)) {
-                continue;
-            }
-            rows.push(Row::Set(n.run.clone()));
-            if !(honour_collapse && self.collapsed.contains(&n.run))
-                && let Some(s) = lead
-            {
-                rows.push(Row::Session(s.id));
-            }
-        }
         // Nothing known yet (before the first answer): the sessions, without headers.
         if self.workspaces.is_empty() {
             rows.extend(
                 self.sessions
                     .iter()
-                    .filter(|s| !s.pad && !self.led(s) && self.show.keeps(s))
+                    .filter(|s| !s.pad && self.show.keeps(s))
                     .map(|s| if s.quick { Row::Quick(s.id) } else { Row::Session(s.id) }),
             );
             return rows;
@@ -308,8 +287,6 @@ impl Inputs<'_> {
                     .sessions
                     .iter()
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
-                    // A change set's lead has its row under the set, not twice.
-                    .filter(|s| !self.led(s))
                     // In another workspace that has this project too: listed there.
                     .filter(|s| self.home(s) == ws.name)
                     .filter(|s| self.show.keeps(s))
@@ -340,7 +317,7 @@ impl Inputs<'_> {
         let others: Vec<&SessionInfo> = self
             .sessions
             .iter()
-            .filter(|s| !s.pad && !self.led(s) && self.show.keeps(s))
+            .filter(|s| !s.pad && self.show.keeps(s))
             .filter(|s| {
                 let under_project = s.project.as_ref().is_some_and(|p| shown.contains(&p.as_str()))
                     && s.worktree.as_ref().is_some_and(|w| {
@@ -587,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn a_removed_worktrees_sessions_and_a_set_lead_show_once() {
+    fn a_removed_worktrees_sessions_show_once() {
         let ws = vec![WorkspaceInfo {
             machine: None,
             id: "w".into(),
@@ -612,9 +589,7 @@ mod tests {
         gone.state = WorktreeState::Removed;
         let worktrees = vec![wt("root", "p", true, 1), gone];
         let orphan = session("orphan", Some("t9"), Some("p"), Some("main"));
-        let lead = session("lead", Some("root"), Some("p"), Some("main"));
-        let sessions = vec![orphan.clone(), lead.clone()];
-        let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.id.full()) }];
+        let sessions = vec![orphan.clone()];
         let collapsed = HashSet::new();
         let rows = Inputs {
             workspaces: &ws,
@@ -622,7 +597,6 @@ mod tests {
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
-            sets: &nodes,
             show: Show::All,
             chats: &[],
             recent: None,
@@ -630,10 +604,8 @@ mod tests {
         }
         .rows();
         // The session of a removed worktree has no worktree row to hang under: it is listed with
-        // the others rather than vanishing, and the change set's lead is under the set only.
+        // the others rather than vanishing.
         assert_eq!(rows.iter().filter(|r| **r == Row::Session(orphan.id)).count(), 1, "{rows:?}");
-        assert_eq!(rows.iter().filter(|r| **r == Row::Session(lead.id)).count(), 1, "{rows:?}");
-        assert_eq!(rows[0], Row::Set("r-1".into()));
     }
 
     fn ws(id: &str, name: &str, projects: &[&str]) -> WorkspaceInfo {
@@ -708,7 +680,6 @@ mod tests {
             worktrees: &[],
             sessions: &[],
             collapsed: &collapsed,
-            sets: &[],
             chats: &chats,
             recent: Some(1),
             shells: ShellsSection::Never,
@@ -766,7 +737,6 @@ mod tests {
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
-            sets: &[],
             show: Show::All,
             chats: &[],
             recent: None,
@@ -806,13 +776,6 @@ mod tests {
             vec![sessions[3].id, sessions[0].id, sessions[1].id, sessions[2].id],
             "cycling goes through every workspace and ignores folding"
         );
-        // A change set comes first, with its lead under it instead of under "other sessions".
-        let lead = sessions[2].id;
-        let nodes = [crate::sets::SetNode { run: "r-1".into(), lead: Some(lead.full()) }];
-        let with = Inputs { sets: &nodes, collapsed: &HashSet::new(), ..i };
-        let rows = with.rows();
-        assert_eq!(rows[..2], [Row::Set("r-1".into()), Row::Session(lead)]);
-        assert_eq!(rows.iter().filter(|r| **r == Row::Session(lead)).count(), 1);
     }
 
     #[test]
@@ -837,7 +800,6 @@ mod tests {
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
-            sets: &[],
             show: Show::All,
             chats: &[],
             recent: None,
@@ -905,7 +867,6 @@ mod tests {
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
-            sets: &[],
             show: Show::All,
             chats: &[],
             recent: None,
@@ -977,7 +938,6 @@ mod tests {
             worktrees: &worktrees,
             sessions: &sessions,
             collapsed: &collapsed,
-            sets: &[],
             chats: &[],
             recent: None,
             shells: ShellsSection::Never,
@@ -1047,7 +1007,6 @@ mod tests {
                 worktrees: &worktrees,
                 sessions: &sessions,
                 collapsed,
-                sets: &[],
                 show: Show::All,
                 chats: &[],
                 recent: None,

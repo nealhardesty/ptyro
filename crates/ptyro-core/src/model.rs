@@ -528,7 +528,7 @@ pub struct WorktreeSpec {
     /// Start the agent in structured mode (M10).
     #[serde(default)]
     pub structured: bool,
-    /// Put the worktree here instead of `worktrees.location` (a change set's member, M11).
+    /// Put the worktree here instead of `worktrees.location` (restoring an archive to its old place).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<std::path::PathBuf>,
     /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.

@@ -159,7 +159,7 @@ function route(): { view: string; id?: string } {
 }
 
 /// The tabs along the bottom of a top-level page; the active one is the page's.
-const TABS: [string, string, string][] = [["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["sets", "#/sets", "Sets"], ["more", "#/more", "More"]];
+const TABS: [string, string, string][] = [["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["runs", "#/runs", "Runs"], ["more", "#/more", "More"]];
 function withTabs(view: string, page: HTMLElement): HTMLElement {
   // Chats switched off (`[chat] enabled = false`) have no tab.
   const tabs = TABS.filter(([v]) => v !== "chats" || chatsShown());
@@ -694,7 +694,7 @@ document.addEventListener("keydown", (e) => {
   // C-g: find across every chat (not in a terminal, whose program has the key).
   if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) { e.preventDefault(); findAllChats(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token()) return;
-  const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", r: "#/runs", e: "#/sets", m: "#/more", i: "#/inbox" };
+  const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", r: "#/runs", m: "#/more", i: "#/inbox" };
   if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) { goKey = 0; location.hash = tabs[e.key]; e.preventDefault(); return; }
   goKey = 0;
   if (e.key === "g") goKey = Date.now();
@@ -714,7 +714,7 @@ document.addEventListener("keydown", (e) => {
     if (r) { e.preventDefault(); if (!r.value) { r.value = "/"; r.dispatchEvent(new Event("input")); } r.focus(); }
   }
   else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
-  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g e", "Change sets"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g r", "Runs"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
 window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });

@@ -130,6 +130,9 @@ function fixesFor(c: any): Item[] {
   const prof = String(c.section).match(/^profile (.+)$/);
   if (prof && ["claude", "codex", "gemini", "opencode", "gh"].includes(c.name) && c.level !== "ok") out.push({ label: `Log in to ${c.name} as ${prof[1]}`, run: () => profileLogin(prof[1], c.name) });
   if (c.section === "ptyro" && c.name === "config mode") out.push({ label: "Make it private (mode 600)", hint: "Saves it again as it is", run: async () => { const g = await doHost("config.get"); if (g && await doHost("config.save", { text: g.text }, "Saved: only you can read it")) health.reload(""); } });
+  // A key a removed feature had (SPEC §13.8): taken out of its file, as `ptyro config unset` would.
+  const gone = c.data?.retired as string | undefined;
+  if (gone) out.push({ label: `Remove ${gone}`, hint: "ptyro no longer uses it", run: async () => { if (await doHost("settings.apply", { ...(c.data.project ? { scope: "project", project: c.data.project, shared: !!c.data.shared } : { scope: "user" }), change: { t: "unset", key: gone } }, `Removed ${gone}`)) health.reload(""); } });
   if (c.section === "ptyro" && c.name.startsWith("config")) out.push({ label: "Edit the config", run: () => go("#/config") });
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   // An upgrade that was called off is fixed by a restart (agents hibernate and resume), not by

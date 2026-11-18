@@ -21,8 +21,6 @@ pub enum RunKind {
     Fanout,
     /// A lead agent coordinating workers through `ptyro mcp`.
     Lead,
-    /// A change set: one change across several repositories (M11).
-    Changeset,
 }
 
 impl RunKind {
@@ -31,7 +29,6 @@ impl RunKind {
             Self::Recipe => "recipe",
             Self::Fanout => "fanout",
             Self::Lead => "lead",
-            Self::Changeset => "changeset",
         }
     }
 }
@@ -224,9 +221,6 @@ pub struct RunState {
     /// Candidates whose worktrees were removed.
     #[serde(default)]
     pub discarded: Vec<String>,
-    /// A change set's members, contract and train (`changeset` runs, M11).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub changeset: Option<crate::changeset::ChangeSet>,
     /// The last event applied.
     pub seq: u64,
 }
@@ -358,12 +352,6 @@ pub enum RunEvent {
         error: Option<String>,
         at: u64,
     },
-    /// The run's lead session, when it starts after the run (a change set's lead).
-    LeadSet {
-        session: String,
-    },
-    /// A change set changed (M11).
-    Cs(crate::changeset::CsEvent),
 }
 
 impl RunEvent {
@@ -389,8 +377,6 @@ impl RunEvent {
             Self::Discarded { .. } => "discarded",
             Self::Note { .. } => "note",
             Self::Ended { .. } => "ended",
-            Self::LeadSet { .. } => "lead_set",
-            Self::Cs(_) => "cs",
         }
     }
 
@@ -579,13 +565,6 @@ impl RunState {
                 self.error = error.clone();
                 self.ended_ms = Some(*at);
             }
-            RunEvent::LeadSet { session } => {
-                self.lead = Some(session.clone());
-                if !self.sessions.contains(session) {
-                    self.sessions.push(session.clone());
-                }
-            }
-            RunEvent::Cs(e) => self.changeset.get_or_insert_with(Default::default).apply(e),
         }
     }
 
