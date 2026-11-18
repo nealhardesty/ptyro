@@ -1,7 +1,7 @@
 //! `ptyro uninstall` (ROADMAP H2.3): take ptyro off a computer, tidily, and say first what goes and
 //! what stays. It stops the daemon and every session, removes ptyro's own worktrees (through git,
 //! so your repositories stay clean; their branches stay), its config, data, state and runtime
-//! directories, the login service, the opt-in agent integrations, the lines `ptyro init` and the
+//! directories, the login service, the lines `ptyro setup` and the
 //! mend list put in your shell's rc files, a Tailscale mapping it made, and the binary when it is
 //! the one that was installed by hand.
 //!
@@ -12,7 +12,7 @@
 //!
 //! The plan is built without starting anything (`--dry-run` stops there). Work that would be lost
 //! (uncommitted changes in a worktree) has to be confirmed by typing `delete`. With `PTYRO_HOME`
-//! set (a sandbox, a test) it resets that home only: the service, rc files, integrations and the
+//! set (a sandbox, a test) it resets that home only: the service, rc files and the
 //! binary are the machine's, not the sandbox's, and are left alone.
 
 use std::io::{BufRead, IsTerminal, Write};
@@ -34,7 +34,6 @@ pub struct Opts {
     pub keep_config: bool,
     pub keep_data: bool,
     pub keep_binary: bool,
-    pub backup: Option<PathBuf>,
     pub purge_refs: bool,
 }
 
@@ -107,12 +106,6 @@ pub struct Refs {
     pub other: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Integration {
-    pub agent: String,
-    pub profile: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum BinaryAction {
@@ -156,7 +149,6 @@ pub struct Plan {
     /// Windows knows ptyro as an app (WIN10): its AppUserModelID and its `ptyro:` link handler.
     #[serde(default)]
     pub windows_app: bool,
-    pub integrations: Vec<Integration>,
     pub rc: Vec<RcEdit>,
     pub tailscale: Option<String>,
     pub refs: Vec<Refs>,
@@ -288,7 +280,7 @@ fn rc_line_re() -> regex::Regex {
     .expect("a fixed pattern")
 }
 
-/// The file without the lines ptyro put in it (the exact forms `ptyro init` and the mend list
+/// The file without the lines ptyro put in it (the exact forms `ptyro setup` and the mend list
 /// write, and the comment ptyro put above one, and the blank line before that), and the lines
 /// that went. Anything else that merely mentions ptyro stays.
 pub fn strip_rc(text: &str) -> (String, Vec<String>) {
@@ -475,35 +467,6 @@ fn fill(
     }
 }
 
-/// The agent integrations ptyro installed (opt-in ones): for the default account and each
-/// profile with an account directory of its own.
-fn integrations_found(config: &Config, env: &Env) -> Vec<Integration> {
-    let mut homes: Vec<(Option<String>, PathBuf)> = Vec::new();
-    if let Some(h) = &env.home {
-        homes.push((None, h.join(".gemini")));
-    }
-    for (name, p) in &config.profiles {
-        if let Some(dir) = p.gemini.as_ref().and_then(|a| a.dir()) {
-            homes.push((Some(name.clone()), ptyro_core::config::expand_home(dir).join(".gemini")));
-        }
-    }
-    let mut out = Vec::new();
-    for (profile, g) in homes {
-        let linked = g.join("extensions").join("ptyro").exists()
-            || std::fs::read_to_string(g.join("extensions/extension-enablement.json"))
-                .is_ok_and(|t| t.contains("ptyro"));
-        if linked {
-            out.push(Integration { agent: "gemini".into(), profile: profile.clone() });
-        }
-        if std::fs::read_to_string(g.join("config/hooks.json"))
-            .is_ok_and(|t| t.contains("hook antigravity"))
-        {
-            out.push(Integration { agent: "antigravity".into(), profile });
-        }
-    }
-    out
-}
-
 /// A `tailscale serve` mapping to our port: an older ptyro made it (`[remote] tailscale`); this
 /// one no longer does.
 fn tailscale_mapping(config: &Config) -> Option<String> {
@@ -561,7 +524,6 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     };
     #[cfg(not(windows))]
     let windows_app = false;
-    let integrations = if machine { integrations_found(&config, env) } else { Vec::new() };
     let tools: Vec<PathBuf> =
         ptyro_agents::setup::path_dirs(paths).into_iter().filter(|d| d.is_dir()).collect();
     let mut rc = Vec::new();
@@ -637,7 +599,6 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         uncommitted_total,
         service,
         windows_app,
-        integrations,
         rc,
         tailscale,
         refs,
@@ -734,17 +695,6 @@ pub fn render(plan: &Plan, env: &Env) -> String {
             s,
             "  windows       ptyro's toast name and icon, and its ptyro: link handler (your registry)"
         );
-    }
-    if !plan.integrations.is_empty() {
-        let names: Vec<String> = plan
-            .integrations
-            .iter()
-            .map(|i| match &i.profile {
-                Some(p) => format!("{} ({p})", i.agent),
-                None => i.agent.clone(),
-            })
-            .collect();
-        let _ = writeln!(s, "  integrations  {}", names.join(", "));
     }
     for r in plan.rc.iter().filter(|r| !r.lines.is_empty()) {
         let _ = writeln!(
@@ -961,51 +911,8 @@ fn write_rc(file: &Path, text: &str) -> Result<(), String> {
 }
 
 /// Run the uninstall. Returns whether everything it set out to do was done.
-async fn execute(ctx: &Ctx, env: &Env, plan: &Plan, opts: &Opts, json: bool) -> (Vec<Step>, bool) {
+async fn execute(ctx: &Ctx, plan: &Plan, opts: &Opts, json: bool) -> (Vec<Step>, bool) {
     let mut steps = Vec::new();
-    let exe = env.exe.clone();
-    let sub = |args: Vec<String>| {
-        let exe = exe.clone();
-        async move {
-            let out = tokio::process::Command::new(exe)
-                .args(&args)
-                .stdin(std::process::Stdio::null())
-                .output()
-                .await;
-            match out {
-                Ok(o) if o.status.success() => Ok(String::new()),
-                Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_owned()),
-                Err(e) => Err(e.to_string()),
-            }
-        }
-    };
-
-    // A backup first: nothing below is undone by it, but nothing is lost unseen.
-    if let Some(file) = &opts.backup {
-        let r = crate::backup::create(
-            ctx,
-            &crate::backup::Opts { output: Some(file.clone()), ..Default::default() },
-        )
-        .await;
-        let ok = r.is_ok();
-        step(
-            &mut steps,
-            json,
-            "backup",
-            r.map(|m| m.path.display().to_string()).map_err(|e| e.message),
-        );
-        if !ok {
-            // Without the backup that was asked for, nothing is removed.
-            return (steps, false);
-        }
-    }
-    for i in &plan.integrations {
-        let mut args = vec!["integrations".to_owned(), "uninstall".into(), i.agent.clone()];
-        if let Some(p) = &i.profile {
-            args.extend(["--profile".to_owned(), p.clone()]);
-        }
-        step(&mut steps, json, &format!("remove the {} integration", i.agent), sub(args).await);
-    }
     if plan.service.is_some() {
         let r = crate::service::uninstall(ctx, false).map(|_| String::new()).map_err(|e| e.message);
         step(&mut steps, json, "remove the login service", r);
@@ -1218,7 +1125,7 @@ pub async fn run(ctx: &Ctx, opts: Opts, json: bool) -> Result<i32, Error> {
             return Ok(1);
         }
     }
-    let (steps, ok) = execute(ctx, &env, &plan, &opts, json).await;
+    let (steps, ok) = execute(ctx, &plan, &opts, json).await;
     if json {
         println!(
             "{}",

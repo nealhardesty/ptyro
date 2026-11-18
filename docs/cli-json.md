@@ -123,7 +123,6 @@ Conventions:
 ## Agents
 
 - `ptyro usage --json` → `[{profile, agent, windows: [{name, used_percent, resets_at_ms?}], cost_millis?, context_percent?, limited_until_ms?, at_ms}]`
-- `ptyro integrations ls --json` → `[{agent, needs_install, active, detail}]`
 
 ## Projects, workspaces, worktrees, profiles
 

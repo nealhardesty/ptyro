@@ -2,7 +2,6 @@
 
 mod about;
 mod agents;
-mod backup;
 mod chat;
 mod checkpoint;
 mod cli;
@@ -10,7 +9,6 @@ mod complete;
 mod config;
 mod doctor;
 mod host;
-mod init;
 mod linked;
 mod logins;
 mod machines;
@@ -28,7 +26,6 @@ mod service;
 mod setup;
 mod shells;
 mod tls;
-mod tour;
 mod uninstall;
 mod webapp;
 mod winapp;
@@ -87,6 +84,9 @@ where
 {
     use clap::error::{ContextKind, ContextValue, ErrorKind};
     let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    if let Some(e) = removed_command(&argv) {
+        return Err(Cli::command().error(ErrorKind::InvalidSubcommand, e));
+    }
     let cli = Cli::try_parse_from(&argv)?;
     if cli.cmd.is_some() || cli.task.len() < 2 {
         return Ok(cli);
@@ -104,6 +104,35 @@ where
     );
     e.insert(ContextKind::Suggested, ContextValue::StyledStrs(tips));
     Err(e)
+}
+
+/// Commands that were removed (the pare-down, 2026-11-17), each with what to use instead.
+const REMOVED_COMMANDS: &[(&str, &str)] = &[
+    ("init", "`ptyro setup` does what it did: your agents, accounts, preferences and repositories"),
+    ("tour", "`?` in the TUI lists the keys, and `ptyro --help` the commands"),
+    (
+        "backup",
+        "`ptyro about` says where ptyro keeps its config and data, to copy while the daemon is stopped",
+    ),
+    ("integrations", "Claude Code, Codex and OpenCode need nothing installed for ptyro"),
+];
+
+/// The error for a removed command (`ptyro init`), when the command line names one.
+fn removed_command(argv: &[std::ffi::OsString]) -> Option<String> {
+    let mut words = argv.iter().skip(1).map(|a| a.to_string_lossy());
+    let first = loop {
+        match words.next()? {
+            w if w == "--remote" => {
+                words.next();
+            }
+            w if w.starts_with('-') => {}
+            w => break w,
+        }
+    };
+    REMOVED_COMMANDS
+        .iter()
+        .find(|(c, _)| *c == first)
+        .map(|(c, instead)| format!("`ptyro {c}` was removed on 2026-11-17: {instead}"))
 }
 
 #[derive(Subcommand)]
@@ -125,7 +154,7 @@ enum Cmd {
         /// Print the session as JSON (doesn't attach)
         #[arg(long)]
         json: bool,
-        /// Start an agent: claude, codex, gemini, opencode, or one from [agents]; `claude@work`
+        /// Start an agent: claude, codex, opencode, or one from [agents]; `claude@work`
         /// picks a profile too
         #[arg(short, long, add = ArgValueCandidates::new(complete::agents))]
         agent: Option<String>,
@@ -436,7 +465,7 @@ enum Cmd {
         /// The key for --cert (PEM)
         #[arg(long, requires = "cert")]
         key: Option<PathBuf>,
-        /// Internal: plain HTTP on this computer only (the tour and the tests)
+        /// Internal: plain HTTP on this computer only (the tests)
         #[arg(long, hide = true)]
         loopback_http: bool,
         /// Internal: started by the daemon (`[remote] serve = true`)
@@ -547,24 +576,16 @@ enum Cmd {
         /// bash, zsh, fish, elvish or powershell
         shell: String,
     },
-    /// Set ptyro up: detect agents, accounts and repositories, then write your config
-    Init {
-        /// Accept every suggestion without asking (scripts, CI)
-        #[arg(short, long)]
-        yes: bool,
-        /// Show what it would write, change nothing
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// The setup checklist: install coding agents (Claude Code, Codex, Antigravity, OpenCode,
-    /// Gemini CLI) and the tools they need (git, the GitHub CLI, Node.js) on this computer
+    /// Set ptyro up: the checklist to install coding agents (Claude Code, Codex, OpenCode) and
+    /// the tools they need (git, the GitHub CLI, Node.js), their logins, then your accounts,
+    /// preferences and repositories, written to your config
     Setup {
         /// Ask nothing: install what --agents and --tools name (with neither, the defaults: Claude
         /// Code, Codex, git, GitHub CLI). A step that needs administrator rights runs only if it
         /// can without a password prompt; otherwise it is reported with its command
         #[arg(short, long)]
         yes: bool,
-        /// The agents to tick: claude, codex, agy, opencode, gemini (comma-separated; `none`)
+        /// The agents to tick: claude, codex, opencode (comma-separated; `none`)
         #[arg(long, value_delimiter = ',', value_name = "NAMES")]
         agents: Option<Vec<String>>,
         /// The tools to tick: git, gh, node (comma-separated; `none`)
@@ -592,12 +613,12 @@ enum Cmd {
         #[arg(long, hide = true)]
         tty: bool,
     },
-    /// Install agents or tools by name, with what they need first: `ptyro install agy`,
-    /// `ptyro install gemini gh`. An agent installed another way (npm, Homebrew, WinGet) is
+    /// Install agents or tools by name, with what they need first: `ptyro install codex`,
+    /// `ptyro install opencode gh`. An agent installed another way (npm, Homebrew, WinGet) is
     /// offered the move to the recommended installer, which asks first; with --yes it is left as
     /// it is (updated the way it's installed) unless --move
     Install {
-        /// claude, codex, agy, opencode, gemini, git, gh, node
+        /// claude, codex, opencode, git, gh, node
         #[arg(required = true, value_name = "NAME")]
         names: Vec<String>,
         /// Don't ask first; a step that needs administrator rights runs only if it can without a
@@ -638,7 +659,7 @@ enum Cmd {
     /// way it was installed: `ptyro update`, `ptyro update codex`, `ptyro update ptyro`;
     /// `--check` only looks
     Update {
-        /// claude, codex, agy, opencode, gemini, ptyro (default: every one with a newer version,
+        /// claude, codex, opencode, ptyro (default: every one with a newer version,
         /// less what `updates.ignore` skips)
         #[arg(value_name = "NAME")]
         names: Vec<String>,
@@ -663,7 +684,7 @@ enum Cmd {
     /// Log in to the agents and the GitHub CLI, one account each: each tool's own sign-in, in
     /// this terminal, confirmed by its own status command (ptyro never sees a credential)
     Login {
-        /// claude, codex, agy, opencode, gemini, gh (default: every one installed that isn't
+        /// claude, codex, opencode, gh (default: every one installed that isn't
         /// logged in)
         #[arg(value_name = "NAME")]
         names: Vec<String>,
@@ -691,23 +712,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Diagnose: agents and logins per profile, integrations, terminal, tmux, daemon, git
+    /// Diagnose: agents and logins per profile, their hooks, terminal, tmux, daemon, git
     Doctor {
-        /// Skip the hook self-test (it runs a fake agent through each integration)
+        /// Skip the hook self-test (it runs a fake agent through each agent's hooks)
         #[arg(long)]
         quick: bool,
         #[arg(long)]
         json: bool,
     },
-    /// The tour: start a task, answer the agent, clean up and keep a shell, for real, with a
-    /// pretend agent in a ptyro of its own (deleted afterwards)
-    Tour {
-        /// Internal: the coach on this ptyro (what the tour itself runs)
-        #[arg(long, hide = true)]
-        here: bool,
-    },
     /// Take ptyro off this computer: stops the daemon and every session, removes its worktrees,
-    /// config, data, login service, integrations and shell lines, and the binary when it was
+    /// config, data, login service and shell lines, and the binary when it was
     /// installed by hand. Shows what goes and what stays first; your repositories are untouched
     Uninstall {
         /// Show the plan and stop
@@ -728,30 +742,10 @@ enum Cmd {
         /// Don't remove the ptyro program itself
         #[arg(long)]
         keep_binary: bool,
-        /// Save a backup here first (`ptyro backup`'s file); nothing is removed if it fails
-        #[arg(long, value_name = "FILE")]
-        backup: Option<PathBuf>,
         /// Also delete the snapshots under refs/ptyro/ in your repositories (archived and
         /// taken-over work)
         #[arg(long)]
         purge_refs: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Save ptyro's own state (config, database, chats) to a private .tar.gz
-    Backup {
-        /// Where to write it (default: `~/ptyro-backup-DATE.tar.gz`); never replaces a file
-        #[arg(short, long, value_name = "FILE")]
-        output: Option<PathBuf>,
-        /// Include every session's recording (big; it holds what was on screen)
-        #[arg(long)]
-        with_recordings: bool,
-        /// Include the web app's certificate authority, with its private key
-        #[arg(long)]
-        with_ca: bool,
-        /// Leave your chats (chat.db) out
-        #[arg(long)]
-        no_chats: bool,
         #[arg(long)]
         json: bool,
     },
@@ -814,11 +808,6 @@ enum Cmd {
     Notify {
         #[command(subcommand)]
         cmd: agents::NotifyCmd,
-    },
-    /// Agent integrations that need installing once (Gemini extension, Antigravity hooks)
-    Integrations {
-        #[command(subcommand)]
-        cmd: agents::IntegrationsCmd,
     },
     /// Internal: called by agent hooks (SPEC §8.3)
     #[command(hide = true)]
@@ -1296,6 +1285,26 @@ mod tests {
         assert_eq!(parse(&["ptyro", "wait", "s", "--match", "x"]), Some(None));
         // Still only with --match.
         assert_eq!(parse(&["ptyro", "wait", "s", "--scrollback", "5"]), None);
+    }
+
+    /// Commands removed on 2026-11-17 say so and name what to use, however they're typed.
+    #[test]
+    fn a_removed_command_says_what_to_use() {
+        let said = |argv: &[&str]| {
+            let argv: Vec<std::ffi::OsString> = argv.iter().map(Into::into).collect();
+            super::removed_command(&argv)
+        };
+        let init = said(&["ptyro", "init", "--yes"]).unwrap();
+        assert!(
+            init.contains("`ptyro init` was removed") && init.contains("`ptyro setup`"),
+            "{init}"
+        );
+        assert!(said(&["ptyro", "--remote", "box", "tour"]).unwrap().contains("`ptyro tour`"));
+        assert!(said(&["ptyro", "integrations", "ls"]).is_some());
+        assert!(said(&["ptyro", "backup"]).is_some());
+        assert_eq!(said(&["ptyro", "setup"]), None);
+        assert_eq!(said(&["ptyro", "chat", "new", "backup"]), None, "only the command word");
+        assert_eq!(said(&["ptyro"]), None);
     }
 
     #[test]

@@ -229,7 +229,21 @@ impl CommandSpec {
 }
 
 /// The agents ptyro knows without a `[agents.<name>]` table.
-pub const BUILTIN_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode", "antigravity"];
+pub const BUILTIN_AGENTS: &[&str] = &["claude", "codex", "opencode"];
+
+/// Built-in agents that were removed (2026-11-17, the pare-down), with their names for people.
+/// An `[agents.<name>]` table that gives its own `command` still runs as an agent of your own
+/// (the generic adapter); one without, or a default agent that names it, is reported with its
+/// fix, which `ptyro doctor` applies.
+pub const REMOVED_AGENTS: &[(&str, &str)] =
+    &[("gemini", "Gemini CLI"), ("antigravity", "Antigravity")];
+
+/// The removed built-in `name` is, as `(name, its name for people)`, when nothing of yours
+/// (`[agents.<name>] command`) makes it an agent of your own.
+pub fn removed_agent<'a>(agents: &Agents, name: &'a str) -> Option<(&'a str, &'static str)> {
+    let (_, label) = REMOVED_AGENTS.iter().find(|(n, _)| *n == name)?;
+    agents.get(name).is_none_or(|d| d.command.is_none()).then_some((name, *label))
+}
 
 /// `[agents]` (SPEC §13.2): `default = "<agent>"`, the agent new sessions use when nothing else
 /// says (`claude` when unset), plus one `[agents.<name>]` table each. It reads as the map of those
@@ -304,8 +318,8 @@ impl<'de> Deserialize<'de> for Agents {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentDef {
-    /// `claude`, `codex`, `gemini`, `opencode`, `antigravity`, `generic` (default: the name if
-    /// it's a known adapter, else `generic`).
+    /// `claude`, `codex`, `opencode`, `generic` (default: the name if it's a known adapter, else
+    /// `generic`).
     pub adapter: Option<String>,
     pub command: Option<CommandSpec>,
     pub args: Vec<String>,
@@ -686,7 +700,7 @@ pub struct Chat {
     /// Chats shown under CHATS in the sidebar, after the pinned ones.
     pub recent: u32,
     /// The agent for new chats (`claude`, `codex@work`…); "" = the workspace's default agent,
-    /// else the first installed of claude, codex, gemini and opencode.
+    /// else the first installed of claude, codex and opencode.
     pub agent: String,
     /// New chats start incognito: nothing of them is written, and they end with their agent.
     pub incognito: bool,
@@ -1393,7 +1407,7 @@ pub enum Account {
 #[serde(default, deny_unknown_fields)]
 pub struct AccountDef {
     pub dir: Option<String>,
-    /// `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`/`CODEX_API_KEY`, `GEMINI_API_KEY`.
+    /// `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`/`CODEX_API_KEY`.
     pub api_key: Option<Secret>,
     /// `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `GH_TOKEN`.
     pub token: Option<Secret>,
@@ -1449,7 +1463,6 @@ pub struct ProfileDef {
     pub color: Option<String>,
     pub claude: Option<Account>,
     pub codex: Option<Account>,
-    pub gemini: Option<Account>,
     pub opencode: Option<Account>,
     pub git: Option<GitIdentity>,
     pub gh: Option<Account>,
@@ -1469,7 +1482,7 @@ pub struct ProfileDef {
 }
 
 /// Agents a profile can carry an account for, with their `share` defaults directory.
-pub const PROFILE_AGENTS: &[&str] = &["claude", "codex", "gemini", "opencode"];
+pub const PROFILE_AGENTS: &[&str] = &["claude", "codex", "opencode"];
 
 /// Files that hold credentials: never shared between profiles (SPEC §10.10).
 pub const CREDENTIAL_FILES: &[&str] =
@@ -1480,7 +1493,6 @@ impl ProfileDef {
         match agent {
             "claude" => self.claude.as_ref(),
             "codex" => self.codex.as_ref(),
-            "gemini" => self.gemini.as_ref(),
             "opencode" => self.opencode.as_ref(),
             "gh" => self.gh.as_ref(),
             _ => None,
@@ -1537,9 +1549,12 @@ impl Config {
         for k in self.ui.prefix.keys() {
             parse_key(k).map_err(|e| format!("ui.prefix: {e}"))?;
         }
+        // A removed built-in (2026-11-17) loads: using it says why it can't run, and `ptyro
+        // doctor` switches the default.
         if let Some(name) = self.agents.default.as_deref().filter(|d| !d.is_empty())
             && !self.agents.contains_key(name)
             && !BUILTIN_AGENTS.contains(&name)
+            && removed_agent(&self.agents, name).is_none()
         {
             let mut known: Vec<&str> = BUILTIN_AGENTS.to_vec();
             known.extend(self.agents.keys().map(String::as_str));
@@ -1719,8 +1734,8 @@ impl Config {
     }
 }
 
-/// Flags that turn off an agent's permission prompts or sandbox on their own (Claude, Codex,
-/// Gemini), alone or as `--flag=value`.
+/// Flags that turn off an agent's permission prompts or sandbox on their own (Claude's, Codex's
+/// and other agents' common ones), alone or as `--flag=value`.
 const DANGEROUS_FLAGS: &[&str] = &[
     "--dangerously-skip-permissions",
     "--allow-dangerously-skip-permissions",
@@ -1750,7 +1765,7 @@ pub fn dangerous_arg(argv: &[String]) -> Option<String> {
             Some((f, v)) if f.starts_with('-') => (f, Some(v)),
             _ => (arg.as_str(), None),
         };
-        // `npx -y @google/gemini-cli`: that `-y` is the package runner's own ("yes, install it").
+        // `npx -y @acme/agent`: that `-y` is the package runner's own ("yes, install it").
         let runner_flag = flag == "-y"
             && i > 0
             && matches!(
@@ -2426,10 +2441,10 @@ mod tests {
                 "--config=sandbox_mode=danger-full-access",
             ),
             ("codex --full-auto", "--full-auto"),
-            ("gemini -y", "-y"),
-            ("gemini --yolo", "--yolo"),
-            ("gemini --approval-mode yolo", "--approval-mode yolo"),
-            ("gemini --approval-mode=YOLO", "--approval-mode=YOLO"),
+            ("my-agent -y", "-y"),
+            ("my-agent --yolo", "--yolo"),
+            ("my-agent --approval-mode yolo", "--approval-mode yolo"),
+            ("my-agent --approval-mode=YOLO", "--approval-mode=YOLO"),
         ] {
             assert_eq!(dangerous_arg(&argv(bad)).as_deref(), Some(shown), "{bad}");
         }
@@ -2438,7 +2453,7 @@ mod tests {
             "claude --permission-mode",
             "codex -s workspace-write -a on-request",
             "codex -c model=o3",
-            "gemini --approval-mode default",
+            "my-agent --approval-mode default",
             "aider --yes-always-not",
             "my-agent --sandbox",
         ] {
@@ -2587,8 +2602,7 @@ scope = "global"
 label = "work"
 color = "blue"
 claude = "~/.claude-work"
-codex  = "~/.codex-work"
-gemini = { api_key = { command = ["op", "read", "op://Work/gemini/key"] } }
+codex  = { dir = "~/.codex-work", api_key = { command = ["op", "read", "op://Work/openai/key"] } }
 git    = { name = "Your Name", email = "you@acme.example", ssh_key = "~/.ssh/id_work" }
 gh     = "~/.config/gh-work"
 env    = { AWS_PROFILE = "acme" }
@@ -2615,7 +2629,7 @@ code = { command = ["code", "{path}"] }
         let w = &c.profiles["work"];
         assert_eq!(w.claude.as_ref().and_then(Account::dir), Some("~/.claude-work"));
         assert!(matches!(
-            w.gemini.as_ref().and_then(Account::def).and_then(|d| d.api_key.as_ref()),
+            w.codex.as_ref().and_then(Account::def).and_then(|d| d.api_key.as_ref()),
             Some(Secret::Command { .. })
         ));
         assert_eq!(w.guard, Guard::Refuse);
@@ -2852,15 +2866,14 @@ mod hardening {
 
     #[test]
     fn a_package_runners_yes_flag_is_not_the_agents() {
-        for ok in ["npx -y @google/gemini-cli", "bunx -y gemini", "pnpm dlx -y gemini-cli"] {
+        for ok in ["npx -y @acme/agent", "bunx -y agent", "pnpm dlx -y agent-cli"] {
             assert_eq!(dangerous_arg(&argv(ok)), None, "{ok}");
         }
         // Anywhere else it still skips prompts.
-        assert_eq!(dangerous_arg(&argv("npx @google/gemini-cli -y")).as_deref(), Some("-y"));
-        assert_eq!(dangerous_arg(&argv("gemini -y")).as_deref(), Some("-y"));
+        assert_eq!(dangerous_arg(&argv("npx @acme/agent -y")).as_deref(), Some("-y"));
+        assert_eq!(dangerous_arg(&argv("agent -y")).as_deref(), Some("-y"));
         assert!(
-            Config::parse("[agents.gemini]\ncommand = [\"npx\", \"-y\", \"@google/gemini-cli\"]\n")
-                .is_ok()
+            Config::parse("[agents.mine]\ncommand = [\"npx\", \"-y\", \"@acme/agent\"]\n").is_ok()
         );
     }
 

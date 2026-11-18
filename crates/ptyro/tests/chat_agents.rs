@@ -31,7 +31,7 @@ impl World {
             "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n\
              [profiles.work]\nlabel = \"work\"\n[profiles.personal]\nlabel = \"personal\"\n",
         );
-        for a in ["claude", "codex", "gemini", "opencode"] {
+        for a in ["claude", "codex", "opencode"] {
             if missing.contains(&a) {
                 config.push_str(&format!(
                     "\n[agents.{a}]\ncommand = [\"/nonexistent/ptyro-test/{a}\"]\n"
@@ -77,7 +77,7 @@ impl World {
 
 #[test]
 fn a_missing_agent_offers_setup_not_the_os_error() {
-    let w = World::with(&["claude", "codex", "gemini", "opencode"]);
+    let w = World::with(&["claude", "codex", "opencode"]);
     let out = w.cli(&["chat", "new", "hello"]);
     assert!(!out.status.success());
     let err = String::from_utf8_lossy(&out.stderr);
@@ -85,7 +85,6 @@ fn a_missing_agent_offers_setup_not_the_os_error() {
         err.contains("No agent that can chat is installed: `ptyro setup` installs one"),
         "{err}"
     );
-    assert!(err.contains("Antigravity, for a Google account, runs in sessions but can't chat"));
     assert!(!err.contains("npm i -g"), "a command to copy, no longer: {err}");
     // A session of an agent that isn't there: what it is, not "No such file or directory".
     let out = w.cli(&["new", "-d", "--agent", "codex"]);

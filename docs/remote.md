@@ -38,7 +38,7 @@ daemon's socket (starting it if needed). Frames are compressed (zstd) on this pa
   `client.default_remote`). A `PTYRO_REMOTE_BIN` with a space works with `cmd.exe`, the default.
 - **Another transport.** `PTYRO_SSH` replaces the ssh command, e.g. `PTYRO_SSH="tailscale ssh"`.
 - **Files stay local.** Commands that read files on *this* machine still read them here:
-  `config`, `init`, and paths you pass to `project add`. Use them on the remote machine
+  `config`, `setup`, and paths you pass to `project add`. Use them on the remote machine
   (`ssh workbox ptyro config …`).
 
 ## Several machines: `ptyro machine`
@@ -175,7 +175,7 @@ phone.
 your company's CA, say: phones that trust its issuer need nothing installed, and there's no
 `/ca.crt`. The files are read again every 12 hours, so a renewed certificate is picked up.
 
-**Have the daemon run it.** `ptyro web on` (or the question in `ptyro init`, or `ptyro daemon start
+**Have the daemon run it.** `ptyro web on` (or the question in `ptyro setup`, or `ptyro daemon start
 --serve`, or More → Web app in the web app, or `remote.web_on` in the TUI) sets `[remote] serve = true`
 in `~/.config/ptyro/config.toml`. The daemon then starts `ptyro serve` itself, restarts it if it
 dies, and keeps it through live upgrades and restarts. Its log is `~/.local/state/ptyro/serve.log`.
@@ -328,17 +328,11 @@ a device with less sees the pages and is told what it lacks.
   **Checkpoints** (what changed since each, and putting one back), remove.
 - **More**: health (each finding with its fix), usage, devices (pair another with a link and a QR
   code), profiles and logins, the config editor (checked as you save, applied at once),
-  integrations, the daemon (logs, upgrade, restart, login service), first-run setup, and a tour.
+  the daemon (logs, upgrade, restart, login service), and first-run setup.
 
-Changing the machine (the config file, profiles, the login service, the daemon's restart, the
-tour) goes through `POST /api/host`, which `ptyro serve` accepts from a `full` device only, and
+Changing the machine (the config file, profiles, the login service, the daemon's restart) goes
+through `POST /api/host`, which `ptyro serve` accepts from a `full` device only, and
 only when it runs on the same machine as the daemon (not with `--remote`).
-
-**The tour** (More → Take the tour) starts a ptyro of its own, with a demo repository and a pretend
-agent, and a second `ptyro serve` for it on a free port of this computer (loopback, plain HTTP),
-and opens it in a new tab with a coach: start a task, answer the agent, clean up, keep a shell.
-It's reachable from this computer only, so it opens from a browser on it. "End the tour" stops
-its daemon and deletes everything it made; one left behind is swept the next time a tour starts.
 
 ### Remote approvals
 
@@ -360,7 +354,7 @@ through their protocol for a chat's agent.
 | The pairing link read off a screen, scrollback or recording | It is a code, not the token: claimed once, within 10 minutes, then worthless. `ptyro pair` reports who claimed it and from where; failed claims count toward the lockout. During those minutes it *is* a credential, so prefer a plain terminal. |
 | Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and `ptyro serve` takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
-| A paired phone changing the machine | The config file, profiles, the login service, the daemon's restart and the tour need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
+| A paired phone changing the machine | The config file, profiles, the login service, and the daemon's restart need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
 | A browser posing as a local client | `ptyro serve` rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
 | A device doing more than intended | Scopes, enforced in the daemon for every request and keystroke. Unknown requests need `full`. Remote actions on a session go to its event log (`ptyro events --session S`) with the device's name. |

@@ -352,9 +352,9 @@ fn admin_in_wsl_is_asked_for_in_the_terminal_through_wsl_exe() {
 #[test]
 fn the_checklist_ticks_each_side() {
     let m = Machine::with_ubuntu(json!({}));
-    // Defaults on Windows; Claude Code (1) moved to WSL, gh (7: the tools follow the five
+    // Defaults on Windows; Claude Code (1) moved to WSL, gh (5: the tools follow the three
     // agents) to both; then install.
-    let o = m.run(&["setup"], "1:wsl 7:both\n\n");
+    let o = m.run(&["setup"], "1:wsl 5:both\n\n");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
     assert!(

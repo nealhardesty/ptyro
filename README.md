@@ -9,7 +9,7 @@
 
 **A terminal-native home for your coding agents.**
 
-ptyro runs Claude Code, Codex, Gemini CLI and OpenCode side by side, each in its own git
+ptyro runs Claude Code, Codex and OpenCode side by side, each in its own git
 worktree, inside the terminal you already use. A background daemon owns every session, so you
 can detach, close the terminal or lose SSH, and the agents keep working. ptyro knows which agent
 is working, which is blocked on a permission prompt and which is done, and one key takes you to
@@ -33,7 +33,7 @@ the one that needs you.
 Pre-1.0 (version 0.0.x), public for early testing. Every
 feature milestone (M1–M10) is built and covered by tests, most of them against scripted fake
 agents. Day-to-day use so far is mainly Claude Code on Linux. Some features have not been run
-against the real thing yet: the phone app on a real phone, OpenCode, Gemini and Codex chat
+against the real thing yet: the phone app on a real phone, OpenCode and Codex chat
 answers, and macOS by hand. [`docs/compat.md`](docs/compat.md) records what has
 been tried, and [`ROADMAP.md`](ROADMAP.md) what's next. Bug reports are very welcome.
 
@@ -56,10 +56,8 @@ Google, or any other tool named here; their names and trademarks belong to their
   `sh scripts/rust-install.sh`).
 - **git 2.40 or later**, and **GNU make** for building from a checkout.
 - **At least one agent CLI:** [Claude Code](https://code.claude.com) (the best supported),
-  [Codex CLI](https://github.com/openai/codex),
-  [Antigravity CLI](https://antigravity.google) (`agy`, Google's agent for a Google account),
-  [OpenCode](https://opencode.ai), or [Gemini CLI](https://github.com/google-gemini/gemini-cli)
-  (for Gemini API-key and enterprise accounts). Any other program runs too, with less status detail.
+  [Codex CLI](https://github.com/openai/codex), or [OpenCode](https://opencode.ai). Any other
+  program runs too, with less status detail.
   `ptyro setup` installs them for you ([below](#agents-and-tools-ptyro-setup)), each its
   vendor's recommended way for your platform, from a table checked against each vendor's
   documentation (SPEC §24.1).
@@ -92,7 +90,7 @@ curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/instal
 ```
 
 `--uninstall` hands over to `ptyro uninstall` (see [Removing ptyro](#removing-ptyro) below), and
-anything after it goes along too (`--dry-run`, `--yes`, `--backup FILE`). If the installed binary
+anything after it goes along too (`--dry-run`, `--yes`). If the installed binary
 won't run, the script removes just what it installed. Or build it yourself:
 
 ```bash
@@ -120,9 +118,8 @@ refuses them: run `xattr -d com.apple.quarantine ptyro` once, or use the install
 doesn't set the mark). Then let ptyro look around:
 
 ```bash
-ptyro setup      # installs the coding agents and the tools they need (a checklist)
-ptyro init       # finds your agents, accounts and repositories; asks a few questions (and offers setup)
-ptyro doctor     # checks agents, logins, integrations, terminal and tmux
+ptyro setup      # installs the coding agents and the tools they need, then your accounts and repositories
+ptyro doctor     # checks agents, logins, hooks, terminal and tmux
 ```
 
 **Upgrading** while agents run: `ptyro update ptyro` (below; `C-q ^` in the TUI) downloads the new
@@ -134,27 +131,30 @@ script again, then `ptyro daemon upgrade`, does the same by hand.
 ### Agents and tools: `ptyro setup`
 
 A new machine needs only ptyro: `ptyro setup` installs the rest. It shows one checklist of the
-coding agents (Claude Code, Codex, Antigravity, OpenCode, and Gemini CLI for Gemini API-key and
-enterprise accounts) and the tools (git, the GitHub CLI, Node.js), with what is already here.
+coding agents (Claude Code, Codex, OpenCode) and the tools (git, the GitHub CLI, Node.js), with
+what is already here.
 Claude Code, Codex, git and the GitHub CLI are ticked unless you have them. Type the numbers to
 tick or untick, then press Enter: each one installs with its output as it runs, ends ✓ or ✗ with
-the fix, and one failure doesn't stop the rest. Then it logs you in to each one (below).
+the fix, and one failure doesn't stop the rest. Then it logs you in to each one (below), and
+asks about the rest: the accounts it found (as profiles), your prefix key, where worktrees go,
+desktop notifications, the web app for your phone and the repositories to register. Your config
+gets only what it lacks, shown before it is written.
 
 ```bash
 ptyro setup                                   # the checklist
-ptyro install agy                             # one by name (agy, gemini, gh, node…), any time later
-ptyro install gemini --dry-run                # what it would run, changing nothing
+ptyro install opencode                        # one by name (codex, opencode, gh, node…), any time later
+ptyro install opencode --dry-run              # what it would run, changing nothing
 ptyro setup --yes --agents claude,codex --tools git,gh   # unattended: scripts, a fresh VM
 ptyro login                                   # log in to each agent and gh that isn't yet
 ptyro login --check                           # where each login stands, changing nothing
 ```
 
 - **The vendors' own ways.** Each install command is the vendor's recommended one for your
-  platform (Claude Code's native installer, Codex's and Antigravity's installers, npm for Gemini
-  CLI, apt, dnf, Homebrew or WinGet for git and the GitHub CLI), from a table checked against
+  platform (Claude Code's, Codex's and OpenCode's installers, npm for OpenCode on Windows, apt,
+  dnf, Homebrew or WinGet for git and the GitHub CLI), from a table checked against
   their documentation (SPEC §24.1). Nothing is guessed.
-- **Prerequisites come along.** Ticking Gemini CLI ticks Node.js. When your package manager's
-  Node.js is too old for it (Ubuntu 24.04's is 18), ptyro puts nodejs.org's build, checked
+- **Prerequisites come along.** Ticking OpenCode on Windows ticks Node.js. Without a package
+  manager that has it, ptyro puts nodejs.org's build, checked
   against its published checksums, in a folder of its own (`~/.local/share/ptyro-tools`), with no
   admin rights and no `sudo npm`. It then offers to add a line to your shell's rc file so new
   terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
@@ -179,12 +179,13 @@ ptyro login --check                           # where each login stands, changin
 - **In the TUI, it's the first thing you see.** The first `ptyro` on a new machine opens with the
   same checklist at the top of the first-run screen: Agents, Tools and Already here, each with a
   line saying what it is, how it installs and whether it asks for admin rights or a login.
-  Something ticked for another says so ("ticked because Gemini CLI needs it"). `Space` ticks,
+  Something ticked for another says so ("ticked because OpenCode needs it"). `Space` ticks,
   `j`/`k` move, `⏎` installs what's ticked (and keeps the rest of the first run's choices), `s`
   is "not now". The install runs in a split: its live output, sudo's password prompt, then each
   login and the line about profiles, exactly as `ptyro setup` does in a terminal. Any time later,
   `Ctrl-Q U` (or `app.setup` in the palette) opens the checklist again on its own, the health
-  badge's fixes (`Ctrl-Q M`) open it for a missing agent or git, and `ptyro init` offers it too.
+  badge's fixes (`Ctrl-Q M`) open it for a missing agent or git, and the palette's `first.run`
+  opens the whole first-run screen again.
   `app.install` installs one by name.
 - **Windows: WSL, Windows, or both.** On Windows each agent and tool can go into your WSL
   distro, onto Windows itself, or both: the checklist has a column each, a number ticks it on
@@ -202,8 +203,8 @@ ptyro login --check                           # where each login stands, changin
   CLI it installed, one after another, through the tool's own sign-in: a page in your browser,
   or a link and a code to enter, right there in your terminal (Ctrl+C skips one). ptyro never
   sees a credential: whether it worked is the tool's own status command saying so (`claude auth
-  status`, `codex login status`, `gh auth status`). Antigravity, Gemini CLI and OpenCode name no
-  such command, so they sign in when they start; `ptyro login agy` starts one now. Later,
+  status`, `codex login status`, `gh auth status`). OpenCode names no
+  such command, so it signs in when it starts; `ptyro login opencode` starts it now. Later,
   `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
   `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
   tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there (on Windows with WSL, WSL's logins are listed there too). With `--yes`,
@@ -227,17 +228,14 @@ ptyro login --check                           # where each login stands, changin
   or tool that isn't installed (a new chat, a session of an agent you don't have, `ptyro
   doctor`, the health badge, an issue to start from without `gh`), offers setup rather than a command to
   copy: in a terminal, `ptyro setup` or `ptyro install codex`; in the TUI, `Ctrl-Q u` on its
-  message opens the checklist with it ticked; on the web, a Set up button does the same. With a
-  Google account, the agent to pick is Antigravity (Gemini CLI now serves only Gemini API keys and
-  some enterprise accounts).
+  message opens the checklist with it ticked; on the web, a Set up button does the same.
 - **More accounts are profiles.** Setup logs in one account each. For a second (work and
   personal), make a profile and log it in: `ptyro profile new work`, then
   `ptyro profile login work claude`. Each profile keeps its own logins.
 
 ### Keeping your agents, and ptyro, up to date: `ptyro update`
 
-ptyro looks for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
-CLI), and of ptyro itself, once a day, in the background, and tells you when one is out: once per new version when
+ptyro looks for newer versions of your agents (Claude Code, Codex, OpenCode), and of ptyro itself, once a day, in the background, and tells you when one is out: once per new version when
 `ptyro` starts ("Codex 0.170.0 is out (you have 0.162.1)": press `Ctrl-Q u` while the note shows,
 or use the palette's `app.update`), in the health badge (`Ctrl-Q M`), on the web app's Health
 page, and in `ptyro doctor`, which always looks afresh. Each says what the update runs. Nothing
@@ -301,8 +299,8 @@ ptyro machine update      # just the linked machines behind this one, each updat
 ### Removing ptyro
 
 `ptyro uninstall` (or the install script's `--uninstall`, or `-Uninstall` on Windows) shows what it keeps on your machine (sessions, worktrees
-with any uncommitted work flagged, its directories, the login service, integrations, shell-rc
-lines, the binary), asks, and removes it; `ptyro backup` saves its state first. Your repositories,
+with any uncommitted work flagged, its directories, the login service, shell-rc
+lines, the binary), asks, and removes it. Your repositories,
 their branches and `.ptyro.toml` stay. See [`docs/uninstall.md`](docs/uninstall.md).
 
 ### Windows
@@ -345,8 +343,7 @@ file manager opens it from WSL, on this computer (VS Code through Remote-WSL, th
 Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works without any setup.
 Settings: the screen's own (the look, keys, themes, the clipboard) are `ptyro.exe`'s; everything
 else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
-daemon's file to change them (`ptyro config set` of one says where it lives). Commands a daemon
-host runs (`tour`) say to run them inside WSL.
+daemon's file to change them (`ptyro config set` of one says where it lives).
 
 **Start at login.** `ptyro daemon install-service` (the TUI's palette, `daemon.service`; the web
 app's More → Daemon → Install the service) adds a logon task to Windows' Task Scheduler that
@@ -409,9 +406,7 @@ worktrees. The status bar says so, and `Ctrl-Q u` undoes it (it then stays out u
 it). `Ctrl-Q P` adds another repository; `[discover] auto_register = false` turns this off.
 
 Every key starts with the **prefix**, `Ctrl-Q` (or `Ctrl-Space`). Pause after it and a menu of
-the next keys appears; `Ctrl-Q ?` lists them all, and `ptyro tour` lets you try the whole loop
-(a task, its permission prompt, cleaning up, a shell of your own) with a pretend agent in a
-throwaway repository, deleted afterwards. The
+the next keys appears; `Ctrl-Q ?` lists them all. The
 status bar says what you'd do next with what's selected (`C-q p answer it`).
 
 **2. Detach and come back.** Press `Ctrl-Q d`. Everything keeps running in the daemon. Run
@@ -582,7 +577,7 @@ profile, then start a new session.
 ### Agent status and notifications
 
 ptyro adds its hooks to each agent *for that launch only*, so your agent config is never
-changed. Gemini and Antigravity need a one-time `ptyro integrations install`.
+changed.
 
 | Glyph | Means |
 |---|---|
@@ -648,9 +643,9 @@ In the TUI every workspace has a **CHATS** section in the sidebar; `C-q m` start
 file; give it a folder (`--folder`, `/folder`) and it reads that folder and nothing else. Where
 an agent can't enforce that by itself the chat says `best effort`. `chat task` (`/task`) hands a chat's plan to an agent in a new worktree (not an
 incognito chat's, which keeps nothing; ptyro asks first when the project runs under another profile
-than the chat). Gemini CLI
+than the chat). An agent
 works even when it is only an `npx` alias: ptyro finds it in npm's cache, nvm or the npm prefix
-(`ptyro doctor` shows where, and offers `npm install -g @google/gemini-cli`). Its agent stops when idle and picks up again from the saved conversation,
+(`ptyro doctor` shows where, and offers its install command). Its agent stops when idle and picks up again from the saved conversation,
 after a restart too. A linked machine's chats show under its workspaces and are used from here
 (they run there, on its agents). In a chat, `C-f` finds in it, `/` in the composer lists commands
 (`/retry` and `/edit` replace the last answer or your last message, `/agent`…) and `C-q C-g`
@@ -687,7 +682,7 @@ on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, r
 scrollback, events…), one for projects and worktrees (start a task in a new worktree, from a PR,
 an issue or a branch; its checkpoints; remove it), and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
-config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
+config editor, the daemon and its logs, and first-run setup. Push notifications carry
 Allow / Deny where the platform shows actions.
 
 **Several machines, one place.** `ptyro machine add ssh://laptop2` (or, without ssh, `ptyro
@@ -703,7 +698,7 @@ Each page names its machine, to tell several apart: the tab title is `studio · 
 dot on the icon and a thin bar in the header, and the TUI's sidebar and terminal title say it too.
 It is the computer's short name; `[daemon] machine_name` (Settings) changes it.
 
-`ptyro init` asks whether to run it, `ptyro daemon start --serve` turns it on with the daemon,
+`ptyro setup` asks whether to run it, `ptyro daemon start --serve` turns it on with the daemon,
 `ptyro web off` stops it, and in the TUI and the web app it is **More → Web app**. It is a
 supervised `ptyro serve`, so a daemon restart or live upgrade brings it back, and `ptyro doctor`
 says why when it won't start (a port taken by something else, say). `ptyro serve` by hand still
@@ -800,7 +795,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 - **Inside tmux:** add `set -g allow-passthrough on` and `set -g extended-keys on` to
   `~/.tmux.conf` so Shift+Enter and clipboard copies reach ptyro.
 - **Two prefixes, `Ctrl-Q` and `Ctrl-Space`,** work out of the box, so if one is taken the other
-  still gets through. `Ctrl-Q` is the one Ctrl+letter that none of Claude Code, Codex, Gemini CLI
+  still gets through. `Ctrl-Q` is the one Ctrl+letter that none of Claude Code, Codex
   and OpenCode uses; macOS takes `Ctrl-Space` for switching input sources, and VS Code's terminal
   on Linux and Windows and Zellij take `Ctrl-Q`. Press a prefix twice (`Ctrl-Q Ctrl-Q`) to jump
   to the sidebar; the prefix then `q` (`Ctrl-Q q`) sends the prefix itself to the program.
@@ -849,7 +844,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
-| [`docs/uninstall.md`](docs/uninstall.md) | What `ptyro uninstall` and `ptyro backup` remove, keep and save |
+| [`docs/uninstall.md`](docs/uninstall.md) | What `ptyro uninstall` removes and keeps |
 | [`docs/compat.md`](docs/compat.md) | Which programs and terminals work inside ptyro, and how well |
 | [`docs/fixtures.md`](docs/fixtures.md) | Recording and sanitising test fixtures |
 | [`SPEC.md`](SPEC.md) | Architecture, protocol, formats, configuration, CLI, security, verified facts |
@@ -897,7 +892,7 @@ WSL works meanwhile.
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
-| `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's and Antigravity's feeds, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
+| `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's feed, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
 | `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes, the setup checklist; needs Node) |
@@ -906,7 +901,7 @@ WSL works meanwhile.
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
 | `make doc` / `make clean` | API docs (warnings fail) / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
-| `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
+| `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
@@ -916,7 +911,7 @@ WSL works meanwhile.
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-conpty` (`ARGS=report`) | ROADMAP WIN0.2 and WIN0.3, from WSL or Git Bash on Windows: plays what ptyro needs (its OSCs, queries, keys, Ctrl+C, resizes, recorded Claude Code and Codex screens, a 2 MiB burst) through Windows' own ConPTY and Microsoft's packaged conpty.dll (fetched from NuGet, its signature checked), tests whether a second process can take a pseudoconsole over, and writes `spikes/conpty/REPORT.md` (SPEC §20.13). Smart App Control may refuse the unsigned spike; it says so |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
-| `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; Gemini and OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
+| `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |

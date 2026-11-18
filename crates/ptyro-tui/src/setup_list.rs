@@ -239,7 +239,7 @@ impl Setup {
     }
 }
 
-/// The name `ptyro install` takes for an item (its command: `agy`, `gh`).
+/// The name `ptyro install` takes for an item (its command: `opencode`, `gh`).
 fn program(id: &str) -> String {
     catalog::item(id).map_or_else(|| id.to_owned(), |i| i.program.clone())
 }
@@ -399,19 +399,22 @@ pub(crate) mod tests {
 
     #[test]
     fn a_prerequisite_ticks_itself_says_why_and_stays() {
-        let mut s = one(&[]);
+        // OpenCode on Windows needs Node.js.
+        let mut s = Setup::looking(None);
+        let here = survey(Platform::WindowsX64, &[], &["winget"]);
+        s.found(Sides { here, side: Side::Windows, wsl: None, status: None }, Where::Windows, None);
         let at = |s: &Setup, id: &str| s.rows().iter().position(|e| e.id == id).unwrap();
-        s.toggle(at(&s, "gemini"));
+        s.toggle(at(&s, "opencode"));
         let node = s.rows()[at(&s, "node")].clone();
-        assert!(node.ticked && !node.picked, "Node.js ticked for Gemini CLI");
+        assert!(node.ticked && !node.picked, "Node.js ticked for OpenCode: {node:?}");
         let r = s.ready().unwrap();
-        let line = about(&r.plan, &node, &programs_of(r, Side::Local), false);
-        assert!(line.contains("ticked because Gemini CLI needs it"), "{line}");
+        let line = about(&r.plan, &node, &programs_of(r, Side::Windows), false);
+        assert!(line.contains("ticked because OpenCode needs it"), "{line}");
         s.toggle(at(&s, "node"));
         assert!(s.said.as_deref().unwrap().contains("untick that first"), "{:?}", s.said);
         assert!(s.rows()[at(&s, "node")].ticked);
-        // Unticking Gemini CLI lets Node.js go.
-        s.toggle(at(&s, "gemini"));
+        // Unticking OpenCode lets Node.js go.
+        s.toggle(at(&s, "opencode"));
         assert!(!s.rows()[at(&s, "node")].ticked);
     }
 

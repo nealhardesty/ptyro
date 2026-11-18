@@ -7,9 +7,9 @@ What it costs: Claude turns run on `--model haiku` (about ten of them, a few cen
 use your default model (about ten short ones). Nothing is written to your agents' settings. It does
 leave a few short sessions in the agents' own histories (Claude's under ~/.claude/projects, named for
 target/spike-chat; Codex's rollouts); the Codex ones are deleted at the end.
-Gemini and OpenCode are used if they are on PATH (or SPIKE_GEMINI / SPIKE_OPENCODE name them); an
-`npx` alias doesn't count. Neither is given a model turn: Gemini needs a login and OpenCode's free tier
-runs out, so their checks are the protocol and the session API, which is as far as CHAT0 needs.
+OpenCode is used if it is on PATH (or SPIKE_OPENCODE names it); an `npx` alias doesn't count. It is
+given no model turn: OpenCode's free tier runs out, so its checks are the session API, which is as far
+as CHAT0 needs.
 
 A claim is "verified" when its check passes, and the checks are written as the claims of §22.5, so
 a FAIL means the spec is wrong there, not that the script is.
@@ -339,44 +339,6 @@ def spike_codex():
         c.close()
 
 
-# ── Gemini (ACP) ─────────────────────────────────────────────────────────────────────────────────
-def spike_gemini():
-    print("gemini (acp):")
-    exe = os.environ.get("SPIKE_GEMINI") or shutil.which("gemini")
-    if not exe:
-        return out("SKIP", "gemini isn't installed (npm i -g @google/gemini-cli, or SPIKE_GEMINI=/path; an npx alias doesn't count)")
-    env = dict(os.environ, GEMINI_CLI_HOME=cwd("gemini-home"), NO_COLOR="1")
-    p = subprocess.Popen([exe, "--acp"], cwd=cwd("gemini"), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
-    p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1, "clientCapabilities": {}}}) + "\n")
-    p.stdin.flush()
-    res = None
-    t0 = time.time()
-    while time.time() - t0 < 60:
-        r, _, _ = select.select([p.stdout], [], [], 1)
-        if r:
-            try:
-                m = json.loads(p.stdout.readline())
-            except ValueError:
-                continue
-            if m.get("id") == 1:
-                res = m.get("result")
-                break
-    p.kill()
-    if not res:
-        return out("FAIL", "no answer to ACP initialize")
-    caps = res.get("agentCapabilities", {})
-    ver = res.get("agentInfo", {}).get("version")
-    print(f"    gemini {ver}: agentCapabilities = {json.dumps(caps)}")
-    check(caps.get("loadSession") is True, "ACP `session/load` is offered (a chat can continue natively)")
-    sc = caps.get("sessionCapabilities") or {}
-    out("PASS" if not sc else "NOTE", "no `sessionCapabilities`: `session/list`, `session/resume` and `session/fork` are NOT offered; chats use load or a seed" if not sc else f"sessionCapabilities = {sc}")
-    pol = os.path.join(os.path.dirname(os.path.realpath(exe)), "..", "bundle", "policies", "plan.toml")
-    if os.path.exists(pol):
-        t = open(pol).read()
-        check('toolName = "*"' in t and 'decision = "deny"' in t, "the policy engine's rule format has a `toolName = \"*\"` catch-all `deny` (§22.5's `none` and `chat` presets for Gemini)")
-    out("NOTE", "tool enforcement through `--policy FILE` is NOT tried: a Gemini turn needs a login (SPEC §20.8)")
-
-
 # ── OpenCode (serve) ─────────────────────────────────────────────────────────────────────────────
 def spike_opencode():
     print("opencode (serve):")
@@ -426,10 +388,10 @@ def spike_opencode():
 
 
 def main():
-    which = sys.argv[1:] or ["claude", "codex", "gemini", "opencode"]
+    which = sys.argv[1:] or ["claude", "codex", "opencode"]
     prep()
     for w in which:
-        {"claude": spike_claude, "codex": spike_codex, "gemini": spike_gemini, "opencode": spike_opencode}[w]()
+        {"claude": spike_claude, "codex": spike_codex, "opencode": spike_opencode}[w]()
     if fails:
         print(f"{fails} check(s) failed: the SPEC is wrong or an agent changed; update SPEC §20.8 and §22.5")
         sys.exit(1)

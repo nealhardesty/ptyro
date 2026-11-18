@@ -3629,6 +3629,27 @@ ptyro installed from its release (`install.sh` / `install.ps1`), signed in to re
   web's new task each say what is missing and offer setup (the TUI's `C-q u`, the web's Set up
   button), naming Antigravity for a Google account.
 
+**Removed (2026-11-17): agents and setup, pare-down batch 8.** Deep, not wide
+(`docs/review-2026-11/pare-down.md`): the kept agents are Claude Code, Codex, OpenCode and your own.
+Gone from every surface (CLI, TUI, web): **Gemini CLI and Antigravity** as built-in agents (M4.21,
+R-AGT-01; their adapters, catalog rows, install, login, update, doctor notes, the fake agent's
+modes, ptyro-drive's Gemini ACP flags, a chat's Gemini policy; `[profiles.X] gemini` is a retired
+key). An `[agents.gemini]` with its own `command` runs as an agent of yours (`protocol = "acp"` for
+chats); a default agent, `chat.agent` or `adapter` that names a removed one still loads, says why
+it can't start, and `ptyro doctor` gives the change that fixes it (the TUI's Health runs it, the
+web's applies it); a session of one still lists, and resuming it says why it can't. **`ptyro
+integrations`** (and the TUI's `integrations*`, the web's Integrations page); the doctor's
+self-test section is `hooks` now. **The tour** (UX1.22, R-UX-26: `ptyro tour`, `help.tour`, the
+coaches, the web's `#/tour`). **`ptyro backup`** and `uninstall --backup` (H2.3; `app.backup`, the
+web's Back up button). **`ptyro init` merged into `ptyro setup`** (M5.5): at a terminal, setup
+goes on from its checklist and logins to your accounts, preferences and repositories;
+`ptyro init`, `tour`, `backup` and `integrations` say they were removed and what to use.
+`ptyro doctor` also finds `[keys]` lines bound to actions the TUI no longer has (any earlier
+batch's), with `ptyro config unset keys.…` (several in one change). Protocol 1.48 (no wire change;
+the web's host ops for the removed pages answer that they were removed). The boot2 flake (its
+config written after the daemon started, whose reload raced the TUI's first keys) is fixed in the
+test.
+
 ## CF — Creating shows every option (decided 2026-11-09 by the owner; built 2026-11-09)
 
 The owner: "whenever anything in the TUI is created, it should make all of the options as

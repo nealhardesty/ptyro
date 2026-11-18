@@ -559,8 +559,8 @@ fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|w| (*w).to_owned()).collect()
 }
 
-/// How a program was installed, by the folder it is in. A Homebrew keg first: Homebrew's
-/// Gemini CLI is an npm install inside its keg (`Cellar/gemini-cli/…/node_modules`), and is
+/// How a program was installed, by the folder it is in. A Homebrew keg first: a Homebrew
+/// formula may be an npm install inside its keg (`Cellar/<formula>/…/node_modules`), and is
 /// Homebrew's; npm with Homebrew's Node.js (`homebrew/lib/node_modules`) is npm's.
 pub(super) fn installed_via(path: &Path) -> Option<Via> {
     let p = path.to_string_lossy().replace('\\', "/").to_ascii_lowercase();

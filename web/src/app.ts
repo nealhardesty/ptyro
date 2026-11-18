@@ -16,7 +16,7 @@ import "./panel.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
-import { coach, offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
+import { offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
 import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 
@@ -55,17 +55,16 @@ async function idbSet(key: string, value: string | null): Promise<void> {
 }
 
 function takePairCode(): void {
-  const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)(&tour=1)?$/);
+  const m = location.hash.match(/^#pair=([A-Za-z0-9_\-]+)$/);
   if (m) {
     history.replaceState(null, "", location.pathname + "#/");
-    // A tour's own ptyro (`ptyro tour` on the web): its pages show the coach, once the code is good.
-    void claim(m[1], !!m[2]);
+    void claim(m[1]);
   }
 }
 /// Why the last pairing attempt failed (shown on the pairing screen).
 let pairNote = "";
 /// Trade the one-time code from `ptyro pair` for this device's token (`POST /api/pair`).
-async function claim(code: string, tour = false): Promise<void> {
+async function claim(code: string): Promise<void> {
   pairNote = "Pairing…";
   render();
   try {
@@ -77,7 +76,6 @@ async function claim(code: string, tour = false): Promise<void> {
     if (!r.ok) throw new Error(await r.text());
     const { token } = await r.json();
     pairNote = "";
-    if (tour) store.set("ptyro.tour", "1");
     useToken(token);
   } catch (e) {
     pairNote = `Pairing failed: ${(e as Error).message || e}`;
@@ -400,7 +398,6 @@ function render(): void {
   for (const old of view.querySelectorAll(":scope > .toast")) old.remove();
   if (t) view.append(t);
   paint();
-  coach();
 }
 
 function subscribe(id: string | null): void {
@@ -420,7 +417,6 @@ function subscribe(id: string | null): void {
 /// Forget this device's pairing (the token here; `ptyro devices revoke` ends it for good).
 async function forget(): Promise<void> {
   store.remove("ptyro.token");
-  store.remove("ptyro.tour");
   await idbSet("token", null).catch(() => {});
   // This device's push subscription goes too: nothing should be sent to a device that forgot.
   try {

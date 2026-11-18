@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 47 };
+pub const PROTO: Version = Version { major: 1, minor: 48 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -456,7 +456,7 @@ pub enum Request {
         layout: ptyro_core::window::WindowLayout,
     },
     /// Setup (SPEC §24.2, protocol 1.31): the checklist on the daemon's machine: what is
-    /// installed, and what installing `picks` (item ids, `agy` and `github-cli` too) with what
+    /// installed, and what installing `picks` (item ids, commands and names too, `github-cli`) with what
     /// they need would run; `None`, the defaults. Replies `SetupPlan`.
     SetupPlan {
         #[serde(default)]
@@ -1166,7 +1166,7 @@ pub struct AgentChoice {
     pub program: String,
     /// The program is on `PATH`, or where npm, nvm or `npx` put it.
     pub installed: bool,
-    /// Where it was found, for people (`~/.npm/_npx/…/gemini.js (npx cache)`; 1.24).
+    /// Where it was found, for people (`~/.npm/_npx/…/opencode.js (npx cache)`; 1.24).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub found: Option<String>,
 }

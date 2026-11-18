@@ -174,7 +174,7 @@ pub fn movable(survey: &Survey) -> Vec<Movable> {
 pub struct Outdated {
     pub id: String,
     pub name: String,
-    /// What `ptyro update` takes (its command: `agy`).
+    /// What `ptyro update` takes (its command: `opencode`).
     pub program: String,
     pub version: String,
     pub latest: String,
@@ -531,7 +531,7 @@ pub fn refresh(host: &dyn Host, state: &Path, now: u64) -> Versions {
 }
 
 /// `updates.ignore` skips this one: its name (every version), or its name and this version.
-/// Names are as `ptyro install` takes them (`codex`, `agy`, `"Claude Code"`).
+/// Names are as `ptyro install` takes them (`codex`, `opencode`, `"Claude Code"`).
 pub fn ignored(ignore: &[String], o: &Outdated) -> bool {
     ignore.iter().any(|i| {
         let (name, version) = match i.split_once('@') {

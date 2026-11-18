@@ -1,7 +1,7 @@
 //! CHAT4 end-to-end (SPEC §22.5, §22.7; ROADMAP CHAT4) against a real daemon whose agents are the
 //! fakes: a chat given a folder reads it and nothing else; a chat without one searches the web
-//! and can't touch a file; Gemini's chat gets its admin policy, no extensions, only ptyro's MCP
-//! server (which arrives in `session/new`); the tool presets' old settings still load; and a
+//! and can't touch a file; an ACP agent's chat gets ptyro's MCP server in `session/new`; the tool
+//! presets' old settings still load; and a
 //! chat becomes a task with its context.
 
 use std::path::{Path, PathBuf};
@@ -30,11 +30,15 @@ impl World {
             "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
         config.push_str(extra);
-        for a in ["claude", "codex", "gemini", "opencode"] {
+        for a in ["claude", "codex", "opencode"] {
             config.push_str(&format!(
                 "\n[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
+        // An agent of the user's that speaks ACP.
+        config.push_str(&format!(
+            "\n[agents.acp]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"acp\", \"--acp\"]\nprotocol = \"acp\"\n"
+        ));
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
     }
@@ -138,54 +142,20 @@ fn a_chat_reads_its_folder_and_one_without_only_searches() {
     assert_eq!(d.get("best_effort"), None, "claude enforces it itself");
 }
 
+/// An ACP agent's chat: ptyro's MCP server arrives in `session/new`, in ACP's shape, and the
+/// agent is told nothing it wouldn't understand.
 #[test]
-fn gemini_gets_an_admin_policy_no_extensions_and_ptyros_mcp_server() {
+fn an_acp_agent_gets_ptyros_mcp_server_in_session_new() {
     let w = World::new("");
-    let notes = w.home().join("notes");
-    std::fs::create_dir_all(&notes).unwrap();
-    let notes_s = notes.to_string_lossy().into_owned();
     // The fake answers `mcp` with the servers `session/new` brought it, checked for ACP's shape.
-    let c = w.chat(&["--agent", "gemini", "--folder", &notes_s, "mcp"]);
+    let c = w.chat(&["--agent", "acp", "mcp"]);
     let addr = format!("c:{}", c["handle"].as_str().unwrap());
     w.until("its answer", || texts(&w, &addr).contains("mcp servers:"));
-    assert!(
-        texts(&w, &addr).contains("mcp servers: ptyro\n")
-            || texts(&w, &addr).contains("mcp servers: ptyro"),
-        "{}",
-        texts(&w, &addr)
-    );
+    assert!(texts(&w, &addr).contains("mcp servers: ptyro"), "{}", texts(&w, &addr));
     assert!(!texts(&w, &addr).contains("malformed"));
     let a = w.argv(c["id"].as_str().unwrap());
-    let policy = after(&a, "--admin-policy");
-    assert_eq!(policy.len(), 1, "{a:?}");
-    assert_eq!(after(&a, "--policy"), policy, "and in the user tier, should Gemini ignore it");
-    assert_eq!(after(&a, "--extensions"), ["none"]);
-    assert_eq!(after(&a, "--allowed-mcp-server-names"), ["ptyro"]);
-    assert_eq!(after(&a, "--include-directories"), [notes_s.as_str()]);
-    let rules = std::fs::read_to_string(policy[0]).unwrap();
-    assert!(rules.starts_with("[[rule]]\ntoolName = \"*\"\ndecision = \"deny\""), "{rules}");
-    for t in ["google_web_search", "read_file", "mcp_ptyro_*"] {
-        assert!(rules.contains(&format!("toolName = \"{t}\"")), "{t}: {rules}");
-    }
-    assert!(!rules.contains("run_shell_command"));
-    assert_eq!(c["best_effort"], true, "Gemini's rules are read from its source, not run");
-    // Gemini keeps its own copy in a folder marked with the chat's directory (`.project_root`):
-    // deleting the chat removes it, and leaves other projects' alone.
-    let engines = w.json(&["ls", "--chats", "--json"]);
-    let cwd = engines.as_array().unwrap()[0]["cwd"].as_str().unwrap().to_owned();
-    let gem = w.home().join(".gemini");
-    for (slug, root) in [("c1", cwd.as_str()), ("mine", "/somewhere/else")] {
-        for base in ["tmp", "history"] {
-            let d = gem.join(base).join(slug);
-            std::fs::create_dir_all(d.join("chats")).unwrap();
-            std::fs::write(d.join(".project_root"), root).unwrap();
-        }
-    }
-    w.ok(&["chat", "rm", "-y", &addr]);
-    w.until("gemini's copy removed", || {
-        !gem.join("tmp/c1").exists() && !gem.join("history/c1").exists()
-    });
-    assert!(gem.join("tmp/mine").exists() && gem.join("history/mine").exists());
+    assert!(after(&a, "--admin-policy").is_empty(), "{a:?}");
+    assert_eq!(c["best_effort"], true, "nothing tells an ACP agent what it may use");
 }
 
 /// A config from before presets went (2026-11-17) still loads: its chats work as every chat

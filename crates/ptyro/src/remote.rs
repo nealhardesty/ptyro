@@ -630,7 +630,7 @@ mod tests {
         let c = cfg(Access::Localhost, 7091, None);
         assert_eq!(base_url(&c, true), "https://127.0.0.1:7091");
         assert_eq!(base_url(&cfg(Access::Localhost, 8443, None), true), "https://127.0.0.1:8443");
-        // The tour and the tests speak plain HTTP, on this computer.
+        // The tests speak plain HTTP, on this computer.
         assert_eq!(base_url(&c, false), "http://127.0.0.1:7091");
         // `public_url` is what the owner wrote, minus a trailing slash.
         let c = cfg(Access::Open, 7091, Some("https://ptyro.example.com:8443/"));

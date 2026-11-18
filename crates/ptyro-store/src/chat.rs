@@ -882,31 +882,6 @@ impl ChatDb {
         })
         .await
     }
-
-    /// A consistent copy of the file (WAL included) at `to`, private, for `ptyro backup`.
-    pub async fn copy_to(&self, to: PathBuf) -> Result<()> {
-        self.call(move |db| {
-            let _ = std::fs::remove_file(&to);
-            db.execute("VACUUM INTO ?1", [to.display().to_string()])?;
-            private(&to);
-            Ok(())
-        })
-        .await
-    }
-
-    /// The same of a `chat.db` that isn't open here (`ptyro backup` beside a running daemon):
-    /// read-only, so nothing is migrated or written, whichever ptyro made it.
-    pub fn snapshot(from: &Path, to: &Path) -> Result<()> {
-        let db = Connection::open_with_flags(
-            from,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        db.busy_timeout(std::time::Duration::from_secs(5))?;
-        let _ = std::fs::remove_file(to);
-        db.execute("VACUUM INTO ?1", [to.display().to_string()])?;
-        private(to);
-        Ok(())
-    }
 }
 
 /// What a search looks in.
@@ -1493,9 +1468,8 @@ mod tests {
         assert!(d.fts5 && d.integrity == "ok", "{d:?}");
     }
 
-    #[cfg(unix)] // file modes
     #[tokio::test]
-    async fn a_late_write_after_a_delete_is_dropped_and_copies_are_private() {
+    async fn a_late_write_after_a_delete_is_dropped() {
         let db = db_with_chat().await;
         db.put_node_now("c1".into(), user("u1", None, "hello"), None, false).await.unwrap();
         db.delete("c1".into()).await.unwrap();
@@ -1511,11 +1485,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0);
-        let dir = tempfile::tempdir().unwrap();
-        let copy = dir.path().join("copy.db");
-        db.copy_to(copy.clone()).await.unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
         // An archived chat past its days is purged, and named so its files can go.
         let db = db_with_chat().await;
         db.put_node_now("c1".into(), user("u1", None, "old plans"), None, false).await.unwrap();

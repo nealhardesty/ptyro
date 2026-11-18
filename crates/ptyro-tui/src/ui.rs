@@ -82,7 +82,7 @@ fn what(s: &SessionInfo) -> String {
         return format!("{program} › {}", s.foreground.as_deref().unwrap_or(agent));
     }
     // An agent session is its agent, whatever its process is called (a wrapper script, a
-    // launcher, the tour's pretend one).
+    // launcher, a test's pretend one).
     if s.kind == SessionKind::Agent
         && let Some(agent) = &s.agent
     {
@@ -116,9 +116,6 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
         if app.config.ui.status_bar && area.height > 2 {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
-        if let Some(tour) = &app.tour {
-            draw_coach(app, f, area, tour);
-        }
     }
     if app.first_run.is_some() {
         crate::onboard::draw(app, f, area);
@@ -128,54 +125,6 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     } else if app.which_key_shown() {
         draw_which_key(app, f, area);
     }
-}
-
-/// The tour's coach (UX1.22): bottom right, above the status bar, never in the way of keys.
-fn draw_coach(app: &App, f: &mut Frame<'_>, area: Rect, tour: &crate::tour::Tour) {
-    let t = &app.theme;
-    let (title, lines) = tour.coach(app);
-    let width = 58.min(area.width.saturating_sub(2));
-    let inner = width.saturating_sub(2) as usize;
-    let mut rows: Vec<Line<'_>> = Vec::new();
-    for l in &lines {
-        for row in textwrap_simple(l, inner) {
-            rows.push(Line::raw(row));
-        }
-    }
-    let height = (rows.len() as u16 + 2).min(area.height.saturating_sub(2));
-    let bottom = area.bottom().saturating_sub(u16::from(app.config.ui.status_bar));
-    let r = Rect {
-        x: area.right().saturating_sub(width + 1),
-        y: bottom.saturating_sub(height),
-        width,
-        height,
-    };
-    f.render_widget(Clear, r);
-    f.render_widget(
-        Paragraph::new(rows).block(
-            Block::default().borders(Borders::ALL).border_style(fg(app, t.accent)).title(
-                Span::styled(format!(" {title} "), fg(app, t.accent).add_modifier(Modifier::BOLD)),
-            ),
-        ),
-        r,
-    );
-}
-
-/// `text` wrapped at spaces into rows of at most `width` columns.
-fn textwrap_simple(text: &str, width: usize) -> Vec<String> {
-    let mut rows = vec![String::new()];
-    for word in text.split(' ') {
-        let row = rows.last_mut().expect("a row");
-        if !row.is_empty() && row.width() + 1 + word.width() > width {
-            rows.push(word.to_owned());
-        } else {
-            if !row.is_empty() {
-                row.push(' ');
-            }
-            row.push_str(word);
-        }
-    }
-    rows
 }
 
 /// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.

@@ -21,6 +21,12 @@ struct World {
 
 impl World {
     fn new(extra: Value) -> Self {
+        Self::with_config(extra, None)
+    }
+
+    /// With a user config in place before the daemon starts. Written once the daemon runs, its
+    /// reload races the TUI started next, whose keys can land before it.
+    fn with_config(extra: Value, config: Option<&str>) -> Self {
         let dir = tempfile::Builder::new().prefix("ptyro-boot2-").tempdir().unwrap();
         for d in ["fake", "home"] {
             std::fs::create_dir_all(dir.path().join(d)).unwrap();
@@ -29,7 +35,7 @@ impl World {
         w.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         std::fs::write(dir.path().join("fake/world.json"), w.to_string()).unwrap();
         let (fake, home) = (path(&dir.path().join("fake")), path(&dir.path().join("home")));
-        let d = TempDaemon::start_with_env(
+        let d = TempDaemon::start_with(
             BIN,
             &[
                 ("PTYRO_TEST_SETUP", &fake),
@@ -39,6 +45,7 @@ impl World {
                 // runs while a test does.
                 ("PTYRO_TEST_UPDATES_FIRST_MS", "3600000"),
             ],
+            config,
         )
         .unwrap();
         Self { dir, d }
@@ -153,59 +160,59 @@ async fn a_running_install_is_never_joined_by_a_second() {
 }
 
 /// Later, `U` opens the checklist alone (a config exists: no first run). What's here isn't
-/// offered; Space ticks Antigravity, ⏎ installs just it, and its sign-in runs since it was just
+/// offered; Space ticks OpenCode, ⏎ installs just it, and its sign-in runs since it was just
 /// installed. `s` (not now) closes it with nothing installed, saying how to come back.
 #[tokio::test]
 async fn the_checklist_comes_back_on_its_key_and_installs_what_is_ticked() {
     let all = json!({ "claude": "2.1.319", "codex": "0.162.1", "git": "2.43.0", "gh": "2.57.0" });
-    let w = World::new(json!({ "installed": all, "logged_in": ["claude", "codex", "gh"] }));
     // No update offers (BOOT5) on these screens: nothing but the checklist's own messages.
-    w.d.write_config("[updates]\ncheck = \"off\"\n").unwrap();
+    let w = World::with_config(
+        json!({ "installed": all, "logged_in": ["claude", "codex", "gh"] }),
+        Some("[updates]\ncheck = \"off\"\n"),
+    );
     // Not now first: nothing runs.
     let r = run(w
         .tui()
         .send_when("▾ main", "\\x11U")
-        .send_when("[ ] Antigravity", "s")
+        .send_when("[ ] OpenCode", "s")
         .until("opens the setup checklist"))
     .await
     .unwrap();
     assert!(r.screen.contains("C-q U opens the setup checklist"), "{}", r.screen);
     assert!(w.log("calls.log").is_empty(), "nothing ran");
-    // Then Antigravity: the cursor starts on it, the first row.
+    // Then OpenCode: the cursor starts on it, the first row.
     let r = run(w
         .tui()
         .send_when("▾ main", "\\x11U")
-        .send_when("[ ] Antigravity", " ")
-        .send_when("[x] Antigravity", "\\r")
+        .send_when("[ ] OpenCode", " ")
+        .send_when("[x] OpenCode", "\\r")
         .until("More accounts"))
     .await
     .unwrap();
-    assert!(w.installed("antigravity"), "{}", r.screen);
-    for id in ["claude", "codex", "opencode", "gemini", "node"] {
+    assert!(w.installed("opencode"), "{}", r.screen);
+    for id in ["claude", "codex", "node"] {
         assert!(!w.installed(id), "{id} wasn't ticked");
     }
     assert_eq!(w.log("calls.log").iter().filter(|c| c.starts_with("install")).count(), 1);
     assert!(
-        w.log("logins.log").contains(&"login antigravity".to_owned()),
+        w.log("logins.log").contains(&"login opencode".to_owned()),
         "just installed: its sign-in"
     );
 }
 
-/// `ptyro init` offers the same checklist (the CLI's, in its terminal) in its agents step; with
-/// no agent found, yes is its default (BOOT9), so Enter opens it.
+/// `ptyro setup` at a terminal starts with the same checklist (the CLI's), the defaults ticked;
+/// quitting it installs nothing, and setup goes on to ask about the rest (what `ptyro init`
+/// asked before it was merged in, 2026-11-17).
 #[tokio::test]
-async fn init_offers_the_setup_checklist() {
+async fn setup_at_a_terminal_starts_with_the_checklist_then_asks_the_rest() {
     let w = World::new(json!({}));
     let r = run(w
-        .ptyro(&["init"])
-        // No agent the developer has may be found (PATH, nvm's, npm's): none is, so the
-        // question defaults to yes.
+        .ptyro(&["setup"])
         .env("PATH", "/usr/bin:/bin")
         .env("NVM_DIR", &path(&w.dir.path().join("no-nvm")))
         .env("NPM_CONFIG_PREFIX", &path(&w.dir.path().join("no-npm")))
-        .send_when("open the setup checklist, to install agents and tools? [Y/n]", "\\r")
         .send_when("Enter to install", "q\\r")
-        .until("Nothing installed."))
+        .until("accounts, preferences and repositories?"))
     .await
     .unwrap();
     assert!(r.screen.contains("[x] Claude Code"), "{}", r.screen);

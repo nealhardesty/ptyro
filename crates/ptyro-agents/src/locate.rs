@@ -1,6 +1,6 @@
 //! Finding an agent's program when it isn't on `PATH` (out of the box first, SPEC §1.3): a daemon
 //! started by a service manager has a short `PATH`, and npm-installed agents live where nvm, an
-//! npm prefix or `npx`'s cache put them. Gemini CLI run as `npx …` (a shell alias) is only ever in
+//! npm prefix or `npx`'s cache put them. An agent run as `npx …` (a shell alias) is only ever in
 //! that cache. ptyro never downloads an agent: it runs one that is already on disk, and when none
 //! is, it offers setup to install it ([`install_fix`], BOOT9; the vendor's own command is
 //! [`install_hint`]).
@@ -27,7 +27,7 @@ pub struct Found {
 }
 
 impl Found {
-    /// For people: `/usr/local/bin/codex`, or `~/.npm/_npx/…/gemini.js (npx cache)`.
+    /// For people: `/usr/local/bin/codex`, or `~/.npm/_npx/…/opencode.js (npx cache)`.
     pub fn describe(&self) -> String {
         let p = tilde(&self.path);
         match &self.via {
@@ -39,7 +39,6 @@ impl Found {
 
 /// The npm package and its command for the built-in agents that npm ships.
 const NPM: &[(&str, &str)] = &[
-    ("gemini", "@google/gemini-cli"),
     ("codex", "@openai/codex"),
     ("opencode", "opencode-ai"),
     ("claude", "@anthropic-ai/claude-code"),
@@ -61,9 +60,8 @@ fn hint_on(program: &str, platform: crate::catalog::Platform) -> Option<String> 
     crate::catalog::by_program(program)?.method(platform, |_| true)?.install.clone()
 }
 
-/// Which agent to install, where a message finds none (BOOT9): Antigravity for a Google account,
-/// Gemini CLI kept for the accounts it still serves (SPEC §24.10).
-pub const WHICH_AGENT: &str = "Claude Code, Codex, or Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts";
+/// Which agent to install, where a message finds none (BOOT9).
+pub const WHICH_AGENT: &str = "Claude Code, Codex or OpenCode";
 
 /// No coding agent installed (BOOT9), in every client's words: `ptyro setup` is the fix, which
 /// the TUI offers as its checklist (`C-q U`) and the web as its setup page.
@@ -71,10 +69,9 @@ pub fn no_agent() -> String {
     format!("No coding agent is installed: `ptyro setup` installs one ({WHICH_AGENT})")
 }
 
-/// No agent that can chat (BOOT9). Antigravity has no structured mode (SPEC §22.5), so it is
-/// named as what a Google account runs in a session, not as a fix.
+/// No agent that can chat (BOOT9).
 pub fn no_chat_agent() -> String {
-    "No agent that can chat is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account, runs in sessions but can't chat)".into()
+    format!("No agent that can chat is installed: `ptyro setup` installs one ({WHICH_AGENT})")
 }
 
 /// The fix for a missing agent or tool setup installs here: `` `ptyro install codex` installs
@@ -96,7 +93,7 @@ pub fn not_installed(agent: &str, program: &str) -> String {
 
 /// What a message's setup offer installs (BOOT9), for a client that does it instead of leaving it
 /// to be typed: `` `ptyro setup` installs `` is the checklist's defaults (`Some([])`), and
-/// `` `ptyro install codex agy` installs `` those names. Only the offers above: a lock held by
+/// `` `ptyro install codex gh` installs `` those names. Only the offers above: a lock held by
 /// `` `ptyro install` `` or a move (`` `ptyro install codex` moves it ``) is something else.
 pub fn setup_offer(text: &str) -> Option<Vec<String>> {
     text.match_indices("`ptyro ").find_map(|(at, open)| {
@@ -196,8 +193,6 @@ fn places() -> Option<Places> {
         dirs.push((home.join(".local").join("bin"), "~\\.local\\bin".into()));
         let local = var("LOCALAPPDATA").unwrap_or_else(|| home.join("AppData").join("Local"));
         dirs.push((local.join("Microsoft").join("WinGet").join("Links"), "WinGet".into()));
-        // The Antigravity CLI's installer (`install.ps1`) puts `agy.exe` here.
-        dirs.push((local.join("agy").join("bin"), "%LOCALAPPDATA%\\agy\\bin".into()));
         let scoop = var("SCOOP").unwrap_or_else(|| home.join("scoop"));
         dirs.push((scoop.join("shims"), "Scoop".into()));
         // nvm-windows: the active Node's folder, where its global packages' commands are.
@@ -497,40 +492,40 @@ mod tests {
         let f = find_in("codex", &path, &places(home, &nvm)).unwrap();
         assert_eq!((f.argv, f.via), (vec!["codex".to_owned()], None));
         // Nowhere: nothing (and never a download).
-        assert!(find_in("gemini", &path, &places(home, &nvm)).is_none());
+        assert!(find_in("opencode", &path, &places(home, &nvm)).is_none());
         // In nvm's newest node: a Node script runs with the `node` beside it (none on PATH).
         let old = nvm.join("versions/node/v9.0.0/bin");
         let new = nvm.join("versions/node/v24.18.0/bin");
-        exe(&old.join("gemini"), "#!/usr/bin/env node\n");
-        exe(&new.join("gemini"), "#!/usr/bin/env node\n");
+        exe(&old.join("opencode"), "#!/usr/bin/env node\n");
+        exe(&new.join("opencode"), "#!/usr/bin/env node\n");
         exe(&new.join("node"), "");
-        let f = find_in("gemini", &path, &places(home, &nvm)).unwrap();
+        let f = find_in("opencode", &path, &places(home, &nvm)).unwrap();
         assert_eq!(f.via.as_deref(), Some("nvm"));
         assert_eq!(f.argv[0], new.join("node").to_string_lossy());
-        assert_eq!(f.argv[1], new.join("gemini").canonicalize().unwrap().to_string_lossy());
+        assert_eq!(f.argv[1], new.join("opencode").canonicalize().unwrap().to_string_lossy());
         // Only in npx's cache: its newest copy, run with node.
         std::fs::remove_dir_all(nvm.join("versions/node/v9.0.0")).unwrap();
-        std::fs::remove_file(new.join("gemini")).unwrap();
+        std::fs::remove_file(new.join("opencode")).unwrap();
         // Newer copies that aren't the package (an alias under its name) or whose script is
         // outside it are passed over.
         for (h, name, v, bin) in [
-            ("a1", "@google/gemini-cli", "0.60.0", "bundle/gemini.js"),
-            ("b2", "@google/gemini-cli", "0.66.0", "bundle/gemini.js"),
-            ("c3", "not-gemini", "9.0.0", "bundle/gemini.js"),
-            ("d4", "@google/gemini-cli", "9.0.0", "../../x.js"),
+            ("a1", "opencode-ai", "0.60.0", "bin/opencode.js"),
+            ("b2", "opencode-ai", "0.66.0", "bin/opencode.js"),
+            ("c3", "not-opencode", "9.0.0", "bin/opencode.js"),
+            ("d4", "opencode-ai", "9.0.0", "../../x.js"),
         ] {
-            let pkg = home.join(".npm/_npx").join(h).join("node_modules/@google/gemini-cli");
-            exe(&pkg.join("bundle/gemini.js"), "#!/usr/bin/env node\n");
+            let pkg = home.join(".npm/_npx").join(h).join("node_modules/opencode-ai");
+            exe(&pkg.join("bin/opencode.js"), "#!/usr/bin/env node\n");
             exe(&home.join(".npm/_npx").join(h).join("node_modules/x.js"), "#!/usr/bin/env node\n");
             std::fs::write(
                 pkg.join("package.json"),
                 format!(
-                    "{{\"name\":\"{name}\",\"version\":\"{v}\",\"bin\":{{\"gemini\":\"{bin}\"}}}}"
+                    "{{\"name\":\"{name}\",\"version\":\"{v}\",\"bin\":{{\"opencode\":\"{bin}\"}}}}"
                 ),
             )
             .unwrap();
         }
-        let f = find_in("gemini", &path, &places(home, &nvm)).unwrap();
+        let f = find_in("opencode", &path, &places(home, &nvm)).unwrap();
         assert_eq!(f.via.as_deref(), Some("npx cache"));
         assert!(f.path.to_string_lossy().contains("/b2/"), "{f:?}");
         assert_eq!(
@@ -543,7 +538,10 @@ mod tests {
         // A configured full path is taken as it is.
         let full = bin.join("codex").to_string_lossy().into_owned();
         assert_eq!(find_in(&full, "", &places(home, &nvm)).unwrap().argv, [full]);
-        assert_eq!(install_hint("gemini").as_deref(), Some("npm install -g @google/gemini-cli"));
+        assert_eq!(
+            install_hint("codex").as_deref(),
+            Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh")
+        );
     }
 
     /// The hint is the version table's recommended command for the platform.
@@ -564,8 +562,8 @@ mod tests {
             Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh")
         );
         assert_eq!(
-            h("agy", WindowsArm64).as_deref(),
-            Some("irm https://antigravity.google/cli/install.ps1 | iex")
+            h("codex", WindowsArm64).as_deref(),
+            Some("irm https://chatgpt.com/codex/install.ps1 | iex")
         );
         assert_eq!(
             h("opencode", Linux).as_deref(),
@@ -575,12 +573,11 @@ mod tests {
         assert_eq!(h("my-own-agent", Linux), None);
     }
 
-    /// BOOT9: a missing agent offers setup, not a command to copy, and the no-agent words name
-    /// Antigravity for a Google account (Gemini CLI only for the accounts it still serves).
+    /// BOOT9: a missing agent offers setup, not a command to copy.
     #[test]
     fn missing_agents_offer_setup() {
         assert_eq!(install_fix("codex").as_deref(), Some("`ptyro install codex` installs it"));
-        assert_eq!(install_fix("agy").as_deref(), Some("`ptyro install agy` installs it"));
+        assert_eq!(install_fix("agy"), None, "no longer one setup installs (2026-11-17)");
         assert_eq!(install_fix("git").as_deref(), Some("`ptyro install git` installs it"));
         assert_eq!(install_fix("my-own-agent"), None);
         assert_eq!(
@@ -593,20 +590,9 @@ mod tests {
         );
         let none = no_agent();
         assert!(none.contains("`ptyro setup` installs one"), "{none}");
-        assert!(none.contains("Antigravity for a Google account"), "{none}");
-        assert!(
-            none.contains("Gemini CLI is for Gemini API keys and enterprise accounts"),
-            "{none}"
-        );
-        assert!(
-            none.find("Claude Code") < none.find("Gemini CLI"),
-            "Gemini CLI isn't first: {none}"
-        );
+        assert!(none.contains("Claude Code, Codex or OpenCode"), "{none}");
         let chat = no_chat_agent();
         assert!(chat.contains("`ptyro setup` installs one"), "{chat}");
-        assert!(
-            chat.contains("Antigravity, for a Google account, runs in sessions but can't chat")
-        );
         // The offers parse back to what they install; other mentions of the commands don't.
         assert_eq!(setup_offer(&none), Some(vec![]));
         assert_eq!(setup_offer(&chat), Some(vec![]));
@@ -692,27 +678,24 @@ mod windows_rules {
         assert_eq!(as_paths(&find_in("opencode", &path, &places).unwrap().argv), [bin]);
         // On PATH too: what the shim starts, found by `PATHEXT`.
         let on_path = home.join("bin");
-        let gem = on_path.join("node_modules/@google/gemini-cli/bundle/gemini.js");
+        let gem = on_path.join("node_modules/mine-cli/bin/mine.js");
         write(&gem, "#!/usr/bin/env node\n");
-        write(
-            &on_path.join("gemini.cmd"),
-            &shim(r"node_modules\@google\gemini-cli\bundle\gemini.js"),
-        );
+        write(&on_path.join("mine.cmd"), &shim(r"node_modules\mine-cli\bin\mine.js"));
         write(&on_path.join("node.exe"), "MZ");
-        let f = find_in("gemini", &path, &places).unwrap();
+        let f = find_in("mine", &path, &places).unwrap();
         assert_eq!(as_paths(&f.argv), [on_path.join("node.exe"), gem]);
         assert_eq!(f.via, None);
         // A shim whose target climbs out of its folder, or isn't there, runs as itself.
-        write(&npm.join("agy.cmd"), &shim(r"..\..\evil.exe"));
+        write(&npm.join("own.cmd"), &shim(r"..\..\evil.exe"));
         write(&home.join("AppData/evil.exe"), "MZ");
         assert_eq!(
-            find_in("agy", &path, &places).unwrap().argv,
-            [npm.join("agy.cmd").to_string_lossy()]
+            find_in("own", &path, &places).unwrap().argv,
+            [npm.join("own.cmd").to_string_lossy()]
         );
         assert_eq!(shim_target(&npm.join("codex")), None, "only a .cmd is a shim");
         // A shim left behind by an install that rolled back (its package gone): not found.
-        write(&npm.join("gemini.cmd"), &shim(r"node_modules\@google\gemini-cli\bundle\gemini.js"));
+        write(&npm.join("mine.cmd"), &shim(r"node_modules\mine-cli\bin\mine.js"));
         std::fs::remove_dir_all(home.join("bin")).unwrap();
-        assert!(find_in("gemini", &path, &places).is_none(), "a broken shim runs nothing");
+        assert!(find_in("mine", &path, &places).is_none(), "a broken shim runs nothing");
     }
 }

@@ -437,14 +437,7 @@ impl Daemon {
             let adapter = ptyro_agents::adapter(&id);
             let mut base =
                 a.command.clone().or_else(|| self.agent_argv(&a.name)).ok_or_else(|| {
-                    Error::new(
-                        ErrorCode::NotFound,
-                        format!(
-                            "no agent named {:?} (known: {})",
-                            a.name,
-                            ptyro_agents::names(&config).join(", ")
-                        ),
-                    )
+                    Error::new(ErrorCode::NotFound, ptyro_agents::unknown(&config, &a.name))
                 })?;
             agent_program = base.first().map(|p| (a.name.clone(), p.clone()));
             base.extend(l.argv.iter().cloned());
@@ -458,7 +451,7 @@ impl Daemon {
                     ),
                 ));
             }
-            let home = ptyro_agents::home_var(&id)
+            let home = ptyro_agents::dir_var(&id)
                 .and_then(|v| plan.set.iter().find(|(k, _)| k == v).map(|(_, p)| PathBuf::from(p)))
                 .or_else(|| ptyro_agents::default_dir(&id));
             let ptyro = hook_ptyro();
@@ -493,13 +486,8 @@ impl Daemon {
                     .then(free_port)
                     .flatten()
                     .map(|p| (p, ptyro_agents::adapter::random_hex()));
-                argv = ptyro_drive::launch_args(
-                    &protocol,
-                    &id,
-                    &base,
-                    &opts,
-                    http.as_ref().map(|h| h.0),
-                );
+                argv =
+                    ptyro_drive::launch_args(&protocol, &base, &opts, http.as_ref().map(|h| h.0));
                 agent_env.extend(def.env.iter().map(|(k, v)| (k.clone(), v.clone())));
                 if let Some((_, pw)) = &http {
                     agent_env.push(("OPENCODE_SERVER_PASSWORD".into(), pw.clone()));

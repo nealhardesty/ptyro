@@ -1,7 +1,7 @@
 //! M10 end-to-end tests: the structured machinery chats run on (SPEC §22.2). A session of your
 //! own is no longer started structured (removed 2026-11-17), so it is tested through chats:
 //! every protocol's turn, permission request and answer (Claude stream-json, Codex app-server,
-//! Gemini ACP, OpenCode's server), and a chat's answer cut off by a live upgrade. A session started
+//! an ACP agent of the user's, OpenCode's server), and a chat's answer cut off by a live upgrade. A session started
 //! structured before the removal resumes in its agent's own terminal UI. Every agent is the fake.
 
 use std::path::PathBuf;
@@ -33,11 +33,15 @@ impl World {
         let mut config = String::from(
             "[attention]\nmin_work = \"1s\"\n[chat]\ntitle = \"off\"\n[worktrees]\nfetch = false\n",
         );
-        for a in ["claude", "codex", "gemini", "opencode"] {
+        for a in ["claude", "codex", "opencode"] {
             config.push_str(&format!(
                 "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));
         }
+        // An agent of the user's that speaks ACP.
+        config.push_str(&format!(
+            "[agents.acp]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"acp\", \"--acp\"]\nprotocol = \"acp\"\n"
+        ));
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
     }
@@ -118,7 +122,7 @@ fn every_protocol_answers_a_chat_and_its_permission_requests() {
     for (agent, protocol) in [
         ("claude", "stream-json"),
         ("codex", "app-server"),
-        ("gemini", "acp"),
+        ("acp", "acp"),
         ("opencode", "opencode"),
     ] {
         let (id, addr) = new_chat(&w, agent, "work 0.2 first");

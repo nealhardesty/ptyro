@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | `stream-json` | Claude Code `-p --input-format/--output-format stream-json` | stdio, JSON lines |
 //! | `app-server` | Codex `app-server` | stdio, JSON-RPC (no `jsonrpc` field) |
-//! | `acp` | Gemini `--acp`, any Agent Client Protocol agent | stdio, JSON-RPC 2.0 |
+//! | `acp` | any Agent Client Protocol agent (`protocol = "acp"`) | stdio, JSON-RPC 2.0 |
 //! | `opencode` | OpenCode `serve` | HTTP + server-sent events |
 
 pub mod acp;
@@ -87,7 +87,6 @@ pub fn protocol_for(adapter: &str) -> Option<&'static str> {
     Some(match adapter {
         "claude" => "stream-json",
         "codex" => "app-server",
-        "gemini" => "acp",
         "opencode" => "opencode",
         _ => return None,
     })
@@ -98,13 +97,7 @@ pub const PROTOCOLS: &[&str] = &["stream-json", "app-server", "acp", "opencode"]
 
 /// The command line for structured mode: the agent's configured command plus what the protocol
 /// needs. `port` is OpenCode's server port.
-pub fn launch_args(
-    protocol: &str,
-    adapter: &str,
-    base: &[String],
-    opts: &Opts,
-    port: Option<u16>,
-) -> Vec<String> {
+pub fn launch_args(protocol: &str, base: &[String], opts: &Opts, port: Option<u16>) -> Vec<String> {
     let mut v = base.to_vec();
     let add = |v: &mut Vec<String>, a: &[&str]| v.extend(a.iter().map(|s| (*s).to_owned()));
     match protocol {
@@ -130,8 +123,7 @@ pub fn launch_args(
             }
         }
         "app-server" => add(&mut v, &["app-server"]),
-        // Gemini needs `--acp`; another ACP agent's command is used as configured.
-        "acp" if adapter == "gemini" => add(&mut v, &["--acp"]),
+        // An ACP agent's command is used as configured.
         "opencode" => {
             let p = port.unwrap_or(0).to_string();
             add(&mut v, &["serve", "--port", &p, "--hostname", "127.0.0.1"]);
@@ -172,7 +164,6 @@ mod tests {
         let base = vec!["claude".to_owned(), "--model".into(), "opus".into()];
         let a = launch_args(
             "stream-json",
-            "claude",
             &base,
             &Opts { session_id: Some("u1".into()), ..Opts::default() },
             None,
@@ -182,7 +173,6 @@ mod tests {
         assert!(a.ends_with(&["--session-id".into(), "u1".into()]));
         let r = launch_args(
             "stream-json",
-            "claude",
             &base,
             &Opts { resume: Some("c9".into()), session_id: Some("u1".into()), ..Opts::default() },
             None,
@@ -191,22 +181,18 @@ mod tests {
             r.ends_with(&["--resume".into(), "c9".into()]) && !r.contains(&"--session-id".into())
         );
         assert_eq!(
-            launch_args("app-server", "codex", &["codex".into()], &Opts::default(), None),
+            launch_args("app-server", &["codex".into()], &Opts::default(), None),
             ["codex", "app-server"]
         );
         assert_eq!(
-            launch_args("acp", "gemini", &["/x/gemini".into()], &Opts::default(), None),
-            ["/x/gemini", "--acp"]
-        );
-        assert_eq!(
-            launch_args("acp", "generic", &["my-acp-agent".into()], &Opts::default(), None),
+            launch_args("acp", &["my-acp-agent".into()], &Opts::default(), None),
             ["my-acp-agent"]
         );
         assert_eq!(
-            launch_args("opencode", "opencode", &["opencode".into()], &Opts::default(), Some(4100)),
+            launch_args("opencode", &["opencode".into()], &Opts::default(), Some(4100)),
             ["opencode", "serve", "--port", "4100", "--hostname", "127.0.0.1"]
         );
-        assert_eq!(protocol_for("gemini"), Some("acp"));
-        assert_eq!(protocol_for("antigravity"), None);
+        assert_eq!(protocol_for("gemini"), None, "removed (2026-11-17): `protocol = \"acp\"`");
+        assert_eq!(protocol_for("generic"), None);
     }
 }

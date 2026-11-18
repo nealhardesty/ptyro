@@ -203,7 +203,7 @@ pub enum State {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         store: Option<String>,
     },
-    /// Older than something ticked needs (Node.js 18 for Gemini CLI's 20).
+    /// Older than something ticked needs (git 2.20 for Codex's 2.23).
     TooOld {
         version: String,
         min: String,
@@ -569,7 +569,7 @@ pub struct Entry {
     pub id: String,
     pub name: String,
     pub kind: Kind,
-    /// Beside the name: Gemini CLI's "for Gemini API-key and enterprise accounts…".
+    /// Beside the name: a qualifier ("for API-key accounts").
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default)]
@@ -695,7 +695,7 @@ pub fn defaults(survey: &Survey) -> Vec<String> {
         .collect()
 }
 
-/// The item a person means: its id (`antigravity`), its command (`agy`) or its name, in any
+/// The item a person means: its id (`claude`), its command (`opencode`) or its name, in any
 /// case and without the spaces or dots (`github-cli`, `"Claude Code"`, `nodejs`).
 pub fn resolve(name: &str) -> Result<&'static Item, String> {
     let squash = |s: &str| -> String {

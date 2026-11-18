@@ -185,7 +185,7 @@ pub fn random_hex() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// A random UUIDv4 (Claude and Gemini accept these as `--session-id`).
+/// A random UUIDv4 (Claude accepts these as `--session-id`).
 pub fn uuid_v4() -> String {
     let h = random_hex();
     let mut c: Vec<char> = h.chars().collect();

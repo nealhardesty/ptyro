@@ -145,7 +145,7 @@ fn work_profile_environment() {
     assert_eq!(get("OPENAI_API_KEY"), Some("resolved:op read codex:profiles.work.codex.api_key"));
     assert_eq!(get("CODEX_API_KEY"), get("OPENAI_API_KEY"));
     // Omitted agents get a managed dir, never the agent's default one.
-    assert_eq!(path("GEMINI_CLI_HOME"), want("/data/profiles/work/gemini"));
+    assert_eq!(path("OPENCODE_CONFIG_DIR"), want("/data/profiles/work/opencode"));
     assert_eq!(path("GH_CONFIG_DIR"), want("/data/profiles/work/gh"));
     assert_eq!(get("GH_TOKEN"), Some("ghp_literal"));
     assert_eq!(get("GIT_AUTHOR_NAME"), Some("Work Me"));
@@ -164,7 +164,7 @@ fn secrets_never_appear_in_the_shown_env() {
         assert_eq!(shown[k], format!("<secret:{k}>"));
     }
     assert_eq!(shown["CLAUDE_CONFIG_DIR"], "/acct/claude-work");
-    assert!(p.create_dirs.contains(&PathBuf::from("/data/profiles/work/gemini")));
+    assert!(p.create_dirs.contains(&PathBuf::from("/data/profiles/work/opencode")));
     let failing = plan(&c, "work", Path::new("/d"), &mut |label: &str, _: &Secret| {
         Err(format!("{label}: op not signed in"))
     });

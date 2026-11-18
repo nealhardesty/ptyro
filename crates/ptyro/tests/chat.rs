@@ -34,7 +34,7 @@ impl World {
         let mut config = String::from(
             "[chat]\ntitle_command = [\"sh\", \"-c\", \"cat >/dev/null; echo '\\\"A fake title.\\\"'\"]\n",
         );
-        for a in ["claude", "codex", "gemini", "opencode"] {
+        for a in ["claude", "codex", "opencode"] {
             config.push_str(&format!(
                 "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
             ));

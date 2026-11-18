@@ -62,8 +62,8 @@ Status markers used below:
 2. **Detach/reattach like tmux.** Sessions are owned by a background daemon and survive the client
    going away (closed terminal, dropped SSH, laptop lid). Reattach from anywhere and get the exact
    screen back.
-3. **Agents are first-class.** Claude Code is the primary agent; Codex CLI, Gemini CLI and OpenCode
-   are supported from early on. ptyro *knows* when an agent is working, blocked on you, idle, or dead,
+3. **Agents are first-class.** Claude Code is the primary agent; Codex CLI and OpenCode
+   are supported too. ptyro *knows* when an agent is working, blocked on you, idle, or dead,
    without scraping the screen.
 4. **Speed.** Native Rust. Keystroke-to-child overhead is imperceptible; idle CPU is ~zero; startup is
    instant.
@@ -133,7 +133,7 @@ Status markers used below:
 | **Worktree** | An isolated `git worktree` checkout of a project on its own branch, created and tracked by ptyro. The project's main checkout is also represented as a (special, non-deletable) worktree named `@root`. |
 | **Session** | One process running in one ptyro-owned PTY, with its own terminal state — an agent (`claude`, `codex`, …) or a plain shell/command. Sessions are what you attach to. |
 | **Name / title** | **[built UX1.24]** Sessions and worktrees have both. The **name** is the address (`[a-z0-9._-]`, fixed at creation, changed only by `rename`): `ptyro send fix-flaky-test …`. The **title** is free text people read (the task, a PR's title) and changes freely (`rename --title`). By default a name is made from the title or prompt (`fix-flaky-test`), else `<agent>-<corvid>` (`claude-rook`), else a friendly pair; the title is the prompt. |
-| **Agent** | A configured session kind backed by an adapter (`claude`, `codex`, `gemini`, `opencode`, `shell`, or a user-defined generic command). |
+| **Agent** | A configured session kind backed by an adapter (`claude`, `codex`, `opencode`, `shell`, or a user-defined generic command). |
 | **Conversation** | The agent's own notion of a chat (Claude `session_id`, Codex `thread_id`, …). A ptyro session *has* zero or one current conversation id; resuming a dormant session reuses it. Never confuse the two ids. |
 | **Chat** | **[decided 2026-10-29, §22]** A general-purpose conversation with an agent: no repository, no worktree. A durable tree of nodes in `chat.db`, owned by one workspace on one machine, served by a replaceable *engine* (a hidden structured session). Not a session, and not the agent's *conversation* (a chat may use several over its life). |
 | **Shell (SHELLS)** | **[decided 2026-11-04, §23; proposed]** A session that belongs to a workspace instead of a worktree (`loose`), any command, listed in the workspace's SHELLS section under a **number** (its *slot*) that never changes on its own: `Alt-3`, `%3`. tmux's window. Not the quick terminal (one per worktree, §11.2h). |
@@ -297,13 +297,13 @@ uses it, so the rules can't drift apart.
  │  Supervisor (registry, addressing, commands)   Status engine (§9)        │
  │  Client hub (subscriptions, frame pacing)      Notifier (OSC 9, push…)   │
  │  Session actors ×N:  PTY ⇄ Emulator ⇄ row-versioned screen  ⇄ recorder   │
- │  Adapter layer: claude | codex | gemini | opencode | shell | generic     │
+ │  Adapter layer: claude | codex | opencode | shell | generic              │
  │  Git/worktree service (git CLI)   Script runner (setup/run)              │
  │  Store actor (SQLite)             Config loader (TOML, layered)          │
  └───────────────┬──────────────────────────────────────────────────────────┘
                  │ owns PTY masters; children are its direct child processes
-     ┌───────────┼───────────┬─────────────┬─────────────┐
-   claude      codex       gemini       opencode      $SHELL / nvim / …
+     ┌───────────┼───────────┬─────────────┐
+   claude      codex       opencode      $SHELL / nvim / …
  (each in its own PTY, own process group, cwd = its worktree)
 ```
 
@@ -331,7 +331,7 @@ ptyro/
 │   ├── ptyro-term/            # Emulator trait + alacritty backend, row versions, snapshots,
 │   │                          #   query responder, input encoding, OSC side-channel parser
 │   ├── ptyro-daemon/          # actors: supervisor, sessions, client hub, notifier, scripts
-│   ├── ptyro-agents/          # adapters: claude, codex, gemini, opencode, shell, generic
+│   ├── ptyro-agents/          # adapters: claude, codex, opencode, shell, generic
 │   ├── ptyro-git/             # worktree ops (git CLI), fast reads (gix, optional)
 │   ├── ptyro-store/           # rusqlite schema, migrations, store actor
 │   ├── ptyro-drive/           # structured-session drivers: Claude stream-json, Codex
@@ -773,7 +773,7 @@ against the **child's current modes** (only the daemon knows them):
   `ESC[201~` is stripped (paste-injection defence). Newlines normalized to `\r` when not bracketed.
 - `Focus { gained }` → `CSI I` / `CSI O` iff mode 1004 is on. Focus is sent honestly: a session is
   focused when it is the focused pane of the *controlling* client and that client's outer terminal
-  is focused. Codex/Gemini use focus to decide whether to notify (§20).
+  is focused. Codex uses focus to decide whether to notify (§20).
 - `RawBytes { bytes }` — escape hatch for `ptyro send --raw` and the `--raw` attach mode.
 
 The TUI asks the *outer* terminal for kitty keyboard enhancement
@@ -819,7 +819,7 @@ XTVERSION (`DCS > | ptyro <ver> ST`), `CSI 16 t`, XTGETTCAP.
 | OSC 7501 status reports | agent status (§9.2) |
 | OSC 9 / OSC 777 `notify` / OSC 99 (kitty) | notifications (§9.5) |
 | BEL | attention hint (configurable) |
-| OSC 0/2 title | pane title; Gemini's dynamic title encodes Ready/Action Required/Working (§8.6) |
+| OSC 0/2 title | pane title |
 | OSC 7 cwd | session cwd without polling |
 | OSC 133 A/B/C/D (shell integration) | prompt marks → jump-to-prompt in scrollback, command exit status for shell sessions. **[built M2]** Marks are stored *inside the grid*: at 133;A the daemon splits the batch and injects an invisible OSC 8 hyperlink (`ptyro:prompt`) that it closes at B/C/D or at the next newline. alacritty keeps hyperlinks per cell through scrolling and reflow, so the mark travels with its line into history, where line numbers can't follow. Rows carry `prompt: true` in frames and scrollback documents. Caveat: a program's own hyperlink that is open at that moment ends there. **[built WIN1]** Shell sessions get the snippets with no setup (§8.7); `ptyro shell-init bash\|zsh\|fish\|pwsh` prints them for other shells; they do nothing outside ptyro. |
 | OSC 9;*n* (ConEmu's numbered commands) | **[built WIN1]** OSC 9 is two things: `9;<text>` is a notification (iTerm2), and `9;<digits>[;…]` is one of ConEmu's commands. `9;4` is progress; `9;9;<path>` is the directory (Windows Terminal uses it too, so a prompt set up for Windows Terminal reports it in ptyro unchanged): a POSIX path as it is, and in WSL a Windows path mapped (`C:\src` → `/mnt/c/src` under `[automount] root` from `/etc/wsl.conf`, `\\wsl.localhost\<distro>\p` → `/p`); elsewhere a Windows path is ignored. `9;12` is a prompt start (clink, cmd.exe), like 133;A. Every other number (sleep, message box, run a program…) is dropped, never shown as a notification. Before WIN1, `9;9` raised a notification at every prompt. |
@@ -1171,6 +1171,14 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-17] Protocol 1.48** (a removal): Gemini CLI and Antigravity as built-in agents
+(§8.5, §8.6b, §8.6d), `ptyro integrations`, the tour (§11.2h), `ptyro backup` (§14.5), and
+`ptyro init`, merged into `ptyro setup` (§12.3). No wire change: the web's host operations
+`integrations.ls`, `integrations.install`, `integrations.uninstall`, `backup.create`,
+`tour.start` and `tour.end` answer `unsupported`, saying they were removed. `ptyro_drive::launch_args`
+lost its adapter parameter (no built-in mapping is left to pick by it; an agent with `protocol =
+"acp"` gets the generic ACP path).
+
 **[built 2026-11-17] Protocol 1.47** (a removal): the chat trims (§22.7, §22.10, §22.14):
 comparing agents' answers, importing the agents' histories, tool presets, and branches, forks and
 side chats. The requests `chat_branch`, `chat_fork`, `chat_presets`, `chat_compare`, `chat_pick`
@@ -1474,10 +1482,11 @@ removed 2026-11-17, to keep one way to run an agent in a session).
   |---|---|---|
   | claude | stream-json | `-p --input-format/--output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio` |
   | codex | app-server | `codex app-server` |
-  | gemini | acp | `gemini --acp` |
   | opencode | opencode | `opencode serve --port P --hostname 127.0.0.1` |
 
-  Other adapters have none, unless the agent sets `protocol = "acp"`.
+  Other adapters have none, unless the agent sets `protocol = "acp"` (an agent of yours in
+  `[agents.NAME]`, launched with its own `command` and `args`; the built-in Gemini mapping was
+  removed on 2026-11-17 with Gemini CLI).
 - **The process.** The agent runs with pipes, in its own process group, with the profile's
   environment and no hook integration.
 - **The driver.** The `ptyro-drive` crate is pure protocol logic: lines in, effects out. The
@@ -1509,7 +1518,7 @@ removed 2026-11-17, to keep one way to run an agent in a session).
   bytes, transcript, draft and rendering state, plus the stdin/stdout/stderr fds, cross the exec.
 
 **[built M3]** `agent` sessions start `[agents.<name>] command` (a string or argv) plus `args`,
-else the built-in CLI of that name (`claude`, `codex`, `gemini`, `opencode`). `script` sessions
+else the built-in CLI of that name (`claude`, `codex`, `opencode`). `script` sessions
 are read-only: the daemon drops input to them. They stop with SIGTERM, then SIGKILL after 5 s.
 
 ### 7.2 SpawnSpec
@@ -1727,8 +1736,8 @@ never rewritten. `sidecar` is a side channel the daemon runs (OpenCode's server)
   `done_means_idle`.
 - `[agents.<name>] adapter = "…"` picks the adapter (default: the name, if it's a known one,
   else `generic`), so `claude-work` or a wrapper script still gets Claude's integration.
-- Built-ins: `claude`, `codex`, `gemini`, `opencode`, `antigravity` (CLI `agy`), `generic`; plus
-  the `shell` session kind.
+- Built-ins: `claude`, `codex`, `opencode`, `generic`; plus the `shell` session kind. (`gemini`
+  and `antigravity` were removed on 2026-11-17, §8.5, §8.6d.)
 - Args that skip permission prompts (`--dangerously-skip-permissions`, `--yolo`,
   `--dangerously-bypass-approvals-and-sandbox`, …) are refused unless the agent sets
   `dangerous = true`. Those sessions carry a ⚠ badge everywhere. The check
@@ -2014,51 +2023,13 @@ title alone.
 - **[unverified]** `Stop`, `PermissionRequest` and `notify` payloads are still uncaptured (Codex
   login, §20.2), so their mapping follows the docs and the fake agent.
 
-### 8.5 Gemini CLI **[verified 0.64.0 where noted]**
+### 8.5 Gemini CLI **[built M4, removed 2026-11-17]**
 
-- **Launch:** `gemini --session-id <uuid> [configured args]` (flag present in 0.64 local help).
-- **Hooks:** settings-based (`SessionStart`, `BeforeAgent`, `AfterAgent`, `BeforeTool`, `AfterTool`,
-  `Notification{notification_type: ToolPermission}`, `SessionEnd`, …). No `--settings` flag. Hook
-  arrays merge with strategy `concat` across layers, so they add rather than replace.
-- **Hook injection** **[decided 2026-10-20, verified M0.5 on 0.64.0]**: a **ptyro Gemini extension**
-  (`gemini-extension.json` + `hooks/hooks.json`; template in
-  `crates/ptyro-agents/tests/fixtures/gemini-0.64.0/extension/`), materialized at `data/integrations/gemini/ptyro/`
-  and **linked once** with `gemini extensions link <dir> --consent`. Linking writes to the user's
-  (or profile's) Gemini home, so it is **opt-in**: `ptyro init` / `ptyro integrations install
-  gemini`, listed by `ptyro doctor`. Its hooks call `ptyro hook gemini <event>`, which exits 0
-  silently when `PTYRO_SESSION_ID` is unset, so it is inert outside ptyro. Verified: `SessionStart`
-  and `SessionEnd` fire from a linked extension, carrying the pre-assigned `--session-id`.
-  - The planned `GEMINI_CLI_SYSTEM_SETTINGS_PATH` / `GEMINI_CLI_SYSTEM_DEFAULTS_PATH` route is
-    **rejected**. Gemini skips system layers whose file or parent directory is not owned by root
-    ("Security Warning: Skipping system defaults file … not owned by root").
-  - Without the extension, status comes from the title (medium confidence) and the activity
-    heuristic.
-- **Title fallback:** **[verified M0 spike, 0.64.0]** the idle title is `◇  Ready (<folder>)` (glyph, two spaces, state, folder). `ui.dynamicWindowTitle` (default on) puts Ready / Action Required / Working
-  in OSC 0 — parsed by the adapter with low-medium confidence.
-- **Resume:** `gemini --resume <uuid>`; storage `$GEMINI_CLI_HOME/.gemini/tmp/<project>/chats/session-<ts>-<id8>.jsonl`.
-- **`GEMINI_CLI_HOME`** **[verified]** replaces the *home directory*: Gemini uses
-  `$GEMINI_CLI_HOME/.gemini/` for everything (settings, extensions, trust, chats, credentials), which
-  confirms the profile mechanism for Gemini (§10.10).
-- **Turn-level hooks** (`BeforeAgent`/`AfterAgent`/`Notification`) are **not yet captured**: the
-  API key available when recording belonged to a project with the Gemini API disabled (HTTP 403).
-  Re-test with a working key.
-- **Gotcha (secrets on screen):** the auth dialog pre-fills `GEMINI_API_KEY` **in clear text**.
-  Recordings and screenshots of agent startup can contain secrets: the recorder (§7.6) and fixture
-  capture (docs/fixtures.md) must assume screens are sensitive.
-- **Structured:** `gemini --acp` (Agent Client Protocol over stdio) for M10.
-- **Note:** Google moved free-tier users to "Antigravity CLI" (2026-06); an `antigravity` adapter is
-  in the backlog once researched.
-
-**[built M4]**
-- The extension is opt-in: `ptyro integrations install gemini` writes it under
-  `data/integrations/gemini/ptyro/` and links it into the session profile's Gemini home;
-  `integrations ls` / `uninstall` manage it.
-- Launch: `--session-id <uuid>`; resume: `--resume <uuid>`.
-- Hooks: `BeforeAgent` → working, `BeforeTool` → working(tool),
-  `Notification(ToolPermission)` → blocked, `AfterAgent` → idle.
-- `on_title` maps `◇ Ready` / `✋ Action Required` / working titles at medium confidence.
-- `ptyro profile doctor` warns when a profile uses consumer Gemini login: the free tier moved to
-  Antigravity.
+Removed on 2026-11-17 (the pare-down): ptyro keeps the agents in use, Claude Code, Codex and
+OpenCode, and a fourth built-in (its extension, `GEMINI_CLI_HOME`, its ACP flags and chat policy)
+was much to carry for none. An `[agents.gemini]` with its own `command` still runs, as a generic agent (§8.7); one
+that names the built-in still loads, and starting it, or `ptyro doctor`, says it was removed and
+how to fix it (§8.6d). What was learned about Gemini CLI stays in §20.3 and §20.8.
 
 ### 8.6 OpenCode **[from docs/source; not yet installed locally]**
 
@@ -2069,7 +2040,7 @@ title alone.
 - **Conversation id:** server-assigned (`ses_…`), learned from events.
 - **Resume:** `opencode --session <id>` (or `-c`).
 - **Structured:** `opencode serve` + HTTP API (`POST /session/:id/prompt_async`,
-  `/permissions/:id`) — the cleanest structured integration of the four.
+  `/permissions/:id`) — the cleanest structured integration of the agents.
 
 **[built M4, not run against a real OpenCode yet]** Launch adds `--port <free
 port> --hostname 127.0.0.1` and `OPENCODE_SERVER_PASSWORD=<random>`. The daemon follows `GET
@@ -2082,15 +2053,10 @@ port> --hostname 127.0.0.1` and `OPENCODE_SERVER_PASSWORD=<random>`. The daemon 
 `ptyro answer` posts `once`/`always`/`reject` to `/session/:id/permissions/:permissionID`. The
 fake agent's `--as opencode` serves this API for the tests.
 
-### 8.6b Antigravity CLI (`agy`) **[built M4.21 from its docs; unverified, not installed]**
+### 8.6b Antigravity CLI (`agy`) **[built M4.21, removed 2026-11-17]**
 
-Google's successor to Gemini CLI for consumer accounts. Its hooks are `SessionStart`,
-`PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation` and `Stop{fullyIdle,
-terminationReason, error}` with camelCase fields, configured in `~/.gemini/config/hooks.json`.
-`ptyro integrations install antigravity` writes that file (opt-in, inert outside ptyro).
-- Mapping: `PreInvocation` → working; `PreToolUse` → working(tool); `Stop` → idle when
-  `fullyIdle`, errored on `error`.
-- There is no permission hook, so *blocked* comes only from OSC 7501, if agy emits it.
+Removed on 2026-11-17 (the pare-down), with Gemini CLI: built from its docs and never run
+against a real install, and it could not chat.
 
 ### 8.6c Which model an agent runs **[built UX4.1]**
 
@@ -2105,7 +2071,6 @@ other. Sources, by agent:
 | Claude (terminal) | `SessionStart` hook payload `model`; on `Stop` the last assistant turn of `transcript_path` (`message.model`, the file's last 256 KiB; `<synthetic>` turns skipped), so a `/model` switch shows once the turn that used it ends | **[verified 2.1.304 fixture; a real transcript]** |
 | Claude (structured) | `system/init` `model` in stream-json | **[verified 2.1.305 fixture]** |
 | Codex | `model` in the payload of every hook (`SessionStart`, `UserPromptSubmit`, `Stop`); `notify` carries none | **[verified 0.143.0 and 0.164.0 fixtures; a real rollout's `turn_context`]** |
-| Gemini | its hooks carry none (0.64.0 fixture); the chat file's shape is unconfirmed | **[spike UX4.2]** |
 | OpenCode | `providerID`/`modelID` on a message from `GET /session/:id/message`, by docs and clients | **[spike UX4.2; not installed]** |
 
 Display: `ptyro_core::session::model_label` (and `modelLabel` in web/src/screen.ts, same table of
@@ -2113,6 +2078,18 @@ tests) shortens `claude-opus-5-5` to `opus 5.5`, `claude-3-5-sonnet-20241022` to
 drops a provider prefix; a non-Claude id is shown whole. The TUI pane header of an agent session
 says `name · claude opus 5.5`; `ptyro ls` gets a MODEL column once any session has one (`--json`
 has the raw `model`); the web shows it in a session's card, its header pill and the search.
+
+### 8.6d A removed built-in agent **[built 2026-11-17]**
+
+A default agent (`[agents] default`), `chat.agent` or `[agents.X] adapter` that names `gemini`
+or `antigravity` still loads. Starting it fails with "Gemini CLI (gemini) is no longer built into
+ptyro (removed 2026-11-17): use claude, codex or opencode, or give [agents.gemini] a command …".
+`ptyro doctor` reports each with its fix (`ptyro config set agents.default <a kept agent>`,
+`ptyro config rm agents gemini --yes`, `ptyro config unset chat.agent`, `ptyro config unset
+agents.X.adapter`), which the TUI's health view runs on ⏎ and the web's Health page applies.
+Doctor also notes a leftover Gemini extension or Antigravity hooks file in your homes; it never
+deletes them. Dormant sessions of those agents still list; resuming one says why it can't.
+`[profiles.X] gemini` is a retired key (§13.8).
 
 ### 8.7 Shell and generic adapters
 
@@ -2168,7 +2145,7 @@ runs), so a restart integrates afresh:
   The rc file is `~/.bashrc`, `~/.zshrc`, `<config>/fish/config.fish` or (off Windows)
   `<config>/powershell/Microsoft.PowerShell_profile.ps1`. `<config>` is `$XDG_CONFIG_HOME` when it
   is set to an absolute path, else `~/.config`, as fish and pwsh have it
-  (`ptyro_core::config::config_home`). `init`'s completions line, profile detection (§10.10),
+  (`ptyro_core::config::config_home`). `setup`'s completions line, profile detection (§10.10),
   `uninstall` and the systemd unit use the same rule [fixed 2026-11-01: they used `~/.config` regardless].
 - `generic`: any user-defined agent command. Status from OSC 7501 (if the program speaks it),
   OSC 9 notifications, BEL, and the activity heuristic (§9.3).
@@ -2179,7 +2156,7 @@ runs), so a restart integrates afresh:
 
 **[built UX1.4] An agent started by hand in a shell session.** Once a second, a live `shell`
 session's foreground process is matched against the agents (a configured agent's command, else
-a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). On Windows a name matches
+a built-in's program: `claude`, `codex`, `opencode`). On Windows a name matches
 without case or a runnable extension (`C:\Tools\MyAgent.EXE` is `myagent`), and an npm package's
 folder names its command (`claude-code`, as WIN7 names `node …\claude-code\cli.js`; WIN8). While
 one is in the foreground:
@@ -2225,9 +2202,9 @@ Process state (§7.3) dominates: when the process exits, status is cleared.
 | Priority | Source | Confidence | Examples |
 |---|---|---|---|
 | 1 | Process events | high | exit, spawn failure |
-| 2 | Hooks (authoritative, carry conversation id) | high | Claude `PermissionRequest`, `Stop`, `StopFailure`; Codex `PermissionRequest`, `Stop`; Gemini `Notification(ToolPermission)`, `AfterAgent`; OpenCode SSE |
+| 2 | Hooks (authoritative, carry conversation id) | high | Claude `PermissionRequest`, `Stop`, `StopFailure`; Codex `PermissionRequest`, `Stop`; OpenCode SSE |
 | 3 | OSC 7501 | high | Claude `state=blocked:kind=permission` |
-| 4 | Title parsing | medium | Gemini dynamic title, Codex spinner title |
+| 4 | Title parsing | medium | Codex spinner title |
 | 5 | Notifications (OSC 9/777/BEL) | low→medium | "waiting for input" |
 | 6 | Activity heuristic | low | output in last 2 s ⇒ "active?"; quiet for 30 s after activity ⇒ "quiet" |
 
@@ -2257,7 +2234,7 @@ A turn is what the agent did between a prompt and its answer. Its end runs the t
 2026-11-17.)
 - **Agents with a turn-end signal** (every built-in adapter whose hooks are on, and every
   structured session): the turn ends at the agent's own end, `Signal::TurnEnd` (Claude's and
-  Codex's `Stop`, Codex's `notify`, Gemini's `AfterAgent`, OpenCode's `session.idle`, OSC 7501
+  Codex's `Stop`, Codex's `notify`, OpenCode's `session.idle`, OSC 7501
   `done`, a driver's turn end). It counts once, and only if the session has worked since the
   last one, so a turn that several sources end (Codex sends `Stop`, `notify` and OSC 7501
   `done`) is one turn. Start-up noise is none: the output heuristic, or an agent's own
@@ -2323,7 +2300,7 @@ workspace, else `main`.
   9/777/BEL (low), heuristic (low).
 - **High sources are peers: the newest wins.** A weaker high source that arrives within 250 ms
   of a stronger one is **deferred, not dropped**. It is applied 270 ms later unless a newer high
-  signal superseded it. Dropping it lost real progressions (agy's `Stop` right after a 7501
+  signal superseded it. Dropping it lost real progressions (a hook's `Stop` right after a 7501
   `working`).
 - **Medium sources** apply only after high ones have been quiet for `attention.stale_after`
   (default 5 m), and **low** only when neither has spoken. The heuristic is not even evaluated
@@ -2452,7 +2429,7 @@ modes and other-workspace badges.
   workspace the TUI showed last.
 - Discovery walks `[discover] roots` (depth 3). It stops at repositories and skips hidden dirs,
   `node_modules`, `target`, `vendor` and `venv`, and caches the result for an hour in kv
-  `discover:cache`. The first run (`init`) and the TUI's and web's project pickers (the palette's
+  `discover:cache`. The first run (`setup`) and the TUI's and web's project pickers (the palette's
   `project.add`) use it. (The CLI's `project discover` was removed 2026-11-17.)
 
 ### 10.2 Worktree layout **[decided]**
@@ -2819,7 +2796,6 @@ difference.
 | Claude account, settings, transcripts | `CLAUDE_CONFIG_DIR=<dir>` | variable present in the 2.1.304 binary; macOS Keychain separation is spike M0.10 |
 | Claude by token or key instead | `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `ANTHROPIC_API_KEY`, or `apiKeyHelper` in that dir's settings, supplied via `secrets` | variables present in the 2.1.304 binary |
 | Codex account, config, rollouts | `CODEX_HOME=<dir>` (`auth.json`, `config.toml`, `sessions/`); or `CODEX_API_KEY` / `OPENAI_API_KEY` | present in the 0.143.0 binary; keyring storage (`cli_auth_credentials_store`) is spike M0.10 |
-| Gemini | `GEMINI_CLI_HOME=<dir>`; or `GEMINI_API_KEY`, or `GOOGLE_CLOUD_PROJECT` + `GOOGLE_APPLICATION_CREDENTIALS` | docs; spike M0.10 |
 | OpenCode | `OPENCODE_CONFIG_DIR`, plus the auth file under `$XDG_DATA_HOME/opencode/` | unverified (not installed); spike once installed |
 | git identity | `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, or a whole `GIT_CONFIG_GLOBAL=<file>` (signing key, `url.*.insteadOf`); `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes"` | git docs |
 | GitHub CLI (`--issue`) | `GH_CONFIG_DIR=<dir>`, or `GH_TOKEN` via `secrets` | gh docs |
@@ -2835,8 +2811,7 @@ into a shell pane in the `work` workspace uses the work key and author.
 label = "work"
 color = "blue"
 claude = "~/.claude-work"              # → CLAUDE_CONFIG_DIR
-codex  = "~/.codex-work"               # → CODEX_HOME
-gemini = { api_key = { command = ["op", "read", "op://Work/gemini/key"] } }
+codex  = { dir = "~/.codex-work", api_key = { command = ["op", "read", "op://Work/openai/key"] } }
 git    = { name = "Your Name", email = "you@acme.example", ssh_key = "~/.ssh/id_work" }
 gh     = "~/.config/gh-work"           # → GH_CONFIG_DIR
 env    = { AWS_PROFILE = "acme" }
@@ -2876,7 +2851,7 @@ explicit error. `ptyro profile rename` rewrites every reference.
 **Environment construction** at spawn (extends §5.1):
 
 1. Start from the daemon's base env, with every profile-managed variable **always** removed
-   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, `OPENCODE_CONFIG_DIR`, `GH_CONFIG_DIR`,
+   (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OPENCODE_CONFIG_DIR`, `GH_CONFIG_DIR`,
    `GIT_CONFIG_GLOBAL`, `GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `GIT_SSH_COMMAND`). A daemon started
    from a shell with `CLAUDE_CONFIG_DIR` exported must not leak that account into `default`
    sessions; `ptyro doctor` reports any it found.
@@ -2914,12 +2889,12 @@ Off unless configured.
 - `ptyro profile new <name> [--adopt claude=~/.claude-work …]` creates a profile, adopting existing
   dirs or creating managed ones.
 - `ptyro profile login <name> <agent|gh>` opens a session under that profile that runs the tool's
-  own login flow (Claude `/login`, `codex login`, Gemini's auth dialog, `gh auth login`). ptyro never
+  own login flow (Claude `/login`, `codex login`, `gh auth login`). ptyro never
   sees the credentials.
-- `ptyro init` detects existing multi-account setups and offers to adopt each one. The owner's
+- `ptyro setup` (its accounts step) detects existing multi-account setups and offers to adopt each one. The owner's
   setup — **aliases that point an agent at a separate config dir** — is the first-class case:
   - parse `alias NAME='VAR=dir … agent …'` and `NAME() { VAR=dir agent "$@"; }` forms for `VAR` in
-    `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, `GH_CONFIG_DIR`, in `~/.zshrc`,
+    `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GH_CONFIG_DIR`, in `~/.zshrc`,
     `~/.zshenv`, `~/.zprofile`, `~/.bashrc`, `~/.bash_aliases`, `~/.profile`,
     `<config>/fish/config.fish` (`$XDG_CONFIG_HOME` or `~/.config`, §8.7), and files they `source` (one level, no evaluation — text only);
   - the profile name is suggested from the alias suffix (`claude-work` → `work`); aliases for
@@ -2944,10 +2919,9 @@ wrong account, the wrong commit author or the wrong `gh` org. True isolation nee
 or containers (backlog: sandbox per profile).
 
 **[built M3]**
-- **Schema.** `claude`, `codex`, `gemini`, `opencode` and `gh` each take a dir string or
-  `{ dir, api_key, token }`:
-  - `api_key` → `ANTHROPIC_API_KEY` (claude), `OPENAI_API_KEY` + `CODEX_API_KEY` (codex),
-    `GEMINI_API_KEY` (gemini);
+- **Schema.** `claude`, `codex`, `opencode` and `gh` each take a dir string or
+  `{ dir, api_key, token }` (`gemini` is a retired key since 2026-11-17, §13.8):
+  - `api_key` → `ANTHROPIC_API_KEY` (claude), `OPENAI_API_KEY` + `CODEX_API_KEY` (codex);
   - `token` → `CLAUDE_CODE_OAUTH_TOKEN` (claude), `GH_TOKEN` (gh).
 
   `git = { name, email, ssh_key, config }`. `[profiles.default]` may exist, to set `isolate =
@@ -2974,16 +2948,16 @@ or containers (backlog: sandbox per profile).
   profile. `rename` also rewrites the store (workspace, project, worktree and session rows) and
   live sessions.
 - **Detection.** The alias detection described above is `ptyro profile detect [--apply]`; `ptyro
-  init` (M5) will call it.
+  setup` calls it.
   - It reads `alias`/function/`export` lines, follows one level of `source`, and expands `$HOME`.
-  - It also finds unreferenced `~/.claude-*`/`~/.codex-*`/`~/.gemini-*` dirs and `[includeIf
+  - It also finds unreferenced `~/.claude-*`/`~/.codex-*` dirs and `[includeIf
     "gitdir:…"]` identities.
 - **Doctor.** `profile doctor` checks:
   - each agent's dir and its credential file (`.credentials.json`, `auth.json`,
     `oauth_creds.json`, `hosts.yml`; on macOS Claude may use the Keychain);
   - the git identity, and whether `ssh_key` exists;
   - pins that contradict `match`, and managed variables exported in your shell.
-- **`profile login`** runs `claude` (a fresh dir starts its login), `codex login`, `gemini`,
+- **`profile login`** runs `claude` (a fresh dir starts its login), `codex login`,
   `opencode auth login` or `gh auth login` under the profile.
 
 ### 10.11 Change sets
@@ -3171,8 +3145,7 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   project or worktree row it still folds. `b` (in the sidebar, or after the prefix) opens one
   prompt for every marked session. Each gets it once it's ready (`wait_ready_ms`, never typed
   into a dialog), and the marks clear.
-- **Tour:** `ptyro tour` (palette `help.tour`, and offered at the end of `ptyro init`). *(Was
-  five pages of keys; UX1.22 replaced them with the hands-on tour in §11.2h.)*
+- **Tour:** removed on 2026-11-17 (§11.2h).
 - `ptyro attach --workspace W` opens a workspace's own view.
 
 ### 11.2f What M6 added **[removed 2026-11-17]**
@@ -3229,29 +3202,10 @@ learning anything up front.
   opens every row. The row in focus (and any that wants you) wraps its task and reply over two
   lines. Drawing, clicks and scrolling share one line layout, so a row is one target however
   many lines it takes.
-- **The tour, done for real** (UX1.22; `ptyro tour`, palette `help.tour`, the first run's last
-  step and `ptyro init`'s). It runs a ptyro of its own (`crates/ptyro/src/tour.rs`):
-  - its `PTYRO_HOME` under the system temp dir (`ptyro-tour-<pid>-<ms>`), with none of the outer
-    session's `PTYRO_SOCKET`/`PTYRO_SESSION_ID`;
-  - a config with your `[ui]` and `[keys]` (so its keys are yours) and one agent, `claude`,
-    which is the built-in fake in tour mode (`PTYRO_FAKE_TOUR`, `PTYRO_FAKE_PASTE`);
-  - a demo repository whose `greeting.txt` has a typo.
-
-  The TUI runs as a child (`ptyro tour --here`) in the demo repository. When it ends the
-  tour's daemon is stopped and its directory deleted; a tour that couldn't clean up (killed, its
-  terminal closed) is swept by the next one. From a TUI, `help.tour` exits into the tour
-  (`AttachEnd::Tour`) and the TUI comes back after it.
-
-  The coach (`crates/ptyro-tui/src/tour.rs`) sits bottom right and never takes keys. Each step
-  names the keys as bound (or as they work where the focus is) and moves on when it's done:
-  1. start a task (`n`): an agent with a task, in a worktree of its own;
-  2. answer it (`p`, `y`): it blocked on a permission and got going again (or its turn ended);
-  3. clean up (`worktree.remove` from the palette, then `y` twice: asked, then the refusal over
-     the uncommitted fix): the worktree is removed;
-  4. keep a shell of your own in SHELLS.
-
-  (Review and finish were steps until 2026-11-17.) The pretend agent asks before running `sed`
-  on `greeting.txt`, and fixes the typo once allowed (leaves it, told no). `help.tour` inside the tour starts it over.
+- **The tour** (UX1.22: a throwaway ptyro with a pretend agent and a coach): removed on
+  2026-11-17 (the pare-down), as `?` and the palette already teach the keys where they are used.
+  `ptyro tour` and `help.tour` are gone, and its pretend agent's task mode stays as a test knob
+  (`PTYRO_FAKE_TASK=1`, with `PTYRO_FAKE_PASTE`) for UX1's done-when test (`crates/ptyro/tests/ux1.rs`).
 - **Shipped worktrees** (UX1.12, UX1.22): removed 2026-11-17 with pull requests and integrating.
 - **Short choices pick by key** (`Palette::with_hotkeys`): in the "open in" picker, `!` (a shell)
   picks its item while nothing is typed. In the palette, keys are only shown.
@@ -3349,7 +3303,8 @@ learning anything up front.
   (`<profile>` filled in from its section), run in a split; stale worktrees open the clean-up
   list (`Fix::Action`, §10.8). `run_cli` (a `ptyro` command in a
   split, its output kept) is also the TUI path of `doctor`, `daemon.status|logs|restart|
-  upgrade|service|unservice` and `integrations[.install|.uninstall]`.
+  upgrade|service|unservice` (`integrations[.install|.uninstall]` went with `ptyro
+  integrations` on 2026-11-17).
 - **The first run and home** (UX1.19, `crates/ptyro-tui/src/onboard.rs`). When `ptyro` had to
   start the first session itself (`Options::welcome`):
   - with no config file (and `PTYRO_FIRST_RUN` not `0`): the first run, over everything. First
@@ -3358,10 +3313,10 @@ learning anything up front.
     repositories under `[discover] roots` (the one you're in ticked; it registers on its own
     anyway), desktop notifications (not ticked). Space ticks, ⏎ writes `config.toml` (0600,
     created only if absent, checked before writing) and registers the ticked repositories in
-    the current workspace (and installs what the checklist ticks, §24.5), then offers the
-    tour; `s` does the same without installing; Esc writes an empty config so it never comes
-    back. `first.run` opens it again; `ptyro init` stays the terminal's version, with the
-    terminal checks and shell extras (and the CLI's checklist offered);
+    the current workspace (and installs what the checklist ticks, §24.5) (it offered the tour
+    until that was removed on 2026-11-17); `s` does the same without installing; Esc writes an
+    empty config so it never comes back. `first.run` opens it again; `ptyro setup` is the
+    terminal's version, with the terminal checks and shell extras (§12.3);
   - else, when the workspace has no project: **home** (`home`, `H`), one list of who needs you,
     projects (most recently used first; ⏎ starts a task
     there), repositories found (⏎ adds one, then the task box), and a shell here.
@@ -3558,7 +3513,8 @@ action's key. Differences from the proposal below:
   the sidebar, `]` pastes the last yank.
 - In the sidebar: `j/k/g/G` move, `⏎` opens, `x/X/R/,` act on the selected session.
 - `[keys]` in config rebinds keys (`"key" = "action [arg]"`, `"global:key"`, `"nav:key"`, `"none"`
-  unbinds); unknown actions or keys are reported by `ptyro config check` and as a toast. Every
+  unbinds); unknown actions or keys are reported by `ptyro config check` and as a toast naming
+  `ptyro doctor`, which offers to unset bindings to removed actions (§12.2). Every
   default can be overridden or unbound; the settings panel lists them all (§13.7).
 
 **[built M3]**
@@ -3790,7 +3746,6 @@ ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>
          |run <wt> [<script>]|rename <wt> <new>
 ptyro broadcast <session…> <text>
 
-ptyro init                             # first-run onboarding (§12.3)
 ptyro doctor                           # diagnose: agents installed/authenticated, terminal caps,
                                        #   socket perms, git version, hook integration health
 ptyro about [--json]                   # version, repository, licence, build, paths, daemon, tools
@@ -3801,7 +3756,7 @@ ptyro gc [--dry-run]
 ptyro completions bash|zsh|fish        # dynamic: completes live session/worktree names
 ptyro shells [ls]|new [-- CMD…] [-C DIR] [--slot N] [--scratch]|go N|move N M|split [S] [--down]|break S|join S N|loose S|adopt S [WT]|watch S [--done|--activity|--silence D|--match RE|--off]   # SHELLS (§23; proposed)
 ptyro shell-init bash|zsh|fish|pwsh    # OSC 7/133 snippets for shells ptyro didn't start (§8.7)
-ptyro setup [-y] [--agents A,B] [--tools T,U] [--where W] [--dry-run] [--json]   # the setup checklist (§24.2, §24.3)
+ptyro setup [-y] [--agents A,B] [--tools T,U] [--where W] [--dry-run] [--json]   # the setup checklist, then onboarding at a terminal (§12.3, §24.2, §24.3)
 ptyro install NAME… [-y] [--where W] [--dry-run] [--json]             # install agents/tools by name; W: wsl|windows|both (Windows)
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
@@ -3847,7 +3802,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `mute TARGET [--for D] [--off]`;
   - `usage [--json]`;
   - `notify test`;
-  - `integrations ls|install|uninstall gemini|antigravity`;
+  - `integrations ls|install|uninstall gemini|antigravity` (removed 2026-11-17 with both agents);
   - `report --state … [--kind] [--msg] [--progress]` (alias `report-agent`; removed
     2026-11-17).
 - **Hidden:** `hook` and `statusline-relay`. They run before any tokio runtime starts.
@@ -3882,9 +3837,10 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   has no `WT_SESSION` of its own).
 - **Daemon:** `daemon stop --hibernate`, `daemon restart`, `daemon logs -f`,
   `daemon install-service|uninstall-service [--dry-run]`.
-- **Setup and help:** `completions`, `init [--yes] [--dry-run]`, `doctor [--quick] [--json]`,
-  `profile doctor [P] [--json]`, `tour`.
-- **More `--json`:** `config show|check`, `gc`, `profile env`, `integrations ls`,
+- **Setup and help:** `completions`, `init [--yes] [--dry-run]` (merged into `setup` on
+  2026-11-17, §12.3), `doctor [--quick] [--json]`, `profile doctor [P] [--json]`, `tour`
+  (removed 2026-11-17).
+- **More `--json`:** `config show|check`, `gc`, `profile env`,
   `project config [--explain]`. Every shape is documented in `docs/cli-json.md` and pinned by a
   snapshot.
 - **`wait` conditions:**
@@ -3910,7 +3866,8 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - agents found on your PATH but not on the daemon's (a service manager's PATH);
   - warnings the daemon collected (a Codex "hooks need review" screen, a config that failed to
     load);
-  - the **hook self-test**: `fake-agent --as claude|codex|opencode` runs through the real
+  - the **hook self-test** (section `hooks`; it was `integrations` until 2026-11-17, when
+    `ptyro integrations` went): `fake-agent --as claude|codex|opencode` runs through the real
     per-launch integration. It passes only if the turn's `working` came from hooks or the
     sidecar; for OpenCode it waits for the event stream first.
   - inside WSL: the version; interop (off in `/etc/wsl.conf`, or its binfmt entry gone, each with
@@ -3923,8 +3880,12 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - git (warns below 2.40, the documented requirement) and gh;
   - agent versions against the ones verified;
   - per profile: logins by each tool's own command (`claude auth status --json`, `codex login
-    status`, `gh auth status`; Gemini by its credential file), git identity, SSH key; then pins
-    that contradict `match`.
+    status`, `gh auth status`), git identity, SSH key; then pins that contradict `match`;
+  - settings that name a removed built-in agent (§8.6d), and `[keys]` bindings to actions the
+    TUI no longer has (any id not in its `ACTIONS`): one warning, `config keys`, whose fix is
+    `ptyro config unset keys.X keys.Y` (`config unset` takes several keys in one change). The
+    TUI's "unknown action" message names `ptyro doctor`; its health view runs the fix, and the
+    web's Health page applies it (`settings.apply`).
 
   A `problem` exits 1.
 - **`install-service`:**
@@ -3999,11 +3960,22 @@ user's):
   warnings; kv `pairs` is kept for it) with the git commands that put it back (`git -C ROOT
   checkout --force ORIG`, then `git stash apply SHA`).
 
-### 12.3 `ptyro init` (onboarding, quick setup)
+### 12.3 `ptyro setup` (onboarding, quick setup)
+
+**[changed 2026-11-17]** `ptyro init` was merged into `ptyro setup` (the pare-down: two first
+commands asked the same things). At a real terminal, `ptyro setup` runs the checklist (§24.2,
+and its logins), then asks "Now your accounts, preferences and repositories?" and goes on with
+what `init` asked, below: the terminal checks, the accounts found (→ profiles), prefix, worktree
+location and desktop notifications, the config written with only what's missing, the web app,
+the repositories to register, then completions and the login service offered. `--yes`,
+`--agents`/`--tools`, `--json`, `--dry-run` and a piped stdin stop after the checklist. `ptyro
+init` (like `tour`, `backup` and `integrations`) now fails with "`ptyro init` was removed on
+2026-11-17: `ptyro setup` does what it did: …" (exit 2). A bare `ptyro` with no config still
+opens the TUI's first run (`first.run`, §11.2h), the same steps.
 
 1. Detect terminal capabilities (truecolor, kitty keyboard, OSC 52, running inside tmux → suggest
    `allow-passthrough on` and `extended-keys on`).
-2. Detect agent CLIs (`claude`, `codex`, `gemini`, `opencode`) and versions; flag unsupported
+2. Detect agent CLIs (`claude`, `codex`, `opencode`) and versions; flag unsupported
    versions; check authentication hints (without reading secrets).
 3. Detect existing multi-account setups (`CLAUDE_CONFIG_DIR`/`CODEX_HOME` exports and aliases in
    shell rc files, extra `~/.claude-*`/`~/.codex-*` dirs, git `includeIf` identities) and offer to
@@ -4013,7 +3985,7 @@ user's):
 5. Choose prefix keys, worktree location, notifications.
 6. Write `~/.config/ptyro/config.toml` with comments; offer to install shell completions and the
    systemd/launchd service.
-7. Offer the tour (`ptyro tour`, §11.2h).
+7. Offer the tour (removed 2026-11-17).
 
 **[built M5]**
 1. **Terminal:** the doctor's terminal and tmux checks.
@@ -4027,15 +3999,14 @@ user's):
      exports, fish).
 4. **Preferences:** prefix, worktree location, desktop notifications.
 5. **The config:** only keys you don't have are added, via `toml_edit` (comments kept). The
-   additions are listed, then written on a yes. `--dry-run` prints the result and stops.
+   additions are listed, then written on a yes.
 6. **Projects:** discovered repos are listed by number (`1,3-5`, `all`, `none`).
 7. **Extras:**
    - completions: offered for your shell's rc file; appended only on an explicit yes;
-   - the service: offered;
-   - the tour: offered.
+   - the service: offered.
 
-`--yes` accepts the suggestions but never registers repositories, edits rc files or installs the
-service. Without a terminal and without `--yes`, `init` refuses (exit 2).
+These steps run only at a terminal, after the checklist, so they never register repositories,
+edit rc files or install the service unasked.
 
 ### 12.4 Exit codes
 
@@ -4124,7 +4095,7 @@ change (debounced) and emits `ConfigReloaded`.
   protocol a chat with that agent speaks (§22.2).
 
 **[built M5]** `.ptyro.toml [project] import = false` turns off other tools' config (§10.5).
-`ptyro init` writes `ui.prefix`, `worktrees.location`, `notifications.channels`,
+`ptyro setup` (at a terminal) writes `ui.prefix`, `worktrees.location`, `notifications.channels`,
 `discover.roots` and `[profiles.*]`, and only when they're absent.
 
 **[built M6, removed 2026-11-17]** `[github]` (poll, draft, merge_method, watch,
@@ -4192,9 +4163,6 @@ hibernate_after = "off"
 
 [agents.codex]
 adapter = "codex"
-
-[agents.gemini]
-adapter = "gemini"
 
 [agents.opencode]
 adapter = "opencode"
@@ -4371,7 +4339,9 @@ extras (2026-11-17) retire `worktrees.archive_purge_days`, `worktrees.auto_renam
 `ports` (the whole table), `ui.show_ports`, `scripts.after_turn`, `scripts.archive`,
 `agents.*.after_turn` and `project.default_agent` (`[agents] default` stays). The chat trims
 (2026-11-17) retire `chat.preset`, `chat.import` and `chat.tools` (the whole table of tool
-presets): every chat now searches the web and reads the folders it was given. A `*` in a retired
+presets): every chat now searches the web and reads the folders it was given. Removing Gemini CLI
+and Antigravity (2026-11-17, §8.6d) retires `profiles.*.gemini`: its directory stays where it is,
+and an agent of your own sets its variables with `[agents.NAME] env`. A `*` in a retired
 key stands for any one name (`agents.*.after_turn` matches `agents.claude.after_turn`). The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
 
 ### 13.6 The scratchpad **[built NOTE1, removed 2026-11-17]**
@@ -4541,21 +4511,19 @@ left behind (§10.8, §12.2); the archive refs and `data/archive-extras/` are le
 
 ---
 
-### 14.5 Backup and uninstall **[built H2.3]**
+### 14.5 Uninstall **[built H2.3]**
 
-`ptyro backup` writes a private (0600), never-overwriting `.tar.gz` of ptyro's own state: the
-config, a consistent copy of the database (`Store::backup_to`, SQLite `VACUUM INTO`, safe with the
-daemon running), your chats (`chat.db`; `--no-chats` leaves them out), a `manifest.json` and a `README.txt` with
-the manual restore. It leaves out the agents' login directories, the recordings (`--with-recordings`)
-and the web app's CA private key (`--with-ca`). `ptyro uninstall` plans first (`--dry-run` stops
+`ptyro backup` and `uninstall --backup` were removed on 2026-11-17 (the pare-down): a backup
+with no restore was half a feature, and `ptyro about` says where the config and data are, to copy
+while the daemon is stopped. The copy of `ptyro.db` set aside before a migration (§14) is not a
+backup and stays. `ptyro uninstall` plans first (`--dry-run` stops
 there; read-only, never starts a daemon): the running sessions, every directory it keeps (from
 `Paths`, so `PTYRO_HOME` and `PTYRO_CONFIG` are honoured), worktrees with uncommitted changes
 (from `git status`, not the daemon's cache), unpushed commits and locks, the login service,
-integrations it installed, the shell-rc lines `ptyro init` and the mend list wrote (only those
-exact lines), a `tailscale serve` mapping it made, and the binary. Typing `delete` is required
+the shell-rc lines `ptyro setup` and the mend list wrote (only those exact lines), a `tailscale serve` mapping it made, and the binary. Typing `delete` is required
 when a worktree has uncommitted work (`--yes` never skips it; `--delete-work` does); without a
 terminal it refuses without `--yes`; inside a ptyro session it refuses (`PTYRO_HOME` set means
-a sandbox). Order: backup, integrations, login service, stop the daemon and wait for its lock,
+a sandbox). Order: login service, stop the daemon and wait for its lock,
 worktrees (through `git worktree remove`), directories, rc lines, the binary last. **[built WIN3]**
 Uninstall is about this computer: it never follows `client.default_remote` or `PTYRO_REMOTE` (it
 would stop that daemon and its sessions), and refuses `--remote`, naming where to run it. On
@@ -4568,7 +4536,7 @@ user's repositories, branches, `.ptyro.toml`, `.ptyro.local.toml`, `.git/info/ex
 place the user put it (`~/.local/bin`, `/usr/local/bin`); `~/.cargo/bin` goes through `cargo
 uninstall`; Homebrew and system paths get the package manager's command; a path under
 `/target/` is never removed. In a sandbox (`PTYRO_HOME`) only that home is touched. Web:
-`uninstall.plan` and `backup.create` host operations (full scope); the page shows the plan and
+the `uninstall.plan` host operation (full scope; `backup.create` went on 2026-11-17); the page shows the plan and
 the command, because removing ptyro ends the server the page is served by. `make reset` is a
 wrapper over it. Details: `docs/uninstall.md`.
 
@@ -4728,7 +4696,7 @@ are. `PTYRO_WSL` replaces `wsl.exe`. Variables cross both hops when listed in `W
   its named pipe), and the only way a Windows client starts one by itself; with no remote, a
   Windows client uses a native daemon already running but starts none. On
   Windows with none of them, the first command that needs a daemon (not `config`,
-  `completions`, `shell-init` (internal), `init`, `uninstall`, `backup`, `daemon`, `proxy`) asks each
+  `completions`, `shell-init` (internal), `setup`, `uninstall`, `daemon`, `proxy`) asks each
   distro (WSL's order; `docker-desktop`, `rancher-desktop`, `podman-machine` left out) for
   `ptyro --version`. The first that answers is offered (on a terminal "Ubuntu (WSL) runs ptyro
   0.0.48. Use it? [Y/n]", kept in `client.default_remote`; without one it is used and a note says
@@ -4765,7 +4733,7 @@ is local-socket-only by design; the network-facing HTTP/TLS code belongs in a pr
 crash, restart and be killed for a live upgrade without touching a session. What the person sees
 is "the web is up when the daemon is".
 - **One switch, five doors.** `ptyro web on|off|status [--via tailscale|lan|here] [--pair]`;
-  `ptyro daemon start --serve`; the question in `ptyro init`; the TUI's `remote.web`,
+  `ptyro daemon start --serve`; the question in `ptyro setup`; the TUI's `remote.web`,
   `remote.web_on`, `remote.web_off`; and the web app's More → Web app. All of them are
   `Request::Web` (§6.4) or the same `set_serve` on the config file, so they cannot disagree.
 - **It reacts at once.** The supervisor waits on a wake-up, not only its 3 s look, so a config
@@ -4803,7 +4771,7 @@ is "the web is up when the daemon is".
   older ptyro made), and there is no plain-HTTP or trusted-proxy mode (so no `X-Forwarded-For`
   handling). The one exception is not a setting: `ptyro serve --loopback-http` (or
   `PTYRO_LOOPBACK_HTTP=1`, which the daemon's child inherits) speaks plain HTTP on 127.0.0.1
-  for the tour and the tests (a browser counts loopback as secure); it refuses any `access`
+  for the tests (a browser counts loopback as secure); it refuses any `access`
   but `localhost`.
 - **No orphans.** A managed `ptyro serve` leaves within a second of its parent daemon going
   (`getppid` changes), however it went: a crash leaves the socket file behind, so the file alone
@@ -4820,7 +4788,7 @@ is "the web is up when the daemon is".
   (`PTYRO_DAEMON_STARTED`), and a process with its id that started at another time is another
   one: the daemon is gone.
 - **After a reboot.** The daemon runs it, so it is up when the daemon is; `ptyro web on` and
-  `ptyro init` say when the login service isn't installed (`ptyro daemon install-service`).
+  `ptyro setup` say when the login service isn't installed (`ptyro daemon install-service`).
 - **Routes:** `/` and the embedded app; `/ws`; `POST /api/request` (`Authorization: Bearer`,
   one request, JSON outcome); `POST /api/pair` (`{code, name?}` → `{token, device}`: a `DeviceClaim`
   over a local connection; a refused code counts as a failed login); `/healthz`.
@@ -5011,18 +4979,13 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
   <token>`; the token must be a `full` device's, which `serve` checks by asking the daemon for
   the device list, and `serve` must not be `--remote`): `config.get|check|save|show` (checked as
   `ptyro config check` does, written 0600 atomically, the daemon told to reload), `doctor`, `about`,
-  `profile.new|rm|rename|sync|detect|detect_apply|login|doctor`, `integrations.ls|install|
-  uninstall`, `service.install|uninstall`, `daemon.logs|restart|stop`, `tour.start|end`,
-  `login.list|start` (BOOT4, §24.4). The work
+  `profile.new|rm|rename|sync|detect|detect_apply|login|doctor`, `service.install|uninstall`,
+  `daemon.logs|restart|stop`, `login.list|start` (BOOT4, §24.4). (`integrations.ls|install|
+  uninstall`, `backup.create`, `tour.start` and `tour.end` were removed on 2026-11-17; they
+  answer `unsupported`, saying so.) The work
   is the CLI's own (`profiles.rs`, `doctor.rs`, `config.rs` expose it as functions; the rest runs
   the CLI as a subprocess), so the two cannot drift.
-- **The web tour:** `tour.start` makes what `ptyro tour` makes (a throwaway directory with its own
-  ptyro home, a demo repository, the pretend agent) and also starts a `ptyro serve` of its own
-  there on a free loopback port, paired with a `full` device, and returns its link (with
-  `&tour=1`). That page shows a coach (`settings.ts`) that follows the same six steps as the
-  TUI's and moves on by what it sees; "End the tour" runs `tour.end` there, which stops that
-  daemon, deletes the directory and exits. Stale tours are swept at the next start. A tour listens
-  on this computer only, so it is opened from a browser on it.
+- **The web tour** (`#/tour` and its coach): removed on 2026-11-17 with the TUI's (§11.2h).
 - **Scrollback:** `ReadScrollback` renders as coloured, searchable text. (The replay player and
   the Earlier sessions page, `#/history`, were removed 2026-11-17.)
 - **Diff and review:** `WorktreeDiff` renders per file and hunk; tapping a line adds a
@@ -5293,7 +5256,7 @@ confine that.
 | Stale answers | an answer names its prompt (`Answer.expect` = the blocked status's `since_ms`, which changes with every new prompt); approve/deny links and push notifications carry it; a held hook has a generation. A changed prompt refuses the answer |
 | Clipboard exfiltration | OSC 52 write only to the controlling client, off with `[clipboard] allow_write = false`, capped at 1 MiB, never into ptyro's paste buffer; read never |
 | Secrets in recordings/logs | files `0600`; recorder opt-out; logs never include PTY content above `trace` |
-| Secrets in the config file (literal tokens, webhooks) | everything ptyro writes there (`config edit`, `init`, profile and pin commands) is 0600 in directories it creates 0700, replaced atomically; `ptyro doctor` warns when group or others can read or write it |
+| Secrets in the config file (literal tokens, webhooks) | everything ptyro writes there (`config edit`, `setup`, profile and pin commands) is 0600 in directories it creates 0700, replaced atomically; `ptyro doctor` warns when group or others can read or write it |
 | Data loss in worktrees | §10.8 rules; locks while running; marker files |
 | Remote access | **[built M9]** off by default; the daemon's clients use a local socket only (its one TCP port is the opt-in approve/deny link listener, loopback/Tailscale unless `insecure`). `ptyro serve` is always HTTPS and listens where `[remote] access` says (this computer, plus your Tailscale network, or every interface). Devices: 256-bit tokens stored hashed, compared in constant time, scopes enforced per request and keystroke, a browser's Hello rewritten to `web`, a lockout after 10 failures, revocation closes live connections, pairing only locally and through a one-time code (single use, 10 minutes, so the printed link is worthless afterwards; the token itself is never printed), `full` by default with a warning (`--scope` for less), remote actions in the event log. The app ships a strict CSP and no third-party code. Web Push is end-to-end encrypted. Over ssh: the ssh login. E2E relay later (docs/remote.md has the threat model). |
 | Credentials | ptyro stores none for agents; uses the agents' own auth; remote tokens hashed; profile `secrets` resolved per spawn, memory-only, redacted everywhere |
@@ -5336,7 +5299,7 @@ confine that.
 | Daemon integration | `ptyro-testkit` spawns a daemon with `PTYRO_HOME=tmpdir`, uses `ptyro-fake-agent` — a scriptable fake agent binary that emits OSC 7501, calls `ptyro hook`, asks fake permission prompts, prints colours, uses alt screen — so status/attach tests never need real agents or network |
 | Git | temp repos; worktree create/remove safety matrix (dirty, untracked, unpushed, stash, locked) |
 | End-to-end | scripted TUI runs in a headless PTY (the testkit attaches a client, sends keys, asserts on cell cache). **Built in M1:** `ptyro-headless` (dev tool in `ptyro-testkit`) runs a program, even the ptyro TUI itself, inside the emulator with timed `--send`/`--resize`/`--snapshot`/`--expect`/`--record`; `make smoke` runs it in CI. `crates/ptyro/tests/e2e.rs` drives a real daemon in a temp `PTYRO_HOME` with the built-in fake agent. |
-| Manual compatibility matrix | `docs/compat.md`: Claude Code, Codex, Gemini, OpenCode, nvim, vim, htop/btop, less, fzf, lazygit, tig, bash/zsh/fish readline, `vttest` sections — checked per release in Ghostty, kitty, WezTerm, Alacritty, iTerm2, Terminal.app, and inside tmux |
+| Manual compatibility matrix | `docs/compat.md`: Claude Code, Codex, OpenCode, nvim, vim, htop/btop, less, fzf, lazygit, tig, bash/zsh/fish readline, `vttest` sections — checked per release in Ghostty, kitty, WezTerm, Alacritty, iTerm2, Terminal.app, and inside tmux |
 
 **The fake agent behaves as the real ones do where ptyro looks [2026-11-07, the flakes task]:**
 - As Claude does, the fake Claude empties its input box when it takes a prompt (the prompt
@@ -5563,7 +5526,7 @@ are built on tags later. CI only ever calls make targets.
 | 17 | **Structured sessions render their transcript into the session's emulator** (M10) | `read`, `wait --match`, the recorder, live upgrades and every terminal client work unchanged; the chat view is an enhancement on top (`ServerMsg::Chat`) | a separate session type with no terminal (every existing path would need a structured variant); clients rendering transcripts only |
 | 18 | ~~**A change set is a run, and its members live side by side in the set's root** (M11)~~ | removed 2026-11-17 with change sets (§15.5) | |
 | 19 | **A chat is ptyro's own durable record; the agent's conversation is a replaceable engine** (CHAT) | one truth for history, search, forks, switching agent and the machine mirror; agents' own histories differ, change format and vanish; native resume and fork stay as optimisations | indexing the agents' own history files (four unstable formats, no fork, no switch); a chat as a session kind (the transcript dies with the session, no tree) |
-| 20 | **Chat text lives in its own `chat.db`** (CHAT) | sensitive and large; FTS churn and long writes must not touch the metadata store's thread; backup, retention, delete and uninstall treat it on its own (`--no-chats`) | new tables in `ptyro.db` (every backup and `VACUUM INTO` copies chats; contention); a JSONL file per chat (no search, no tree queries) |
+| 20 | **Chat text lives in its own `chat.db`** (CHAT) | sensitive and large; FTS churn and long writes must not touch the metadata store's thread; retention, delete and uninstall treat it on its own (backup did too, `--no-chats`, until removed 2026-11-17) | new tables in `ptyro.db` (every backup and `VACUUM INTO` copies chats; contention); a JSONL file per chat (no search, no tree queries) |
 | 21 | **Seed-replay is the contract; native resume and fork are optimisations** (CHAT) | works for every agent, an agent switch, a fork from the middle, a lost conversation; the cost is tokens, shown once | requiring native fork (only Codex forks at any turn; Claude only from the end); making switching agents impossible |
 | 22 | **A chat belongs to a workspace on the machine that owns it; machines mirror, they don't sync** (CHAT, MM1) | chats then appear in every machine's workspaces with the machinery MM1 built (authority, routing, offline); one writer means no conflicts | replicating chats to every machine now (sync is CHAT6, needs its own design; the schema is ready for it) |
 
@@ -5758,6 +5721,9 @@ learn something the hard way.
   `-c mcp_servers.<name>.command=…`, `.args=[…]`, `.env={…}`.
 
 ### 20.3 Gemini CLI
+
+History: ptyro no longer runs Gemini CLI as a built-in (removed 2026-11-17, §8.5). These facts
+are kept as they were found.
 
 - **[verified 2026-10-19, 0.64.0 `--help`]** `--session-id <uuid>`, `-r/--resume`, `--list-sessions`,
   `-o text|json|stream-json`, `--acp`, `--approval-mode default|auto_edit|yolo|plan`, `-w/--worktree`,
@@ -6138,7 +6104,7 @@ tier was at its limit, and no provider was logged in).
 - **Approvals** reached the client as server requests (`item/commandExecution/requestApproval`),
   as §8.4 says.
 
-**Gemini CLI (`gemini --acp`, 0.66.0)**
+**Gemini CLI (`gemini --acp`, 0.66.0)** (history: no longer a built-in since 2026-11-17, §8.5)
 
 - `initialize` answers `protocolVersion 1`, `authMethods` (`oauth-personal`, `gemini-api-key`,
   `vertex-ai`, `gateway`) and `agentCapabilities {loadSession: true, promptCapabilities {image,
@@ -6188,8 +6154,8 @@ tier was at its limit, and no provider was logged in).
     holding the folder's path.
   - *Titles:* the ACP schema has `session_info_update {title}`, but 0.66.0 never sends one, so the
     one-shot titler names Gemini chats.
-  - *No incognito switch:* nothing keeps a session from being written; ptyro removes the folders
-    above when the chat ends.
+  - *No incognito switch:* nothing keeps a session from being written; ptyro removed the folders
+    above when the chat ended, until Gemini CLI was removed on 2026-11-17.
 
 **OpenCode (`opencode serve`, 1.19.5; `/doc` is its OpenAPI)**
 
@@ -6479,7 +6445,7 @@ Windows) wasn't needed to get the list below: compile errors are the same either
   that needs quotes (a space in the user's name) becomes its 8.3 short name
   (`GetShortPathNameW`, kept on the system volume by default); and failing that, Claude's hooks
   name PowerShell (`"shell": "powershell"`, `& '…'`), which every Windows has, while the status
-  line, Codex, Gemini and agy get double quotes (Git Bash and cmd). Claude's exec form (`args`,
+  line and Codex get double quotes (Git Bash and cmd). Claude's exec form (`args`,
   no shell, v2.1.139) was passed over: reports say plugin `hooks.json` ignores it, and that on
   Windows with Git Bash it still goes through bash [U]. [V for the three shells]
 - **A detached child inherits the parent's standard handles.** std starts a Windows child with
@@ -6742,7 +6708,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`. Updating is running it again (`codex update` exists
   too). Its feed, `https://releases.openai.com/codex/channels/latest`, is GitHub-release JSON with
   `tag_name` = `rust-v<version>`. `codex login status` exits 1 when logged out.
-- **Antigravity (`agy`):** its installer (`…/cli/install.sh | bash`, `…/cli/install.ps1 | iex`) puts
+- **Antigravity (`agy`)** (history: out of the table since 2026-11-17, §8.6b): its installer (`…/cli/install.sh | bash`, `…/cli/install.ps1 | iex`) puts
   `agy` in `~/.local/bin` or `%LOCALAPPDATA%\agy\bin` and it updates itself in the background
   (`AGY_CLI_DISABLE_AUTO_UPDATE=true` stops that). The installers read
   `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/<os>_<arch>.json`
@@ -6753,8 +6719,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   OpenCode 1: `curl -fsSL https://opencode.ai/install | bash` (into `~/.opencode/bin`), or
   `npm install -g opencode-ai` on Windows (the docs recommend WSL there). Its newest version is
   the npm registry's `opencode-ai/latest`; `opencode upgrade` updates it.
-- **Gemini CLI:** `npm install -g @google/gemini-cli`, Node.js 20+ (its `engines`, and the docs).
-  No login status command.
+- **Gemini CLI** (history: out of the table since 2026-11-17, §8.5): `npm install -g
+  @google/gemini-cli`, Node.js 20+ (its `engines`, and the docs). No login status command.
 - **GitHub CLI:** the docs warn off Debian's and Ubuntu's own `gh` (2.45.x/2.46.x broken); its
   own apt and dnf repositories, Homebrew, and `winget install --id GitHub.cli --source winget`.
   `gh auth status` exits 1 when logged out.
@@ -6789,17 +6755,17 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
    **Same day, the owner asked for both:** `[ui] prefix` takes a list, and the default is
    `["C-q", "C-Space"]`. Each key covers the other's gaps: macOS takes Ctrl-Space, while VS Code
    and Zellij take Ctrl-Q. A list the user sets replaces the default. The user-facing wording is in
-   `docs/keys.md`. `ptyro init` asks for comma-separated keys and warns only when `C-Space` is the
+   `docs/keys.md`. `ptyro setup` asks for comma-separated keys and warns only when `C-Space` is the
    sole prefix on macOS.
-3. ~~**Codex & Gemini hook injection**~~ — **decided 2026-10-20:** Codex entirely through `-c` flags, nothing written to `~/.codex`; Gemini through a ptyro extension linked once, opt-in (§8.4, §8.5, M0.4/M0.5).
+3. ~~**Codex & Gemini hook injection**~~ — **decided 2026-10-20:** Codex entirely through `-c` flags, nothing written to `~/.codex`; Gemini through a ptyro extension linked once, opt-in (§8.4, §8.5, M0.4/M0.5; Gemini removed 2026-11-17).
 4. ~~**Claude hooks injection**~~ — **decided 2026-10-20:** `--plugin-dir`; both mechanisms are additive (§8.2, M0.3).
 5. **Should the TUI offer a raw-passthrough fast path** when it is the only client and sizes match
    (enables image protocols like kitty graphics)? Deferred until someone needs images.
 6. ~~**Workspace semantics**~~ — **decided 2026-10-20:** workspaces carry a view, an attention
    policy (§9.6) *and* a profile (§10.10); the owner runs several accounts side by side, switching
-   today via shell aliases with separate config dirs (→ `ptyro init` adoption, §10.10). `default`
+   today via shell aliases with separate config dirs (→ adoption in `ptyro setup`, §10.10). `default`
    becomes `isolate = true` once any profile is defined (decided 2026-10-20).
-7. ~~**Antigravity CLI** adapter~~ — built from its docs as M4.21 (§8.6b); unverified against a real install.
+7. ~~**Antigravity CLI** adapter~~ — built from its docs as M4.21 (§8.6b), never verified against a real install, removed 2026-11-17 (pare-down).
 8. ~~**Change sets (§15.5)**~~ — built as M11, removed 2026-11-17 (pare-down): the owner never used
    them.
 9. **A resident summariser ("concierge")** — the UX1.3 spike's option B (owner's idea,
@@ -6812,7 +6778,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
     model2vec `potion-base-8M` (31 MB, downloaded only when `[chat] meaning` is switched on). Still
     open: its quality on real chats, and the 0.3 cosine floor ([U] until tried).
 12. **Chat tool restriction per agent** — answered by CHAT0 for Claude and Codex (§20.8, §22.5);
-    open for Gemini and OpenCode, whose native rules are read but were not run (§22.17).
+    open for OpenCode, whose native rules are read but were not run (§22.17); Gemini's went with
+    it on 2026-11-17.
 
 
 ---
@@ -6825,14 +6792,13 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   streaming node closed `interrupted` at start. So is a turn cut off before any of its answer
   arrived (the shown branch ends after the person's message with no answer and no end): a notice
   that says to retry, then the `interrupted` end; its running tools are closed failed and its
-  open permission cards `cancelled`, as nothing can answer them now. `ptyro doctor` reports it, `ptyro backup` copies it
-  (`--no-chats` leaves it out), `ptyro uninstall`'s plan names it. A removed workspace's chats go
+  open permission cards `cancelled`, as nothing can answer them now. `ptyro doctor` reports it, `ptyro uninstall`'s plan names it. A removed workspace's chats go
   to `main`.
 - **Engine** (`ptyro-daemon/src/chats.rs`): a structured session with `Place::chat`, in
   `<data>/chat/<id>/`, under the chat's profile, launched with the §22.5 line per agent (Claude
   `--tools`/`--allowedTools`/`--strict-mcp-config`/`--safe-mode`/`--system-prompt`; Codex
   `thread/start` fields through the driver's new `Opts.params`, every `codex mcp list` server off;
-  a Gemini `--policy` file; OpenCode's permission ruleset). Engines are hidden by the clients
+  OpenCode's permission ruleset). Engines are hidden by the clients
   (`SessionInfo.chat`), never restored as dormant, never hibernated by
   `[agents]`: `[chat] hibernate_after` stops them. Native continue by conv; a conv whose resume
   produced no answer is ended and the message is re-sent seeded. Codex's driver ends a turn on
@@ -6848,7 +6814,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   binary's folder; every `codex mcp list` server is switched off whatever its case, and when the
   list can't be read the chat says `tools: best effort`. `chat.db` and its copies are 0600 every
   time; a write after a delete is dropped; `archive_purge_days` removes the purged chats' files;
-  `ptyro backup` reads `chat.db` read-only; doctor uses `quick_check`. `[chat] notify = "all"` adds
+  doctor uses `quick_check`. `[chat] notify = "all"` adds
   only the chat's own "answered". A machine can't be named `c`; another machine's archived chats
   are routed there once listed.
 - **Not built in CHAT1** (each is its later task): incognito, `history_tool`/`history_scope`
@@ -6900,9 +6866,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   removed, is still accepted). The daemon knows a caller is an engine by its pid's session; an engine may
   only search, read and list, scoped by `history_scope`, never itself or an incognito chat. Claude
   engines get the line of §20.8 instead of `--safe-mode`; Codex gets `mcp_servers.ptyro` in the
-  thread's config; Gemini engines get them in `session/new` since CHAT4; OpenCode engines get none yet. Not built: `--machine` on
+  thread's config; an ACP agent's engines get them in `session/new` since CHAT4; OpenCode engines get none yet. Not built: `--machine` on
   search (the fan-out and `--here` are), the trigram index for CJK.
-- **Tools and tasks (CHAT4) and Gemini (2026-10-30):** tool presets of your own
+- **Tools and tasks (CHAT4):** tool presets of your own
   (`[chat.tools.*]` with `shell` and `mcp`, `ChatPresets`, `ptyro chat presets`, `/tools`) were
   built here and removed on 2026-11-17 (pare-down): every chat may search the web and read the
   folders it was given (§22.5). **Folders** are the chat's own: `ChatNew.folders`,
@@ -6926,16 +6892,14 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   skips one). It waits its turn like a message: refused while the chat answers. The project defaults to the only one of the chat's workspace (or the only one there is);
   otherwise the error lists them with `--project`, and the TUI and web ask with a picker. The link
   back is that notice and the worktree's title (the chat's): `SessionInfo` has no `forked_from_chat`
-  (27 places build it, and `ptyro.db` would need a column). **Gemini:** a chat runs with
-  `--admin-policy F --policy F --extensions none --allowed-mcp-server-names <ptyro, or "">` (and
-  `--include-directories` per folder when it reads); the history tools reach any
+  (27 places build it, and `ptyro.db` would need a column). The history tools reach any
   ACP agent through `Opts.params.mcpServers`, which the driver merges into `session/new` and
   `session/load` (no new `Opts` field: `params` already is "more fields for the call that starts or
-  resumes the conversation"). Another ACP agent gets no Gemini flags. Deleting a Gemini chat, or an
-  incognito one ending, removes Gemini's own folders for its scratch directory (`.project_root`).
-  Deleting any chat (or `archive_purge_days` purging it: `compact` returns each with its agent and
+  resumes the conversation"). (A Gemini chat's own flags, `--admin-policy`, `--policy`,
+  `--extensions none` and `--allowed-mcp-server-names`, and removing Gemini's own folders went
+  with Gemini CLI on 2026-11-17.) Deleting any chat (or `archive_purge_days` purging it: `compact` returns each with its agent and
   profile) removes the copy of every agent that served it (each conv's agent and profile): Claude's
-  project folder, Gemini's folders, and Codex's rollouts (`sessions/YYYY/MM/DD/rollout-*-<thread
+  project folder and Codex's rollouts (`sessions/YYYY/MM/DD/rollout-*-<thread
   id>.jsonl` and `archived_sessions/`, by each conv's `conversation_id`, only when the file's first
   line names the chat's id, so no other conversation is touched).
   **Finding agents:** `ptyro_agents::locate` finds a program that isn't on `PATH` in the npm prefix,
@@ -6951,7 +6915,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   with `%USERPROFILE%` as the home when `HOME` isn't set, in the npm prefix (the prefix itself, not
   `bin`), `%APPDATA%\npm`, `~\.local\bin` (Claude's native installer), WinGet's `Links`, Scoop's
   `shims`, `%NVM_SYMLINK%` (nvm-windows), `~\.bun\bin` and `npx`'s cache under
-  `%LOCALAPPDATA%\npm-cache\_npx`, and `%LOCALAPPDATA%\agy\bin` (the Antigravity CLI's installer).
+  `%LOCALAPPDATA%\npm-cache\_npx`.
   An npm shim whose package is gone (a removed package, or an install that rolled back) runs
   nothing and isn't found. An npm `.cmd` shim is read and what it starts runs instead: its
   last quoted `"%dp0%\…"`, inside its folder only, a `.js` with `node` (the shim's own `node.exe`
@@ -6959,7 +6923,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   between ptyro and the agent, ask "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's
   program. A shim that can't be read runs as itself (WIN5 wraps it in `cmd.exe /d /c`). Claude's
   install hint is `irm https://claude.ai/install.ps1 | iex` there (every hint is the version table's, §24.1). **Not built:** an `@` completion of the folders' files
-  in the composer; agent-sent titles (no agent of the four sends one: §20.8); MCP for OpenCode chats
+  in the composer; agent-sent titles (no built-in agent sends one: §20.8); MCP for OpenCode chats
   (its server takes MCP servers per server instance, `POST /mcp`, and it isn't installed here to
   try; its permission rules for `<server>_*` are written [S]).
 - **Meaning search (CHAT5, 2026-10-30):** opt-in `[chat] meaning`, model2vec `potion-base-8M` in
@@ -7102,8 +7066,7 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   archive_purge_days` (0 = never) deletes archived chats after that long; `ptyro chat rm` and the
   row menu delete one at once (a tombstone, then the rows and the index entries are removed at
   the next compaction, in a day, so a sync can learn of the delete).
-- **Privacy:** a chat's content is sensitive and large. It is in `ptyro backup` (`--no-chats`
-  leaves it out), in `ptyro uninstall`'s plan (the file and its size), and in `ptyro doctor` (opens,
+- **Privacy:** a chat's content is sensitive and large. It is in `ptyro uninstall`'s plan (the file and its size), and in `ptyro doctor` (opens,
   FTS5 present, size, `PRAGMA integrity_check`). Secrets the profile holds are never put in a
   chat by ptyro; text a person types is stored as typed.
 - **Live upgrade:** the connection closes before the exec and opens after; engines cross as
@@ -7115,7 +7078,7 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   one (or resumes the chat's current `conv`, §22.6); it **hibernates** after `[chat] hibernate_after`
   (default `2m`) idle, as sessions do (§7.4).
 - **Which agent.** `[chat] agent`, else the workspace's default agent, else the first of claude,
-  codex, gemini, opencode that is installed and has a structured protocol (§7.1). With none: the new
+  codex, opencode that is installed and has a structured protocol (§7.1). With none: the new
   chat says no agent that can chat is installed and offers setup (BOOT9, §24.10: the TUI's
   checklist, the web's setup page, `ptyro setup`). An agent without a structured
   protocol is not offered (a `protocol = "acp"` entry makes it one). `agent@profile` works as it
@@ -7135,13 +7098,12 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   |---|---|---|---|
   | **Claude** (stream-json) **[V]** | `--tools "WebSearch,WebFetch" --allowedTools WebSearch WebFetch --strict-mcp-config --safe-mode --system-prompt <chat prompt>` | `--tools "Read,Glob,Grep"` and `--add-dir` for each attached folder, **no** `--allowedTools` for them (a bare allow reads anywhere), plus the same flags | `--tools ""` plus `--strict-mcp-config --safe-mode` |
   | **Codex** (app-server) **[V]** | `thread/start {sandbox: "read-only", config: {web_search: "live", features: {shell_tool: false, unified_exec: false, hooks: false, …}, mcp_servers: {<each>: {enabled: false}}}}`. `read-only` alone is not enough: it still reads any file | a profile `extends ":read-only"` that denies `$HOME` and re-allows the attached folders and what Codex needs to start; **no** `sandbox` parameter; shell on. Files outside `$HOME` stay readable, so the header says `tools: best effort` | the `chat` config with `web_search: "disabled"` |
-  | **Gemini** (ACP) **[S]** (2026-10-30, read from 0.66.0's source; §20.8) | a policy file ptyro writes, passed as `--admin-policy` (the tier above the user's rules and "always allow" answers) and `--policy` (which replaces the user's own; for when a system policy makes Gemini ignore `--admin-policy`): `toolName = "*"` `deny` at 900, `google_web_search` and `web_fetch` `allow` at 950, `mcp_ptyro_*` with the history tools; `--extensions none`; `--allowed-mcp-server-names ptyro` (or `""`: none). The history server comes in `session/new`. 0.66.0 has no `--safe-mode`; the user's hooks and skills in a chat stay **[U]** | the same, with `read_file`, `read_many_files`, `glob`, `grep_search`, `list_directory` allowed and `--include-directories` for each folder: its file tools read only the workspace (the scratch folder and those) | the catch-all `deny` only |
   | **OpenCode** (serve) **[S]** | `POST /session {permission: [{"*","*",deny}, {websearch,*,allow}, {webfetch,*,allow}]}`, set again after every fork; per-message `tools` as a second fence | `read`, `glob`, `grep` allowed for the attached folders' patterns | the catch-all `deny` only |
 
   Every Claude engine also gets `--safe-mode`: without it the user's hooks, CLAUDE.md, skills and
   plugins run inside the chat (§20.8). A Codex thread's hooks and MCP servers are switched off by
   name for the same reason. A chat whose agent can't enforce its tools natively, or can only
-  partly (folders on Codex, anything on Gemini and OpenCode until a login lets CHAT1.3 test it),
+  partly (folders on Codex, anything on OpenCode until a login lets CHAT1.3 test it),
   shows `best effort` in its header, not silence, and ptyro's own answer to each permission
   request still stands behind it: any other tool is denied. Web content is untrusted text: with no
   shell and no file tools beyond the folders a chat was given, a page can say what it likes and
@@ -7160,8 +7122,8 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
     resume and fork only where it says so (§22.6). OpenCode: its permission ruleset is set at session
     creation and **again after every fork**; a `retry` status with an `action` (a usage limit) is shown
     as a notice with its link, and no call waits for the model synchronously.
-- **Web search out of the box.** All four agents ship one (Claude `WebSearch` and `WebFetch`;
-  Codex `web_search`; Gemini `google_web_search`; OpenCode `websearch` where Exa's hosted search is
+- **Web search out of the box.** All three agents ship one (Claude `WebSearch` and `WebFetch`;
+  Codex `web_search`; OpenCode `websearch` where Exa's hosted search is
   on **[S]**), so a chat only has to leave it on. No search MCP is installed.
 
 ### 22.6 Continuing a conversation: native, or seeded
@@ -7182,8 +7144,9 @@ from the stored record (never from the agent's own files):
 CHAT0 (§20.8) settled which agents can do what: **Claude** resumes (`--resume`, same id) and forks
 at its end (`--fork-session`, new id, original untouched) but has no fork at a message; **Codex**
 resumes in a new process (`thread/resume`) and forks at any turn (`thread/fork` with `lastTurnId`,
-verified); **Gemini 0.66.0** offers `session/load` only (no `session/list`, `resume` or `fork`: read
-`agentCapabilities.sessionCapabilities` at `initialize` and use what it lists); **OpenCode** forks at
+verified); an **ACP** agent offers what `agentCapabilities.sessionCapabilities` lists at
+`initialize`, so read it and use that (Gemini 0.66.0, no longer built in, offered `session/load`
+only); **OpenCode** forks at
 a message (`POST /session/:id/fork`, which copies the messages *before* it and drops the session's
 permission rules, so set them again) and resumes by id. Chats use only the resumes now.
 
@@ -7229,8 +7192,7 @@ agent's own history is a cache**: losing it, or an agent's updated format, loses
 ### 22.8 Titles
 
 The first exchange gets a title, once: (1) the agent's own when it sends one (ACP
-`session_info_update {title}`: Gemini 0.66.0 declares it and never sends it, read from its source
-**[S]** 2026-10-30; OpenCode writes its own title into the session, read
+`session_info_update {title}`; OpenCode writes its own title into the session, read
 from `session.updated` or `GET /session/:id` [V]; Codex sends no `thread/name/updated` and sets no
 name in an app-server thread, and Claude's stream and session file carry no title: both **[V]**, so
 for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot
@@ -7253,10 +7215,7 @@ seeds a new one from memory, and the chat ends 10 s after its last reader leaves
 running (a reload or a reconnect comes back in time); `chat find`'s are the same. The transcript
 lives in the daemon's memory, so it ends with a live upgrade or a restart too (its folders go then). Claude's engine gets `--no-session-persistence`
 **[V]**, so it has no resume and leaves no file; Codex's gets `ephemeral: true` **[V]**, which leaves
-no rollout and no list entry; Gemini has no such switch, but its copy is in folders marked with
-the chat's scratch directory (`<home>/.gemini/{tmp,history}/<slug>/.project_root`, §20.8 [S/V]),
-which ptyro removes when the chat ends, and the chat says so ("ptyro keeps nothing, and removes
-gemini's own copy when the chat ends"); OpenCode has no switch **[U]**, so its own history may keep
+no rollout and no list entry; OpenCode has no switch **[U]**, so its own history may keep
 it, which the chat says plainly ("ptyro keeps nothing; opencode may keep its own copy"). `chat ask` (below)
 is incognito unless `--keep`.
 
@@ -7373,7 +7332,7 @@ The owner's rule: chats show in the workspaces of connected machines. They follo
   …); a request about `laptop2:c:…` goes over the link with the prefix taken off its addresses only,
   and its reply is qualified. `ChatList` (and `Chats` in the TUI and web) gains every mirror's
   shown part; `ChatSearch` fans out (§22.10). Requests about this machine itself are not routed
-  (`[chat]` settings, `chat.db` doctor and backup).
+  (`[chat]` settings, `chat.db` doctor).
 - **Open and use.** `ChatSubscribe` (the live stream, `ServerMsg::Chat` with nodes) goes over the
   client's own upstream connection to the machine, as screens do, so streaming, answering a
   permission card, sending, retrying and editing work on a remote chat exactly as on a local one.
@@ -7409,7 +7368,7 @@ hides when `enabled`):
     ★ migration plan   claude        <- pinned
     ● rust lifetimes   codex         <- working
     ◉ release notes    claude ⚠      <- needs you (permission)
-      dinner ideas     gemini  ●     <- unread
+      dinner ideas     opencode ●    <- unread
       all chats… (23)
 ▾ ● laptop2 / work
   ▾ CHATS                      ＋
@@ -7510,7 +7469,7 @@ archive_purge_days = 0    # 0 = keep archived chats forever
 `chat.preset`, `chat.import` and `[chat.tools.*]` are retired (removed 2026-11-17 with tool presets
 and import; §13.8). The keys marked *next* apply to chats started or resumed after the change; `live`
 ones to every screen at once. `[chat]` is refused in a repository's `.ptyro.toml` (§13.1), as
-agents are. `ptyro init` asks nothing about chats: they work on first use.
+agents are. `ptyro setup` asks nothing about chats: they work on first use.
 
 ### 22.14 Protocol (additive, the next minor after 1.20)
 
@@ -7551,6 +7510,12 @@ and `.keep`, the `ChatImported` and `ChatPresets` replies, `ChatTranscript.sibli
 `source_dir` went (with `ChatSiblings`, `ChatCompare`, `ChatPreset`, `ImportReport`). `ChatInfo.tools`
 stays: `chat`, `none` or `find`. `Chats` gains `incognito`, a new chat's default.
 
+**1.48 (2026-11-17, pare-down):** no chat wire change. Gemini CLI went as a built-in, so a chat
+no longer gets Gemini's ACP flags or tool policy (`--admin-policy`, `--policy`, `--extensions
+none`), and deleting a chat no longer removes Gemini's own copies; an agent of yours with
+`protocol = "acp"` still chats over the generic ACP path. `ptyro_drive::launch_args` lost its
+adapter parameter.
+
 **Not built** (in the first draft; nothing needs them yet): `ChatNew.profile` (it is
 `agent@profile`); `ChatList.machine`, `cursor` and `next` (no paging: a list is metadata, and
 `limit` caps it); `ChatGet{from, branches}` (it is `ChatRead`);
@@ -7584,7 +7549,7 @@ CHAT builds on the fakes of M10 (a fake for each of the four protocols), so ever
 agent installed:
 - **Store:** migrations, the FTS triggers, a streaming node written in steps and a crash mid-turn
   (the next start closes it `interrupted`), tombstones and compaction, `chat.db` missing or locked
-  (the daemon runs, the chat says why), backup with and without `--no-chats`.
+  (the daemon runs, the chat says why).
 - **Engine:** native continue, seed (agent switch, a retry or an edit, lost conversation, other
   profile), the seed budget and the summary, hibernate and resume, the tools per agent (the launch arguments are asserted for each), a denied tool, an incognito chat leaving no
   row, a live upgrade mid-turn.
@@ -7615,11 +7580,9 @@ agent installed:
 - **Still unverified, each a known gap and a task before the work that depends on it:**
   - that `WebSearch` works in `-p` on an API-key, Bedrock, Vertex or Team account (only a
     subscription login was tried);
-  - that Gemini's policy rules stop a call (read from its source, §20.8; a turn needs a login),
-    and whether its hooks and skills load in a chat;
   - that OpenCode's ruleset stops a call, and that its `retry`/`action` status is what a driver sees
     at a limit (a free tier at its limit, no provider logged in);
-  - `session/resume` and `session/fork` of ACP on an agent that offers them (Gemini 0.66.0 doesn't);
+  - `session/resume` and `session/fork` of ACP on an agent that offers them;
   - Linux: every result above is from macOS (Codex's sandbox and permission profiles differ there);
   - a chat's folders on Codex: files outside `$HOME` stay readable.
   The first three fit `make verify-chat` (§22.16), which CHAT1.3 writes with a login for each.
@@ -7731,8 +7694,7 @@ agent installed:
     - `ptyro doctor`'s `terminal alt keys` says the same from a shell. It names the shells menu as
       the keymap binds it, says nothing is wrong when `alt_digits` is off, and trusts the kitty
       keyboard protocol.
-  - **The tour's sixth stop**, "keep a shell of your own" (TUI and web), moves on once a shell is
-    in SHELLS. The headless tour test presses Alt-1 there.
+  - **The tour's sixth stop**, "keep a shell of your own", went with the tour on 2026-11-17.
 
 
 What tmux's windows give you, and ptyro hasn't: terminals that belong to no repository, made with
@@ -8200,9 +8162,8 @@ corrected without touching the logic, and the tests check every row on every loa
 from the vendor's documentation (or, where marked, the vendor's installer script or the program
 itself) on the row's `checked` date, and RESEARCH segment G records the same, with sources.
 
-**Rows:** the agents Claude Code (`claude`), Codex, Antigravity (`agy`), OpenCode and Gemini CLI
-(labelled "for Gemini API-key and enterprise accounts (others: Antigravity)"), and the tools
-git, the GitHub CLI (`gh`) and Node.js (`node`). An agent's row id is its built-in name (§8.1).
+**Rows:** the agents Claude Code (`claude`), Codex and OpenCode, and the tools git, the GitHub CLI
+(`gh`) and Node.js (`node`). (Antigravity's and Gemini CLI's rows went on 2026-11-17, §8.5.) An agent's row id is its built-in name (§8.1).
 
 **Per row:** `doc` (the vendor page) and `checked` (the date); `version` (the argv that prints the
 installed version); `login` (`start`, and `check`, which exits 0 when logged in, absent when the
@@ -8220,12 +8181,12 @@ build and Linux gets apt or dnf by what is there.
 
 **Marks:** every method, login and source carries `V`, `S` or `U` (§20 style), and anything not `V`
 carries a `note` saying what is second-hand or missing. A value nobody documents is left out:
-Antigravity's, Gemini CLI's and OpenCode's logins have no `check` (OpenCode's `auth list` was one until BOOT4: it lists providers, and nothing documents that it fails when none is logged in), and the tests insist such a login says why.
+OpenCode's login has no `check` (OpenCode's `auth list` was one until BOOT4: it lists providers, and nothing documents that it fails when none is logged in), and the tests insist such a login says why.
 
 **Newest versions, without the network:** `Latest::url(platform, arch)` names what to fetch and
 `Latest::parse(body)` reads the reply. Sources: `npm` (`{"version"}`), `github-release`
 (`tag_name` less a prefix: `v` for gh, `rust-v` for Codex's channel), `plain-text` (Claude's
-`latest`), `agy-manifest` (`{"version"}`, per `<os>_<arch>`) and `node-dist` (the newest LTS in
+`latest`) and `node-dist` (the newest LTS in
 `index.json`). The tests parse replies recorded on 2026-11-06 in
 `crates/ptyro-agents/tests/fixtures/catalog/` (trimmed to the fields that matter; `make catalog-fixtures` records them again) and reject a
 reply that isn't a version (an HTML error page, the wrong tag prefix). git has no source: the
@@ -8240,13 +8201,11 @@ its release); `at_least` checks a minimum.
 - **OpenCode is OpenCode 1** (`opencode-ai`): OpenCode 2 is beta and changed the server API the
   adapter speaks. On Windows it installs with npm (the docs recommend WSL), so it needs Node.js
   there.
-- **Antigravity and Claude Code update themselves**; their `update` is the manual form.
-  Antigravity's `agy update` is [S] (third-party guides, not the docs).
+- **Claude Code updates itself**; its `update` is the manual form.
 - **Admin:** no agent's recommended method needs it. apt, dnf, Xcode's tools and WinGet's
   machine-wide Git, gh and Node.js installers do (`admin = true`); the tests require any `sudo`
   command to say so.
-- **Not handled:** musl Linux for Antigravity's manifest (its installer picks `_musl` builds);
-  Alpine generally.
+- **Not handled:** Alpine and musl Linux generally.
 
 **Uses:** `locate::install_hint` is the table's first method for the platform (`doctor`'s note
 for an agent run from npx's cache); BOOT1 builds the plan engine on the rest. A missing agent's fix
@@ -8279,14 +8238,13 @@ method's `update`); `other` (installed through one of the row's `others`, by its
 `node_modules`/`npm`/`_npx`, Homebrew's `Cellar`/`Caskroom`, WinGet's links, read where the file
 really is (a link in `~/.npm-global/bin` names npm's folder); offered the move to the recommended
 installer unless kept, BOOT7, §24.9); `too_old` (older than a minimum something ticked needs:
-Node.js 18 for Gemini CLI's 20). Each entry has a `side`, only `local` until BOOT8 adds WSL's and
+git below the 2.23 Codex's helpers want; Node.js 18 for Gemini CLI's 20 until 2026-11-17). Each entry has a `side`, only `local` until BOOT8 adds WSL's and
 Windows'.
 
-**Prerequisites:** only *required* ones tick (Node.js for Gemini CLI everywhere and for OpenCode
-on Windows); recommended ones (git for Codex's PR helpers, Git for Windows for Claude) don't, but
+**Prerequisites:** only *required* ones tick (Node.js for OpenCode on Windows); recommended ones (git for Codex's PR helpers, Git for Windows for Claude) don't, but
 git is a default tick. A ticked prerequisite can't be unticked while what needs it is ticked.
-`npm` counts as present when Node.js is installed or about to be, so Gemini CLI plans through npm
-on a machine with no Node.js yet.
+`npm` counts as present when Node.js is installed or about to be, so OpenCode on Windows plans
+through npm on a machine with no Node.js yet.
 
 **Node.js, the design's rule** (and BOOT0's review's open note): methods in the table's order,
 skipping those whose `needs` is absent. apt's and dnf's are used only when the candidate version
@@ -8316,7 +8274,7 @@ their program folders (`bin` under each, except on Windows):
   shell's rc file (`ShellKind::rc_line`, with a `# ptyro …` comment above it: exactly the form
   `ptyro uninstall` takes out), or says it's there already. On Windows it offers to put the
   folders in the user's `PATH` (`[Environment]::SetEnvironmentVariable(…, 'User')`, each once).
-  `--yes` only says what to add, as `ptyro init --yes` leaves rc files alone.
+  `--yes` only says what to add, and leaves rc files alone.
 
 **Administrator rights:** asked for once, before the first step that needs them, never through
 ptyro. `Admin::Ask` (the CLI at a terminal): sudo's own `sudo -v` in the real terminal, then each
@@ -8354,7 +8312,7 @@ without a terminal it refuses and says to pass `--yes`. `--dry-run` prints the c
 step's command (`--json`: the `Plan`); `--json` on a run prints each event as a JSON line on
 stdout. `--where` is BOOT8's (§24.3), `--move` BOOT7's (§24.9).
 **`ptyro install NAME… [-y] [--dry-run] [--json]`:** names as people say them (`setup::resolve`:
-the id, the program or the name, any case, without spaces or dots: `agy`, `github-cli`,
+the id, the program or the name, any case, without spaces or dots: `codex`, `github-cli`,
 `"Claude Code"`, `nodejs`); an unknown one exits 3 listing the known. It shows the steps and asks
 `Install? [Y/n]` (end of input is no). Already installed: "✓ GitHub CLI is here already". Both
 exit 0 when everything ran, 1 when anything failed or was skipped, and never talk to a daemon (an
@@ -8537,7 +8495,7 @@ The design's goal 5: each installed agent and the GitHub CLI logged in once, to 
 profile, through the tool's own flow; setup ends by saying how to add more accounts.
 
 **The engine** (`ptyro_agents::setup::login`): `status(host, item)` is `logged_in`, `logged_out`,
-`unconfirmed` (the table names no `check`: Antigravity, Gemini CLI, OpenCode) or `missing`;
+`unconfirmed` (the table names no `check`: OpenCode) or `missing`;
 `rows(host, ids)` lists them (`LoginRow`: id, name, side, state, the `start` command as typed,
 the `check`, the table's note); `log_in(host, item)` runs `start` in the person's terminal, then
 asks `check` again; `after(plan, report)` is what a run walks through. Two `Host` methods:
@@ -8588,7 +8546,7 @@ to, so it was taken out of the table (§24.1) and OpenCode is `unconfirmed`.
 a login that is installed. Each logged in says ✓; each logged out runs its login ("▸ Logging in to
 GitHub CLI: `gh auth login --web`", then a line saying the sign-in is the tool's and Ctrl+C skips
 it) and ends ✓, or ✗ with the fix (`ptyro login gh` tries again, or the command to run yourself).
-One that can't be checked runs only when named (`ptyro login agy` starts Antigravity: "sign in,
+One that can't be checked runs only when named (`ptyro login opencode` starts OpenCode's: "sign in,
 then quit it to come back here") and ends "?", saying it can't be confirmed; quit non-zero (Ctrl+C,
 or however the agent quits) it says "skipped", not a failure. A login ending non-zero for a tool
 that can be checked says how it ended, with the fix. A named one not
@@ -8603,7 +8561,7 @@ as for setup: logins are this computer's.
 `login::after` per side, under a heading each (WSL's in WSL, as above), asking nothing more: the
 person chose these by ticking them, and Ctrl+C skips any one. One that can be checked runs when
 logged out; one that can't runs only if this run just installed it (it can't have signed in yet),
-so Antigravity already here isn't started on every setup. One just installed but not found from
+so OpenCode already here isn't started on every setup. One just installed but not found from
 this terminal yet says to open a new terminal, then `ptyro login <name>`. With `--yes` (no person) they only
 say where each stands and that `ptyro login` logs them in; with `--json` nothing is said (the
 `logins` event is in the stream); WSL's ptyro running for Windows' (`--admin=…`) leaves them to
@@ -8662,10 +8620,10 @@ before.
 
 **On screen:** under Agents and Tools, each row is `[x]` picked, `[+]` ticked for something
 picked, `[ ]` not, then its name and one line, parts joined by ` · ` and wrapped between parts:
-the catalog's new `about` (one line per row, `catalog.toml`; Gemini CLI's label takes its place),
+the catalog's new `about` (one line per row, `catalog.toml`),
 the method it would use (`through` the action's when ticked, else the table's first method whose
 `needs` is present), "asks for admin", "needs Node.js" (required prerequisites), "ticked because
-Gemini CLI needs it", an outdated or too-old state, "can't here: …" for a blocked one, and "then
+OpenCode needs it", an outdated or too-old state, "can't here: …" for a blocked one, and "then
 log in" for an item with a login. On Windows with a usable WSL each row has a cell per side
 (`Windows`, `WSL (Ubuntu)`: `[x] WinGet (admin)`, `[ ]`, `✓ 2.43.0`), the cursor's cell
 reversed, and a line under the row per side for what a cell can't say (why it can't, what needs
@@ -8725,22 +8683,22 @@ to open it again (`C-q U opens the setup checklist (agents and tools) any time`)
   computer's `ptyro install <names> [--where …]` in a split (`ptyro setup` when it names none).
   The doctor's lines offer setup in BOOT9's words (§24.10): "No coding agent is installed:
   `ptyro setup` installs one (…)", "codex not found: `ptyro install codex` installs it".
-- **`ptyro init`** (the CLI): its agents step asks "open the setup checklist, to install agents
-  and tools?" (yes by default when no agent is found) and runs `ptyro setup`'s checklist in that
-  terminal, then carries on; never with `--yes` or `--dry-run`.
+- **`ptyro setup`** (the CLI, at a terminal): the checklist first, then what `ptyro init` asked
+  (merged 2026-11-17, §12.3); `--yes` and `--dry-run` stop after the checklist.
 
 **Tests, with no real installer:** the ticking rules and Windows' commands in
 `setup_list.rs` (defaults and `install … --confirmed`, a prerequisite ticked with its reason and
 kept, two columns and `--where both` vs. a split per side with WSL's daemon, Windows' ptyro out of
 WSL's reach, a daemon elsewhere); the screen in `app.rs`'s tests (the first run's sections, lines
-and footer count, Space on Gemini CLI ticking Node.js, ⏎'s `install` words and the config; the
+and footer count, Space on a row ticking its required prerequisite, ⏎'s `install` words and the config; the
 checklist alone and `s`); `health.rs` (which findings open it, with what ticked);
 `crates/ptyro/tests/boot2.rs`, `ptyro` in a PTY (`ptyro_testkit::headless`, `send_when`/`until`)
 on BOOT1's fake machine: the first run's ⏎ installing the defaults in a split with sudo asked once
 and each login, then the profiles line and the config; `C-q U` once while that install runs,
 saying setup is still running, each item installed once; `C-q U` later, `s` installing nothing, and
-Space then ⏎ installing only Antigravity (and its sign-in, just installed); `ptyro init` offering
-the checklist. UX1.19's tour test now leaves the first run with `s`, so it installs nothing, and
+Space then ⏎ installing only OpenCode (and its sign-in, just installed; Antigravity until
+2026-11-17); `ptyro setup` at a terminal starting with the checklist, then asking the rest (it was
+`ptyro init` offering the checklist until the merge). UX1.19's first-run test now leaves the first run with `s`, so it installs nothing, and
 both UX1.19 tests point `PTYRO_TEST_SETUP` at an empty fake machine, so the checklist never looks
 at the machine running the tests. The unit tests add: a running install refused a second, and the
 next side started only once the first ends; a failed spawn, a closed split and a died one each
@@ -8803,10 +8761,10 @@ side, action) only for its checkboxes and counts.
 
 **Administrator steps** (`setup.admin`, `adminSteps` in `web/src/setupkit.ts`): what is left for
 the computer (`leftForComputer`): each ticked step that needs administrator rights, and each
-ticked item that waits for one on its side (`action.after`, transitively: Gemini CLI after Node.js
-from apt). A box per side gives the command to run on the computer, `ptyro install <ids>`
+ticked item that waits for one on its side (`action.after`, transitively: OpenCode after Node.js
+on Windows). A box per side gives the command to run on the computer, `ptyro install <ids>`
 (`--where windows|wsl` when there are two sides), with Copy, the items it covers ("left for the
-computer"), why a waiting one is in it ("Gemini CLI needs Node.js first, so it's in that command
+computer"), why a waiting one is in it ("OpenCode needs Node.js first, so it's in that command
 too"), and the TUI's way ("press the prefix … then U", `app.setup`, which asks for the password
 once) or `ptyro setup`. The run still gets every pick (so its plan is the one shown, and a
 prerequisite the plan re-ticks is skipped the same either way); the daemon skips what is left,
@@ -8935,8 +8893,7 @@ The design's goals 6 and 8 (the owner: "tell us how to update on startup when it
 of date. on 'doctor' as well"; "once a day, remembered in between, or with doctor"): an installed
 agent with a newer version is reported with a one-step update and the command shown, never
 updated silently; newest versions are fetched at most once a day, remembered, and fetched afresh
-by `doctor`. What is checked is the agents (Claude Code, Codex, Antigravity, OpenCode, Gemini
-CLI): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself is one more row (BOOT6, §24.8).
+by `doctor`. What is checked is the agents (Claude Code, Codex, OpenCode): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself is one more row (BOOT6, §24.8).
 
 **The engine** (`ptyro_agents::updates`, beside the version table and the plan engine):
 - `sources()`: each agent row with a `latest` source (§24.1); `looked_up()` adds ptyro's own
@@ -8951,8 +8908,8 @@ CLI): not git, the GitHub CLI or Node.js (the design's non-goal). ptyro itself i
   A failed lookup keeps the version found before, so offline changes nothing but the time.
 - `refresh(host, state, now)`: the survey again against what is remembered, no network, by the
   holder of the setup lock after an install or update. Between the daily looks the same is done
-  beside the installs (`look_beside`, below), so an agent that updated itself (Claude Code and
-  Antigravity do) stops being offered. Refreshes ask the agents only (`setup::survey_agents`: no
+  beside the installs (`look_beside`, below), so an agent that updated itself (Claude Code
+  does) stops being offered. Refreshes ask the agents only (`setup::survey_agents`: no
   git, GitHub CLI or Node.js versions, no package manager's candidate).
 - `remember(host, state, now, since, looked, full)`: what a lookup found, written with the survey
   (all rows when it is to plan with, the agents otherwise); `since` is the install count read
@@ -9326,7 +9283,7 @@ Still nothing is installed without a yes (the owner kept "always ask").
   answers the daemon's version (an update replaced it, then upgraded the daemon live), it says
   "ptyro X is installed: this TUI restarts into it once you're idle" and, at the first tick when
   nothing of its own is half done (30 s without a key, paste or click; no overlay, first run,
-  copy mode, pending prefix key, chat draft or tour), ends with `AttachEnd::Restart{from, to,
+  copy mode, pending prefix key or chat draft), ends with `AttachEnd::Restart{from, to,
   workspace, session}`, saving its view as on any exit. The CLI (`restart_args`, `restart_tui`)
   starts the installed binary as `ptyro [--remote R] attach --workspace W [--view-only]
   --restarted FROM:TO` (raw mode: `attach SESSION --raw`), **never the command that first started
@@ -9395,7 +9352,7 @@ through npm, Homebrew or WinGet) is offered the move; the offer can be dismissed
 which it updates the way it is installed. In all three clients.
 
 **Detected** as before (§24.2's `other` state, by where the program's file really is: Homebrew's
-`Cellar`/`Caskroom` first, since Homebrew's Gemini CLI is an npm install inside its keg; then
+`Cellar`/`Caskroom` first, since a Homebrew formula can be an npm install inside its keg; then
 `npm`'s `node_modules`; then `homebrew`, WinGet's links), now through the canonical path, so a
 link in `~/.npm-global/bin` or `/usr/local/bin` counts as npm's. `Installed.system`: the file's
 folder is neither the user's nor writable by everyone (a system npm prefix,
@@ -9424,10 +9381,10 @@ shims, pipx, a wrapper script in `~/bin`) never counts. A vendor method with no 
 known) offers no move, and the table's tests require them wherever another way exists.
 
 **The offer** (`setup::offer`, `setup::Moving`): for an `other` agent that `Survey.keep` doesn't
-name, when the platform's recommended method is usable here (its `needs` present; Gemini CLI's npm
-needs Node.js) and the old installer's `others` row has an `uninstall`. Each `others` row in the
+name, when the platform's recommended method is usable here (its `needs` present; an npm
+method needs Node.js) and the old installer's `others` row has an `uninstall`. Each `others` row in the
 table now carries `uninstall` (the vendor's documented one for Claude Code [V 2026-11-07, the setup
-page's "Uninstall Claude Code"]; npm's and Homebrew's own forms for Codex, OpenCode and Gemini CLI
+page's "Uninstall Claude Code"]; npm's and Homebrew's own forms for Codex and OpenCode
 [S], marked in the row's note), never with `sudo` (the tests insist): ptyro adds `sudo ` for a
 `system` copy on Unix, and the whole move is then an administrator's step. Never for Homebrew,
 which refuses to run as root: a keg that isn't the user's isn't offered the move. npm's removal acts
@@ -9442,14 +9399,13 @@ logins live, said in every offer.
 - **Settings and logins stay.** They live in the home, which neither installer touches: Claude
   Code `~/.claude` and `~/.claude.json` [V 2026-11-07: the docs remove them in a step of their own,
   apart from every uninstall]; Codex `~/.codex` (`config.toml` [V 2026-11-07, config-basic];
-  `auth.json` there [S: the binary, §10.10]); Gemini CLI `~/.gemini` [S]; OpenCode
-  `~/.config/opencode` and `~/.local/share/opencode` [S]. Antigravity has no other way in the table,
-  so it is never offered a move. The tests confirm the login holds across a move (the fake
+  `auth.json` there [S: the binary, §10.10]); OpenCode
+  `~/.config/opencode` and `~/.local/share/opencode` [S]. The tests confirm the login holds across a move (the fake
   machine's `logged_in`: setup's login walk after the move says ✓).
 - **The new one first** (`setup/moving.rs`): the recommended method's install runs; then
   `Host::copies` (every copy of the program, `PATH` first, then npm's, nvm's and the vendors'
   folders: `locate::find_all`) must show a copy the recommended method installed
-  (`installed_by`: in the vendor's places; npm's for Gemini CLI) that answers `--version`. Any
+  (`installed_by`: in the vendor's places; npm's for an npm method) that answers `--version`. Any
   other copy (Homebrew's beside npm's, Nix's) never counts; then the install runs.
   A failed install, or one whose new copy can't be found answering, is `failed` with "nothing was
   removed: Codex through npm is still installed and works" and the fix; the old copy is untouched.
@@ -9581,43 +9537,38 @@ someone else's Homebrew).
 ### 24.10 The stale suggestions (BOOT9) **[built 2026-11-07]**
 
 The design's last call: the "no agent found" and "isn't installed" messages, which put Gemini CLI
-first with npm commands to copy, become offers of setup that name Antigravity for Google. Every
+first with npm commands to copy, become offers of setup. Every
 such message now offers the fix, in one set of words shared by the CLI, the TUI and the web.
+(Until 2026-11-17 the words also named Antigravity for a Google account and Gemini CLI for API
+keys; both went with those agents, §8.5.)
 
 **The words** (`ptyro_agents::locate`, so no client writes its own):
-- `no_agent()`: "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex, or
-  Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts)"
-  (`WHICH_AGENT`; Gemini CLI kept, labelled as the checklist labels it, never first).
+- `no_agent()`: "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex or
+  OpenCode)" (`WHICH_AGENT`).
 - `no_chat_agent()`: "No agent that can chat is installed: `ptyro setup` installs one (Claude
-  Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account,
-  runs in sessions but can't chat)". Antigravity has no structured mode (§22.5), so a chat never
-  offers it as the fix.
+  Code, Codex or OpenCode)".
 - `install_fix(program)`: "`ptyro install codex` installs it", for a program the version table
   knows and can install on this platform (`None` otherwise: an agent of your own keeps "install
   it, or set [agents.NAME] command to its full path").
 - `not_installed(agent, program)`: "codex isn't installed (codex is nowhere ptyro looks): `ptyro
   install codex` installs it".
 - `setup_offer(text)`: what a message's offer installs, read back by the clients that act on it:
-  "`ptyro setup` installs" → the checklist's defaults, "`ptyro install codex agy` installs" →
+  "`ptyro setup` installs" → the checklist's defaults, "`ptyro install codex opencode` installs" →
   those names. Only that form: a lock held by "`ptyro install`" or a move ("`ptyro install codex`
   moves it") is something else. The web's `setupOffer` (`web/src/setupkit.ts`) is the same rule.
 
 **Where they are said:**
-- **`doctor`** (`agents` and `git`): no agent at all is `no_agent()` (Antigravity now counts as an
-  agent: it runs sessions, and with only it installed "no agent" would be wrong); a configured
+- **`doctor`** (`agents` and `git`): no agent at all is `no_agent()`; a configured
   agent not found, "claude not found: `ptyro install claude` installs it"; git, "git not found:
   projects and worktrees need it; `ptyro install git` installs it"; gh, "gh not found: pull
-  requests (`wt new --pr`) need it; `ptyro install gh` installs it"; Gemini CLI without an API
-  key, "… with a personal Google account, use Antigravity (`agy`): `ptyro install agy` installs
-  it" when agy isn't installed.
+  requests (`wt new --pr`) need it; `ptyro install gh` installs it".
 - **The daemon:** a chat with no agent that can chat (`no_chat_agent()`) or with a named one not
   installed (`not_installed`, also a compare's note for that agent); a session whose agent's
   program isn't anywhere ptyro looks (`not_installed`, instead of "cannot start session: No such
   file or directory"; a missing working folder still gives the OS's words); `gh` missing for PR
   features and git missing for a project, each with `install_fix`.
 - **The CLI:** the messages as they are: a command to run, which is the CLI's way. `ptyro update`
-  with no agent says `no_agent()`. `ptyro init` now notices the no-agent line (it never did: the
-  line made the report non-empty) and asks to open the checklist with yes as the default.
+  with no agent says `no_agent()`. `ptyro setup` starts with the checklist anyway (§12.3).
 - **The TUI:** any refused request whose message carries an offer (a session's spawn, a new
   worktree's agent, a chat made or sent) shows it with `toast.act`: "… · C-q u set it up (the
   checklist)", which runs `app.setup` with that one ticked (`app.setup`'s argument: names), or
@@ -9630,16 +9581,16 @@ such message now offers the fix, in one set of words shared by the CLI, the TUI 
   use) whose message carries an offer opens a sheet with its words and "Set up codex" (or "Set up
   agents and tools"), which opens the checklist with it ticked (`offerSetup`, `openSetup`,
   `setup.offer`); any other is a toast as before. The button names each by the checklist's
-  name ("Set up Antigravity", never its program `agy`: `setupLabel`, through the daemon's agent
+  name ("Set up GitHub CLI", never its program `gh`: `setupLabel`, through the daemon's agent
   list and the plan's entries). Only a device paired with full scope is offered setup (the sheet,
   Health's item, the new-task link and the chat picker's); others get the message as a toast, and
   the new-task sheet says to run `ptyro setup` on the computer. Health's findings in `agents` and `git` with an
   offer get the same item in their menu. The new-task sheet links "Install another agent", or,
   with none installed, says "No coding agent is installed on the computer yet: Set up agents and
-  tools (Claude Code, Codex, or Antigravity for a Google account)"; the chat's agent picker ends
+  tools (Claude Code, Codex or OpenCode)"; the chat's agent picker ends
   with "Install another agent…".
 
-**Tests:** `locate.rs` (the words, Gemini CLI never first, Antigravity named, `setup_offer` and
+**Tests:** `locate.rs` (the words, `setup_offer` and
 what it refuses); `doctor.rs` (`fix_for`); the TUI's `a_missing_agent_offers_the_setup_checklist`
 (a refused spawn and a chat not made, with the offer and its `app.setup` argument) and
 `health.rs` (the doctor's new lines opening the checklist); `crates/ptyro/tests/chat_agents.rs`'s
@@ -9649,8 +9600,7 @@ of one that isn't there, against a real daemon); `web/test/setup.mjs` (`setupOff
 **Decided by the builder:** the daemon's errors carry the CLI's words (a command, which every
 client can show), and the TUI and the web act on them through `setup_offer` rather than each
 error growing a field; offers are recognised only in their "`…` installs" form, so a message
-merely naming `ptyro install` never turns into a setup button; the chat's no-agent words name
-Antigravity as what can't chat rather than as the fix.
+merely naming `ptyro install` never turns into a setup button.
 
 ### 24.11 The final fix wave **[built 2026-11-07]**
 
@@ -9658,8 +9608,8 @@ What the whole-feature review found, and the rulings carried into one change (PR
 - **The daemon's PATH follows installers on Windows** (§24.2, the review's I1).
 - **`locate` searches the version table's vendor folders.** Each vendor method names its `bin`,
   the folders its installer puts the program in (`~/.local/bin` for Claude and Codex's
-  install.sh, `~/.opencode/bin`, `%CODEX_INSTALL_DIR%` then `%LOCALAPPDATA%\Programs\OpenAI\Codex`,
-  `%LOCALAPPDATA%\agy\bin`), and `locate::places` adds them for this platform (`vendor_bins`,
+  install.sh, `~/.opencode/bin`, `%CODEX_INSTALL_DIR%` then `%LOCALAPPDATA%\Programs\OpenAI\Codex`),
+  and `locate::places` adds them for this platform (`vendor_bins`,
   expanded by `expand_place`; one unset variable skips that entry). OpenCode's
   `~/.opencode/bin` and Codex's Windows folder were missing, so a fresh install was "nowhere
   ptyro looks", and BOOT7's move of OpenCode from Homebrew never found its new copy (`fresh()`
@@ -9701,4 +9651,5 @@ What the whole-feature review found, and the rulings carried into one change (PR
   test waits for the login's line and no longer sleeps after it (the handler is in place before
   the login starts); the web offers setup only to a full-scope device and names each item by the
   checklist's name (§24.10); the chat picker's missing agent sets itself up on ⏎; `ptyro init`'s
-  default-yes is tested (`boot2::init_offers_the_setup_checklist`, Enter alone opens it).
+  default-yes was tested (`boot2::init_offers_the_setup_checklist`) until the merge into `ptyro
+  setup` on 2026-11-17 (`boot2::setup_at_a_terminal_starts_with_the_checklist_then_asks_the_rest`).

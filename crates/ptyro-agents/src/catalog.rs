@@ -57,7 +57,7 @@ impl Platform {
     }
 }
 
-/// A processor architecture, for downloads that name one (Antigravity's manifest, nodejs.org).
+/// A processor architecture, for downloads that name one (nodejs.org).
 /// Windows platforms carry theirs; elsewhere it is the host's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arch {
@@ -116,7 +116,7 @@ pub enum Kind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Via {
-    /// The vendor's own installer (Claude's native installer, Codex's, Antigravity's…).
+    /// The vendor's own installer (Claude's native installer, Codex's…).
     Vendor,
     Npm,
     Brew,
@@ -306,8 +306,6 @@ pub enum Source {
     GithubRelease,
     /// A body that is just the version (Claude's `latest`).
     PlainText,
-    /// Antigravity's per-platform manifest: `{"version": …, "url": …, "sha512": …}`.
-    AgyManifest,
     /// nodejs.org's `dist/index.json`: the newest release whose `lts` isn't `false`.
     NodeDist,
 }
@@ -317,7 +315,7 @@ pub enum Source {
 #[serde(deny_unknown_fields)]
 pub struct Latest {
     pub source: Source,
-    /// May hold `{platform}` (Antigravity's manifest: `linux_amd64`, `windows_arm64`…).
+    /// May hold `{platform}` (`linux_amd64`, `windows_arm64`…).
     url: String,
     #[serde(default)]
     pub tag_prefix: Option<String>,
@@ -376,7 +374,7 @@ impl Latest {
                 .ok_or_else(|| bad(&format!("no {k}")))
         };
         let v = match self.source {
-            Source::Npm | Source::AgyManifest => field(&json()?, "version")?,
+            Source::Npm => field(&json()?, "version")?,
             Source::GithubRelease => {
                 let tag = field(&json()?, "tag_name")?;
                 let p = self.tag_prefix.as_deref().unwrap_or("");
@@ -405,14 +403,14 @@ impl Latest {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Item {
-    /// `claude`, `antigravity`, `gh`, `node`: the agent's built-in name, or the tool's.
+    /// `claude`, `opencode`, `gh`, `node`: the agent's built-in name, or the tool's.
     pub id: String,
     /// For people: `Claude Code`.
     pub name: String,
     pub kind: Kind,
-    /// The command on `PATH`: `claude`, `agy`.
+    /// The command on `PATH`: `claude`, `opencode`.
     pub program: String,
-    /// A qualifier shown beside the name (Gemini CLI's "for Gemini API-key…").
+    /// A qualifier shown beside the name ("for API-key accounts").
     #[serde(default)]
     pub label: Option<String>,
     /// What it is, in a line for people (the setup checklist's description, BOOT2).
@@ -487,7 +485,7 @@ pub fn item(id: &str) -> Option<&'static Item> {
     items().iter().find(|i| i.id == id)
 }
 
-/// The item whose command is `program` (`agy` → Antigravity).
+/// The item whose command is `program` (`claude` → Claude Code).
 pub fn by_program(program: &str) -> Option<&'static Item> {
     items().iter().find(|i| i.program == program)
 }
@@ -574,18 +572,14 @@ mod tests {
         }
         assert!(load("[[item]]\nid = \"x\"\n").is_err(), "a row missing its fields is an error");
         let ids: Vec<&str> = items().iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            ["claude", "codex", "antigravity", "opencode", "gemini", "git", "gh", "node"]
-        );
+        assert_eq!(ids, ["claude", "codex", "opencode", "git", "gh", "node"]);
         // Every built-in agent has its row, under its built-in name and program.
         for (name, prog) in crate::BUILTIN {
             let i = item(name).unwrap_or_else(|| panic!("{name} has no row"));
             assert_eq!(i.program, *prog);
             assert_eq!(i.kind, Kind::Agent);
         }
-        assert_eq!(by_program("agy").map(|i| i.id.as_str()), Some("antigravity"));
-        assert!(item("gemini").unwrap().label.as_deref().unwrap().contains("Antigravity"));
+        assert_eq!(by_program("opencode").map(|i| i.id.as_str()), Some("opencode"));
     }
 
     #[test]
@@ -731,8 +725,7 @@ mod tests {
             Some("irm https://claude.ai/install.ps1 | iex")
         );
         assert_eq!(lin("codex").via, Via::Vendor);
-        assert_eq!(lin("antigravity").via, Via::Vendor);
-        assert_eq!(lin("gemini").via, Via::Npm);
+        assert_eq!(lin("opencode").via, Via::Vendor);
         assert_eq!(win("opencode").via, Via::Npm);
         assert_eq!(win("gh").via, Via::Winget);
     }
@@ -746,18 +739,18 @@ mod tests {
         assert_eq!(node.method(Platform::Macos, |p| p == "brew").unwrap().via, Via::Brew);
         assert_eq!(node.method(Platform::Macos, none).unwrap().via, Via::NodeDist);
         assert_eq!(node.method(Platform::WindowsX64, none).unwrap().via, Via::NodeDist);
-        assert!(item("gemini").unwrap().method(Platform::Linux, none).is_none());
+        assert!(item("opencode").unwrap().method(Platform::WindowsX64, none).is_none());
         let git = item("git").unwrap();
         assert_eq!(git.method(Platform::Macos, none).unwrap().via, Via::Xcode);
     }
 
     #[test]
     fn prerequisites_by_platform() {
-        let g = item("gemini").unwrap();
-        let p: Vec<_> = g.prereqs(Platform::Linux).collect();
+        let c = item("codex").unwrap();
+        let p: Vec<_> = c.prereqs(Platform::Linux).collect();
         assert_eq!(
             (p[0].item.as_str(), p[0].min.as_deref(), p[0].required),
-            ("node", Some("20.0.0"), true)
+            ("git", Some("2.23"), false)
         );
         let oc = item("opencode").unwrap();
         assert_eq!(oc.prereqs(Platform::Linux).count(), 0);
@@ -771,10 +764,7 @@ mod tests {
             |id: &str, f: &str| item(id).unwrap().latest.as_ref().unwrap().parse(&fixture(f));
         assert_eq!(parse("claude", "claude-latest.txt").unwrap(), "2.1.319");
         assert_eq!(parse("codex", "codex-latest.json").unwrap(), "0.167.0");
-        assert_eq!(parse("antigravity", "antigravity-latest-linux_amd64.json").unwrap(), "1.5.2");
-        assert!(parse("antigravity", "antigravity-latest-windows_arm64.json").is_ok());
         assert_eq!(parse("opencode", "opencode-latest.json").unwrap(), "1.19.5");
-        assert_eq!(parse("gemini", "gemini-latest.json").unwrap(), "0.67.0");
         assert_eq!(parse("gh", "gh-latest.json").unwrap(), "2.103.3");
         // The newest LTS, not the newer alpha above it.
         assert!(fixture("node-latest.json").contains("alpha"));
@@ -787,22 +777,22 @@ mod tests {
         let l = |id: &str| item(id).unwrap().latest.clone().unwrap();
         assert!(l("claude").parse("<html>Service Unavailable</html>").is_err());
         assert!(l("claude").parse("").is_err());
-        assert!(l("gemini").parse("{\"name\":\"x\"}").is_err());
-        assert!(l("gemini").parse("not json").is_err());
+        assert!(l("opencode").parse("{\"name\":\"x\"}").is_err());
+        assert!(l("opencode").parse("not json").is_err());
         assert!(l("codex").parse("{\"tag_name\":\"v1.2.3\"}").is_err(), "wrong tag prefix");
         assert!(l("node").parse("[{\"version\":\"v27.0.0\",\"lts\":false}]").is_err());
     }
 
     #[test]
     fn source_urls_per_platform() {
-        let agy = item("antigravity").unwrap().latest.clone().unwrap();
-        let base =
-            "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/";
-        assert_eq!(agy.url(Platform::Linux, Arch::X64), format!("{base}linux_amd64.json"));
-        assert_eq!(agy.url(Platform::Wsl, Arch::Arm64), format!("{base}linux_arm64.json"));
-        assert_eq!(agy.url(Platform::Macos, Arch::Arm64), format!("{base}darwin_arm64.json"));
+        let base = "https://example.invalid/manifests/";
+        let src =
+            Latest::new(Source::Npm, &format!("{base}{{platform}}.json"), None, Mark::Verified);
+        assert_eq!(src.url(Platform::Linux, Arch::X64), format!("{base}linux_amd64.json"));
+        assert_eq!(src.url(Platform::Wsl, Arch::Arm64), format!("{base}linux_arm64.json"));
+        assert_eq!(src.url(Platform::Macos, Arch::Arm64), format!("{base}darwin_arm64.json"));
         // Windows' platforms carry their architecture.
-        assert_eq!(agy.url(Platform::WindowsArm64, Arch::X64), format!("{base}windows_arm64.json"));
+        assert_eq!(src.url(Platform::WindowsArm64, Arch::X64), format!("{base}windows_arm64.json"));
         let node = item("node").unwrap();
         let dist = node.methods.iter().find(|m| m.via == Via::NodeDist).unwrap();
         assert_eq!(

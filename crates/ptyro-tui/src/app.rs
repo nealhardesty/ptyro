@@ -229,8 +229,6 @@ pub enum Purpose {
     Home,
     /// What the doctor found, to fix (UX1.20).
     Health,
-    /// `ptyro <these args> <the pick>`, in a split (UX1.20, UX1.21).
-    Cli(Vec<String>),
     /// A word of a `ptyro …` command being put together (UX1.21).
     CliPick(Box<crate::cli_actions::CliJob>),
     /// The profile to pin this project to.
@@ -723,8 +721,6 @@ pub struct App {
     pub area: Rect,
     pub dirty: bool,
     pub quit: Option<AttachEnd>,
-    /// The tour's coach (UX1.22), when this TUI runs `ptyro tour`.
-    pub tour: Option<crate::tour::Tour>,
     /// `app.quit` was confirmed: the daemon going away ends the TUI instead of reconnecting
     /// (which would start a new one).
     quitting: bool,
@@ -797,7 +793,6 @@ impl App {
         panes.insert(1, PaneState::default());
         let workspace = opts.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into());
         let follow = opts.follow_worktree.clone().map(|w| (w, 1));
-        let opts_tour = opts.tour;
         Self {
             projects: Vec::new(),
             worktrees: Vec::new(),
@@ -856,7 +851,6 @@ impl App {
             prefix_key: None,
             prefix_at: None,
             overlay: None,
-            tour: opts_tour.then(crate::tour::Tour::default),
             toast: None,
             buffer: None,
             controller: HashMap::new(),
@@ -1410,12 +1404,6 @@ impl App {
     /// Periodic work: toast expiry, debounced view saves, the sidebar's foreground names.
     pub fn tick(&mut self) {
         self.maybe_restart();
-        if let Some(mut tour) = self.tour.take() {
-            if tour.advance(self) {
-                self.dirty = true;
-            }
-            self.tour = Some(tour);
-        }
         if self.toast.as_ref().is_some_and(|t| Instant::now() > t.until) {
             self.toast = None;
             self.dirty = true;
@@ -2868,15 +2856,6 @@ impl App {
             "daemon.service" => self.run_cli(&["daemon".into(), "install-service".into()]),
             "daemon.unservice" => self.run_cli(&["daemon".into(), "uninstall-service".into()]),
             "doctor" => self.run_cli(&["doctor".into()]),
-            "integrations" => self.run_cli(&["integrations".into(), "ls".into()]),
-            "integrations.install" | "integrations.uninstall" => {
-                let verb = cmd.action.trim_start_matches("integrations.");
-                self.pick_cli(
-                    &format!("{verb} which agent's integration?"),
-                    &["integrations", verb],
-                    &[("gemini", "a linked extension"), ("antigravity", "its hooks")],
-                );
-            }
             "first.run" => self.open_first_run(),
             // With names: those ticked (a message's offer, BOOT9).
             "app.setup" => self.open_setup(
@@ -3074,14 +3053,6 @@ impl App {
                     kind: PromptKind::Broadcast(self.marked.clone()),
                 });
             }
-            // The tour runs in a ptyro of its own: this TUI steps aside for it, then comes back.
-            "help.tour" => match self.tour {
-                Some(_) => {
-                    self.tour = Some(crate::tour::Tour::default());
-                    self.toast("the tour starts over");
-                }
-                None => self.quit = Some(AttachEnd::Tour),
-            },
             // From an offer: that chat, or that search.
             "chat.open" if cmd.arg.is_some() => self.open_chat(cmd.arg.as_deref().unwrap_or("")),
             "chat.search" if cmd.arg.is_some() => {
@@ -3760,23 +3731,6 @@ impl App {
             }
             other => self.toast(format!("{other}: not available yet")),
         }
-    }
-
-    /// Pick one of `choices`, then ptyro runs with `<args> <choice>` in a split.
-    pub(crate) fn pick_cli(&mut self, title: &str, args: &[&str], choices: &[(&str, &str)]) {
-        let items = choices
-            .iter()
-            .map(|(c, d)| Item {
-                label: (*c).to_owned(),
-                detail: (*d).to_owned(),
-                key: None,
-                target: Target::Path((*c).into()),
-            })
-            .collect();
-        self.overlay = Some(Overlay::Picker {
-            palette: Palette::new(title, items),
-            purpose: Purpose::Cli(args.iter().map(|a| (*a).to_owned()).collect()),
-        });
     }
 
     /// The actions that apply to a row (UX1.15), for its menu: a session's, a worktree's, a
@@ -5084,10 +5038,6 @@ impl App {
                     notify: Some(n.to_string_lossy().into_owned()),
                 },
             ),
-            (Target::Path(arg), Purpose::Cli(mut args)) => {
-                args.push(arg.to_string_lossy().into_owned());
-                self.run_cli(&args);
-            }
             // Picked on its own: where it goes, on the form (SPEC §11.5a).
             (Target::Path(path), Purpose::AddProject(None)) => self.open_project_form(Some(path)),
             (Target::Path(path), purpose) => {
@@ -6665,52 +6615,6 @@ mod tests {
     }
 
     #[test]
-    fn the_tour_moves_on_as_each_step_is_done_and_says_the_keys() {
-        use crate::tour::Step;
-        let mut app = app();
-        with_project(&mut app);
-        let w = feature(&mut app);
-        app.tour = Some(crate::tour::Tour::default());
-        let step = |app: &mut App| {
-            app.tick();
-            app.tour.as_ref().unwrap().step
-        };
-        let coach = |app: &App| app.tour.as_ref().unwrap().coach(app).1.join(" ");
-        assert_eq!(step(&mut app), Step::Task);
-        assert!(coach(&app).contains("Press C-q n"), "{}", coach(&app));
-        // A shell is no task; the agent the task box started, in its own worktree, is.
-        let mut agent = session("fix-typo");
-        agent.kind = SessionKind::Agent;
-        agent.task = Some("fix the typo".into());
-        agent.worktree = Some(w.id.clone());
-        status(&mut agent, AgentStatus::Working, None, None);
-        app.sessions = vec![session("zsh"), agent];
-        assert_eq!(step(&mut app), Step::Answer);
-        status(&mut app.sessions[1], AgentStatus::Blocked, Some("permission"), Some("Bash: sed"));
-        assert_eq!(step(&mut app), Step::Answer);
-        assert!(coach(&app).contains("Press C-q p to peek, then y"), "{}", coach(&app));
-        // Answered: it works again.
-        status(&mut app.sessions[1], AgentStatus::Working, None, None);
-        assert_eq!(step(&mut app), Step::CleanUp);
-        assert!(coach(&app).contains("Press C-q :, type worktree.remove"), "{}", coach(&app));
-        app.worktrees.retain(|x| x.id != w.id);
-        // Last, a shell of your own in SHELLS: the coach names the key, and one made moves on.
-        assert_eq!(step(&mut app), Step::Shells);
-        assert!(coach(&app).contains("Press M-1 to start shell 1"), "{}", coach(&app));
-        let mut one = session("dl");
-        (one.loose, one.slot) = (true, Some(1));
-        app.sessions.push(one);
-        assert_eq!(step(&mut app), Step::Done);
-        assert!(coach(&app).contains("C-q d leaves the tour"), "{}", coach(&app));
-        // `help.tour` inside the tour starts it over (outside, the TUI steps aside for it).
-        app.run(&Command { action: "help.tour", arg: None });
-        assert_eq!(app.tour.as_ref().unwrap().step, Step::Task);
-        let mut plain = self::app();
-        plain.run(&Command { action: "help.tour", arg: None });
-        assert!(matches!(plain.quit, Some(AttachEnd::Tour)));
-    }
-
-    #[test]
     fn text_boxes_take_several_lines_and_pastes_stay_in_them() {
         let mut app = app();
         let task = |app: &App| match &app.overlay {
@@ -8063,7 +7967,6 @@ mod tests {
         let text = std::fs::read_to_string(Config::path(&app.paths)).unwrap();
         assert!(text.contains("[profiles.work]") && text.contains("\"desktop\""), "{text}");
         assert!(app.toast.as_ref().unwrap().text.contains("1 profile(s), 0 project(s)"));
-        assert!(app.toast.as_ref().unwrap().text.contains("take the tour"));
         // Still looking, so nothing installed: it says how to come back to the checklist.
         assert!(app.toast.as_ref().unwrap().text.contains("C-q U opens the setup checklist"));
     }
@@ -8096,8 +7999,7 @@ mod tests {
             "[x] Codex",
             "OpenAI's coding agent",
             "then log in",
-            "[ ] Gemini CLI",
-            "for Gemini API-key and enterprise accounts (others: Antigravity)",
+            "[ ] OpenCode",
             " Tools",
             "[x] git",
             "asks for admin",
@@ -8110,23 +8012,19 @@ mod tests {
             assert!(shown.contains(want), "{want:?}:\n{shown}");
         }
         let k = |app: &mut App, code| app.first_run_key(KeyEvent::new(code, Mods::NONE));
-        // Down to Gemini CLI (Codex, Antigravity, OpenCode, Gemini CLI), Space ticks it, and
-        // Node.js with it.
-        for _ in 0..3 {
-            k(&mut app, KeyCode::Char { c: 'j' });
-        }
+        // Down to OpenCode (after Codex), Space ticks it.
+        k(&mut app, KeyCode::Char { c: 'j' });
         k(&mut app, KeyCode::Char { c: ' ' });
         let shown = screen_at(&app, 140);
-        assert!(shown.contains("[+] Node.js"), "{shown}");
-        assert!(shown.contains("ticked because Gemini CLI needs it"), "{shown}");
-        assert!(shown.contains("⏎ install 5 and use these"), "{shown}");
+        assert!(shown.contains("[x] OpenCode"), "{shown}");
+        assert!(shown.contains("⏎ install 4 and use these"), "{shown}");
         k(&mut app, KeyCode::Enter);
         assert!(app.first_run.is_none());
         let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         assert_eq!(
             app.last_cli,
-            Some(words(&["install", "codex", "gemini", "git", "gh", "--confirmed"])),
-            "Node.js comes with Gemini CLI, as the CLI plans it"
+            Some(words(&["install", "codex", "opencode", "git", "gh", "--confirmed"])),
+            "what's ticked, as the CLI plans it"
         );
         assert!(Config::path(&app.paths).exists(), "the first run's config is written too");
     }
@@ -8447,16 +8345,15 @@ mod tests {
         };
         let mut app = app();
         let mut setup = crate::setup_list::tests::two();
-        // Gemini CLI on WSL's side: Node.js there, with the line saying why under its row.
-        setup.side_step(1);
-        let gemini = setup.rows().iter().position(|e| e.id == "gemini").unwrap();
-        setup.toggle(gemini);
+        // OpenCode on Windows' side: Node.js there, with the line saying why under its row.
+        let opencode = setup.rows().iter().position(|e| e.id == "opencode").unwrap();
+        setup.toggle(opencode);
         app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
         let shown = draw(&app);
         assert!(shown.contains("WSL (Ubuntu)"), "{shown}");
         assert!(shown.contains("[x] the vendor's installer"), "{shown}");
         assert!(shown.contains("then log in"), "{shown}");
-        assert!(shown.contains("WSL (Ubuntu): ticked because Gemini CLI needs it"), "{shown}");
+        assert!(shown.contains("Windows: ticked because OpenCode needs it"), "{shown}");
         fits(&shown);
         // Windows without a usable WSL: its reason and fix, and the default side's, wrap.
         app.first_run = Some(FirstRun {
@@ -8878,7 +8775,7 @@ mod tests {
         let (left, other_shell_host) =
             (app.focused, app.layout.split(app.focused, Dir::Right).unwrap());
         app.panes.insert(other_shell_host, PaneState::default());
-        let b = placed("gemini", Some("p2"), Some("p2-root"));
+        let b = placed("zephyr", Some("p2"), Some("p2-root"));
         app.sessions.push(b.clone());
         app.panes.get_mut(&other_shell_host).unwrap().session = Some(b.id);
         app.focused = left; // an agent of p1 is focused; p2's is beside it
@@ -9227,7 +9124,7 @@ mod tests {
     fn a_new_session_opens_full_sized_and_back_brings_the_split_whole() {
         let mut app = app();
         let (a, b, _) = split_two(&mut app);
-        let fresh = placed("gemini", Some("p1"), Some("p1-root"));
+        let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         assert_eq!(app.layout.panes().len(), 1, "full sized, not in a split");
         assert_eq!(app.focused_session(), Some(fresh.id));
@@ -9253,7 +9150,7 @@ mod tests {
     fn in_one_pane_a_new_session_takes_it_and_back_is_the_previous() {
         let mut app = app();
         let (a, _) = with_agents(&mut app);
-        let fresh = placed("gemini", Some("p1"), Some("p1-root"));
+        let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         assert_eq!(app.layout.panes().len(), 1);
         assert!(app.kept.is_none());
@@ -9265,7 +9162,7 @@ mod tests {
     fn the_kept_split_comes_back_with_the_view_and_forgets_gone_sessions() {
         let mut app = app();
         let (a, b, _) = split_two(&mut app);
-        let fresh = placed("gemini", Some("p1"), Some("p1-root"));
+        let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         let saved = serde_json::to_value(SavedView {
             v: 1,

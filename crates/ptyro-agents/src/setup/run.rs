@@ -251,7 +251,7 @@ pub fn run(plan: &Plan, host: &dyn Host, admin: Admin, on: &mut dyn FnMut(Event)
     report
 }
 
-/// The name `ptyro install` takes for it (its command: `agy`, `gh`).
+/// The name `ptyro install` takes for it (its command: `opencode`, `gh`).
 fn program(e: &Entry) -> String {
     catalog::item(&e.id).map_or_else(|| e.id.clone(), |i| i.program.clone())
 }

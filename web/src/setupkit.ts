@@ -28,7 +28,7 @@ export function bannerWants(o: { scope: string; later: boolean; seen: boolean })
 }
 
 /// What is left for the computer (the owner's parity exception, 2026-11-06): the ticked
-/// administrator steps, and what waits for one on its side (Gemini CLI after Node.js from apt),
+/// administrator steps, and what waits for one on its side (OpenCode after Node.js from WinGet),
 /// in the plan's order. The daemon skips them all (`Admin::Never`).
 export function leftForComputer(plan: Plan): any[] {
   const entries = plan?.entries ?? [];
@@ -61,8 +61,8 @@ export function adminSteps(plan: Plan): AdminStep[] {
   return out;
 }
 
-/// Ticked items with no administrator step of their own that wait for one (Gemini CLI after
-/// Node.js from apt): `["Gemini CLI", "Node.js"]` pairs, so the page says why they're left too.
+/// Ticked items with no administrator step of their own that wait for one (OpenCode after
+/// Node.js from WinGet): `["OpenCode", "Node.js"]` pairs, so the page says why they're left too.
 export function waitsForAdmin(plan: Plan): [string, string][] {
   const left = leftForComputer(plan);
   const out: [string, string][] = [];
@@ -331,7 +331,7 @@ export function linkedBehind(machines: Iterable<{ name: string; state: string; v
   return out;
 }
 
-/// The live sessions here running an agent (`id`, the engine's: `claude`, `antigravity`): an
+/// The live sessions here running an agent (`id`, the engine's: `claude`, `opencode`): an
 /// update leaves them on the old version until they restart, so the page names them.
 export function runningAgent(sessions: Iterable<{ name: string; agent?: string | null; inner_agent?: string | null; machine?: string | null; state: { t: string } }>, id: string): string[] {
   const out: string[] = [];
@@ -347,7 +347,7 @@ export function retryOf(r: { id: string; side: string }, name: string): { label:
 }
 
 /// A setup offer's button (BOOT9): each pick by the name the checklist gives it ("Set up
-/// Antigravity", never "agy"). A program goes to its agent through `agents` (the daemon's list),
+/// Claude Code", never "claude"). A program goes to its agent through `agents` (the daemon's list),
 /// then to the checklist's name through `entries` (a plan's), else stays the agent's name. No
 /// picks: the checklist's defaults.
 export function setupLabel(picks: string[], agents: { name: string; program: string }[], entries: { id: string; name: string }[]): string {

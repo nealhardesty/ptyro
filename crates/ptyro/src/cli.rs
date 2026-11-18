@@ -208,13 +208,11 @@ async fn dispatch(
             Cmd::Config { .. }
                 | Cmd::Completions { .. }
                 | Cmd::ShellInit { .. }
-                | Cmd::Init { .. }
                 | Cmd::Setup { .. }
                 | Cmd::Install { .. }
                 | Cmd::Update { .. }
                 | Cmd::Login { .. }
                 | Cmd::Uninstall { .. }
-                | Cmd::Backup { .. }
                 | Cmd::Daemon { .. }
                 | Cmd::Proxy
         )
@@ -400,7 +398,6 @@ async fn dispatch(
             print!("{}", crate::complete::registration(&shell).map_err(Error::invalid)?);
             Ok(0)
         }
-        Some(Cmd::Init { yes, dry_run }) => crate::init::run(&ctx, yes, dry_run).await,
         Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, survey, move_, tty }) => {
             let a = crate::setup::SetupArgs {
                 yes,
@@ -451,8 +448,6 @@ async fn dispatch(
         }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
         Some(Cmd::Doctor { quick, json }) => crate::doctor::run_cmd(&ctx, quick, json).await,
-        Some(Cmd::Tour { here: false }) => run_tour(&ctx).await,
-        Some(Cmd::Tour { here: true }) => tour_here(&ctx).await,
         // Kill is immediate and keeps the session listed, as in the TUI and the web (SPEC §7.3).
         Some(Cmd::Kill { sessions, signal, keep: _ }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
@@ -542,7 +537,6 @@ async fn dispatch(
             keep_config,
             keep_data,
             keep_binary,
-            backup,
             purge_refs,
             json,
         }) => {
@@ -553,14 +547,9 @@ async fn dispatch(
                 keep_config,
                 keep_data,
                 keep_binary,
-                backup,
                 purge_refs,
             };
             crate::uninstall::run(&ctx, opts, json).await
-        }
-        Some(Cmd::Backup { output, with_recordings, with_ca, no_chats, json }) => {
-            let opts = crate::backup::Opts { output, with_recordings, with_ca, no_chats };
-            crate::backup::run(&ctx, opts, json).await
         }
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
         Some(Cmd::Checkpoint { cmd }) => crate::checkpoint::checkpoint(&ctx, cmd).await,
@@ -618,7 +607,6 @@ async fn dispatch(
         }
         Some(Cmd::Usage { json }) => crate::agents::usage(&ctx, json).await,
         Some(Cmd::Notify { cmd }) => crate::agents::notify(&ctx, cmd).await,
-        Some(Cmd::Integrations { cmd }) => crate::agents::integrations(&ctx, cmd).await,
         Some(Cmd::Hook { .. } | Cmd::StatuslineRelay | Cmd::OpenUrl { .. }) => {
             unreachable!("handled in main")
         }
@@ -696,32 +684,6 @@ pub(crate) async fn upgrade(
         }
         return Ok(if status.rolled_back { 1 } else { 0 });
     }
-}
-
-/// `ptyro tour` (UX1.22): the daily loop with a pretend agent, in a ptyro of its own.
-pub async fn run_tour(ctx: &Ctx) -> Result<i32, Error> {
-    crate::tour::run(ctx).await
-}
-
-/// `ptyro tour --here`: the TUI with the tour's coach, on this ptyro (the tour's own, which
-/// `run_tour` sets up). A shell to start from, if nothing runs yet.
-async fn tour_here(ctx: &Ctx) -> Result<i32, Error> {
-    check_attachable()?;
-    let client = ctx.connect(true).await?;
-    let info = match most_recent(&client).await? {
-        Some(i) => i,
-        None => {
-            let spec = SpawnSpec {
-                cwd: current_dir()?,
-                env: client_env(),
-                size: ptyro_tui::pane_size(&ctx.paths),
-                ..SpawnSpec::default()
-            };
-            session_of(client.request(Request::Spawn { spec }).await?)?
-        }
-    };
-    let tui = ptyro_tui::Options { tour: true, ..Default::default() };
-    attach_with(ctx, client, Some(info), tui).await
 }
 
 /// What the CLI prints for an error: the daemon's words, then a refusal's way through the
@@ -1144,19 +1106,8 @@ pub async fn attach_with(
     let paths = ctx.paths.clone();
     tui.workspace = tui.workspace.or_else(|| info.as_ref().and_then(|i| i.workspace.clone()));
     tui.focus = info.map(|i| i.id);
-    let mut end = ptyro_tui::run(opts.clone(), &paths, tui.clone()).await;
-    // Asked for the tour: it runs in a ptyro of its own, then this TUI comes back.
-    while matches!(end, Ok(AttachEnd::Tour)) {
-        run_tour(ctx).await?;
-        end = ptyro_tui::run(
-            opts.clone(),
-            &paths,
-            ptyro_tui::Options { welcome: false, restarted: None, ..tui.clone() },
-        )
-        .await;
-    }
+    let end = ptyro_tui::run(opts.clone(), &paths, tui.clone()).await;
     match end {
-        Ok(AttachEnd::Tour) => unreachable!("handled above"),
         Ok(AttachEnd::Restart { from, to, workspace, session }) => {
             restart_tui(&restart_args(ctx, &tui, &from, &to, &workspace, session.as_deref()), &to)
         }

@@ -20,6 +20,8 @@ use ptyro_core::{Error, ErrorCode};
 
 use crate::cli::Ctx;
 
+mod rest;
+
 pub struct SetupArgs {
     pub yes: bool,
     pub agents: Option<Vec<String>>,
@@ -223,19 +225,29 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     if a.dry_run {
         return show_plan(&sides.plan(&picks), a.json);
     }
+    // A person at a terminal goes on to the rest after the checklist (what `ptyro init` asked):
+    // accounts, preferences, repositories. A script's run, or one for named items, stops here.
+    let rest = !a.yes && !named && !a.json && rest::wanted();
     if !a.yes {
-        let stdin = std::io::stdin();
-        match checklist(&sides, place, picks, &mut stdin.lock(), &mut std::io::stderr()) {
+        // Let go of stdin before the rest of setup reads it (its lock isn't reentrant).
+        let picked =
+            checklist(&sides, place, picks, &mut std::io::stdin().lock(), &mut std::io::stderr());
+        match picked {
             Some(p) => picks = p,
             None => {
                 eprintln!("Nothing installed.");
-                return Ok(0);
+                drop(lock);
+                return if rest { rest::run(ctx).await } else { Ok(0) };
             }
         }
     }
     let plan = sides.plan(&picks);
     let admin = if a.yes { Admin::Silent } else { Admin::Ask };
-    go(ctx, &*host, &sides, &plan, admin, a.json, false, lock, "`ptyro setup`")
+    let code = go(ctx, &*host, &sides, &plan, admin, a.json, false, lock, "`ptyro setup`")?;
+    if rest {
+        rest::run(ctx).await?;
+    }
+    Ok(code)
 }
 
 pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
@@ -247,7 +259,7 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
         }
     }
     if ids.is_empty() {
-        return Err(Error::invalid("name what to install: `ptyro install agy`"));
+        return Err(Error::invalid("name what to install: `ptyro install codex`"));
     }
     // Asked already, by Windows' ptyro (BOOT8): run, and ask only for administrator rights.
     let asked = match a.admin.as_deref() {
@@ -686,7 +698,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         if !confirm("Try again now? [Y/n] ") {
             break;
         }
-        // Looked at again: one that updated itself meanwhile (Claude Code and Antigravity do)
+        // Looked at again: one that updated itself meanwhile (Claude Code does)
         // is done, not a failure.
         let fresh = setup::survey(&*host, &v.latest);
         let mut still: Vec<String> = Vec::new();
@@ -1172,7 +1184,7 @@ pub(crate) fn confirm(q: &str) -> bool {
 
 /// New terminals need ptyro's tools folders on `PATH`: through `ptyro shell-init`'s line in the
 /// shell's rc file (it adds them first), or on Windows the user's `PATH`. Asked; `--yes` only
-/// says how, as `ptyro init --yes` leaves rc files alone.
+/// says how, as it leaves rc files alone everywhere else.
 fn offer_path(paths: &Paths, yes: bool) {
     let dirs = setup::path_dirs(paths);
     let shown: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
@@ -1576,16 +1588,11 @@ mod tests {
     #[test]
     fn the_checklist_ticks_by_number_and_name_and_enter_installs() {
         let s = survey(&[("git", "2.43.0")]);
-        // Agents 1-5, then the tools not here: gh 6, node 7.
-        let (r, out) = drive(&s, &["claude", "codex", "gh"], "2\n5 agy\n\n");
-        assert_eq!(r.unwrap(), ["claude", "gh", "gemini", "antigravity"]);
+        // Agents 1-3, then the tools not here: gh 4, node 5.
+        let (r, out) = drive(&s, &["claude", "codex", "gh"], "2\nopencode\n\n");
+        assert_eq!(r.unwrap(), ["claude", "gh", "opencode"]);
         assert!(out.contains("   1 [x] Claude Code"), "{out}");
         assert!(out.contains("Already here\n     ✓ git: installed 2.43.0"), "{out}");
-        // After ticking Gemini CLI, Node.js is ticked for it.
-        assert!(
-            out.contains("   7 [+] Node.js  (needed by Gemini CLI; through Homebrew)"),
-            "{out}"
-        );
     }
 
     #[test]
@@ -1601,8 +1608,15 @@ mod tests {
 
     #[test]
     fn a_needed_item_stays_and_quitting_installs_nothing() {
-        let s = survey(&[]);
-        let (r, out) = drive(&s, &["gemini"], "8\n9\nq\n");
+        // Windows: OpenCode needs Node.js (agents 1-3, git 4, gh 5, node 6).
+        let mut s = survey(&[]);
+        s.platform = Platform::WindowsX64;
+        s.programs = ["winget".to_owned()].into();
+        let mut out = Vec::new();
+        let sides = Sides { here: s.clone(), side: Side::Windows, wsl: None, status: None };
+        let picks = Picks { here: vec!["opencode".to_owned()], wsl: vec![] };
+        let r = checklist(&sides, Where::Windows, picks, &mut "6\n9\nq\n".as_bytes(), &mut out);
+        let out = String::from_utf8(out).unwrap();
         assert!(r.is_none());
         assert!(out.contains("Node.js is needed by something ticked"), "{out}");
         assert!(out.contains("\"9\": not on the list"), "{out}");

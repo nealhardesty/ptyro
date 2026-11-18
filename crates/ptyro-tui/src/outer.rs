@@ -1,5 +1,5 @@
 //! What we learn about the user's real terminal at startup: its default colours (OSC 10/11), so
-//! the daemon can answer programs that pick a theme from them (SPEC §5.6). Codex and Gemini do.
+//! the daemon can answer programs that pick a theme from them (SPEC §5.6). Codex does.
 //! Keys typed while we wait for the answer arrive in the same reads: they are kept and replayed.
 
 #[cfg(unix)]

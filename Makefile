@@ -134,7 +134,7 @@ ratchet: ## Fail if a crate has more unwrap()/expect() in non-test code than scr
 ratchet-update: ## Write the current unwrap()/expect() counts as the new baseline (they should only go down)
 	python3 scripts/unwrap-ratchet.py --update
 
-catalog-fixtures: ## Re-record the version table's newest-version replies (npm, GitHub, Claude's and Antigravity's feeds, nodejs.org) as test fixtures, printing each newest version (needs the network; review the diff)
+catalog-fixtures: ## Re-record the version table's newest-version replies (npm, GitHub, Claude's feed, nodejs.org) as test fixtures, printing each newest version (needs the network; review the diff)
 	python3 scripts/catalog-fixtures.py
 
 # The oldest compiler the workspace claims to build with (`rust-version` in Cargo.toml).
@@ -181,7 +181,7 @@ spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, a
 spike-chat-meaning: ## CHAT5: meaning search's cost over NODES (default 100000) chat messages: embedding, the backfill, a search's scan, the vectors' size (synthetic model, no download)
 	NODES=$${NODES:-100000} $(CARGO) run --profile local -p ptyro-store --example chat_meaning_spike
 
-spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex, Gemini and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
+spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
 	python3 scripts/spike-chat.py $(ARGS)
 
 spike-wsl: build ## WIN0.1: does WSL keep the daemon alive after the last terminal closes? Run inside WSL2: ARGS="start [label]", then (an hour later) check, clean; none = status

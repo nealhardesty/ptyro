@@ -1,8 +1,8 @@
 // Settings and health (ROADMAP WEB1.6): the More tab: this device, the doctor's findings with
 // their fixes, usage, devices and pairing another, profiles and their logins, the config file,
-// agent integrations, the daemon, first-run setup and the tour.
+// the daemon and setup.
 
-import { conn, host, store, token } from "./conn.js";
+import { conn, host, store } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
 import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, fixOf, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
 import type { Item, Sheet } from "./kit.js";
@@ -30,7 +30,6 @@ const ACTIONS = {
   "profile.sync": "Link the files a profile shares (CLAUDE.md, skills) from the agents' defaults",
   "profile.detect": "Find accounts already set up here (aliases, ~/.claude-* dirs, git includes)",
   "profile.doctor": "Check a profile: directories, logins, identity",
-  "integrations": "Agent integrations that need installing once",
   "config.edit": "Edit the config; it's checked as you save and applies at once",
   "config.check": "Check the config without saving it",
   "config.show": "The effective config, with defaults filled in",
@@ -41,7 +40,6 @@ const ACTIONS = {
   "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
   "daemon.restart": "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
   "daemon.stop": "Stop every session and the daemon",
-  "backup.create": "Save ptyro's own state (config and database) to a private .tar.gz in your home directory on the computer",
   "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
   "daemon.service": "Start ptyro at login (a systemd or launchd service, or a Windows logon task)",
   "daemon.unservice": "Remove the login service",
@@ -64,7 +62,6 @@ const ACTIONS = {
   "setup.keep": "Keep an agent installed another way as it is: the move isn't offered again, and it updates the way it's installed (Settings → Updates → keep_installer)",
   "setup.offer": "An agent or tool that isn't installed (a chat, a new task, a Health finding) offers setup: the checklist opens with it ticked, to install on the computer",
   "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
-  "help.tour": "A tour: ptyro's daily loop with a pretend agent, in a throwaway ptyro of its own",
 } as const;
 const tip = actions(ACTIONS);
 
@@ -94,12 +91,10 @@ function moreView(): HTMLElement {
     ["Machines", "Other machines whose workspaces show here", "#/machines"],
     ["Profiles", "Accounts agents run under", "#/profiles"],
     ["Settings", "Every option, searchable, with what it does", "#/settings"],
-    ["Integrations", "Agents that need installing once", "#/integrations"],
     ["Web app", "The server your phone opens: up, its address, on or off", "#/web"],
     ["Daemon", "Version, logs, restart, login service", "#/daemon"],
     ["About", "Version, where to report a problem, where things live", "#/about"],
     ["Set up ptyro", "Install agents and tools; your accounts and repositories", "#/setup"],
-    ["Take the tour", "ptyro's daily loop with a pretend agent", "#/tour"],
   ];
   return h("div", {}, ui.header("More", false), h("main", { class: "stack", title: tip("more") },
     section("This device", facts([
@@ -125,11 +120,19 @@ const health = new Cache<any[]>(() => host("doctor", { quick: false }).then((r) 
 function fixesFor(c: any): Item[] {
   const out: Item[] = [];
   const prof = String(c.section).match(/^profile (.+)$/);
-  if (prof && ["claude", "codex", "gemini", "opencode", "gh"].includes(c.name) && c.level !== "ok") out.push({ label: `Log in to ${c.name} as ${prof[1]}`, run: () => profileLogin(prof[1], c.name) });
+  if (prof && ["claude", "codex", "opencode", "gh"].includes(c.name) && c.level !== "ok") out.push({ label: `Log in to ${c.name} as ${prof[1]}`, run: () => profileLogin(prof[1], c.name) });
   if (c.section === "ptyro" && c.name === "config mode") out.push({ label: "Make it private (mode 600)", hint: "Saves it again as it is", run: async () => { const g = await doHost("config.get"); if (g && await doHost("config.save", { text: g.text }, "Saved: only you can read it")) health.reload(""); } });
   // A key a removed feature had (SPEC §13.8): taken out of its file, as `ptyro config unset` would.
   const gone = c.data?.retired as string | undefined;
   if (gone) out.push({ label: `Remove ${gone}`, hint: "ptyro no longer uses it", run: async () => { if (await doHost("settings.apply", { ...(c.data.project ? { scope: "project", project: c.data.project, shared: !!c.data.shared } : { scope: "user" }), change: { t: "unset", key: gone } }, `Removed ${gone}`)) health.reload(""); } });
+  // Keys bound to actions ptyro no longer has, and settings that name an agent it no longer has
+  // (2026-11-17): the change the doctor names, made here, as `ptyro config` would.
+  const fix = (label: string, hint: string, change: Record<string, unknown>, done: string): void => { out.push({ label, hint, run: async () => { if (await doHost("settings.apply", { scope: "user", change }, done)) health.reload(""); } }); };
+  const unbind = c.data?.unbind as string[] | undefined;
+  if (unbind) fix(`Remove ${unbind.length === 1 ? "that key" : `those ${unbind.length} keys`}`, unbind.join(", "), { t: "bind", changes: unbind.map((k) => [k, null]) }, "Removed");
+  if (c.data?.set) fix(`Set ${c.data.set} to ${c.data.value}`, "ptyro no longer has the one it named", { t: "set", key: c.data.set, value: c.data.value }, `${c.data.set} is ${c.data.value}`);
+  if (c.data?.unset) fix(`Unset ${c.data.unset}`, "ptyro no longer has the one it named", { t: "unset", key: c.data.unset }, `${c.data.unset} unset`);
+  if (c.data?.remove) fix(`Remove [${c.data.remove}.${c.data.name}]`, "Or give it a command in the config, to run it as your own", { t: "remove", path: c.data.remove, name: c.data.name }, "Removed");
   if (c.section === "ptyro" && c.name.startsWith("config")) out.push({ label: "Edit the config", run: () => go("#/config") });
   if (c.section === "remote" || /restart/.test(c.text)) out.push({ label: "Restart ptyro", run: () => restartDaemon() });
   // An upgrade that was called off is fixed by a restart (agents hibernate and resume), not by
@@ -139,7 +142,6 @@ function fixesFor(c: any): Item[] {
   if (c.section === "wsl" && c.name === "survival" && /hold_wsl is off/.test(c.text)) out.push({ label: "Keep WSL running while ptyro runs", hint: "Settings → daemon → hold_wsl", run: () => go("#/settings/daemon") });
   if (c.section === "terminal" && c.name === "windows terminal" && c.level !== "ok") out.push({ label: "Change ptyro's prefix", hint: "Or remove the binding in Windows Terminal", run: () => go("#/settings/interface") });
   if (c.section === "wsl" && c.name === "network") out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
-  if (c.section === "integrations") out.push({ label: "Integrations", run: () => go("#/integrations") });
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Remove or keep each", run: () => go("#/gc") });
   // Newer versions (BOOT5): the update, with its command; and looking again now.
   const upd = updateOffer(c);
@@ -362,7 +364,7 @@ function qrBox(text: string): HTMLElement {
 // ── profiles ────────────────────────────────────────────────────────────────────────────────
 
 const profiles = new Cache<any[]>(() => conn.request({ t: "profile_list" }).then((r) => r.profiles));
-const AGENT_DIRS = ["claude", "codex", "gemini", "opencode", "gh"];
+const AGENT_DIRS = ["claude", "codex", "opencode", "gh"];
 
 async function profileLogin(name: string, target: string): Promise<void> {
   const r = await doHost("profile.login", { name, target });
@@ -536,21 +538,6 @@ function configView(): HTMLElement {
   return h("div", {}, ui.header("config.toml", "#/settings"), h("main", { class: "stack", title: tip("config.edit") }, body));
 }
 
-// ── integrations ────────────────────────────────────────────────────────────────────────────
-
-const integrations = new Cache<any[]>(() => host("integrations.ls").then((r) => r.integrations));
-
-function integrationsView(): HTMLElement {
-  const list = integrations.get("");
-  return h("div", {}, ui.header("Integrations", "#/more"), h("main", { class: "stack", title: tip("integrations") },
-    conn.scope !== "full" ? h("p", { class: "empty" }, "This needs a device paired with --scope full.") :
-    pending(integrations, "") ?? h("div", { class: "rows" }, ...list!.map((i) => row(h("span", {}, i.agent, " ", badge(i.active ? "active" : "not installed", i.active ? "ok" : "warn")), i.detail, null,
-      i.needs_install ? { onclick: () => menu(i.agent, [
-        !i.active && { label: "Install", run: async () => { const r = await doHost("integrations.install", { agent: i.agent }); if (r) { integrations.reload(""); showNotes("Installed", r.notes ?? []); } } },
-        i.active && { label: "Uninstall", danger: true, run: async () => { const r = await doHost("integrations.uninstall", { agent: i.agent }); if (r) { integrations.reload(""); showNotes("Removed", r.notes ?? []); } } },
-      ]) } : {})))));
-}
-
 // ── the daemon ──────────────────────────────────────────────────────────────────────────────
 
 const status = new Cache<any>(() => conn.request({ t: "status" }).then((r) => r.status));
@@ -644,19 +631,9 @@ function daemonView(): HTMLElement {
         bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r) showNotes("Login service", r.notes ?? []); } }, "Install the service"),
           h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it"))),
 
-      section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."),
-        bar(h("button", { title: tip("backup.create"), onclick: backupNow }, "Back up ptyro's state"),
-          h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
+      section("Leave", h("p", { class: "sub" }, "Uninstalling removes ptyro; your repositories stay."),
+        bar(h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
   return h("div", {}, ui.header("Daemon", "#/more"), h("main", { class: "stack" }, body));
-}
-
-/// A backup of ptyro's state, written on the computer (the page can't hold a file that size, and
-/// the file belongs where the person looks for it).
-async function backupNow(): Promise<void> {
-  const r = await doHost("backup.create");
-  if (!r) return;
-  const mb = (r.bytes / (1024 * 1024)).toFixed(1);
-  textSheet("Backed up", `${r.path} (${mb} MB)\n\nIn it:\n${(r.items as string[]).map((i) => `  + ${i}`).join("\n")}\n\nNot in it:\n${(r.left_out as string[]).map((i) => `  - ${i}`).join("\n") || "  (nothing left out)"}\n\nIt is private to you (mode 600). Its README.txt says how to put it back.`);
 }
 
 /// What uninstalling would do. It is not done from here: it ends the server this page comes from
@@ -668,7 +645,7 @@ async function showUninstall(): Promise<void> {
   sheet("Uninstall ptyro", [
     h("p", { class: "intro" }, "This is what it would do. It isn't done from the web app: it stops the daemon and the server this page comes from, and asks you to confirm in a terminal on the computer."),
     h("pre", { class: "block" }, String(r.text)),
-    h("p", { class: "sub" }, "To do it, run this on the computer (add --backup FILE to save a backup first; --dry-run shows this again):"),
+    h("p", { class: "sub" }, "To do it, run this on the computer (--dry-run shows this again):"),
     h("pre", { class: "block" }, cmd),
   ], [h("button", { onclick: () => void navigator.clipboard?.writeText(cmd).then(() => ui.toast("Copied"), () => ui.toast("Couldn't copy")) }, "Copy the command")]);
 }
@@ -1086,77 +1063,6 @@ async function startLogin(id: string, name: string, side: string): Promise<void>
   if (r) { ui.toast(`Logging in to ${name}${side === "wsl" ? " in WSL" : ""}: its own sign-in; come back and Check again when it's done`); go(`#/s/${enc(r.session)}`); }
 }
 
-// ── the tour ────────────────────────────────────────────────────────────────────────────────
-
-function tourView(): HTMLElement {
-  return h("div", {}, ui.header("Tour", "#/more"), h("main", { class: "stack", title: tip("help.tour") },
-    h("p", { class: "intro" }, "ptyro's daily loop, done for real: start a task, answer the agent, clean up, keep a shell of your own. It runs in a ptyro of its own, with a demo repository and a pretend agent: your sessions, projects and config are never touched, and it all goes away when you end the tour."),
-    conn.scope !== "full" ? h("p", { class: "empty" }, "Starting a tour needs a device paired with --scope full.") : bar(h("button", { class: "primary", onclick: startTour }, "Start the tour")),
-    h("p", { class: "sub" }, "It opens in a new tab served from this computer (localhost), so open this page from the computer that runs ptyro. The tour's own page has a coach that says what to do next.")));
-}
-
-async function startTour(): Promise<void> {
-  // Open the tab now, inside the tap, or a popup blocker refuses it once the tour is ready.
-  const tab = window.open("about:blank", "_blank");
-  const b = sheet("Starting the tour…", [h("p", { class: "intro" }, "⏳ Making a ptyro of its own, a demo repository and a pretend agent.")]);
-  try {
-    const r = await host("tour.start");
-    b.close();
-    const local = ["localhost", "127.0.0.1"].includes(location.hostname) || location.hostname.startsWith("[");
-    if (local && tab) { tab.location.href = r.url; return; }
-    tab?.close();
-    textSheet("The tour is ready", `It listens on this computer only, so open this link in a browser on the computer that runs ptyro:\n\n${r.url}`);
-  } catch (e) { b.close(); tab?.close(); hostFail(e); }
-}
-
-// the coach, in a tour's own page (`ptyro.tour` is set when its pairing link says so)
-const STEPS = ["Start a task", "Answer the agent", "Clean up", "Keep a shell"] as const;
-const tour = { step: 0, worktree: "", agent: "", blocked: false };
-
-function advanceTour(): void {
-  for (;;) {
-    const before = tour.step;
-    const sessions = [...allSessions().values()];
-    const agent = sessions.find((s) => s.id === tour.agent);
-    if (tour.step === 0) {
-      const s = sessions.filter((x) => x.kind === "agent" && x.task && x.worktree && !data.worktrees.get(x.worktree)?.is_root).sort((a, b) => b.created_ms - a.created_ms)[0];
-      if (s) { tour.agent = s.id; tour.worktree = s.worktree!; tour.step = 1; }
-    } else if (tour.step === 1) {
-      const st = agent?.status?.status;
-      tour.blocked ||= st === "blocked";
-      if ((tour.blocked && (st === "working" || st === "idle" || st === "done")) || ((st === "idle" || st === "done") && (agent?.turns ?? 0) > 0)) tour.step = 2;
-    } else if (tour.step === 2) {
-      if (!data.worktrees.has(tour.worktree)) tour.step = 3;
-    } else if (tour.step === 3) {
-      // A shell of your own in SHELLS (SPEC §23): numbered, in no worktree.
-      if (sessions.some((s) => s.loose && s.slot != null)) tour.step = 4;
-    }
-    if (tour.step === before) break;
-  }
-}
-
-const COACH: string[][] = [
-  ["Tap ＋ (top right) and say what to do:", "fix the typo in greeting.txt", "Pick “demo · in a new worktree” and Start. It gets a worktree and a branch of its own."],
-  ["It wants to run a command and asks first.", "Open its session (Sessions tab) and tap Allow."],
-  ["It's done: its worktree's page (Projects tab) says what it changed.", "Clean up: on the worktree's page, ⋯ → Archive."],
-  ["Keep a shell of your own: on the Sessions tab, tap ＋ beside SHELLS → A shell.", "It's numbered and in no worktree: tap its number on a shell's page to come back to it."],
-  ["That's the loop, and a shell of your own. Everything you did was real, in a ptyro of its own."],
-];
-
-let coachEl: HTMLElement | null = null;
-/// Called after every render: the coach shows on a tour's own pages and says what's next.
-export function coach(): void {
-  if (store.get("ptyro.tour") !== "1" || !token()) { coachEl?.remove(); coachEl = null; return; }
-  advanceTour();
-  const lines = COACH[tour.step];
-  const el = h("aside", { class: "coach", "aria-live": "polite" },
-    h("b", {}, tour.step < STEPS.length ? `Tour ${tour.step + 1}/${STEPS.length} · ${STEPS[tour.step]}` : "Tour done"),
-    ...lines.map((l, i) => h("div", { class: i === 1 && tour.step === 0 ? "say" : "" }, l)),
-    h("button", { class: tour.step === STEPS.length ? "primary small" : "small", onclick: () => confirm("End the tour?", "Its ptyro, repository and agent are deleted. Your own ptyro is untouched.", "End the tour", async () => { if (await doHost("tour.end")) { store.remove("ptyro.tour"); ui.toast("The tour is over"); setTimeout(() => window.close(), 800); } }, false) }, "End the tour"));
-  if (coachEl) coachEl.replaceWith(el); else document.body.append(el);
-  coachEl = el;
-}
-
 views.set("more", () => moreView());
 views.set("health", () => healthView());
 views.set("usage", () => usageView());
@@ -1164,9 +1070,7 @@ views.set("devices", () => devicesView());
 views.set("profiles", () => profilesView());
 views.set("profile", profileView);
 views.set("config", () => configView());
-views.set("integrations", () => integrationsView());
 views.set("daemon", () => daemonView());
 views.set("about", () => aboutView());
 views.set("web", () => webView());
 views.set("setup", (rest) => setupView(rest));
-views.set("tour", () => tourView());
