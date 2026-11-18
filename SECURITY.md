@@ -39,6 +39,6 @@ it calls.
 
 ## Before attaching logs
 
-Session recordings (`ptyro replay`, `data/sessions/*/pty.log`) and crash reports contain
+Session recordings (`data/sessions/*/pty.log`) and crash reports contain
 whatever was on screen, which can include secrets. Please look through them before attaching
 them anywhere public.
