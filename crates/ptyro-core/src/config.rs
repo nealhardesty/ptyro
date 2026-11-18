@@ -688,8 +688,6 @@ pub struct Chat {
     /// The agent for new chats (`claude`, `codex@work`…); "" = the workspace's default agent,
     /// else the first installed of claude, codex, gemini and opencode.
     pub agent: String,
-    /// The tool preset of new chats: `chat`, `read`, `none`, or one of `[chat.tools]`.
-    pub preset: String,
     /// New chats start incognito: nothing of them is written, and they end with their agent.
     pub incognito: bool,
     /// Chats can look up your other chats (`chat_search`, `chat_read`, `chat_list`).
@@ -712,18 +710,11 @@ pub struct Chat {
     /// Meaning search (SPEC §22.10): find messages by what they are about, not only by their
     /// words. Switching it on downloads a 31 MB model once.
     pub meaning: bool,
-    /// Keep importing the agents' own histories (Claude Code, Codex and Gemini sessions) as
-    /// read-only chats, every 10 minutes (SPEC §22.10). Off: it copies coding history into
-    /// `chat.db`, so it is yours to ask for; `ptyro chat import` does it once.
-    pub import: bool,
     /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
     /// screen shows it; `off`.
     pub notify: String,
     /// Delete archived chats after this many days (0 = keep them).
     pub archive_purge_days: u32,
-    /// Your own tool presets (`chat`, `read` and `none` are built in; a table with their name
-    /// changes them).
-    pub tools: BTreeMap<String, ChatTools>,
 }
 
 impl Default for Chat {
@@ -732,7 +723,6 @@ impl Default for Chat {
             enabled: true,
             recent: 5,
             agent: String::new(),
-            preset: "chat".into(),
             incognito: false,
             history_tool: true,
             history_scope: "profile".into(),
@@ -755,94 +745,36 @@ impl Default for Chat {
             daily_cap: 200,
             index_tools: false,
             meaning: false,
-            import: false,
             notify: "blocked".into(),
             archive_purge_days: 0,
-            tools: BTreeMap::new(),
         }
     }
 }
 
-/// What a chat may use (SPEC §22.5): a tool preset.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// What a chat may use (SPEC §22.5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatTools {
     /// The agent's own web search and fetch.
     pub web: bool,
-    /// Read files in `dirs`.
+    /// Read files in the chat's folders.
     pub read: bool,
-    /// Folders a chat of this preset may read.
-    pub dirs: Vec<String>,
-    /// The agent's shell: it runs commands as you (never in a built-in preset; shown with ⚠).
-    pub shell: bool,
-    /// MCP servers by name, from the agent's own configuration, kept on in the chat.
-    pub mcp: Vec<String>,
-    /// More tool names to approve without asking.
-    pub allow: Vec<String>,
-}
-
-impl ChatTools {
-    /// One line for people: what a chat with this preset may use.
-    pub fn describe(&self) -> String {
-        let mut what: Vec<String> = Vec::new();
-        if self.shell {
-            what.push("⚠ runs shell commands".into());
-        }
-        if self.web {
-            what.push("web search".into());
-        }
-        if self.read {
-            what.push(if self.dirs.is_empty() {
-                "reads the chat's folders".into()
-            } else {
-                format!("reads {} and the chat's folders", self.dirs.join(", "))
-            });
-        }
-        if !self.mcp.is_empty() {
-            what.push(format!("MCP: {}", self.mcp.join(", ")));
-        }
-        if !self.allow.is_empty() {
-            what.push(format!("also {}", self.allow.join(", ")));
-        }
-        if what.is_empty() { "no tools".into() } else { what.join(" · ") }
-    }
 }
 
 impl Chat {
-    /// The built-in presets: `chat` (web search), `read` (also reads `dirs`), `none`.
-    pub const BUILTIN: [&'static str; 3] = ["chat", "read", "none"];
-    /// `chat find`'s own (its history tools and nothing else): never a preset of yours.
+    /// `chat find`'s tools (its history tools and nothing else).
     pub const FIND: &'static str = "find";
 
-    /// A preset by name: yours, else a built-in one.
-    pub fn preset(&self, name: &str) -> Option<ChatTools> {
-        if let Some(t) = self.tools.get(name) {
-            return Some(t.clone());
+    /// What a chat may use, by the `tools` its row keeps: web search, and its folders when it
+    /// has some. `none` (a chat made with no tools before 2026-11-17) keeps none, and `find`
+    /// has only what its launch adds.
+    pub fn tools_for(tools: &str, has_folders: bool) -> ChatTools {
+        match tools {
+            "none" | Self::FIND => ChatTools::default(),
+            _ => ChatTools { web: true, read: has_folders },
         }
-        match name {
-            "chat" => Some(ChatTools { web: true, ..ChatTools::default() }),
-            "read" => Some(ChatTools { web: true, read: true, ..ChatTools::default() }),
-            "none" => Some(ChatTools::default()),
-            _ => None,
-        }
-    }
-
-    /// Every preset name: the built-in ones, then yours.
-    pub fn presets(&self) -> Vec<String> {
-        let mut v: Vec<String> = Self::BUILTIN.iter().map(|s| (*s).to_owned()).collect();
-        let mine: Vec<String> = self.tools.keys().filter(|k| !v.contains(k)).cloned().collect();
-        v.extend(mine);
-        v
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.preset(&self.preset).is_none() {
-            return Err(format!(
-                "chat.preset: {:?} isn't a preset ({})",
-                self.preset,
-                self.presets().join(", ")
-            ));
-        }
         parse_duration(&self.hibernate_after).map_err(|e| format!("chat.hibernate_after: {e}"))?;
         if !matches!(self.title.as_str(), "auto" | "off") {
             return Err(format!("chat.title: {:?} (auto or off)", self.title));
@@ -858,29 +790,6 @@ impl Chat {
         }
         if !(1..=100).contains(&self.recent) {
             return Err("chat.recent: 1 to 100".into());
-        }
-        for (name, t) in &self.tools {
-            crate::names::validate(name).map_err(|e| format!("chat.tools.{name}: {e}"))?;
-            if name == Self::FIND {
-                return Err(format!(
-                    "chat.tools.{name}: `{name}` is the name of `chat find`'s own tools (it reads your past chats, nothing else): give this preset another name"
-                ));
-            }
-            if t.shell && Self::BUILTIN.contains(&name.as_str()) {
-                return Err(format!(
-                    "chat.tools.{name}.shell: the built-in presets never run commands; make a preset of your own for that ([chat.tools.shell] shell = true)"
-                ));
-            }
-            // Gemini names a server's tools `mcp_<server>_<tool>`: a `_` would be ambiguous.
-            if let Some(m) = t
-                .mcp
-                .iter()
-                .find(|m| m.is_empty() || !m.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
-            {
-                return Err(format!(
-                    "chat.tools.{name}.mcp: {m:?} isn't an MCP server name (letters, digits and -)"
-                ));
-            }
         }
         Ok(())
     }
@@ -2437,12 +2346,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn find_is_chat_finds_own_preset() {
-        let mut c = Chat::default();
-        assert!(c.validate().is_ok());
-        c.tools.insert("find".into(), ChatTools { shell: true, ..ChatTools::default() });
-        let e = c.validate().unwrap_err();
-        assert!(e.contains("chat.tools.find") && e.contains("another name"), "{e}");
+    fn what_a_chat_may_use() {
+        assert!(Chat::default().validate().is_ok());
+        let web = ChatTools { web: true, read: false };
+        assert_eq!(Chat::tools_for("chat", false), web);
+        assert_eq!(Chat::tools_for("chat", true), ChatTools { web: true, read: true });
+        // A row from before presets went: `read` and your own are the same chat now; `none`
+        // stays without tools, and `find` has only its history tools.
+        assert_eq!(Chat::tools_for("read", false), web);
+        assert_eq!(Chat::tools_for("mine", true), ChatTools { web: true, read: true });
+        assert_eq!(Chat::tools_for("none", true), ChatTools::default());
+        assert_eq!(Chat::tools_for(Chat::FIND, false), ChatTools::default());
     }
 
     #[cfg(unix)] // Unix execute bits, modes and symlinks

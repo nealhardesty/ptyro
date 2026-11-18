@@ -2,7 +2,7 @@
 //! agents are the fakes. A chat is made and answered with no setup; its engine is hidden from
 //! `ls`; it carries on after a daemon restart (natively, the same conversation); switching its
 //! agent replays the conversation as a seed; titles, pin, archive, export and delete; the
-//! launch line of each preset.
+//! launch line of a chat.
 
 use std::path::PathBuf;
 use std::process::Output;
@@ -420,11 +420,10 @@ fn an_agent_that_stops_before_answering_is_said_and_ask_keeps_nothing() {
 #[test]
 fn json_waits_for_the_answer_and_every_verb_can_say_it() {
     let w = World::new("");
-    // `new --json` waits for the answer (as `compare --json` does), unless --no-wait.
-    let out =
-        w.json(&["chat", "new", "--tools", "read", "--timeout", "60", "--json", "hello json"]);
+    // `new --json` waits for the answer, unless --no-wait.
+    let out = w.json(&["chat", "new", "--timeout", "60", "--json", "hello json"]);
     let addr = format!("c:{}", out["chat"]["handle"].as_str().unwrap());
-    assert_eq!(out["chat"]["tools"], "read", "--tools is --preset: {out}");
+    assert_eq!(out["chat"]["tools"], "chat", "{out}");
     assert!(out["message"].is_string(), "{out}");
     let a = &out["answers"].as_array().unwrap()[0];
     assert_eq!(a["agent"], "claude");
@@ -436,12 +435,10 @@ fn json_waits_for_the_answer_and_every_verb_can_say_it() {
     assert!(sent["answers"][0]["text"].as_str().unwrap().contains("you said: again"), "{sent}");
     let retried = w.json(&["chat", "retry", &addr, "--json"]);
     assert!(retried["answers"][0]["text"].as_str().unwrap().contains("again"), "{retried}");
-    let forked = w.json(&["chat", "fork", &addr, "--timeout", "60", "--json", "a fork"]);
-    assert!(forked["answers"][0]["text"].as_str().unwrap().contains("a fork"), "{forked}");
     let renamed = w.json(&["chat", "rename", &addr, "Named", "--json"]);
     assert_eq!(renamed["chat"]["title"], "Named");
-    let set = w.json(&["chat", "set", &addr, "--preset", "none", "--json"]);
-    assert_eq!(set["chat"]["tools"], "none");
+    let set = w.json(&["chat", "set", &addr, "--agent", "codex", "--json"]);
+    assert_eq!(set["chat"]["agent"], "codex");
     let pinned = w.json(&["chat", "pin", &addr, "--json"]);
     assert_eq!(pinned["chats"][0]["pinned"], true);
     // Nothing found is no failure, in text as in JSON.

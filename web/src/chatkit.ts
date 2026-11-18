@@ -4,7 +4,7 @@
 /// What of a chat the list reads (`ChatInfo`, SPEC §22.12).
 export interface ChatLike {
   id: string; title?: string | null; agent: string; workspace: string; pinned: boolean; last_ms: number;
-  incognito: boolean; side_of?: string | null; source?: string | null; source_dir?: string | null;
+  incognito: boolean;
   machine?: string | null;
 }
 
@@ -13,13 +13,6 @@ export const onMachine = (c: { machine?: string | null }, machine = ""): boolean
   !machine || (machine === "." ? !c.machine : c.machine === machine);
 
 export const label = (c: ChatLike | undefined): string => c?.title?.trim() || "new chat";
-
-/// `imported from claude · ~/repo`.
-export function importedFrom(c: ChatLike): string {
-  if (!c.source) return "";
-  const agent = c.source.split(":")[0];
-  return c.source_dir ? `imported from ${agent} · ${c.source_dir}` : `imported from ${agent}`;
-}
 
 /// Pinned first, then the newest.
 export function sorted<T extends ChatLike>(list: Iterable<T>): T[] {
@@ -40,30 +33,20 @@ export function titleQuery(q: string): { text: string; agent: string } {
   return { text: words.join(" "), agent };
 }
 
-export interface ListFilter { query: string; workspace: string; imported: boolean; pinned: boolean; machine?: string }
+export interface ListFilter { query: string; workspace: string; pinned: boolean; machine?: string }
 
-/// The list's rows: the chats `source` holds that the filter keeps, each followed by its side
-/// chats (newest first, as the TUI's sidebar has them under it). A side chat goes with its chat;
-/// incognito ones are never "every chat" (SPEC §22.12).
-export function shownChats<T extends ChatLike>(source: T[], f: ListFilter): { chat: T; side: boolean }[] {
+/// The list's rows: the chats `source` holds that the filter keeps, in its order; incognito ones
+/// are never "every chat" (SPEC §22.12).
+export function shownChats<T extends ChatLike>(source: T[], f: ListFilter): T[] {
   const { text: q, agent } = titleQuery(f.query);
-  const keeps = (c: T): boolean => !c.incognito && (!f.workspace || c.workspace === f.workspace) && (!f.imported || !!c.source) && (!f.pinned || c.pinned)
+  return source.filter((c) => !c.incognito && (!f.workspace || c.workspace === f.workspace) && (!f.pinned || c.pinned)
     && onMachine(c, f.machine) && (!agent || c.agent.toLowerCase().includes(agent))
-    && (!q || label(c).toLowerCase().includes(q) || c.agent.toLowerCase().includes(q) || importedFrom(c).toLowerCase().includes(q));
-  const sides = new Map<string, T[]>();
-  for (const c of source) if (c.side_of && !c.incognito) sides.set(c.side_of, [...(sides.get(c.side_of) ?? []), c]);
-  const out: { chat: T; side: boolean }[] = [];
-  for (const c of source) {
-    if (c.side_of || !keeps(c)) continue;
-    out.push({ chat: c, side: false });
-    for (const s of [...(sides.get(c.id) ?? [])].sort((a, b) => b.last_ms - a.last_ms)) out.push({ chat: s, side: true });
-  }
-  return out;
+    && (!q || label(c).toLowerCase().includes(q) || c.agent.toLowerCase().includes(q)));
 }
 
 /// The compact CHATS section: every pinned chat, then the newest `recent` others (`[chat] recent`).
 export function recentChats<T extends ChatLike>(list: Iterable<T>, recent: number): T[] {
-  const top = sorted([...list].filter((c) => !c.side_of && !c.incognito));
+  const top = sorted([...list].filter((c) => !c.incognito));
   return [...top.filter((c) => c.pinned), ...top.filter((c) => !c.pinned).slice(0, Math.max(0, recent))];
 }
 
@@ -100,9 +83,9 @@ export function atInsert(text: string, caret: number, start: number, folder: str
 /// What makes a transcript item drawn again: what it shows changing, not the whole of it (a long
 /// answer isn't turned into a string on every render); `extra`: what around it changes its
 /// buttons and links.
-export function itemKey(it: { id: string; t: string; rev?: number; [k: string]: any }, sib: { at: number; of: number } | undefined, findIn: string, extra = ""): string {
+export function itemKey(it: { id: string; t: string; rev?: number; [k: string]: any }, findIn: string, extra = ""): string {
   const len = (x: unknown): number => (typeof x === "string" ? x.length : 0);
-  return [it.id, it.t, it.rev ?? "", len(it.text), len(it.output), len(it.title), it.streaming ? 1 : 0, it.status ?? "", it.decided ?? "", it.stop ?? "", sib ? `${sib.at}/${sib.of}` : "", findIn, extra].join("\u0001");
+  return [it.id, it.t, it.rev ?? "", len(it.text), len(it.output), len(it.title), it.streaming ? 1 : 0, it.status ?? "", it.decided ?? "", it.stop ?? "", findIn, extra].join("\u0001");
 }
 
 /// The daemon's "chats are off" (`[chat] enabled = false`), not some other failure to list them.

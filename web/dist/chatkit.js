@@ -3,13 +3,6 @@
 /// The machine a list keeps (`chat ls --machine`): every one (""), this one ("."), or that one.
 export const onMachine = (c, machine = "") => !machine || (machine === "." ? !c.machine : c.machine === machine);
 export const label = (c) => c?.title?.trim() || "new chat";
-/// `imported from claude · ~/repo`.
-export function importedFrom(c) {
-    if (!c.source)
-        return "";
-    const agent = c.source.split(":")[0];
-    return c.source_dir ? `imported from ${agent} · ${c.source_dir}` : `imported from ${agent}`;
-}
 /// Pinned first, then the newest.
 export function sorted(list) {
     return [...list].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.last_ms - a.last_ms);
@@ -30,31 +23,17 @@ export function titleQuery(q) {
     }
     return { text: words.join(" "), agent };
 }
-/// The list's rows: the chats `source` holds that the filter keeps, each followed by its side
-/// chats (newest first, as the TUI's sidebar has them under it). A side chat goes with its chat;
-/// incognito ones are never "every chat" (SPEC §22.12).
+/// The list's rows: the chats `source` holds that the filter keeps, in its order; incognito ones
+/// are never "every chat" (SPEC §22.12).
 export function shownChats(source, f) {
     const { text: q, agent } = titleQuery(f.query);
-    const keeps = (c) => !c.incognito && (!f.workspace || c.workspace === f.workspace) && (!f.imported || !!c.source) && (!f.pinned || c.pinned)
+    return source.filter((c) => !c.incognito && (!f.workspace || c.workspace === f.workspace) && (!f.pinned || c.pinned)
         && onMachine(c, f.machine) && (!agent || c.agent.toLowerCase().includes(agent))
-        && (!q || label(c).toLowerCase().includes(q) || c.agent.toLowerCase().includes(q) || importedFrom(c).toLowerCase().includes(q));
-    const sides = new Map();
-    for (const c of source)
-        if (c.side_of && !c.incognito)
-            sides.set(c.side_of, [...(sides.get(c.side_of) ?? []), c]);
-    const out = [];
-    for (const c of source) {
-        if (c.side_of || !keeps(c))
-            continue;
-        out.push({ chat: c, side: false });
-        for (const s of [...(sides.get(c.id) ?? [])].sort((a, b) => b.last_ms - a.last_ms))
-            out.push({ chat: s, side: true });
-    }
-    return out;
+        && (!q || label(c).toLowerCase().includes(q) || c.agent.toLowerCase().includes(q)));
 }
 /// The compact CHATS section: every pinned chat, then the newest `recent` others (`[chat] recent`).
 export function recentChats(list, recent) {
-    const top = sorted([...list].filter((c) => !c.side_of && !c.incognito));
+    const top = sorted([...list].filter((c) => !c.incognito));
     return [...top.filter((c) => c.pinned), ...top.filter((c) => !c.pinned).slice(0, Math.max(0, recent))];
 }
 /// A line that starts with `/` but is a message (as `chats::slash_message`): `//` sends the rest
@@ -89,9 +68,9 @@ export function atInsert(text, caret, start, folder) {
 /// What makes a transcript item drawn again: what it shows changing, not the whole of it (a long
 /// answer isn't turned into a string on every render); `extra`: what around it changes its
 /// buttons and links.
-export function itemKey(it, sib, findIn, extra = "") {
+export function itemKey(it, findIn, extra = "") {
     const len = (x) => (typeof x === "string" ? x.length : 0);
-    return [it.id, it.t, it.rev ?? "", len(it.text), len(it.output), len(it.title), it.streaming ? 1 : 0, it.status ?? "", it.decided ?? "", it.stop ?? "", sib ? `${sib.at}/${sib.of}` : "", findIn, extra].join("\u0001");
+    return [it.id, it.t, it.rev ?? "", len(it.text), len(it.output), len(it.title), it.streaming ? 1 : 0, it.status ?? "", it.decided ?? "", it.stop ?? "", findIn, extra].join("\u0001");
 }
 /// The daemon's "chats are off" (`[chat] enabled = false`), not some other failure to list them.
 export function chatsOff(e) {

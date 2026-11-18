@@ -436,19 +436,12 @@ impl Source {
             Self::Agents => "agents",
             Self::Editors => "editors",
             Self::Actions => "actions",
-            Self::ChatPresets => "chat_presets",
         }
     }
 }
 
-const SOURCES: [Source; 6] = [
-    Source::Themes,
-    Source::BuiltinThemes,
-    Source::Agents,
-    Source::Editors,
-    Source::Actions,
-    Source::ChatPresets,
-];
+const SOURCES: [Source; 5] =
+    [Source::Themes, Source::BuiltinThemes, Source::Agents, Source::Editors, Source::Actions];
 
 /// Everything the panel needs to show a family of settings.
 #[derive(Debug, Clone)]

@@ -1,8 +1,8 @@
 //! CHAT4 end-to-end (SPEC §22.5, §22.7; ROADMAP CHAT4) against a real daemon whose agents are the
-//! fakes: a `read` chat is given its folder and nothing else; the default chat searches the web
+//! fakes: a chat given a folder reads it and nothing else; a chat without one searches the web
 //! and can't touch a file; Gemini's chat gets its admin policy, no extensions, only ptyro's MCP
-//! server (which arrives in `session/new`); a shell preset is marked; and a chat becomes a task
-//! with its context.
+//! server (which arrives in `session/new`); the tool presets' old settings still load; and a
+//! chat becomes a task with its context.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -97,15 +97,15 @@ fn texts(w: &World, addr: &str) -> String {
 }
 
 #[test]
-fn a_read_chat_reads_its_folder_and_the_default_chat_only_searches() {
+fn a_chat_reads_its_folder_and_one_without_only_searches() {
     let w = World::new("");
     let notes = w.home().join("notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(notes.join("plan.md"), "ship on friday\n").unwrap();
-    // Given a folder (relative to here), and no preset: it reads, that folder only.
+    // Given a folder (relative to here): it reads, that folder only.
     let c = w.chat(&["--agent", "claude", "--folder", "notes", "what is the plan?"]);
     let notes_s = notes.to_string_lossy().into_owned();
-    assert_eq!(c["tools"], "read");
+    assert_eq!(c["tools"], "chat");
     assert_eq!(c["folders"], serde_json::json!([notes_s]));
     let a = w.argv(c["id"].as_str().unwrap());
     assert_eq!(after(&a, "--tools"), ["WebSearch,WebFetch,Read,Glob,Grep"]);
@@ -114,7 +114,7 @@ fn a_read_chat_reads_its_folder_and_the_default_chat_only_searches() {
     assert!(
         after(&a, "--allowedTools")[0].split(',').all(|t| !matches!(t, "Read" | "Glob" | "Grep"))
     );
-    // The default chat: web search, no file tool, no folder, no shell.
+    // A chat without a folder: web search, no file tool, no folder, no shell.
     let d = w.chat(&["--agent", "claude", "hello"]);
     assert_eq!((d["tools"].as_str(), d.get("folders")), (Some("chat"), None));
     let a = w.argv(d["id"].as_str().unwrap());
@@ -132,7 +132,7 @@ fn a_read_chat_reads_its_folder_and_the_default_chat_only_searches() {
     let out = w.cli(&["chat", "set", &addr, "--folder", missing]);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("no such folder"));
-    // Codex: the read chat's folder in its permission profile (best effort: outside $HOME).
+    // Codex: the chat's folder in its permission profile (best effort: outside $HOME).
     let x = w.chat(&["--agent", "codex", "--folder", &notes_s, "hi"]);
     assert_eq!(x["best_effort"], true);
     assert_eq!(d.get("best_effort"), None, "claude enforces it itself");
@@ -188,27 +188,37 @@ fn gemini_gets_an_admin_policy_no_extensions_and_ptyros_mcp_server() {
     assert!(gem.join("tmp/mine").exists() && gem.join("history/mine").exists());
 }
 
+/// A config from before presets went (2026-11-17) still loads: its chats work as every chat
+/// does, and `config check` names each old key with the command that takes it out.
 #[test]
-fn a_shell_preset_is_marked_and_mcp_servers_are_named() {
-    let w = World::new("[chat.tools.ops]\nweb = true\nshell = true\nmcp = [\"github\"]\n");
-    let presets = w.json(&["chat", "presets", "--json"]);
-    let ops = presets.as_array().unwrap().iter().find(|p| p["name"] == "ops").unwrap();
-    assert_eq!((ops["shell"].as_bool(), ops["builtin"].as_bool()), (Some(true), Some(false)));
-    assert!(ops["about"].as_str().unwrap().starts_with("⚠ runs shell commands"));
-    let read = presets.as_array().unwrap().iter().find(|p| p["name"] == "read").unwrap();
-    assert_eq!(read["about"], "web search · reads the chat's folders");
-    let c = w.chat(&["--agent", "claude", "--preset", "ops", "hi"]);
-    assert_eq!(c["shell"], true);
+fn the_presets_old_settings_load_and_are_reported() {
+    let w = World::new(
+        "preset = \"read\"\nimport = true\n\n[chat.tools.ops]\nweb = true\nshell = true\nmcp = [\"github\"]\n",
+    );
+    let c = w.chat(&["--agent", "claude", "hi"]);
+    assert_eq!(c["tools"], "chat");
     let a = w.argv(c["id"].as_str().unwrap());
-    assert!(after(&a, "--tools")[0].ends_with(",Bash"));
-    // `github` isn't in this Claude's config: left out, and the chat says so.
-    let addr = format!("c:{}", c["handle"].as_str().unwrap());
-    w.until("the notice", || {
-        texts(&w, &addr).contains("MCP github isn't in claude's own configuration")
-    });
-    // Built-in presets never run commands.
-    let out = w.cli(&["config", "set", "chat.tools.chat.shell", "true"]);
-    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert_eq!(after(&a, "--tools"), ["WebSearch,WebFetch"], "no shell: {a:?}");
+    let check = w.cli(&["config", "check"]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(check.status.success(), "{said}");
+    for key in ["chat.preset", "chat.import", "chat.tools"] {
+        assert!(said.contains(key) && said.contains("is no longer used"), "{key}: {said}");
+    }
+    assert!(said.contains("`ptyro config unset chat.preset`"), "{said}");
+    // The command is gone too, and says so rather than asking an agent "presets".
+    let out = w.cli(&["chat", "presets"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("`chat presets` was removed on 2026-11-17"), "{err}");
+    let out = w.cli(&["chat", "fork", "c:abcd"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("retry and edit replace the last turn"), "{err}");
+    assert!(w.json(&["chat", "ls", "--json"]).as_array().unwrap().len() == 1, "no chat made");
 }
 
 /// A repository with one commit.

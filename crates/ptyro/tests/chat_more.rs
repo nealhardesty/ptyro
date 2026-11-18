@@ -1,6 +1,7 @@
-//! CHAT2 and CHAT3 end-to-end (SPEC §22.7–§22.10): branches, forks, side chats, incognito,
-//! search, the history scope, `chat find` and the history tools, through the CLI against a real
-//! daemon whose agents are the fakes (which echo what they are given, so a seed shows).
+//! CHAT2 and CHAT3 end-to-end (SPEC §22.7–§22.10): retry and edit (they replace the last turn),
+//! incognito, search, the history scope, `chat find` and the history tools, through the CLI
+//! against a real daemon whose agents are the fakes (which echo what they are given, so a seed
+//! shows).
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -114,7 +115,7 @@ fn ids(chat: &Value, kind: &str) -> Vec<String> {
 }
 
 #[test]
-fn retry_edit_branches_and_forks() {
+fn retry_and_edit_replace_the_last_turn() {
     let w = World::new("");
     w.ok(&["chat", "new", "--title", "Plans", "hello"]);
     let addr = w.addr_of("Plans");
@@ -123,105 +124,49 @@ fn retry_edit_branches_and_forks() {
     let first_answer = ids(&first, "assistant")[0].clone();
     let hello = ids(&first, "user")[0].clone();
 
-    // Retry: a second answer beside the first; the first stays, as a branch.
+    // Retry: a new answer replaces the last one.
     let out = w.ok(&["chat", "retry", &addr]);
     assert!(out.contains("you said: hello"), "{out}");
     let shown = w.show(&addr);
     let second_answer = ids(&shown, "assistant")[0].clone();
     assert_ne!(first_answer, second_answer);
-    let sib = &shown["siblings"].as_array().unwrap_or_else(|| panic!("{shown}"))[0];
-    assert_eq!((sib["at"].as_u64(), sib["of"].as_u64()), (Some(2), Some(2)), "{shown}");
-    let text = w.ok(&["chat", "show", &addr, "--branches"]);
-    assert!(text.contains("‹ 2/2 ›"), "{text}");
-
-    // Flip back to the first answer.
-    w.ok(&["chat", "branch", &addr, "--to", &first_answer]);
-    assert_eq!(ids(&w.show(&addr), "assistant"), std::slice::from_ref(&first_answer));
-
-    // Edit the message: a sibling of it, answered afresh; both stay.
-    let out = w.ok(&["chat", "edit", &addr, &hello[hello.len() - 8..], "bonjour"]);
-    assert!(out.contains("you said: bonjour"), "{out}");
-    let shown = w.show(&addr);
-    assert_eq!(texts(&shown, "user"), ["bonjour"]);
-    assert_eq!(
-        w.json(&["chat", "show", &addr, "--all", "--format", "json"])["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|n| n["t"] == "user")
-            .count(),
-        2
-    );
+    assert_eq!(ids(&shown, "assistant").len(), 1, "replaced, not beside it: {shown}");
+    assert!(shown.get("siblings").is_none(), "{shown}");
     w.idle(&addr);
 
-    // A fork on the same agent from the end: Claude's native fork (no seed is sent).
-    let out = w.ok(&["chat", "fork", &addr, "and then?"]);
-    assert!(out.contains("you said: and then?"), "{out}");
-    assert!(!out.contains("The conversation so far"), "native: no seed: {out}");
-    let fork = w.addr_of("fork of Plans");
-    let f = w.show(&fork);
-    assert_eq!(texts(&f, "user"), ["bonjour", "and then?"]);
-    assert!(f["chat"]["forked"].as_bool().unwrap());
-    // The original is as it was.
-    assert_eq!(texts(&w.show(&addr), "user"), ["bonjour"]);
+    // A second turn: only it can be asked again or said differently.
+    let out = w.ok(&["chat", "send", &addr, "zebra crossing"]);
+    assert!(out.contains("you said: zebra crossing"), "{out}");
+    w.idle(&addr);
+    let out = w.cli(&["chat", "retry", &addr, &second_answer]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("only the last answer can be asked again: send a new message"), "{err}");
+    let out = w.cli(&["chat", "edit", &addr, &hello[hello.len() - 8..], "bonjour"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("only your last message can be edited: send a new message"), "{err}");
+    assert_eq!(texts(&w.show(&addr), "user"), ["hello", "zebra crossing"], "nothing changed");
 
-    // A fork on another agent, from a message in the middle: seeded with the branch to there.
-    let out = w.ok(&[
-        "chat",
-        "fork",
-        &fork,
-        "--agent",
-        "codex",
-        "--at",
-        &ids(&f, "assistant")[0],
-        "on codex",
-    ]);
-    assert!(out.contains("The conversation so far") && out.contains("[user] bonjour"), "{out}");
-    assert!(!out.contains("and then?"), "only the branch up to the message: {out}");
-
-    // A side chat: asks about the chat, answers, and goes; the chat is unchanged.
-    let before = w.chats().len();
-    let out = w.ok(&["chat", "fork", &addr, "--side", "what was that about?"]);
-    assert!(out.contains("what was that about?"), "{out}");
-    w.until("the side chat gone", || w.chats().len() == before);
-    assert_eq!(texts(&w.show(&addr), "user"), ["bonjour"]);
-
-    // Kept, it stays as a fork of its own, named as one.
-    w.ok(&["chat", "fork", &addr, "--side", "--keep", "and this?"]);
-    let forks = w.chats();
-    let forks: Vec<_> = forks.iter().filter(|c| c["title"] == "fork of Plans").collect();
-    assert_eq!(forks.len(), 2, "the earlier fork and the kept side chat: {forks:?}");
-    assert!(forks.iter().all(|c| c["side_of"].is_null()));
-    assert_eq!(w.chats().len(), before + 1);
-}
-
-#[test]
-fn a_side_chat_nobody_follows_goes_and_goes_with_its_chat() {
-    let w = World::new("hibernate_after = \"2s\"");
-    w.ok(&["chat", "new", "hello"]);
-    // (By its handle: its title is written behind the answer.)
-    let parent = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
-    let side_of = |out: &Output| {
-        let err = String::from_utf8_lossy(&out.stderr).into_owned();
-        err.split_whitespace().next().unwrap_or_default().to_owned()
-    };
-    let gone = |w: &World, addr: &str| !w.cli(&["chat", "show", addr]).status.success();
-    // Left by a client that couldn't delete it (here: never opened): it goes after a while.
-    // (Made well after the daemon started, so not by the look it takes at start.)
-    std::thread::sleep(Duration::from_secs(3));
-    let s1 = side_of(&w.cli(&["chat", "fork", &parent, "--side"]));
-    assert!(s1.starts_with("c:") && !gone(&w, &s1), "{s1}");
-    w.until("the side chat nobody follows is gone", || gone(&w, &s1));
-    assert!(!gone(&w, &parent), "its chat stays");
-    // Deleting its chat takes it along at once (here nothing else would, for a minute).
-    let w = World::new("hibernate_after = \"60s\"");
-    w.ok(&["chat", "new", "hello"]);
-    // (By its handle: its title is written behind the answer.)
-    let parent = format!("c:{}", w.chats()[0]["handle"].as_str().unwrap());
-    let s2 = side_of(&w.cli(&["chat", "fork", &parent, "--side"]));
-    assert!(!gone(&w, &s2));
-    w.ok(&["chat", "rm", "-y", &parent]);
-    assert!(gone(&w, &s2), "it went with its chat");
+    // Edit the last message: it and its answer are replaced, answered afresh.
+    let zebra = ids(&w.show(&addr), "user")[1].clone();
+    let out = w.ok(&["chat", "edit", &addr, &zebra[zebra.len() - 8..], "bonjour"]);
+    // A new agent is told what comes before it, and not what it replaces.
+    assert!(out.contains("[user] hello") && out.contains("bonjour"), "{out}");
+    assert!(!out.contains("zebra"), "{out}");
+    w.idle(&addr);
+    let shown = w.show(&addr);
+    assert_eq!(texts(&shown, "user"), ["hello", "bonjour"]);
+    assert_eq!(ids(&shown, "assistant")[0], second_answer, "the first turn is as it was");
+    // What was replaced is found no more (it stays in chat.db, unreachable).
+    w.until("the search index caught up", || {
+        !w.json(&["chat", "search", "bonjour", "--json"]).as_array().unwrap().is_empty()
+    });
+    assert!(
+        w.json(&["chat", "search", "zebra", "--here", "--json"]).as_array().unwrap().is_empty()
+    );
+    let text = w.ok(&["chat", "show", &addr]);
+    assert!(!text.contains("‹") && !text.contains("zebra"), "{text}");
 }
 
 #[test]
@@ -232,7 +177,7 @@ fn incognito_keeps_nothing() {
     let c = w.chats().into_iter().find(|c| c["incognito"] == true).expect("listed while it lasts");
     let addr = format!("c:{}", c["handle"].as_str().unwrap());
     assert_eq!(texts(&w.show(&addr), "assistant"), ["you said: my secret plan"]);
-    // A retry replaces the answer (no branches to keep); another agent carries it on, seeded.
+    // A retry replaces the answer; another agent carries it on, seeded.
     w.ok(&["chat", "retry", &addr]);
     let shown = w.show(&addr);
     assert_eq!(texts(&shown, "user"), ["my secret plan"]);

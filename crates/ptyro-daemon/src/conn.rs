@@ -549,13 +549,7 @@ impl Conn {
                         text,
                     },
                 );
-                let msg = ServerMsg::ChatLive {
-                    chat,
-                    rev: 0,
-                    reset: true,
-                    items: vec![item],
-                    siblings: Vec::new(),
-                };
+                let msg = ServerMsg::ChatLive { chat, rev: 0, reset: true, items: vec![item] };
                 let _ = self.out.send(msg).await;
                 return;
             }
@@ -745,8 +739,8 @@ async fn stream_frames(
     }
 }
 
-/// A followed chat (SPEC §22.14): its shown branch, then what changed; the whole branch again
-/// when it is reloaded. A chat that can't be followed says why, as a notice.
+/// A followed chat (SPEC §22.14): its conversation, then what changed; the whole of it again
+/// when it is reloaded (a retry, an edit). A chat that can't be followed says why, as a notice.
 async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<ServerMsg>) {
     let live = match daemon.chat_follow(&chat).await {
         Ok(l) => l,
@@ -759,13 +753,7 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
                 },
             );
             let _ = out
-                .send(ServerMsg::ChatLive {
-                    chat,
-                    rev: 0,
-                    reset: true,
-                    items: vec![item],
-                    siblings: Vec::new(),
-                })
+                .send(ServerMsg::ChatLive { chat, rev: 0, reset: true, items: vec![item] })
                 .await;
             return;
         }
@@ -790,9 +778,7 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
             (t.rev, if reset { t.items.clone() } else { t.since(seen) })
         };
         if reset || !items.is_empty() {
-            // With a reset, where the branch has others (the client's ‹ 2/3 ›).
-            let siblings = if reset { live.siblings.locked().clone() } else { Vec::new() };
-            for msg in live_frames(&live.id, rev, reset, items, siblings) {
+            for msg in live_frames(&live.id, rev, reset, items) {
                 if out.send(msg).await.is_err() {
                     return;
                 }
@@ -809,15 +795,14 @@ async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<S
     }
 }
 
-/// A chat's items as `ChatLive` frames that each fit in a frame (a long chat's branch is more
-/// than one holds, and a frame too big is dropped): the first carries `reset` and the siblings,
-/// the rest carry on from it. A tool's output too big for a frame by itself is cut.
+/// A chat's items as `ChatLive` frames that each fit in a frame (a long chat is more than one
+/// holds, and a frame too big is dropped): the first carries `reset`, the rest carry on from
+/// it. A tool's output too big for a frame by itself is cut.
 fn live_frames(
     chat: &str,
     rev: u64,
     reset: bool,
     items: Vec<ptyro_core::chat::ChatItem>,
-    siblings: Vec<ptyro_core::chats::ChatSiblings>,
 ) -> Vec<ServerMsg> {
     const BUDGET: usize = ptyro_protocol::MAX_FRAME / 2;
     let size = |i: &ptyro_core::chat::ChatItem| serde_json::to_vec(i).map_or(0, |v| v.len());
@@ -841,7 +826,6 @@ fn live_frames(
     }
     // The last (or only, maybe empty: a reset to nothing) frame.
     frames.push(cur);
-    let mut siblings = Some(siblings);
     frames
         .into_iter()
         .enumerate()
@@ -850,7 +834,6 @@ fn live_frames(
             rev,
             reset: reset && i == 0,
             items,
-            siblings: if i == 0 { siblings.take().unwrap_or_default() } else { Vec::new() },
         })
         .collect()
 }
@@ -993,7 +976,7 @@ mod tests {
             files: Vec::new(),
         };
         items.push(ChatItem::new("t", tool));
-        let frames = live_frames("c1", 7, true, items, Vec::new());
+        let frames = live_frames("c1", 7, true, items);
         assert!(frames.len() >= 4, "{}", frames.len());
         let mut ids = Vec::new();
         for (i, f) in frames.iter().enumerate() {
@@ -1010,13 +993,8 @@ mod tests {
             1,
             true,
             vec![ChatItem::new("n", ChatBody::User { text: "hi".into() })],
-            Vec::new(),
         );
         assert_eq!(one.len(), 1);
-        assert_eq!(
-            live_frames("c1", 1, true, Vec::new(), Vec::new()).len(),
-            1,
-            "an empty reset still resets"
-        );
+        assert_eq!(live_frames("c1", 1, true, Vec::new()).len(), 1, "an empty reset still resets");
     }
 }

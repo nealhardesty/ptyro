@@ -100,7 +100,7 @@ async fn chats(c: &Client) -> Vec<ChatInfo> {
         limit: None,
     };
     match c.request(req).await.unwrap() {
-        Reply::Chats { chats } => chats,
+        Reply::Chats { chats, .. } => chats,
         other => panic!("{other:?}"),
     }
 }
@@ -109,13 +109,10 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
     let req = Request::ChatNew {
         workspace: workspace.map(Into::into),
         agent: None,
-        preset: None,
         title: None,
         prompt: Some(prompt.into()),
         incognito: None,
         folders: Vec::new(),
-        compare: Vec::new(),
-        confirmed: false,
     };
     match c.request(req).await.unwrap() {
         Reply::Chat { info } => info,
@@ -124,10 +121,7 @@ async fn new_chat(c: &Client, workspace: Option<&str>, prompt: &str) -> ChatInfo
 }
 
 async fn answers(c: &Client, chat: &str) -> Vec<String> {
-    match c
-        .request(Request::ChatRead { chat: chat.into(), all: false, from: None, limit: None })
-        .await
-    {
+    match c.request(Request::ChatRead { chat: chat.into(), from: None, limit: None }).await {
         Ok(Reply::ChatTranscript { nodes, .. }) => nodes
             .into_iter()
             .filter_map(|n| match n.body {
@@ -198,7 +192,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
         archived: false,
         limit: None,
     };
-    let Reply::Chats { chats: only } = here.request(req).await.unwrap() else { panic!() };
+    let Reply::Chats { chats: only, .. } = here.request(req).await.unwrap() else { panic!() };
     assert_eq!(only.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), [theirs.id.as_str()]);
 
     // Sent from here (by its id), answered there; read from here.
@@ -214,7 +208,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
     let addr = format!("laptop2:c:{}", theirs.handle);
     for a in [addr.as_str(), theirs.handle.as_str()] {
         let r = here
-            .request(Request::ChatRead { chat: a.into(), all: false, from: None, limit: None })
+            .request(Request::ChatRead { chat: a.into(), from: None, limit: None })
             .await
             .unwrap();
         assert!(matches!(r, Reply::ChatTranscript { info, .. } if info.id == theirs.id), "{a}");
@@ -277,8 +271,6 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             pinned: Some(true),
             archived: None,
             agent: None,
-            preset: None,
-            keep: None,
             folders: None,
             confirmed: false,
             auto_title: false,
@@ -306,8 +298,6 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
             pinned: None,
             archived: Some(true),
             agent: None,
-            preset: None,
-            keep: None,
             folders: None,
             confirmed: false,
             auto_title: false,
@@ -325,7 +315,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
         archived: true,
         limit: Some(1),
     };
-    let Reply::Chats { chats: archived } = here.request(req).await.unwrap() else { panic!() };
+    let Reply::Chats { chats: archived, .. } = here.request(req).await.unwrap() else { panic!() };
     assert_eq!(archived.len(), 1, "the limit holds across machines");
     here.request(Request::ChatUpdate {
         chat: theirs.id.clone(),
@@ -333,8 +323,6 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
         pinned: None,
         archived: Some(false),
         agent: None,
-        preset: None,
-        keep: None,
         folders: None,
         confirmed: false,
         auto_title: false,
@@ -386,10 +374,7 @@ async fn another_machines_chats_are_listed_used_and_made_from_here() {
 
 /// The tool outputs of a chat's shown branch (what its agent's `sh` printed).
 async fn tool_output(c: &Client, chat: &str) -> String {
-    match c
-        .request(Request::ChatRead { chat: chat.into(), all: false, from: None, limit: None })
-        .await
-    {
+    match c.request(Request::ChatRead { chat: chat.into(), from: None, limit: None }).await {
         Ok(Reply::ChatTranscript { nodes, .. }) => nodes
             .into_iter()
             .filter_map(|n| match n.body {
@@ -412,13 +397,10 @@ async fn a_chats_history_tools_search_and_read_linked_machines_within_its_scope(
     let req = Request::ChatNew {
         workspace: None,
         agent: Some("claude@work".into()),
-        preset: None,
         title: None,
         prompt: Some("zebra stripes".into()),
         incognito: None,
         folders: Vec::new(),
-        compare: Vec::new(),
-        confirmed: true,
     };
     let Reply::Chat { info: work } = there.request(req).await.unwrap() else { panic!() };
     assert_eq!(work.profile, "work");

@@ -46,8 +46,8 @@ action by name.
 | `a` | jump to the session that needs you most (blocked first) |
 | `p` | peek at the session that needs you most (else this one) and answer it without switching |
 | `b` | broadcast one prompt into every session marked with `Space` in the sidebar |
-| `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
-| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` rename (its title), `e` export, `A` archived ones, `i` only the imported ones (again: every chat), `I` imports your agents' own histories (asks first, and takes `chat import`'s flags: `codex --since 30d --profile work --dry-run`; ⏎ alone imports everything) |
+| `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent (SPEC §22) |
+| `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` rename (its title), `e` export, `A` archived ones |
 | `C-g` | search every chat: the chat list, every workspace and machine, typing its search |
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
@@ -159,42 +159,38 @@ switches to the session; `Esc` closes peek.
 The chat view takes the place of the panes; the sidebar stays. Type and `⏎` to send
 (`Shift-⏎` or `Ctrl-J` for a new line), `PageUp`/`PageDown` (or the wheel) to scroll, `Ctrl-C`
 stops an answer being written (with none, it clears the draft), `Esc` goes back: to the chat list
-it was opened from, a side chat to its chat (closed this way it goes, unless kept). Each chat
+it was opened from. Each chat
 keeps its draft while you are elsewhere. On a permission card, with nothing typed, `a` allows,
 `A` always, `d` denies; any other letter is typed. `Ctrl-Q .` is the chat's menu: everything below
-that applies to it (a new chat's: its agent, tools, folder, incognito). While the chat (or the
+that applies to it (a new chat's: its agent, folder, incognito). While the chat (or the
 list) is shown, `Ctrl-Q ,` `x` `X` mean its title, archive and delete, never the session under it.
-The header says what the chat may use: `tools: read`, plus `best effort` where its agent can't
-enforce that by itself, `⚠ shell` for a preset with a shell (its row in CHATS shows `⚠` too), and
-its folders.
+A chat searches the web and reads the folders it was given; the header names its folders, and
+says `best effort` where its agent can't enforce that by itself.
 
 | Key | Does |
 |---|---|
-| `Alt-←` / `Alt-→` | where a retry, an edit or a compare made another branch (`‹ 2/3 ›`, `‹ 2/3 codex ›`): the other answers (or messages), in turn |
 | `Ctrl-F` | find in this chat; again: the next match; `Esc` clears it |
 | `Tab` or `Ctrl-I` | in a new chat, before its first message: incognito (nothing kept, it ends with its agent) |
-| `Ctrl-O` | in a new chat: pick the agent, its tools, then a folder it may read; in a chat: switch its agent |
+| `Ctrl-O` | in a new chat: pick the agent, then a folder it may read; in a chat: switch its agent |
 | `↑` / `↓` | in a draft of several lines: the line above / below |
 | `←` / `→`, `Home` / `End` or `Ctrl-A` / `Ctrl-E` | move in the draft (to the start or end of the cursor's line) |
 | `Ctrl-U` / `Ctrl-K` | delete to the start / the end of the cursor's line |
 | `Ctrl-W` / `⌫` / `Delete` | delete the word before the cursor / the character before / the one under it |
 | `@` then `↑`/`↓`, `Tab` or `⏎` | the chat's folders that match what follows the `@` (shown in the composer): choose one, put it in |
 
-Slash commands, typed into the composer: `/retry`, `/edit [text]` (the last message, or pick
-one), `/fork` (from the end or a message), `/side [question]`, `/keep`, `/branch`, `/agent NAME`,
-`/tools NAME` (none: the presets, each with what it lets a chat use), `/folder DIR` (one more
+Slash commands, typed into the composer: `/retry` (a new answer replaces the last one),
+`/edit [text]` (say your last message differently: it and its answer are replaced; only the last
+one), `/agent NAME`, `/folder DIR` (one more
 folder it may read; `/folder none` takes them away; in a new chat, before its first message, too),
 `/task [PROJECT] [--agent A] [--name N]` (an agent carries the chat out in a new worktree; it asks which project when it
-can't tell; `--agent` another agent than the chat's, `--name` the worktree's name), `/compare [AGENTS…] [question]` (several agents answer, each a branch named by its
-agent; with no question the last message again; in a new chat `/compare claude codex` (or `claude,codex@work`) sends its
-first message to each), `/pick` (keep the answer shown: its agent takes the next message), `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
+can't tell; `--agent` another agent than the chat's, `--name` the worktree's name), `/title TEXT`, `/search WORDS`, `/find QUESTION`, `/export`, `/incognito`, `/cite`
 (open a citation), `/help` (the list: ⏎ puts one in the composer). `/agent NAME` and `/title TEXT`
 work in a new chat too, before its first message. Each is also an action in the palette (`chat.*`).
 
 The chat list (`Ctrl-Q g`): `j`/`k` move, `⏎` (or a click) opens (a message hit: at that
 message), `/` searches (`⏎` opens what is selected), `m` new, `*` pin, `x` archive, `X` delete,
-`,` title, `f` fork, `e` export, `s` only the chats that need you, then working, unread, pinned,
-then all, `A` archived ones, `i` imported ones, `I` imports, `Tab` every workspace (again: back to
+`,` title, `e` export, `s` only the chats that need you, then working, unread, pinned,
+then all, `A` archived ones, `Tab` every workspace (again: back to
 the one it was opened for), `.` the menu, `Esc` closes. The selected chat shows its last question
 and answer under it.
 

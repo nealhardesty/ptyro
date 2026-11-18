@@ -130,16 +130,11 @@ pub fn needed(req: &Request) -> Scope {
         ChatList { .. }
         | ChatRead { .. }
         | ChatExport { .. }
-        | ChatSearch { .. }
-        | ChatPresets => Scope::Read,
+        | ChatSearch { .. } => Scope::Read,
         ChatNew { .. }
         | ChatTask { .. }
-        | ChatCompare { .. }
-        | ChatPick { .. }
         | ChatRetry { .. }
         | ChatEdit { .. }
-        | ChatBranch { .. }
-        | ChatFork { .. }
         | ChatFind { .. }
         | ChatSend { .. }
         | ChatAnswer { .. }
@@ -213,8 +208,6 @@ pub fn needed(req: &Request) -> Scope {
         ShellSplit { .. } | ShellJoin { .. } | ShellLayout { .. } => Scope::Full,
         // Everything else changes the machine, the config, the daemon or who may talk to it.
         MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } | MachineUpdate { .. } | SelfUpdate => Scope::Full,
-        // It copies coding history into chat.db, as `[chat] import` (a setting: full) does.
-        ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
         Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,

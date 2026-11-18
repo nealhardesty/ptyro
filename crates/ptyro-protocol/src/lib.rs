@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 46 };
+pub const PROTO: Version = Version { major: 1, minor: 47 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -113,6 +113,12 @@ pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
     ("report", "`ptyro report`"),
     ("replay", "replaying recordings"),
     ("export", "exporting recordings"),
+    ("chat_branch", "chat branches"),
+    ("chat_fork", "forks and side chats"),
+    ("chat_presets", "chat tool presets"),
+    ("chat_compare", "comparing agents' answers"),
+    ("chat_pick", "comparing agents' answers"),
+    ("chat_import", "importing the agents' own histories"),
 ];
 
 /// A checkpoint of a session's worktree, taken after an agent turn (SPEC §15.3).
@@ -825,9 +831,6 @@ pub enum Request {
         /// `agent` or `agent@profile`; default `[chat] agent`.
         #[serde(default)]
         agent: Option<String>,
-        /// A tool preset; default `[chat] preset`.
-        #[serde(default)]
-        preset: Option<String>,
         #[serde(default)]
         title: Option<String>,
         #[serde(default)]
@@ -836,17 +839,9 @@ pub enum Request {
         /// as `[chat] incognito` says; `Some(false)` keeps it even when that is on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         incognito: Option<bool>,
-        /// Folders it may read (1.24, SPEC §22.5): with no `preset`, the chat then reads.
+        /// Folders it may read (1.24, SPEC §22.5).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         folders: Vec<String>,
-        /// Ask these agents the first message, each answer a branch (1.24, CHAT5, as
-        /// `ChatCompare`): `agent` or `agent@profile`, two or more.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        compare: Vec<String>,
-        /// The person agreed to what the daemon asked (`NeedsConfirmation`): a compare agent
-        /// under another profile than the chat's (SPEC §22.7).
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        confirmed: bool,
     },
     /// Chats, pinned first then the newest: one workspace's, or every one's with `all`.
     ChatList {
@@ -861,11 +856,9 @@ pub enum Request {
         #[serde(default)]
         limit: Option<u32>,
     },
-    /// A chat and its shown branch (every node of every branch with `all`).
+    /// A chat and its conversation.
     ChatRead {
         chat: String,
-        #[serde(default)]
-        all: bool,
         /// Only part of them, oldest first (1.25): from the `from`-th node (0: the first), at
         /// most `limit` (a chat too big for one reply is read so; fewer than `limit` is the end).
         #[serde(default)]
@@ -878,39 +871,19 @@ pub enum Request {
         chat: String,
         text: String,
     },
-    /// Ask again: a new answer to the message `node` answers (a node of that answer, or the
-    /// message; default the last), beside the old one (1.23, SPEC §22.7).
+    /// Ask again: a new answer replaces the last one (1.47, SPEC §22.7). `node`, when given, is
+    /// the last message or a node of its answer: an earlier one is refused.
     ChatRetry {
         chat: String,
         #[serde(default)]
         node: Option<String>,
     },
-    /// Say it differently: `text` beside the person's message `node`, answered afresh; the old
-    /// one and its answers stay as a branch.
+    /// Say it differently: `text` replaces the person's last message `node` (and its answer),
+    /// answered afresh (1.47). An earlier message is refused.
     ChatEdit {
         chat: String,
         node: String,
         text: String,
-    },
-    /// Show another branch: the one through `to` (its newest tip).
-    ChatBranch {
-        chat: String,
-        to: String,
-    },
-    /// A new chat from this one's branch up to `node` (default: all of it). `side`: a side chat
-    /// that reads this one and never writes back, gone when closed unless kept.
-    ChatFork {
-        chat: String,
-        #[serde(default)]
-        node: Option<String>,
-        #[serde(default)]
-        agent: Option<String>,
-        #[serde(default)]
-        side: bool,
-        /// The person agreed to carry it on under another profile than the chat's (1.25): a
-        /// bare agent name is the chat's own profile's, and another one asks first.
-        #[serde(default)]
-        confirmed: bool,
     },
     /// Search every chat's messages and titles (SPEC §22.10). `query` takes words, `"phrases"`,
     /// `-word`, `prefix*`, `agent:`, `since:`, `workspace:`. `machines`: linked machines too.
@@ -957,7 +930,7 @@ pub enum Request {
     ChatStop {
         chat: String,
     },
-    /// Change a chat: its title (empty: none), pin, archive, agent, preset.
+    /// Change a chat: its title (empty: none), pin, archive, agent, folders.
     ChatUpdate {
         chat: String,
         #[serde(default)]
@@ -968,15 +941,11 @@ pub enum Request {
         archived: Option<bool>,
         #[serde(default)]
         agent: Option<String>,
-        #[serde(default)]
-        preset: Option<String>,
-        /// Keep a side chat: it becomes an ordinary fork (1.23).
-        #[serde(default)]
-        keep: Option<bool>,
         /// The folders it may read, all of them (empty: none; 1.24).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         folders: Option<Vec<String>>,
-        /// As `ChatFork.confirmed`, for `agent` (1.25).
+        /// The person agreed to switch to an agent under another profile than the chat's
+        /// (`NeedsConfirmation`, 1.25).
         #[serde(default)]
         confirmed: bool,
         /// A new automatic title instead of `title` (1.38). Before 1.38 an empty `title` asked
@@ -991,14 +960,14 @@ pub enum Request {
         #[serde(default)]
         confirmed: bool,
     },
-    /// The shown branch as Markdown (`md`) or JSON (`json`).
+    /// The conversation as Markdown (`md`) or JSON (`json`).
     ChatExport {
         chat: String,
         #[serde(default)]
         format: String,
     },
     /// Make it a task (1.24, SPEC §22.7): an agent session in a new worktree of `project`, its
-    /// first prompt the chat's shown branch and last answer. Answered like `WorktreeNew`.
+    /// first prompt the chat's conversation and last answer. Answered like `WorktreeNew`.
     ChatTask {
         chat: String,
         /// Default: the only project of the chat's workspace.
@@ -1014,45 +983,6 @@ pub enum Request {
         /// under another profile than the chat's, or a profile guard (SPEC §22.7).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         confirmed: bool,
-    },
-    /// The tool presets, each with what it lets a chat use (1.24).
-    ChatPresets,
-    /// Ask several agents one message (1.24, CHAT5, SPEC §22.7): each answer is a branch under
-    /// it, labelled with its agent; the chat's own agent answers in its own conversation, the
-    /// others each in a helper of their own. `text`: a new message; none: the last one again,
-    /// for the agents that haven't answered it. `agents`: `agent` or `agent@profile`; empty:
-    /// every installed agent that can chat. Answered at once; `ChatInfo.comparing` says how far.
-    ChatCompare {
-        chat: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        agents: Vec<String>,
-        #[serde(default)]
-        text: Option<String>,
-        /// The person agreed to ask an agent under another profile than the chat's: the branch
-        /// goes to that profile's account (`NeedsConfirmation`, SPEC §22.7).
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        confirmed: bool,
-    },
-    /// Keep an answer (1.24, CHAT5): show the branch through `node` (default: the one shown)
-    /// and switch the chat to the agent that wrote it, so the next message goes there.
-    ChatPick {
-        chat: String,
-        #[serde(default)]
-        node: Option<String>,
-    },
-    /// Import the agents' own histories as chats (1.24, CHAT5, SPEC §22.10): sessions new or
-    /// grown since the last import. `agent`: one of them (default all); `profile`: one profile's
-    /// (default every profile); `since`: sessions touched in that long (`30d`); `dry_run`: count
-    /// only.
-    ChatImport {
-        #[serde(default)]
-        agent: Option<String>,
-        #[serde(default)]
-        profile: Option<String>,
-        #[serde(default)]
-        since: Option<String>,
-        #[serde(default)]
-        dry_run: bool,
     },
 }
 
@@ -1461,28 +1391,19 @@ pub enum Reply {
     },
     Chats {
         chats: Vec<ChatInfo>,
+        /// A new chat is incognito unless the person says otherwise (`[chat] incognito`; 1.47,
+        /// before in `ChatPresets`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        incognito: bool,
     },
-    /// A chat and nodes of it, oldest first, with where the shown branch has others (1.23).
+    /// A chat and nodes of it, oldest first (1.23).
     ChatTranscript {
         info: ChatInfo,
         nodes: Vec<ChatNode>,
-        #[serde(default)]
-        siblings: Vec<ptyro_core::chats::ChatSiblings>,
     },
     /// Search hits, best first (1.23).
     ChatHits {
         hits: Vec<ptyro_core::chats::ChatHit>,
-    },
-    /// The tool presets (1.24).
-    /// What `ChatImport` did (or, dry, would do).
-    ChatImported {
-        report: ptyro_core::chats::ImportReport,
-    },
-    ChatPresets {
-        presets: Vec<ptyro_core::chats::ChatPreset>,
-        /// A new chat is incognito unless the person says otherwise (`[chat] incognito`, 1.25).
-        #[serde(default)]
-        incognito: bool,
     },
     Devices {
         devices: Vec<DeviceInfo>,
@@ -1616,7 +1537,7 @@ pub enum ClientMsg {
         terminal_focused: bool,
     },
     Ping,
-    /// Follow a chat (1.22): its shown branch, then each change (`ServerMsg::ChatLive`). Being
+    /// Follow a chat (1.22): its conversation, then each change (`ServerMsg::ChatLive`). Being
     /// shown clears its unread count.
     ChatSubscribe {
         chat: String,
@@ -1842,8 +1763,9 @@ pub enum ServerMsg {
         reason: String,
     },
     Pong,
-    /// A followed chat (1.22): its shown branch on subscribe and when the branch changes
-    /// (`reset`), then the items that changed. Item ids are node ids.
+    /// A followed chat (1.22): its conversation on subscribe and when it is reloaded (`reset`:
+    /// a retry or an edit replaced the last turn), then the items that changed. Item ids are
+    /// node ids.
     ChatLive {
         /// The chat's full id.
         chat: String,
@@ -1851,9 +1773,6 @@ pub enum ServerMsg {
         #[serde(default)]
         reset: bool,
         items: Vec<ptyro_core::chat::ChatItem>,
-        /// Where the shown branch has others (with `reset`; 1.23).
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        siblings: Vec<ptyro_core::chats::ChatSiblings>,
     },
 }
 

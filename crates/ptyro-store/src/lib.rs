@@ -371,9 +371,9 @@ fn opt_ms(v: Option<i64>) -> Option<u64> {
 /// What the schema version of the database at `path` allows, decided before anything is written to
 /// it: a database from a newer ptyro is refused untouched ([`StoreError::TooNew`]); one from an
 /// older ptyro is copied to `<path>.bak-v<its version>` before its migrations run (the two
-/// newest copies are kept), so a bad migration never costs the history.
-fn prepare(path: &Path) -> Result<()> {
-    let known = MIGRATIONS.len();
+/// newest copies are kept), so a bad migration never costs the history. `known`: how many
+/// migrations its schema has (`chat.db` has its own; the copy is private, as the file is).
+pub(crate) fn prepare(path: &Path, known: usize) -> Result<()> {
     let Ok(conn) = Connection::open_with_flags(
         path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -398,6 +398,7 @@ fn prepare(path: &Path) -> Result<()> {
                 path.display()
             );
         }
+        let _ = ptyro_core::os::make_private(&copy);
         prune_backups(path, &name);
     }
     Ok(())
@@ -424,7 +425,7 @@ fn prune_backups(path: &Path, name: &str) {
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        prepare(path)?;
+        prepare(path, MIGRATIONS.len())?;
         Self::start(Connection::open(path)?)
     }
 

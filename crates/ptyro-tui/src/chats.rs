@@ -5,7 +5,7 @@
 //! list's) are the key map's `chat` and `chatlist` tables.
 
 use ptyro_core::chat::{ChatBody, ChatItem};
-use ptyro_core::chats::{ChatHit, ChatInfo, ChatSiblings};
+use ptyro_core::chats::{ChatHit, ChatInfo};
 use ptyro_core::input::{KeyCode, KeyEvent, KeyKind, Mods};
 use ptyro_core::status::AgentStatus;
 use ptyro_protocol::{ClientMsg, Request};
@@ -37,8 +37,6 @@ pub struct ChatList {
     pub typing: bool,
     /// Archived chats instead (fetched when asked for).
     pub archived: Option<Vec<ChatInfo>>,
-    /// Only chats imported from the agents' own histories (`i`; `chat ls --imported`).
-    pub imported: bool,
     /// Only the chats in this state (`s` steps through them).
     pub state: StateFilter,
     /// Messages that match the query (SPEC §22.10), from every machine, best first.
@@ -108,35 +106,30 @@ pub struct ChatViewState {
     pub draft: String,
     /// The composer's cursor, in characters (past the end: at the end).
     pub at: usize,
-    /// A new chat's agent and preset, picked with `C-o` (or `/agent`, `/tools`).
+    /// A new chat's agent, picked with `C-o` (or `/agent`).
     pub agent: Option<String>,
-    pub preset: Option<String>,
     /// A new chat's folders (`/folder DIR` before the first message).
     pub folders: Vec<String>,
     /// A new chat's title (`/title TEXT` before the first message).
     pub title: Option<String>,
-    /// Where Esc goes back to: the list it was opened from, or the chat a side chat is of.
+    /// Where Esc goes back to: the list it was opened from.
     pub back: Option<Box<ChatPanel>>,
     /// A message is on its way (a new chat being made, or one sent): another waits for it.
     pub sending: bool,
     /// A new chat that keeps nothing (`C-i` flips it before the first message).
     pub incognito: bool,
-    /// Where the shown branch has others.
-    pub siblings: Vec<ChatSiblings>,
     /// Find in the chat: the matching messages, and which is shown.
     pub found: Vec<String>,
     pub found_at: usize,
-    /// Show this message once the branch arrives (a search hit, a citation).
+    /// Show this message once the chat arrives (a search hit, a citation).
     pub focus: Option<String>,
-    /// A new chat's first message goes to these agents, each answer a branch (`/compare A B`).
-    pub compare: Vec<String>,
     /// Its transcript has arrived (pickers of its messages wait for it).
     pub loaded: bool,
-    /// An action that waits for the transcript (a fork asked for from the chat's row).
+    /// An action that waits for the transcript (an edit asked for from the chat's row).
     pub then: Option<&'static str>,
     /// Its machine's going offline is said once, until it is back.
     pub offline_said: bool,
-    /// `C-o` in a new chat: the agent, then its tools, then a folder.
+    /// `C-o` in a new chat: the agent, then a folder.
     pub choosing: bool,
     /// Which of an `@`'s folders Tab or ⏎ puts in.
     pub at_pick: usize,
@@ -154,18 +147,15 @@ impl ChatViewState {
             draft: String::new(),
             at: 0,
             agent: None,
-            preset: None,
             folders: Vec::new(),
             at_pick: 0,
             title: None,
             back: None,
             sending: false,
             incognito: false,
-            siblings: Vec::new(),
             found: Vec::new(),
             found_at: 0,
             focus: None,
-            compare: Vec::new(),
             loaded: false,
             then: None,
             offline_said: false,
@@ -197,9 +187,6 @@ impl ChatViewState {
 /// New chats' tokens (see [`ChatViewState::token`]).
 static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-/// Why an imported chat isn't retried or edited (the daemon refuses it too).
-const IMPORTED_AS_WRITTEN: &str = "an imported chat stays as its agent wrote it: send it a message (it continues as a fork), then retry or edit there";
-
 /// The day group of a chat in the list.
 fn group(last_ms: u64, now: u64) -> &'static str {
     let day = 86_400_000;
@@ -221,7 +208,6 @@ impl ChatList {
             query: String::new(),
             typing: false,
             archived: None,
-            imported: false,
             state: StateFilter::All,
             hits: Vec::new(),
             hits_for: String::new(),
@@ -285,15 +271,9 @@ fn working(c: &ChatInfo) -> bool {
 
 /// The composer's slash commands (`/help` lists them; picking one starts it in the composer).
 const SLASH: &[(&str, &str)] = &[
-    ("/retry", "ask again: the old answer stays as a branch"),
-    ("/edit", "say your last message differently (/edit TEXT)"),
-    ("/compare", "several agents answer (/compare AGENTS… [question])"),
-    ("/pick", "keep the answer shown: its agent takes the next message"),
-    ("/fork", "a new chat from here or from any message"),
-    ("/side", "ask about this chat without changing it (/side QUESTION)"),
-    ("/keep", "keep this side chat as a chat of its own"),
+    ("/retry", "ask again: a new answer replaces the last one"),
+    ("/edit", "say your last message differently: it and its answer are replaced (/edit TEXT)"),
     ("/agent", "switch agent (/agent NAME); a new chat: its agent"),
-    ("/tools", "what it may use (/tools NAME)"),
     ("/folder", "a folder it may read (/folder DIR, /folder none)"),
     ("/task", "an agent carries it out in a new worktree ([PROJECT] [--agent A] [--name N])"),
     ("/title", "its title (/title TEXT)"),
@@ -301,7 +281,6 @@ const SLASH: &[(&str, &str)] = &[
     ("/find", "ask your chats a question (/find QUESTION)"),
     ("/export", "write it out as Markdown"),
     ("/incognito", "a new chat that keeps nothing"),
-    ("/branch", "show another branch"),
     ("/cite", "open a citation of its answers"),
 ];
 
@@ -338,13 +317,10 @@ impl App {
         );
     }
 
-    /// Whether a chat's preset reads its folders, where this TUI can tell: `None` for another
-    /// machine's chat, or a preset this config doesn't define (that machine's config says).
-    pub(crate) fn chat_reads(&self, c: &ChatInfo) -> Option<bool> {
-        if c.machine.is_some() {
-            return None;
-        }
-        self.config.chat.preset(&c.tools).map(|t| t.read)
+    /// Whether a chat reads the folders it is given: every chat does, but one made with no
+    /// tools before 2026-11-17 (SPEC §22.5).
+    pub(crate) fn chat_reads(&self, c: &ChatInfo) -> bool {
+        c.tools != "none"
     }
 
     /// A chat by id: listed, or held by the chat panel (archived, or opened from the archive).
@@ -472,15 +448,8 @@ impl App {
         }
     }
 
-    /// A followed chat's items (with a reset: where its branch has others).
-    pub(crate) fn chat_live(
-        &mut self,
-        chat: String,
-        rev: u64,
-        reset: bool,
-        items: Vec<ChatItem>,
-        siblings: Vec<ChatSiblings>,
-    ) {
+    /// A followed chat's items (with a reset: the whole conversation).
+    pub(crate) fn chat_live(&mut self, chat: String, rev: u64, reset: bool, items: Vec<ChatItem>) {
         let mut then = None;
         if let Some(ChatPanel::View(v)) = &mut self.chat_panel
             && v.id.as_deref() == Some(chat.as_str())
@@ -490,11 +459,7 @@ impl App {
             v.view.apply(rev, reset, items, draft);
             if reset {
                 v.loaded = true;
-                v.view.set_marks(siblings.iter().map(|s| {
-                    (s.node.clone(), (s.at, s.of, s.label().unwrap_or_default().to_owned()))
-                }));
-                v.siblings = siblings;
-                // Another branch: find-in-chat's matches are this one's.
+                // Reloaded (a retry, an edit): find-in-chat's matches are this one's.
                 if let Some(q) = v.view.highlight.clone() {
                     v.found = v.view.find(&q);
                     v.found_at = 0;
@@ -521,14 +486,8 @@ impl App {
         }
     }
 
-    /// Open a chat at a message (a search hit, a citation): its branch is shown first.
+    /// Open a chat at a message (a search hit, a citation).
     pub(crate) fn open_chat_at(&mut self, chat: &str, node: Option<&str>) {
-        if let Some(n) = node {
-            self.request(
-                Pending::Done(String::new()),
-                Request::ChatBranch { chat: chat.to_owned(), to: n.to_owned() },
-            );
-        }
         self.open_chat(chat);
         if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
             v.focus = node.map(str::to_owned);
@@ -553,11 +512,6 @@ impl App {
                 Some(s) => format!("type a message · ⏎ sends · {s} stops an answer"),
                 None => "type a message · ⏎ sends".into(),
             },
-            branches: [k("chat.branch_prev"), k("chat.branch_next")]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" "),
         });
     }
 
@@ -616,7 +570,6 @@ impl App {
             return self.chats_off_toast();
         }
         let info = self.chat(id).cloned();
-        let side_of = info.as_ref().and_then(|c| c.side_of.clone());
         let mut same = None;
         let back = match self.chat_panel.take() {
             Some(ChatPanel::List(l)) => Some(Box::new(ChatPanel::List(l))),
@@ -625,13 +578,6 @@ impl App {
             Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id) => {
                 same = Some(v);
                 None
-            }
-            // A side chat opened from its chat: Esc goes back there.
-            Some(ChatPanel::View(v)) if side_of.is_some() && v.id == side_of => {
-                if let Some(p) = &v.id {
-                    self.send(ClientMsg::ChatUnsubscribe { chat: p.clone() });
-                }
-                Some(Box::new(ChatPanel::View(v)))
             }
             other => {
                 self.let_go(other);
@@ -680,8 +626,7 @@ impl App {
         self.sidebar_zoom = false;
     }
 
-    /// Stop following the chat shown, if one is (a side chat not kept goes with it); its draft
-    /// waits for it to open again.
+    /// Stop following the chat shown, if one is; its draft waits for it to open again.
     fn leave_chat(&mut self) {
         let p = self.chat_panel.take();
         self.let_go(p);
@@ -709,18 +654,15 @@ impl App {
         }
     }
 
-    /// Leave the chat shown for where it was opened from: the list, or the chat a side chat
-    /// is of; else nothing.
+    /// Leave the chat shown for where it was opened from: the list; else nothing.
     fn leave_view(&mut self, v: ChatViewState) {
         self.stash(&v);
         if let Some(id) = &v.id {
             self.left_chat(id);
         }
-        let parent = v.info.as_ref().and_then(|c| c.side_of.clone());
-        match (v.back, parent) {
-            (Some(b), _) => self.chat_back(*b),
-            (None, Some(p)) => self.open_chat(&p),
-            (None, None) => self.chat_panel = None,
+        match v.back {
+            Some(b) => self.chat_back(*b),
+            None => self.chat_panel = None,
         }
         self.dirty = true;
     }
@@ -737,26 +679,20 @@ impl App {
         self.preview_selected();
     }
 
-    /// A chat's view was left: stop following it; a side chat goes, unless kept (SPEC §22.7).
+    /// A chat's view was left: stop following it.
     fn left_chat(&mut self, id: &str) {
         self.send(ClientMsg::ChatUnsubscribe { chat: id.to_owned() });
-        if self.chat(id).is_some_and(|c| c.side_of.is_some()) {
-            self.request(
-                Pending::Done("side chat closed".into()),
-                Request::ChatDelete { chat: id.to_owned(), confirmed: true },
-            );
-        }
     }
 
     /// Put the chat (or the list) shown aside, as it is (its draft too), for `session.last`. It
-    /// stays followed, so the daemon doesn't take a side chat put aside for one nobody has.
+    /// stays followed.
     pub(crate) fn set_chat_aside(&mut self) {
         self.drop_chat_aside();
         self.chat_aside = self.chat_panel.take();
         self.dirty = true;
     }
 
-    /// No way back to the chat put aside: it is left (a side chat goes, unless kept).
+    /// No way back to the chat put aside: it is left.
     pub(crate) fn drop_chat_aside(&mut self) {
         let p = self.chat_aside.take();
         self.let_go(p);
@@ -817,7 +753,7 @@ impl App {
         }
     }
 
-    /// A chat made or found for the person (a fork, a side chat, an answer to `/find`): shown
+    /// A chat made or found for the person (an answer to `/find`): shown
     /// at `node` if what asked for it (`origin`) still is, else offered, so it never takes the
     /// place of what they went on to; true when shown.
     pub(crate) fn chat_ready(&mut self, info: ChatInfo, origin: &str, node: Option<&str>) -> bool {
@@ -888,15 +824,10 @@ impl App {
                 }
                 return self.open_chat_list(Some(self.chat_workspace()));
             }
-            "chat.import" => {
-                // It copies coding history into chat.db: asked first (SPEC §22.10), with every
-                // flag of `chat import` on the form.
-                return self.open_chat_import_form();
+            "chat.list_search" | "chat.list_all" | "chat.list_archived" | "chat.list_state" => {
+                return self.chat_list_action(action);
             }
-            "chat.list_search" | "chat.list_all" | "chat.list_archived" | "chat.list_imported"
-            | "chat.list_state" => return self.chat_list_action(action),
-            "chat.allow" | "chat.always" | "chat.deny" | "chat.branch_prev"
-            | "chat.branch_next" | "chat.page_up" | "chat.page_down" => {
+            "chat.allow" | "chat.always" | "chat.deny" | "chat.page_up" | "chat.page_down" => {
                 return self.chat_view_action(action);
             }
             _ => {}
@@ -910,18 +841,14 @@ impl App {
             pinned,
             archived,
             agent: None,
-            preset: None,
-            keep: None,
             folders: None,
             confirmed: false,
             auto_title: false,
         };
-        // A picker of the chat's messages (or branches) needs them: the chat opens first.
-        let wants_transcript =
-            matches!(action, "chat.edit" | "chat.fork" | "chat.branch" | "chat.cite");
+        // Its last message, or its citations, are in its transcript: the chat opens first.
+        let wants_transcript = matches!(action, "chat.edit" | "chat.cite");
         let loaded = matches!(&self.chat_panel, Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id.as_str()) && v.loaded);
-        let imported = info.as_ref().is_some_and(|c| c.source.is_some());
-        if wants_transcript && !loaded && !(imported && action == "chat.edit") {
+        if wants_transcript && !loaded {
             self.open_chat(&id);
             if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
                 v.then = crate::keymap::spec(action).map(|s| s.id);
@@ -981,7 +908,6 @@ impl App {
                 });
             }
             "chat.agent" => self.pick_chat_agent(Some(id)),
-            "chat.preset" => self.pick_chat_preset(Some(id)),
             "chat.folder" => self.ask_chat_folder(Some(id)),
             "chat.task" => self.chat_task(id, TaskArgs::default()),
             "chat.export" => {
@@ -1006,70 +932,11 @@ impl App {
                 }
                 self.request(Pending::Done("stopped".into()), Request::ChatStop { chat: id })
             }
-            "chat.retry" | "chat.edit" if imported => self.toast(IMPORTED_AS_WRITTEN),
             "chat.retry" => self.request(
-                Pending::Done("asked again: the old answer stays as a branch".into()),
+                Pending::Done("asked again: the new answer replaces the last one".into()),
                 Request::ChatRetry { chat: id, node: None },
             ),
-            "chat.edit" => self.pick_message(Purpose::ChatEditPick, "Edit which message?"),
-            "chat.fork" => self.pick_message(Purpose::ChatForkAt, "Fork from where?"),
-            "chat.side" => self.request(
-                Pending::ChatOpen(self.chat_shown_key()),
-                Request::ChatFork {
-                    chat: id,
-                    node: None,
-                    agent: None,
-                    side: true,
-                    confirmed: false,
-                },
-            ),
-            "chat.keep" => {
-                if info.as_ref().is_some_and(|c| c.side_of.is_some()) {
-                    // Kept at once here, so leaving before the daemon's word doesn't drop it.
-                    if let Some(c) = self.chat_list.iter_mut().find(|c| c.id == id) {
-                        c.side_of = None;
-                    }
-                    if let Some(ChatPanel::View(v)) = &mut self.chat_panel
-                        && let Some(c) = &mut v.info
-                        && c.id == id
-                    {
-                        c.side_of = None;
-                    }
-                    self.request(
-                        Pending::Done("kept: it is a chat of its own now".into()),
-                        Request::ChatUpdate {
-                            chat: id,
-                            title: None,
-                            pinned: None,
-                            archived: None,
-                            agent: None,
-                            preset: None,
-                            keep: Some(true),
-                            folders: None,
-                            confirmed: false,
-                            auto_title: false,
-                        },
-                    );
-                } else {
-                    self.toast("not a side chat: nothing to keep");
-                }
-            }
-            "chat.branch" => self.pick_branch(),
-            "chat.compare" => {
-                if imported {
-                    return self.toast(
-                        "an imported chat stays as its agent wrote it: send it a message (it continues as a fork), then compare there",
-                    );
-                }
-                self.overlay = Some(Overlay::Prompt {
-                    title: "Compare: which agents answer the last message again? (space-separated; empty: every installed one)".into(),
-                    text: String::new(),
-                    kind: PromptKind::ChatCompare(id),
-                });
-            }
-            "chat.pick" => {
-                self.request(Pending::ChatPicked, Request::ChatPick { chat: id, node: None })
-            }
+            "chat.edit" => self.edit_last_message(),
             "chat.find_in" => {
                 // Again, with matches shown: the next one.
                 if let Some(ChatPanel::View(v)) = &mut self.chat_panel
@@ -1107,7 +974,6 @@ impl App {
                 }
                 self.pick_chat_agent(None)
             }
-            "chat.preset" if new => self.pick_chat_preset(None),
             "chat.folder" if new => self.ask_chat_folder(None),
             "chat.stop" if new => {
                 if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
@@ -1119,7 +985,7 @@ impl App {
         }
     }
 
-    /// The chat view's own actions: a permission card answered, branches flipped, scrolling.
+    /// The chat view's own actions: a permission card answered, scrolling.
     fn chat_view_action(&mut self, action: &str) {
         let Some(ChatPanel::View(v)) = &mut self.chat_panel else { return self.no_chat_toast() };
         match action {
@@ -1127,7 +993,7 @@ impl App {
                 let page = v.view.body_rows.get().saturating_sub(2).max(1) as isize;
                 v.view.scroll_by(if action == "chat.page_up" { page } else { -page });
             }
-            "chat.allow" | "chat.always" | "chat.deny" => {
+            _ => {
                 let Some(id) = v.id.clone().filter(|_| v.view.pending_permission()) else {
                     return self.toast("nothing to answer: no permission card is waiting");
                 };
@@ -1140,19 +1006,6 @@ impl App {
                 self.request(
                     Pending::Done(String::new()),
                     Request::ChatAnswer { chat: id, decision: d, node },
-                );
-            }
-            _ => {
-                // The newest branch point's other answers (or messages), in turn.
-                let (Some(id), Some(s)) = (v.id.clone(), v.siblings.last().cloned()) else {
-                    return self.toast("one branch only: retry an answer (/retry) or edit a message (/edit) to make another");
-                };
-                let at = s.at as usize - 1;
-                let n = s.ids.len();
-                let to = if action == "chat.branch_prev" { (at + n - 1) % n } else { (at + 1) % n };
-                self.request(
-                    Pending::Done(String::new()),
-                    Request::ChatBranch { chat: id, to: s.ids[to].clone() },
                 );
             }
         }
@@ -1183,7 +1036,6 @@ impl App {
                 }
                 rescope = true;
             }
-            "chat.list_imported" => l.imported = !l.imported,
             _ => {
                 l.state = l.state.next();
                 say = Some(match l.state {
@@ -1215,64 +1067,20 @@ impl App {
         self.dirty = true;
     }
 
-    /// The person's messages of the shown branch, newest first, to pick one (`purpose`).
-    /// (The view's own chat, which the caller opened: its messages are the ones offered.)
-    fn pick_message(&mut self, purpose: fn(String) -> Purpose, title: &str) {
+    /// `chat.edit`: the shown chat's last message of yours, to say differently (it and its
+    /// answer are replaced; an earlier one can't be edited).
+    fn edit_last_message(&mut self) {
         let Some(ChatPanel::View(v)) = &self.chat_panel else { return };
         let Some(chat) = v.id.clone() else { return self.toast("no message yet") };
-        let mut items: Vec<Item> = Vec::new();
-        if matches!(purpose(String::new()), Purpose::ChatForkAt(_)) {
-            items.push(Item {
-                label: "from the end".into(),
-                detail: "the whole conversation".into(),
-                key: None,
-                target: Target::Chat(String::new()),
-            });
-        }
-        for it in v.view.items.iter().rev() {
-            if let ChatBody::User { text } = &it.body {
-                items.push(Item {
-                    label: ptyro_core::chats::first_line_title(text),
-                    detail: crate::ui::ago(it.at_ms),
-                    key: None,
-                    target: Target::Chat(it.id.clone()),
-                });
-            }
-        }
-        if items.is_empty() {
-            return self.toast("no message yet");
-        }
-        self.overlay =
-            Some(Overlay::Picker { palette: Palette::new(title, items), purpose: purpose(chat) });
-    }
-
-    /// The branch points of the shown chat, each choice of each, to show another.
-    fn pick_branch(&mut self) {
-        let Some(ChatPanel::View(v)) = &self.chat_panel else { return };
-        let Some(chat) = v.id.clone() else { return self.toast("no message yet") };
-        let mut items = Vec::new();
-        for s in &v.siblings {
-            let named = s.label().is_some();
-            for (i, id) in s.ids.iter().enumerate() {
-                let here = i + 1 == s.at as usize;
-                let who = match s.agents.get(i) {
-                    Some(a) if named && !a.is_empty() => format!(" ({a})"),
-                    _ => String::new(),
-                };
-                items.push(Item {
-                    label: format!("{}/{}{who} at message {}", i + 1, s.of, short(&s.node)),
-                    detail: if here { "shown".into() } else { "show this branch".into() },
-                    key: None,
-                    target: Target::Chat(id.clone()),
-                });
-            }
-        }
-        if items.is_empty() {
-            return self.toast("one branch only: retry an answer (/retry) or edit a message (/edit) to make another");
-        }
-        self.overlay = Some(Overlay::Picker {
-            palette: Palette::new("Which branch?", items),
-            purpose: Purpose::ChatBranchPick(chat),
+        let last = v.view.items.iter().rev().find_map(|i| match &i.body {
+            ChatBody::User { text } => Some((i.id.clone(), text.clone())),
+            _ => None,
+        });
+        let Some((node, text)) = last else { return self.toast("no message to edit yet") };
+        self.overlay = Some(Overlay::Prompt {
+            title: "Say your last message differently (it and its answer are replaced)".into(),
+            text,
+            kind: PromptKind::ChatEdit(chat, node),
         });
     }
 
@@ -1343,34 +1151,6 @@ impl App {
     /// What a picker of ours picked.
     pub(crate) fn chat_pick(&mut self, purpose: Purpose, value: String) {
         match purpose {
-            Purpose::ChatForkAt(chat) => self.request(
-                Pending::ChatOpen(self.chat_shown_key()),
-                Request::ChatFork {
-                    chat,
-                    node: Some(value).filter(|v| !v.is_empty()),
-                    agent: None,
-                    side: false,
-                    confirmed: false,
-                },
-            ),
-            Purpose::ChatEditPick(chat) => {
-                let text = match &self.chat_panel {
-                    Some(ChatPanel::View(v)) => v.view.items.iter().find_map(|i| match &i.body {
-                        ChatBody::User { text } if i.id == value => Some(text.clone()),
-                        _ => None,
-                    }),
-                    _ => None,
-                };
-                self.overlay = Some(Overlay::Prompt {
-                    title: "Say it differently (the old message and its answer stay as a branch)"
-                        .into(),
-                    text: text.unwrap_or_default(),
-                    kind: PromptKind::ChatEdit(chat, value),
-                });
-            }
-            Purpose::ChatBranchPick(chat) => {
-                self.request(Pending::Done(String::new()), Request::ChatBranch { chat, to: value })
-            }
             Purpose::ChatCite => {
                 // `c:7f3k/01jb…`, maybe with a machine: the chat, then the node.
                 let (chat, node) = value.rsplit_once('/').unwrap_or((value.as_str(), ""));
@@ -1383,12 +1163,7 @@ impl App {
                     }
                     None => self.request(
                         Pending::ChatOpenAt(node, self.chat_shown_key()),
-                        Request::ChatRead {
-                            chat: chat.to_owned(),
-                            all: false,
-                            from: None,
-                            limit: None,
-                        },
+                        Request::ChatRead { chat: chat.to_owned(), from: None, limit: None },
                     ),
                 }
             }
@@ -1445,12 +1220,9 @@ impl App {
                 );
             }
             ("find", _) => self.chat_action("chat.find"),
-            ("tools", None) if arg.is_empty() => self.pick_chat_preset(None),
-            ("tools", None) => self.chat_picked(arg.to_owned(), false, None),
             ("folder" | "folders", c) if !arg.is_empty() => self.chat_folder(c, arg),
             ("folder" | "folders", None) => self.ask_chat_folder(None),
             ("folder" | "folders", Some(_)) => self.chat_action("chat.folder"),
-            ("compare", c) => self.chat_compare_slash(c, arg),
             // A new chat's agent and title go with its first message.
             ("agent", None) if arg.is_empty() => self.pick_chat_agent(None),
             ("agent", None) => {
@@ -1469,19 +1241,11 @@ impl App {
                 self.toast(format!("titled {arg:?} once its first message goes"));
             }
             // A command of a chat's own, before there is one; anything else falls to the end.
-            (
-                "pick" | "task" | "retry" | "edit" | "fork" | "side" | "keep" | "branch" | "cite"
-                | "export",
-                None,
-            ) => need(self),
-            ("pick", Some(_)) => self.chat_action("chat.pick"),
+            ("task" | "retry" | "edit" | "cite" | "export", None) => need(self),
             ("task", Some(c)) => match TaskArgs::parse(arg) {
                 Ok(t) => self.chat_task(c, t),
                 Err(e) => self.toast_err(e),
             },
-            ("retry" | "edit", Some(c)) if self.chat(&c).is_some_and(|i| i.source.is_some()) => {
-                self.toast(IMPORTED_AS_WRITTEN)
-            }
             ("retry", Some(_)) => self.chat_action("chat.retry"),
             ("edit", Some(c)) if !arg.is_empty() => {
                 let last = match &self.chat_panel {
@@ -1499,26 +1263,10 @@ impl App {
                 }
             }
             ("edit", Some(_)) => self.chat_action("chat.edit"),
-            ("fork", Some(_)) => self.chat_action("chat.fork"),
-            ("side", Some(c)) if !arg.is_empty() => self.request(
-                Pending::ChatSideAsk(arg.to_owned(), self.chat_shown_key()),
-                Request::ChatFork {
-                    chat: c,
-                    node: None,
-                    agent: None,
-                    side: true,
-                    confirmed: false,
-                },
-            ),
-            ("side", Some(_)) => self.chat_action("chat.side"),
-            ("keep", Some(_)) => self.chat_action("chat.keep"),
-            ("branch", Some(_)) => self.chat_action("chat.branch"),
             ("cite", Some(_)) => self.chat_action("chat.cite"),
             ("export", Some(_)) => self.chat_action("chat.export"),
             ("agent", Some(_)) if arg.is_empty() => self.chat_action("chat.agent"),
-            ("agent", Some(c)) => self.chat_picked(arg.to_owned(), true, Some(c)),
-            ("tools", Some(_)) if arg.is_empty() => self.chat_action("chat.preset"),
-            ("tools", Some(c)) => self.chat_picked(arg.to_owned(), false, Some(c)),
+            ("agent", Some(c)) => self.chat_picked(arg.to_owned(), Some(c)),
             ("title", Some(_)) if arg.is_empty() => self.chat_action("chat.rename"),
             ("title", Some(c)) => self.request(
                 Pending::Done("retitled".into()),
@@ -1528,8 +1276,6 @@ impl App {
                     pinned: None,
                     archived: None,
                     agent: None,
-                    preset: None,
-                    keep: None,
                     folders: None,
                     confirmed: false,
                     auto_title: false,
@@ -1548,7 +1294,7 @@ impl App {
         true
     }
 
-    /// The agents ptyro knows (for `/compare`'s words): the built-in ones and yours.
+    /// The agents ptyro knows: the built-in ones and yours.
     fn agent_names(&self) -> Vec<String> {
         let mut names: Vec<String> =
             ["claude", "codex", "gemini", "opencode"].map(String::from).into();
@@ -1556,97 +1302,6 @@ impl App {
             self.config.agents.keys().filter(|k| !names.contains(k)).cloned().collect();
         names.extend(mine);
         names
-    }
-
-    /// `/compare [AGENTS…] [question]`: the words that name agents (`codex`, `codex@work`), then
-    /// the question. In a new chat its first message goes to them; in a chat the question (or,
-    /// with none, the last message) does.
-    fn chat_compare_slash(&mut self, chat: Option<String>, arg: &str) {
-        let names = self.agent_names();
-        let mut agents: Vec<String> = Vec::new();
-        let mut words = arg.split_whitespace().peekable();
-        while let Some(named) = words.peek().and_then(|w| agent_words(&names, w)) {
-            agents.extend(named);
-            words.next();
-        }
-        let text = words.collect::<Vec<&str>>().join(" ");
-        let Some(c) = chat else {
-            let Some(ChatPanel::View(v)) = &mut self.chat_panel else { return };
-            if agents.len() < 2 {
-                return self.toast(
-                    "/compare AGENT AGENT…: the first message goes to each (e.g. /compare claude codex)",
-                );
-            }
-            v.compare = agents.clone();
-            if !text.is_empty() {
-                v.set_draft(text);
-            }
-            return self.toast(format!(
-                "the first message goes to {} (each answer a branch); ⏎ sends it",
-                agents.join(", ")
-            ));
-        };
-        self.compare_request(c, agents, Some(text).filter(|t| !t.is_empty()));
-    }
-
-    /// `chat.import`'s answer (its form): the import.
-    pub(crate) fn chat_import_request(&mut self, req: Request) {
-        let dry = matches!(req, Request::ChatImport { dry_run: true, .. });
-        self.toast(if dry {
-            "counting what your agents' histories would bring…"
-        } else {
-            "importing your agents' histories…"
-        });
-        self.request(Pending::ChatImport, req);
-    }
-
-    /// `chat.compare`'s answer: the agents typed (empty: every installed one).
-    pub(crate) fn chat_compare(&mut self, chat: String, text: &str) {
-        let agents = text
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .filter(|a| !a.is_empty())
-            .map(str::to_owned)
-            .collect();
-        self.compare_request(chat, agents, None);
-    }
-
-    fn compare_request(&mut self, chat: String, agents: Vec<String>, text: Option<String>) {
-        let who =
-            if agents.is_empty() { "every installed agent".to_owned() } else { agents.join(", ") };
-        let k = |a: &str| self.keymap.key_in(Table::Chat, a);
-        let flips = match (k("chat.branch_prev"), k("chat.branch_next")) {
-            (Some(p), Some(n)) => format!("{p}/{n} flips"),
-            _ => "/branch shows another".into(),
-        };
-        let done = Pending::Done(format!(
-            "asking {who}: each answer is a branch ({flips}, /pick keeps one)"
-        ));
-        let req = Request::ChatCompare { chat, agents, text, confirmed: false };
-        self.request(Pending::Confirm(Box::new(req.clone()), Box::new(done)), req);
-    }
-
-    /// The reply to a message sent to `sent_to`: when it names another chat, the message went
-    /// to a fork (an imported chat carries on as one). The view goes there if it still shows
-    /// the chat the message went to, with what was typed meanwhile.
-    pub(crate) fn chat_forked(&mut self, sent_to: &str, info: ChatInfo) {
-        if info.id == sent_to {
-            return;
-        }
-        let id = info.id.clone();
-        let label = info.label().to_owned();
-        self.chat_updated(info);
-        if let Some(ChatPanel::View(v)) = &mut self.chat_panel
-            && v.id.as_deref() == Some(sent_to)
-        {
-            let draft = std::mem::take(&mut v.draft);
-            self.open_chat(&id);
-            if let Some(ChatPanel::View(v)) = &mut self.chat_panel
-                && v.draft.is_empty()
-            {
-                v.set_draft(draft);
-            }
-        }
-        self.toast(format!("continued as a fork ({label}): the imported chat stays as it was"));
     }
 
     pub(crate) fn search_chats(&mut self) {
@@ -1681,7 +1336,7 @@ impl App {
         if let Some(ChatPanel::List(l)) = &mut self.chat_panel {
             l.preview = Some((id.clone(), Vec::new()));
         }
-        let req = Request::ChatRead { chat: id.clone(), all: false, from: None, limit: None };
+        let req = Request::ChatRead { chat: id.clone(), from: None, limit: None };
         self.request(Pending::ChatPreview(id), req);
     }
 
@@ -1816,13 +1471,13 @@ impl App {
         if !clear && !folders.contains(&dir) {
             folders.push(dir.clone());
         }
-        let reads = self.chat(&chat).and_then(|c| self.chat_reads(c));
+        let reads = self.chat(&chat).is_none_or(|c| self.chat_reads(c));
         let msg = match (clear, reads) {
             (true, _) => "no folders: the next message starts it without any".to_owned(),
-            (false, Some(false)) => {
-                format!("{dir} attached; this preset reads no files: /tools read lets it")
-            }
-            (false, _) => format!("it may read {dir} from the next message on"),
+            (false, false) => format!(
+                "{dir} attached, but this chat was made without tools, so it reads no files: a new chat with the folder does"
+            ),
+            (false, true) => format!("it may read {dir} from the next message on"),
         };
         self.request(
             Pending::Done(msg),
@@ -1832,8 +1487,6 @@ impl App {
                 pinned: None,
                 archived: None,
                 agent: None,
-                preset: None,
-                keep: None,
                 folders: Some(folders),
                 confirmed: false,
                 auto_title: false,
@@ -1916,37 +1569,17 @@ impl App {
         });
     }
 
-    pub(crate) fn pick_chat_preset(&mut self, id: Option<String>) {
-        let items = self
-            .config
-            .chat
-            .presets()
-            .into_iter()
-            .map(|p| {
-                let t = self.config.chat.preset(&p).unwrap_or_default();
-                Item { label: p.clone(), detail: t.describe(), key: None, target: Target::Agent(p) }
-            })
-            .collect();
-        self.overlay = Some(Overlay::Picker {
-            palette: Palette::new("What may the chat use?", items),
-            purpose: Purpose::ChatPreset(id),
-        });
-    }
-
-    /// An agent or preset was picked.
-    pub(crate) fn chat_picked(&mut self, value: String, agent: bool, id: Option<String>) {
+    /// An agent was picked.
+    pub(crate) fn chat_picked(&mut self, value: String, id: Option<String>) {
         match id {
             Some(chat) => {
-                let (a, p) = if agent { (Some(value), None) } else { (None, Some(value)) };
                 // Another profile's agent asks first (the conversation goes to that account).
                 let req = Request::ChatUpdate {
                     chat,
                     title: None,
                     pinned: None,
                     archived: None,
-                    agent: a,
-                    preset: p,
-                    keep: None,
+                    agent: Some(value),
                     folders: None,
                     confirmed: false,
                     auto_title: false,
@@ -1957,18 +1590,11 @@ impl App {
             None => {
                 let mut folder = false;
                 if let Some(ChatPanel::View(v)) = &mut self.chat_panel {
-                    if agent {
-                        v.agent = Some(value);
-                    } else {
-                        v.preset = Some(value);
-                        // `C-o`'s last step: a folder it may read.
-                        folder = std::mem::take(&mut v.choosing);
-                    }
+                    v.agent = Some(value);
+                    // `C-o`'s last step: a folder it may read.
+                    folder = std::mem::take(&mut v.choosing);
                 }
-                // After the agent, what it may use.
-                if agent {
-                    self.pick_chat_preset(None);
-                } else if folder {
+                if folder {
                     self.ask_chat_folder(None);
                 }
             }
@@ -2059,13 +1685,6 @@ impl App {
         self.dirty = true;
     }
 
-    /// The person agreed to make the new chat `token`: its message is on its way again.
-    pub(crate) fn chat_sending(&mut self, token: u64) {
-        if let Some(v) = self.held_view_mut(|v| v.id.is_none() && v.token == token) {
-            v.sending = true;
-        }
-    }
-
     // ── keys ─────────────────────────────────────────────────────────────────────────────
 
     pub(crate) fn chat_key(&mut self, key: KeyEvent) {
@@ -2103,7 +1722,6 @@ impl App {
                 v.id.is_some() && v.view.pending_permission() && v.draft.is_empty()
             }
             "chat.incognito" => v.id.is_none(),
-            "chat.branch_prev" | "chat.branch_next" => v.id.is_some() && !v.siblings.is_empty(),
             _ => true,
         }
     }
@@ -2197,16 +1815,13 @@ impl App {
                             let req = Request::ChatNew {
                                 workspace: Some(v.workspace.clone()),
                                 agent: v.agent.clone(),
-                                preset: v.preset.clone(),
                                 title: v.title.clone(),
                                 prompt: Some(text.clone()),
                                 incognito: Some(v.incognito),
                                 folders: v.folders.clone(),
-                                compare: v.compare.clone(),
-                                confirmed: false,
                             };
-                            let made = Box::new(Pending::ChatMade { text, token: v.token });
-                            self.request(Pending::Confirm(Box::new(req.clone()), made), req);
+                            let made = Pending::ChatMade { text, token: v.token };
+                            self.request(made, req);
                         }
                     }
                 }
@@ -2260,10 +1875,9 @@ impl App {
         let (q, agent) = title_query(&l.query);
         source
             .iter()
-            // Side chats sit under their chat, incognito ones are never "all chats" (§22.12).
-            .filter(|c| c.side_of.is_none() && !c.incognito)
+            // Incognito chats are never "all chats" (§22.12).
+            .filter(|c| !c.incognito)
             .filter(|c| l.workspace.as_ref().is_none_or(|w| c.workspace == *w))
-            .filter(|c| !l.imported || c.source.is_some())
             .filter(|c| l.state.admits(c))
             .filter(|c| agent.as_ref().is_none_or(|a| c.agent.to_lowercase().contains(a)))
             .filter(|c| {
@@ -2311,7 +1925,7 @@ impl App {
                 return self.preview_selected();
             }
         }
-        // ⏎ on a message hit: that chat, at that message (its branch shown).
+        // ⏎ on a message hit: that chat, at that message.
         if key.code == KeyCode::Enter
             && l.sel >= chats
             && let Some(h) = l.hits.get(l.sel - chats).cloned()
@@ -2367,8 +1981,6 @@ impl App {
     /// What a chat's menu offers: [`CHAT_ACTIONS`], less what doesn't apply to it now.
     pub(crate) fn chat_actions_for(&self, id: &str) -> Vec<&'static str> {
         let c = self.chat(id);
-        let imported = c.is_some_and(|c| c.source.is_some());
-        let side = c.is_some_and(|c| c.side_of.is_some());
         let busy = c.is_some_and(working);
         let shown = match &self.chat_panel {
             Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id) => Some(v),
@@ -2379,10 +1991,7 @@ impl App {
             .copied()
             .filter(|a| match *a {
                 "chat.open" => shown.is_none(),
-                "chat.retry" | "chat.edit" | "chat.compare" => !imported,
-                "chat.keep" => side,
                 "chat.stop" => busy,
-                "chat.branch" => shown.is_none_or(|v| !v.siblings.is_empty()),
                 _ => true,
             })
             .collect()
@@ -2438,25 +2047,18 @@ pub const CHAT_ACTIONS: &[&str] = &[
     "chat.stop",
     "chat.retry",
     "chat.edit",
-    "chat.branch",
-    "chat.fork",
-    "chat.side",
-    "chat.keep",
     "chat.find_in",
     "chat.cite",
     "chat.archive",
     "chat.agent",
-    "chat.preset",
     "chat.folder",
     "chat.task",
-    "chat.compare",
-    "chat.pick",
     "chat.export",
     "chat.delete",
 ];
 
 /// A new chat's menu, before its first message.
-const NEW_CHAT_ACTIONS: &[&str] = &["chat.agent", "chat.preset", "chat.folder", "chat.incognito"];
+const NEW_CHAT_ACTIONS: &[&str] = &["chat.agent", "chat.folder", "chat.incognito"];
 
 // ── drawing ─────────────────────────────────────────────────────────────────────────────────
 
@@ -2475,7 +2077,6 @@ fn glyph(app: &App, c: &ChatInfo) -> (&'static str, ratatui::style::Color) {
         Some(AgentStatus::Errored) => ("✗", t.error),
         _ if c.incognito => ("◌", t.dim),
         _ if c.pinned => ("★", t.accent),
-        _ if c.source.is_some() => ("⇣", t.dim),
         _ => (" ", t.dim),
     }
 }
@@ -2522,9 +2123,8 @@ pub(crate) fn sidebar_line(
             if selected_chat == Some(id.as_str()) {
                 name = name.add_modifier(Modifier::BOLD).fg(app.depth.fit(t.accent));
             }
-            let indent = if c.side_of.is_some() { "     ↳" } else { "   " };
             let mut spans = vec![
-                Span::raw(indent),
+                Span::raw("   "),
                 Span::styled(format!("{g} "), fg(app, gc)),
                 Span::styled(c.label().to_owned(), name),
                 Span::styled(format!(" {}", c.agent), fg(app, t.dim)),
@@ -2539,18 +2139,12 @@ pub(crate) fn sidebar_line(
     })
 }
 
-/// A row's marks after its agent: `⎇` a fork, `⚠` it needs you (or has a shell), `●` unread.
+/// A row's marks after its agent: `⚠` it needs you, `●` unread.
 fn marks(app: &App, c: &ChatInfo) -> Vec<Span<'static>> {
     let t = &app.theme;
     let mut spans = Vec::new();
-    if c.forked {
-        spans.push(Span::styled(" ⎇", fg(app, t.dim)));
-    }
     if c.attention.is_some() {
         spans.push(Span::styled(" ⚠", fg(app, t.blocked)));
-    } else if c.shell {
-        // A shell preset: marked as a `dangerous` session is.
-        spans.push(Span::styled(" ⚠", fg(app, t.error)));
     }
     if c.unread > 0 {
         spans.push(Span::styled(" ●", fg(app, t.search).add_modifier(Modifier::BOLD)));
@@ -2588,43 +2182,25 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
         format!(" {} ", info.map_or("new chat", ChatInfo::label)),
         fg(app, t.accent).add_modifier(Modifier::BOLD),
     )];
-    let (agent, preset) = match info {
-        Some(c) => (format!("{}@{}", c.agent, c.profile), c.tools.clone()),
-        None => (
-            v.agent.clone().unwrap_or_else(|| {
-                Some(app.config.chat.agent.clone())
-                    .filter(|a| !a.is_empty())
-                    .unwrap_or_else(|| "default agent".into())
-            }),
-            // As the daemon chooses: given folders and no preset, a chat reads.
-            v.preset.clone().unwrap_or_else(|| {
-                let default = app.config.chat.preset.clone();
-                let reads = app.config.chat.preset(&default).is_some_and(|t| t.read);
-                if v.folders.is_empty() || reads { default } else { "read".into() }
-            }),
-        ),
+    let agent = match info {
+        Some(c) => format!("{}@{}", c.agent, c.profile),
+        None => v.agent.clone().unwrap_or_else(|| {
+            Some(app.config.chat.agent.clone())
+                .filter(|a| !a.is_empty())
+                .unwrap_or_else(|| "default agent".into())
+        }),
     };
-    head.push(Span::styled(format!("· {agent} · tools: {preset}"), fg(app, t.dim)));
-    let tools = app.config.chat.preset(&preset);
-    let (best_effort, shell, folders, reads) = match info {
-        Some(c) => (c.best_effort, c.shell, c.folders.len(), app.chat_reads(c)),
-        None => (
-            false,
-            tools.as_ref().is_some_and(|t| t.shell),
-            v.folders.len(),
-            tools.as_ref().map(|t| t.read),
-        ),
+    head.push(Span::styled(format!("· {agent}"), fg(app, t.dim)));
+    let (best_effort, folders, reads) = match info {
+        Some(c) => (c.best_effort, c.folders.len(), app.chat_reads(c)),
+        None => (false, v.folders.len(), true),
     };
     if best_effort {
         head.push(Span::styled(" · best effort", fg(app, t.blocked)));
     }
-    if shell {
-        head.push(Span::styled(" · ⚠ shell", fg(app, t.error)));
-    }
     if folders > 0 {
         let s = if folders == 1 { "" } else { "s" };
-        // Said only where it is known (a preset of this machine's config).
-        let note = if reads == Some(false) { " (not read: /tools read)" } else { "" };
+        let note = if reads { "" } else { " (not read: made without tools)" };
         head.push(Span::styled(format!(" · {folders} folder{s}{note}"), fg(app, t.dim)));
     }
     if let Some(c) = info {
@@ -2643,29 +2219,9 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
             head.push(Span::styled(" · archived", fg(app, t.dim)));
         }
     }
-    let side = info.and_then(|c| c.side_of.as_deref()).and_then(|p| app.chat(p));
     let incognito = v.incognito || info.is_some_and(|c| c.incognito);
     if incognito {
         head.push(Span::styled(" ◌ incognito", fg(app, t.accent)));
-    }
-    if let Some(p) = side {
-        head.push(Span::styled(
-            format!(" ↳ side chat of {} (/keep keeps it)", p.label()),
-            fg(app, t.accent),
-        ));
-    }
-    if let Some(s) = v.siblings.last() {
-        let who = s.label().map(|a| format!(" {a}")).unwrap_or_default();
-        head.push(Span::styled(format!(" ⎇ {}/{}{who}", s.at, s.of), fg(app, t.dim)));
-    }
-    if let Some(from) = info.and_then(ChatInfo::imported_from) {
-        head.push(Span::styled(format!(" ⇣ {from} (read-only)"), fg(app, t.accent)));
-    }
-    if let Some(cmp) = info.and_then(|c| c.comparing.as_ref()) {
-        head.push(Span::styled(format!(" · {}", cmp.line()), fg(app, t.working)));
-    }
-    if v.id.is_none() && !v.compare.is_empty() {
-        head.push(Span::styled(format!(" · asks {}", v.compare.join(", ")), fg(app, t.accent)));
     }
     let hints: Vec<String> = if v.id.is_none() {
         [chat_hint(app, "chat.agent", "agent"), chat_hint(app, "chat.incognito", "incognito")]
@@ -2682,30 +2238,18 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
     let focused =
         app.overlay.is_none() && !app.prefix && app.focus == Focus::Pane && !app.sidebar_zoom;
     if v.id.is_none() && v.view.items.is_empty() && v.draft.is_empty() {
-        // What this chat will be: its tools as its preset says, and whether it is kept.
-        let mut can = Vec::new();
-        if let Some(t) = &tools {
-            if t.web {
-                can.push("search the web".to_owned());
-            }
-            if t.read && (folders > 0 || !t.dirs.is_empty()) {
-                can.push("read its folders".to_owned());
-            }
-            if t.shell {
-                can.push("run commands".to_owned());
-            }
-        }
-        let can = if can.is_empty() {
-            "it uses no tools".to_owned()
+        // What this chat will be: what it may use, and whether it is kept.
+        let can = if folders > 0 {
+            "it can search the web and read its folders"
         } else {
-            format!("it can {}", can.join(" and "))
+            "it can search the web"
         };
         let kept = if incognito {
             "Incognito: nothing of it is kept."
         } else {
             "It is kept, and searchable."
         };
-        let choose = chat_hint(app, "chat.agent", "picks the agent, its tools and a folder")
+        let choose = chat_hint(app, "chat.agent", "picks the agent and a folder")
             .map(|h| format!(" {h}."))
             .unwrap_or_default();
         let lines = vec![
@@ -2735,9 +2279,6 @@ fn list_lines(app: &App, l: &ChatList) -> (Vec<(Line<'static>, Option<usize>)>, 
         out.push((Line::raw(""), None));
         let none = if !l.query.is_empty() || l.state != StateFilter::All {
             "  nothing matches".to_owned()
-        } else if l.imported {
-            let k = app.keymap.key_in(Table::ChatList, "chat.import").unwrap_or_default();
-            format!("  no imported chats: {k} imports your agents' own histories")
         } else {
             let k = app.keymap.key_in(Table::ChatList, "chat.new").unwrap_or_default();
             format!("  no chats here yet: {k} starts one")
@@ -2850,9 +2391,6 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
         (Some(w), _) => format!("chats in {}", crate::ui::workspace_label(w)),
         (None, _) => "every chat".to_owned(),
     };
-    if l.imported {
-        scope.push_str(", imported only");
-    }
     if l.state != StateFilter::All {
         scope.push_str(&format!(", {} only", l.state.label()));
     }
@@ -2874,11 +2412,8 @@ fn draw_list(app: &App, f: &mut Frame<'_>, area: Rect, l: &ChatList) {
             k("chat.archive", if l.archived.is_some() { "unarchive" } else { "archive" }),
             k("chat.delete", "delete"),
             k("chat.rename", "title"),
-            k("chat.fork", "fork"),
             k("chat.list_state", "state"),
             k("chat.list_archived", "archived"),
-            k("chat.list_imported", "imported"),
-            k("chat.import", "import"),
             k("chat.list_all", if l.workspace.is_some() { "all" } else { "here" }),
             Some("Esc".to_owned()),
         ]
@@ -2988,20 +2523,6 @@ fn title_query(q: &str) -> (String, Option<String>) {
     (words.join(" "), agent)
 }
 
-/// The agents a word of `/compare` names (`codex`, `codex@work`, `claude,codex@work,`), or
-/// `None` when any part of it isn't one: then it is the question's.
-fn agent_words(names: &[String], word: &str) -> Option<Vec<String>> {
-    let parts: Vec<&str> = word.split(',').filter(|a| !a.is_empty()).collect();
-    let known = |a: &&str| names.iter().any(|n| n == a.split('@').next().unwrap_or(a));
-    (!parts.is_empty() && parts.iter().all(known))
-        .then(|| parts.into_iter().map(str::to_owned).collect())
-}
-
-/// A node id's end, as people see it.
-fn short(id: &str) -> String {
-    id[id.len().saturating_sub(6)..].to_owned()
-}
-
 /// One row of the chat's agent picker: where its program is, and picking it switches to it; or,
 /// not installed but setup knows how, ⏎ opens the setup checklist with it ticked (`app.setup
 /// <program>`, as a toast's offer does, BOOT9); else "not found".
@@ -3075,19 +2596,6 @@ mod tests {
         assert_eq!(title_query("agent:Codex retry*"), ("retry".into(), Some("codex".into())));
         assert_eq!(title_query("by:words"), (String::new(), None));
         assert_eq!(title_query("\"a phrase\""), ("a phrase".into(), None));
-    }
-
-    #[test]
-    fn compare_words_name_agents_with_commas_too() {
-        let names: Vec<String> = ["claude", "codex", "gemini"].map(String::from).into();
-        let w = |x: &str| agent_words(&names, x);
-        assert_eq!(w("claude,codex"), Some(vec!["claude".into(), "codex".into()]));
-        assert_eq!(w("codex@work,claude,"), Some(vec!["codex@work".into(), "claude".into()]));
-        assert_eq!(w("gemini"), Some(vec!["gemini".into()]));
-        // A word that isn't (wholly) agents is the question's.
-        assert_eq!(w("claude,why"), None);
-        assert_eq!(w("why"), None);
-        assert_eq!(w(","), None);
     }
 
     #[test]

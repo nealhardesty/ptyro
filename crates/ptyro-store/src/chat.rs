@@ -2,13 +2,17 @@
 //! search are the feature. Apart from `ptyro.db`: its own file, connection and writer thread, so
 //! a long message or an index update never delays a status write. Built for sync (§22.15):
 //! ULIDs everywhere, an `origin` on every row, append-only nodes with parent links, tombstones.
+//! A chat is the line from its first node to its `leaf`. A retry or an edit puts a new node
+//! beside the one it replaces and moves the leaf to it: the replaced turn stays in the file,
+//! unreachable, and so do the other branches of a chat from before 2026-11-17 (when chats
+//! could branch). Nothing is deleted for it, and search finds only what a chat shows.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 use crate::migrate::{self, M};
 use ptyro_core::chat::{ChatBody, NoticeLevel, ToolStatus};
-use ptyro_core::chats::{self, ChatInfo, ChatNode, ChatSiblings};
+use ptyro_core::chats::{self, ChatInfo, ChatNode};
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::oneshot;
 
@@ -112,6 +116,10 @@ const MIGRATIONS: &[M] = &[
     // v6 (CHAT5): the tip each import left the chat's shown branch at, so a re-import moves it
     // on only when the person hasn't gone to another branch since.
     M::up("ALTER TABLE import ADD COLUMN leaf TEXT;"),
+    // v7 (2026-11-17, the pare-down): importing the agents' histories was removed. `import`
+    // only said how far each file was read; the chats it made stay, as ordinary chats. Their
+    // `source` columns, and `side_of` and `forked_from_*`, are left as they are (not read).
+    M::up("DROP TABLE import;"),
 ];
 
 /// A tombstoned chat's rows go at the first compaction this long after its delete (§22.4).
@@ -138,10 +146,7 @@ pub struct NewChat {
     pub agent: String,
     pub profile: String,
     pub tools: String,
-    pub forked_from: Option<(String, String)>,
-    /// A side chat's chat.
-    pub side_of: Option<String>,
-    /// Folders it may read (with a preset that reads).
+    /// Folders it may read.
     pub folders: Vec<String>,
 }
 
@@ -160,57 +165,6 @@ pub struct Conv {
     pub ended_ms: Option<u64>,
 }
 
-/// How far a session of an agent's history was imported (SPEC §22.10).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportState {
-    pub chat: String,
-    pub path: String,
-    pub size: u64,
-    pub mtime: u64,
-    /// How far an append-only file was read (the next import starts there).
-    pub offset: u64,
-    /// The last node written: the next one's parent.
-    pub tail: Option<String>,
-    /// The chat it became was deleted: it is never imported again.
-    pub deleted: bool,
-}
-
-/// One session's new part, to import.
-#[derive(Debug, Clone)]
-pub struct ImportBatch {
-    /// `claude:<session id>`.
-    pub source: String,
-    /// The chat's id when it is new.
-    pub chat: String,
-    pub workspace: String,
-    /// The agent's own title for it, if any.
-    pub title: Option<String>,
-    pub agent: String,
-    pub profile: String,
-    pub tools: String,
-    pub source_dir: Option<String>,
-    pub path: String,
-    pub size: u64,
-    pub mtime: u64,
-    pub offset: u64,
-    /// Nodes, each with its parent (ids made from the source's, so an import is idempotent).
-    pub nodes: Vec<ChatNode>,
-    /// The session's last node: the shown branch's tip.
-    pub leaf: Option<String>,
-    /// The node before `offset` (the parent of the next import's first node).
-    pub tail: Option<String>,
-    pub index_tools: bool,
-}
-
-/// What `import_batch` did: the chat (`None`: it was deleted, so nothing), whether it is new,
-/// and how many nodes it gained.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportResult {
-    pub chat: Option<String>,
-    pub created: bool,
-    pub added: usize,
-}
-
 /// What `ChatDb::list` returns.
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
@@ -219,8 +173,6 @@ pub struct ListFilter {
     /// Archived chats instead of the others.
     pub archived: bool,
     pub limit: usize,
-    /// Side chats too (they are listed under their chat, not with the others).
-    pub sides: bool,
 }
 
 /// `ptyro doctor`'s look at `chat.db`.
@@ -235,8 +187,7 @@ pub struct ChatDoctor {
 }
 
 const CHAT_COLS: &str = "id, workspace, title, title_src, pinned, archived_at, agent, profile, \
-                         tools, leaf, forked_from_chat, created_at, last_at, nodes, unread, cost_micro_usd, side_of, folders, \
-                         source, source_dir";
+                         tools, leaf, created_at, last_at, nodes, unread, cost_micro_usd, folders";
 
 fn chat_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChatInfo> {
     Ok(ChatInfo {
@@ -253,25 +204,19 @@ fn chat_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ChatInfo> {
         profile: r.get(7)?,
         tools: r.get(8)?,
         leaf: r.get(9)?,
-        forked: r.get::<_, Option<String>>(10)?.is_some(),
-        created_ms: r.get::<_, Option<i64>>(11)?.unwrap_or(0) as u64,
-        last_ms: r.get::<_, Option<i64>>(12)?.unwrap_or(0) as u64,
-        nodes: r.get::<_, i64>(13)? as u32,
-        unread: r.get::<_, i64>(14)? as u32,
-        cost_micro_usd: r.get::<_, i64>(15)? as u64,
+        created_ms: r.get::<_, Option<i64>>(10)?.unwrap_or(0) as u64,
+        last_ms: r.get::<_, Option<i64>>(11)?.unwrap_or(0) as u64,
+        nodes: r.get::<_, i64>(12)? as u32,
+        unread: r.get::<_, i64>(13)? as u32,
+        cost_micro_usd: r.get::<_, i64>(14)? as u64,
         status: None,
         attention: None,
         engine: None,
-        side_of: r.get(16)?,
         folders: r
-            .get::<_, Option<String>>(17)?
+            .get::<_, Option<String>>(15)?
             .and_then(|f| serde_json::from_str(&f).ok())
             .unwrap_or_default(),
         best_effort: false,
-        shell: false,
-        comparing: None,
-        source: r.get(18)?,
-        source_dir: r.get(19)?,
     })
 }
 
@@ -311,6 +256,9 @@ impl ChatDb {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
+        // A chat.db from an older ptyro is copied beside it first (`chat.db.bak-v<N>`, private),
+        // as ptyro.db is: a migration never costs the conversations.
+        crate::prepare(path, MIGRATIONS.len())?;
         let conn = Connection::open(path)?;
         // Private every time (a restored copy may not be), and before the WAL is made: SQLite
         // gives its -wal and -shm files the main file's mode.
@@ -403,12 +351,10 @@ impl ChatDb {
         let origin = self.machine_id.clone();
         self.call(move |db| {
             let t = now();
-            let (fc, fnode) = c.forked_from.unzip();
             db.execute(
                 "INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools,
-                   forked_from_chat, forked_from_node, created_at, updated_at, last_at, origin, side_of,
-                   folders)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, ?11, ?12, ?13)",
+                   created_at, updated_at, last_at, origin, folders)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8, ?9, ?10)",
                 params![
                     c.id,
                     c.workspace,
@@ -417,11 +363,8 @@ impl ChatDb {
                     c.agent,
                     c.profile,
                     c.tools,
-                    fc,
-                    fnode,
                     t,
                     origin,
-                    c.side_of,
                     folders_json(&c.folders)
                 ],
             )?;
@@ -455,9 +398,6 @@ impl ChatDb {
             });
             if f.pinned_only {
                 sql.push_str(" AND pinned = 1");
-            }
-            if !f.sides {
-                sql.push_str(" AND side_of IS NULL");
             }
             if f.workspace.is_some() {
                 sql.push_str(" AND workspace = ?1");
@@ -527,10 +467,6 @@ impl ChatDb {
             Ok(())
         })
         .await
-    }
-
-    pub async fn set_tools(&self, id: String, tools: String) -> Result<()> {
-        self.update(id, "tools = ?2", tools).await
     }
 
     pub async fn set_folders(&self, id: String, folders: Vec<String>) -> Result<()> {
@@ -657,20 +593,10 @@ impl ChatDb {
         self.call(move |db| put_node(db, &chat, &n, conv.as_deref(), &origin, index_tools)).await
     }
 
-    /// The branch from the root to `leaf` (the chat's leaf when `None`), oldest first.
+    /// The line from the first node to `leaf` (the chat's leaf when `None`), oldest first: the
+    /// conversation (SPEC §22.7).
     pub async fn branch(&self, chat: String, leaf: Option<String>) -> Result<Vec<ChatNode>> {
         self.call(move |db| branch(db, &chat, leaf.as_deref())).await
-    }
-
-    /// Every node of a chat (all branches), oldest first.
-    pub async fn nodes(&self, chat: String) -> Result<Vec<ChatNode>> {
-        self.call(move |db| {
-            let mut st = db.prepare(
-                "SELECT id, parent, body, at_ms FROM node WHERE chat = ?1 AND deleted_at IS NULL ORDER BY seq",
-            )?;
-            Ok(st.query_map([chat], node_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
-        })
-        .await
     }
 
     /// A daemon that stopped mid-answer left a streaming node: close each such turn with an
@@ -859,355 +785,10 @@ impl ChatDb {
         .await
     }
 
-    /// Where each node of `branch` has siblings (other children of its parent), and which
-    /// agent wrote each sibling's branch (the first node at or below it that a conv produced).
-    pub async fn siblings(&self, chat: String, branch: Vec<String>) -> Result<Vec<ChatSiblings>> {
-        self.call(move |db| sibling_groups(db, &chat, &branch, false)).await
-    }
-
-    /// The children of `parent` (answers to a message), each with the agent that wrote it, as
-    /// `siblings` names them.
-    pub async fn child_agents(
-        &self,
-        chat: String,
-        parent: String,
-    ) -> Result<Vec<(String, String)>> {
-        self.call(move |db| {
-            let first: Option<String> = db
-                .query_row(
-                    "SELECT id FROM node WHERE chat = ?1 AND parent = ?2 AND deleted_at IS NULL ORDER BY seq LIMIT 1",
-                    [&chat, &parent],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let Some(first) = first else { return Ok(Vec::new()) };
-            let groups = sibling_groups(db, &chat, &[first], true)?;
-            Ok(groups
-                .into_iter()
-                .next()
-                .map(|s| {
-                    let n = s.ids.len();
-                    let agents = if s.agents.is_empty() { vec![String::new(); n] } else { s.agents };
-                    s.ids.into_iter().zip(agents).collect()
-                })
-                .unwrap_or_default())
-        })
-        .await
-    }
-
-    /// The agent and profile that wrote the branch ending at `leaf`: the newest node on it
-    /// that a conv produced (a compare's answer is a branch of the agent that wrote it).
-    pub async fn branch_agent(
-        &self,
-        chat: String,
-        leaf: String,
-    ) -> Result<Option<(String, String)>> {
-        self.call(move |db| {
-            Ok(db
-                .query_row(
-                    "WITH RECURSIVE up(id, parent, conv, depth) AS (
-                       SELECT id, parent, conv, 0 FROM node WHERE id = ?1 AND chat = ?2
-                       UNION ALL
-                       SELECT n.id, n.parent, n.conv, up.depth + 1 FROM node n JOIN up ON n.id = up.parent
-                     )
-                     SELECT conv.agent, conv.profile FROM up JOIN conv ON conv.id = up.conv
-                     ORDER BY up.depth LIMIT 1",
-                    [&leaf, &chat],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?)
-        })
-        .await
-    }
-
-    /// Add `nodes` (a branch beside the shown one, each the next's parent, the first's parent
-    /// already in the chat) as written by `conv`, which is recorded ended: it is who wrote them,
-    /// not a conversation to continue (a compare's other answers, SPEC §22.7). The leaf stays.
-    pub async fn put_branch(
-        &self,
-        chat: String,
-        nodes: Vec<ChatNode>,
-        conv: Conv,
-        index_tools: bool,
-    ) -> Result<()> {
-        let origin = self.machine_id.clone();
-        self.call(move |db| {
-            let tx = db.transaction()?;
-            // Deleted meanwhile (a compare's answer coming in late): it takes nothing more.
-            let gone = tx
-                .query_row("SELECT deleted_at IS NOT NULL FROM chat WHERE id = ?1", [&chat], |r| {
-                    r.get::<_, bool>(0)
-                })
-                .optional()?
-                .unwrap_or(true);
-            if gone {
-                return Ok(());
-            }
-            let t = now();
-            tx.execute(
-                "INSERT INTO conv (id, chat, agent, profile, conversation_id, node, how, started_at, ended_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                params![
-                    conv.id,
-                    chat,
-                    conv.agent,
-                    conv.profile,
-                    conv.conversation_id,
-                    nodes.last().map(|n| n.id.clone()),
-                    conv.how,
-                    t
-                ],
-            )?;
-            for n in &nodes {
-                insert_node(&tx, &chat, n, Some(&conv.id), &origin, index_tools)?;
-            }
-            tx.execute(
-                "UPDATE chat SET nodes = nodes + ?2, updated_at = ?3, last_at = ?3 WHERE id = ?1",
-                params![chat, nodes.len() as i64, t],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-        .await
-    }
-
-    /// The tip of `node`'s subtree, following the newest child down: what is shown when a
-    /// branch is picked at `node`.
-    pub async fn tip(&self, chat: String, node: String) -> Result<String> {
-        self.call(move |db| {
-            let mut at = node;
-            for _ in 0..100_000 {
-                let next: Option<String> = db
-                    .query_row(
-                        "SELECT id FROM node WHERE chat = ?1 AND parent = ?2 AND deleted_at IS NULL ORDER BY seq DESC LIMIT 1",
-                        [&chat, &at],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                match next {
-                    Some(n) => at = n,
-                    None => break,
-                }
-            }
-            Ok(at)
-        })
-        .await
-    }
-
-    /// Copy `nodes` (a branch, oldest first) into chat `to` with new ids, each the next's
-    /// parent: a fork (SPEC §22.7). Returns the old → new ids.
-    pub async fn copy_branch(
-        &self,
-        to: String,
-        nodes: Vec<ChatNode>,
-        index_tools: bool,
-    ) -> Result<Vec<(String, String)>> {
-        let origin = self.machine_id.clone();
-        self.call(move |db| {
-            let mut map = Vec::new();
-            let mut parent: Option<String> = None;
-            for n in nodes {
-                let id = chats::new_id();
-                // An answer still being written is copied as it stands, closed: the copy's
-                // engine never writes it.
-                let mut body = n.body;
-                if let ChatBody::Assistant { streaming, .. } = &mut body {
-                    *streaming = false;
-                }
-                let copy =
-                    ChatNode { id: id.clone(), parent: parent.clone(), at_ms: n.at_ms, body };
-                put_node(db, &to, &copy, None, &origin, index_tools)?;
-                map.push((n.id, id.clone()));
-                parent = Some(id);
-            }
-            Ok(map)
-        })
-        .await
-    }
-
-    // ── imports (SPEC §22.10: the agents' own histories) ─────────────────────────────────────
-
-    /// Every session imported so far, by source.
-    pub async fn import_states(&self) -> Result<std::collections::HashMap<String, ImportState>> {
-        self.call(|db| {
-            let mut st = db.prepare(
-                "SELECT i.source, i.chat, i.path, i.size, i.mtime, i.offset, i.tail,
-                        c.id IS NULL OR c.deleted_at IS NOT NULL
-                 FROM import i LEFT JOIN chat c ON c.id = i.chat",
-            )?;
-            let rows = st.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    ImportState {
-                        chat: r.get(1)?,
-                        path: r.get(2)?,
-                        size: r.get::<_, i64>(3)? as u64,
-                        mtime: r.get::<_, i64>(4)? as u64,
-                        offset: r.get::<_, i64>(5)? as u64,
-                        tail: r.get(6)?,
-                        deleted: r.get(7)?,
-                    },
-                ))
-            })?;
-            Ok(rows.collect::<rusqlite::Result<_>>()?)
-        })
-        .await
-    }
-
-    /// How many of `ids` are nodes already (a dry run's count of what is new).
-    pub async fn known_nodes(&self, ids: Vec<String>) -> Result<usize> {
-        self.call(move |db| {
-            let mut st = db.prepare_cached("SELECT 1 FROM node WHERE id = ?1")?;
-            let mut n = 0;
-            for id in ids {
-                if st.exists([id])? {
-                    n += 1;
-                }
-            }
-            Ok(n)
-        })
-        .await
-    }
-
-    /// Import one session's new part in one transaction: the chat (made when it is new), its
-    /// nodes (a node already there takes its new body: a tool's result arrived), the shown
-    /// branch's tip, the title unless a person gave one, and how far the file was read. A
-    /// session whose chat was deleted is left alone.
-    pub async fn import_batch(&self, b: ImportBatch) -> Result<ImportResult> {
-        let origin = self.machine_id.clone();
-        self.call(move |db| {
-            let tx = db.transaction()?;
-            let t = now();
-            let known: Option<(String, bool)> = tx
-                .query_row(
-                    "SELECT i.chat, c.id IS NULL OR c.deleted_at IS NOT NULL
-                     FROM import i LEFT JOIN chat c ON c.id = i.chat WHERE i.source = ?1",
-                    [&b.source],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            let by_source: Option<String> = tx
-                .query_row(
-                    "SELECT id FROM chat WHERE source = ?1 AND deleted_at IS NULL",
-                    [&b.source],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            if matches!(known, Some((_, true))) && by_source.is_none() {
-                return Ok(ImportResult { chat: None, created: false, added: 0 });
-            }
-            let first_at = b.nodes.first().map_or(t, |n| n.at_ms as i64);
-            let (chat, created) = match by_source.or(known.map(|k| k.0)) {
-                Some(c) => (c, false),
-                None => {
-                    tx.execute(
-                        "INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools,
-                           created_at, updated_at, last_at, origin, source, source_dir)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?8, ?10, ?11, ?12)",
-                        params![
-                            b.chat,
-                            b.workspace,
-                            b.title,
-                            if b.title.is_some() { "agent" } else { "auto" },
-                            b.agent,
-                            b.profile,
-                            b.tools,
-                            first_at,
-                            t,
-                            origin,
-                            b.source,
-                            b.source_dir
-                        ],
-                    )?;
-                    (b.chat.clone(), true)
-                }
-            };
-            // The shown branch moves on with the session only from where the last import left
-            // it (the person may have gone to another branch since).
-            let old_tip: Option<Option<String>> = tx
-                .query_row("SELECT leaf FROM import WHERE source = ?1", [&b.source], |r| r.get(0))
-                .optional()?;
-            let shown: Option<String> =
-                tx.query_row("SELECT leaf FROM chat WHERE id = ?1", [&chat], |r| r.get(0))?;
-            let follow = match (&shown, old_tip) {
-                (None, _) | (_, None | Some(None)) => true,
-                (Some(s), Some(Some(t))) => *s == t,
-            };
-            let mut added = 0;
-            let mut last_msg: Option<i64> = None;
-            for n in &b.nodes {
-                if insert_node(&tx, &chat, n, None, &origin, b.index_tools)? {
-                    added += 1;
-                } else {
-                    let body = serde_json::to_string(&n.body)?;
-                    let text = chats::search_text(&n.body, b.index_tools);
-                    tx.execute(
-                        "UPDATE node SET body = ?2, text = ?3 WHERE id = ?1 AND chat = ?4 AND body IS NOT ?2",
-                        params![n.id, body, text, chat],
-                    )?;
-                }
-                if matches!(n.body, ChatBody::User { .. } | ChatBody::Assistant { .. }) {
-                    last_msg = Some(last_msg.unwrap_or(0).max(n.at_ms as i64));
-                }
-            }
-            tx.execute(
-                "UPDATE chat SET
-                   nodes = (SELECT count(*) FROM node WHERE chat = ?1 AND deleted_at IS NULL),
-                   leaf = COALESCE(?2, leaf),
-                   last_at = max(COALESCE(last_at, 0), COALESCE(?3, 0)),
-                   title = CASE WHEN ?4 IS NOT NULL AND title_src IS NOT 'user' THEN ?4 ELSE title END,
-                   title_src = CASE WHEN ?4 IS NOT NULL AND title_src IS NOT 'user' THEN 'agent' ELSE title_src END,
-                   updated_at = ?5
-                 WHERE id = ?1",
-                params![chat, if follow { b.leaf.clone() } else { None }, last_msg, b.title, t],
-            )?;
-            tx.execute(
-                "INSERT INTO import (source, chat, path, size, mtime, offset, tail, at, leaf)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(source) DO UPDATE SET chat = ?2, path = ?3, size = ?4, mtime = ?5,
-                   offset = ?6, tail = COALESCE(?7, tail), at = ?8, leaf = COALESCE(?9, leaf)",
-                params![
-                    b.source,
-                    chat,
-                    b.path,
-                    b.size as i64,
-                    b.mtime as i64,
-                    b.offset as i64,
-                    b.tail,
-                    t,
-                    b.leaf
-                ],
-            )?;
-            tx.commit()?;
-            Ok(ImportResult { chat: Some(chat), created, added })
-        })
-        .await
-    }
-
-    /// The newest fork of `chat` that is kept and not archived (not a side chat).
-    pub async fn newest_fork(&self, chat: String) -> Result<Option<String>> {
-        self.call(move |db| {
-            Ok(db
-                .query_row(
-                    "SELECT id FROM chat WHERE forked_from_chat = ?1 AND deleted_at IS NULL
-                       AND archived_at IS NULL AND side_of IS NULL
-                     ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                    [chat],
-                    |r| r.get(0),
-                )
-                .optional()?)
-        })
-        .await
-    }
-
-    /// Keep a side chat: it becomes an ordinary fork, listed with the others.
-    pub async fn keep_side(&self, id: String) -> Result<()> {
-        self.update(id, "side_of = ?2", Option::<String>::None).await
-    }
-
     /// Full-text search (SPEC §22.10): messages ranked by bm25 (a person's words above the
     /// answers'), each with a snippet; then titles that match. `profile`/`workspace` limit it
-    /// (a chat's `history_scope`). Deleted chats and nodes are never found.
+    /// (a chat's `history_scope`). Deleted chats and nodes are never found, nor a turn a retry
+    /// or an edit replaced (or another branch of a chat from before 2026-11-17).
     pub async fn search(&self, q: SearchFilter) -> Result<Vec<RawHit>> {
         self.call(move |db| search(db, &q)).await
     }
@@ -1226,16 +807,12 @@ impl ChatDb {
         .await
     }
 
-    /// What a conv has reached: its agent conversation id, its last seen node.
-    /// A turn ended: where the conv is now. A pending fork whose agent has a conversation of
-    /// its own (not the source's any more) is a fork from here on; until then a restart forks
-    /// the source again rather than resuming it.
+    /// A turn ended: where the conv is now (its agent conversation id, its last seen node).
     pub fn update_conv(&self, id: String, conversation_id: Option<String>, node: Option<String>) {
         self.spawn(move |db| {
             db.execute(
-                "UPDATE conv SET conversation_id = COALESCE(?2, conversation_id), node = COALESCE(?3, node), \
-                 how = CASE WHEN how = 'fork_pending' AND ?2 IS NOT NULL AND ?2 IS NOT conversation_id \
-                 THEN 'native_fork' ELSE how END WHERE id = ?1",
+                "UPDATE conv SET conversation_id = COALESCE(?2, conversation_id), node = COALESCE(?3, node) \
+                 WHERE id = ?1",
                 params![id, conversation_id, node],
             )?;
             Ok(())
@@ -1398,6 +975,17 @@ fn chat_cols() -> String {
     CHAT_COLS.split(", ").map(|c| format!("c.{}", c.trim())).collect::<Vec<_>>().join(", ")
 }
 
+/// The nodes the chats `wh` (over `chat c`) show: each one's line from its leaf up, as a
+/// recursive CTE named `shown` (SPEC §22.7: a replaced turn, or an old branch, isn't found).
+fn shown_cte(wh: &str) -> String {
+    format!(
+        "WITH RECURSIVE shown(id, parent) AS (
+           SELECT n0.id, n0.parent FROM chat c JOIN node n0 ON n0.id = c.leaf WHERE {wh}
+           UNION ALL
+           SELECT p.id, p.parent FROM node p JOIN shown s ON p.id = s.parent)"
+    )
+}
+
 fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
     let limit = if q.limit == 0 { 50 } else { q.limit.min(500) } as i64;
     let (wh, args) = filter_sql(q);
@@ -1407,11 +995,14 @@ fn search(db: &Connection, q: &SearchFilter) -> Result<Vec<RawHit>> {
     if !q.fts.is_empty() {
         let n = args.len();
         let sql = format!(
-            "SELECT {cols}, n.id, n.kind, snippet(node_fts, 0, char(2), char(3), '…', 16), n.at_ms,
+            "{}
+             SELECT {cols}, n.id, n.kind, snippet(node_fts, 0, char(2), char(3), '…', 16), n.at_ms,
                     bm25(node_fts) * CASE n.kind WHEN 'user' THEN 1.3 ELSE 1.0 END AS r
              FROM node_fts JOIN node n ON n.seq = node_fts.rowid JOIN chat c ON c.id = n.chat
              WHERE node_fts MATCH ?{} AND n.deleted_at IS NULL AND n.at_ms >= ?{} AND {wh}
+               AND n.id IN (SELECT id FROM shown)
              ORDER BY r LIMIT ?{}",
+            shown_cte(&wh),
             n + 1,
             n + 2,
             n + 3
@@ -1491,35 +1082,6 @@ fn mark_words(title: &str, words: &[String]) -> String {
         out.push(chats::MARK_OFF);
     }
     out
-}
-
-/// Insert a node that isn't there yet (a copy or an import), leaving the chat's row alone.
-fn insert_node(
-    tx: &rusqlite::Transaction<'_>,
-    chat: &str,
-    n: &ChatNode,
-    conv: Option<&str>,
-    origin: &str,
-    index_tools: bool,
-) -> Result<bool> {
-    let body = serde_json::to_string(&n.body)?;
-    let text = chats::search_text(&n.body, index_tools);
-    let added = tx.execute(
-        "INSERT OR IGNORE INTO node (id, chat, parent, kind, body, text, at_ms, conv, origin)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![
-            n.id,
-            chat,
-            n.parent,
-            chats::kind(&n.body),
-            body,
-            text,
-            n.at_ms as i64,
-            conv,
-            origin
-        ],
-    )?;
-    Ok(added > 0)
 }
 
 /// Owner-only (0600): chat text is private.
@@ -1607,72 +1169,6 @@ fn put_node(
     Ok(())
 }
 
-/// Where each node of `branch` has siblings, with each sibling's agent (`single`: a node with
-/// none is listed too, as one of one).
-fn sibling_groups(
-    db: &Connection,
-    chat: &str,
-    branch: &[String],
-    single: bool,
-) -> Result<Vec<ChatSiblings>> {
-    let mut st = db.prepare(
-        "SELECT id, parent, conv FROM node WHERE chat = ?1 AND deleted_at IS NULL ORDER BY seq",
-    )?;
-    let all: Vec<(String, Option<String>, Option<String>)> = st
-        .query_map([chat], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-        .collect::<rusqlite::Result<_>>()?;
-    let mut st = db.prepare("SELECT id, agent, profile FROM conv WHERE chat = ?1")?;
-    let convs: std::collections::HashMap<String, String> = st
-        .query_map([chat], |r| {
-            let (id, agent, profile): (String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
-            Ok((id, chats::agent_label(&agent, &profile)))
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    let mut by_parent: std::collections::HashMap<Option<String>, Vec<String>> =
-        std::collections::HashMap::new();
-    for (id, parent, _) in &all {
-        by_parent.entry(parent.clone()).or_default().push(id.clone());
-    }
-    let parent_of: std::collections::HashMap<&String, &Option<String>> =
-        all.iter().map(|(i, p, _)| (i, p)).collect();
-    let conv_of: std::collections::HashMap<&String, &Option<String>> =
-        all.iter().map(|(i, _, c)| (i, c)).collect();
-    // Down the newest child until a node some conv produced (a notice has none).
-    let agent_of = |id: &String| -> String {
-        let mut at = id.clone();
-        for _ in 0..64 {
-            if let Some(Some(c)) = conv_of.get(&at)
-                && let Some(a) = convs.get(c)
-            {
-                return a.clone();
-            }
-            match by_parent.get(&Some(at.clone())).and_then(|k| k.last()) {
-                Some(next) => at = next.clone(),
-                None => break,
-            }
-        }
-        String::new()
-    };
-    Ok(branch
-        .iter()
-        .filter_map(|n| {
-            let ids = by_parent.get(*parent_of.get(n)?)?;
-            let at = ids.iter().position(|x| x == n)?;
-            if ids.len() < 2 && !single {
-                return None;
-            }
-            let agents: Vec<String> = ids.iter().map(&agent_of).collect();
-            Some(ChatSiblings {
-                node: n.clone(),
-                at: at as u32 + 1,
-                of: ids.len() as u32,
-                ids: ids.clone(),
-                agents: if agents.iter().all(String::is_empty) { Vec::new() } else { agents },
-            })
-        })
-        .collect())
-}
-
 fn branch(db: &Connection, chat: &str, leaf: Option<&str>) -> Result<Vec<ChatNode>> {
     let leaf: Option<String> = match leaf {
         Some(l) => Some(l.to_owned()),
@@ -1726,117 +1222,11 @@ mod tests {
             agent: "claude".into(),
             profile: "default".into(),
             tools: "chat".into(),
-            forked_from: None,
-            side_of: None,
             folders: Vec::new(),
         })
         .await
         .unwrap();
         db
-    }
-
-    #[tokio::test]
-    async fn a_compares_answers_are_labelled_and_picked_by_their_agent() {
-        let db = db_with_chat().await;
-        let conv = |id: &str, agent: &str, profile: &str| Conv {
-            id: id.into(),
-            chat: "c1".into(),
-            agent: agent.into(),
-            profile: profile.into(),
-            conversation_id: None,
-            node: None,
-            how: "new".into(),
-            ended_ms: None,
-        };
-        db.add_conv(conv("k1", "claude", "default")).await.unwrap();
-        db.put_node_now("c1".into(), user("u", None, "q"), None, false).await.unwrap();
-        db.put_node_now(
-            "c1".into(),
-            answer("a1", "u", "claude's", false),
-            Some("k1".into()),
-            false,
-        )
-        .await
-        .unwrap();
-        // Codex's answer beside it: the leaf (claude's) stays shown.
-        let codex = vec![answer("b1", "u", "codex's", false)];
-        db.put_branch("c1".into(), codex, conv("k2", "codex", "work"), false).await.unwrap();
-        assert_eq!(db.get("c1".into()).await.unwrap().unwrap().leaf.as_deref(), Some("a1"));
-        let sib = db.siblings("c1".into(), vec!["u".into(), "a1".into()]).await.unwrap();
-        assert_eq!(sib[0].agents, ["claude", "codex@work"]);
-        assert_eq!(sib[0].label(), Some("claude"));
-        let kids = db.child_agents("c1".into(), "u".into()).await.unwrap();
-        assert_eq!(kids, [("a1".into(), "claude".into()), ("b1".into(), "codex@work".into())]);
-        // Who wrote a branch; the compare's conv is ended, so the current one is still claude's.
-        let who = db.branch_agent("c1".into(), "b1".into()).await.unwrap();
-        assert_eq!(who, Some(("codex".into(), "work".into())));
-        assert_eq!(db.current_conv("c1".into()).await.unwrap().unwrap().id, "k1");
-        // A retry's siblings by one agent carry no label.
-        db.put_node_now("c1".into(), answer("a2", "u", "again", false), Some("k1".into()), false)
-            .await
-            .unwrap();
-        let sib = db.siblings("c1".into(), vec!["a1".into()]).await.unwrap();
-        assert_eq!(sib[0].of, 3);
-    }
-
-    #[tokio::test]
-    async fn an_import_is_idempotent_and_a_deleted_one_stays_deleted() {
-        let db = ChatDb::open_in_memory().unwrap();
-        let batch = |nodes: Vec<ChatNode>, title: Option<&str>| ImportBatch {
-            source: "claude:s1".into(),
-            chat: chats::new_id(),
-            workspace: "w1".into(),
-            title: title.map(str::to_owned),
-            agent: "claude".into(),
-            profile: "default".into(),
-            tools: "chat".into(),
-            source_dir: Some("/repo".into()),
-            path: "/h/.claude/projects/x/s1.jsonl".into(),
-            size: 10,
-            mtime: 1,
-            offset: 10,
-            leaf: nodes.last().map(|n| n.id.clone()),
-            tail: nodes.last().map(|n| n.id.clone()),
-            nodes,
-            index_tools: false,
-        };
-        let first = vec![user("i1", None, "hello"), answer("i2", "i1", "hi", false)];
-        let r = db.import_batch(batch(first.clone(), Some("Greeting"))).await.unwrap();
-        assert!(r.created && r.added == 2);
-        let chat = r.chat.unwrap();
-        let again = db.import_batch(batch(first, None)).await.unwrap();
-        assert_eq!(
-            (again.chat.as_deref(), again.created, again.added),
-            (Some(chat.as_str()), false, 0)
-        );
-        let more = vec![user("i3", Some("i2"), "more")];
-        assert_eq!(db.import_batch(batch(more, None)).await.unwrap().added, 1);
-        let c = db.get(chat.clone()).await.unwrap().unwrap();
-        assert_eq!(
-            (c.nodes, c.leaf.as_deref(), c.title.as_deref()),
-            (3, Some("i3"), Some("Greeting"))
-        );
-        assert_eq!(c.source.as_deref(), Some("claude:s1"));
-        // A person who went to another branch stays there; back at the import's tip, it follows.
-        let leaf = || async { db.get(chat.clone()).await.unwrap().unwrap().leaf };
-        db.set_leaf(chat.clone(), "i2".into()).await.unwrap();
-        db.import_batch(batch(vec![user("i4", Some("i3"), "on")], None)).await.unwrap();
-        assert_eq!(leaf().await.as_deref(), Some("i2"), "not moved off the person's branch");
-        db.set_leaf(chat.clone(), "i4".into()).await.unwrap();
-        db.import_batch(batch(vec![user("i5", Some("i4"), "and on")], None)).await.unwrap();
-        assert_eq!(leaf().await.as_deref(), Some("i5"));
-        // A person's title is never replaced by the agent's.
-        db.set_title(chat.clone(), Some("Mine".into()), "user".into()).await.unwrap();
-        db.import_batch(batch(vec![], Some("Theirs"))).await.unwrap();
-        assert_eq!(db.get(chat.clone()).await.unwrap().unwrap().title.as_deref(), Some("Mine"));
-        let st = db.import_states().await.unwrap();
-        assert_eq!((st["claude:s1"].offset, st["claude:s1"].deleted), (10, false));
-        // Deleted: the next import leaves it alone.
-        db.delete(chat.clone()).await.unwrap();
-        assert!(db.import_states().await.unwrap()["claude:s1"].deleted);
-        let r = db.import_batch(batch(vec![user("i9", None, "x")], None)).await.unwrap();
-        assert_eq!(r, ImportResult { chat: None, created: false, added: 0 });
-        assert_eq!(db.known_nodes(vec!["i1".into(), "zz".into()]).await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -1859,7 +1249,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_chat_its_branches_and_its_index() {
+    async fn a_chat_a_retry_and_its_index() {
         let db = db_with_chat().await;
         assert_eq!(db.machine_id.len(), 26);
         db.put_node_now("c1".into(), user("u1", None, "how do lifetimes work"), None, false)
@@ -1876,7 +1266,7 @@ mod tests {
         assert_eq!((c.nodes, c.leaf.as_deref()), (2, Some("a1")));
         assert_eq!(hits(&db, "regions"), 1);
         assert_eq!(hits(&db, "lifetime"), 1, "porter: lifetime finds lifetimes");
-        // A retry is a sibling; shown, the leaf moves to it; both branches stay.
+        // A retry's answer replaces it: the leaf moves to it, and the old one stays in the file.
         db.put_node_now("c1".into(), answer("a2", "u1", "Scopes", false), None, false)
             .await
             .unwrap();
@@ -1892,53 +1282,39 @@ mod tests {
             .map(|n| n.id)
             .collect();
         assert_eq!(b, ["u1", "a1"]);
-        assert_eq!(db.nodes("c1".into()).await.unwrap().len(), 3);
+        assert_eq!(rows(&db, "SELECT count(*) FROM node"), 3, "nothing is deleted");
+    }
+
+    fn rows(db: &ChatDb, sql: &'static str) -> i64 {
+        db.call_blocking(move |c| Ok(c.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
     #[tokio::test]
-    async fn branches_tips_forks_and_search() {
+    async fn search_finds_only_what_a_chat_shows() {
         let db = db_with_chat().await;
         let put = |n: ChatNode| db.put_node_now("c1".into(), n, None, false);
         put(user("u1", None, "how should the retry policy back off?")).await.unwrap();
         put(answer("a1", "u1", "Exponentially, with jitter.", false)).await.unwrap();
-        put(user("u2", Some("a1"), "and for redis?")).await.unwrap();
-        // A retry of a1: a sibling. Written off the shown branch, it doesn't move the leaf…
+        // A retry's answer is written beside a1: off what is shown, it doesn't move the leaf…
         put(answer("a1b", "u1", "Linearly, capped at a minute.", false)).await.unwrap();
-        assert_eq!(db.get("c1".into()).await.unwrap().unwrap().leaf.as_deref(), Some("u2"));
-        // …until it is shown.
-        db.set_leaf("c1".into(), "a1b".into()).await.unwrap();
-        let b: Vec<String> =
-            db.branch("c1".into(), None).await.unwrap().into_iter().map(|n| n.id).collect();
-        assert_eq!(b, ["u1", "a1b"]);
-        let sib = db.siblings("c1".into(), b.clone()).await.unwrap();
-        assert_eq!(sib.len(), 1);
-        assert_eq!((sib[0].node.as_str(), sib[0].at, sib[0].of), ("a1b", 2, 2));
-        assert_eq!(sib[0].ids, ["a1", "a1b"]);
-        // Back to the first: its subtree's tip is u2.
-        assert_eq!(db.tip("c1".into(), "a1".into()).await.unwrap(), "u2");
+        assert_eq!(db.get("c1".into()).await.unwrap().unwrap().leaf.as_deref(), Some("a1"));
         assert_eq!(db.find_node("c1".into(), "a1b".into()).await.unwrap().len(), 1);
-        // A fork copies a branch with new ids, each the next's parent.
+        // Another chat, another profile.
         db.create(NewChat {
             id: "c2".into(),
             workspace: "w1".into(),
-            title: Some("fork of it".into()),
+            title: Some("jitter notes".into()),
             title_src: "auto".into(),
             agent: "codex".into(),
             profile: "work".into(),
             tools: "chat".into(),
-            forked_from: Some(("c1".into(), "a1".into())),
-            side_of: None,
             folders: Vec::new(),
         })
         .await
         .unwrap();
-        let path = db.branch("c1".into(), Some("a1".into())).await.unwrap();
-        let map = db.copy_branch("c2".into(), path, false).await.unwrap();
-        assert_eq!(map.len(), 2);
-        assert_eq!(db.newest_fork("c1".into()).await.unwrap().as_deref(), Some("c2"));
-        let copied = db.branch("c2".into(), None).await.unwrap();
-        assert_eq!(copied[1].parent.as_deref(), Some(copied[0].id.as_str()));
-        assert!(copied.iter().all(|n| n.id != "u1" && n.id != "a1"));
+        db.put_node_now("c2".into(), user("v1", None, "jitter at work"), None, false)
+            .await
+            .unwrap();
         // Search: stems, the profile scope, titles, snippets marked.
         let q = |s: &str, profile: Option<&str>| {
             let p = ptyro_core::chats::parse_query(s, 0).unwrap();
@@ -1950,14 +1326,34 @@ mod tests {
                 ..SearchFilter::default()
             }
         };
+        let found = |s: &'static str| {
+            let db = db.clone();
+            async move {
+                let mut v: Vec<String> = db
+                    .search(q(s, None))
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|h| h.node)
+                    .collect();
+                v.sort();
+                v
+            }
+        };
         let hits = db.search(q("jitters", None)).await.unwrap();
-        assert_eq!(hits.iter().filter(|h| h.node.is_some()).count(), 2, "both chats' copies");
+        assert_eq!(hits.iter().filter(|h| h.node.is_some()).count(), 2, "both chats'");
         assert!(hits[0].snippet.contains('\u{2}') && hits[0].snippet.contains('\u{3}'));
+        assert!(found("capped").await.is_empty(), "the answer not shown isn't found");
+        // …until a retry shows it: then the answer it replaced isn't found.
+        db.set_leaf("c1".into(), "a1b".into()).await.unwrap();
+        assert_eq!(found("capped").await, ["a1b"]);
+        assert_eq!(found("exponentially").await, Vec::<String>::new());
+        assert_eq!(found("policy").await, ["u1"], "the message both answer is shown");
         let work = db.search(q("jitter", Some("work"))).await.unwrap();
         assert!(work.iter().all(|h| h.chat.profile == "work"), "a profile sees its own only");
-        let titled = db.search(q("fork", None)).await.unwrap();
+        let titled = db.search(q("notes", None)).await.unwrap();
         assert!(titled.iter().any(|h| h.kind == "title" && h.chat.id == "c2"));
-        let not = db.search(q("fork -it", None)).await.unwrap();
+        let not = db.search(q("notes -jitter", None)).await.unwrap();
         assert!(!not.iter().any(|h| h.kind == "title"), "a word left out leaves the title out");
         db.delete("c2".into()).await.unwrap();
         assert!(
@@ -1965,6 +1361,100 @@ mod tests {
             "deleted: never found"
         );
         assert_eq!(mark_words("İstanbul trip", &["trip".into()]), "İstanbul trip");
+    }
+
+    /// A chat.db from before chats were made linear (schema v6): a chat with two branches, a
+    /// fork of it, a side chat and an imported chat. It is copied aside before the migration,
+    /// nothing of it is deleted, and every chat opens: the branched one on the branch it showed.
+    #[cfg(unix)] // file modes
+    #[tokio::test]
+    async fn a_chat_db_from_before_opens_whole_and_linear() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chat.db");
+        {
+            let mut c = Connection::open(&path).unwrap();
+            migrate::to_latest(&mut c, &MIGRATIONS[..6]).unwrap();
+            c.execute_batch(
+                r#"INSERT INTO meta (key, value) VALUES ('machine_id', '01MACHINEMACHINEMACHINEMAC');
+                 INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools, leaf,
+                   created_at, last_at, nodes, origin)
+                   VALUES ('b', 'w1', 'branched', 'auto', 'claude', 'default', 'read', 'b2', 1, 9, 4, 'm');
+                 INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools, leaf,
+                   forked_from_chat, forked_from_node, created_at, last_at, nodes, origin)
+                   VALUES ('f', 'w1', 'fork of branched', 'auto', 'codex', 'default', 'chat', 'f2',
+                     'b', 'b1', 2, 8, 2, 'm');
+                 INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools, leaf,
+                   forked_from_chat, side_of, created_at, last_at, nodes, origin)
+                   VALUES ('s', 'w1', 'side: branched', 'auto', 'claude', 'default', 'none', 's1',
+                     'b', 'b', 3, 7, 1, 'm');
+                 INSERT INTO chat (id, workspace, title, title_src, agent, profile, tools, leaf,
+                   source, source_dir, created_at, last_at, nodes, origin)
+                   VALUES ('i', 'w1', 'imported', 'agent', 'claude', 'default', 'chat', 'i2',
+                     'claude:s1', '/repo', 4, 6, 2, 'm');
+                 INSERT INTO node (id, chat, parent, kind, body, text, at_ms, origin) VALUES
+                   ('b0', 'b', NULL, 'user', '{"t":"user","text":"which way?"}', 'which way?', 1, 'm'),
+                   ('b1', 'b', 'b0', 'assistant', '{"t":"assistant","text":"left turn"}', 'left turn', 2, 'm'),
+                   ('b2', 'b', 'b0', 'assistant', '{"t":"assistant","text":"right turn"}', 'right turn', 3, 'm'),
+                   ('b3', 'b', 'b1', 'user', '{"t":"user","text":"and then?"}', 'and then?', 4, 'm'),
+                   ('f1', 'f', NULL, 'user', '{"t":"user","text":"which way?"}', 'which way?', 1, 'm'),
+                   ('f2', 'f', 'f1', 'assistant', '{"t":"assistant","text":"left turn"}', 'left turn', 2, 'm'),
+                   ('s1', 's', NULL, 'user', '{"t":"user","text":"aside"}', 'aside', 3, 'm'),
+                   ('i1', 'i', NULL, 'user', '{"t":"user","text":"from claude"}', 'from claude', 4, 'm'),
+                   ('i2', 'i', 'i1', 'assistant', '{"t":"assistant","text":"imported answer"}', 'imported answer', 5, 'm');
+                 INSERT INTO import (source, chat, path, size, mtime, offset, at, leaf)
+                   VALUES ('claude:s1', 'i', '/h/s1.jsonl', 10, 1, 10, 1, 'i2');"#,
+            )
+            .unwrap();
+        }
+        let db = ChatDb::open(&path).unwrap();
+        // Copied aside first, as it was, and private.
+        let copy = dir.path().join("chat.db.bak-v6");
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        let old = Connection::open(&copy).unwrap();
+        let v: i64 = old.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, 6);
+        // Nothing of the conversations went; only the import bookkeeping did.
+        assert_eq!(rows(&db, "SELECT count(*) FROM node"), 9);
+        assert_eq!(rows(&db, "SELECT count(*) FROM sqlite_master WHERE name = 'import'"), 0);
+        // Every chat is listed, the side chat and the imported one with the others.
+        let mut ids: Vec<String> =
+            db.list(ListFilter::default()).await.unwrap().into_iter().map(|c| c.id).collect();
+        ids.sort();
+        assert_eq!(ids, ["b", "f", "i", "s"]);
+        // The branched chat is the branch it showed; the other stays in the file, unreachable.
+        let line = |c: &'static str| {
+            let db = db.clone();
+            async move {
+                db.branch(c.into(), None)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|n| n.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(line("b").await, ["b0", "b2"]);
+        assert_eq!(line("f").await, ["f1", "f2"]);
+        assert_eq!(line("s").await, ["s1"]);
+        assert_eq!(line("i").await, ["i1", "i2"]);
+        // A new message carries the shown branch on.
+        db.put_node_now("b".into(), user("b4", Some("b2"), "go on"), None, false).await.unwrap();
+        assert_eq!(line("b").await, ["b0", "b2", "b4"]);
+        // Search finds what each chat shows, imported ones too, and not the other branch.
+        let q = |s: &str| {
+            let p = ptyro_core::chats::parse_query(s, 0).unwrap();
+            SearchFilter { fts: p.fts, words: p.words, ..SearchFilter::default() }
+        };
+        let nodes = |h: Vec<RawHit>| h.into_iter().filter_map(|h| h.node).collect::<Vec<_>>();
+        assert_eq!(nodes(db.search(q("imported answer")).await.unwrap()), ["i2"]);
+        assert_eq!(nodes(db.search(q("then")).await.unwrap()), Vec::<String>::new());
+        assert_eq!(nodes(db.search(q("left")).await.unwrap()), ["f2"], "the fork's own copy");
+        // Opened again: no second copy, nothing more to migrate.
+        drop(db);
+        std::fs::remove_file(&copy).unwrap();
+        drop(ChatDb::open(&path).unwrap());
+        assert!(!copy.exists());
     }
 
     #[tokio::test]
@@ -2036,53 +1526,7 @@ mod tests {
             [("c1".to_owned(), "claude".to_owned(), "default".to_owned())]
         );
         assert_eq!(hits(&db, "plans"), 0, "out of the index at once");
-        // A compare's answer coming in after the delete: nothing of it is written.
-        let conv = Conv {
-            id: "k9".into(),
-            chat: "c1".into(),
-            agent: "codex".into(),
-            profile: "default".into(),
-            conversation_id: None,
-            node: None,
-            how: "compare".into(),
-            ended_ms: None,
-        };
-        db.put_branch("c1".into(), vec![answer("a9", "u1", "late", false)], conv, false)
-            .await
-            .unwrap();
-        let n: i64 = db
-            .call(|c| {
-                Ok(c.query_row("SELECT count(*) FROM node WHERE id = 'a9'", [], |r| r.get(0))?)
-            })
-            .await
-            .unwrap();
-        assert_eq!(n, 0);
-        // A fork mid-answer: its copy of the answer is closed.
-        let db = db_with_chat().await;
-        db.put_node_now("c1".into(), user("u1", None, "hi"), None, false).await.unwrap();
-        db.put_node_now("c1".into(), answer("a1", "u1", "Hel", true), None, false).await.unwrap();
-        let path = db.branch("c1".into(), None).await.unwrap();
-        db.create(NewChat {
-            id: "c2".into(),
-            workspace: "w1".into(),
-            title: None,
-            title_src: "auto".into(),
-            agent: "claude".into(),
-            profile: "default".into(),
-            tools: "chat".into(),
-            forked_from: None,
-            side_of: None,
-            folders: Vec::new(),
-        })
-        .await
-        .unwrap();
-        db.copy_branch("c2".into(), path, false).await.unwrap();
-        let copy = db.branch("c2".into(), None).await.unwrap();
-        assert_eq!(copy[1].body, ChatBody::Assistant { text: "Hel".into(), streaming: false });
-        // (Made without a source: not a fork of c1.)
-        assert_eq!(db.newest_fork("c1".into()).await.unwrap(), None);
     }
-
     #[tokio::test]
     async fn a_crash_mid_answer_is_closed_as_interrupted() {
         let db = db_with_chat().await;
@@ -2148,7 +1592,7 @@ mod tests {
         assert!(matches!(&b[3].body, ChatBody::Notice { text, .. } if text.contains("retry")));
         assert!(matches!(&b[4].body, ChatBody::TurnEnd { stop, .. } if stop == "interrupted"));
         assert!(db.close_interrupted().await.unwrap().is_empty(), "once");
-        // An answer with no end of its own (imported, compared) is no open turn.
+        // An answer with no end of its own (imported before 2026-11-17) is no open turn.
         let db = db_with_chat().await;
         db.put_node_now("c1".into(), user("u1", None, "hi"), None, false).await.unwrap();
         db.put_node_now("c1".into(), answer("a1", "u1", "Hello", false), None, false)

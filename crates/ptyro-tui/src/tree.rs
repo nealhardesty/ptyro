@@ -399,16 +399,8 @@ impl Inputs<'_> {
     /// (SPEC §22.11): their chats are mirrored, and a new one is made there.
     fn chat_rows(&self, ws: &str, honour_collapse: bool) -> Vec<Row> {
         let Some(recent) = self.recent else { return Vec::new() };
-        // Side chats sit under their chat (SPEC §22.12), not among the others.
         let mine: Vec<&ptyro_core::chats::ChatInfo> =
-            self.chats.iter().filter(|c| c.workspace == ws && c.side_of.is_none()).collect();
-        let sides_of = |id: &str| -> Vec<Row> {
-            self.chats
-                .iter()
-                .filter(|c| c.side_of.as_deref() == Some(id))
-                .map(|c| Row::Chat(c.id.clone()))
-                .collect()
-        };
+            self.chats.iter().filter(|c| c.workspace == ws).collect();
         // Filtered to running or active sessions, chats aren't sessions: only the one last
         // written to stays, to pick up where you were, and nothing when there is none.
         if self.filtering() {
@@ -432,7 +424,6 @@ impl Inputs<'_> {
         let mut shown = 0;
         for c in pinned.chain(newest) {
             rows.push(Row::Chat(c.id.clone()));
-            rows.extend(sides_of(&c.id));
             shown += 1;
         }
         if shown < mine.len() {
@@ -442,12 +433,9 @@ impl Inputs<'_> {
     }
 
     /// How many chats a workspace has (`all chats… (N)`): as the chat list counts them,
-    /// without side chats and incognito ones.
+    /// without incognito ones.
     pub fn chat_count(&self, ws: &str) -> usize {
-        self.chats
-            .iter()
-            .filter(|c| c.workspace == ws && c.side_of.is_none() && !c.incognito)
-            .count()
+        self.chats.iter().filter(|c| c.workspace == ws && !c.incognito).count()
     }
 }
 
@@ -640,8 +628,6 @@ mod tests {
             pinned,
             archived: false,
             incognito: false,
-            forked: false,
-            side_of: None,
             leaf: None,
             nodes: 2,
             unread: 0,
@@ -653,10 +639,6 @@ mod tests {
             engine: None,
             folders: Vec::new(),
             best_effort: false,
-            shell: false,
-            comparing: None,
-            source: None,
-            source_dir: None,
         }
     }
 
@@ -692,13 +674,11 @@ mod tests {
             "pinned, then the newest `recent`, then `all chats…`; `＋ new chat` where there are none"
         );
         assert_eq!(i.chat_count("main"), 3);
-        // Side chats and incognito ones aren't counted, as the chat list doesn't list them.
+        // Incognito ones aren't counted, as the chat list doesn't list them.
         let mut more = chats.clone();
-        let mut side = chat("s", "main", false);
-        side.side_of = Some("a".into());
         let mut gone = chat("g", "main", false);
         gone.incognito = true;
-        more.extend([side, gone]);
+        more.push(gone);
         assert_eq!(Inputs { chats: &more, ..i }.chat_count("main"), 3);
         let mut folded = HashSet::new();
         folded.insert(chats_key("main"));

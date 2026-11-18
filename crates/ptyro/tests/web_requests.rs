@@ -41,7 +41,7 @@ fn request_names() -> Vec<(String, String)> {
 #[test]
 fn every_request_the_web_app_names_exists() {
     let names = request_names();
-    assert!(names.len() > 100, "the scan found only {} requests", names.len());
+    assert!(names.len() > 90, "the scan found only {} requests", names.len());
     for (name, file) in names {
         // A request with a missing field is a real one; an unknown variant is a typo.
         let err =
