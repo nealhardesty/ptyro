@@ -17,7 +17,7 @@ Conventions:
   `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
 - Durations look like `30s`, `10m`, `2h`.
 - Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
-  words): `chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  words): `chat rm`, `project rm`, `wt rm`, `ws rm`, `profile rm`, `devices revoke`,
   `machine rm`, `config rm`. `-y`/`--yes` doesn't ask; with no
   terminal to ask and no `--yes`, the command refuses (exit 5) and changes nothing. They act on an
   exact address only: a chat's handle, id or `@last`, never words from its title.
@@ -85,7 +85,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
   (`ws new my_fix` makes `my_fix`). A bad one is refused, and the error offers the fix:
   `invalid name "My Feature": … try "my-feature"`.
 - **Everything else you name** (projects, workspaces, profiles, chats, devices,
-  archives, machines) resolves the same way: the exact name (a project's slug), then
+  machines) resolves the same way: the exact name (a project's slug), then
   `project/name` where there is one, then the full id, then the end of the id, **at least 4
   characters** (`7f3k`, `c:7f3k`, `r-k3x9`). Case doesn't matter. When several match, ptyro lists
   them and exits 4; say which. A chat also takes a word of its title, as the last resort.
@@ -98,12 +98,11 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro "TASK…"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach |
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches in a terminal unless `-d` (`--json` prints it instead). No `--agent` means your shell, or `CMD` |
 | `ptyro new … -a A[@PROFILE] [--prompt TEXT \| --prompt-file F] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
-| `ptyro new --again [--wt W] [-d]` | quick new: another of the agent this worktree last started (with its profile and arguments); the project's `default_agent`, else `[agents] default` (claude), when none has |
-| `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
+| `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL` | where: an existing worktree, a new one, one on a PR's branch, or one for an issue. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --structured` | drive it over its protocol (chat view) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
-| `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
+| `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop, keeping them listed: an agent's turn is interrupted and it gets a moment to exit, then the process gets HUP, TERM and KILL |
 | `ptyro kill SESSIONS… [-s N]` | kill now (SIGKILL, no chance to clean up), keeping them listed; `-s N` sends signal N instead |
 | `ptyro rm SESSIONS… [--stop] [-y]` | forget ended sessions (they leave the list); a dormant agent asks first, its conversation forgotten (`-y` doesn't ask); a running one is refused, and `--stop` stops it first. Each is tried: a refusal is said, the rest go on, and the exit code is the first refusal's |
@@ -178,21 +177,15 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro project add [PATH] [-w WS]` / `ls` / `show [P]` / `rm P [--release] [-y]` | register (to the workspace the TUI showed last, unless `--workspace`) / list / inspect / forget repositories. The repository a session runs in registers by itself; `rm` keeps it from doing so again, and its worktrees stay on disk. Sessions running in it block `rm` (at a terminal it offers to let them go); `--release` lets them go on, outside any project |
 | `ptyro project rename P NEW` | rename a project: its slug, the address of its worktrees and sessions (`NEW/name`). Its worktrees' directories stay where they are; new ones go under the new name. `NEW` is a slug: `a-z 0-9 -`, at most 40 |
 | `ptyro project trust [P] [-y]` / `untrust [P]` | review and trust a project's scripts |
-| `ptyro project line-endings [P]` | rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout |
 | `ptyro project config [P] [--explain] [--json]` | the effective project config, and where each value came from |
-| `ptyro project discover [--refresh]` · `pin P PROFILE` · `unpin P` | find repos under `[discover] roots` · pin a project to a profile |
-| `ptyro project suggest [P] [--apply\|--decline] [--json]` | what the project needs (a setup script from its lockfile, `.env` files to copy); `--apply` writes it to `.ptyro.local.toml`. A first worktree asks on its own |
-| `ptyro wt new [-n NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL \| --take-changes] [-a A [--prompt P]] [--title T] [--profile P] [--no-setup] [--no-fetch] [-d] [--json]` | create a worktree (optionally with an agent, attached to in a terminal unless `-d`); `--take-changes` moves the main checkout's uncommitted work into it |
+| `ptyro project pin P PROFILE` · `unpin P` | pin a project to a profile |
+| `ptyro wt new [-n NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL] [-a A [--prompt P]] [--title T] [--profile P] [--no-setup] [--no-fetch] [-d] [--json]` | create a worktree (optionally with an agent, attached to in a terminal unless `-d`) |
 | `ptyro wt ls [-p P]` / `status [W]` | list worktrees / repository status |
-| `ptyro wt pair W [--refresh]` / `unpair W` | show W's work in the main checkout / give the checkout back, your edits carried to W |
-| `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script / open in an editor |
-| `ptyro wt rm W [--force] [-y] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost. Its directory is deleted, and its branch too if it is merged or the same as its pushed copy, otherwise kept (`--keep-branch`: always kept). Asks unless `-y` (`--force` asks again, after saying what would be lost) |
+| `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script (`setup`, or a run script by name) / open in an editor |
+| `ptyro wt rm W [--force] [-y] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost (commit and push it first, or `--force` to discard it). Its directory is deleted, and its branch too if it is merged or the same as its pushed copy, otherwise kept (`--keep-branch`: always kept). Asks unless `-y` (`--force` asks again, after saying what would be lost) |
 | `ptyro wt rename W NEW` | rename a worktree: its name, its address `project/NEW`, unique in its project. Its branch and its directory stay, so what runs in it carries on. The main checkout is always `@root` |
-| `ptyro wt lock\|unlock W` / `rename-branch W [NEW]` | manual lock / rename the branch (never once pushed) |
 | `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
-| `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME\|HANDLE` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them, each with the handle that tells apart archives of one name |
-| `ptyro wt archive-rm [P/]NAME\|HANDLE… [-y]` | delete archives for good: the saved files, and each branch if merged into its base or the same as its pushed copy (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
-| `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
+| `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; one with sessions running is left alone), biggest on disk first; asks for each: `r` removes it (refusing to lose work, as `wt rm` does), ⏎ keeps it. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add-project\|remove-project …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`; `rm WS [-y]`: its sessions keep running and move to main, with its chats and the projects no other workspace has; `add-project WS PROJECT` / `remove-project WS PROJECT` put a project in one or take it out (it stays registered) |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
 

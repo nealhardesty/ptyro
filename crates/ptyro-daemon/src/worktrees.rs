@@ -1,4 +1,4 @@
-//! Worktrees (SPEC §10.2–10.9): creation with includes, ports and the setup script; removal with
+//! Worktrees (SPEC §10.2–10.9): creation with includes and the setup script; removal with
 //! the safety matrix; lifecycle scripts; locks while sessions run; repository status;
 //! reconciliation with `git worktree list`; gc.
 
@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use ptyro_core::config::{StartAgents, WorktreeLocation};
 use ptyro_core::model::{
-    GcEntry, PortBlock, ProjectInfo, RemoveOpts, WorktreeInfo, WorktreeSpec, WorktreeState, new_id,
+    GcEntry, ProjectInfo, RemoveOpts, WorktreeInfo, WorktreeSpec, WorktreeState, new_id,
     render_branch, slugify,
 };
 use ptyro_core::project::{ProjectConfig, RunMode, ShareMode};
@@ -23,8 +23,6 @@ use crate::daemon::Daemon;
 use crate::launch::Launch;
 use crate::registry::git_err;
 use crate::session::{Place, Session};
-
-const ARCHIVE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Run blocking work (git, file copies) off the async workers.
 pub(crate) async fn blocking<T: Send + 'static>(
@@ -178,35 +176,7 @@ fn bring_files(git: &Git, root: &Path, dst: &Path, cfg: &ProjectConfig) -> Vec<S
     notes
 }
 
-fn port_free(p: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", p)).is_ok()
-}
-
 impl Daemon {
-    /// A free block of `ports.count` ports (SPEC §10.7): not given to another worktree, and
-    /// every port bindable right now.
-    fn allocate_ports(&self) -> Option<PortBlock> {
-        let config = self.config();
-        let (lo, hi) = config.ports.bounds().ok()?;
-        let count = config.ports.count;
-        let taken: Vec<PortBlock> =
-            self.registry.locked().worktrees.iter().filter_map(|w| w.ports).collect();
-        let mut base = u32::from(lo);
-        while base + u32::from(count) - 1 <= u32::from(hi) {
-            let b = base as u16;
-            let block = PortBlock { base: b, count };
-            let overlaps = taken.iter().any(|t| {
-                u32::from(t.base) < base + u32::from(count)
-                    && base < u32::from(t.base) + u32::from(t.count)
-            });
-            if !overlaps && (0..count).all(|i| port_free(b + i)) {
-                return Some(block);
-            }
-            base += u32::from(count);
-        }
-        None
-    }
-
     /// The branch for a new worktree from the template (SPEC §10.3).
     fn branch_for(&self, cfg: &ProjectConfig, name: &str) -> String {
         let template = cfg
@@ -224,7 +194,7 @@ impl Daemon {
     }
 
     /// SPEC §10.3: name → profile → branch and base → `git worktree add` → marker → includes →
-    /// ports → setup script → agent.
+    /// setup script → agent.
     pub async fn create_worktree(self: &Arc<Self>, mut spec: WorktreeSpec) -> Result<Reply, Error> {
         // A path in a repository that isn't a project yet registers it (UX1.5), so
         // `ptyro "fix it"` or `new --new-wt` works in a fresh clone.
@@ -292,27 +262,7 @@ impl Daemon {
         }
         let mut notes: Vec<String> = res.warning.into_iter().chain(issue_note).collect();
         notes.push(format!("profile {} ({})", res.profile, res.reason.label()));
-        // `take_changes` (UX1.10): the main checkout's uncommitted work, snapshot first; the
-        // worktree starts where the main checkout is, so the changes apply as they were.
-        let taken = if spec.take_changes {
-            let root = p.root.clone();
-            Some(
-                blocking(move || -> Result<ptyro_git::orch::Snapshot, Error> {
-                    let git = Git::new();
-                    if git.status(&root, None).map_err(git_err)?.dirty() == 0 {
-                        return Err(Error::invalid(
-                            "nothing to take: the main checkout has no uncommitted changes",
-                        ));
-                    }
-                    git.checkpoint(&root, "ptyro: changes taken into a new worktree")
-                        .map_err(git_err)
-                })
-                .await??,
-            )
-        } else {
-            None
-        };
-        let (mut source, branch) = match (spec.pr, spec.existing, spec.branch.clone()) {
+        let (source, branch) = match (spec.pr, spec.existing, spec.branch.clone()) {
             (Some(n), _, b) => {
                 let branch = b.unwrap_or_else(|| format!("pr/{n}"));
                 let remote = Git::new()
@@ -335,11 +285,6 @@ impl Daemon {
                 (Source::NewBranch { branch: branch.clone(), base }, branch)
             }
         };
-        if let Some(head) = taken.as_ref().and_then(|t| t.head.clone())
-            && let Source::NewBranch { base, .. } = &mut source
-        {
-            *base = head;
-        }
         // A branch that came from elsewhere (a PR from a fork, a branch someone else made)
         // carries its own `.ptyro.toml`. What may be copied out of your checkout, and what may be
         // shared, is your checkout's say, not that file's: its scripts are trust-gated, this isn't.
@@ -353,22 +298,17 @@ impl Daemon {
             Source::NewBranch { base, .. } => Some(base.clone()),
             _ => root_wt.base.clone(),
         };
-        let (path, ours) = match &spec.path {
-            Some(at) => (at.clone(), at.parent().map(Path::to_path_buf).unwrap_or_default()),
-            // A renamed worktree keeps its directory, so the one this name would get may be
-            // taken: then the next free one (`name-2`). Free means no worktree we know of uses it
-            // either, even one whose directory is gone for now.
-            None => {
-                let used: Vec<PathBuf> =
-                    self.registry.locked().worktrees.iter().map(|w| w.path.clone()).collect();
-                std::iter::once(name.clone())
-                    .chain((2..).map(|k| format!("{name}-{k}")))
-                    .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
-                    .find(|(path, _)| {
-                        std::fs::symlink_metadata(path).is_err() && !used.contains(path)
-                    })
-                    .expect("infinite")
-            }
+        // A renamed worktree keeps its directory, so the one this name would get may be taken:
+        // then the next free one (`name-2`). Free means no worktree we know of uses it either,
+        // even one whose directory is gone for now.
+        let (path, ours) = {
+            let used: Vec<PathBuf> =
+                self.registry.locked().worktrees.iter().map(|w| w.path.clone()).collect();
+            std::iter::once(name.clone())
+                .chain((2..).map(|k| format!("{name}-{k}")))
+                .map(|n| worktree_path(config.worktrees.location, &self.paths.data, &p, &n))
+                .find(|(path, _)| std::fs::symlink_metadata(path).is_err() && !used.contains(path))
+                .expect("infinite")
         };
         refuse_symlinks(&ours, &path)?;
         if path.exists() {
@@ -389,7 +329,6 @@ impl Daemon {
             is_root: false,
             profile: Some(res.profile.clone()),
             state: WorktreeState::Creating,
-            ports: None,
             created_ms: now_ms(),
             removed_ms: None,
             last_used_ms: None,
@@ -449,42 +388,6 @@ impl Daemon {
                 return Err(e);
             }
         }
-        if let Some(t) = taken {
-            // A copy first; the main checkout gives its changes up only once they're here.
-            let (root, path, commit, tree, refname) = (
-                p.root.clone(),
-                path.clone(),
-                t.commit,
-                t.tree,
-                format!("refs/ptyro/taken/{name}"),
-            );
-            let shown = refname.clone();
-            let moved = blocking(move || -> Result<(), ptyro_git::GitError> {
-                let git = Git::new();
-                git.update_ref(&root, &refname, &commit)?;
-                git.restore(&path, &commit)?;
-                // Fetching and checking out took a while: whatever was written in the main
-                // checkout since the snapshot isn't in the worktree, so don't wipe it.
-                let now = git.checkpoint(&root, "ptyro: re-checking before taking changes")?;
-                if now.tree != tree {
-                    return Err(ptyro_git::GitError::Failed {
-                        args: "take changes".into(),
-                        message: "the main checkout changed while the worktree was being made"
-                            .into(),
-                    });
-                }
-                git.run(&root, &["reset", "-q", "--hard"])?;
-                git.run(&root, &["clean", "-q", "-fd"])?;
-                Ok(())
-            })
-            .await?;
-            notes.push(match moved {
-                Ok(()) => format!("took the main checkout's uncommitted changes (a copy stays at {shown})"),
-                Err(e) => format!(
-                    "couldn't move the main checkout's changes ({e}); they're still there, and a copy is at {shown}"
-                ),
-            });
-        }
         let mut cfg = ProjectConfig::load(&p.root, &path).unwrap_or(root_cfg);
         if foreign {
             (cfg.worktree.copy, cfg.worktree.share, cfg.worktree.share_mode) = own_files;
@@ -499,18 +402,7 @@ impl Daemon {
         if let Ok(s) = Git::new().status(&path, base.as_deref()) {
             wt.status = Some(s);
         }
-        {
-            // Two worktrees made at once must not be given the same block: choosing one and
-            // recording it are one step.
-            static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-            let _one = PORTS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            wt.ports = self.allocate_ports();
-            match wt.ports {
-                Some(b) => notes.push(format!("ports {}-{}", b.base, b.base + b.count - 1)),
-                None => notes.push("no free port block (see [ports] in config)".into()),
-            }
-            self.put_worktree(wt.clone());
-        }
+        self.put_worktree(wt.clone());
         self.watch_worktree_bg(&wt);
         // Setup: only trusted scripts run (SPEC §10.5).
         let scripts = self.scripts_info(&p, &wt)?;
@@ -589,8 +481,8 @@ impl Daemon {
         })
     }
 
-    /// Run a lifecycle script in a `script` session (SPEC §10.5). `which`: `setup`, `archive`,
-    /// `after_turn`, a run script name (`dev`, `run:dev`), or `None` for the default run script.
+    /// Run a lifecycle script in a `script` session (SPEC §10.5). `which`: `setup`, a run script
+    /// name (`dev`, `run:dev`), or `None` for the default run script.
     pub async fn run_script(
         self: &Arc<Self>,
         wt: &WorktreeInfo,
@@ -614,7 +506,7 @@ impl Daemon {
             }
             Some(w) => {
                 let role = match w {
-                    "setup" | "archive" | "after_turn" => w.to_owned(),
+                    "setup" => w.to_owned(),
                     other => format!("run:{}", other.strip_prefix("run:").unwrap_or(other)),
                 };
                 let cmd =
@@ -684,7 +576,7 @@ impl Daemon {
     }
 
     /// SPEC §10.8, safety-critical: refuse while sessions run or work would be lost, unless told
-    /// otherwise; archive script; remove; keep the branch unless nothing is lost.
+    /// otherwise; remove; keep the branch unless nothing is lost.
     pub async fn remove_worktree(
         self: &Arc<Self>,
         addr: &str,
@@ -733,7 +625,7 @@ impl Daemon {
                 return Err(Error::new(
                     ErrorCode::DirtyWorktree,
                     format!(
-                        "refusing to remove {} — it has work that would be lost:\n  {}\nCommit or push it, archive it to keep it, or remove it anyway to discard it.",
+                        "refusing to remove {} — it has work that would be lost:\n  {}\nTo keep it, commit and push it first; to discard it, remove it anyway.",
                         wt.qualified(),
                         safety.report()
                     ),
@@ -757,30 +649,6 @@ impl Daemon {
             worktree: wt.qualified(),
             step: "removing".into(),
         });
-        if exists {
-            let cfg = ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
-            if cfg.scripts.archive.is_some() && self.is_trusted(&p.id, &cfg.trust_fingerprint()) {
-                match self.run_script(&wt, Some("archive"), None, BTreeMap::new()).await {
-                    Ok(s) => {
-                        if tokio::time::timeout(ARCHIVE_TIMEOUT, s.wait_exit()).await.is_err() {
-                            let _ = s.kill(None).await;
-                            notes.push("archive script timed out and was stopped".into());
-                        } else {
-                            notes.push(format!(
-                                "archive script {}",
-                                s.meta
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                    .state
-                                    .label()
-                            ));
-                        }
-                        self.forget_session(s.id);
-                    }
-                    Err(e) => notes.push(format!("archive script not run: {}", e.message)),
-                }
-            }
-        }
         let (root, path, branch, base, force, keep) = (
             p.root.clone(),
             wt.path.clone(),
@@ -814,15 +682,11 @@ impl Daemon {
         })
         .await??;
         notes.extend(git_notes);
-        if let Some(b) = wt.ports {
-            notes.push(format!("released ports {}-{}", b.base, b.base + b.count - 1));
-        }
         self.unwatch(&wt.id);
         for s in &sessions {
             self.forget_session(s.id);
         }
         self.drop_worktree(wt.clone());
-        self.forget_launch(&wt.id).await;
         notes.insert(0, format!("removed {}", wt.qualified()));
         Ok(Reply::Removed { notes })
     }
@@ -981,7 +845,6 @@ impl Daemon {
                     is_root: false,
                     profile: None,
                     state: WorktreeState::Ready,
-                    ports: self.allocate_ports(),
                     created_ms: m["created_at"].as_u64().unwrap_or_else(now_ms),
                     removed_ms: None,
                     last_used_ms: None,
@@ -1088,91 +951,8 @@ impl Daemon {
         }
     }
 
-    /// `wt rename-branch` (SPEC §10.3): never once pushed. Without a name, one is derived from the
-    /// first commit's subject.
-    /// Rename to the template's branch for `name` (auto-rename from the first prompt).
-    pub(crate) async fn rename_branch_to(
-        self: &Arc<Self>,
-        wt_id: &str,
-        name: &str,
-    ) -> Result<Reply, Error> {
-        let wt = self.worktree_by_id(wt_id).ok_or_else(|| Error::missing("worktree", wt_id))?;
-        let p = self
-            .project_by_id(&wt.project)
-            .ok_or_else(|| Error::missing("project", &wt.project))?;
-        let cfg = ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
-        let branch = self.branch_for(&cfg, name);
-        self.rename_branch(&wt.id, Some(branch)).await
-    }
-
-    async fn rename_branch(
-        self: &Arc<Self>,
-        addr: &str,
-        new: Option<String>,
-    ) -> Result<Reply, Error> {
-        let wt = self.find_worktree(addr)?;
-        let p = self
-            .project_by_id(&wt.project)
-            .ok_or_else(|| Error::missing("project", &wt.project))?;
-        let old = wt
-            .branch
-            .clone()
-            .ok_or_else(|| Error::invalid("the worktree has no branch (detached)"))?;
-        let cfg = ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
-        // The first prompt someone gave an agent here names the work best (M3.16).
-        let prompt = self.sessions_in(&wt.id).iter().find_map(|s| {
-            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).first_prompt.clone()
-        });
-        let words = |text: &str| slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
-        let from_prompt = prompt.as_deref().map(words).filter(|w| !w.is_empty());
-        let new = match new {
-            Some(n) => n,
-            None if from_prompt.is_some() => {
-                self.branch_for(&cfg, from_prompt.as_deref().unwrap_or_default())
-            }
-            None => {
-                let (path, base) =
-                    (wt.path.clone(), wt.base.clone().unwrap_or_else(|| "HEAD".into()));
-                let first = blocking(move || Git::new().subjects_since(&path, &base))
-                    .await?
-                    .into_iter()
-                    .next();
-                let first = first.ok_or_else(|| {
-                    Error::invalid("no commits yet to name the branch after; give a name")
-                })?;
-                let slug = words(&first);
-                if slug.is_empty() {
-                    return Err(Error::invalid(
-                        "the first commit's subject has no words to name the branch after; give a name",
-                    ));
-                }
-                self.branch_for(&cfg, &slug)
-            }
-        };
-        let (root, o, n) = (p.root.clone(), old.clone(), new.clone());
-        blocking(move || {
-            let git = Git::new();
-            if git.is_published(&root, &o) {
-                return Err(Error::conflict(format!(
-                    "{o} has been pushed; renaming it would orphan the remote branch"
-                )));
-            }
-            git.rename_branch(&root, &o, &n).map_err(git_err)
-        })
-        .await??;
-        // On the entry as it is now, not the copy held across the awaits: a rename (or a
-        // removal) that landed meanwhile stays.
-        let wt = self
-            .update_worktree(&wt.id, |w| w.branch = Some(new))
-            .ok_or_else(|| Error::missing("worktree", addr))?;
-        if let Some(store) = &self.store {
-            store.save_worktree(wt.clone());
-        }
-        Ok(Reply::Worktree { info: wt })
-    }
-
     /// `WorktreeRename` (SPEC §2.3): a new name, the worktree's address `project/name`. Its
-    /// branch stays (`rename-branch` changes that) and so does its directory: sessions running in
+    /// branch stays and so does its directory: sessions running in
     /// it keep their working directory. The marker git keeps for it follows, so a re-adoption
     /// finds the new name.
     async fn rename_worktree(&self, addr: &str, name: &str) -> Result<Reply, Error> {
@@ -1250,25 +1030,8 @@ impl Daemon {
             Request::WorktreeGet { addr } => {
                 Ok(Reply::Worktree { info: self.find_worktree(&addr)? })
             }
-            Request::WorktreeNew { spec } => {
-                let (agent, profile) = (spec.agent.clone(), spec.profile.clone());
-                let reply = self.create_worktree(spec).await?;
-                // Its agent counts for quick new (UX3.7), as `Spawn`'s does.
-                if let (Some(agent), Reply::WorktreeCreated { info, .. }) = (agent, &reply) {
-                    let spec = SpawnSpec { agent: Some(agent), profile, ..SpawnSpec::default() };
-                    self.remember_launch(Some(&info.id), &spec).await;
-                }
-                Ok(reply)
-            }
+            Request::WorktreeNew { spec } => self.create_worktree(spec).await,
             Request::WorktreeRemove { addr, opts } => self.remove_worktree(&addr, opts).await,
-            Request::WorktreeArchive { addr, stop_sessions } => {
-                self.archive_worktree(&addr, stop_sessions).await
-            }
-            Request::WorktreeRestore { addr } => self.restore_worktree(&addr).await,
-            Request::WorktreeArchiveDelete { addr } => self.delete_archive(&addr).await,
-            Request::WorktreeArchiveGet { addr } => self.get_archive(&addr).await,
-            Request::WorktreeArchives { project } => self.list_archives(project.as_deref()).await,
-            Request::ProjectSuggest { addr, apply } => self.project_suggest(&addr, apply).await,
             Request::Branches { project } => {
                 let p = self.find_project(&project)?;
                 let used: Vec<String> = {
@@ -1322,29 +1085,7 @@ impl Daemon {
                 let s = self.run_script(&wt, script.as_deref(), size, BTreeMap::new()).await?;
                 Ok(Reply::Session { info: self.info(&s) })
             }
-            Request::WorktreeLock { addr, lock } => {
-                let wt = self.find_worktree(&addr)?;
-                let p = self
-                    .project_by_id(&wt.project)
-                    .ok_or_else(|| Error::missing("project", &wt.project))?;
-                let (root, path, id) = (p.root, wt.path.clone(), wt.id.clone());
-                blocking(move || {
-                    let git = Git::new();
-                    if lock {
-                        git.lock(&root, &path, &format!("ptyro:{id}"))
-                    } else {
-                        git.unlock(&root, &path)
-                    }
-                })
-                .await?
-                .map_err(git_err)?;
-                let info = self.update_worktree(&wt.id, |w| w.locked = lock).unwrap_or(wt);
-                Ok(Reply::Worktree { info })
-            }
             Request::WorktreeRename { addr, name } => self.rename_worktree(&addr, &name).await,
-            Request::WorktreeRenameBranch { addr, branch } => {
-                self.rename_branch(&addr, branch).await
-            }
             Request::Gc => self.gc().await,
             other => Err(Error::invalid(format!("unsupported request {other:?}"))),
         }

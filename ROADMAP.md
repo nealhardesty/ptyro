@@ -41,7 +41,7 @@ Conventions:
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done; removed 2026-11-17) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
-| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
+| **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent; removed 2026-11-17), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
@@ -358,6 +358,35 @@ clear explanation; removing a clean merged one deletes it and its branch. With `
 Claude session there runs under the work account and commits with the work author; a shell in
 `personal` pushes with the personal key; spawning `claude@personal` in the work repo asks for
 confirmation first.
+
+**Removed (2026-11-17): worktree and project extras, pare-down batch 4.** Deep, not wide
+(`docs/review-2026-11/pare-down.md`): ptyro makes, runs and removes worktrees; keeping, pairing,
+locking and renaming branches are yours, with git. Gone from every surface (CLI, TUI, web):
+archived worktrees (`wt archive`, `restore`, `archive-rm`, `archives`; `worktree.archive`,
+`.restore`, `.archive_delete` and the restore picker; the web's `#/archives`; UX1.12's archive half),
+pair mode (`wt pair`/`unpair`, M6.7's pair half), `wt lock`/`unlock`, `wt rename-branch` and the
+branch named from the first prompt (M3.16's rename half), `project suggest` (UX1.11),
+`project line-endings` (WIN6's fix; the doctor's CRLF finding stays and says how to fix it by hand),
+`project discover` (the command only: the first run and the project pickers still discover),
+`--take-changes` on `new` and `wt new` (UX1.10's "your changes"; it ran `git reset --hard` and
+`git clean -fd` on your checkout), quick new (`new --again`, `session.again` on `C-q C-n` and the
+sidebar's `C-n`, both now unbound, the web's "+ claude" button; UX3.2, UX3.7), `after_turn` and
+`archive` scripts (M4.14; `setup` and `run` scripts, trust, `wt run` and `.worktreeinclude` stay),
+and port blocks with listening-port detection (M3's ports, WIN7's port scan, the sidebar's `:5173`
+badges). **Scripts no longer get `PTYRO_PORT`, `PTYRO_PORT_COUNT` or `CONDUCTOR_PORT`:** one that
+reads them gets nothing, so `ptyro doctor` (and Health in the TUI and the web) flags a project
+whose scripts still name one, with the fix (`${PTYRO_PORT:-3000}`, or the port in the script);
+imported Claude Desktop servers run as written. `wt rm`'s refusal now says what would be lost and
+offers removing anyway, or committing and pushing first; `gc` offers remove or keep. Protocol 1.45
+retires 11 requests; store migration 10 drops the port columns and quick new's memory; retired
+keys (SPEC §13.8, now with `*` for any one name): `[ports]`, `ui.show_ports`,
+`worktrees.archive_purge_days`, `worktrees.auto_rename_branch`, `agents.*.after_turn`,
+`scripts.after_turn`, `scripts.archive`, and `project.default_agent` (only quick new read it).
+Existing archives (their refs, `archive-extras/`) and a main checkout still paired are left as
+they are: `ptyro doctor` lists them, with the git commands that bring them back. The daemon still
+locks a worktree while sessions run in it. RESEARCH: R-WT-03's `autoPort`, R-WT-05's
+`--take-changes`, R-WT-06, R-WT-08 (moot), R-WT-09's archiving, R-WT-10, R-UX-35, R-UX-39 and
+R-WIN-12's ports marked built and removed.
 
 ---
 

@@ -19,7 +19,7 @@ use ptyro_term::PspReport;
 pub const TIE_MS: u64 = 250;
 const EXPLAIN_KEEP: usize = 64;
 
-/// A status change the daemon acts on (attention, notifications, after_turn).
+/// A status change the daemon acts on (attention, notifications).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transition {
     pub from: Option<AgentStatus>,

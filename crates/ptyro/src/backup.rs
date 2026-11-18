@@ -71,8 +71,7 @@ fn readme(version: &str, items: &[String], left_out: &[String]) -> String {
          \x20                                 directory; the data directory is beside it, usually\n\
          \x20                                 ~/.local/share/ptyro), replacing ptyro.db there\n\
          \x20 data/chat.db                likewise (your chats)\n\
-         Worktrees are not in it: they are in your repositories (their branches), and `ptyro wt restore`\n\
-         brings archived ones back from the snapshots in your repositories.\n\
+         Worktrees are not in it: they are in your repositories (their branches).\n\
          The file is private to you (mode 600): it names your projects and paired devices.\n",
         items.iter().map(|i| format!("  - {i}\n")).collect::<String>(),
         left_out.iter().map(|i| format!("  - {i}\n")).collect::<String>().trim_end(),

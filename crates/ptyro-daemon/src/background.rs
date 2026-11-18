@@ -1,5 +1,5 @@
 //! The daemon's background work: repository status on file changes (debounced, SPEC §10.9),
-//! listening ports per session (SPEC §10.7), and worktree locks following session lifetimes.
+//! and worktree locks following session lifetimes.
 
 use ptyro_core::sync::MutexExt;
 use std::collections::HashSet;
@@ -12,7 +12,8 @@ use ptyro_protocol::DomainEvent;
 use crate::daemon::Daemon;
 
 const STATUS_DEBOUNCE: Duration = Duration::from_millis(500);
-const PORT_SCAN: Duration = Duration::from_secs(3);
+/// How often the periodic refresh looks whether one is due.
+const TICK: Duration = Duration::from_secs(3);
 /// Worktrees with live sessions are re-checked this often even without file events.
 const ACTIVE_REFRESH: Duration = Duration::from_secs(10);
 const IDLE_REFRESH: Duration = Duration::from_secs(60);
@@ -157,14 +158,13 @@ impl Daemon {
         });
         let me = Arc::clone(self);
         tokio::spawn(async move {
-            let mut tick = tokio::time::interval(PORT_SCAN);
+            let mut tick = tokio::time::interval(TICK);
             let mut since_active = Duration::ZERO;
             let mut since_idle = Duration::ZERO;
             loop {
                 tick.tick().await;
-                me.scan_ports().await;
-                since_active += PORT_SCAN;
-                since_idle += PORT_SCAN;
+                since_active += TICK;
+                since_idle += TICK;
                 let (active, idle) = (since_active >= ACTIVE_REFRESH, since_idle >= IDLE_REFRESH);
                 if active || idle {
                     let ids: Vec<String> = {
@@ -186,36 +186,5 @@ impl Daemon {
                 }
             }
         });
-    }
-
-    /// Update every live session's listening ports; announce changes.
-    async fn scan_ports(self: &Arc<Self>) {
-        let live: Vec<(Arc<crate::session::Session>, u32)> = self
-            .sessions()
-            .into_iter()
-            .filter(|s| s.is_live())
-            .filter_map(|s| s.pid().map(|p| (s, p)))
-            .collect();
-        if live.is_empty() {
-            return;
-        }
-        let pids: Vec<u32> = live.iter().map(|(_, p)| *p).collect();
-        let Ok(found) =
-            tokio::task::spawn_blocking(move || ptyro_pty::listening_ports(&pids)).await
-        else {
-            return;
-        };
-        for (s, pid) in live {
-            let ports = found.get(&pid).cloned().unwrap_or_default();
-            let changed = {
-                let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                let changed = m.ports != ports;
-                m.ports = ports;
-                changed
-            };
-            if changed {
-                let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
-            }
-        }
     }
 }

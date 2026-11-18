@@ -142,8 +142,8 @@ impl Tour {
                 "clean up",
                 vec![
                     "It's done: its row says what it replied, and its worktree what it changed.".into(),
-                    format!("Press {palette}, type worktree.archive and ⏎:"),
-                    "the worktree goes, its branch is kept, and it can come back.".into(),
+                    format!("Press {palette}, type worktree.remove and ⏎, then y:"),
+                    "the worktree goes; its fix was never committed, so y once more says to drop it.".into(),
                 ],
             ),
             Step::Shells => {

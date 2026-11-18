@@ -760,36 +760,6 @@ impl Git {
         self.run(root, &["branch", "-D", branch]).map(drop)
     }
 
-    /// Whether `branch` has an upstream or exists on any remote (then renaming is refused).
-    pub fn is_published(&self, root: &Path, branch: &str) -> bool {
-        if self.ok(root, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")]) {
-            return true;
-        }
-        self.remotes(root).iter().any(|r| self.ref_exists(root, &format!("{}/{branch}", r.name)))
-    }
-
-    pub fn rename_branch(&self, root: &Path, old: &str, new: &str) -> Result<()> {
-        self.check_branch_name(new)?;
-        self.run(root, &["branch", "-m", old, new]).map(drop)
-    }
-
-    /// Subjects of the commits on HEAD that `base` lacks, oldest first.
-    pub fn subjects_since(&self, path: &Path, base: &str) -> Vec<String> {
-        self.run(
-            path,
-            &[
-                "log",
-                "--reverse",
-                "--format=%s",
-                "--end-of-options",
-                &format!("{base}..HEAD"),
-                "--",
-            ],
-        )
-        .map(|o| lines(&o).map(str::to_owned).collect())
-        .unwrap_or_default()
-    }
-
     /// Untracked files under `root` matching gitignore-style `patterns` (SPEC §10.4). With
     /// `ignored_only`, only those git also ignores (`.worktreeinclude` semantics). git does the
     /// matching itself, so the semantics are exactly gitignore's.

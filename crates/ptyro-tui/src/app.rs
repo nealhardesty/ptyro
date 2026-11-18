@@ -115,12 +115,6 @@ pub enum Overlay {
         naming: bool,
         wizard: Wizard,
     },
-    /// A project's first worktree (UX1.11): what ptyro found it needs; y writes it locally.
-    Suggest {
-        suggestions: ptyro_core::model::SetupSuggestions,
-        spec: Box<WorktreeSpec>,
-        split: Option<Dir>,
-    },
     /// Lifecycle scripts shown in full before trusting them (SPEC §10.5).
     Trust {
         scripts: ScriptsInfo,
@@ -152,12 +146,10 @@ pub struct Wizard {
     pub name: Option<String>,
     /// The first prompt, from the task box (UX1.9); also the title and, slugged, the name.
     pub prompt: Option<String>,
-    /// Where the work comes from (UX1.10): a PR, an issue, an existing branch, or the main
-    /// checkout's uncommitted changes.
+    /// Where the work comes from (UX1.10): a PR, an issue, or an existing branch.
     pub pr: Option<u32>,
     pub issue: Option<String>,
     pub branch: Option<String>,
-    pub take: bool,
     /// The rest of `ptyro new`'s options, from the form (SPEC §11.5a): the profile (`None`
     /// resolves), a new worktree's base, whether it skips setup or fetching, structured mode, a
     /// command line for `@command`, and a title apart from the prompt.
@@ -255,11 +247,7 @@ pub enum Purpose {
     /// This workspace's profile, or how it notifies.
     WorkspaceProfile,
     WorkspaceNotify,
-    /// An archived worktree to bring back (`^x` deletes the one selected).
-    Restore,
-    /// An archived worktree to delete for good.
-    ArchiveDelete,
-    /// A stale worktree to clean up (archive).
+    /// A stale worktree to clean up (remove).
     Gc,
     /// The existing branch a new worktree checks out (UX1.10).
     Branch(Wizard),
@@ -290,7 +278,6 @@ pub enum PromptKind {
     /// A word for a `ptyro …` command being put together (UX1.21); `true`: `k=v` variables.
     CliAsk(Box<crate::cli_actions::CliJob>),
     /// A branch's new name, for this worktree (by id).
-    RenameBranch(String),
     /// A workspace's new name.
     RenameWorkspace(String),
     /// A worktree's new name (by id).
@@ -385,7 +372,6 @@ impl PromptKind {
         match self {
             Self::RenameProject(_) => ptyro_core::names::slug_typed(text),
             _ if self.is_name() => ptyro_core::names::typed(text),
-            Self::RenameBranch(_) => ptyro_core::names::branch_typed(text),
             _ => text.to_owned(),
         }
     }
@@ -409,8 +395,6 @@ pub enum Confirmed {
     },
     /// "Pinned to X — keep it?" after adding a project; `n` unpins.
     KeepPin(String),
-    /// Archive this worktree, stopping what runs in it (UX1.12).
-    Archive(String),
     /// Add a line to a file: a health fix (UX1.20).
     Append(std::path::PathBuf, String),
     /// Send this request, then show this.
@@ -506,8 +490,6 @@ pub enum Pending {
     ChatImport,
     /// `chat.pick`: which agent takes the next message, as a toast.
     ChatPicked,
-    /// What quick-new would start in this workspace (UX3.2), for its label.
-    Again(Option<String>),
     /// The daemon's agents out of date (BOOT5); `note`: the start-up note's too.
     Updates {
         note: bool,
@@ -535,23 +517,13 @@ pub enum Pending {
     DeepScrollback(PaneId, SessionId),
     /// The context worktree's scripts, for an open palette (UX1.18).
     PaletteScripts(String),
-    /// Archived worktrees, for the restore picker (UX1.12), or the delete one.
-    Archives {
-        delete: bool,
-    },
     /// Stale worktrees, for the clean-up picker.
     Gc,
     /// The project's branches, for the wizard (UX1.10).
     Branches(Box<Wizard>),
-    /// Setup suggestions before a project's first worktree (UX1.11).
-    Suggest(Box<WorktreeSpec>, Option<Dir>),
-    /// They were written: check the scripts (trust) again, then create.
-    Suggested(Box<WorktreeSpec>, Option<Dir>),
     /// The repositories for the first run, and for home (UX1.19).
     FirstRunRepos,
     Home,
-    /// `project.suggest`: say what was found, offering to use it.
-    SuggestShow(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -758,11 +730,6 @@ pub struct App {
     pub(crate) revealing: Option<(SessionId, Instant)>,
     /// Tools (an editor) whose screen goes back to what it replaced when they exit (UX3.1).
     pub(crate) tool_back: HashSet<SessionId>,
-    /// What quick new (`session.again`) starts, and in which worktree (UX3.7); `None`: not
-    /// known yet (the default agent).
-    pub again: Option<(Option<String>, ptyro_core::session::LastLaunch)>,
-    /// The worktree quick new's label was last asked about.
-    pub(crate) again_for: Option<Option<String>>,
     /// The selected sidebar row, and its index when last set (the fallback once it's gone).
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
@@ -883,8 +850,6 @@ impl App {
             kept: None,
             revealing: None,
             tool_back: HashSet::new(),
-            again: None,
-            again_for: None,
             opts,
             connect,
             paths,
@@ -1059,7 +1024,6 @@ impl App {
             self.workspace = ws;
         }
         self.load_view().await;
-        self.refresh_again();
         // `ptyro chat open`: that chat, over the panes.
         if let Some(id) = self.opts.chat.take() {
             self.open_chat(&id);
@@ -1490,10 +1454,6 @@ impl App {
         if self.config.ui.clock {
             self.dirty = true;
         }
-        // Quick new's label follows the context to another worktree.
-        if self.client.is_some() && self.again_for.as_ref() != Some(&self.context().1) {
-            self.refresh_again();
-        }
         self.health_tick(self.started);
         self.setup_tick();
         self.sync_window();
@@ -1904,7 +1864,6 @@ impl App {
                     _ => None,
                 };
                 self.apply_view(view);
-                self.refresh_again();
                 return;
             }
         };
@@ -2043,7 +2002,6 @@ impl App {
                 if back {
                     self.tool_back.insert(id);
                 }
-                self.refresh_again();
                 self.upsert(info);
                 self.show(id, split);
             }
@@ -2081,7 +2039,6 @@ impl App {
                 }),
             ) => {
                 let pane_shown = agent.as_ref().or(setup.as_ref()).map(|s| s.id);
-                self.refresh_again();
                 upsert_by(&mut self.worktrees, info.clone(), |w| w.id.clone());
                 for s in [setup, agent].into_iter().flatten() {
                     self.upsert(s);
@@ -2177,64 +2134,11 @@ impl App {
                         then: AfterTrust::Create(spec, split),
                         scroll: 0,
                     });
-                } else if !scripts.names.iter().any(|n| n == "setup") && spec.setup {
-                    // No setup yet: on a project's first worktree, what ptyro found (UX1.11).
-                    let addr = spec.project.clone();
-                    self.request(
-                        Pending::Suggest(spec, split),
-                        Request::ProjectSuggest { addr, apply: None },
-                    );
                 } else {
                     self.create_worktree(*spec, split);
                 }
             }
             (Pending::PreCreate(spec, split), Err(_)) => self.create_worktree(*spec, split),
-            (Pending::Suggest(spec, split), Ok(Reply::Suggestions { suggestions })) => {
-                if suggestions.offered || suggestions.is_empty() {
-                    self.create_worktree(*spec, split);
-                } else {
-                    self.overlay = Some(Overlay::Suggest { suggestions, spec, split });
-                }
-            }
-            (Pending::Suggest(spec, split), Err(_)) => self.create_worktree(*spec, split),
-            (Pending::SuggestShow(project), Ok(Reply::Suggestions { suggestions: s })) => {
-                if s.is_empty() {
-                    self.toast(format!(
-                        "{}: nothing to suggest (its config has what it needs)",
-                        s.project
-                    ));
-                } else {
-                    let mut found = Vec::new();
-                    if let Some(cmd) = &s.setup {
-                        found.push(format!("setup: {cmd}"));
-                    }
-                    if !s.copy.is_empty() {
-                        found.push(format!("copy {}", s.copy.join(", ")));
-                    }
-                    self.toast_offer(
-                        format!("{}: {}", s.project, found.join(" · ")),
-                        false,
-                        Offer {
-                            label: "use them (.ptyro.local.toml)".into(),
-                            then: Then::Send(
-                                Box::new(Request::ProjectSuggest {
-                                    addr: project,
-                                    apply: Some(true),
-                                }),
-                                "written to .ptyro.local.toml".into(),
-                            ),
-                        },
-                    );
-                }
-            }
-            (Pending::Suggested(spec, split), Ok(_)) => {
-                self.toast("written to .ptyro.local.toml (yours, not committed)");
-                let addr = spec.project.clone();
-                self.request(
-                    Pending::PreCreate(spec, split),
-                    Request::ProjectScripts { addr, worktree: None },
-                );
-            }
             (Pending::Branches(w), Ok(Reply::Branches { names })) => {
                 if names.is_empty() {
                     self.toast("no branch to check out: every one has a worktree");
@@ -2262,7 +2166,7 @@ impl App {
             {
                 self.overlay = Some(Overlay::Confirm {
                     text: format!(
-                        "{}\n\na: archive it instead (its work is kept; restore brings it back)\ny: remove it anyway ({}) · n: neither",
+                        "{}\n\ny: remove it anyway ({}) · n: keep it",
                         e.message,
                         ptyro_core::removal::FORCED
                     ),
@@ -2304,50 +2208,11 @@ impl App {
                     }));
                     self.overlay = Some(Overlay::Picker {
                         palette: Palette::new(
-                            "Stale worktrees, biggest first   ⏎ archive (its work is kept) · ^l keep it (lock)",
+                            "Stale worktrees, biggest first   ⏎ remove (asks first; refuses if work would be lost)",
                             items,
                         ),
                         purpose: Purpose::Gc,
                     });
-                }
-            }
-            (Pending::Archives { delete }, Ok(Reply::Archives { entries })) => {
-                if entries.is_empty() {
-                    self.toast("nothing archived yet");
-                } else {
-                    let items = entries
-                        .iter()
-                        .map(|e| Item {
-                            label: format!("{}/{}", e.project_slug, e.name),
-                            detail: format!(
-                                "{} · archived {} ago{}",
-                                e.branch,
-                                crate::ui::ago(e.archived_ms),
-                                e.title.as_deref().map(|t| format!(" · {t}")).unwrap_or_default()
-                            ),
-                            key: None,
-                            // By id: several archives can share a name (an older
-                            // daemon's have none).
-                            target: Target::Archive(
-                                if e.id.is_empty() {
-                                    format!("{}/{}", e.project_slug, e.name)
-                                } else {
-                                    e.id.clone()
-                                },
-                                format!("{}/{}", e.project_slug, e.name),
-                            ),
-                        })
-                        .collect();
-                    let (title, purpose) = if delete {
-                        (
-                            "Delete an archived worktree   ⏎ delete (asks first)",
-                            Purpose::ArchiveDelete,
-                        )
-                    } else {
-                        ("Restore an archived worktree   ⏎ restore · ^x delete", Purpose::Restore)
-                    };
-                    self.overlay =
-                        Some(Overlay::Picker { palette: Palette::new(title, items), purpose });
                 }
             }
             (Pending::ProjectAdded(then), Ok(Reply::Project { info, notes })) => {
@@ -2446,14 +2311,6 @@ impl App {
                 }
             }
             (Pending::Saved, Ok(_)) => {}
-            (Pending::Again(wt), Ok(Reply::LastLaunch { launch })) => {
-                if self.again_for.as_ref() == Some(&wt) {
-                    self.again = launch.map(|l| (wt, l));
-                    self.dirty = true;
-                }
-            }
-            // Only a label: a worktree still being made says so elsewhere.
-            (Pending::Again(_), Err(_)) => {}
             // A refusal's way through (SPEC §6.6), else what its words suggest.
             (_, Err(e)) => match (self.retry.take(), &e.fix) {
                 (Some(req), Some(fix)) => {
@@ -2578,13 +2435,12 @@ impl App {
     }
 
     /// The workspace you're in (MM1.B: all are on screen at once) is the selected row's in the
-    /// sidebar, else the focused session's: what `n`, quick new, the status bar and new
+    /// sidebar, else the focused session's: what `n`, the status bar and new
     /// workspace-wide things go by.
     pub(crate) fn enter_workspace(&mut self, w: String) {
         if w != self.workspace {
             self.workspace = w;
             self.view_dirty_since.get_or_insert_with(Instant::now);
-            self.refresh_again();
         }
     }
 
@@ -2820,7 +2676,6 @@ impl App {
             "app.detach" => self.quit = Some(AttachEnd::Detached),
             "app.quit" => self.confirm_quit(),
             "session.new" => self.open_task(None),
-            "session.again" => self.quick_new(),
             "attention.next" => self.next_attention(),
             "peek" => {
                 let target = if self.focus == Focus::Sidebar {
@@ -2935,13 +2790,6 @@ impl App {
                 None => self.pick_project(Some(AfterAdd::Run("script.pick"))),
             },
             "project.add" => self.pick_project(None),
-            "project.suggest" => match self.context().0 {
-                Some(p) => self.request(
-                    Pending::SuggestShow(p.clone()),
-                    Request::ProjectSuggest { addr: p, apply: None },
-                ),
-                None => self.pick_project(Some(AfterAdd::Run("project.suggest"))),
-            },
             "project.trust" => match self.context().0 {
                 Some(p) => self.request(
                     Pending::TrustDialog(AfterTrust::Nothing),
@@ -2949,17 +2797,6 @@ impl App {
                 ),
                 None => self.pick_project(Some(AfterAdd::Run("project.trust"))),
             },
-            "worktree.archive" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
-                Some(w) if w.is_root => {
-                    self.toast("that's the main checkout: archive a worktree of it")
-                }
-                Some(w) => self.confirm_archive(&w),
-                None => self.pick_project(Some(AfterAdd::Run("worktree.archive"))),
-            },
-            "worktree.restore" | "worktree.archive_delete" => self.request(
-                Pending::Archives { delete: cmd.action == "worktree.archive_delete" },
-                Request::WorktreeArchives { project: None },
-            ),
             "worktree.gc" => self.request(Pending::Gc, Request::Gc),
             "shell.new" => self.new_shell(),
             // SHELLS (SPEC §23.6).
@@ -3937,8 +3774,7 @@ impl App {
             | "project.pin"
             | "project.unpin"
             | "project.leave"
-            | "project.workspaces"
-            | "project.line_endings" => {
+            | "project.workspaces" => {
                 let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
                     self.pick_project(None);
                     return;
@@ -3967,10 +3803,6 @@ impl App {
                     "project.untrust" => self.request(
                         Pending::Done("scripts no longer trusted".into()),
                         Request::ProjectUntrust { addr: p.id },
-                    ),
-                    "project.line_endings" => self.request(
-                        Pending::Done("line endings".into()),
-                        Request::ProjectLineEndings { addr: p.id },
                     ),
                     "project.unpin" => self.request(
                         Pending::Done("unpinned".into()),
@@ -4006,26 +3838,6 @@ impl App {
                     }
                 }
             }
-            "worktree.lock" | "worktree.unlock" => match worktree {
-                Some(w) => self.request(
-                    Pending::Done(
-                        if action == "worktree.lock" { "locked" } else { "unlocked" }.into(),
-                    ),
-                    Request::WorktreeLock { addr: w.id, lock: action == "worktree.lock" },
-                ),
-                None => need_wt(self),
-            },
-            "worktree.pair" | "worktree.unpair" => match worktree {
-                Some(w) => self.request(
-                    Pending::Done(String::new()),
-                    Request::WorktreePair {
-                        addr: w.id,
-                        off: action == "worktree.unpair",
-                        refresh: false,
-                    },
-                ),
-                None => need_wt(self),
-            },
             "worktree.rename" => match worktree {
                 Some(w) if w.is_root => self.toast_err(
                     "that's the main checkout: it's always @root (rename the project, or give it a title)",
@@ -4038,19 +3850,6 @@ impl App {
                         ),
                         text: w.name.clone(),
                         kind: PromptKind::RenameWorktree(w.id),
-                    });
-                }
-                None => need_wt(self),
-            },
-            "worktree.rename_branch" => match worktree {
-                Some(w) => {
-                    self.overlay = Some(Overlay::Prompt {
-                        title: format!(
-                            "Rename {}'s branch (empty: from its first commit)",
-                            w.qualified()
-                        ),
-                        text: w.branch.clone().unwrap_or_default(),
-                        kind: PromptKind::RenameBranch(w.id),
                     });
                 }
                 None => need_wt(self),
@@ -4212,17 +4011,15 @@ impl App {
             }
             Row::Worktree(w) => {
                 let root = self.worktree(w).is_some_and(|w| w.is_root);
-                let mut v =
-                    vec!["session.new", "session.again", "shell.new", "shell.drawer", "shell.pane"];
+                let mut v = vec!["session.new", "shell.new", "shell.drawer", "shell.pane"];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
                 if !root {
-                    v.extend(["worktree.rename", "worktree.archive", "worktree.remove"]);
+                    v.extend(["worktree.rename", "worktree.remove"]);
                 }
                 v
             }
             Row::Project(_) => vec![
                 "session.new",
-                "session.again",
                 "worktree.new",
                 "shell.new",
                 "shell.drawer",
@@ -4249,7 +4046,7 @@ impl App {
             // A workspace (MM1.B): start something in it, set it up; another machine's adds what
             // its link can do.
             Row::Workspace(w) => {
-                let mut v = vec!["session.new", "session.again", "worktree.new", "project.add"];
+                let mut v = vec!["session.new", "worktree.new", "project.add"];
                 if let Some(m) = self.machine_of_name(w) {
                     if m.state != ptyro_core::model::MachineState::Online {
                         v.insert(0, "machine.retry");
@@ -4447,7 +4244,7 @@ impl App {
             });
         }
         // Where else the work can come from (UX1.10).
-        if let Some(p) = &project {
+        if project.is_some() {
             items.push(Item {
                 label: "+ from a PR or an issue…".into(),
                 detail: "paste its URL, or its number".into(),
@@ -4460,20 +4257,6 @@ impl App {
                 key: None,
                 target: Target::Action(Command { action: "wizard.branch", arg: None }),
             });
-            let dirty = self
-                .worktrees
-                .iter()
-                .find(|x| x.project == p.id && x.is_root)
-                .and_then(|x| x.status.as_ref())
-                .is_some_and(|s| s.dirty() > 0);
-            if dirty {
-                items.push(Item {
-                    label: "+ with my uncommitted changes".into(),
-                    detail: format!("a new worktree takes them from {}'s main checkout", p.slug),
-                    key: None,
-                    target: Target::Action(Command { action: "wizard.take", arg: None }),
-                });
-            }
         }
         let here = self.here().display().to_string();
         items.push(Item { label: "here".into(), detail: here, key: None, target: Target::Here });
@@ -4909,35 +4692,6 @@ impl App {
         self.overlay = Some(Overlay::Confirm { action: Confirmed::Quit, text });
     }
 
-    fn confirm_archive(&mut self, w: &WorktreeInfo) {
-        let live = self
-            .sessions
-            .iter()
-            .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && s.state.is_live())
-            .count();
-        let note =
-            if live > 0 { format!(" Its {live} running session(s) stop.") } else { String::new() };
-        self.overlay = Some(Overlay::Confirm {
-            text: format!(
-                "Archive {} ({})? Its branch and a snapshot of its files are kept; restore brings it back.{note} [Y/n]",
-                w.qualified(),
-                w.branch.as_deref().unwrap_or("-")
-            ),
-            action: Confirmed::Archive(w.id.clone()),
-        });
-    }
-
-    /// Deleting an archive can't be undone: asked first.
-    fn confirm_archive_delete(&mut self, addr: &str, label: &str) {
-        self.overlay = Some(Overlay::Confirm {
-            text: format!("Delete the archive of {label}? {} [y/N]", ptyro_core::removal::ARCHIVE),
-            action: Confirmed::Send(
-                Box::new(Request::WorktreeArchiveDelete { addr: addr.to_owned() }),
-                "archive deleted".into(),
-            ),
-        });
-    }
-
     fn confirm_remove(&mut self, w: &WorktreeInfo) {
         let live = self
             .sessions
@@ -5140,68 +4894,11 @@ impl App {
                 self.task_key(key, text, name, naming, wizard)
             }
             Overlay::Form(form) => self.form_key(form, key),
-            Overlay::Suggest { suggestions, spec, split } => match key.code {
-                KeyCode::Char { c: 'y' | 'Y' } | KeyCode::Enter => {
-                    // Written (and trusted when they're its only scripts); then the usual check.
-                    let addr = spec.project.clone();
-                    self.request(
-                        Pending::Suggested(spec, split),
-                        Request::ProjectSuggest { addr, apply: Some(true) },
-                    );
-                }
-                // Esc backs out of the whole thing; `n` is the answer "no, and don't ask again".
-                KeyCode::Esc => self.toast("not created"),
-                KeyCode::Char { c: 'n' | 'N' } => {
-                    self.request(
-                        Pending::Done(String::new()),
-                        Request::ProjectSuggest { addr: spec.project.clone(), apply: Some(false) },
-                    );
-                    self.create_worktree(*spec, split);
-                }
-                _ => self.overlay = Some(Overlay::Suggest { suggestions, spec, split }),
+            Overlay::Picker { mut palette, purpose } => match palette.key(key) {
+                Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
+                Picked::Close => {}
+                Picked::Pick(target) => self.picked(target, purpose),
             },
-            Overlay::Picker { mut palette, purpose } => {
-                // The clean-up list keeps the one selected with ^l: locked, gc leaves it be.
-                if matches!(purpose, Purpose::Gc)
-                    && key.mods.has(Mods::CTRL)
-                    && key.code == (KeyCode::Char { c: 'l' })
-                {
-                    if let Some(Target::Worktree(id)) = palette
-                        .filtered
-                        .get(palette.selected)
-                        .map(|_| palette.item(palette.selected).target.clone())
-                    {
-                        self.request(
-                            Pending::Done("kept: it's locked, so clean-up leaves it alone".into()),
-                            Request::WorktreeLock { addr: id, lock: true },
-                        );
-                    } else {
-                        self.overlay = Some(Overlay::Picker { palette, purpose });
-                    }
-                    return;
-                }
-                // The restore list deletes the one selected with ^x.
-                if matches!(purpose, Purpose::Restore)
-                    && key.mods.has(Mods::CTRL)
-                    && key.code == (KeyCode::Char { c: 'x' })
-                {
-                    if let Some(Target::Archive(addr, label)) = palette
-                        .filtered
-                        .get(palette.selected)
-                        .map(|_| palette.item(palette.selected).target.clone())
-                    {
-                        self.confirm_archive_delete(&addr, &label);
-                    } else {
-                        self.overlay = Some(Overlay::Picker { palette, purpose });
-                    }
-                    return;
-                }
-                match palette.key(key) {
-                    Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
-                    Picked::Close => {}
-                    Picked::Pick(target) => self.picked(target, purpose),
-                }
-            }
             Overlay::Prompt { title, mut text, kind } => match key.code {
                 KeyCode::Esc => {}
                 _ if kind.multiline() && is_newline_key(&key) => {
@@ -5240,13 +4937,6 @@ impl App {
             Overlay::Confirm { action, text } => match (key.code, &action) {
                 // "Keep the pin? [Y/n]": Enter keeps it.
                 (KeyCode::Enter, Confirmed::KeepPin(_)) => {}
-                // Archiving loses nothing: Enter agrees.
-                (KeyCode::Enter, Confirmed::Archive(_)) => self.confirmed(action),
-                // A removal that would lose work: `a` archives it instead (UX1.12).
-                (KeyCode::Char { c: 'a' | 'A' }, Confirmed::RemoveWorktree { id, force: true }) => {
-                    let id = id.clone();
-                    self.confirmed(Confirmed::Archive(id));
-                }
                 (KeyCode::Char { c: 'n' | 'N' }, Confirmed::KeepPin(id)) => {
                     let id = id.clone();
                     self.request(
@@ -5483,12 +5173,6 @@ impl App {
             }
             Confirmed::KeepPin(_) => {}
             Confirmed::Append(file, line) => self.append_line(file, line),
-            Confirmed::Archive(id) => {
-                self.request(
-                    Pending::Done(String::new()),
-                    Request::WorktreeArchive { addr: id, stop_sessions: true },
-                );
-            }
         }
     }
 
@@ -5520,10 +5204,6 @@ impl App {
             (Target::Action(Command { action: "wizard.branch", .. }), Purpose::Target(w)) => {
                 let project = w.project.clone().unwrap_or_default();
                 self.request(Pending::Branches(Box::new(w)), Request::Branches { project });
-            }
-            (Target::Action(Command { action: "wizard.take", .. }), Purpose::Target(w)) => {
-                let project = w.project.clone().unwrap_or_default();
-                self.wizard_done(Wizard { take: true, ..w }, Target::NewWorktree(project));
             }
             (Target::Path(b), Purpose::Branch(w)) => {
                 let project = w.project.clone().unwrap_or_default();
@@ -5562,7 +5242,7 @@ impl App {
             (Target::Script(name), Purpose::Script(wt)) => self.run_script(wt, Some(name)),
             (Target::Worktree(id), Purpose::Gc) => {
                 if let Some(w) = self.worktree(&id).cloned() {
-                    self.confirm_archive(&w);
+                    self.confirm_remove(&w);
                 }
             }
             (Target::Path(path), Purpose::Gc) => {
@@ -5608,12 +5288,6 @@ impl App {
             (Target::Path(arg), Purpose::Cli(mut args)) => {
                 args.push(arg.to_string_lossy().into_owned());
                 self.run_cli(&args);
-            }
-            (Target::Archive(addr, label), Purpose::ArchiveDelete) => {
-                self.confirm_archive_delete(&addr, &label)
-            }
-            (Target::Archive(addr, _), Purpose::Restore) => {
-                self.request(Pending::Done("restored".into()), Request::WorktreeRestore { addr });
             }
             // Picked on its own: where it goes, on the form (SPEC §11.5a).
             (Target::Path(path), Purpose::AddProject(None)) => self.open_project_form(Some(path)),
@@ -5846,13 +5520,6 @@ impl App {
                 );
             }
             PromptKind::CliAsk(job) => self.cli_answer(*job, &text),
-            PromptKind::RenameBranch(id) => {
-                let branch = Some(text.trim().to_owned()).filter(|b| !b.is_empty());
-                self.request(
-                    Pending::Done("branch renamed".into()),
-                    Request::WorktreeRenameBranch { addr: id, branch },
-                );
-            }
             PromptKind::RenameWorkspace(old) => {
                 let machine = self.workspace_machine(&old);
                 let new_name = on_machine(machine.as_deref(), text.trim());
@@ -6763,7 +6430,6 @@ pub(crate) fn worktree_spec(w: &Wizard, project: &str) -> WorktreeSpec {
         issue: w.issue.clone(),
         existing: w.branch.is_some(),
         branch: w.branch.clone(),
-        take_changes: w.take,
         ..WorktreeSpec::default()
     }
 }
@@ -7239,7 +6905,7 @@ mod tests {
         // Answered: it works again.
         status(&mut app.sessions[1], AgentStatus::Working, None, None);
         assert_eq!(step(&mut app), Step::CleanUp);
-        assert!(coach(&app).contains("Press C-q :, type worktree.archive"), "{}", coach(&app));
+        assert!(coach(&app).contains("Press C-q :, type worktree.remove"), "{}", coach(&app));
         app.worktrees.retain(|x| x.id != w.id);
         // Last, a shell of your own in SHELLS: the coach names the key, and one made moves on.
         assert_eq!(step(&mut app), Step::Shells);
@@ -8516,19 +8182,22 @@ mod tests {
                 "{k} is unbound"
             );
         }
-        // A removal that would lose work offers archiving instead.
+        // A removal that would lose work says what, and offers removing anyway or keeping it.
         app.overlay = None;
         app.on_reply(AppMsg::Reply(
             Pending::Removed(w.id.clone()),
             Err(Error::new(ErrorCode::DirtyWorktree, "refusing to remove p1/feat")
                 .with_fix(ptyro_core::error::Again::Force, "Remove anyway")),
         ));
-        assert!(screen(&app).contains("a: archive it instead"));
-        key(&mut app, KeyCode::Char { c: 'a' }, Mods::NONE);
-        assert!(app.overlay.is_none(), "archived (the request went out)");
+        let shown = screen(&app);
+        assert!(shown.contains("y: remove it anyway") && shown.contains("n: keep it"), "{shown}");
+        assert!(!shown.contains("archive"), "{shown}");
+        key(&mut app, KeyCode::Char { c: 'n' }, Mods::NONE);
+        assert!(app.overlay.is_none(), "kept: nothing went out");
         // The row menu has them all, the companion shell too.
         let actions = app.row_actions(&Row::Worktree(w.id.clone()));
-        for a in ["worktree.archive", "worktree.remove", "shell.drawer", "shell.new"] {
+        assert!(!actions.iter().any(|a| a.contains("archive")), "{actions:?}");
+        for a in ["worktree.remove", "shell.drawer", "shell.new"] {
             assert!(actions.contains(&a) && keymap::spec(a).is_some(), "{a}");
         }
     }
@@ -8552,15 +8221,15 @@ mod tests {
     }
 
     #[test]
-    fn work_can_come_from_a_pr_a_branch_or_your_changes() {
+    fn work_can_come_from_a_pr_or_a_branch() {
         let mut app = app();
         with_project(&mut app);
         // The task box takes a pasted PR.
         app.run(&Command { action: "session.new", arg: None });
         typed(&mut app, "https://github.com/acme/app/pull/12");
         assert!(screen(&app).contains("→ pr-12 · claude · PR #12's branch, in a new worktree"));
-        // The wizard's "where": a PR or issue, a branch, and (the main checkout is dirty) your
-        // changes.
+        // The wizard's "where": a PR or issue, or a branch; never the main checkout's
+        // uncommitted changes, even when it has some (taking them was removed, 2026-11-17).
         app.overlay = None;
         let st = ptyro_core::model::RepoStatus { modified: 2, ..Default::default() };
         app.worktrees[0].status = Some(st);
@@ -8568,47 +8237,10 @@ mod tests {
         let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!() };
         let labels: Vec<&str> =
             (0..palette.filtered.len()).map(|i| palette.item(i).label.as_str()).collect();
-        for want in [
-            "+ from a PR or an issue…",
-            "+ on an existing branch…",
-            "+ with my uncommitted changes",
-        ] {
+        for want in ["+ from a PR or an issue…", "+ on an existing branch…"] {
             assert!(labels.contains(&want), "{want}: {labels:?}");
         }
-    }
-
-    #[test]
-    fn a_first_worktree_offers_what_the_project_needs() {
-        let mut app = app();
-        with_project(&mut app);
-        let spec = WorktreeSpec { project: "p1".into(), setup: true, ..WorktreeSpec::default() };
-        let suggestions = ptyro_core::model::SetupSuggestions {
-            project: "myrepo".into(),
-            setup: Some("pnpm install --frozen-lockfile".into()),
-            from: Some("pnpm-lock.yaml".into()),
-            copy: vec![".env".into()],
-            offered: false,
-        };
-        app.on_reply(AppMsg::Reply(
-            Pending::Suggest(Box::new(spec.clone()), None),
-            Ok(Reply::Suggestions { suggestions: suggestions.clone() }),
-        ));
-        let shown = screen(&app);
-        assert!(
-            shown.contains("pnpm-lock.yaml → setup: pnpm install --frozen-lockfile"),
-            "{shown}"
-        );
-        assert!(shown.contains(".env → copied into each worktree"), "{shown}");
-        key(&mut app, KeyCode::Char { c: 'n' }, Mods::NONE);
-        assert!(app.overlay.is_none(), "declined: the worktree is made without them");
-        // Offered once: not again.
-        app.on_reply(AppMsg::Reply(
-            Pending::Suggest(Box::new(spec), None),
-            Ok(Reply::Suggestions {
-                suggestions: ptyro_core::model::SetupSuggestions { offered: true, ..suggestions },
-            }),
-        ));
-        assert!(app.overlay.is_none());
+        assert!(!labels.iter().any(|l| l.contains("uncommitted")), "{labels:?}");
     }
 
     #[test]
@@ -9671,7 +9303,7 @@ mod tests {
                 section: "worktrees".into(),
                 name: "stale".into(),
                 level: "warn".into(),
-                text: "2 stale worktrees, taking 4.0 GiB (2 merged): `ptyro gc` archives or removes them; lock one to keep it".into(),
+                text: "2 stale worktrees, taking 4.0 GiB (2 merged): `ptyro gc` removes the ones you say".into(),
             }]
         };
         app.got_health(stale());
@@ -9998,7 +9630,7 @@ mod tests {
     }
 
     #[test]
-    fn bang_starts_another_shell_in_this_worktree_and_c_n_starts_again() {
+    fn bang_starts_another_shell_in_this_worktree() {
         let mut app = app();
         with_agents(&mut app);
         let spawns = |app: &mut App| {
@@ -10020,24 +9652,16 @@ mod tests {
             assert_eq!(spec.worktree.as_deref(), Some("p1-root"));
             assert!(spec.agent.is_none() && spec.argv.is_empty() && !spec.quick, "a plain shell");
         }
-        act(&mut app, "session.again");
-        let v = spawns(&mut app);
-        assert!(v[0].1.again && v[0].1.worktree.as_deref() == Some("p1-root"));
-        // Its label says what it starts.
-        assert_eq!(app.again_label(), "claude");
-        let codex = ptyro_core::session::LastLaunch {
-            agent: Some("codex".into()),
-            profile: Some("work".into()),
-            ..Default::default()
-        };
-        app.again = Some((Some("p1-root".into()), codex.clone()));
-        assert_eq!(app.again_label(), "codex@work");
-        // Another worktree's answer isn't this one's.
-        app.again = Some((Some("p2-root".into()), codex));
-        assert_eq!(app.again_label(), "claude");
-        for a in ["shell.new", "session.again"] {
-            assert!(app.keymap.key_for(a).is_some(), "{a} has a key");
-        }
+        assert!(app.keymap.key_for("shell.new").is_some(), "shell.new has a key");
+        // Quick new was removed (2026-11-17): its C-n stays free, in both tables.
+        assert!(
+            app.keymap
+                .lookup(Table::Prefix, ptyro_core::config::parse_key("C-n").unwrap())
+                .is_none()
+        );
+        assert!(
+            app.keymap.lookup(Table::Nav, ptyro_core::config::parse_key("C-n").unwrap()).is_none()
+        );
     }
 
     // ── many machines (MM1.B) ─────────────────────────────────────────────
@@ -10092,7 +9716,7 @@ mod tests {
         let shown = screen(&app);
         assert!(shown.contains("laptop2 / work"), "{shown}");
         assert!(!shown.contains("laptop2:fix-flaky-test"), "no machine twice in its rows: {shown}");
-        // Selecting there makes it the workspace you're in: quick new and `n` go there.
+        // Selecting there makes it the workspace you're in: `n` goes there.
         app.focus = Focus::Sidebar;
         app.set_sel(&rows, at + 1);
         assert_eq!(app.workspace, "laptop2:work");

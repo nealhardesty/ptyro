@@ -45,11 +45,15 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q", "-b", "main"]);
     let d = TempDaemon::start_with(BIN, &[("HOME", hs.as_str())], Some(MINE)).unwrap();
-    let discover = |d: &TempDaemon| {
-        let o = d.cmd().args(["project", "discover", "--refresh", "--json"]).output().unwrap();
-        String::from_utf8_lossy(&o.stdout).into_owned()
-    };
-    assert!(!discover(&d).contains(WORK_APP), "not found under the default folders");
+    // What the first run and the TUI's project picker find (`Discover`, rescanned).
+    async fn discover(d: &TempDaemon) -> String {
+        let c = d.client().await.unwrap();
+        match c.request(ptyro_protocol::Request::Discover { refresh: true }).await.unwrap() {
+            ptyro_protocol::Reply::Paths { paths } => format!("{paths:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(!discover(&d).await.contains(WORK_APP), "not found under the default folders");
 
     let mut s = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
         .size(120, 36)
@@ -62,8 +66,8 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
         s.send_when("▾ main", "\x11C")
             // The panel; ⏎ moves to the settings. Down to `clock` and ⏎ turns it off.
             .send_when("Settings — your config", "\rjjjjj\r")
-            // `on_stop` is six below it: pick `stay` from its list.
-            .send_when("ui.clock = off", "jjjjjj\rj\r")
+            // `on_stop` is five below it: pick `stay` from its list.
+            .send_when("ui.clock = off", "jjjjj\rj\r")
             // A number: search for it, jump there, and step it.
             .send_when("ui.on_stop = stay", "/sidebar_width\r+")
             // A list: search, jump, ⏎ opens the box on the current value; clear it and retype.
@@ -88,7 +92,7 @@ async fn the_panel_changes_a_switch_a_choice_a_number_and_a_list_and_the_daemon_
     assert!(file.contains("[daemon]\nscrollback_lines = 5000\n"), "{file}");
     // The running daemon reloaded the file and uses the new folders.
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
-    while !discover(&d).contains(WORK_APP) {
+    while !discover(&d).await.contains(WORK_APP) {
         assert!(
             std::time::Instant::now() < deadline,
             "the daemon never used the new discover.roots"

@@ -91,10 +91,6 @@ enum Cmd {
         /// Run under this profile (default: the worktree's, the project's pin, the workspace's)
         #[arg(long, add = ArgValueCandidates::new(complete::profiles))]
         profile: Option<String>,
-        /// Start another of the agent this worktree last started (its profile and arguments
-        /// too); the project's default agent, else `[agents] default`, when none has
-        #[arg(long, conflicts_with_all = ["agent", "argv", "new_wt", "pr", "issue", "take_changes"])]
-        again: bool,
         /// Run in this worktree (`brisk-rook`, `myrepo/@root`)
         #[arg(long, conflicts_with = "new_wt", add = ArgValueCandidates::new(complete::worktrees))]
         wt: Option<String>,
@@ -119,9 +115,6 @@ enum Cmd {
         /// What it's for, for people to read (default: the prompt); the name stays its address
         #[arg(long)]
         title: Option<String>,
-        /// In a new worktree that takes the main checkout's uncommitted changes with it
-        #[arg(long, conflicts_with_all = ["wt", "pr", "issue"])]
-        take_changes: bool,
         /// In a new worktree checked out from this pull request (number or URL)
         #[arg(long, value_parser = parse_number, conflicts_with_all = ["wt", "issue"])]
         pr: Option<u32>,

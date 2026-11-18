@@ -46,8 +46,7 @@ Conventions:
 | `profile` | string | fixed for its lifetime |
 | `worktree`, `project`, `workspace` | string? | worktree id, project id, home workspace name |
 | `agent` | string? | configured agent name |
-| `script` | string? | `setup`, `archive`, `after_turn`, `run:<name>` for script sessions |
-| `ports` | [number] | ports its processes listen on |
+| `script` | string? | `setup` or `run:<name>` for script sessions |
 | `status` | Status? | the status engine's view (below) |
 | `attention` | `{kind, text, since_ms}`? | set when it wants you; `kind` is `blocked`, `errored`, `done`, `idle`, `exited` or `notification` |
 | `activity` | string? | `"Bash: cargo test"` |
@@ -150,10 +149,9 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `ptyro project ls --json` → `[{id, slug, root, default_branch?, remote_url?, pin?, created_ms, last_used_ms?}]`
 - `ptyro project show P --json` → `{project, worktrees, scripts}`
 - `ptyro project config P --json` → `{config, origin: {"<dotted key>": "<file>"}, imported: [{tool, file, scripts, notes}]}`
-- `ptyro project discover --json` → `[path]`
 - `ptyro ws ls --json` → `[{id, name, profile, notify, projects: [project id], created_ms}]`
 - `ptyro wt ls --json`, `wt status W --json` → Worktree:
-  - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, ports?: {base, count}, created_ms, last_used_ms?, removed_ms?, status?, title?}` (`title`: what it's for, for people to read);
+  - fields: `{id, project, project_slug, name, path, branch?, base?, is_root, state, locked, profile?, created_ms, last_used_ms?, removed_ms?, status?, title?}` (`title`: what it's for, for people to read);
   - `status` is `{head, branch, upstream?, ahead, behind, base_ahead, base_behind, staged, modified, untracked, conflicts, insertions, deletions, subject, unpushed?, pushed?, at_ms}`. `unpushed` (commits on no remote, for a branch with no upstream) and `pushed` (committed work, all of it pushed, nothing uncommitted) are missing when they do not apply (UX2.2).
 - `ptyro wt new … --json` → `{info: Worktree, setup?: Session, agent?: Session, agent_pending, untrusted?, notes}`
 - `ptyro gc --json` → `[{worktree: Worktree, reasons: [string]}]`

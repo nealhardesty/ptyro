@@ -307,10 +307,6 @@ impl Daemon {
         if let Some(b) = &wt.branch {
             v.push(("PTYRO_BRANCH".into(), b.clone()));
         }
-        if let Some(ports) = wt.ports {
-            v.push(("PTYRO_PORT".into(), ports.base.to_string()));
-            v.push(("PTYRO_PORT_COUNT".into(), ports.count.to_string()));
-        }
         // Scripts imported from another tool expect its variables (M5.10).
         let tools: Vec<&str> = ptyro_core::project::ProjectConfig::load(&p.root, &wt.path)
             .map(|c| c.imported.iter().map(|i| i.tool).collect())
@@ -324,9 +320,6 @@ impl Daemon {
             v.push(("CONDUCTOR_IS_LOCAL".into(), "1".into()));
             if let Some(b) = &p.default_branch {
                 v.push(("CONDUCTOR_DEFAULT_BRANCH".into(), b.clone()));
-            }
-            if let Some(ports) = wt.ports {
-                v.push(("CONDUCTOR_PORT".into(), ports.base.to_string()));
             }
         }
         if tools.contains(&"superset") {

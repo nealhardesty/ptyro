@@ -527,17 +527,14 @@ async fn scripts(ctx: &Ctx, r: &mut Report) {
         let Ok(pc) = ptyro_core::project::ProjectConfig::load(&p.root, &p.root) else { continue };
         let crlf = pc.scripts.crlf_files(&p.root);
         if !crlf.is_empty() {
-            r.add(S, &p.slug, Level::Warn, crlf_text(&p.slug, &crlf));
+            r.add(S, &p.slug, Level::Warn, crlf_text(&crlf));
+        }
+        if let Some(text) = port_vars_text(&p.slug, &pc.scripts.describe()) {
+            r.add(S, &format!("{} ports", p.slug), Level::Warn, text);
         }
         if cfg!(windows) && ctx.local {
-            let mut roles: Vec<(String, String)> = [
-                ("setup", &pc.scripts.setup),
-                ("archive", &pc.scripts.archive),
-                ("after_turn", &pc.scripts.after_turn),
-            ]
-            .into_iter()
-            .filter_map(|(k, v)| v.clone().map(|v| (k.to_owned(), v)))
-            .collect();
+            let mut roles: Vec<(String, String)> =
+                pc.scripts.setup.iter().map(|v| ("setup".to_owned(), v.clone())).collect();
             roles.extend(
                 pc.scripts.run.iter().map(|(n, r)| (format!("run:{n}"), r.command.clone())),
             );
@@ -581,13 +578,43 @@ fn retired(text: &str, project: Option<(&str, bool)>, r: &mut Report) {
     }
 }
 
-fn crlf_text(slug: &str, files: &[String]) -> String {
+fn crlf_text(files: &[String]) -> String {
     format!(
-        "{} {} Windows (CRLF) line endings, which bash can't run: `ptyro project line-endings {slug}` \
-         rewrites them with LF in every checkout",
+        "{} {} Windows (CRLF) line endings, which bash can't run: save {} with LF line endings \
+         (`perl -pi -e 's/\\r$//' {}`); a `*.sh text eol=lf` line in .gitattributes, committed, \
+         keeps git from checking {} out with CRLF again",
         files.join(", "),
-        if files.len() == 1 { "has" } else { "have" }
+        if files.len() == 1 { "has" } else { "have" },
+        if files.len() == 1 { "it" } else { "them" },
+        files.join(" "),
+        if files.len() == 1 { "it" } else { "them" }
     )
+}
+
+/// The variables ptyro gave scripts while it handed each worktree a block of ports (removed
+/// 2026-11-17): a script that still reads one gets nothing, so a project's scripts that name
+/// one are a warning, with the fix.
+const PORT_VARS: &[&str] = &["PTYRO_PORT_COUNT", "PTYRO_PORT", "CONDUCTOR_PORT"];
+
+fn port_vars_text(slug: &str, scripts: &str) -> Option<String> {
+    let used: Vec<&str> = PORT_VARS
+        .iter()
+        .copied()
+        .filter(|v| {
+            scripts.match_indices(v).any(|(i, _)| {
+                // `PTYRO_PORT` inside `PTYRO_PORT_COUNT` is that one, not this.
+                !scripts[i + v.len()..].starts_with(|c: char| c == '_' || c.is_ascii_alphanumeric())
+            })
+        })
+        .collect();
+    let first = used.first()?;
+    Some(format!(
+        "{slug}'s scripts use ${}, which ptyro no longer sets (worktrees' port blocks were \
+         removed 2026-11-17), so {} empty now: give the port in the script (`${{{first}:-3000}}` \
+         keeps a default), in its .ptyro.toml or in Settings, under its scripts",
+        used.join(", $"),
+        if used.len() == 1 { "it is" } else { "they are" }
+    ))
 }
 
 /// Shell sessions (WIN1, SPEC §8.7): the shell they run exists, and whether ptyro's integration
@@ -924,6 +951,11 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     for w in &report.warnings {
         r.add(S, "noticed", Level::Warn, w.clone());
     }
+    // What archived worktrees (removed 2026-11-17) left in your repositories, and how to get
+    // one back; a main checkout still paired is among the warnings above.
+    for n in &report.left_behind {
+        r.add("worktrees", "archived", Level::Note, n.clone());
+    }
     if let Some(c) = &report.chats {
         let bad = !c.starts_with("chats: ") || c.contains("integrity") || c.contains("FTS5");
         let level = if bad { Level::Problem } else { Level::Ok };
@@ -1098,7 +1130,6 @@ fn dev_drive_finding(drive: &str, fs: Option<&str>, folder: &str) -> (Level, Str
 
 /// Worktrees left behind once their work is done (and their build output with them): a warning,
 /// so the TUI's health badge and the web's Health page say so and offer the clean-up list.
-/// Archives are only a note: they take next to nothing.
 async fn worktrees(c: &ptyro_client::Client, config: &Config, r: &mut Report) {
     const S: &str = "worktrees";
     if let Ok(Reply::Gc { entries, scratch }) = c.request(Request::Gc).await {
@@ -1119,25 +1150,6 @@ async fn worktrees(c: &ptyro_client::Client, config: &Config, r: &mut Report) {
                 ),
             );
         }
-    }
-    if let Ok(Reply::Archives { entries }) =
-        c.request(Request::WorktreeArchives { project: None }).await
-        && let Some(oldest) = entries.iter().map(|e| e.archived_ms).min()
-    {
-        let purge = match config.worktrees.archive_purge_days {
-            0 => "kept until you delete them (`ptyro wt archive-rm`, or set [worktrees] archive_purge_days)".to_owned(),
-            d => format!("deleted after {d} days"),
-        };
-        r.add(
-            S,
-            "archived",
-            Level::Note,
-            format!(
-                "{} archived, the oldest {} ago; {purge}",
-                entries.len(),
-                crate::cli::ago(oldest)
-            ),
-        );
     }
 }
 
@@ -1174,7 +1186,7 @@ fn stale_text(entries: &[ptyro_core::model::GcEntry], stale_days: u32) -> String
     };
     let n = entries.len();
     format!(
-        "{n} stale worktree{}{size} ({}): `ptyro gc` archives or removes them; lock one to keep it",
+        "{n} stale worktree{}{size} ({}): `ptyro gc` removes the ones you say",
         if n == 1 { "" } else { "s" },
         why.join(", ")
     )
@@ -1860,14 +1872,28 @@ mod tests {
         std::fs::write(t.path().join("scripts/setup.sh"), "#!/bin/bash\r\necho hi\r\n").unwrap();
         std::fs::write(t.path().join("run.sh"), "#!/bin/sh\necho ok\n").unwrap();
         let scripts: ptyro_core::project::Scripts = toml::from_str(
-            "setup = \"bash scripts/setup.sh --quiet\"\narchive = \"./scripts/setup.sh\"\n\
+            "setup = \"bash scripts/setup.sh --quiet\"\n\
              [run.web]\ncommand = \"./run.sh\"\n[run.db]\ncommand = \"'scripts/setup.sh'\"\n",
         )
         .unwrap();
         assert_eq!(scripts.crlf_files(t.path()), ["scripts/setup.sh"]);
         assert!(ptyro_core::project::Scripts::default().crlf_files(t.path()).is_empty());
-        let text = super::crlf_text("api", &["scripts/setup.sh".to_owned()]);
-        assert!(text.contains("`ptyro project line-endings api`"), "{text}");
+        let text = super::crlf_text(&["scripts/setup.sh".to_owned()]);
+        assert!(text.contains("perl -pi -e 's/\\r$//' scripts/setup.sh"), "{text}");
+        assert!(text.contains("eol=lf"), "{text}");
+    }
+
+    /// A project's scripts that still read a port variable ptyro no longer sets (2026-11-17)
+    /// are a warning naming each, with the fix; `PTYRO_PORT_COUNT` isn't `PTYRO_PORT`.
+    #[test]
+    fn scripts_reading_the_old_port_variables_are_flagged() {
+        let text = super::port_vars_text("web", "pnpm dev --port $PTYRO_PORT").unwrap();
+        assert!(text.starts_with("web's scripts use $PTYRO_PORT, which ptyro no longer sets"));
+        assert!(text.contains("${PTYRO_PORT:-3000}"), "{text}");
+        let text = super::port_vars_text("w", "n=$PTYRO_PORT_COUNT; x $CONDUCTOR_PORT").unwrap();
+        assert!(text.contains("$PTYRO_PORT_COUNT, $CONDUCTOR_PORT,"), "{text}");
+        assert!(!text.contains("$PTYRO_PORT,"), "{text}");
+        assert!(super::port_vars_text("w", "make run PORT=3000").is_none());
     }
 
     fn stale(name: &str, reason: &str, bytes: Option<u64>) -> ptyro_core::model::GcEntry {
@@ -1884,7 +1910,7 @@ mod tests {
         }
     }
 
-    /// The nudge says how many, why and how much disk, and how to act on it or keep one.
+    /// The nudge says how many, why and how much disk, and how to act on it.
     #[test]
     fn stale_worktrees_are_a_warning_saying_why_and_how_big() {
         use super::{Level, stale_level, stale_text};
@@ -1897,12 +1923,12 @@ mod tests {
         assert_eq!(stale_level(&entries), Level::Warn);
         assert_eq!(
             stale_text(&entries, 14),
-            "3 stale worktrees, taking 4.0 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` archives or removes them; lock one to keep it"
+            "3 stale worktrees, taking 4.0 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` removes the ones you say"
         );
         let mut one = stale("d", "its directory is gone", None);
         assert_eq!(
             stale_text(std::slice::from_ref(&one), 14),
-            "1 stale worktree (1 gone from disk): `ptyro gc` archives or removes them; lock one to keep it"
+            "1 stale worktree (1 gone from disk): `ptyro gc` removes the ones you say"
         );
         (one.bytes, one.bytes_partial) = (Some(2048), true);
         assert!(stale_text(&[one], 14).contains("taking at least 2.0 KiB"));

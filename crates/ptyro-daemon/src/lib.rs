@@ -1,10 +1,8 @@
 //! The ptyro daemon (SPEC §4): owns every PTY and terminal state, serves clients over a Unix
 //! socket (a named pipe on Windows, WIN5), and keeps sessions alive while no client is attached.
 
-mod again;
 mod agents;
 mod approvals;
-mod archive;
 mod autoreg;
 mod background;
 mod chats;
@@ -23,7 +21,6 @@ mod load;
 mod machines;
 mod meaning;
 mod notifier;
-mod pair;
 mod push;
 mod quick;
 mod registry;
@@ -33,7 +30,6 @@ mod setup;
 mod shells;
 mod sidecar;
 mod structured;
-mod suggest;
 mod summary;
 mod usage;
 mod watchdog;
@@ -455,7 +451,6 @@ async fn serve(
     daemon.start_host_load();
     daemon.start_background();
     daemon.start_agents();
-    daemon.start_archive_purge();
     daemon.start_updates();
     if let Some(store) = &daemon.store {
         match store.close_orphans(daemon.run_id.clone()).await {
@@ -472,10 +467,8 @@ async fn serve(
     }
     daemon.load_devices().await;
     daemon.load_used_links().await;
-    daemon.load_last_launch().await;
     daemon.start_machines().await;
     daemon.load_declined().await;
-    daemon.load_pairs().await;
     daemon.start_serve_supervisor();
     daemon.start_wsl_hold();
     daemon.start_chats().await;

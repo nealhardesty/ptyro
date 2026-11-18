@@ -162,37 +162,6 @@ fn codex_file(checkout: &Path) -> Option<String> {
     names.first().map(|n| format!(".codex/environments/{n}"))
 }
 
-/// A word in double quotes in which only the port variable expands (`$PTYRO_PORT`,
-/// `$((PTYRO_PORT + 1))`): everything else in it, `$(…)`, backticks, quotes and backslashes,
-/// stays text, as it was in the file.
-fn dq_port(a: &str) -> String {
-    let mut out = String::from("\"");
-    let mut rest = a;
-    while let Some(c) = rest.chars().next() {
-        if rest.starts_with("$PTYRO_PORT") {
-            out.push_str("$PTYRO_PORT");
-            rest = &rest["$PTYRO_PORT".len()..];
-            continue;
-        }
-        if let Some(r) = rest.strip_prefix("$((PTYRO_PORT + ")
-            && let Some(end) = r.find("))")
-            && r[..end].bytes().all(|b| b.is_ascii_digit())
-        {
-            let n = end + "$((PTYRO_PORT + ".len() + 2;
-            out.push_str(&rest[..n]);
-            rest = &rest[n..];
-            continue;
-        }
-        if matches!(c, '\\' | '"' | '`' | '$') {
-            out.push('\\');
-        }
-        out.push(c);
-        rest = &rest[c.len_utf8()..];
-    }
-    out.push('"');
-    out
-}
-
 /// Quote one word for `sh`.
 pub fn sh_word(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:@,%".contains(c)) {
@@ -239,9 +208,9 @@ fn str_table(v: Option<&toml::Value>) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-/// `.conductor/settings.toml`: `scripts.setup|archive` strings, `scripts.run` a string or a
-/// table of `{command, args, options.cwd, default, available_in}`, `run_mode`,
-/// `[environment_variables]` (+ `.local`).
+/// `.conductor/settings.toml`: `scripts.setup|archive` strings (an archive script isn't used),
+/// `scripts.run` a string or a table of `{command, args, options.cwd, default, available_in}`,
+/// `run_mode`, `[environment_variables]` (+ `.local`).
 pub fn conductor(text: &str) -> Result<Imported, String> {
     let t: toml::Table = toml::from_str(text).map_err(|e| e.to_string())?;
     let mut i = Imported { tool: "conductor", ..Imported::default() };
@@ -251,7 +220,7 @@ pub fn conductor(text: &str) -> Result<Imported, String> {
     let scripts = t.get("scripts").and_then(toml::Value::as_table);
     let s = |k: &str| scripts.and_then(|s| s.get(k)).and_then(toml::Value::as_str);
     i.scripts.setup = s("setup").map(|c| format!("{pre}{c}"));
-    i.scripts.archive = s("archive").map(|c| format!("{pre}{c}"));
+    not_used(&mut i, "archive", s("archive").is_some());
     if s("run_mode") == Some("nonconcurrent") {
         i.scripts.run_mode = RunMode::Exclusive;
     }
@@ -292,7 +261,7 @@ pub fn conductor_json(text: &str) -> Result<Imported, String> {
     let mut i = Imported { tool: "conductor", ..Imported::default() };
     let s = |k: &str| v["scripts"][k].as_str().filter(|c| !c.trim().is_empty()).map(str::to_owned);
     i.scripts.setup = s("setup");
-    i.scripts.archive = s("archive");
+    not_used(&mut i, "archive", s("archive").is_some());
     if let Some(r) = s("run") {
         add_run(&mut i, "run", r, true);
     }
@@ -300,6 +269,15 @@ pub fn conductor_json(text: &str) -> Result<Imported, String> {
         i.scripts.run_mode = RunMode::Exclusive;
     }
     Ok(i)
+}
+
+/// A script another tool runs when a worktree goes (an archive, teardown or cleanup script):
+/// ptyro runs only setup and run scripts (the rest were removed 2026-11-17), so say so.
+fn not_used(i: &mut Imported, what: &str, there: bool) {
+    if there {
+        i.notes
+            .push(format!("its {what} script isn't used: ptyro runs setup and run scripts only"));
+    }
 }
 
 /// One command per line, stopping at the first failure (Superset runs them in order).
@@ -353,7 +331,7 @@ pub fn superset(checkout: &Path, text: &str) -> Result<Imported, String> {
     let teardown = key("teardown")?;
     let run = key("run")?;
     i.scripts.setup = script_of(&setup, cwd.as_deref());
-    i.scripts.archive = script_of(&teardown, cwd.as_deref());
+    not_used(&mut i, "teardown", !teardown.is_empty());
     if let Some(r) = script_of(&run, cwd.as_deref()) {
         add_run(&mut i, "run", r, true);
     }
@@ -376,7 +354,7 @@ pub fn codex(text: &str) -> Result<Imported, String> {
             .map(str::to_owned)
     };
     i.scripts.setup = script("setup");
-    i.scripts.archive = script("cleanup");
+    not_used(&mut i, "cleanup", script("cleanup").is_some());
     let actions = t.get("actions").and_then(toml::Value::as_array).cloned().unwrap_or_default();
     let has_run =
         actions.iter().any(|a| a.get("name").and_then(toml::Value::as_str) == Some("Run"));
@@ -395,29 +373,11 @@ pub fn codex(text: &str) -> Result<Imported, String> {
     Ok(i)
 }
 
-/// Replace `--port N`, `--port=N` and `-p N` in an argv with `port`.
-fn retarget_port(args: &[String], port: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut it = args.iter().peekable();
-    while let Some(a) = it.next() {
-        if (a == "--port" || a == "-p") && it.peek().is_some() {
-            out.push(a.clone());
-            out.push(port.to_owned());
-            it.next();
-        } else if a.starts_with("--port=") {
-            out.push(format!("--port={port}"));
-        } else {
-            out.push(a.clone());
-        }
-    }
-    out
-}
-
 /// `.claude/launch.json` (Claude Code desktop): `configurations[]` of `{name,
-/// runtimeExecutable, runtimeArgs, program, args, cwd, env, port, autoPort}`. With `autoPort`
-/// (the default) the server gets a port from the worktree's block in `PORT`, and `--port`/`-p`
-/// values are rewritten to it, as Claude does; entries with only a `url` attach to a server
-/// that's already running, so there's nothing to run.
+/// runtimeExecutable, runtimeArgs, program, args, cwd, env, port, autoPort}`. Each runs as
+/// written: ptyro gives worktrees no ports of their own, so a `port` is a note that worktrees
+/// running it at once collide on it. Entries with only a `url` attach to a server that's already
+/// running, so there's nothing to run.
 pub fn claude_launch(text: &str) -> Result<Imported, String> {
     let v: Value = serde_json::from_str(&strip_json_comments(text)).map_err(|e| e.to_string())?;
     let mut i = Imported { tool: "claude", ..Imported::default() };
@@ -426,10 +386,9 @@ pub fn claude_launch(text: &str) -> Result<Imported, String> {
             .map(|a| a.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
             .unwrap_or_default()
     };
-    let mut n = 0;
     for c in v["configurations"].as_array().into_iter().flatten() {
         let name = c["name"].as_str().unwrap_or("server");
-        let mut argv: Vec<String> = if let Some(exe) = c["runtimeExecutable"].as_str() {
+        let argv: Vec<String> = if let Some(exe) = c["runtimeExecutable"].as_str() {
             std::iter::once(exe.to_owned()).chain(strs(&c["runtimeArgs"])).collect()
         } else if let Some(p) = c["program"].as_str() {
             ["node".to_owned(), p.to_owned()].into_iter().chain(strs(&c["args"])).collect()
@@ -438,7 +397,7 @@ pub fn claude_launch(text: &str) -> Result<Imported, String> {
                 .push(format!("{name}: attaches to a running server (url only), nothing to run"));
             continue;
         };
-        let mut env: BTreeMap<String, String> = c["env"]
+        let env: BTreeMap<String, String> = c["env"]
             .as_object()
             .map(|o| {
                 o.iter()
@@ -446,26 +405,12 @@ pub fn claude_launch(text: &str) -> Result<Imported, String> {
                     .collect()
             })
             .unwrap_or_default();
-        let mut prefix = String::new();
-        if c["autoPort"].as_bool() != Some(false) {
-            // One port per server from the worktree's block: $PTYRO_PORT, +1, +2…
-            let port =
-                if n == 0 { "$PTYRO_PORT".to_owned() } else { format!("$((PTYRO_PORT + {n}))") };
-            argv =
-                std::iter::once(argv[0].clone()).chain(retarget_port(&argv[1..], &port)).collect();
-            prefix = format!("PORT=\"{port}\" ");
-            env.remove("PORT");
-            n += 1;
-        } else if let Some(p) = c["port"].as_u64() {
-            i.notes.push(format!(
-                "{name}: fixed port {p} (autoPort = false): worktrees will collide on it"
-            ));
+        if let Some(p) = c["port"].as_u64() {
+            i.notes
+                .push(format!("{name}: port {p}: worktrees running it at once will collide on it"));
         }
-        let words: Vec<String> = argv
-            .iter()
-            .map(|a| if a.contains("PTYRO_PORT") { dq_port(a) } else { sh_word(a) })
-            .collect();
-        let cmd = format!("{}{prefix}{}", env_prefix(&env), words.join(" "));
+        let words: Vec<String> = argv.iter().map(|a| sh_word(a)).collect();
+        let cmd = format!("{}{}", env_prefix(&env), words.join(" "));
         let first = i.scripts.run.is_empty();
         add_run(&mut i, name, in_dir(c["cwd"].as_str(), cmd), first);
     }
@@ -632,29 +577,6 @@ pub fn strip_json_comments(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-#[cfg(unix)] // runs sh
-mod quoting {
-    use super::*;
-
-    #[test]
-    fn only_the_port_variable_expands_in_an_imported_argument() {
-        assert_eq!(dq_port("--port=$PTYRO_PORT"), "\"--port=$PTYRO_PORT\"");
-        assert_eq!(dq_port("--p=$((PTYRO_PORT + 2))"), "\"--p=$((PTYRO_PORT + 2))\"");
-        assert_eq!(dq_port("x$(curl evil)$PTYRO_PORT"), "\"x\\$(curl evil)$PTYRO_PORT\"");
-        assert_eq!(dq_port("a\"b`c\\d$PTYRO_PORT"), "\"a\\\"b\\`c\\\\d$PTYRO_PORT\"");
-        // The shell reads back exactly the text.
-        let out = std::process::Command::new("sh")
-            .args([
-                "-c",
-                &format!("PTYRO_PORT=7; printf %s {}", dq_port("q\"`id`$(id)$PTYRO_PORT\\")),
-            ])
-            .output()
-            .unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout), "q\"`id`$(id)7\\");
-    }
-}
 
 #[cfg(test)]
 mod hostile_files {

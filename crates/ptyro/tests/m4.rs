@@ -1,9 +1,9 @@
 //! M4 end-to-end tests: every adapter through the fake agent's adapter modes (hooks, notify,
 //! sidecars), the status engine, attention, answering prompts, prompt delivery,
 //! dormant sessions and resume across daemon restarts, hibernation, usage meters, notifications
-//! with signed approve links, after_turn, self reports, and the TUI's `a` / `p`.
+//! with signed approve links, self reports, and the TUI's `a` / `p`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
 use std::time::{Duration, Instant};
 
@@ -80,18 +80,6 @@ impl World {
             s = s.env(&k, &v);
         }
         s
-    }
-
-    fn git(&self, dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("HOME", self.home())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
 }
 
@@ -748,68 +736,6 @@ async fn approve_links_refuse_a_public_address() {
     let _c = w.d.client().await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err(), "it listened on 0.0.0.0");
-}
-
-#[tokio::test]
-async fn after_turn_runs_trusted_scripts_and_branches_follow_prompts() {
-    let w = World::new("[worktrees]\nfetch = false\nauto_rename_branch = true\n");
-    let h = w.home();
-    w.git(&h, &["init", "-q", "--bare", "r.git"]);
-    w.git(&h, &["clone", "-q", "r.git", "r"]);
-    let root = h.join("r");
-    std::fs::write(
-        root.join(".ptyro.toml"),
-        "[scripts]\nshell = \"bash\"\nafter_turn = \"echo linted-$PTYRO_WORKTREE_NAME\"\n",
-    )
-    .unwrap();
-    w.git(&root, &["add", "-A"]);
-    w.git(&root, &["commit", "-q", "-m", "init"]);
-    w.ok(&["project", "add", root.to_str().unwrap()]);
-    w.ok(&["project", "trust", "r", "--yes"]);
-    let c = w.d.client().await.unwrap();
-    let Reply::WorktreeCreated { info, agent: Some(a), .. } = c
-        .request(Request::WorktreeNew {
-            spec: ptyro_core::model::WorktreeSpec {
-                project: "r".into(),
-                name: Some("job".into()),
-                agent: Some("claude".into()),
-                prompt: Some("work 0.3 Fix the login bug".into()),
-                ..Default::default()
-            },
-        })
-        .await
-        .unwrap()
-    else {
-        panic!("agent should start right away (no setup)")
-    };
-    // The first prompt names the branch (not pushed yet).
-    let deadline = Instant::now() + WAIT;
-    loop {
-        let Reply::Worktree { info: wt } =
-            c.request(Request::WorktreeGet { addr: info.id.clone() }).await.unwrap()
-        else {
-            panic!()
-        };
-        if wt.branch.as_deref() == Some("work-0-3-fix-the-login") {
-            break;
-        }
-        assert!(Instant::now() < deadline, "branch not renamed: {:?}", wt.branch);
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    // The turn ended: after_turn ran in its own script session.
-    let deadline = Instant::now() + WAIT;
-    loop {
-        let Reply::Sessions { sessions } = c.request(Request::List).await.unwrap() else {
-            panic!()
-        };
-        if let Some(s) = sessions.iter().find(|s| s.script.as_deref() == Some("after_turn")) {
-            w.d.wait_for_text(&c, &s.name, "linted-job", WAIT).await.unwrap();
-            break;
-        }
-        assert!(Instant::now() < deadline, "after_turn never ran");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    let _ = a;
 }
 
 async fn run(s: Script) -> Report {

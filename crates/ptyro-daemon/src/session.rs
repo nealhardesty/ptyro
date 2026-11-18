@@ -91,8 +91,6 @@ pub struct Meta {
     /// The spawning client's variables (SSH agent, display), kept for `restart`.
     pub client_env: BTreeMap<String, String>,
     pub place: Place,
-    /// Ports its processes listen on, refreshed by the daemon's port scan.
-    pub ports: Vec<u16>,
     /// The adapter driving it (`claude`, `generic`…), for agent sessions.
     pub adapter: Option<String>,
     pub conversation: Option<String>,
@@ -356,7 +354,6 @@ fn new_meta(
         last_command_exit: None,
         client_env: BTreeMap::new(),
         place,
-        ports: Vec::new(),
         adapter: None,
         conversation: None,
         attention: None,
@@ -592,7 +589,6 @@ impl Session {
             workspace: meta.place.workspace.clone(),
             agent: meta.place.agent.clone(),
             script: meta.place.script.clone(),
-            ports: meta.ports.clone(),
             status,
             attention: meta.attention.clone(),
             activity,

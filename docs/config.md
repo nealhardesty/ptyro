@@ -8,7 +8,7 @@ ptyro reads two kinds of file. Both are optional.
 | File | Whose | What goes in it |
 |---|---|---|
 | `~/.config/ptyro/config.toml` | yours | the UI, agents, profiles, notifications, the daemon, remote access |
-| `.ptyro.toml` in a repository | the project's (committed) | worktree setup, scripts, ports, prompt snippets |
+| `.ptyro.toml` in a repository | the project's (committed) | worktree setup, scripts, prompt snippets |
 | `.ptyro.local.toml` beside it | yours (not committed) | overrides for `.ptyro.toml` |
 
 **You don't have to edit these files.** Settings (`C-q C` in the TUI, More → Settings on the
@@ -56,15 +56,10 @@ tint_borders = true       # colour pane dividers with the session's profile
 # status_bar = false
 # clock = false           # no clock in the status bar
 # load = false            # no load average in the status bar (or the web's header)
-# show_ports = false      # hide listening ports in the sidebar and pane headers
 
 [worktrees]
 location = "sibling"      # data (default: ptyro's data dir) | sibling (<repo>.worktrees/) | in-repo
 branch_template = "{user}/{name}"   # {name} {user} {date} {issue} {slug}; default {name}
-
-[ports]
-range = "20000-29999"     # each worktree gets `count` ports from here
-count = 10
 
 [discover]
 roots = ["~/dev", "~/src"]   # where `project.add` (`Ctrl-Q P`) looks for repositories
@@ -75,8 +70,7 @@ default = "nvim"
 code = { command = ["code", "{path}"] }
 
 [agents]
-default = "codex"                         # the default agent: `n`'s first choice, and what `C-n`
-                                          # starts where no agent has run (default: claude)
+default = "codex"                         # the default agent: `n`'s first choice (default: claude)
 
 [agents.claude]
 command = ["claude", "--model", "opus"]   # how to start an agent
@@ -235,12 +229,10 @@ share = ["node_modules"]             # shared, not copied (copy-on-write clone, 
 
 [scripts]
 setup = "pnpm install --frozen-lockfile"
-archive = "docker compose down -v"   # before a worktree is removed
 run_mode = "exclusive"               # starting a run script stops it in other worktrees
-# after_turn = "cargo clippy -q"     # after every agent turn
 
 [scripts.run.dev]
-command = "pnpm dev --port $PTYRO_PORT"
+command = "pnpm dev --port 3000"
 default = true
 
 [scripts.run.test]
@@ -254,8 +246,8 @@ command = "cargo test"
   again whenever it changes (`ptyro project trust`).
 - **Trusting a command trusts the files it runs.** Trust pins the text (`cargo test`,
   `./scripts/lint.sh`), not what those commands read, and agents edit the checkout. Scripts
-  and `after_turn` run as you, with your full environment and network,
-  outside any sandbox an agent runs in, right after an agent's turn. Trust a project only if
+  run as you, with your full environment and network, outside any sandbox an agent runs in,
+  after an agent has edited the checkout. Trust a project only if
   you'd run its build and tests yourself after any agent's edit. (ptyro's own background `git`
   calls run no hooks and no `core.fsmonitor`; a new worktree you ask for runs your hooks as git
   would.)
@@ -267,9 +259,13 @@ command = "cargo test"
 - **A repository can never define agent commands or profiles.** Those live only in your config.
 
 Scripts and sessions in a worktree see `PTYRO_PROJECT`, `PTYRO_ROOT_PATH`, `PTYRO_WORKTREE_PATH`,
-`PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` and `PTYRO_PORT_COUNT`. Every session also
-gets `PTYRO_SESSION_ID` and `PTYRO_SOCKET`. `[compat] conductor_env = true` (in your
-config) adds the `CONDUCTOR_*` names, so Conductor setup scripts run unchanged.
+`PTYRO_WORKTREE_NAME` and `PTYRO_BRANCH`. Every session also gets `PTYRO_SESSION_ID` and
+`PTYRO_SOCKET`. `[compat] conductor_env = true` (in your config) adds the `CONDUCTOR_*` names, so
+Conductor setup scripts run unchanged. ptyro gives worktrees no ports (`PTYRO_PORT`,
+`PTYRO_PORT_COUNT` and `CONDUCTOR_PORT` were removed on 2026-11-17): a script that read one
+names its port itself, and `ptyro doctor` flags a project whose scripts still use one.
+Only `setup` and `run` scripts exist: an `archive` or `after_turn` script, and another tool's
+teardown or cleanup script, isn't run (doctor reports the key, with the line that removes it).
 
 ## Where files live
 

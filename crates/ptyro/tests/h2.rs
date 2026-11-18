@@ -34,7 +34,7 @@ async fn workspace_projects(c: &ptyro_client::Client, name: &str) -> Vec<String>
 }
 
 /// A workspace's name is where its saved view and the TUI's note of the last workspace are kept:
-/// they follow a rename. (Quick new is kept by worktree, which a rename doesn't touch: UX3.7.)
+/// they follow a rename.
 #[tokio::test]
 async fn what_is_kept_under_a_workspace_s_name_follows_a_rename() {
     let d = TempDaemon::start(BIN).unwrap();

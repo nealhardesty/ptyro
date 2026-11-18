@@ -201,7 +201,6 @@ fn bad_values_are_refused_with_the_reason() {
         err("notifications.quiet_hours", "late").contains("expected HH:MM-HH:MM")
             || err("notifications.quiet_hours", "late").contains("HH:MM")
     );
-    assert!(err("ports.range", "100-200").contains("1024"));
     assert!(err("ui.nonsense", "1").contains("no such setting"));
     assert!(err("ui.theme", "").contains("pick one"));
     assert!(err("worktrees.stale_days", "0").contains("outside 1 to 3650"));
@@ -466,8 +465,13 @@ fn a_change_goes_to_the_layer_it_names_and_can_be_undone() {
         "ui.clock: nope"
     );
     // Slower ones say so.
-    let d = apply(&user, &Op::Set { key: "ports.count".into(), value: "20".into() }, &lk, &none)
-        .unwrap();
+    let d = apply(
+        &user,
+        &Op::Set { key: "daemon.scrollback_lines".into(), value: "20".into() },
+        &lk,
+        &none,
+    )
+    .unwrap();
     assert_eq!(d.apply, Apply::Next);
     let d = apply(
         &user,
@@ -504,7 +508,7 @@ fn a_change_goes_to_the_layer_it_names_and_can_be_undone() {
     assert!(d.notes.iter().any(|n| n.contains("committed")));
     let d = apply(
         &Layer::Shared(repo.clone()),
-        &Op::Set { key: "scripts.after_turn".into(), value: "cargo fmt".into() },
+        &Op::Set { key: "scripts.setup".into(), value: "cargo fmt".into() },
         &lk,
         &none,
     )

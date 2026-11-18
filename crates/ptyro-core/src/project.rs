@@ -17,8 +17,6 @@ pub const LOCAL_FILE: &str = ".ptyro.local.toml";
 #[serde(default, deny_unknown_fields)]
 pub struct ProjectSection {
     pub name: Option<String>,
-    /// Which *configured* agent new sessions use by default.
-    pub default_agent: Option<String>,
     /// Base for new worktrees, e.g. `origin/main`.
     pub base: Option<String>,
     /// Read other tools' committed config (Conductor, Superset, Codex, Claude Desktop, Cursor,
@@ -70,9 +68,6 @@ pub struct RunScript {
 #[serde(default, deny_unknown_fields)]
 pub struct Scripts {
     pub setup: Option<String>,
-    pub archive: Option<String>,
-    /// After each agent turn (lint/format); run by the status engine from M4.
-    pub after_turn: Option<String>,
     pub run_mode: RunMode,
     pub run: BTreeMap<String, RunScript>,
     /// Which shell runs them (WIN6). Left out of the trust fingerprint while `auto`, so
@@ -82,10 +77,7 @@ pub struct Scripts {
 
 impl Scripts {
     pub fn is_empty(&self) -> bool {
-        self.setup.is_none()
-            && self.archive.is_none()
-            && self.after_turn.is_none()
-            && self.run.is_empty()
+        self.setup.is_none() && self.run.is_empty()
     }
 
     /// The run script `name`, or the default one (the one marked `default`, else the only one).
@@ -101,12 +93,10 @@ impl Scripts {
         }
     }
 
-    /// A script by role: `setup`, `archive`, `after_turn`, or `run:<name>` / a run script name.
+    /// A script by role: `setup`, or `run:<name>` / a run script name.
     pub fn command(&self, which: &str) -> Option<String> {
         match which {
             "setup" => self.setup.clone(),
-            "archive" => self.archive.clone(),
-            "after_turn" => self.after_turn.clone(),
             other => {
                 let name = other.strip_prefix("run:").unwrap_or(other);
                 self.run.get(name).map(|r| r.command.clone())
@@ -137,12 +127,6 @@ impl Scripts {
             let title = format!("run.{name}{}", if r.default { " (default)" } else { "" });
             put(&format!("scripts.run.{name}"), &title, &r.command);
         }
-        if let Some(s) = &self.archive {
-            put("scripts.archive", "archive", s);
-        }
-        if let Some(s) = &self.after_turn {
-            put("scripts.after_turn", "after_turn", s);
-        }
         out
     }
 
@@ -160,10 +144,7 @@ impl Scripts {
     /// as part of each command and fails. Paths relative to `checkout`. A `.bat`, `.cmd` or
     /// `.ps1` file is left alone (cmd wants CRLF, PowerShell doesn't mind).
     pub fn crlf_files(&self, checkout: &Path) -> Vec<String> {
-        let commands = [&self.setup, &self.archive, &self.after_turn]
-            .into_iter()
-            .flatten()
-            .chain(self.run.values().map(|r| &r.command));
+        let commands = self.setup.iter().chain(self.run.values().map(|r| &r.command));
         let mut out: Vec<String> = Vec::new();
         for word in commands.flat_map(|c| c.split_whitespace()) {
             let word = word.trim_matches(['"', '\'']);
@@ -192,11 +173,13 @@ impl Scripts {
 
     /// What trust covers: every field as before `shell` existed, in the same order, and
     /// `shell` after them only when it isn't `auto`, so a fingerprint taken before is the same.
+    /// `archive` and `after_turn` scripts were removed (2026-11-17): always none, so the scripts
+    /// of a project that had neither stay trusted.
     fn trusted_view(&self) -> TrustedScripts<'_> {
         TrustedScripts {
             setup: &self.setup,
-            archive: &self.archive,
-            after_turn: &self.after_turn,
+            archive: &None,
+            after_turn: &None,
             run_mode: self.run_mode,
             run: &self.run,
             shell: (!self.shell.is_auto()).then_some(self.shell),
@@ -218,37 +201,6 @@ fn bash_reads(path: &Path, bytes: &[u8]) -> bool {
             .any(|s| first.split(['/', ' ', '\r', '\t']).any(|w| w == *s))
 }
 
-/// Rewrite `files` (relative to `checkout`) with LF line endings: a temporary file beside each,
-/// then a rename, so a reader never sees half of one. Its permissions are kept. What was
-/// rewritten, relative.
-pub fn rewrite_lf(checkout: &Path, files: &[String]) -> std::io::Result<Vec<String>> {
-    let mut done = Vec::new();
-    for rel in files {
-        let f = checkout.join(rel);
-        let bytes = std::fs::read(&f)?;
-        let mut lf = Vec::with_capacity(bytes.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
-                i += 1;
-                continue;
-            }
-            lf.push(bytes[i]);
-            i += 1;
-        }
-        if lf == bytes {
-            continue;
-        }
-        let perms = std::fs::metadata(&f)?.permissions();
-        let tmp = f.with_extension(format!("ptyro-lf-{}", std::process::id()));
-        std::fs::write(&tmp, &lf)?;
-        std::fs::set_permissions(&tmp, perms)?;
-        std::fs::rename(&tmp, &f)?;
-        done.push(rel.clone());
-    }
-    Ok(done)
-}
-
 #[derive(Serialize)]
 struct TrustedScripts<'a> {
     setup: &'a Option<String>,
@@ -261,7 +213,7 @@ struct TrustedScripts<'a> {
 }
 
 impl ProjectConfig {
-    /// Whether the script for `role` (`setup`, `archive`, `after_turn`, `run:<name>`) came from
+    /// Whether the script for `role` (`setup`, `run:<name>`) came from
     /// another tool's committed config (M5.10), which writes for bash.
     pub fn imported(&self, role: &str) -> bool {
         let key = match role.strip_prefix("run:") {
@@ -393,10 +345,9 @@ impl ProjectConfig {
         let skip = |what: &str, by: &str, notes: &mut Vec<String>| {
             notes.push(format!("{what} not used: {by} defines it"));
         };
-        for (key, mine, theirs) in [
-            ("scripts.setup", &mut self.scripts.setup, i.scripts.setup.take()),
-            ("scripts.archive", &mut self.scripts.archive, i.scripts.archive.take()),
-        ] {
+        for (key, mine, theirs) in
+            [("scripts.setup", &mut self.scripts.setup, i.scripts.setup.take())]
+        {
             let Some(t) = theirs else { continue };
             if mine.is_none() {
                 *mine = Some(t);
@@ -465,7 +416,6 @@ mod tests {
     const SPEC_EXAMPLE: &str = r#"
 [project]
 name = "myrepo"
-default_agent = "claude"
 base = "origin/main"
 
 [worktree]
@@ -478,12 +428,10 @@ setup = """
 pnpm install --frozen-lockfile
 cp -n .env.example .env
 """
-archive = "docker compose down -v"
 run_mode = "exclusive"
-after_turn = "pnpm -s lint --fix"
 
 [scripts.run.dev]
-command = "pnpm dev --port $PTYRO_PORT"
+command = "pnpm dev"
 default = true
 
 [scripts.run.test]
@@ -516,19 +464,18 @@ review = "Review the diff against origin/main and list risks."
         std::fs::create_dir_all(d.join(".conductor")).unwrap();
         std::fs::write(
             d.join(".conductor/settings.toml"),
-            "[scripts]\nsetup = \"pnpm i\"\narchive = \"down\"\n[scripts.run.web]\ncommand = \"pnpm dev\"\ndefault = true\n",
+            "[scripts]\nsetup = \"pnpm i\"\n[scripts.run.web]\ncommand = \"pnpm dev\"\ndefault = true\n",
         )
         .unwrap();
         std::fs::write(d.join(FILE), "[scripts]\nsetup = \"make deps\"\n[scripts.run.dev]\ncommand = \"make run\"\ndefault = true\n").unwrap();
         let c = ProjectConfig::load(d, d).unwrap();
         assert_eq!(c.scripts.setup.as_deref(), Some("make deps"), ".ptyro.toml wins");
-        assert_eq!(c.scripts.archive.as_deref(), Some("down"), "the gap is filled");
         assert!(c.scripts.run["dev"].default && !c.scripts.run["web"].default);
-        assert_eq!(c.origin["scripts.archive"], ".conductor/settings.toml");
+        assert_eq!(c.origin["scripts.run.web"], ".conductor/settings.toml", "the gap is filled");
         assert_eq!(c.origin["scripts.setup"], FILE);
         assert!(c.imported[0].notes.iter().any(|n| n.contains("setup not used")));
         let text = c.scripts.describe_from(&c.origin);
-        assert!(text.contains("── archive (from .conductor/settings.toml) ──"), "{text}");
+        assert!(text.contains("── run.web (from .conductor/settings.toml) ──"), "{text}");
         assert!(text.contains("── setup ──"));
         std::fs::write(d.join(FILE), "[project]\nimport = false\n").unwrap();
         let off = ProjectConfig::load(d, d).unwrap();
@@ -548,32 +495,18 @@ review = "Review the diff against origin/main and list risks."
     }
 
     #[test]
-    fn bash_scripts_with_crlf_are_found_and_rewritten_and_nothing_else() {
+    fn bash_scripts_with_crlf_are_found_and_nothing_else() {
         let d = tempfile::tempdir().unwrap();
         let w = |name: &str, text: &str| std::fs::write(d.path().join(name), text).unwrap();
         w("setup.sh", "#!/bin/bash\r\necho hi\r\n");
         w("build", "#!/usr/bin/env sh\r\nmake\r\n");
         w("go.bat", "@echo off\r\n:top\r\n");
         w("lf.sh", "echo fine\n");
-        let mut s = Scripts {
-            setup: Some("./setup.sh --fast && ./build".into()),
-            archive: Some("go.bat".into()),
-            ..Default::default()
-        };
-        s.run.insert("x".into(), RunScript { command: "sh lf.sh".into(), default: false });
+        let mut s =
+            Scripts { setup: Some("./setup.sh --fast && ./build".into()), ..Default::default() };
+        s.run.insert("x".into(), RunScript { command: "sh lf.sh go.bat".into(), default: false });
         let found = s.crlf_files(d.path());
         assert_eq!(found, ["setup.sh", "build"], "the .bat keeps CRLF; lf.sh is fine");
-        let done = rewrite_lf(d.path(), &found).unwrap();
-        assert_eq!(done, found);
-        assert_eq!(
-            std::fs::read_to_string(d.path().join("setup.sh")).unwrap(),
-            "#!/bin/bash\necho hi\n"
-        );
-        assert!(s.crlf_files(d.path()).is_empty());
-        assert_eq!(
-            std::fs::read_to_string(d.path().join("go.bat")).unwrap(),
-            "@echo off\r\n:top\r\n"
-        );
         // Outside the checkout is never looked at.
         let out = Scripts { setup: Some("../x.sh /etc/y.sh".into()), ..Default::default() };
         assert!(out.crlf_files(d.path()).is_empty());
@@ -588,24 +521,21 @@ review = "Review the diff against origin/main and list risks."
         assert!(c.imported("setup"));
         assert!(!c.imported("run:web"));
         assert!(c.imported("run:dev"));
-        assert!(!c.imported("archive"));
+        assert!(!c.imported("setup-other"));
     }
 
     #[test]
     fn scripts_trusted_before_a_shell_could_be_chosen_stay_trusted() {
-        let mut s = Scripts {
-            setup: Some("./setup.sh".into()),
-            after_turn: Some("make lint".into()),
-            ..Default::default()
-        };
+        let mut s = Scripts { setup: Some("./setup.sh".into()), ..Default::default() };
         s.run.insert(
             "web".into(),
             RunScript { command: "npm run dev -- --port $PTYRO_PORT".into(), default: true },
         );
-        // Taken with the code from before `[scripts] shell` (WIN6): it must not move.
+        // Taken with the code from before `[scripts] shell` (WIN6), and before `archive` and
+        // `after_turn` scripts were removed: it must not move.
         assert_eq!(
             s.fingerprint(),
-            "448325184a537bdb87009544cb0c4b8ad87ce2fd7c26c88b1e6eb124901c61dc"
+            "44e6ec7b512e246b4d8d0f6b7a4f1d781605037ba3f5c05ceb38c4cd1101571d"
         );
         // Choosing a shell changes what runs: trust is asked for again.
         let bash = Scripts { shell: crate::shell::ScriptShell::Bash, ..s.clone() };

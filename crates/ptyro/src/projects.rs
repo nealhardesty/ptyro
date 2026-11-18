@@ -62,12 +62,6 @@ pub enum ProjectCmd {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: Option<String>,
     },
-    /// Rewrite with LF the bash scripts the project's scripts run that have Windows (CRLF) line
-    /// endings, which bash can't run, in its main checkout and every worktree
-    LineEndings {
-        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
-        project: Option<String>,
-    },
     /// Print the project's effective config (.ptyro.toml + .ptyro.local.toml)
     Config {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
@@ -96,25 +90,6 @@ pub enum ProjectCmd {
     Unpin {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: String,
-    },
-    /// List git repositories under discover.roots
-    Discover {
-        /// Rescan instead of using the cache
-        #[arg(long)]
-        refresh: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// What ptyro found the project needs (a setup script from its lockfile, .env files to
-    /// copy into worktrees); --apply writes them to .ptyro.local.toml, --decline says no
-    Suggest {
-        project: Option<String>,
-        #[arg(long, conflicts_with = "decline")]
-        apply: bool,
-        #[arg(long)]
-        decline: bool,
-        #[arg(long)]
-        json: bool,
     },
 }
 
@@ -176,34 +151,6 @@ pub enum WsCmd {
 // Parsed once per command line: boxing `New` would buy nothing.
 #[allow(clippy::large_enum_variant)]
 pub enum WtCmd {
-    /// Archive a worktree: a snapshot of its files and its branch are kept, the worktree goes;
-    /// `wt restore` brings it back as it was. Never loses work, so it doesn't refuse like `rm`
-    Archive {
-        worktree: Option<String>,
-        /// Stop the sessions running in it first
-        #[arg(long)]
-        stop_sessions: bool,
-    },
-    /// Bring an archived worktree back as it was (`name`, `project/name` or its handle)
-    Restore { worktree: String },
-    /// Delete archived worktrees for good (`name`, `project/name` or its handle): the saved
-    /// files go, and the branch too when it is merged into its base or the same as its pushed
-    /// copy. Asks first unless --yes
-    ArchiveRm {
-        #[arg(required = true)]
-        worktrees: Vec<String>,
-        /// Don't ask
-        #[arg(short, long)]
-        yes: bool,
-    },
-    /// Archived worktrees, newest first
-    Archives {
-        /// Only this project's
-        #[arg(short, long, add = ArgValueCandidates::new(crate::complete::projects))]
-        project: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
     /// Change a worktree's title, what people read; no title clears it (its name stays)
     Retitle {
         worktree: String,
@@ -251,10 +198,6 @@ pub enum WtCmd {
         /// What it's for, for people to read (default: the prompt; its name comes from it too)
         #[arg(long)]
         title: Option<String>,
-        /// Move the main checkout's uncommitted changes into it (a copy stays at
-        /// `refs/ptyro/taken/<name>`)
-        #[arg(long, conflicts_with_all = ["pr", "issue", "existing"])]
-        take_changes: bool,
         /// Don't run the setup script
         #[arg(long)]
         no_setup: bool,
@@ -306,22 +249,7 @@ pub enum WtCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Pair mode: the project's main checkout shows this worktree (your IDE and dev server see
-    /// the agent's work); `unpair` brings your own work back
-    Pair {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: String,
-        /// Re-sync the main checkout (edits you made there go to the worktree first)
-        #[arg(long)]
-        refresh: bool,
-    },
-    /// End pair mode: your edits in the main checkout go to the worktree, and the main checkout
-    /// gets its own branch and uncommitted work back
-    Unpair {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: String,
-    },
-    /// Run a lifecycle script: the default run script, or setup, archive, after_turn, a run name
+    /// Run a lifecycle script: the default run script, setup, or a run script by name
     Run {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
@@ -340,28 +268,13 @@ pub enum WtCmd {
         #[arg(short, long, add = ArgValueCandidates::new(crate::complete::editors))]
         editor: Option<String>,
     },
-    /// Lock the worktree against `git worktree prune/remove`
-    Lock {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: String,
-    },
-    Unlock {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: String,
-    },
-    /// Rename a worktree: its name, its address (`project/NEW`). Its branch stays
-    /// (`rename-branch` changes that) and so does its directory, so what runs in it carries on.
+    /// Rename a worktree: its name, its address (`project/NEW`). Its branch stays and so does
+    /// its directory, so what runs in it carries on.
     /// The main checkout is always `@root`
     Rename {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
         new: String,
-    },
-    /// Rename its branch (refused once pushed); without NEW, named after the first commit
-    RenameBranch {
-        #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
-        worktree: String,
-        new: Option<String>,
     },
 }
 
@@ -584,16 +497,6 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             eprintln!("trusted; any change to them asks again");
             Ok(0)
         }
-        ProjectCmd::LineEndings { project } => {
-            let reply =
-                c.request(Request::ProjectLineEndings { addr: project_addr(project)? }).await?;
-            if let Reply::Notes { notes } = reply {
-                for n in notes {
-                    eprintln!("{n}");
-                }
-            }
-            Ok(0)
-        }
         ProjectCmd::Untrust { project } => {
             c.request(Request::ProjectUntrust { addr: project_addr(project)? }).await?;
             Ok(0)
@@ -654,54 +557,6 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
         }
         ProjectCmd::Unpin { project } => {
             c.request(Request::ProjectPin { addr: addr_here(project)?, profile: None }).await?;
-            Ok(0)
-        }
-        ProjectCmd::Suggest { project, apply, decline, json } => {
-            let apply = (apply || decline).then_some(apply);
-            let Reply::Suggestions { suggestions: s } =
-                c.request(Request::ProjectSuggest { addr: project_addr(project)?, apply }).await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            if json {
-                print_json(&s);
-                return Ok(0);
-            }
-            if s.is_empty() {
-                eprintln!("{}: nothing to suggest", s.project);
-            }
-            if let Some(cmd) = &s.setup {
-                println!("setup: {cmd}   (from {})", s.from.as_deref().unwrap_or("?"));
-            }
-            if !s.copy.is_empty() {
-                println!("copy into each worktree: {}", s.copy.join(", "));
-            }
-            match apply {
-                Some(true) => eprintln!("written to .ptyro.local.toml"),
-                Some(false) => eprintln!("not offered again"),
-                None if !s.is_empty() => {
-                    eprintln!("`ptyro project suggest --apply` writes them to .ptyro.local.toml")
-                }
-                None => {}
-            }
-            Ok(0)
-        }
-        ProjectCmd::Discover { refresh, json } => {
-            let Reply::Paths { paths } = c.request(Request::Discover { refresh }).await? else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            let known = projects_of(c.request(Request::ProjectList).await?)?;
-            if json {
-                print_json(&paths);
-                return Ok(0);
-            }
-            for p in &paths {
-                let mark = if known.iter().any(|k| k.root == *p) { "  (registered)" } else { "" };
-                println!("{}{mark}", p.display());
-            }
-            if paths.is_empty() {
-                eprintln!("no repositories under discover.roots");
-            }
             Ok(0)
         }
     }
@@ -789,7 +644,6 @@ pub async fn ws(ctx: &Ctx, cmd: WsCmd) -> Result<i32, Error> {
 
 /// Create a worktree, asking about guards on a TTY.
 async fn create(c: &Client, spec: WorktreeSpec, yes: bool) -> Result<Reply, Error> {
-    offer_suggestions(c, &spec.project).await;
     with_confirmation(c, Request::WorktreeNew { spec }, yes, |r| {
         if let Request::WorktreeNew { spec } = r {
             spec.override_pin = true;
@@ -797,30 +651,6 @@ async fn create(c: &Client, spec: WorktreeSpec, yes: bool) -> Result<Reply, Erro
         }
     })
     .await
-}
-
-/// A project's first worktree, on a TTY (UX1.11): offer what ptyro found it needs, once.
-async fn offer_suggestions(c: &Client, project: &str) {
-    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        return;
-    }
-    let Ok(Reply::Suggestions { suggestions: s }) =
-        c.request(Request::ProjectSuggest { addr: project.into(), apply: None }).await
-    else {
-        return;
-    };
-    if s.offered || s.is_empty() {
-        return;
-    }
-    eprintln!("{}'s first worktree. ptyro found:", s.project);
-    if let Some(cmd) = &s.setup {
-        eprintln!("  {} → setup = \"{cmd}\"", s.from.as_deref().unwrap_or("?"));
-    }
-    if !s.copy.is_empty() {
-        eprintln!("  {} → copied into each worktree (git ignores them)", s.copy.join(", "));
-    }
-    let take = confirm("Write these to .ptyro.local.toml (yours, not committed)?");
-    let _ = c.request(Request::ProjectSuggest { addr: project.into(), apply: Some(take) }).await;
 }
 
 /// On a TTY, offer to trust untrusted scripts and run setup now.
@@ -882,7 +712,6 @@ pub async fn new_in_new_worktree(
         setup: true,
         // Named and titled after what it's for (UX1.24); the session below gets the prompt.
         title: a.title.clone().or_else(|| a.prompt.clone().filter(|p| !p.starts_with('@'))),
-        take_changes: a.take_changes,
         ..WorktreeSpec::default()
     };
     let reply = create(&c, spec, a.yes).await?;
@@ -950,105 +779,19 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             let Reply::Sessions { sessions } = c.request(Request::List).await? else {
                 return Err(Error::internal("unexpected reply"));
             };
-            println!(
-                "{:<28} {:<26} {:<9} {:<11} {:>3}  STATUS",
-                "WORKTREE", "BRANCH", "PROFILE", "PORTS", "S"
-            );
+            println!("{:<28} {:<26} {:<9} {:>3}  STATUS", "WORKTREE", "BRANCH", "PROFILE", "S");
             for w in &worktrees {
                 let n = sessions
                     .iter()
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && s.state.is_live())
                     .count();
-                let ports =
-                    w.ports.map_or("-".into(), |p| format!("{}-{}", p.base, p.base + p.count - 1));
                 println!(
-                    "{:<28} {:<26} {:<9} {:<11} {:>3}  {}",
+                    "{:<28} {:<26} {:<9} {:>3}  {}",
                     truncate(&w.qualified(), 28),
                     truncate(w.branch.as_deref().unwrap_or("(detached)"), 26),
                     w.profile.as_deref().unwrap_or("-"),
-                    ports,
                     n,
                     status_line(w)
-                );
-            }
-            Ok(0)
-        }
-        WtCmd::Archive { worktree, stop_sessions } => {
-            let addr = wt_addr(worktree)?;
-            let Reply::Notes { notes: n } =
-                c.request(Request::WorktreeArchive { addr, stop_sessions }).await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            notes(&n);
-            Ok(0)
-        }
-        WtCmd::Restore { worktree } => {
-            let Reply::Worktree { info } =
-                c.request(Request::WorktreeRestore { addr: addr_here(worktree)? }).await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            eprintln!(
-                "restored {} on {} at {}",
-                info.qualified(),
-                info.branch.as_deref().unwrap_or("-"),
-                info.path.display()
-            );
-            Ok(0)
-        }
-        WtCmd::ArchiveRm { worktrees, yes } => {
-            // Found first, then asked about by their names: a typo asks nothing.
-            let mut found = Vec::new();
-            for addr in worktrees {
-                let reply = c.request(Request::WorktreeArchiveGet { addr }).await?;
-                let Reply::Archives { entries } = reply else { return Err(unexpected(reply)) };
-                // The same archive named twice is one.
-                for e in entries {
-                    if !found.iter().any(|f: &ptyro_core::model::ArchiveEntry| f.id == e.id) {
-                        found.push(e);
-                    }
-                }
-            }
-            let what: Vec<String> =
-                found.iter().map(|e| format!("{}/{}", e.project_slug, e.name)).collect();
-            let q = format!("Delete the archive of {}? {}", what.join(", "), removal::ARCHIVE);
-            ask_first(&q, yes)?;
-            // Each is tried: one that fails is said, and the rest go on (as `rm` does).
-            let mut code = 0;
-            for e in found {
-                let name = format!("{}/{}", e.project_slug, e.name);
-                match c.request(Request::WorktreeArchiveDelete { addr: e.id }).await {
-                    Ok(Reply::Notes { notes: n }) => notes(&n),
-                    Ok(other) => crate::cli::failed(&mut code, &name, &unexpected(other)),
-                    Err(e) => crate::cli::failed(&mut code, &name, &e),
-                }
-            }
-            Ok(code)
-        }
-        WtCmd::Archives { project, json } => {
-            let Reply::Archives { entries } =
-                c.request(Request::WorktreeArchives { project: addr_here_opt(project)? }).await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            if json {
-                print_json(&entries);
-                return Ok(0);
-            }
-            if entries.is_empty() {
-                eprintln!("nothing archived");
-            }
-            // Its handle tells apart archives that share a name (`wt restore 7f3k`).
-            let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
-            for e in &entries {
-                println!(
-                    "{:<6} {:<28} {:<8} {:<24} {}",
-                    ptyro_core::lookup::handle(&e.id, ids.iter().copied()),
-                    truncate(&format!("{}/{}", e.project_slug, e.name), 28),
-                    ago(e.archived_ms),
-                    truncate(&e.branch, 24),
-                    e.title.as_deref().unwrap_or("")
                 );
             }
             Ok(0)
@@ -1079,7 +822,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             issue,
             prompt,
             title,
-            take_changes,
             no_setup,
             no_fetch,
             agent,
@@ -1104,7 +846,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 issue,
                 prompt,
                 title,
-                take_changes,
                 base,
                 fetch: no_fetch.then_some(false),
                 setup: !no_setup,
@@ -1194,9 +935,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 "  profile   {}",
                 info.profile.as_deref().unwrap_or("- (resolved per session)")
             );
-            if let Some(p) = info.ports {
-                println!("  ports     {}-{} (PTYRO_PORT={})", p.base, p.base + p.count - 1, p.base);
-            }
             if let Some(s) = &info.status {
                 println!(
                     "  vs base   {} ahead, {} behind, +{} -{}",
@@ -1225,30 +963,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             );
             Ok(0)
         }
-        WtCmd::Pair { worktree, refresh } => {
-            let Reply::Notes { notes: n } = c
-                .request(Request::WorktreePair { addr: addr_here(worktree)?, off: false, refresh })
-                .await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            notes(&n);
-            Ok(0)
-        }
-        WtCmd::Unpair { worktree } => {
-            let Reply::Notes { notes: n } = c
-                .request(Request::WorktreePair {
-                    addr: addr_here(worktree)?,
-                    off: true,
-                    refresh: false,
-                })
-                .await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            notes(&n);
-            Ok(0)
-        }
         WtCmd::Run { worktree, script, attach } => {
             if attach {
                 check_attachable()?;
@@ -1266,31 +980,12 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::Open { worktree, editor } => open(ctx, c, wt_addr(worktree)?, editor).await,
-        WtCmd::Lock { worktree } => {
-            c.request(Request::WorktreeLock { addr: addr_here(worktree)?, lock: true }).await?;
-            Ok(0)
-        }
-        WtCmd::Unlock { worktree } => {
-            c.request(Request::WorktreeLock { addr: addr_here(worktree)?, lock: false }).await?;
-            Ok(0)
-        }
         WtCmd::Rename { worktree, new } => {
             let info = worktree_of(
                 c.request(Request::WorktreeRename { addr: addr_here(worktree)?, name: new })
                     .await?,
             )?;
             eprintln!("renamed to {}", info.qualified());
-            Ok(0)
-        }
-        WtCmd::RenameBranch { worktree, new } => {
-            let info = worktree_of(
-                c.request(Request::WorktreeRenameBranch {
-                    addr: addr_here(worktree)?,
-                    branch: new,
-                })
-                .await?,
-            )?;
-            eprintln!("branch is now {}", info.branch.as_deref().unwrap_or("-"));
             Ok(0)
         }
     }
@@ -1363,31 +1058,18 @@ async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Res
     Ok(0)
 }
 
-/// What `ptyro gc` does with one stale worktree.
-enum Clean {
-    Archive,
-    Remove,
-    /// Lock it: gc, and the doctor's nudge, leave it alone from now on.
-    Keep,
-}
-
-/// `a` archive (keeps everything), `r` remove, `k` keep (lock), else skip; `None` without a
-/// terminal.
-fn ask_clean(what: &str) -> Option<Clean> {
+/// Whether to remove one stale worktree: `r` removes it, anything else keeps it; `false`
+/// without a terminal.
+fn ask_remove(what: &str) -> bool {
     use std::io::{BufRead, IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
-        return None;
+        return false;
     }
-    eprint!("{what}: a archive (keeps its work) · r remove · k keep (lock) · ⏎ skip ");
+    eprint!("{what}: r remove · ⏎ keep ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     let _ = std::io::stdin().lock().read_line(&mut line);
-    match line.trim() {
-        "a" | "A" => Some(Clean::Archive),
-        "r" | "R" => Some(Clean::Remove),
-        "k" | "K" => Some(Clean::Keep),
-        _ => None,
-    }
+    matches!(line.trim(), "r" | "R")
 }
 
 pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Result<i32, Error> {
@@ -1442,35 +1124,21 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Res
     }
     for e in entries {
         let w = e.worktree;
-        // Archiving keeps everything (UX1.12); removing refuses when work would be lost.
-        let req = match ask_clean(&w.qualified()) {
-            Some(Clean::Archive) => {
-                Request::WorktreeArchive { addr: w.id.clone(), stop_sessions: false }
-            }
-            Some(Clean::Remove) => {
-                Request::WorktreeRemove { addr: w.id.clone(), opts: RemoveOpts::default() }
-            }
-            Some(Clean::Keep) => {
-                match c.request(Request::WorktreeLock { addr: w.id.clone(), lock: true }).await {
-                    Ok(_) => eprintln!("  kept: locked (`ptyro wt unlock` lets gc see it again)"),
-                    Err(e) => eprintln!("  {}", e.message),
-                }
-                continue;
-            }
-            None => continue,
-        };
-        if let Request::WorktreeArchive { .. } = req {
-            match c.request(req).await {
-                Ok(Reply::Notes { notes: n }) => n.iter().for_each(|l| eprintln!("  {l}")),
-                Ok(other) => return Err(unexpected(other)),
-                Err(e) => eprintln!("  {}", e.message),
-            }
+        // Removing refuses when work would be lost.
+        if !ask_remove(&w.qualified()) {
             continue;
         }
+        let req = Request::WorktreeRemove { addr: w.id.clone(), opts: RemoveOpts::default() };
         match c.request(req).await {
             Ok(Reply::Removed { notes: n }) => n.iter().for_each(|l| eprintln!("  {l}")),
             Ok(other) => return Err(unexpected(other)),
-            // Refusals (unsaved work) are reported, never forced from gc.
+            // Refusals (unsaved work) are reported, never forced from gc: the way through is
+            // said, for the person to choose.
+            Err(e) if fixed_by(&e, &Again::Force) => eprintln!(
+                "  {}\n  (`ptyro wt rm {} --force` discards it)",
+                e.message.replace('\n', "\n  "),
+                w.qualified()
+            ),
             Err(e) => eprintln!("  {}", e.message),
         }
     }

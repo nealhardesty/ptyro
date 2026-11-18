@@ -20,8 +20,6 @@ pub const WORKTREE_KEEP_BRANCH: &str = "Its directory is deleted; its branch is 
 pub const SAFE: &str = "Nothing is removed if that would lose work.";
 /// The same, forced (`--force`, the web's "Remove anyway").
 pub const FORCED: &str = "Work that isn't saved anywhere else is thrown away.";
-/// `wt archive-rm`.
-pub const ARCHIVE: &str = "Its saved files are deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. This can't be undone.";
 /// `ws rm` (`WorkspaceRemove`).
 pub const WORKSPACE: &str = "Its sessions keep running and move to main, with its chats and the projects no other workspace has.";
 /// `profile rm`.
@@ -62,7 +60,6 @@ pub const DIALOGS: &[(&str, &[&str])] = &[
     ("Delete the chat", &[CHAT]),
     ("Forget project", &[PROJECT]),
     ("Remove worktree", &[WORKTREE, SAFE, FORCED]),
-    ("Delete the archive of", &[ARCHIVE]),
     ("Remove workspace", &[WORKSPACE]),
     ("Remove profile", &[PROFILE, PROFILE_FORCE]),
     ("Revoke device", &[DEVICE]),

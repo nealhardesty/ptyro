@@ -63,6 +63,46 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "the scratchpad was removed; your notes file is yours and stays where it is",
     },
+    Retired {
+        key: "worktrees.archive_purge_days",
+        removed: "2026-11-17",
+        why: "archived worktrees were removed; `ptyro wt rm` removes one, `ptyro gc` lists the stale ones",
+    },
+    Retired {
+        key: "worktrees.auto_rename_branch",
+        removed: "2026-11-17",
+        why: "renaming a worktree's branch was removed; `git branch -m` renames one",
+    },
+    Retired {
+        key: "ports",
+        removed: "2026-11-17",
+        why: "port blocks for worktrees were removed; scripts no longer get PTYRO_PORT, so pick ports in your own scripts",
+    },
+    Retired {
+        key: "ui.show_ports",
+        removed: "2026-11-17",
+        why: "listening-port detection was removed",
+    },
+    Retired {
+        key: "agents.*.after_turn",
+        removed: "2026-11-17",
+        why: "after_turn scripts were removed; run a linter from your agent's own hooks",
+    },
+    Retired {
+        key: "scripts.after_turn",
+        removed: "2026-11-17",
+        why: "after_turn scripts were removed; run a linter from your agent's own hooks",
+    },
+    Retired {
+        key: "project.default_agent",
+        removed: "2026-11-17",
+        why: "only quick new (`new --again`) read it, and quick new was removed; `[agents] default` picks the agent new sessions start",
+    },
+    Retired {
+        key: "scripts.archive",
+        removed: "2026-11-17",
+        why: "archived worktrees, and the script that ran when one was archived or removed, were removed",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
@@ -99,29 +139,38 @@ impl Found {
     }
 }
 
-/// The entry that retires `key` (the key itself, or a table above it).
+/// The entry that retires `key` (the key itself, or a table above it). A `*` in an entry's
+/// path stands for any one name (`agents.*.after_turn`).
 pub fn find(key: &str) -> Option<Retired> {
-    table().into_iter().find(|r| key == r.key || key.starts_with(&format!("{}.", r.key)))
+    let segs: Vec<&str> = key.split('.').collect();
+    table().into_iter().find(|r| {
+        let pat: Vec<&str> = r.key.split('.').collect();
+        segs.len() >= pat.len() && pat.iter().zip(&segs).all(|(p, s)| *p == "*" || p == s)
+    })
 }
 
-/// The retired keys `doc` sets, each once (a retired table is reported as the table).
+/// The retired keys `doc` sets, each once (a retired table is reported as the table), with
+/// each `*` named as the file has it.
 fn scan(doc: &toml_edit::DocumentMut) -> Vec<Found> {
-    let mut out = Vec::new();
-    for r in table() {
-        let mut item = doc.as_item();
-        let mut found = true;
-        for seg in r.key.split('.') {
-            match item.as_table_like().and_then(|t| t.get(seg)) {
-                Some(next) => item = next,
-                None => {
-                    found = false;
-                    break;
-                }
+    fn walk(item: &toml_edit::Item, pat: &[&str], at: &mut Vec<String>, out: &mut Vec<String>) {
+        let Some((seg, rest)) = pat.split_first() else {
+            out.push(at.join("."));
+            return;
+        };
+        let Some(t) = item.as_table_like() else { return };
+        for (name, next) in t.iter() {
+            if *seg == "*" || *seg == name {
+                at.push(name.to_owned());
+                walk(next, rest, at, out);
+                at.pop();
             }
         }
-        if found {
-            out.push(Found { key: r.key.to_owned(), removed: r.removed, why: r.why });
-        }
+    }
+    let mut out = Vec::new();
+    for r in table() {
+        let mut keys = Vec::new();
+        walk(doc.as_item(), &r.key.split('.').collect::<Vec<_>>(), &mut Vec::new(), &mut keys);
+        out.extend(keys.into_iter().map(|key| Found { key, removed: r.removed, why: r.why }));
     }
     out
 }
@@ -149,20 +198,36 @@ pub fn strip(text: &str) -> Option<(String, Vec<Found>)> {
 
 /// The same for a table already parsed (a repository's files, which are merged as tables).
 pub fn strip_table(t: &mut toml::Table) -> Vec<Found> {
-    fn take(t: &mut toml::Table, segs: &[&str]) -> bool {
+    /// Take what `segs` names out of `t`, pushing each path taken (`at` is where `t` is).
+    fn take(t: &mut toml::Table, segs: &[&str], at: &str, out: &mut Vec<String>) {
+        let path =
+            |name: &str| if at.is_empty() { name.to_owned() } else { format!("{at}.{name}") };
         match segs {
-            [] => false,
-            [last] => t.remove(*last).is_some(),
+            [] => {}
+            [last] => {
+                let names: Vec<String> =
+                    t.keys().filter(|k| *last == "*" || last == k).cloned().collect();
+                for n in names {
+                    t.remove(&n);
+                    out.push(path(&n));
+                }
+            }
             [first, rest @ ..] => {
-                t.get_mut(*first).and_then(toml::Value::as_table_mut).is_some_and(|t| take(t, rest))
+                for (n, v) in t.iter_mut().filter(|(k, _)| *first == "*" || first == k) {
+                    if let Some(sub) = v.as_table_mut() {
+                        take(sub, rest, &path(n), out);
+                    }
+                }
             }
         }
     }
-    table()
-        .into_iter()
-        .filter(|r| take(t, &r.key.split('.').collect::<Vec<_>>()))
-        .map(|r| Found { key: r.key.to_owned(), removed: r.removed, why: r.why })
-        .collect()
+    let mut out = Vec::new();
+    for r in table() {
+        let mut keys = Vec::new();
+        take(t, &r.key.split('.').collect::<Vec<_>>(), "", &mut keys);
+        out.extend(keys.into_iter().map(|key| Found { key, removed: r.removed, why: r.why }));
+    }
+    out
 }
 
 /// Take `key` out of `doc`; `true` if it was there. Empty tables it leaves stay (a header with
@@ -273,6 +338,44 @@ mod tests {
         let (out, _) = strip(old).unwrap();
         assert!(!out.contains("pad.md") && out.contains("default = \"zed\""), "{out}");
         assert!(!crate::config::Config::default().notifications.channels.contains(&"inbox".into()));
+    }
+
+    /// The worktree extras' settings (2026-11-17) load and are reported: archives, ports, branch
+    /// names from the first prompt, `after_turn` and `archive` scripts, a project's default
+    /// agent. Each agent's `after_turn` is found under its own name, and its other keys stay.
+    #[test]
+    fn the_worktree_extras_keys_are_retired() {
+        let old = "[worktrees]\narchive_purge_days = 30\nauto_rename_branch = true\nstale_days = 7\n\n[ports]\nrange = \"20000-29999\"\ncount = 10\n\n[ui]\nshow_ports = false\nclock = false\n\n[agents.claude]\nafter_turn = false\n\n[agents.codex]\nafter_turn = true\nusage = true\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert_eq!(c.worktrees.stale_days, 7, "the rest of [worktrees] is still read");
+        assert!(!c.ui.clock);
+        let keys: Vec<String> = found(old).into_iter().map(|f| f.key).collect();
+        assert_eq!(
+            keys,
+            [
+                "worktrees.archive_purge_days",
+                "worktrees.auto_rename_branch",
+                "ports",
+                "ui.show_ports",
+                "agents.claude.after_turn",
+                "agents.codex.after_turn"
+            ]
+        );
+        assert!(
+            find("agents.claude.after_turn").is_some() && find("agents.claude.usage").is_none()
+        );
+        assert!(find("ports.range").is_some());
+        let (out, _) = strip(old).unwrap();
+        assert!(!out.contains("after_turn") && out.contains("usage = true"), "{out}");
+        let repo = "[project]\ndefault_agent = \"codex\"\nbase = \"origin/main\"\n\n[scripts]\nsetup = \"make\"\narchive = \"down\"\nafter_turn = \"lint\"\n";
+        let keys: Vec<String> = found(repo).into_iter().map(|f| f.key).collect();
+        assert_eq!(keys, ["scripts.after_turn", "project.default_agent", "scripts.archive"]);
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join(crate::project::FILE), repo).unwrap();
+        let pc = crate::project::ProjectConfig::load(d.path(), d.path())
+            .expect("an old repository file loads");
+        assert_eq!(pc.scripts.setup.as_deref(), Some("make"));
+        assert_eq!(pc.project.base.as_deref(), Some("origin/main"));
     }
 
     #[test]
