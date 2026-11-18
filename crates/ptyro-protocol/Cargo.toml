@@ -15,7 +15,6 @@ workspace = true
 bytes.workspace = true
 ptyro-agents.workspace = true
 ptyro-core.workspace = true
-ptyro-run.workspace = true
 rmp-serde.workspace = true
 serde.workspace = true
 serde_json.workspace = true

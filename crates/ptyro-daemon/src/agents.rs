@@ -100,7 +100,7 @@ pub fn attention_for(
 }
 
 /// Attention about the agent's own state, which its next `Working` makes stale; the rest
-/// (notifications, gates, runs and messages) is news for you, whatever the agent does next.
+/// (a program's own notifications) is news for you, whatever the agent does next.
 fn about_the_agent(kind: AttentionKind) -> bool {
     matches!(
         kind,
@@ -180,14 +180,6 @@ impl Daemon {
                 if wanted {
                     self.raise(&s, AttentionKind::Exited, state.label()).await;
                 }
-                if state != ProcessState::Dormant && !s.hibernating.load(Ordering::Relaxed) {
-                    self.drop_leases(&s);
-                    if kind == SessionKind::Agent {
-                        self.notice_lead(&s, "exited");
-                        self.lead_exited(&s).await;
-                    }
-                }
-                self.run_member_changed(&s).await;
                 let _ = self.events.send(DomainEvent::SessionExited { info: self.info(&s) });
                 // `exit` in a quick terminal closes it; the next one starts fresh (UX1.25).
                 // A plain shell too, unless `[ui] shell_exit = "keep"` (a restart's dormant ones
@@ -294,7 +286,6 @@ impl Daemon {
                         .is_some() => {}
                 Signal::Prompt { text } => {
                     self.verify_on_prompt(s, &text);
-                    self.mail_seen(s, &text);
                     let first = {
                         let mut m =
                             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -409,16 +400,12 @@ impl Daemon {
         std::mem::take(&mut m.turn_open)
     }
 
-    /// A turn finished: count it, then checkpoint, verify, tell a lead, look for collisions
-    /// (M7) and summarize (UX1.3).
+    /// A turn finished: count it, then checkpoint and verify (M7) and summarize (UX1.3).
     async fn turn_ended(self: &Arc<Self>, s: &Arc<Session>) {
         s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns += 1;
         if s.kind() == SessionKind::Agent {
             self.checkpoint_turn(s);
             self.verify_after_turn(s);
-            self.notice_lead(s, "done");
-            self.radar_after_turn(s);
-            self.run_member_changed(s).await;
         }
         if s.kind() == SessionKind::Agent
             || s.meta
@@ -450,9 +437,6 @@ impl Daemon {
                 self.after_turn(s).await;
             }
         }
-        if t.to.status == AgentStatus::Blocked && s.kind() == SessionKind::Agent {
-            self.notice_lead(s, "blocked");
-        }
         if t.to.status == AgentStatus::Blocked && t.from != Some(AgentStatus::Blocked) {
             self.summarize_after(s);
         }
@@ -476,7 +460,7 @@ impl Daemon {
                 self.snapshot_turn(s);
             }
             // Someone answered, or it got going again: what it wanted is no longer pending. What
-            // is for you (a reviewer's question, a gate, a message) stays until you look.
+            // is for you (a program's own notification) stays until you look.
             let had = {
                 let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let agents = m.attention.as_ref().is_some_and(|a| about_the_agent(a.kind));
@@ -660,13 +644,6 @@ impl Daemon {
             && let Some(out) = self.verify_stop_hook(&s).await
         {
             s.record_event("bounced", serde_json::json!({}));
-            let run = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).run.clone();
-            if let Some((run, step)) = run {
-                self.emit(
-                    &run,
-                    vec![ptyro_run::RunEvent::Bounced { step, detail: "done_when failed".into() }],
-                );
-            }
             // Not idle: it keeps working on the failures.
             let working: Vec<Sourced> = signals
                 .into_iter()
@@ -674,29 +651,6 @@ impl Daemon {
                 .collect();
             self.apply_queued(&s, working).await;
             return Ok(Reply::HookOutput { stdout: out });
-        }
-        // Leases and guards (M7.13): deny the tool call, with a reason the agent reads.
-        if matches!(event, "PreToolUse" | "BeforeTool" | "pre_tool_use")
-            && let Some(reason) = self.pretool_denial(&s, &adapter, &payload)
-        {
-            s.record_event(
-                "denied",
-                serde_json::json!({ "tool": payload.get("tool_name"), "reason": reason }),
-            );
-            let (run, name) = {
-                let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                (m.run.clone(), m.name.clone())
-            };
-            if let Some((run, _)) = run {
-                self.emit(
-                    &run,
-                    vec![ptyro_run::RunEvent::Note {
-                        text: format!("{name}: denied — {reason}")
-                    }],
-                );
-            }
-            self.apply_queued(&s, signals).await;
-            return Ok(Reply::HookOutput { stdout: crate::verify::deny_output(&adapter, &reason) });
         }
         // Remote approvals (M9.5): held before the prompt is announced, so an answer that comes
         // at once finds it; then wait for it. Claude's dialog stays up meanwhile.
@@ -1213,11 +1167,9 @@ impl Daemon {
                     resume: Some(conv),
                     prompt: None,
                     command: None,
-                    mcp: false,
                     structured: mode.unwrap_or(m.structured.is_some()),
                     params: None,
                     fork: false,
-                    chat_tools: false,
                 }),
             })
             .await?;
@@ -1787,10 +1739,8 @@ mod tests {
         for k in [Blocked, Errored, Done, Idle, Exited] {
             assert!(about_the_agent(k), "{k:?}");
         }
-        // A reviewer's question, a gate, a message: for you, whatever the agent does next.
-        for k in [Notification, Gate, Run] {
-            assert!(!about_the_agent(k), "{k:?}");
-        }
+        // A program's own notification: for you, whatever the agent does next.
+        assert!(!about_the_agent(Notification));
     }
 
     fn t(

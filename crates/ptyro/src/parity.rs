@@ -23,12 +23,11 @@ const COMMANDS_DOC: &str = include_str!("../../../docs/commands.md");
 const README: &str = include_str!("../../../README.md");
 const MAKEFILE: &str = include_str!("../../../Makefile");
 /// The web app's sources that register actions: the core and one module per kind of work.
-const WEB_SOURCES: [(&str, &str); 11] = [
+const WEB_SOURCES: [(&str, &str); 10] = [
     ("app.ts", include_str!("../../../web/src/app.ts")),
     ("sessions.ts", include_str!("../../../web/src/sessions.ts")),
     ("projects.ts", include_str!("../../../web/src/projects.ts")),
     ("review.ts", include_str!("../../../web/src/review.ts")),
-    ("runs.ts", include_str!("../../../web/src/runs.ts")),
     ("settings.ts", include_str!("../../../web/src/settings.ts")),
     ("term.ts", include_str!("../../../web/src/term.ts")),
     ("panel.ts", include_str!("../../../web/src/panel.ts")),

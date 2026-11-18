@@ -703,7 +703,7 @@ impl Daemon {
     pub(crate) async fn handle_chat(
         self: &Arc<Self>,
         req: Request,
-        caller: crate::mail::Caller,
+        caller: crate::guard::Caller,
     ) -> Result<Reply, Error> {
         // A chat's own engine asking (its history tools, SPEC §22.10): it may only read, and only
         // what `[chat] history_scope` lets it see. Which chat it is comes from the kernel (the
@@ -1486,7 +1486,7 @@ impl Daemon {
     }
 
     /// The chat whose engine `caller` runs in, if it is one.
-    pub(crate) fn engine_chat_of(&self, caller: crate::mail::Caller) -> Option<String> {
+    pub(crate) fn engine_chat_of(&self, caller: crate::guard::Caller) -> Option<String> {
         if caller.is_link() {
             return None;
         }
@@ -2238,11 +2238,9 @@ impl Daemon {
                     resume: resume.clone(),
                     prompt: None,
                     command: None,
-                    mcp: false,
                     structured: true,
                     params,
                     fork: fork_pending && resume.is_some(),
-                    chat_tools: false,
                 }),
             })
             .await?;

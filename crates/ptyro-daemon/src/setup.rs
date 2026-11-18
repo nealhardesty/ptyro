@@ -360,7 +360,11 @@ impl Daemon {
         let (host, plan, _) =
             plan_on(&self.paths, &self.config().updates, Some(picks), wsl_picks, Some(&moves))
                 .await?;
-        let run = ptyro_run::short_id("setup", 6);
+        let run = {
+            // A short id (`setup-7f3a2c`).
+            let full = ptyro_core::SessionId::new().full();
+            format!("setup-{}", &full[full.len() - 6..])
+        };
         if let Ok(mut c) = CURRENT.lock() {
             *c = Some(SetupRunning { run: run.clone(), plan: plan.clone(), events: Vec::new() });
         }

@@ -43,7 +43,7 @@ fn wait_for(path: &std::path::Path, what: &str) -> String {
 }
 
 /// `ptyro report` from inside session A is A's own word; for session B it is refused, since it
-/// would forge what B's lead, its gates and the review queue believe.
+/// would forge what B's notifications and the review queue believe.
 #[tokio::test]
 async fn a_program_reports_only_for_its_own_session() {
     let d = TempDaemon::start(BIN).unwrap();

@@ -1,6 +1,6 @@
 // Projects, worktrees and workspaces (ROADMAP WEB1.3): the sidebar's tree as the Projects tab,
 // a worktree's page, and everything the TUI does to them: new, finish, archive, restore, remove,
-// scripts, ports, pair mode, locks, leases, the collision radar, checkpoints and the clean-up.
+// scripts, ports, pair mode, locks, checkpoints and the clean-up.
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, shipped, splitMachine, wsLabel, wtTabs } from "./data.js";
 import { machineChip } from "./machines.js";
@@ -43,8 +43,6 @@ const ACTIONS = {
     "workspace.remove": "Remove a workspace",
     "workspace.rename": "Rename a workspace",
     "workspace.member": "Add a project to a workspace, or take it out",
-    "leases": "File leases: which agent holds which files",
-    "radar": "Predicted collisions between a project's live worktrees",
     "checkpoint.list": "Checkpoints: the worktree as it was at the end of each agent turn",
     "checkpoint.diff": "What changed since a checkpoint",
     "checkpoint.restore": "Put the worktree back to a checkpoint (the state now is checkpointed first)",
@@ -105,7 +103,7 @@ function projectsView() {
         const wts = liveWorktrees().filter((w) => w.project === p.id).sort((a, b) => Number(b.is_root) - Number(a.is_root) || (b.last_used_ms ?? 0) - (a.last_used_ms ?? 0));
         return h("section", { class: "proj" }, h("div", { class: "proj-head" }, h("a", { class: "proj-name", href: `#/proj/${enc(p.id)}`, title: tip("project.show") }, wsLabel(p.slug)), machineChip(p.slug), p.pin ? badge(p.pin, "info") : null, h("span", { class: "spacer" }), h("button", { class: "small", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "＋ Task")), h("div", { class: "rows" }, ...wts.map(worktreeRow)));
     }) : [h("div", { class: "empty" }, h("p", {}, wsFilter ? `No projects in ${wsFilter}.` : "No projects yet."), h("button", { class: "primary", onclick: addProject }, "Add a project"))];
-    return h("div", {}, ui.header("Projects", false, cleanUpButton(), h("button", { class: "icon plus", title: tip("project.add"), "aria-label": "Add a project", onclick: addProject }, "＋")), chips, h("main", { class: "list", title: tip("projects") }, ...body, h("div", { class: "foot-links" }, h("a", { href: "#/archives", title: tip("worktree.restore") }, "Archived"), h("a", { href: "#/ws", title: tip("workspace.set") }, "Workspaces"), h("a", { href: "#/leases", title: tip("leases") }, "Leases"), h("a", { href: "#/radar", title: tip("radar") }, "Radar"))));
+    return h("div", {}, ui.header("Projects", false, cleanUpButton(), h("button", { class: "icon plus", title: tip("project.add"), "aria-label": "Add a project", onclick: addProject }, "＋")), chips, h("main", { class: "list", title: tip("projects") }, ...body, h("div", { class: "foot-links" }, h("a", { href: "#/archives", title: tip("worktree.restore") }, "Archived"), h("a", { href: "#/ws", title: tip("workspace.set") }, "Workspaces"))));
 }
 // ── projects ────────────────────────────────────────────────────────────────────────────────
 function addProject() {
@@ -213,7 +211,6 @@ function projectView(id) {
             { title: tip("project.rename"), label: "Rename…", run: () => renameProject(p) },
             { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
             { title: tip("project.line_endings"), label: "Fix scripts' line endings", hint: "Windows (CRLF) endings bash can't run", run: () => void fixLineEndings(p.id, p.slug) },
-            { title: tip("radar"), label: "Collision radar", run: () => go(`#/radar/${enc(p.id)}`) },
             { title: tip("workspace.member"), label: "Workspaces…", run: () => projectWorkspaces(p) },
             { title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) },
         ]) }, "⋯")), h("main", { class: "stack", title: tip("project.show") }, facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]), bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"), ...((r) => r ? [h("button", { title: tipOf("session.again"), onclick: () => void startAgain(r) }, againWords(r)), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)), h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Quick shell")), section("Scripts", pending(projectScripts, id) ?? (scripts.text.trim() ? h("div", {}, h("div", { class: "bar" }, badge(scripts.trusted ? "trusted" : "not trusted", scripts.trusted ? "ok" : "warn"), h("span", { class: "sub" }, scripts.names.join(", "))), h("pre", { class: "block" }, scripts.text), scripts.trusted
@@ -532,27 +529,7 @@ function archivesView() {
         : h("p", { class: "empty" }, "No archived worktrees."));
     return h("div", {}, ui.header("Archived", "#/p"), h("main", { class: "stack", title: tip("worktree.restore") }, body));
 }
-// ── leases, radar, checkpoints ──────────────────────────────────────────────────────────────
-const leases = new Cache(() => conn.request({ t: "lease_list" }).then((r) => r.leases));
-function leasesView() {
-    const ls = leases.get("");
-    const body = pending(leases, "") ?? (ls.length
-        ? h("div", { class: "rows" }, ...ls.map((l) => row(l.pattern, `${l.holder_name}${l.reason ? ` · ${l.reason}` : ""}`, l.exclusive ? badge("exclusive", "warn") : badge("shared"))))
-        : h("p", { class: "empty" }, "No leases: agents haven't claimed any files."));
-    return h("div", {}, ui.header("File leases", "#/p", h("button", { class: "icon", onclick: () => leases.reload(""), "aria-label": "Refresh" }, "↻")), h("main", { class: "stack", title: tip("leases") }, h("p", { class: "intro" }, "Agents claim the files they edit, so two of them don't work on the same ones."), body));
-}
-const radar = new Cache((id) => conn.request({ t: "radar", project: id || null }).then((r) => r.radar));
-function radarView(rest) {
-    const id = safeDecode(rest);
-    const r = radar.get(id);
-    const body = pending(radar, id, "Comparing worktrees…") ?? (() => {
-        const ov = r.overlaps;
-        if (!ov.length)
-            return h("p", { class: "empty" }, `No collisions between ${r.worktrees.length} worktree${r.worktrees.length === 1 ? "" : "s"}.`);
-        return h("div", { class: "rows" }, ...ov.map((o) => row(`${o.a} ↔ ${o.b}`, o.files.slice(0, 4).join(", ") + (o.files.length > 4 ? ` +${o.files.length - 4}` : ""), o.conflicts.length ? badge(`${o.conflicts.length} would conflict`, "bad") : badge(`${o.files.length} shared`, "warn"))));
-    })();
-    return h("div", {}, ui.header("Collision radar", id ? `#/proj/${enc(id)}` : "#/p", h("button", { class: "icon", onclick: () => radar.reload(id), "aria-label": "Refresh" }, "↻")), h("main", { class: "stack", title: tip("radar") }, body));
-}
+// ── checkpoints ──────────────────────────────────────────────────────────────────────────────
 const checkpoints = new Cache((id) => conn.request({ t: "checkpoint_list", addr: id }).then((r) => r.checkpoints));
 function checkpointsTab(w) {
     const cps = checkpoints.get(w.id);
@@ -578,5 +555,3 @@ views.set("wt", worktreeView);
 views.set("ws", () => workspacesView());
 views.set("gc", () => gcView());
 views.set("archives", () => archivesView());
-views.set("leases", () => leasesView());
-views.set("radar", radarView);

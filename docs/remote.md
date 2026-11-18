@@ -85,7 +85,7 @@ ptyro machine rm laptop2
   it there (`ptyro devices revoke bear`), and the link here says so and how to pair again. A code
   works once, for 10 minutes, and pins the other machine's certificate (its own HTTPS); ssh needs
   nothing new.
-- **What stays per machine:** runs, recipes, messages and leases, the scratchpad,
+- **What stays per machine:** the scratchpad,
   and the agents and editors offered in the new-task wizard.
 
 ## From your phone: `ptyro serve`
@@ -267,8 +267,8 @@ device 'phone' (was approve, now full)". Until the new link is opened, the old o
 
 | Scope | Can |
 |---|---|
-| `read` | see sessions, screens, transcripts, status, the inbox, runs |
-| `approve` | also answer permission prompts and gates, clear attention, mute |
+| `read` | see sessions, screens, transcripts, status, the inbox |
+| `approve` | also answer permission prompts, clear attention, mute |
 | `control` | also type into sessions, stop/resume/convert them, start *configured* agents |
 | `full` (default, with a warning) | everything a local client can (any command line, worktrees and shipping, the config, upgrades, pairing devices): what the whole web app needs |
 
@@ -330,7 +330,6 @@ a device with less sees the pages and is told what it lacks.
 - **Projects**: the sidebar's tree. A worktree's page has its sessions and status; **Changes** is
   the diff, where tapping a line comments for the agent and one button sends them all; **Commits**,
   **Checks** (the PR and its CI), **Finish** (a PR, or merge into main), archive, remove.
-- **Runs**: fan-outs and recipes, gates waiting for you, the compare-and-pick view.
 - **More**: health (each finding with its fix), usage, devices (pair another with a link and a QR
   code), profiles and logins, the config editor (checked as you save, applied at once),
   integrations, the daemon (logs, upgrade, restart, login service), first-run setup, and a tour.
@@ -375,7 +374,7 @@ through their protocol for structured sessions.
 | Forged `X-Forwarded-For` to dodge the lockout | Only believed from loopback with `trusted_proxy` (or under `tailscale serve`), and only its last entry. |
 | Clickjacking, injected scripts | A strict CSP (`default-src 'none'`, scripts only from the app itself), `X-Frame-Options: DENY`, no third-party requests. |
 | Push payload snooping | Web Push is end-to-end encrypted (RFC 8291) for the device; push services see ciphertext. VAPID (RFC 8292) identifies your daemon. Subscriptions are accepted only for the browsers' push services (and the hosts in `[remote] push_hosts`), so a device can't make the daemon post elsewhere. |
-| An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts or gates, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices, except one paired with `--scope full`, which can run any command as you anyway. |
+| An agent approving prompts, or pairing a device for itself | An agent can't answer permission prompts, type into a session that is blocked on one, pair or revoke devices, or trust a repository's scripts, from any client. See below for what this does and doesn't stop. Devices can't pair devices, except one paired with `--scope full`, which can run any command as you anyway. |
 
 Remote input is equivalent to running commands as you. Pair only devices you control. `full` is the default because the whole web app needs it, and `ptyro pair` warns you in plain
 words; pair with `--scope approve` for notifications and approvals only, or `--scope control` to

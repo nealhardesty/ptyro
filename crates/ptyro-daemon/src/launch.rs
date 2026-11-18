@@ -29,16 +29,12 @@ pub struct AgentStart {
     pub prompt: Option<String>,
     /// Run this instead of the configured command (`ptyro doctor`'s self-test).
     pub command: Option<Vec<String>>,
-    /// Give it the `ptyro mcp` server (a lead agent, M7.6).
-    pub mcp: bool,
     /// Drive it over its structured protocol (M10).
     pub structured: bool,
     /// More fields for the structured driver's start call (a chat's tool limits).
     pub params: Option<serde_json::Value>,
     /// With `resume`: fork that conversation instead of continuing it (a chat's fork).
     pub fork: bool,
-    /// A lead whose run policy says `chat = true`: its `ptyro mcp` has the chat history tools.
-    pub chat_tools: bool,
 }
 
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
@@ -103,10 +99,6 @@ pub struct Resolution {
 }
 
 const SECRET_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Variables a run gives its sessions (the daemon sets them; SPEC §15.3).
-const RUN_VARS: [&str; 5] =
-    ["PTYRO_RUN_", "PTYRO_STEP_", "PTYRO_LEAD", "PTYRO_ATTEMPT", "PTYRO_CS"];
 
 impl Daemon {
     /// The worktree a session runs in: the one addressed, else the registered worktree that
@@ -364,9 +356,6 @@ impl Daemon {
         for (k, v) in client_env {
             if let Some(allowed) = ptyro_pty::CLIENT_ENV.iter().find(|a| **a == k) {
                 extra.push((allowed, OsStr::new(v)));
-            } else if RUN_VARS.iter().any(|p| k.starts_with(p)) {
-                // A run's step tells its agent where it is (`$PTYRO_STEP_OUT`, M7).
-                extra.push((k, OsStr::new(v)));
             }
         }
         // An agent definition's own env still wins (SPEC §10.10 step 5).
@@ -489,24 +478,6 @@ impl Daemon {
             let project_root =
                 wt.as_ref().and_then(|w| self.project_by_id(&w.project)).map(|p| p.root);
             let integrations = self.paths.data.join("integrations");
-            // A lead (new, or one resumed or restarted) gets ptyro's MCP server (SPEC §15.4).
-            let lead = a.mcp || self.run_of_session(&session).is_some_and(|(_, _, lead)| lead);
-            // (A restarted lead's run knows its policy; a new one's comes with it.)
-            let chat_tools = a.chat_tools
-                || self.run_of_session(&session).and_then(|(_, p, _)| p).is_some_and(|p| p.chat);
-            let mcp = lead.then(|| {
-                let mut env = serde_json::json!({ "PTYRO_SESSION_ID": session, "PTYRO_SOCKET": self.paths.socket.to_string_lossy() });
-                if chat_tools {
-                    env["PTYRO_CHAT_TOOLS"] = "1".into();
-                }
-                serde_json::json!({ "mcpServers": { "ptyro": {
-                    "type": "stdio",
-                    "command": ptyro,
-                    "args": ["mcp"],
-                    "env": env,
-                } } })
-                .to_string()
-            });
             if a.structured {
                 // M10: the agent's structured protocol instead of its terminal UI.
                 let protocol = def
@@ -535,10 +506,6 @@ impl Daemon {
                     .then(free_port)
                     .flatten()
                     .map(|p| (p, ptyro_agents::adapter::random_hex()));
-                let mut base = base;
-                if let (Some(m), "stream-json") = (&mcp, protocol.as_str()) {
-                    base.extend(["--mcp-config".to_owned(), m.clone()]);
-                }
                 argv = ptyro_drive::launch_args(
                     &protocol,
                     &id,
@@ -566,7 +533,6 @@ impl Daemon {
                     port: if id == "opencode" { free_port() } else { None },
                     agent_home: home,
                     project_root: project_root.as_deref(),
-                    mcp: mcp.as_deref(),
                 };
                 let lp = match &a.resume {
                     Some(c) => adapter.resume(&ctx, c),
@@ -637,10 +603,10 @@ impl Daemon {
             stale_after_ms,
             record,
         };
-        // A relaunch in place keeps the session's part in a run.
+        // A relaunch in place keeps the session's check and its place in SHELLS.
         let carried = self.session(l.id).map(|old| {
             let m = old.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (m.run.clone(), m.verify.clone(), m.guard.clone(), m.shelf.clone())
+            (m.verify.clone(), m.shelf.clone())
         });
         let spawned_session = match structured {
             Some((protocol, opts, http)) => {
@@ -676,11 +642,9 @@ impl Daemon {
         // Its number in SHELLS (SPEC §23), before anyone can see it: a new one's, else the one
         // a restart keeps (no longer lost).
         let pending = crate::shells::take_pending(l.id);
-        if let Some((run, verify, guard, shelf)) = carried.filter(|_| l.replace) {
+        if let Some((verify, shelf)) = carried.filter(|_| l.replace) {
             let mut m = session.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            m.run = run;
             m.verify = verify;
-            m.guard = guard;
             m.shelf = shelf.map(|f| crate::session::Shelf { lost: false, ..f });
         }
         if let Some(shelf) = pending {

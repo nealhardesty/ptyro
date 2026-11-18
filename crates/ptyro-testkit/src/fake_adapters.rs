@@ -23,12 +23,9 @@
 //! | `usage <pct>` | runs the statusLine command with rate limits at `pct`% |
 //! | `edit <path> <text>` | a turn that writes `text` to `path` (PreToolUse Write: a denial is honoured) |
 //! | `sh <command>` | a turn that runs `command` (PreToolUse Bash: a denial is honoured) |
-//! | `mcp <tool> <json>` | (claude) calls a tool on the `--mcp-config` server named `ptyro`, prints the result |
-//! | `When you are done, write your answer as JSON to the file P …` | writes a verdict to P (`PTYRO_FAKE_VERDICT=changes` for changes) |
-//! | `Write JSON to P shaped like …` | (a judge) scores every `*.diff` here into P |
 //!
 //! With `PTYRO_FAKE_TURNS=1` it treats prose like a real agent: a line `Label: <command>` runs
-//! the command, and any other line is a short turn (recipes' prompts and follow-ups).
+//! the command, and any other line is a short turn (prompts and follow-ups).
 //! With `PTYRO_FAKE_TOUR=1` (`ptyro tour`) any prose is a task: it asks before running a command,
 //! then fixes the typo in `greeting.txt` (or, told no, leaves it).
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
@@ -66,8 +63,6 @@ struct Fake {
     statusline: Option<String>,
     psp: bool,
     oc: Option<std::sync::Arc<OcServer>>,
-    /// The `--mcp-config` JSON (claude).
-    mcp: Option<Value>,
     /// `PTYRO_FAKE_LATE_SESSION_START=1`: SessionStart only with the first prompt, after the
     /// turn's OSC 7501 working, as Codex 0.166 sends it. Set until it has been sent.
     late_start: std::cell::Cell<bool>,
@@ -105,7 +100,6 @@ impl Fake {
             statusline: None,
             psp: adapter == "claude" || adapter == "opencode" || adapter == "antigravity",
             oc: None,
-            mcp: arg_value(args, "--mcp-config").and_then(|m| serde_json::from_str(&m).ok()),
             late_start: std::cell::Cell::new(
                 std::env::var_os("PTYRO_FAKE_LATE_SESSION_START").is_some(),
             ),
@@ -308,52 +302,6 @@ impl Fake {
         let msg = body(out);
         self.report(out, "state=done");
         self.turn_complete(&msg, out);
-    }
-
-    /// Call a tool on the `ptyro` MCP server from `--mcp-config`, the way Claude would.
-    fn mcp_call(&self, tool: &str, args: &str) -> String {
-        let Some(def) =
-            self.mcp.as_ref().map(|m| m["mcpServers"]["ptyro"].clone()).filter(|d| !d.is_null())
-        else {
-            return "mcp: no ptyro server in --mcp-config".into();
-        };
-        let mut c = std::process::Command::new(def["command"].as_str().unwrap_or("ptyro"));
-        c.args(def["args"].as_array().into_iter().flatten().filter_map(Value::as_str));
-        for (k, v) in def["env"].as_object().into_iter().flatten() {
-            c.env(k, v.as_str().unwrap_or_default());
-        }
-        c.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null());
-        let Ok(mut child) = c.spawn() else { return "mcp: cannot start the server".into() };
-        let mut stdin = child.stdin.take().expect("stdin");
-        let mut lines = std::io::BufReader::new(child.stdout.take().expect("stdout")).lines();
-        let args: Value = serde_json::from_str(args).unwrap_or(json!({}));
-        let msgs = [
-            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "fake-claude", "version": "0" } } }),
-            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
-            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": { "name": tool, "arguments": args, "_meta": { "progressToken": "p1" } } }),
-        ];
-        for m in msgs {
-            let _ = writeln!(stdin, "{m}");
-        }
-        let _ = stdin.flush();
-        let mut result = String::from("mcp: no answer");
-        for line in lines.by_ref() {
-            let Ok(line) = line else { break };
-            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-            if v["id"] == 2 {
-                let text =
-                    v["result"]["content"][0]["text"].as_str().unwrap_or_default().to_owned();
-                let err = v["result"]["isError"] == true || v.get("error").is_some();
-                result = format!("mcp {tool} {}:\n{text}", if err { "error" } else { "ok" });
-                break;
-            }
-        }
-        drop(stdin);
-        let _ = child.kill();
-        let _ = child.wait();
-        result
     }
 
     /// `PTYRO_FAKE_LATE_SESSION_START=1`, at the first prompt: Codex 0.166's order, OSC 7501's
@@ -936,62 +884,8 @@ pub fn main(args: &[String]) -> i32 {
                     m
                 });
             }
-            "mcp" => {
-                let (tool, args) = rest.split_once(' ').unwrap_or((rest, "{}"));
-                f.turn(&mut out, &line, |out| {
-                    let r = f
-                        .tool(&format!("mcp__ptyro__{tool}"), json!({}), || f.mcp_call(tool, args))
-                        .unwrap_or_else(|why| format!("denied: {why}"));
-                    let _ = writeln!(out, "{}", r.replace('\n', "\r\n"));
-                    r.lines().next().unwrap_or("").to_owned()
-                });
-            }
             "/exit" | "/quit" => return 0,
             "" => {}
-            // A step that wants a typed answer (`output = { schema = … }`): write it, like an
-            // agent following the instructions. `PTYRO_FAKE_VERDICT=changes` asks for changes.
-            _ if line.starts_with("When you are done, write your answer as JSON to the file ") => {
-                let path = line
-                    .trim_start_matches("When you are done, write your answer as JSON to the file ")
-                    .split(" (and nothing else")
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
-                let v = match std::env::var("PTYRO_FAKE_VERDICT").as_deref() {
-                    Ok("changes") => {
-                        json!({ "decision": "changes", "issues": ["handle the empty case"], "summary": "almost" })
-                    }
-                    _ => json!({ "decision": "approve", "issues": [], "summary": "looks right" }),
-                };
-                let _ = std::fs::write(&path, v.to_string());
-                let _ = writeln!(out, "answered in {path}");
-                f.turn(&mut out, &line, |_| "answered".into());
-            }
-            // The judge (M7.10): score every candidate diff in the directory.
-            _ if line.starts_with("Write JSON to ") && line.contains(" shaped like ") => {
-                let path = line
-                    .trim_start_matches("Write JSON to ")
-                    .split(" shaped like ")
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
-                let mut scores = serde_json::Map::new();
-                let mut notes = serde_json::Map::new();
-                for e in std::fs::read_dir(".").into_iter().flatten().flatten() {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if let Some(id) = name.strip_suffix(".diff") {
-                        let lines = std::fs::read_to_string(e.path())
-                            .map(|t| t.lines().count())
-                            .unwrap_or(0);
-                        scores.insert(id.to_owned(), json!(if lines > 0 { 6 } else { 1 }));
-                        notes.insert(id.to_owned(), json!(format!("{lines} diff lines")));
-                    }
-                }
-                let _ =
-                    std::fs::write(&path, json!({ "scores": scores, "notes": notes }).to_string());
-                let _ = writeln!(out, "judged {} candidate(s)", scores.len());
-                f.turn(&mut out, &line, |_| "judged".into());
-            }
             // The tour's finish asks its agent to commit: it does, with a message saying what.
             _ if std::env::var("PTYRO_FAKE_TOUR").is_ok()
                 && line.starts_with("[via ptyro] Please commit") =>

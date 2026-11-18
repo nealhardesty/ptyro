@@ -311,8 +311,8 @@ pub const SECTIONS: &[Section] = &[
     },
     Section {
         id: "orchestration",
-        title: "Orchestration",
-        blurb: "Several agents at once: save points, file locks, overlap warnings and messages between them.",
+        title: "Checkpoints",
+        blurb: "A save point after every agent turn that changed its worktree.",
         scope: Scope::User,
     },
     Section {
@@ -511,8 +511,6 @@ const KINDS: &[Choice] = &[
     c("idle", "an agent has been working and stopped"),
     c("exited", "a session's program ended"),
     c("notification", "a program sent its own notification"),
-    c("gate", "a run waits for your go-ahead"),
-    c("run", "a run ended, or a message for you arrived"),
 ];
 const BREAKTHROUGH: &[Choice] = KINDS;
 const CHANNELS: &[Choice] = &[
@@ -756,11 +754,8 @@ pub const SETTINGS: &[Setting] = &[
     s("github.log_lines", "github", int(1, 2000), "Lines of a failing check's log sent to the agent.").adv().unit("lines"),
     s("review.max_unreviewed", "github", int(0, 100), "Hold new agent sessions while this many worktrees are waiting for your review. 0 never holds.").unit("worktrees"),
     s("review.digest", "github", Kind::Duration, "A digest of what is ready for review, at most this often. `off` for never."),
-    // ── Orchestration ──
+    // ── Checkpoints ──
     s("orchestration.checkpoints", "orchestration", Kind::Bool, "Save a restore point (a checkpoint) after every agent turn that changed its worktree."),
-    s("orchestration.lease_ttl", "orchestration", Kind::Duration, "How long an agent's claim on a file lasts unless it renews it.").adv(),
-    s("orchestration.radar", "orchestration", Kind::Bool, "Watch a project's worktrees for agents changing the same files, and tell both."),
-    s("orchestration.message_ttl", "orchestration", Kind::Duration, "A message between agents is dropped if it was not picked up in this time.").adv(),
     // ── Summaries ──
     s("summaries.enabled", "summaries", Kind::Bool, "A one-line `≈` summary after each agent turn, written by a small model on the session's own account. It sends a trimmed, redacted view of the session to the model's provider."),
     s("summaries.daily_cap", "summaries", int(0, 100_000), "The most summaries made for each profile in a day, to cap the cost (about $0.0007 each with Haiku). 0 makes none.").unit("a day"),
@@ -897,7 +892,7 @@ pub const SETTINGS: &[Setting] = &[
     s("worktree.branch_template", "project", Kind::Text, "How branches here are named.").or("your worktrees setting"),
     s("verify.check", "project", dynamic(Source::RunScripts), "A run script that must pass before an agent's turn counts as done.").or("none"),
     s("verify.max_bounces", "project", int(0, 100), "How many times a failing check sends the agent back to fix it before giving up.").or("the default").unit("times"),
-    s("verify.auto", "project", Kind::Bool, "Verify every agent session in this project's worktrees, not only recipe steps."),
+    s("verify.auto", "project", Kind::Bool, "Verify every agent session in this project's worktrees, not only those started with a check."),
     // ── Project scripts ──
     s("scripts.setup", "scripts", Kind::Script, "Runs once in each new worktree.").or("none"),
     s("scripts.archive", "scripts", Kind::Script, "Runs before a worktree is archived or removed.").or("none"),
@@ -1401,7 +1396,7 @@ pub fn check(scope: Scope, text: &str) -> Result<(), String> {
 }
 
 /// The caller's own check of a whole new file (key bindings and themes, which need the TUI to
-/// judge); `&|_| Ok(())` for none.
+/// judge them); `&|_| Ok(())` for none.
 pub type Extra<'a> = &'a dyn Fn(&str) -> Result<(), String>;
 
 fn finish(scope: Scope, key: &str, new: String, extra: Extra<'_>) -> Result<String, String> {

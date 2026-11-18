@@ -208,39 +208,6 @@ impl Transcript {
             .rev()
             .find(|x| matches!(&x.body, ChatBody::Permission { decided: None, .. }))
     }
-
-    /// Tool calls so far: (count by tool, failed, files touched, commands run, cost).
-    pub fn tool_summary(&self) -> ToolSummary {
-        let mut s = ToolSummary::default();
-        for it in &self.items {
-            match &it.body {
-                ChatBody::Tool { name, title, status, files, .. } => {
-                    s.calls += 1;
-                    *s.by_tool.entry(name.clone()).or_default() += 1;
-                    if matches!(status, ToolStatus::Failed) {
-                        s.failed += 1;
-                    }
-                    for f in files {
-                        if !s.files.contains(f) {
-                            s.files.push(f.clone());
-                        }
-                    }
-                    if is_command(name) && s.commands.len() < 20 {
-                        s.commands.push(title.clone());
-                    }
-                }
-                ChatBody::TurnEnd { cost_micro_usd: Some(c), .. } => {
-                    *s.cost_micro_usd.get_or_insert(0) += c;
-                }
-                _ => {}
-            }
-        }
-        s
-    }
-}
-
-fn is_command(tool: &str) -> bool {
-    matches!(tool, "Bash" | "command" | "shell" | "run_shell_command" | "execute" | "bash")
 }
 
 fn clip(b: &mut ChatBody) {
@@ -255,18 +222,6 @@ fn clip(b: &mut ChatBody) {
             .unwrap_or(0);
         o.replace_range(..cut, "…\n");
     }
-}
-
-/// What a session's tool calls add up to (the compare view, M10).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolSummary {
-    pub calls: u32,
-    pub by_tool: std::collections::BTreeMap<String, u32>,
-    pub failed: u32,
-    pub files: Vec<String>,
-    pub commands: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_micro_usd: Option<u64>,
 }
 
 impl ChatItem {
@@ -298,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn summaries_and_pending_permissions() {
+    fn the_pending_permission_is_found() {
         let mut t = Transcript::default();
         for (id, name, title, st) in [
             ("1", "Bash", "cargo test", ToolStatus::Failed),
@@ -337,11 +292,6 @@ mod tests {
                 output_tokens: None,
             },
         ));
-        let s = t.tool_summary();
-        assert_eq!((s.calls, s.failed, s.by_tool["Bash"]), (3, 1, 2));
-        assert_eq!(s.files, ["src/a.rs"]);
-        assert_eq!(s.commands, ["cargo test", "ls"]);
-        assert_eq!(s.cost_micro_usd, Some(500_000));
         assert_eq!(t.pending_permission().unwrap().id, "p");
     }
 

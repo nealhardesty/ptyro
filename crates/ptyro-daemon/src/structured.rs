@@ -902,18 +902,6 @@ fn render(r: &mut Render, it: &ChatItem) -> Vec<u8> {
     out.into_bytes()
 }
 
-/// A transcript's tool calls, as the compare view shows them.
-pub fn tool_use(t: ptyro_core::chat::ToolSummary) -> ptyro_run::wire::ToolUse {
-    ptyro_run::wire::ToolUse {
-        calls: t.calls,
-        by_tool: t.by_tool,
-        failed: t.failed,
-        files: t.files,
-        commands: t.commands,
-        cost_micro_usd: t.cost_micro_usd,
-    }
-}
-
 impl Session {
     /// The transcript changes after revision `rev`, and the draft.
     pub fn chat_since(&self, rev: u64) -> Option<(u64, Vec<ChatItem>, String)> {

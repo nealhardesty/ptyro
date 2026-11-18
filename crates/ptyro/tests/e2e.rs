@@ -335,6 +335,21 @@ async fn a_removed_request_is_answered_with_what_went() {
     };
     let gone = answer(7, serde_json::json!({ "t": "cs", "op": { "op": "list" } })).await;
     assert!(gone.contains("no longer has change sets"), "{gone}");
+    // Orchestration (the same day): runs, gates, fan-out, mail, leases and leads.
+    for (i, (req, what)) in [
+        (serde_json::json!({ "t": "run_list", "active": false }), "runs"),
+        (serde_json::json!({ "t": "gate_resolve", "id": "g-1", "choice": "yes" }), "gates"),
+        (serde_json::json!({ "t": "fanout", "spec": { "agents": ["claude"] } }), "fan-out"),
+        (serde_json::json!({ "t": "msg_post", "to": "@user", "body": "hi" }), "agent mail"),
+        (serde_json::json!({ "t": "lease_list" }), "file leases"),
+        (serde_json::json!({ "t": "lead", "lead": "x", "op": { "op": "policy" } }), "lead agents"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let gone = answer(20 + i as u32, req).await;
+        assert!(gone.contains(&format!("no longer has {what}")), "{gone}");
+    }
     let typo = answer(8, serde_json::json!({ "t": "no_such_request" })).await;
     assert!(typo.contains("couldn't read this request"), "{typo}");
 }

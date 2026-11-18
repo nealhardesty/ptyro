@@ -15,7 +15,7 @@ pub enum AgentStatus {
     Blocked,
     /// Turn finished, waiting for the next prompt.
     Idle,
-    /// Finished and reported complete (orchestration, OSC 7501 `done` from non-agents).
+    /// Finished and reported complete (OSC 7501 `done` from non-agents).
     Done,
     /// Stopped by an error: `kind` says which (rate_limit, auth, overloaded, …).
     Errored,
@@ -212,11 +212,10 @@ pub enum AttentionKind {
     Done,
     Idle,
     Exited,
+    /// `gate` and `run` were kinds of their own until runs were removed (2026-11-17): what an
+    /// older daemon or a live upgrade still carries reads as a notification.
+    #[serde(alias = "gate", alias = "run")]
     Notification,
-    /// A run's gate waits for an answer (M7.5).
-    Gate,
-    /// A run ended (M7.1), or a message for you arrived (M7.7).
-    Run,
 }
 
 impl AttentionKind {
@@ -228,8 +227,6 @@ impl AttentionKind {
             Self::Idle => "idle",
             Self::Exited => "exited",
             Self::Notification => "notification",
-            Self::Gate => "gate",
-            Self::Run => "run",
         }
     }
 
@@ -241,8 +238,6 @@ impl AttentionKind {
             "idle" => Self::Idle,
             "exited" => Self::Exited,
             "notification" => Self::Notification,
-            "gate" => Self::Gate,
-            "run" => Self::Run,
             _ => return None,
         })
     }

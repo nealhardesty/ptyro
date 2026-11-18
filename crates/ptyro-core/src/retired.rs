@@ -22,7 +22,23 @@ pub struct Retired {
 
 /// Every retired key, oldest first. Change sets, the first feature removed (2026-11-17), had
 /// no settings of their own.
-pub const RETIRED: &[Retired] = &[];
+pub const RETIRED: &[Retired] = &[
+    Retired {
+        key: "orchestration.lease_ttl",
+        removed: "2026-11-17",
+        why: "file leases were removed with the rest of orchestration",
+    },
+    Retired {
+        key: "orchestration.radar",
+        removed: "2026-11-17",
+        why: "the collision radar was removed with the rest of orchestration",
+    },
+    Retired {
+        key: "orchestration.message_ttl",
+        removed: "2026-11-17",
+        why: "mail between agents was removed with the rest of orchestration",
+    },
+];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
 /// `PTYRO_TEST_RETIRED` names it (the CLI's tests).
@@ -178,6 +194,27 @@ mod tests {
         let e = crate::config::Config::parse("[retired_for_tests]\nold = 1\n[ui]\nthemme = 1\n")
             .unwrap_err();
         assert!(e.contains("themme"), "a typo beside a retired key is still caught: {e}");
+    }
+
+    /// The orchestration settings (2026-11-17) load and are reported; the checkpoint switch
+    /// beside them is still read.
+    #[test]
+    fn the_orchestration_keys_are_retired_and_checkpoints_stay() {
+        let old = "[orchestration]\ncheckpoints = false\nlease_ttl = \"30m\"\nradar = true\nmessage_ttl = \"24h\"\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert!(!c.checkpoints());
+        let keys: Vec<String> = found(old).into_iter().map(|f| f.key).collect();
+        assert_eq!(
+            keys,
+            ["orchestration.lease_ttl", "orchestration.radar", "orchestration.message_ttl"]
+        );
+        let (out, _) = strip(old).unwrap();
+        assert!(out.contains("checkpoints = false") && !out.contains("radar"), "{out}");
+        let c = crate::config::Config::parse(
+            "[notifications]\non = [\"blocked\", \"gate\", \"run\"]\n",
+        )
+        .expect("the notification kinds runs had are ignored, not an error");
+        assert!(c.notifications.on.contains(&"blocked".to_owned()));
     }
 
     #[test]

@@ -95,9 +95,8 @@ pub fn validate(name: &str) -> Result<(), String> {
     validate_within(name, 64, "")
 }
 
-/// [`validate`] for a name that is kept shorter than 64 because more is appended to it (a
-/// fan-out's agents): at most `max` characters, `why` saying so when
-/// it's longer, and the fix offered fits.
+/// [`validate`] for a name that is kept shorter than 64 because more is appended to it: at most
+/// `max` characters, `why` saying so when it's longer, and the fix offered fits.
 pub fn validate_within(name: &str, max: usize, why: &str) -> Result<(), String> {
     let n = name.chars().count();
     let p =
@@ -193,7 +192,7 @@ pub fn tidy(raw: &str) -> Option<String> {
 }
 
 /// A name made from text that isn't a name (a title, a directory, what a machine calls itself,
-/// a recipe's template), always valid: itself when it already is one (`Laptop 2` → `laptop-2`,
+/// the scratchpad's editor), always valid: itself when it already is one (`Laptop 2` → `laptop-2`,
 /// `laptop2` → `laptop2`), else [`fold`]ed, or `None` when nothing valid is left. Tidying it
 /// silently is fine, since it isn't anyone's input.
 pub fn derive(raw: &str) -> Option<String> {

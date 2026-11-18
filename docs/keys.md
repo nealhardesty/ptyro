@@ -50,7 +50,6 @@ action by name.
 | `b` | broadcast one prompt into every session marked with `Space` in the sidebar |
 | `D` | the inspector: diff, comments, commit, PR, checks, ports, events |
 | `Q` | the review queue |
-| `O` | runs: fan-outs and recipes, their steps and gates, the comparison |
 | `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
 | `g` | the chat list: this workspace's chats by day (`Tab`: every workspace's), `/` searches (titles at once, every message from 3 letters on, on every machine), `⏎` opens (a message hit: at that message), `*` pin, `x` archive, `X` delete, `,` title, `e` export, `A` archived ones, `i` only the imported ones (again: every chat), `I` imports your agents' own histories (asks first, and takes `chat import`'s flags: `codex --since 30d --profile work --dry-run`; ⏎ alone imports everything) |
@@ -115,7 +114,7 @@ setting is. A shell's pane header is the strip of its workspace's shells, the sh
 brackets: a click on a number shows that shell, a click on `＋` starts one.
 
 In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎` resumes it.
-`Ctrl-Q D` and `O` close their view again when it is already open.
+`Ctrl-Q D` closes its view again when it is already open.
 
 **Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
 they put there is a clone of the session they split. Everything else opens full sized: a new
@@ -141,7 +140,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead; a merged one is archived) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
-| `D` `O` | inspector / runs |
+| `D` | inspector |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `Z` | fold everything: every workspace, project, worktree and CHATS section, so the sidebar is one line a workspace (the selection moves to the row it folded into); `Z` again unfolds it as it was before, and whatever arrived meanwhile opens too |
@@ -174,8 +173,8 @@ denies. `Ctrl-C` clears the draft, or interrupts the turn when the draft is empt
 
 ## The inbox (`Ctrl-Q i`)
 
-`j` / `k` move, `Tab` cycles this workspace, the others and All. `⏎` opens the entry's session
-(or the run, for a gate or run entry), `p` peeks at it, `n` notes it to the scratchpad (a line you
+`j` / `k` move, `Tab` cycles this workspace, the others and All. `⏎` opens the entry's session,
+`p` peeks at it, `n` notes it to the scratchpad (a line you
 can edit, with a link back to the session), `r` marks it read, `R` marks all read, `q` or `Esc`
 closes.
 
@@ -246,15 +245,6 @@ Every key in this section, the view's and the list's, is in the key map: the `ch
 `chatlist` tables, rebound in `[keys]` as `"chat:C-f" = "chat.find_in"` or `"chatlist:p" =
 "chat.pin"` (`"none"` unbinds), and in the settings panel's Keys section. The hints on screen
 show the keys as they are bound.
-
-## Runs (`Ctrl-Q O`)
-
-- **Runs:** `⏎` opens a run, `c` opens the comparison, `x` cancels, `F` starts a fan-out.
-  - In a run: `1`–`9` answer a gate (`n` with a note), `⏎` shows the step's session, `D`
-    inspects its worktree, `r` retries a step, `x` cancels.
-  - In the comparison: `m` merges, `C` cherry-picks, `p` opens a PR (each asks first), `d`
-    discards one, `X` discards the rest, `i` / `I` sends a follow-up to one / all, `R` re-runs
-    the evidence, `D` inspects, `⏎` shows the candidate's session.
 
 ## Several lines in one prompt
 

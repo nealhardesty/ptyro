@@ -99,37 +99,6 @@ pub struct Codex;
 impl Codex {
     fn flags(ctx: &LaunchCtx<'_>) -> Vec<String> {
         let mut a = Vec::new();
-        // A lead's MCP servers, as `-c mcp_servers.<name>.…` (config keys, SPEC §20.2).
-        if let Some(servers) = ctx.mcp.and_then(|m| serde_json::from_str::<Value>(m).ok()) {
-            for (name, def) in servers["mcpServers"].as_object().into_iter().flatten() {
-                if let Some(cmd) = def["command"].as_str() {
-                    a.extend([
-                        "-c".into(),
-                        format!("mcp_servers.{name}.command={}", toml_str(cmd)),
-                    ]);
-                }
-                let args: Vec<String> = def["args"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(toml_str)
-                    .collect();
-                a.extend(["-c".into(), format!("mcp_servers.{name}.args=[{}]", args.join(","))]);
-                let env: Vec<String> = def["env"]
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|(k, v)| v.as_str().map(|v| format!("{k}={}", toml_str(v))))
-                    .collect();
-                if !env.is_empty() {
-                    a.extend([
-                        "-c".into(),
-                        format!("mcp_servers.{name}.env={{{}}}", env.join(",")),
-                    ]);
-                }
-            }
-        }
         if !ctx.def.hooks() {
             return a;
         }
@@ -470,7 +439,6 @@ mod tests {
             port: None,
             agent_home: Some(dir.path().to_path_buf()),
             project_root: Some(Path::new("/repo")),
-            mcp: None,
         };
         let a = Codex.launch(&ctx).unwrap().argv;
         assert!(a.iter().any(|x| x == "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"/bin/ptyro hook codex PermissionRequest\",timeout=600}]}]"), "{a:?}");

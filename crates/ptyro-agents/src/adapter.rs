@@ -50,8 +50,6 @@ pub struct LaunchCtx<'a> {
     pub agent_home: Option<PathBuf>,
     /// The project's main checkout (Codex directory trust).
     pub project_root: Option<&'a Path>,
-    /// MCP servers to give the agent (`{"mcpServers": …}` JSON): `ptyro mcp` for a lead.
-    pub mcp: Option<&'a str>,
 }
 
 /// A side channel the daemon runs next to the session.

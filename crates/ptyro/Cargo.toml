@@ -27,7 +27,6 @@ ptyro-agents.workspace = true
 ptyro-client.workspace = true
 ptyro-core.workspace = true
 ptyro-protocol.workspace = true
-ptyro-run.workspace = true
 ptyro-store.workspace = true
 ptyro-term.workspace = true
 ptyro-tui.workspace = true

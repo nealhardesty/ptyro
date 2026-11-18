@@ -87,14 +87,14 @@ export const errText = (e: unknown): string => (e as Error)?.message || String(e
 
 /// A refusal's way through (SPEC §6.6): the same request again with one thing said, and what
 /// its button says.
-export interface Fix { fix: "force" | "stop_sessions" | "stop" | "trust" | "release"; label: string; fingerprint?: string }
+export interface Fix { fix: "force" | "stop_sessions" | "stop" | "release"; label: string }
 export const fixOf = (e: unknown): Fix | undefined => (e as { fix?: Fix })?.fix;
 
 /// `req` again with `f` said, where the request keeps that field; `null` when it has none.
 export function withFix(req: any, f: Fix): any {
   const r = JSON.parse(JSON.stringify(req));
   for (const o of [r, r.opts]) {
-    if (o && typeof o === "object" && f.fix in o) { o[f.fix] = f.fix === "trust" ? f.fingerprint : true; return r; }
+    if (o && typeof o === "object" && f.fix in o) { o[f.fix] = true; return r; }
   }
   return null;
 }
@@ -411,13 +411,6 @@ export function form(title: string, fields: Field[], label: string, go: (v: Valu
   });
   requestAnimationFrame(() => (s.el.querySelector("input:not([type=checkbox]), textarea") as HTMLElement | null)?.focus());
   return Object.assign(s, { input: (key: string) => inputs.get(key) });
-}
-
-/// Candidates for a fan-out: `n` of them, cycling through the picked agents (`ptyro fanout -n`).
-export function cycle<T>(picked: T[], n: number): T[] {
-  if (!picked.length) return [];
-  const count = Math.max(n || picked.length, 1);
-  return Array.from({ length: count }, (_, i) => picked[i % picked.length]);
 }
 
 /// A profile select's options: the profiles that live on `machine` (`null`: this one), by the

@@ -33,15 +33,6 @@ pub const DEVICE: &str =
     "Its token stops working at once and its connections close. Pair it again to bring it back.";
 /// `machine rm`.
 pub const MACHINE: &str = "Its workspaces leave this list. Nothing changes on it, and its pairing stays until you revoke it there.";
-/// `discard RUN CANDIDATE`, then `SAFE` or `FORCED`.
-pub const DISCARD: &str = "Its agent stops and its worktree is removed.";
-/// `discard RUN`: every candidate not picked; then `SAFE` or `FORCED`.
-pub const DISCARD_REST: &str = "Their agents stop and their worktrees are removed.";
-
-/// `SAFE`, or `FORCED` when `force`.
-pub fn safety(force: bool) -> &'static str {
-    if force { FORCED } else { SAFE }
-}
 /// `review rm --all`: comments typed on a worktree's diff, not sent yet.
 pub const REVIEW_ALL: &str =
     "They haven't been sent to its agent, and what you typed in them can't be brought back.";
@@ -50,8 +41,6 @@ pub const CONFIG_ENTRY: &str = "Everything set in it goes too.";
 /// `rm` of a dormant session (owner, 2026-11-09: it asks, as `chat rm` does).
 pub const DORMANT: &str =
     "Its agent's conversation, which it could resume, is forgotten. This can't be undone.";
-/// `run cancel`, `x` in the runs view, the web's Cancel (the daemon's `cancel_step`).
-pub const RUN_CANCEL: &str = "Its running steps are cancelled and the agents they started are stopped; their worktrees stay.";
 /// `gc`'s question about a scratch shell's leftover directory (`ShellScratchRemove`).
 pub const SCRATCH: &str =
     "A scratch shell left it behind. It is deleted with everything in it; this can't be undone.";
@@ -81,12 +70,9 @@ pub const DIALOGS: &[(&str, &[&str])] = &[
     ("Remove profile", &[PROFILE, PROFILE_FORCE]),
     ("Revoke device", &[DEVICE]),
     ("Stop mirroring", &[MACHINE]),
-    ("Discard candidate", &[DISCARD, SAFE]),
-    ("Discard every candidate", &[DISCARD_REST, SAFE]),
     ("Remove ${c.noun}", &[CONFIG_ENTRY]),
     ("Remove every comment on", &[REVIEW_ALL]),
     ("Remove the dormant session", &[DORMANT]),
-    ("Cancel run", &[RUN_CANCEL]),
     ("Delete the scratch directory", &[SCRATCH]),
     ("Restart the daemon", &[DAEMON_RESTART]),
 ];

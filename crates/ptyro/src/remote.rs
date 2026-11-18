@@ -470,7 +470,7 @@ pub async fn pair(
             Scope::Read =>
                 "watch: sessions, screens and the inbox. `--scope approve` also answers prompts",
             Scope::Approve =>
-                "watch and answer prompts and gates. `--scope control` also types into sessions, \
+                "watch and answer prompts. `--scope control` also types into sessions, \
                 and starts configured agents; `--scope full` is the whole web app: tasks and \
                 worktrees, review and ship, the config, devices",
             Scope::Control =>

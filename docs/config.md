@@ -106,9 +106,6 @@ digest = "30m"                            # "ready for review" digest, at most t
 
 [orchestration]
 checkpoints = true                        # a checkpoint after every agent turn that changed files
-lease_ttl = "30m"                         # file leases last this long unless renewed
-radar = true                              # tell agents when their worktrees start to collide
-message_ttl = "24h"                       # undelivered messages expire
 
 [daemon]
 scrollback_lines = 5000                   # kept in memory per session; older lines come from the recording
@@ -216,8 +213,8 @@ Other rules:
 ```toml
 [notifications]
 channels = ["inbox", "osc", "bell", "desktop", "sinks"]
-on = ["blocked", "errored", "done", "idle", "gate", "run"]   # the default
-quiet_hours = "22:00-07:00"          # inbox only, except [attention] breakthrough (blocked, gate)
+on = ["blocked", "errored", "done", "idle"]   # the default
+quiet_hours = "22:00-07:00"          # inbox only, except [attention] breakthrough (blocked)
 # desktop_command = ["my-notifier", "--title", "{title}", "{body}"]   # instead of notify-send
 
 [[notifications.sinks]]
@@ -266,8 +263,8 @@ default = true
 command = "cargo test"
 
 [verify]
-check = "test"                       # "done" means this run script passes (recipe steps)
-auto = true                          # ...for every agent session in this project, too
+check = "test"                       # "done" means this run script passes (with --verify)
+auto = true                          # ...for every agent session in this project
 ```
 
 - **Files git doesn't carry.** Anything listed in `.worktreeinclude` (gitignore syntax) that git
@@ -299,7 +296,7 @@ ptyro follows the XDG directories:
 
 | Path | Holds |
 |---|---|
-| `~/.config/ptyro/` | `config.toml`, `recipes/` |
+| `~/.config/ptyro/` | `config.toml` |
 | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` |
 | `~/.local/state/ptyro/` | logs, `crashes/`, `versions.json` (the agents' newest versions, as last looked up) |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |

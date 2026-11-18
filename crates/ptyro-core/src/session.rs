@@ -178,9 +178,6 @@ pub struct SessionInfo {
     /// Verified-done (M7.9): the check its turns must pass, and how the last one went.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<Verify>,
-    /// The run and step it works for (M7.1), `r-7f3a2c/impl`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
     /// Its permission prompt is held for an exact answer from any client (M9.5): `answer`
     /// reaches the agent as a decision, not keystrokes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -541,8 +538,8 @@ pub struct SpawnSpec {
     pub prompt: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
-    /// The daemon's own starts (`scratchpad`, `judge`, a run's steps): a `name` taken in the
-    /// project it lands in becomes `name-2`, … instead of being refused. Never from a client.
+    /// The daemon's own starts (`scratchpad`): a `name` taken in the project it lands in
+    /// becomes `name-2`, … instead of being refused. Never from a client.
     #[serde(skip)]
     pub name_or_next: bool,
     /// Extra variables from the requesting client (SPEC §5.1 `client_env`).
@@ -556,10 +553,6 @@ pub struct SpawnSpec {
     /// Verified-done: its turns count as done only once this check passes (M7.9).
     #[serde(default)]
     pub verify: Option<String>,
-    /// Make it a lead agent with this policy (JSON; `{}` for the defaults), given `ptyro mcp`
-    /// (M7.6).
-    #[serde(default)]
-    pub lead: Option<serde_json::Value>,
     /// Drive the agent over its structured protocol instead of its terminal UI (M10).
     #[serde(default)]
     pub structured: bool,

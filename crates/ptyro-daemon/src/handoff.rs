@@ -807,6 +807,22 @@ mod tests {
         assert_eq!(img.sessions.len(), 1);
     }
 
+    /// A daemon from before runs were removed (2026-11-17) hands over a step session: its run,
+    /// its guard and a gate's attention. It comes across as the plain session it is.
+    #[test]
+    fn a_session_of_a_run_from_an_older_daemon_comes_across() {
+        let mut v = as_value(&sample());
+        let meta = &mut v["sessions"][0]["meta"];
+        meta["run"] = serde_json::json!(["r-7f3a2c", "impl"]);
+        meta["guard"] = serde_json::json!({ "deny_paths": ["migrations/**"], "deny_cmds": [] });
+        meta["attention"] =
+            serde_json::json!({ "kind": "gate", "since_ms": 1, "text": "approve the plan?" });
+        let img = decode(&encode(&v)).expect("an image with a run's session decodes");
+        let a = img.sessions[0].meta.attention.as_ref().expect("its attention is kept");
+        assert_eq!(a.kind, ptyro_core::status::AttentionKind::Notification);
+        assert_eq!(img.sessions[0].meta.name, "build");
+    }
+
     #[test]
     fn fields_an_older_ptyro_never_wrote_take_their_defaults() {
         let mut v = as_value(&sample());

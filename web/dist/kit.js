@@ -88,7 +88,7 @@ export function withFix(req, f) {
     const r = JSON.parse(JSON.stringify(req));
     for (const o of [r, r.opts]) {
         if (o && typeof o === "object" && f.fix in o) {
-            o[f.fix] = f.fix === "trust" ? f.fingerprint : true;
+            o[f.fix] = true;
             return r;
         }
     }
@@ -428,13 +428,6 @@ export function form(title, fields, label, go, opts = {}) {
     });
     requestAnimationFrame(() => s.el.querySelector("input:not([type=checkbox]), textarea")?.focus());
     return Object.assign(s, { input: (key) => inputs.get(key) });
-}
-/// Candidates for a fan-out: `n` of them, cycling through the picked agents (`ptyro fanout -n`).
-export function cycle(picked, n) {
-    if (!picked.length)
-        return [];
-    const count = Math.max(n || picked.length, 1);
-    return Array.from({ length: count }, (_, i) => picked[i % picked.length]);
 }
 /// A profile select's options: the profiles that live on `machine` (`null`: this one), by the
 /// name their machine knows them by (a request about another machine's workspace or worktree

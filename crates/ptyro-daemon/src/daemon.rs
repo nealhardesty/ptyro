@@ -109,16 +109,6 @@ pub struct Daemon {
     pub(crate) pairs: Mutex<crate::review::Pairs>,
     /// Agent spawns held by `review.max_unreviewed` (M6.9).
     pub(crate) spawn_queue: Mutex<std::collections::VecDeque<ptyro_core::session::SpawnSpec>>,
-    /// Runs: recipes, fan-outs, leads (M7.1).
-    pub(crate) runs: Mutex<crate::runs::Runs>,
-    /// The open part of the message ledger (M7.7).
-    pub(crate) mail: Mutex<Vec<ptyro_store::MessageRow>>,
-    /// File leases (M7.13).
-    pub(crate) leases: Mutex<Vec<ptyro_store::LeaseRow>>,
-    /// Collisions already reported (pair + files).
-    pub(crate) radar_seen: Mutex<std::collections::HashSet<String>>,
-    /// One mail delivery pass at a time (two would type the same message twice).
-    pub(crate) mail_pass: tokio::sync::Mutex<()>,
     // ── live upgrade (M8.1) ──
     pub(crate) upgrading: std::sync::atomic::AtomicBool,
     /// Tells every PTY reader to park.
@@ -161,8 +151,6 @@ pub struct Daemon {
     pub(crate) kv_gens: Arc<Mutex<HashMap<String, u64>>>,
     pub(crate) kv_writer: Arc<tokio::sync::Mutex<()>>,
     pub(crate) project_adding: tokio::sync::Mutex<()>,
-    /// Lead spawns, one at a time (their limits are check-then-act).
-    pub(crate) lead_spawning: tokio::sync::Mutex<()>,
     /// Chats (SPEC §22): `chat.db` and the chats being followed or answered.
     pub(crate) chats: crate::chats::Chats,
 }
@@ -256,11 +244,6 @@ impl Daemon {
             reviewed: Mutex::new(HashMap::new()),
             pairs: Mutex::new(HashMap::new()),
             spawn_queue: Mutex::new(std::collections::VecDeque::new()),
-            runs: Mutex::new(HashMap::new()),
-            mail: Mutex::new(Vec::new()),
-            leases: Mutex::new(Vec::new()),
-            radar_seen: Mutex::new(std::collections::HashSet::new()),
-            mail_pass: tokio::sync::Mutex::new(()),
             upgrading: std::sync::atomic::AtomicBool::new(false),
             io_pause,
             io: crate::session::IoControl {
@@ -289,7 +272,6 @@ impl Daemon {
             kv_gens: Arc::new(Mutex::new(HashMap::new())),
             kv_writer: Arc::new(tokio::sync::Mutex::new(())),
             project_adding: tokio::sync::Mutex::new(()),
-            lead_spawning: tokio::sync::Mutex::new(()),
             chats,
         })
     }
@@ -795,13 +777,7 @@ impl Daemon {
     /// directory, under the profile SPEC §10.10 picks.
     pub async fn spawn(self: &Arc<Self>, spec: SpawnSpec) -> Result<Arc<Session>, Error> {
         let config = self.config();
-        let (verify, lead) = (spec.verify.clone(), spec.lead.clone());
-        if lead.is_some() && spec.agent.is_none() {
-            return Err(Error::invalid("a lead needs an agent (claude)"));
-        }
-        let policy: Option<ptyro_run::Policy> = lead
-            .map(|p| serde_json::from_value(p).map_err(|e| Error::invalid(format!("policy: {e}"))))
-            .transpose()?;
+        let verify = spec.verify.clone();
         let (agent, agent_profile) = match spec.agent.as_deref() {
             Some(a) => {
                 let (a, p) = ptyro_agents::split_agent(a);
@@ -831,7 +807,7 @@ impl Daemon {
             if asked_loose { None } else { self.target(spec.worktree.as_deref(), &spec.cwd)? };
         // One started outside every project joins SHELLS too (SPEC §23.3), unless it is a
         // quick terminal, the scratchpad's editor, a client's tool, or ptyro's own work in its
-        // data directory (a run's judge).
+        // data directory.
         let loose = asked_loose
             || (target.is_none()
                 && !spec.quick
@@ -922,7 +898,7 @@ impl Daemon {
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let project = target.as_ref().map(|(_, p)| p.id.as_str());
         let name = match spec.name {
-            // Composed by ptyro itself (`<set>-<member>`, a step, `judge`), so derived: made a
+            // Composed by ptyro itself (the scratchpad's editor), so derived: made a
             // valid name of at most 64, then a free one.
             Some(n) if spec.name_or_next => {
                 let n = names::derive(&n)
@@ -985,11 +961,9 @@ impl Daemon {
             resume: spec.resume.clone(),
             prompt,
             command: None,
-            mcp: spec.lead.is_some(),
             structured: spec.structured,
             params: None,
             fork: false,
-            chat_tools: policy.as_ref().is_some_and(|p| p.chat),
         });
         if let Some(r) = &reservation {
             self.pend_shelf(id, r, scratch.clone(), asked_loose);
@@ -1029,9 +1003,6 @@ impl Daemon {
         match verify {
             Some(check) => self.set_verify(&s, Some(check), None)?,
             None => self.auto_verify(&s),
-        }
-        if let Some(p) = policy {
-            self.lead_start(&s, Some(p));
         }
         Ok(s)
     }
@@ -1076,11 +1047,9 @@ impl Daemon {
             resume: None,
             prompt: None,
             command: None,
-            mcp: false,
             structured: meta.structured.is_some(),
             params: None,
             fork: false,
-            chat_tools: false,
         });
         let new = self
             .launch(Launch {
@@ -1168,14 +1137,14 @@ impl Daemon {
     }
 
     pub async fn handle(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
-        self.handle_as(req, crate::mail::Caller::default()).await
+        self.handle_as(req, crate::guard::Caller::default()).await
     }
 
     /// A request from a client: who sent it decides what an agent may do (M7.6).
     pub async fn handle_as(
         self: &Arc<Self>,
         req: Request,
-        caller: crate::mail::Caller,
+        caller: crate::guard::Caller,
     ) -> Result<Reply, Error> {
         // `%N` from a command run inside a session means that session's workspace (SPEC §23.5).
         let req = self.scope_slots(req, &caller);
@@ -1222,15 +1191,10 @@ impl Daemon {
     async fn handle_here(
         self: &Arc<Self>,
         req: Request,
-        caller: crate::mail::Caller,
+        caller: crate::guard::Caller,
     ) -> Result<Reply, Error> {
         self.guard_caller(&req, caller)?;
         self.guard_device(&req, caller)?;
-        // A gate a paired device answers is attributed to that device, whatever it says.
-        let mut req = req;
-        if let (Request::GateResolve { by, .. }, Some(g)) = (&mut req, caller.grant) {
-            *by = Some(self.device_name(g.device));
-        }
         match req {
             req @ (Request::DevicePair { .. }
             | Request::DeviceClaim { .. }
@@ -1240,33 +1204,11 @@ impl Daemon {
             | Request::PushSubscribe { .. }
             | Request::PushUnsubscribe { .. }
             | Request::PushTest) => self.handle_devices(req, caller).await,
-            req @ (Request::RunList { .. }
-            | Request::RunGet { .. }
-            | Request::RunEvents { .. }
-            | Request::RunCancel { .. }
-            | Request::RunRetry { .. }
-            | Request::RunFork { .. }
-            | Request::RecipeList { .. }
-            | Request::RecipeShow { .. }
-            | Request::RecipeRun { .. }
-            | Request::Fanout { .. }
-            | Request::GateList { .. }
-            | Request::GateResolve { .. }) => self.handle_runs(req).await,
-            req @ (Request::Compare { .. }
-            | Request::Pick { .. }
-            | Request::Discard { .. }
-            | Request::Iterate { .. }) => self.handle_compare(req).await,
-            req @ (Request::MsgPost { .. }
-            | Request::MsgCheck { .. }
-            | Request::MsgAck { .. }
-            | Request::MsgList { .. }
-            | Request::LeaseClaim { .. }
-            | Request::LeaseRelease { .. }
-            | Request::LeaseList
-            | Request::Radar { .. }
-            | Request::LeadStart { .. }
-            | Request::Lead { .. }
-            | Request::SetVerify { .. }) => self.handle_mail(req, caller).await,
+            Request::SetVerify { addr, check, max_bounces } => {
+                let s = self.resolve(&addr)?;
+                self.set_verify(&s, check, max_bounces)?;
+                Ok(Reply::Session { info: self.info(&s) })
+            }
             req @ (Request::ChatNew { .. }
             | Request::ChatList { .. }
             | Request::ChatRead { .. }
@@ -1868,7 +1810,6 @@ mod tests {
             "(\x2d-name",
             "pick \x2d-profile",
             "\x2d-existing needs",
-            "\x2d-lead needs",
             "with \x2d-trust",
             "pair \x2d-scope",
             "ptyro\x20machine rm",
@@ -1896,17 +1837,15 @@ mod tests {
         }
         // Any flag in the daemon's words: `--x` after a space, `(` or a backtick. An argv
         // (`"--json"`) starts its string with it, so isn't caught. What may say one: other
-        // programs' flags, and text only a CLI or an agent reads (mail an agent gets, a health
-        // finding whose `ptyro …` command the TUI and the web turn into a button).
+        // programs' flags, and text only a CLI reads (a health finding whose `ptyro …` command
+        // the TUI and the web turn into a button).
         const ELSEWHERE: &[&str] = &[
-            "diff \x2d-git",                       // git's own output, parsed
-            "\x2d-frozen-lockfile",                // a setup script suggested for the repository
-            "\x2d-password=",                      // a redaction test's input
-            "codex \x2d-version",                  // another program
-            "ptyro \x2d-version`",                 // a shell command to try over ssh
-            "msg send {} \\\"…\\\" \x2d-reply-to", // the reply line of mail to an agent
-            "claude \x2d-lead`",                   // an agent's `ptyro mcp` / lead refusal
-            "daemon restart \x2d-hibernate",       // an upgrade's finding: the TUI and web offer it
+            "diff \x2d-git",                 // git's own output, parsed
+            "\x2d-frozen-lockfile",          // a setup script suggested for the repository
+            "\x2d-password=",                // a redaction test's input
+            "codex \x2d-version",            // another program
+            "ptyro \x2d-version`",           // a shell command to try over ssh
+            "daemon restart \x2d-hibernate", // an upgrade's finding: the TUI and web offer it
         ];
         let flag = |l: &str| {
             let b = l.as_bytes();

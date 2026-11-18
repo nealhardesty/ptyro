@@ -4,6 +4,7 @@ mod about;
 mod agents;
 mod backup;
 mod chat;
+mod checkpoint;
 mod cli;
 mod complete;
 mod config;
@@ -14,7 +15,6 @@ mod linked;
 mod logins;
 mod machines;
 mod mcp;
-mod orch;
 mod own;
 mod pad;
 #[cfg(test)]
@@ -138,15 +138,6 @@ enum Cmd {
         /// script's name, or a command); failures go back to the agent
         #[arg(long)]
         verify: Option<String>,
-        /// Make it a lead agent: it gets `ptyro mcp` to start and coordinate workers, within limits
-        #[arg(long)]
-        lead: bool,
-        /// Lead: live workers at once (default 4)
-        #[arg(long, value_name = "N")]
-        max_workers: Option<u32>,
-        /// Lead: the agents it may start (default: any)
-        #[arg(long = "lead-agent", value_name = "AGENT")]
-        lead_agents: Vec<String>,
         /// Drive the agent over its structured protocol (Claude stream-json, Codex app-server,
         /// Gemini ACP, OpenCode's server) and show a chat view: every tool call visible
         #[arg(long)]
@@ -368,140 +359,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: ship::ReviewCmd,
     },
-    /// Runs: recipes, fan-outs and leads, with their steps, gates and events
-    #[command(alias = "runs")]
-    Run {
-        #[command(subcommand)]
-        cmd: orch::RunCmd,
-    },
-    /// Recipes: declarative multi-step workflows (built-in, yours, the repo's)
-    #[command(alias = "recipes")]
-    Recipe {
-        #[command(subcommand)]
-        cmd: orch::RecipeCmd,
-    },
-    /// The same task to several agents, each in its own worktree; then `ptyro compare`
-    Fanout {
-        /// Agents, comma-separated or repeated: claude,codex,gemini (`claude@work` too)
-        #[arg(short, long = "agent", visible_alias = "agents", value_delimiter = ',', required_unless_present = "count", add = ArgValueCandidates::new(complete::agents))]
-        agents: Vec<String>,
-        /// How many candidates (cycling through --agent; default agent claude)
-        #[arg(long, value_name = "N")]
-        count: Option<u32>,
-        /// The task, for every candidate
-        #[arg(long, conflicts_with = "prompt_file")]
-        prompt: Option<String>,
-        #[arg(long)]
-        prompt_file: Option<PathBuf>,
-        /// Project (default: the one containing the current directory)
-        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
-        project: Option<String>,
-        /// Base for the worktrees (default: the project's)
-        #[arg(long)]
-        base: Option<String>,
-        /// What the worktrees' names start with (default: from the prompt)
-        #[arg(long)]
-        prefix: Option<String>,
-        /// Rank by this check when they're done (default `scripts.run.test`)
-        #[arg(long, num_args = 0..=1, default_missing_value = "scripts.run.test")]
-        test: Option<String>,
-        /// Verified-done for every candidate: bounce it until this passes
-        #[arg(long)]
-        verify: Option<String>,
-        /// An advisory judge: this agent scores the candidates' diffs (0–10) in a clean context
-        #[arg(long, add = ArgValueCandidates::new(complete::agents))]
-        judge: Option<String>,
-        /// Per candidate (`45m`)
-        #[arg(long)]
-        timeout: Option<String>,
-        /// Workers run as structured sessions: their tool calls show in `compare`
-        #[arg(long)]
-        structured: bool,
-        /// Wait for all of them, then print the comparison
-        #[arg(long)]
-        wait: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// A fan-out's candidates ranked by evidence: tests, repro, cross-tests, diff, time
-    Compare {
-        /// A run id (or `@last`)
-        run: String,
-        /// Run the evidence again (tests in every candidate and on the base)
-        #[arg(long)]
-        refresh: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Take a candidate: merge it (default), cherry-pick, open a PR, or apply some files/hunks
-    Pick {
-        run: String,
-        candidate: String,
-        #[arg(long, conflicts_with_all = ["pr", "apply"])]
-        cherry_pick: bool,
-        /// Push its branch and open a pull request
-        #[arg(long = "open-pr", conflicts_with = "apply")]
-        pr: bool,
-        /// Copy changes into a worktree (default: the main checkout), uncommitted
-        #[arg(long)]
-        apply: bool,
-        /// Target branch (merge, cherry-pick) or worktree (apply)
-        #[arg(long)]
-        into: Option<String>,
-        /// Only this file (apply; repeatable, globs work)
-        #[arg(long = "path")]
-        paths: Vec<String>,
-        /// Only this hunk, FILE:N (apply; repeatable)
-        #[arg(long = "hunk")]
-        hunks: Vec<String>,
-    },
-    /// Remove candidates' worktrees (every one not picked, or one); refuses to lose work. Asks
-    /// first unless --yes
-    Discard {
-        run: String,
-        candidate: Option<String>,
-        #[arg(long)]
-        force: bool,
-        /// Don't ask
-        #[arg(short, long)]
-        yes: bool,
-    },
-    /// A follow-up for a candidate's agent (or all of them): `ptyro iterate @last codex "also …"`
-    Iterate {
-        run: String,
-        /// `[CANDIDATE]` TEXT
-        #[arg(required = true, num_args = 1..=2)]
-        args: Vec<String>,
-    },
-    /// Gates: questions runs wait on, answered from here, the TUI or your phone
-    #[command(alias = "gates")]
-    Gate {
-        #[command(subcommand)]
-        cmd: orch::GateCmd,
-    },
-    /// The mailbox: messages between agents (and you), delivered when they're idle
-    Msg {
-        #[command(subcommand)]
-        cmd: orch::MsgCmd,
-    },
-    /// File leases: keep other agents out of files one is changing
-    #[command(alias = "leases")]
-    Lease {
-        #[command(subcommand)]
-        cmd: orch::LeaseCmd,
-    },
-    /// Overlapping changes between a project's live worktrees, and predicted merge conflicts
-    Radar {
-        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
-        project: Option<String>,
-        #[arg(long)]
-        json: bool,
-    },
     /// Checkpoints: the worktree after every agent turn; diff or restore any of them
     #[command(alias = "checkpoints", alias = "ckpt")]
     Checkpoint {
         #[command(subcommand)]
-        cmd: orch::CheckpointCmd,
+        cmd: checkpoint::CheckpointCmd,
     },
     /// Verified-done: a session's turns count as done only when CHECK passes
     Verify {
@@ -514,11 +376,11 @@ enum Cmd {
         #[arg(long)]
         max_bounces: Option<u32>,
     },
-    /// MCP server for lead agents (started for you by `ptyro new --agent … --lead`), and the
-    /// chat history tools inside a chat's agent (`--chat`, started for you)
+    /// MCP server with the chat history tools (`chat_search`, `chat_read`, `chat_list`), for a
+    /// chat's agent (started for you)
     Mcp {
-        /// The chat history tools only (`chat_search`, `chat_read`, `chat_list`)
-        #[arg(long)]
+        /// The chat history tools (what a bare `ptyro mcp` serves too; kept for older chats)
+        #[arg(long, hide = true)]
         chat: bool,
     },
     /// Bridge stdin/stdout to this machine's daemon (what `--remote` runs over ssh)
@@ -1681,7 +1543,6 @@ mod tests {
         assert!(has("ptyro wt ls", 'p', "project"));
         assert!(has("ptyro config list", 'p', "project"));
         assert!(has("ptyro events", 'l', "limit"));
-        assert!(has("ptyro fanout", 'a', "agent"));
     }
 
     /// An interactive session's commands attach the same way (owner, 2026-11-09): `-d` says

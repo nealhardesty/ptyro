@@ -239,8 +239,6 @@ pub enum Purpose {
     RowMenu(Row),
     /// What to watch a SHELLS shell for (SPEC §23.9).
     ShellWatch(SessionId),
-    /// `recipe.run`'s recipe; then its form (SPEC §11.5a).
-    Recipe(Vec<ptyro_run::wire::RecipeInfo>),
     /// A chat's agent (`None`: the new chat being written's).
     ChatAgent(Option<String>),
     /// A chat's tool preset.
@@ -323,7 +321,7 @@ pub enum PromptKind {
     /// A PR or issue to start a worktree from (UX1.10).
     WorkSource(Wizard),
     /// A word for a `ptyro …` command being put together (UX1.21); `true`: `k=v` variables.
-    CliAsk(Box<crate::cli_actions::CliJob>, bool),
+    CliAsk(Box<crate::cli_actions::CliJob>),
     /// A branch's new name, for this worktree (by id).
     RenameBranch(String),
     /// A PR to go to (UX1.21).
@@ -334,8 +332,6 @@ pub enum PromptKind {
     RenameWorktree(String),
     /// A project's new slug (by id).
     RenameProject(String),
-    /// Typed in the runs view (M7).
-    Orch(crate::runs::OrchInput),
     /// A chat's title (by id); empty clears it (`chat.autotitle` makes a new one).
     ChatRetitle(String),
     /// One more folder this chat (`None`: the new chat being written) may read (`none`: none).
@@ -454,7 +450,7 @@ pub enum Confirmed {
     Archive(String),
     /// Add a line to a file: a health fix (UX1.20).
     Append(std::path::PathBuf, String),
-    /// Send this request, then show this (runs view: cancel, pick, discard).
+    /// Send this request, then show this.
     Send(Box<Request>, String),
     /// Forget this project (running sessions in it refuse, with a way through).
     Forget(String),
@@ -482,8 +478,6 @@ pub enum AfterTrust {
 /// What a background request was for, so its reply can be applied.
 #[derive(Debug, Clone)]
 pub enum Pending {
-    /// The recipes, for `recipe.run`'s picker.
-    RecipeForm,
     Spawned {
         split: Option<Dir>,
         spec: Box<SpawnSpec>,
@@ -599,12 +593,8 @@ pub enum Pending {
     },
     InspectSent,
     ReviewQueue,
-    /// `RunList` for the runs view (M7).
-    Runs,
     /// Older history for copy mode, from the recording (M8.2).
     DeepScrollback(PaneId, SessionId),
-    /// The compare doc of this run.
-    Compare(String),
     /// The context worktree's scripts, for an open palette (UX1.18).
     PaletteScripts(String),
     /// Archived worktrees, for the restore picker (UX1.12), or the delete one.
@@ -725,8 +715,6 @@ const SUGGESTED: &[(&str, &str, &str)] = &[
     ("`ptyro pr fix", "inspector", "inspect its checks"),
     ("`ptyro pr watch", "inspector", "inspect its checks"),
     ("`ptyro events", "inspector", "see its events"),
-    ("`ptyro run retry", "runs", "see the run"),
-    ("`ptyro fanout", "runs", "see runs"),
     ("`ptyro config edit", "config.edit", "edit the config"),
 ];
 
@@ -791,8 +779,6 @@ pub struct App {
     pub marked: Vec<SessionId>,
     /// The inspector (`D`), drawn over the panes (M6).
     pub inspector: Option<crate::inspector::Inspector>,
-    /// Runs (`O`), drawn over the panes (M7).
-    pub orch: Option<crate::runs::Orch>,
     /// Chats not archived (SPEC §22.12): the CHATS sections and the chat list.
     pub chat_list: Vec<ptyro_core::chats::ChatInfo>,
     /// The chat list or a chat, over the panes.
@@ -815,8 +801,6 @@ pub struct App {
     pub machine: Option<String>,
     /// Its computer's load average (`[ui] load`), as the daemon last said.
     pub host_load: Option<ptyro_protocol::HostLoad>,
-    /// Runs (M7), newest first, kept current by `RunUpdated`.
-    pub runs: Vec<ptyro_run::wire::RunInfo>,
     /// Whether our outer terminal window has focus (a watched session raises no attention).
     pub terminal_focused: bool,
     pub caches: HashMap<SessionId, ScreenCache>,
@@ -960,7 +944,6 @@ impl App {
             folded_before: None,
             marked: Vec::new(),
             inspector: None,
-            orch: None,
             chat_list: Vec::new(),
             chat_panel: None,
             chat_aside: None,
@@ -972,7 +955,6 @@ impl App {
             usage: HashMap::new(),
             machine: None,
             host_load: None,
-            runs: Vec::new(),
             terminal_focused: true,
             sidebar: config.ui.sidebar && !opts.raw,
             sidebar_width: config.ui.sidebar_width.clamp(12, SIDEBAR_MAX),
@@ -1140,23 +1122,6 @@ impl App {
         if let Ok(Reply::Usage { usage }) = client.request(Request::Usage).await {
             self.usage =
                 usage.into_iter().map(|u| ((u.profile.clone(), u.agent.clone()), u)).collect();
-        }
-        if let Ok(Reply::Runs { runs }) =
-            client.request(Request::RunList { active: false, limit: Some(100) }).await
-        {
-            self.runs = runs;
-        }
-        // The morning digest (M7.12): what runs did while nobody watched.
-        let unread = |k: ptyro_core::status::AttentionKind| {
-            self.inbox.iter().filter(|e| e.kind == k && e.read_ms.is_none()).count()
-        };
-        let (ended, gates) = (unread(ptyro_core::status::AttentionKind::Run), self.open_gates());
-        if ended + gates > 0 {
-            self.toast_offer(
-                format!("while you were away: {ended} run update(s), {gates} gate(s) waiting"),
-                false,
-                run_offer("see them", "runs"),
-            );
         }
     }
 
@@ -1917,7 +1882,6 @@ impl App {
                 self.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
             }
             DomainEvent::HostLoad { load } => self.host_load = load,
-            DomainEvent::RunUpdated { run } => self.run_updated(run),
             // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
             DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
@@ -2191,7 +2155,6 @@ impl App {
                     Err(e) => self.toast_err(format!("{}: {e}", path.display())),
                 }
             }
-            (Pending::RecipeForm, Ok(Reply::Recipes { recipes })) => self.recipe_picker(recipes),
             (Pending::Registry, Ok(Reply::Profiles { profiles })) => {
                 self.profiles = profiles;
                 self.profiles_arrived();
@@ -2368,13 +2331,6 @@ impl App {
                 }
                 self.toast(format!("comments sent to {} (typed once its turn is over)", info.name));
             }
-            (Pending::Runs, Ok(Reply::Runs { runs })) => {
-                self.keeping_run_selection(|app| app.runs = runs);
-                if let Some(o) = &mut self.orch {
-                    o.loading = false;
-                }
-            }
-            (Pending::Compare(run), Ok(Reply::Compare { doc })) => self.got_compare(&run, doc),
             (Pending::ReviewQueue, Ok(Reply::ReviewQueue { items })) => {
                 if items.is_empty() {
                     self.toast("nothing waits for review");
@@ -2886,14 +2842,6 @@ impl App {
             self.forward_popup(InputEvent::Key { key });
             return;
         }
-        if self.orch.is_some() && !self.prefix {
-            if self.keymap.is_prefix(key) {
-                self.start_prefix(key);
-            } else {
-                self.orch_key(key);
-            }
-            return;
-        }
         // The chat panel has the keyboard while the panes have focus (the sidebar keeps its own).
         if self.chat_panel.is_some()
             && !self.prefix
@@ -2987,10 +2935,10 @@ impl App {
         self.forward(InputEvent::Key { key });
     }
 
-    /// A full-screen view (inspector, runs, first run) is drawn over the panes:
+    /// A full-screen view (inspector, first run) is drawn over the panes:
     /// the mouse and pastes are not for what is hidden under it.
     fn full_view(&self) -> bool {
-        self.inspector.is_some() || self.orch.is_some() || self.first_run.is_some()
+        self.inspector.is_some() || self.first_run.is_some()
     }
 
     pub fn on_paste(&mut self, text: String) {
@@ -3725,11 +3673,6 @@ impl App {
                 }
             }
             "review.queue" => self.request(Pending::ReviewQueue, Request::ReviewQueue),
-            "runs" => {
-                if self.orch.take().is_none() {
-                    self.open_runs();
-                }
-            }
             // From an offer: that chat, or that search.
             "chat.open" if cmd.arg.is_some() => self.open_chat(cmd.arg.as_deref().unwrap_or("")),
             "chat.search" if cmd.arg.is_some() => {
@@ -4434,14 +4377,7 @@ impl App {
             // Every option `ptyro profile new` takes, on one screen (SPEC §11.5a).
             "profile.new" => self.open_profile_form("", None),
             // The CLI's creating commands, every option on one screen (SPEC §11.5a).
-            "recipe.run" => self.ask_recipes(),
             "remote.pair" => self.open_pair_form(),
-            "session.lead" => match self.selected_session_name() {
-                Some(s) => self.open_lead_form(s),
-                None => {
-                    self.toast_err("pick a session first (in the sidebar), then run this again")
-                }
-            },
             "workspace.profile" => {
                 let items = self
                     .profiles
@@ -6043,11 +5979,6 @@ impl App {
                 job.done.push(word.to_string_lossy().into_owned());
                 self.cli_step(*job);
             }
-            (Target::Path(name), Purpose::Recipe(recipes)) => {
-                if let Some(r) = recipes.into_iter().find(|r| *r.name == *name.to_string_lossy()) {
-                    self.open_recipe_form(r);
-                }
-            }
             (Target::Path(p), Purpose::Pin(project)) => self.request(
                 Pending::Done("pinned".into()),
                 Request::ProjectPin {
@@ -6289,7 +6220,6 @@ impl App {
                     }
                 }
             }
-            PromptKind::Orch(input) => self.orch_input(input, text),
             PromptKind::ChatEdit(chat, node) => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -6355,7 +6285,7 @@ impl App {
                     self.pad_add(text, false, about);
                 }
             }
-            PromptKind::CliAsk(job, vars) => self.cli_answer(*job, &text, vars),
+            PromptKind::CliAsk(job) => self.cli_answer(*job, &text),
             PromptKind::RenameBranch(id) => {
                 let branch = Some(text.trim().to_owned()).filter(|b| !b.is_empty());
                 self.request(
@@ -7199,21 +7129,6 @@ impl App {
     fn inbox_key(&mut self, key: KeyEvent, mut selected: usize, mut tab: Option<String>) {
         let n = self.inbox_tab(tab.as_deref()).len();
         let entry = self.inbox_tab(tab.as_deref()).get(selected).map(|e| (e.id, e.session.clone()));
-        // Gate and run entries open the run (M7.5): "gate g-7f3a · run r-1b2c3d".
-        let run_of = self.inbox_tab(tab.as_deref()).get(selected).and_then(|e| {
-            matches!(
-                e.kind,
-                ptyro_core::status::AttentionKind::Gate | ptyro_core::status::AttentionKind::Run
-            )
-            .then(|| {
-                e.title
-                    .split_whitespace()
-                    .chain(e.body.split_whitespace())
-                    .find(|w| w.starts_with("r-"))
-                    .map(str::to_owned)
-            })
-            .flatten()
-        });
         match key.code {
             KeyCode::Esc | KeyCode::Char { c: 'q' } => return,
             // Note it for later (NOTE1.2): the entry's words and a link back to its session.
@@ -7255,10 +7170,6 @@ impl App {
                         Pending::Done(String::new()),
                         Request::InboxMark { ids: vec![id], all: false, session: None, read: true },
                     );
-                    if let Some(run) = run_of {
-                        self.open_run(run);
-                        return;
-                    }
                     if let Ok(sid) = sess.parse::<SessionId>()
                         && self.session(sid).is_some()
                     {
@@ -8801,11 +8712,9 @@ mod tests {
     /// No message the TUI writes tells you to type a command (UX1.17): it offers the fix.
     #[test]
     fn no_toast_names_a_command_to_type() {
-        for (file, src) in [
-            ("app.rs", include_str!("app.rs")),
-            ("inspector.rs", include_str!("inspector.rs")),
-            ("runs.rs", include_str!("runs.rs")),
-        ] {
+        for (file, src) in
+            [("app.rs", include_str!("app.rs")), ("inspector.rs", include_str!("inspector.rs"))]
+        {
             let lines: Vec<&str> = src.lines().collect();
             for (i, l) in lines.iter().enumerate() {
                 if !(l.contains("toast(") || l.contains("toast_err(") || l.contains("toast_offer("))
@@ -9955,29 +9864,6 @@ mod tests {
         assert_eq!(
             app.last_cli.as_deref(),
             Some(&["profile", "login", "work", "claude"].map(String::from)[..])
-        );
-        // A recipe's form: one field per variable, the defaults shown, then where.
-        app.recipe_picker(vec![
-            serde_json::from_value(serde_json::json!({
-                "name": "implement-and-review", "source": "builtin",
-                "vars": ["task (required)", "n = 1"], "steps": 3,
-            }))
-            .unwrap(),
-        ]);
-        typed(&mut app, "\n");
-        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the recipe's form") };
-        assert_eq!(
-            f.fields.iter().map(|f| f.label.as_str()).collect::<Vec<_>>(),
-            ["task", "n", "Project", "Base"]
-        );
-        typed(&mut app, "\n");
-        assert!(
-            matches!(&app.overlay, Some(Overlay::Form(f)) if f.error.as_deref() == Some("task is needed"))
-        );
-        typed(&mut app, "add json\t2\n");
-        assert_eq!(
-            app.last_cli.clone().unwrap(),
-            ["recipe", "run", "implement-and-review", "--var", "task=add json", "--var", "n=2"]
         );
         // The selected session, a choice, and a file.
         let s = session("worker");

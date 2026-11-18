@@ -1,4 +1,4 @@
-//! Verified-done (M7.9), checkpoints (M7.11) and what hooks answer the agent (M7.9, M7.13).
+//! Verified-done (M7.9) and checkpoints (M7.11).
 //!
 //! **Verified-done.** A session with a check counts a turn as done only once the check passes.
 //! Claude is bounced from its own Stop hook (`{"decision":"block","reason":…}`): the turn never
@@ -10,22 +10,18 @@
 //! `refs/ptyro/ckpt/<session>/<n>`: HEAD plus everything uncommitted, written through a private
 //! index (no visible commit, no stash, the user's index untouched). `ptyro checkpoint restore`
 //! puts any of them back, checkpointing the present first.
-//!
-//! **PreToolUse.** Before a tool runs, file leases held by other sessions and the step's guard
-//! (`deny_paths`, `deny_cmds`) can deny it, with a reason the agent reads.
 
 use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ptyro_core::model::{DiffAgainst, DiffDoc, WorktreeInfo};
 use ptyro_core::session::{Evidence, SessionKind, Verify, VerifyState};
 use ptyro_core::{Error, ErrorCode, now_ms};
-use ptyro_protocol::{DomainEvent, Reply};
-use ptyro_run::wire::Checkpoint;
-use serde_json::{Value, json};
+use ptyro_protocol::{Checkpoint, DomainEvent, Reply};
+use serde_json::json;
 
 use crate::daemon::Daemon;
 use crate::session::Session;
@@ -130,7 +126,7 @@ impl Daemon {
             return Ok(Evidence {
                 command: command.to_owned(),
                 exit_code: if why.starts_with("timed out") { 124 } else { 125 },
-                tail: format!("{why}\n{}", crate::runs::tail(&ran.text, 20)),
+                tail: format!("{why}\n{}", tail(&ran.text, 20)),
                 tree: None,
                 at_ms: now_ms(),
                 duration_ms: started.elapsed().as_millis() as u64,
@@ -147,7 +143,7 @@ impl Daemon {
         Ok(Evidence {
             command: command.to_owned(),
             exit_code: ran.code.unwrap_or(-1),
-            tail: crate::runs::tail(&text, 40),
+            tail: tail(&text, 40),
             tree,
             at_ms: now_ms(),
             duration_ms: started.elapsed().as_millis() as u64,
@@ -243,7 +239,7 @@ impl Daemon {
         let reason = bounce.then(|| {
             format!(
                 "{BOUNCE_MARK} Not done yet: `{}` exits {} (attempt {} of {}). Its output ends with:\n{}\nFix the cause and finish again; don't weaken the check.",
-                ev.command, ev.exit_code, v.bounces + 1, v.max_bounces, crate::runs::tail(&ev.tail, 25)
+                ev.command, ev.exit_code, v.bounces + 1, v.max_bounces, tail(&ev.tail, 25)
             )
         });
         if let Some(v) =
@@ -502,90 +498,13 @@ impl Daemon {
             other => Err(Error::invalid(format!("unsupported request {other:?}"))),
         }
     }
+}
 
-    // ── PreToolUse: leases and guards ───────────────────────────────────────
-
-    /// Should this tool call be denied? The reason, if so.
-    pub(crate) fn pretool_denial(
-        &self,
-        s: &Arc<Session>,
-        adapter: &str,
-        payload: &Value,
-    ) -> Option<String> {
-        let (tool, files, command) = tool_target(adapter, payload);
-        let (guard, wt) = {
-            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (m.guard.clone(), m.place.worktree.clone())
-        };
-        let root = wt.as_deref().and_then(|w| self.worktree_by_id(w)).map(|w| w.path);
-        let cwd = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cwd.clone();
-        // The path a guard or lease sees: relative to the worktree, `..` folded and symlinks
-        // resolved, so `src/../.github/x` or a link can't slip past a pattern.
-        let rel = |f: &str| -> String {
-            let p = PathBuf::from(f);
-            let abs = real_path(&normalize(&if p.is_absolute() { p } else { cwd.join(p) }));
-            match root.as_deref().map(real_path) {
-                Some(r) => ptyro_core::os::slash_path(
-                    &abs.strip_prefix(&r)
-                        .map(|x| x.to_string_lossy().into_owned())
-                        .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
-                ),
-                None => ptyro_core::os::slash_path(f.trim_start_matches("./")),
-            }
-        };
-        if let Some(g) = &guard {
-            if let Some(c) = &command
-                && let Some(d) = g.deny_cmds.iter().find(|d| command_matches(c, d))
-            {
-                return Some(format!(
-                    "ptyro: this step's guard doesn't allow `{d}` here (the run applies outputs itself)"
-                ));
-            }
-            for f in &files {
-                let r = rel(f);
-                if let Some(p) = g.deny_paths.iter().find(|p| ptyro_agents::glob::matches(p, &r)) {
-                    return Some(format!(
-                        "ptyro: this step's guard doesn't allow changing {r} ({p})"
-                    ));
-                }
-            }
-        }
-        if files.is_empty() {
-            return None;
-        }
-        let project =
-            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone();
-        let me = s.id.full();
-        let leases = self.leases.locked();
-        for f in &files {
-            let r = rel(f);
-            if let Some(l) = leases.iter().find(|l| {
-                l.holder != me
-                    && l.exclusive
-                    && l.expires_ms > now_ms()
-                    && l.project == project
-                    && ptyro_agents::glob::matches(&l.pattern, &r)
-            }) {
-                let who = self
-                    .resolve(&l.holder)
-                    .map(|h| {
-                        h.meta
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .name
-                            .clone()
-                    })
-                    .unwrap_or_else(|_| l.holder.clone());
-                let until = crate::agents::human(l.expires_ms.saturating_sub(now_ms()));
-                return Some(format!(
-                    "ptyro: {r} is leased by {who} for another {until}{}; leave it, or ask them: ptyro msg send {who} \"…\"",
-                    l.reason.as_deref().map(|x| format!(" ({x})")).unwrap_or_default()
-                ));
-            }
-        }
-        let _ = tool;
-        None
-    }
+/// The last `lines` lines of `text`, at most 4000 characters.
+pub(crate) fn tail(text: &str, lines: usize) -> String {
+    let v: Vec<&str> = text.lines().collect();
+    let start = v.len().saturating_sub(lines);
+    v[start..].join("\n").chars().rev().take(4000).collect::<String>().chars().rev().collect()
 }
 
 /// The most a check may write before it is stopped, and the most of it kept in memory (the tail).
@@ -659,7 +578,7 @@ pub(crate) async fn run_to_log(
     })
 }
 
-/// Kills a process group when dropped (a check that timed out, or a step that was aborted).
+/// Kills a process group when dropped (a check that timed out, or was given up on).
 /// Harmless once the group is gone.
 pub(crate) struct GroupGuard(pub Option<u32>);
 
@@ -671,133 +590,9 @@ impl Drop for GroupGuard {
     }
 }
 
-/// What a tool call would touch: `(tool, files, shell command)`.
-pub fn tool_target(adapter: &str, p: &Value) -> (String, Vec<String>, Option<String>) {
-    let tool = p["tool_name"].as_str().unwrap_or_default().to_owned();
-    let input = &p["tool_input"];
-    let s = |k: &str| input.get(k).and_then(Value::as_str).map(str::to_owned);
-    let mut files = Vec::new();
-    let mut command = None;
-    match (adapter, tool.as_str()) {
-        (_, "Write" | "Edit" | "MultiEdit" | "write_file" | "replace" | "edit") => {
-            files.extend(s("file_path").or(s("path")))
-        }
-        (_, "NotebookEdit") => files.extend(s("notebook_path")),
-        (_, "apply_patch") => {
-            let patch = s("input")
-                .or(s("patch"))
-                .or_else(|| input.as_str().map(str::to_owned))
-                .unwrap_or_default();
-            for l in patch.lines() {
-                for pre in
-                    ["*** Update File: ", "*** Add File: ", "*** Delete File: ", "*** Move to: "]
-                {
-                    if let Some(f) = l.strip_prefix(pre) {
-                        files.push(f.trim().to_owned());
-                    }
-                }
-            }
-        }
-        (_, "Bash" | "shell" | "run_shell_command" | "exec_command" | "local_shell") => {
-            command = s("command").or_else(|| {
-                input
-                    .get("command")
-                    .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "))
-            });
-        }
-        _ => {}
-    }
-    (tool, files, command)
-}
-
-/// `git push origin x` matches `git push`; `cd a && git push` too.
-/// `path` with its longest existing ancestor canonicalized (symlinks resolved); the rest, not
-/// created yet, appended as is.
-fn real_path(path: &Path) -> PathBuf {
-    let mut base = path.to_path_buf();
-    let mut rest = Vec::new();
-    loop {
-        if let Ok(c) = ptyro_core::os::canonicalize(&base) {
-            return rest.iter().rev().fold(c, |acc, x: &std::ffi::OsString| acc.join(x));
-        }
-        match (base.file_name().map(std::ffi::OsStr::to_os_string), base.parent()) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                base = parent.to_path_buf();
-            }
-            _ => return path.to_path_buf(),
-        }
-    }
-}
-
-/// `a/./b/../c` → `a/c`, without touching the file system.
-fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn command_matches(cmd: &str, deny: &str) -> bool {
-    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-    let (cmd, deny) = (norm(cmd), norm(deny));
-    cmd.split(['&', ';', '|', '\n'])
-        .map(str::trim)
-        .any(|part| part == deny || part.starts_with(&format!("{deny} ")))
-}
-
-/// The JSON a PreToolUse hook prints to deny, per agent.
-pub fn deny_output(adapter: &str, reason: &str) -> String {
-    match adapter {
-        "gemini" | "antigravity" => json!({ "decision": "deny", "reason": reason }).to_string(),
-        // Claude (and Codex, whose hooks follow Claude's format).
-        _ => json!({
-            "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason }
-        })
-        .to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn paths_normalize_lexically() {
-        assert_eq!(normalize(Path::new("/r/web/../api/x.go")), PathBuf::from("/r/api/x.go"));
-        assert_eq!(normalize(Path::new("/r/./a")), PathBuf::from("/r/a"));
-    }
-
-    #[test]
-    fn tool_targets_and_command_matching() {
-        let (_, f, _) = tool_target(
-            "claude",
-            &json!({"tool_name": "Edit", "tool_input": {"file_path": "/w/src/a.rs"}}),
-        );
-        assert_eq!(f, vec!["/w/src/a.rs"]);
-        let (_, f, _) = tool_target(
-            "codex",
-            &json!({"tool_name": "apply_patch", "tool_input": {"input": "*** Begin Patch\n*** Update File: src/x.rs\n@@\n*** Add File: y.txt\n"}}),
-        );
-        assert_eq!(f, vec!["src/x.rs", "y.txt"]);
-        let (_, _, c) = tool_target(
-            "claude",
-            &json!({"tool_name": "Bash", "tool_input": {"command": "cd a && git  push origin main"}}),
-        );
-        assert!(command_matches(&c.unwrap(), "git push"));
-        assert!(!command_matches("git pushx", "git push"));
-        assert!(!command_matches("echo git push", "git push"));
-        assert!(deny_output("claude", "no").contains("permissionDecision"));
-        assert!(deny_output("gemini", "no").contains("\"deny\""));
-    }
 
     #[cfg(unix)] // runs sh
     #[tokio::test]
