@@ -316,6 +316,16 @@ const devices = new Cache<any[]>(() => conn.request({ t: "device_list" }).then((
 /// What the default scope means, in plain words (the same text `ptyro pair` prints).
 const FULL_WARNING = "This device gets FULL control: it can run commands as you, change settings, and pair or revoke other devices. Pair only your own phone or browser. Pick Approve or Control below for less.";
 
+/// Why the link opens on a certificate warning (the browser won't install the app): Tailscale's
+/// certificate should be in use for this address and isn't. The same words `ptyro pair` prints.
+async function untrustedLink(): Promise<string | null> {
+  const w = await conn.request({ t: "status" }).then((r) => r.status?.web, () => null);
+  if (!w?.cert_note || w.cert === "own" || (w.cert === "tailscale" && location.hostname.endsWith(".ts.net"))) return null;
+  const cut = String(w.cert_note).split(" (")[0].split("\n")[0];
+  const fix = cut.charAt(0).toUpperCase() + cut.slice(1);
+  return `This link opens on a certificate warning, and the browser won't install the app, until the device trusts ptyro's certificate: Tailscale's, which every device trusts already, isn't in use. ${fix}; the web app takes it up within 10 minutes (\`ptyro web off\` and \`on\` at once), then pair again.`;
+}
+
 function pairAnother(): void {
   form("Pair another device", [
     { key: "name", label: "Name", value: "phone", required: true, slug: "name", hint: `A name that exists is replaced: its old link stops working and it takes the access chosen here. ${NAME_HINT}` },
@@ -323,11 +333,13 @@ function pairAnother(): void {
   ], "Make a link", async (v) => {
     const r = await conn.request({ t: "device_pair", name: v.name, scope: v.scope });
     const link = `${location.origin}/#pair=${r.code}`;
+    const cert = await untrustedLink();
     const old = r.replaces as { name: string; scope: string } | undefined;
     const s = sheet(`Pair ${v.name}${conn.machine ? ` with ${conn.machine}` : ""}`, [
       h("p", { class: "intro" }, `Open this on the device (or scan the code). It works once, for ${Math.round((r.expires_ms - Date.now()) / 60000)} minutes.`),
       old ? h("p", { class: "intro" }, `Replaces the existing device ${old.name} (was ${old.scope}, now ${v.scope}) when this link is opened: its old link and token stop working.`) : null,
       v.scope === "full" ? h("p", { class: "form-err" }, FULL_WARNING) : null,
+      cert ? h("p", { class: "form-err" }, cert) : null,
       /^(localhost|127\.|\[::1\])/.test(location.hostname) ? h("p", { class: "form-err" }, "This address only reaches this computer. Open this page by its network address (the one `ptyro pair` prints) to make a link another device can use.") : null,
       qrBox(link),
       h("pre", { class: "block" }, link),

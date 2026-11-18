@@ -130,7 +130,9 @@ it is in use.
   (below). The server picks by the name the client asked for.
 - **If it can't.** ptyro keeps its own certificate and `ptyro web` / `ptyro doctor` say why and
   how to fix it: HTTPS Certificates aren't on for the tailnet, Tailscale isn't connected, or on
-  Linux `sudo tailscale set --operator=$USER` lets your user ask for one.
+  Linux `sudo tailscale set --operator=$USER` lets your user ask for one. `ptyro pair` (and the
+  web's Devices ＋) says so too, since its link would open on a certificate warning and the
+  browser wouldn't install the app.
 - **Machines.** `ptyro machine add` accepts a `*.ts.net` machine's Tailscale certificate (checked
   against the public roots) as well as the CA pinned in its code.
 - **A phone that used ptyro's certificate before (Android Chrome).** After the switch, Chrome can
@@ -155,7 +157,10 @@ and its SHA-256, so you can check it's yours:
 - **Android:** download it from the same address, then Settings → Security (or Security &
   privacy) → More → Encryption & credentials → Install a certificate → CA certificate.
 - **A desktop browser:** add `ca.crt` to the system's trusted roots (macOS: Keychain Access →
-  System → drag it in → Always Trust), or accept the warning once.
+  System → drag it in → Always Trust), or accept the warning once. On this computer, `ptyro pair
+  --open` does it for you: inside WSL it offers to add the CA to Windows' store, and on Linux to
+  Chrome's, Chromium's and Firefox's own stores (with `certutil`: `libnss3-tools` on Debian and
+  Ubuntu, `nss-tools` on Fedora).
 
 Then open the address `ptyro pair` shows. Anyone who could reach the server still needs a paired
 device's token; the certificate only keeps it private on the way.

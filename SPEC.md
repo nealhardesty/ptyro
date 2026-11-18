@@ -4894,6 +4894,13 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
     'phone' (was approve, now full)"; `--json` has `replaces`; the web form says the same and
     names the replacement in the sheet. The daemon replies `Pairing{replaces}` / `Paired{replaced}`.
     A different name from the same browser is a different device (nothing links them).
+  - **A link that would warn says so** (2026-11-18). When Tailscale's certificate should be in
+    use and isn't (`serve.json`'s `cert_note`, and the address isn't one it serves Tailscale's
+    on), a device opening the link gets ptyro's own certificate, so the browser warns and won't
+    install the app until it trusts the CA. `ptyro pair` notes that with the fix (the note's
+    first clause, without `tailscale cert`'s raw output: e.g. `sudo tailscale set
+    --operator=$USER`), and that the web app takes it up within 10 minutes; `--json` has it in
+    `notes` (`remote::untrusted_link`). The web's Devices ＋ sheet shows the same words.
   - **Why a code [security review M2]:** what is printed stays in scrollback and in the session
     recording (on by default, kept 30 days), which `read` devices and agents can read. So it is
     a pairing code (`ptp_` + 32 random bytes, stored as SHA-256), not the token. The app
@@ -4910,7 +4917,14 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
     WSL, with ptyro's own CA, it asks PowerShell whether `Cert:\CurrentUser\Root` holds it (by
     the SHA-256 ptyro prints); if not, it offers to add it (`Import-Certificate`, no
     administrator; Windows shows its own confirmation), else the page opens on a certificate
-    warning, which a note says. Firefox keeps its own store. TUI: `remote.pair.browser`; web:
+    warning, which a note says. Firefox keeps its own store. **[built 2026-11-18]** On Linux itself
+    (not WSL) the browsers check certificates against their own NSS databases, not the system's:
+    Chrome's and Chromium's `~/.pki/nssdb` (snap Chromium's too) and each Firefox profile's (also
+    snap's and Flatpak's), those that exist. `--open` asks `certutil -L` whether each holds the CA
+    (nickname `ptyro local CA <16 hex digits of its SHA-256>`), and offers to add it to those that
+    don't (`certutil -A -t C,,`: this user only, no sudo). No `certutil`: a note names the
+    package (libnss3-tools, nss-tools, nss); no store at all: a note says the browser may warn.
+    `--json` can't ask, so it notes the warning and the terminal command. TUI: `remote.pair.browser`; web:
     More → Web app → Open on the computer (the `pair.open` host op, `--json`, which can't ask,
     so it notes the warning). [V 2026-11-03: the trust check and reading the PEM on Windows
     11; the import's dialog not clicked through yet]
