@@ -54,7 +54,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("project.trust", "Review and trust this project's scripts"),
     a("worktree.remove", "Remove this worktree (refuses if work would be lost)"),
     a("worktree.retitle", "Change this worktree's title: what it's for, for people to read"),
-    a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to archive it"),
+    a("worktree.gc", "Stale worktrees (merged, gone, unused): pick one to remove it"),
     a("shell.new", "New shell: another one of its own in this worktree, full sized"),
     a(
         "machine.add",
