@@ -496,30 +496,42 @@ async fn pairing_codes_are_single_use_and_expire() {
     assert!(!text.contains("ptd_"), "{text}");
 }
 
-/// A link opens where `[remote] access` and `port` say, over HTTPS; a `--url` is used as written.
+/// A link opens where the running web app serves; a `--url` is used as written. With the web
+/// app off, pairing turns it on first, so the code is never one nothing could use (owner,
+/// 2026-11-18).
 #[test]
-fn pair_links_follow_access_and_port() {
-    let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
+fn pairing_turns_the_web_app_on_and_links_follow_it() {
+    let port = free_port();
+    let w = World::new(
+        // Who can reach it is pinned: on a machine running Tailscale, unset picks that.
+        &format!("[remote]\nport = {port}\naccess = \"localhost\"\n"),
+        &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")],
+    );
     let link = |w: &World, args: &[&str]| -> (String, Value) {
         let mut a = vec!["pair", "p", "--scope", "read", "--json"];
         a.extend_from_slice(args);
         let v = w.json(&a);
         (v["url"].as_str().unwrap().to_owned(), v)
     };
-    // Out of the box: this computer, the default port, HTTPS; and it says what to do for a phone.
-    let (u, v) = link(&w, &[]);
-    assert!(u.starts_with("https://127.0.0.1:7091/#pair="), "{u}");
+    // Off: pairing turns it on, and it stays on.
+    let out = w.cli(&["pair", "p", "--scope", "read", "--json"]);
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && said.contains("Turned the web app on"), "{said}");
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let u = v["url"].as_str().unwrap();
+    assert!(u.starts_with(&format!("https://127.0.0.1:{port}/#pair=")), "{u}");
     assert!(v["notes"].to_string().contains("remote.access"), "{v}");
+    assert!(w.ok(&["config", "get", "remote.serve"]).contains("true"));
+    // On: no second start.
+    let again = w.cli(&["pair", "p", "--scope", "read", "--json"]);
+    assert!(!String::from_utf8_lossy(&again.stderr).contains("Turned the web app on"));
     let (u, _) = link(&w, &["--url", "https://phone-host.example:8443/"]);
     assert!(u.starts_with("https://phone-host.example:8443/#pair="), "{u}");
-    // A port of your own is in the link.
-    let p = World::new("[remote]\nport = 8123\n", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
-    let (u, _) = link(&p, &[]);
-    assert!(u.starts_with("https://127.0.0.1:8123/#pair="), "{u}");
     // The text form prints the same link (QR and all).
     let out = w.cli(&["pair", "q", "--scope", "read", "--url", "https://box.example:7091"]);
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("https://box.example:7091/#pair=ptp_"), "{text}");
+    w.ok(&["web", "off"]);
 }
 
 /// `full` is the default scope, with a plain warning; naming a scope is the owner's choice and
@@ -527,6 +539,7 @@ fn pair_links_follow_access_and_port() {
 #[test]
 fn the_default_scope_is_full_with_a_warning_and_a_named_one_has_none() {
     let w = World::new("", &[("PTYRO_TEST_PAIRING_TTL_MS", "1500")]);
+    let _serve = w.serve();
     let v = w.json(&["pair", "a", "--json"]);
     assert_eq!(v["device"]["scope"], "full");
     let warn = v["warning"].as_str().unwrap();
@@ -617,6 +630,7 @@ fn the_daemon_reports_its_machine() {
     );
     assert_eq!(w.json(&["daemon", "status", "--json"])["machine"], "studio");
     assert!(w.ok(&["daemon", "status"]).contains("machine   studio"));
+    let _serve = w.serve();
     assert_eq!(w.json(&["pair", "m", "--scope", "read", "--json"])["machine"], "studio");
     let out = w.cli(&["pair", "m2", "--scope", "read"]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("Pairing \"m2\" with studio."));

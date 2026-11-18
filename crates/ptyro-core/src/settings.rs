@@ -721,7 +721,7 @@ pub const SETTINGS: &[Setting] = &[
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
     // ── Web app and remote ──
     s("client.default_remote", "remote", Kind::Text, "Where this ptyro's daemon is, when --remote and PTYRO_REMOTE don't say: an ssh host, or `local` (this computer's own daemon).").also("daemon remote ssh host client local").or("this computer's own daemon").eg("me@devbox"),
-    s("remote.serve", "remote", Kind::Bool, "The web app (for your phone or another computer) is on: the daemon runs its server and starts it again whenever the daemon starts. This is what `ptyro web on` and `ptyro web off` switch.").also("web app server phone serve on off start"),
+    s("remote.serve", "remote", Kind::Bool, "The web app (for your phone or another computer) is on: the daemon runs its server and starts it again whenever the daemon starts. This is what `ptyro web on` and `ptyro web off` switch; turned on here with nobody chosen in Who can reach it, it picks Tailscale when Tailscale runs on this computer.").also("web app server phone serve on off start"),
     s("remote.access", "remote", pick(ACCESS), "Who can reach the web app. It is always HTTPS (ptyro makes the certificate; trust it once from /ca.crt on a phone).").also("tailscale tailnet lan wifi network phone listen bind interface localhost open"),
     s("remote.port", "remote", int(1024, 65535), "The port the web app listens on, whoever may reach it. Pairing links and QR codes use it too.").also("listen bind address https"),
     s("remote.public_url", "remote", Kind::Text, "The address QR codes and links point at.").adv().or("worked out from how it is reached").eg("https://ptyro.example.com"),
