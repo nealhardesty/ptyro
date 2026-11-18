@@ -170,7 +170,6 @@ impl Daemon {
                     ]),
                     structured: false,
                     params: None,
-                    fork: false,
                 }),
             })
             .await?;

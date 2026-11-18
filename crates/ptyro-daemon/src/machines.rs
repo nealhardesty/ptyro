@@ -576,7 +576,7 @@ impl Daemon {
             archived: false,
             limit: None,
         };
-        if let Ok(Reply::Chats { chats }) = client.request(chats).await.map(q) {
+        if let Ok(Reply::Chats { chats, .. }) = client.request(chats).await.map(q) {
             m.chats = chats;
         }
         let old = {
@@ -1004,7 +1004,7 @@ impl Daemon {
                 Reply::Profiles { profiles }
             }
             // Chats (SPEC §22.11): every machine's, interleaved as one list is.
-            Reply::Chats { mut chats } => {
+            Reply::Chats { mut chats, incognito } => {
                 if let Request::ChatList {
                     workspace: None, pinned, archived: false, limit, ..
                 } = req
@@ -1017,7 +1017,7 @@ impl Daemon {
                         chats.truncate(n as usize);
                     }
                 }
-                Reply::Chats { chats }
+                Reply::Chats { chats, incognito }
             }
             Reply::Usage { mut usage } => {
                 usage.extend(views.iter().flat_map(|m| m.usage.clone()));
@@ -1107,8 +1107,10 @@ impl Daemon {
 
     /// `ChatList` of archived chats, with every online machine's (they are not mirrored).
     pub(crate) async fn archived_chats_too(&self, req: &Request, reply: Reply) -> Reply {
-        let (Request::ChatList { workspace: None, archived: true, .. }, Reply::Chats { mut chats }) =
-            (req, reply.clone())
+        let (
+            Request::ChatList { workspace: None, archived: true, .. },
+            Reply::Chats { mut chats, incognito },
+        ) = (req, reply.clone())
         else {
             return reply;
         };
@@ -1120,7 +1122,7 @@ impl Daemon {
             .map(|(m, _)| m.clone())
             .collect();
         for m in online {
-            if let Ok(Reply::Chats { chats: theirs }) = self.forward(&m, req.clone()).await {
+            if let Ok(Reply::Chats { chats: theirs, .. }) = self.forward(&m, req.clone()).await {
                 let hidden = self.hidden_of(&m);
                 // Remembered, so acting on one (unarchive, open, delete) is routed there.
                 if let Some(l) = self.links.locked().get_mut(&m) {
@@ -1138,7 +1140,7 @@ impl Daemon {
         {
             chats.truncate(*n as usize);
         }
-        Reply::Chats { chats }
+        Reply::Chats { chats, incognito }
     }
 
     // ── requests ─────────────────────────────────────────────────────────────

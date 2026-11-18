@@ -26,8 +26,6 @@ pub struct ChatView {
     pub max_scroll: Cell<usize>,
     /// The transcript wrapped for the last width, theme and colour depth; `apply` drops it.
     wrapped: RefCell<Option<Wrapped>>,
-    /// A chat's branch points (SPEC §22.7): item id → (which, of how many), drawn `‹ 2/3 ›`.
-    pub marks: std::collections::HashMap<String, (u32, u32, String)>,
     /// Find in the chat: this text is shown highlighted.
     pub highlight: Option<String>,
     /// What an `@` being typed may be (the chat's folders), shown in the composer.
@@ -51,8 +49,6 @@ pub struct Hints {
     pub card_behind: String,
     /// Nothing typed yet.
     pub empty: String,
-    /// Beside a branch point: the keys that flip it.
-    pub branches: String,
 }
 
 impl Default for Hints {
@@ -61,7 +57,6 @@ impl Default for Hints {
             card: "a allow · A always · d deny".into(),
             card_behind: "(Esc clears the draft, then a/A/d)".into(),
             empty: "type a message · Enter sends · Ctrl-C interrupts".into(),
-            branches: "Alt-← Alt-→".into(),
         }
     }
 }
@@ -106,12 +101,6 @@ impl ChatView {
             u if u >= 0 => (self.scroll + u as usize).min(self.max_scroll.get()),
             d => self.scroll.saturating_sub(d.unsigned_abs()),
         };
-    }
-
-    /// Branch points to draw (`ChatSiblings`, by node).
-    pub fn set_marks(&mut self, marks: impl IntoIterator<Item = (String, (u32, u32, String))>) {
-        self.marks = marks.into_iter().collect();
-        self.wrapped.take();
     }
 
     /// Bring `item` into view at the next draw.
@@ -218,18 +207,8 @@ fn tool_color(st: ToolStatus, t: &Theme) -> Color {
 
 fn build(view: &ChatView, t: &Theme, depth: Depth) -> Doc {
     let c = |c: Color| Style::new().fg(depth.fit(c));
-    let hints = view.hints.clone().unwrap_or_default();
     let mut d = Doc { lines: Vec::new(), starts: Vec::new() };
     for it in &view.items {
-        // Where it has siblings: which one this is, and the keys that go to the others.
-        if let Some((at, of, who)) = view.marks.get(&it.id) {
-            if matches!(it.body, ChatBody::User { .. }) {
-                d.line(vec![]);
-            }
-            // A compare's answers are named by their agent (SPEC §22.7).
-            let who = if who.is_empty() { String::new() } else { format!(" {who}") };
-            d.line(vec![seg(&format!("‹ {at}/{of}{who} ›  {}", hints.branches), c(t.dim))]);
-        }
         d.starts.push((it.id.clone(), d.lines.len()));
         match &it.body {
             ChatBody::User { text } => {

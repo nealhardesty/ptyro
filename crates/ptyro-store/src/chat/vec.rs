@@ -144,12 +144,13 @@ fn meaning(
 ) -> Result<Vec<RawHit>> {
     let k = if f.limit == 0 { 50 } else { f.limit.min(500) };
     let (wh, args) = filter_sql(f);
-    let chats: HashSet<String> = {
-        let mut st = db.prepare(&format!("SELECT c.id FROM chat c WHERE {wh}"))?;
+    // What the chats the filters allow show (a replaced turn, or an old branch, isn't found).
+    let shown: HashSet<String> = {
+        let mut st = db.prepare(&format!("{} SELECT id FROM shown", super::shown_cte(&wh)))?;
         let all: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
         st.query_map(all.as_slice(), |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
-    if chats.is_empty() {
+    if shown.is_empty() {
         return Ok(Vec::new());
     }
     let ruled_out: HashSet<String> = if !not.is_empty() {
@@ -181,7 +182,7 @@ fn meaning(
                 }
             };
             let text = |i| r.get_ref(i).ok().and_then(|v| v.as_str().ok()).unwrap_or_default();
-            if !chats.contains(text(1)) || (!ruled_out.is_empty() && ruled_out.contains(text(2))) {
+            if !shown.contains(text(2)) || (!ruled_out.is_empty() && ruled_out.contains(text(2))) {
                 continue;
             }
             let s = r
@@ -245,8 +246,6 @@ mod tests {
                 agent: "claude".into(),
                 profile: profile.into(),
                 tools: "chat".into(),
-                forked_from: None,
-                side_of: None,
                 folders: Vec::new(),
             })
             .await
@@ -342,6 +341,14 @@ mod tests {
         assert!(near(later, "", -1.0).await.unwrap().is_empty());
         let other = db.meaning(f(), unit(1.0, 0.0), "x".into(), String::new(), -1.0);
         assert!(other.await.unwrap().is_empty());
+        // Only what a chat shows is found: not a message an edit replaced.
+        put("c1", node("u1b", user("my cat naps"))).await.unwrap();
+        let naps = db.vec_todo(M.into(), false, ALL, 10).await.unwrap()[0].text.clone();
+        db.put_vecs(M.into(), vec![("u1b".into(), naps, q(unit(1.0, 0.0)))]).await.unwrap();
+        db.set_leaf("c1".into(), "u1b".into()).await.unwrap();
+        assert!(near(f(), "", -1.0).await.unwrap().iter().all(|h| h.node.as_deref() != Some("u1")));
+        db.set_leaf("c1".into(), "u1".into()).await.unwrap();
+        assert_eq!(near(f(), "", 0.5).await.unwrap().len(), 1);
 
         // A streaming answer, once complete, is embedded; a message's vector goes when it changes.
         put("c1", node("a1", ChatBody::Assistant { text: "whole".into(), streaming: false }))
@@ -356,7 +363,8 @@ mod tests {
         // A deleted chat's messages aren't found; another model's vectors go when asked.
         db.delete("c2".into()).await.unwrap();
         assert!(near(f(), "", -1.0).await.unwrap().iter().all(|h| h.chat.id == "c1"));
-        // (Those of the deleted messages and chat went with them.)
-        assert_eq!(db.drop_other_vecs("other".into()).await.unwrap(), 0);
+        // (Those of the deleted messages and chat went with them; the replaced message's stays,
+        // as the message does.)
+        assert_eq!(db.drop_other_vecs("other".into()).await.unwrap(), 1);
     }
 }

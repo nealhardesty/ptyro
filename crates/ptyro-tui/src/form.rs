@@ -22,8 +22,6 @@ pub enum Make {
     Workspace(Option<String>),
     /// A profile; then, when `Some`, the workspace form it was opened from carries on.
     Profile(Option<Box<Form>>),
-    /// `chat import`, asked first (SPEC §22.10): what to bring in.
-    ChatImport,
     /// A project, into the chosen workspace.
     ProjectAdd,
     /// Which workspaces this project (by id) is in.
@@ -883,15 +881,6 @@ impl App {
                 }
                 Err((key, e)) => form.fail(key, e),
             },
-            Make::ChatImport => {
-                let req = Request::ChatImport {
-                    agent: form.opt("agent"),
-                    profile: form.opt("profile"),
-                    since: form.opt("since"),
-                    dry_run: !form.get("dry_run").is_empty(),
-                };
-                return self.chat_import_request(req);
-            }
             Make::Workspace(machine) => {
                 let name = form.or_suggested("name");
                 let full = machine.as_ref().map_or_else(|| name.clone(), |m| format!("{m}:{name}"));
@@ -1097,46 +1086,6 @@ impl App {
             Make::Cli(vec!["machine".into(), "pair".into()]),
         );
         form.verb = "make the code";
-        self.open(form);
-    }
-
-    /// `chat.import`, asked first: whose histories, since when, or only count them.
-    pub(crate) fn open_chat_import_form(&mut self) {
-        let fields = vec![
-            Field::choice(
-                "agent",
-                "Whose",
-                opts([
-                    ("".into(), "every agent's".into()),
-                    ("claude".into(), "claude".into()),
-                    ("codex".into(), "codex".into()),
-                    ("gemini".into(), "gemini".into()),
-                ]),
-                0,
-                "Your agents' own histories become read-only, searchable chats (their text is copied into chat.db)",
-            ),
-            Field::choice(
-                "profile",
-                "Profile",
-                self.profile_options("every profile's"),
-                0,
-                "One profile's histories",
-            ),
-            Field::text(
-                "since",
-                "Since",
-                "(all of it)",
-                "Only sessions touched in this long: 30d, 12h",
-            ),
-            Field::yes_no(
-                "dry_run",
-                "Only count them",
-                false,
-                "Count what would come; write nothing",
-            ),
-        ];
-        let mut form = Form::new("Import your agents' histories", fields, Make::ChatImport);
-        form.verb = "import";
         self.open(form);
     }
 }

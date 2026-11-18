@@ -75,21 +75,13 @@ pub fn chats() -> Vec<CompletionCandidate> {
         archived: false,
         limit: Some(50),
     };
-    let Some(Reply::Chats { chats }) = ask(req) else { return Vec::new() };
+    let Some(Reply::Chats { chats, .. }) = ask(req) else { return Vec::new() };
     let mut out: Vec<CompletionCandidate> = chats
         .into_iter()
         .map(|c| candidate(format!("c:{}", c.handle), Some(c.label().to_owned())))
         .collect();
     out.push(candidate("@last".into(), Some("the chat used last".into())));
     out
-}
-
-/// The tool presets, each with what it lets a chat use.
-pub fn chat_presets() -> Vec<CompletionCandidate> {
-    let Some(Reply::ChatPresets { presets, .. }) = ask(Request::ChatPresets) else {
-        return Vec::new();
-    };
-    presets.into_iter().map(|p| candidate(p.name, Some(p.about))).collect()
 }
 
 pub fn worktrees() -> Vec<CompletionCandidate> {

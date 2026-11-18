@@ -219,16 +219,8 @@ pub enum Purpose {
     ShellWatch(SessionId),
     /// A chat's agent (`None`: the new chat being written's).
     ChatAgent(Option<String>),
-    /// A chat's tool preset.
-    ChatPreset(Option<String>),
     /// The project this chat's task works in (SPEC §22.7).
     ChatTaskProject(String, crate::chats::TaskArgs),
-    /// Where to fork this chat (SPEC §22.7).
-    ChatForkAt(String),
-    /// Which message of this chat to say differently.
-    ChatEditPick(String),
-    /// Which of this chat's branches to show.
-    ChatBranchPick(String),
     /// A citation to open.
     ChatCite,
     /// A slash command (`/help`), into the composer.
@@ -299,8 +291,6 @@ pub enum PromptKind {
     ShellMatch(SessionId),
     /// A question for `chat find`.
     ChatFind,
-    /// Which agents a chat's last message is asked of (`chat.compare`).
-    ChatCompare(String),
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -472,23 +462,17 @@ pub enum Pending {
         chat: String,
         text: String,
     },
-    /// A chat made (a fork, a side chat, a find): open it, if what was shown when it was asked
+    /// A chat made (a find): open it, if what was shown when it was asked
     /// for (`App::chat_shown_key`) still is; else offer it.
     ChatOpen(String),
     /// A cited chat looked up by its address: open it at this node (as `ChatOpen`).
     ChatOpenAt(Option<String>, String),
-    /// A side chat made by `/side QUESTION`: ask that, and open it (as `ChatOpen`).
-    ChatSideAsk(String, String),
     /// The chat list's preview of this chat.
     ChatPreview(String),
     /// The chat list's message hits, for this query.
     ChatHits(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
-    /// `chat.import`: its report becomes a toast.
-    ChatImport,
-    /// `chat.pick`: which agent takes the next message, as a toast.
-    ChatPicked,
     /// The daemon's agents out of date (BOOT5); `note`: the start-up note's too.
     Updates {
         note: bool,
@@ -967,7 +951,7 @@ impl App {
             self.host_load = status.load;
         }
         if self.config.chat.enabled
-            && let Ok(Reply::Chats { chats }) = client
+            && let Ok(Reply::Chats { chats, .. }) = client
                 .request(Request::ChatList {
                     workspace: None,
                     all: true,
@@ -1518,8 +1502,8 @@ impl App {
                 self.on_event(event);
                 self.retry_reveal();
             }
-            ServerMsg::ChatLive { chat, rev, reset, items, siblings } => {
-                self.chat_live(chat, rev, reset, items, siblings);
+            ServerMsg::ChatLive { chat, rev, reset, items } => {
+                self.chat_live(chat, rev, reset, items);
             }
             ServerMsg::Goodbye { reason } => self.lost(&reason),
             _ => {}
@@ -1893,12 +1877,6 @@ impl App {
     fn handle_reply(&mut self, pending: Pending, res: Result<Reply, ptyro_core::Error>) {
         match (pending, res) {
             (Pending::Confirm(req, then), Err(e)) if e.code == ErrorCode::NeedsConfirmation => {
-                if let Pending::ChatMade { token, .. } = *then
-                    && let Some(crate::chats::ChatPanel::View(v)) = &mut self.chat_panel
-                    && v.token == token
-                {
-                    v.sending = false;
-                }
                 self.overlay = Some(Overlay::Confirm {
                     text: format!("{} [y/N]", e.message),
                     action: Confirmed::Again(req, then),
@@ -1911,8 +1889,8 @@ impl App {
             }
             // An older daemon (before protocol 1.35) can't say: nothing to offer.
             (Pending::Updates { .. }, _) => {}
-            (Pending::Chats, Ok(Reply::Chats { chats })) => self.got_chats(chats),
-            (Pending::ArchivedChats, Ok(Reply::Chats { chats })) => self.got_archived(chats),
+            (Pending::Chats, Ok(Reply::Chats { chats, .. })) => self.got_chats(chats),
+            (Pending::ArchivedChats, Ok(Reply::Chats { chats, .. })) => self.got_archived(chats),
             (Pending::ChatMade { token, .. }, Ok(Reply::Chat { info })) => {
                 self.chat_made(info, token)
             }
@@ -1922,33 +1900,12 @@ impl App {
             (Pending::ChatSent { chat, text }, Err(e)) => {
                 self.chat_sent(&chat, text, Some(e.message))
             }
-            // An imported chat carries on as a fork: the view goes there.
-            (Pending::ChatSent { chat, text }, Ok(Reply::Chat { info })) => {
-                self.chat_sent(&chat, text, None);
-                self.chat_forked(&chat, info);
-            }
             (Pending::ChatSent { chat, text }, Ok(_)) => self.chat_sent(&chat, text, None),
-            (Pending::ChatImport, Ok(Reply::ChatImported { report })) => {
-                self.toast(report.summary());
-                self.refresh_chats();
-            }
-            (Pending::ChatImport, Err(e)) => self.toast_err(format!("import: {}", e.message)),
-            (Pending::ChatPicked, Ok(Reply::Chat { info })) => {
-                let who = ptyro_core::chats::agent_label(&info.agent, &info.profile);
-                self.toast(format!("kept: {who} takes the next message"));
-                self.chat_updated(info);
-            }
             (Pending::ChatOpen(origin), Ok(Reply::Chat { info })) => {
                 self.chat_ready(info, &origin, None);
             }
             (Pending::ChatOpenAt(node, origin), Ok(Reply::ChatTranscript { info, .. })) => {
                 self.chat_ready(info, &origin, node.as_deref());
-            }
-            (Pending::ChatSideAsk(text, origin), Ok(Reply::Chat { info })) => {
-                let id = info.id.clone();
-                self.chat_ready(info, &origin, None);
-                let sent = Pending::ChatSent { chat: id.clone(), text: text.clone() };
-                self.request(sent, Request::ChatSend { chat: id, text });
             }
             (Pending::ChatPreview(id), Ok(Reply::ChatTranscript { nodes, .. })) => {
                 self.got_preview(&id, nodes)
@@ -2968,13 +2925,6 @@ impl App {
                 }
             }
             "sidebar.fold_all" => self.fold_all(),
-            // On a chat row, `f` forks it (SPEC §22.12).
-            "sidebar.filter"
-                if self.focus == Focus::Sidebar
-                    && matches!(self.selected_row(), Some(Row::Chat(_))) =>
-            {
-                self.chat_action("chat.fork")
-            }
             "sidebar.filter" => self.set_show(self.show.next()),
             "sidebar.show_all" => self.set_show(Show::All),
             "sidebar.show_running" => self.set_show(Show::Running),
@@ -3924,7 +3874,7 @@ impl App {
             }
             Row::Chat(id) => self.chat_actions_for(id),
             Row::Chats(_) | Row::ChatNew(_) | Row::ChatAll(_) => {
-                vec!["chat.new", "chat.list", "chat.import"]
+                vec!["chat.new", "chat.list"]
             }
             Row::Shells(_) | Row::ShellNew(_) => {
                 vec!["shells.new", "shells.scratch", "shells.menu"]
@@ -4969,17 +4919,10 @@ impl App {
                 Request::ProjectRemove { addr: id, release: false },
             ),
             Confirmed::Again(mut req, then) => {
-                if let Request::ChatTask { confirmed, .. }
-                | Request::ChatCompare { confirmed, .. }
-                | Request::ChatNew { confirmed, .. }
-                | Request::ChatUpdate { confirmed, .. }
-                | Request::ChatFork { confirmed, .. } = req.as_mut()
+                if let Request::ChatTask { confirmed, .. } | Request::ChatUpdate { confirmed, .. } =
+                    req.as_mut()
                 {
                     *confirmed = true;
-                }
-                // A new chat's message is on its way again: ⏎ waits for it.
-                if let Pending::ChatMade { token, .. } = then.as_ref() {
-                    self.chat_sending(*token);
                 }
                 self.request(*then, *req);
             }
@@ -5161,17 +5104,9 @@ impl App {
             }
             (target, Purpose::Home) => self.home_picked(target),
             (Target::Fix(i), Purpose::Health) => self.fix(i),
-            (Target::Agent(a), Purpose::ChatAgent(id)) => self.chat_picked(a, true, id),
-            (
-                Target::Chat(v),
-                p @ (Purpose::ChatForkAt(_)
-                | Purpose::ChatEditPick(_)
-                | Purpose::ChatBranchPick(_)
-                | Purpose::ChatCite
-                | Purpose::ChatSlash),
-            ) => self.chat_pick(p, v),
+            (Target::Agent(a), Purpose::ChatAgent(id)) => self.chat_picked(a, id),
+            (Target::Chat(v), p @ (Purpose::ChatCite | Purpose::ChatSlash)) => self.chat_pick(p, v),
             (Target::Chat(id), _) => self.open_chat(&id),
-            (Target::Agent(p), Purpose::ChatPreset(id)) => self.chat_picked(p, false, id),
             (Target::Agent(p), Purpose::ChatTaskProject(chat, t)) => {
                 self.chat_task(chat, crate::chats::TaskArgs { project: Some(p), ..t })
             }
@@ -5318,13 +5253,12 @@ impl App {
             PromptKind::ChatEdit(chat, node) => {
                 if !text.trim().is_empty() {
                     self.request(
-                        Pending::Done("said differently: the old one stays as a branch".into()),
+                        Pending::Done("said differently: it and its answer are replaced".into()),
                         Request::ChatEdit { chat, node, text },
                     );
                 }
             }
             PromptKind::ChatFindIn(chat) => self.find_in_chat(&chat, text.trim()),
-            PromptKind::ChatCompare(chat) => self.chat_compare(chat, text.trim()),
             PromptKind::ChatFind => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -5351,8 +5285,6 @@ impl App {
                         pinned: None,
                         archived: None,
                         agent: None,
-                        preset: None,
-                        keep: None,
                         folders: None,
                         confirmed: false,
                         auto_title: false,
@@ -9627,13 +9559,12 @@ mod tests {
         );
     }
 
-    fn chat_info(id: &str, imported: bool) -> ptyro_core::chats::ChatInfo {
+    fn chat_info(id: &str) -> ptyro_core::chats::ChatInfo {
         serde_json::from_value(serde_json::json!({
             "id": id, "handle": id, "workspace": "main", "title": format!("chat {id}"),
             "title_src": "user", "agent": "claude", "profile": "default", "tools": "chat",
-            "pinned": false, "archived": false, "incognito": false, "forked": false,
+            "pinned": false, "archived": false, "incognito": false,
             "nodes": 2, "unread": 0, "created_ms": 0, "last_ms": 0, "cost_micro_usd": 0,
-            "source": if imported { Some(format!("claude:{id}")) } else { None },
         }))
         .unwrap()
     }
@@ -9657,64 +9588,51 @@ mod tests {
     #[test]
     fn a_reply_to_a_message_sent_in_one_chat_never_reopens_it_from_another() {
         let mut app = app();
-        app.chat_list = vec![chat_info("aaaa", false), chat_info("bbbb", false)];
+        app.chat_list = vec![chat_info("aaaa"), chat_info("bbbb")];
         app.open_chat("aaaa");
-        // Sent in A, then B opened before the reply came: B stays, and nothing says "fork".
+        // Sent in A, then B opened before the reply came: B stays.
         app.open_chat("bbbb");
         let sent = Pending::ChatSent { chat: "aaaa".into(), text: "hi".into() };
-        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("aaaa", false) }));
+        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("aaaa") }));
         assert_eq!(shown_chat(&app).as_deref(), Some("bbbb"));
-        assert!(!toast_text(&app).contains("fork"), "{}", toast_text(&app));
-        // A message to an imported chat went to a fork of it: shown, as it is still open.
-        app.chat_list.push(chat_info("cccc", true));
-        app.open_chat("cccc");
-        let sent = Pending::ChatSent { chat: "cccc".into(), text: "go on".into() };
-        app.handle_reply(sent, Ok(Reply::Chat { info: chat_info("dddd", false) }));
-        assert_eq!(shown_chat(&app).as_deref(), Some("dddd"));
-        assert!(toast_text(&app).contains("continued as a fork"), "{}", toast_text(&app));
     }
 
     #[test]
-    fn an_imported_chat_is_never_offered_retry_or_edit() {
+    fn retry_replaces_the_last_answer_and_edit_says_the_last_message_again() {
         let mut app = app();
-        app.chat_list = vec![chat_info("cccc", true)];
-        app.open_chat("cccc");
-        for a in ["chat.retry", "chat.edit"] {
-            app.toast = None;
-            app.chat_action(a);
-            assert!(toast_text(&app).contains("stays as its agent wrote it"), "{a}");
-            assert!(app.overlay.is_none(), "{a}: no message picker");
-        }
-    }
-
-    #[test]
-    fn a_first_message_not_agreed_to_goes_back_to_the_composer() {
-        let mut app = app();
-        app.new_chat();
-        app.chat_paste("ask codex@work");
-        let token = chat_token(&app);
-        app.chat_key(KeyEvent::new(KeyCode::Enter, Mods::NONE));
-        // The daemon asks first (another profile): the person says no.
-        let req = Request::ChatNew {
-            workspace: None,
-            agent: None,
-            preset: None,
-            title: None,
-            prompt: Some("ask codex@work".into()),
-            incognito: Some(false),
-            folders: Vec::new(),
-            compare: vec!["claude".into(), "codex@work".into()],
-            confirmed: false,
+        app.chat_list = vec![chat_info("aaaa")];
+        app.open_chat("aaaa");
+        let answer = |id: &str, text: &str| {
+            ptyro_core::chat::ChatItem::new(
+                id,
+                ptyro_core::chat::ChatBody::Assistant { text: text.into(), streaming: false },
+            )
         };
-        let then = Pending::ChatMade { text: "ask codex@work".into(), token };
-        let e = ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?");
-        app.handle_reply(Pending::Confirm(Box::new(req), Box::new(then)), Err(e));
-        assert!(matches!(app.overlay, Some(Overlay::Confirm { .. })));
-        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'n' }, Mods::NONE));
-        let Some(crate::chats::ChatPanel::View(v)) = &app.chat_panel else { panic!() };
-        assert_eq!(v.draft, "ask codex@work", "the message is back to edit");
-        assert!(v.view.items.is_empty(), "nothing shows as sent");
-        assert!(v.id.is_none() && !v.sending);
+        app.chat_live(
+            "aaaa".into(),
+            1,
+            true,
+            vec![
+                user_item("n1", "first"),
+                answer("a1", "one"),
+                user_item("n2", "second"),
+                answer("a2", "two"),
+            ],
+        );
+        // Edit: the last message, at once (no picker), its text ready to change.
+        act(&mut app, "chat.edit");
+        let Some(Overlay::Prompt { kind: PromptKind::ChatEdit(c, n), text, title }) = &app.overlay
+        else {
+            panic!("asks for the new words")
+        };
+        assert_eq!((c.as_str(), n.as_str(), text.as_str()), ("aaaa", "n2", "second"));
+        assert!(title.contains("replaced"), "{title}");
+        app.overlay = None;
+        asked(&mut app);
+        act(&mut app, "chat.retry");
+        assert!(asked(&mut app).iter().any(
+            |p| matches!(p, Pending::Done(m) if m == "asked again: the new answer replaces the last one")
+        ));
     }
 
     /// A key typed at the terminal, through everything that routes it.
@@ -9961,7 +9879,7 @@ mod tests {
         let mut app = app();
         let (a, b) = with_agents(&mut app);
         app.show(a, None);
-        app.chat_list.push(chat_info("cccc", false));
+        app.chat_list.push(chat_info("cccc"));
         app.open_chat("cccc");
         press(&mut app, 'h', M::NONE);
         press(&mut app, 'i', M::NONE);
@@ -10018,7 +9936,7 @@ mod tests {
     fn an_at_in_the_composer_offers_the_chats_folders() {
         use crossterm::event::KeyModifiers as M;
         let mut app = app();
-        let mut c = chat_info("cccc", false);
+        let mut c = chat_info("cccc");
         c.folders = vec!["~/notes".into(), "/srv/docs".into()];
         app.chat_list.push(c);
         app.open_chat("cccc");
@@ -10100,21 +10018,15 @@ mod tests {
     }
 
     #[test]
-    fn the_chat_list_shows_imported_ones_only_on_i() {
+    fn the_chat_lists_search_operators_arent_title_text() {
         let mut app = app();
-        app.chat_list = vec![chat_info("aaaa", false), chat_info("cccc", true)];
+        app.chat_list = vec![chat_info("aaaa"), chat_info("cccc")];
         app.open_chat_list(None);
         let count = |app: &App| match &app.chat_panel {
             Some(crate::chats::ChatPanel::List(l)) => app.list_rows(l).len(),
             _ => 0,
         };
         assert_eq!(count(&app), 2);
-        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'i' }, Mods::NONE));
-        assert_eq!(count(&app), 1);
-        assert!(screen(&app).contains("imported only"));
-        app.chat_key(KeyEvent::new(KeyCode::Char { c: 'i' }, Mods::NONE));
-        assert_eq!(count(&app), 2);
-        // The search's operators aren't title text.
         if let Some(crate::chats::ChatPanel::List(l)) = &mut app.chat_panel {
             l.query = "by:meaning chat aaaa".into();
         }
@@ -10156,12 +10068,12 @@ mod tests {
         ckey(&mut app, KeyCode::Esc);
         assert!(app.chat_panel.is_none());
         app.new_chat();
-        app.chat_picked("codex".into(), true, None);
+        app.chat_picked("codex".into(), None);
         app.overlay = None;
         app.chat_paste("second");
         app.handle_reply(
             Pending::ChatMade { text: "hello".into(), token: first },
-            Ok(Reply::Chat { info: chat_info("aaaa", false) }),
+            Ok(Reply::Chat { info: chat_info("aaaa") }),
         );
         let v = view(&app);
         assert!(v.id.is_none() && v.agent.as_deref() == Some("codex") && v.draft == "second");
@@ -10173,7 +10085,7 @@ mod tests {
         let mine = chat_token(&app);
         app.handle_reply(
             Pending::ChatMade { text: "second".into(), token: mine },
-            Ok(Reply::Chat { info: chat_info("bbbb", false) }),
+            Ok(Reply::Chat { info: chat_info("bbbb") }),
         );
         assert_eq!(view(&app).id.as_deref(), Some("bbbb"));
         assert_eq!(view(&app).draft, "second", "the draft stays");
@@ -10182,16 +10094,13 @@ mod tests {
     #[test]
     fn a_slow_reply_is_offered_and_each_chat_keeps_its_draft() {
         let mut app = app();
-        app.chat_list = vec![chat_info("aaaa", false), chat_info("bbbb", false)];
+        app.chat_list = vec![chat_info("aaaa"), chat_info("bbbb")];
         app.open_chat("aaaa");
         let origin = app.chat_shown_key();
         app.open_chat("bbbb");
         app.chat_paste("half a thought");
         // A fork asked for in A arrives while B is being typed in: B stays.
-        app.handle_reply(
-            Pending::ChatOpen(origin),
-            Ok(Reply::Chat { info: chat_info("cccc", false) }),
-        );
+        app.handle_reply(Pending::ChatOpen(origin), Ok(Reply::Chat { info: chat_info("cccc") }));
         assert_eq!(shown_chat(&app).as_deref(), Some("bbbb"));
         assert_eq!(view(&app).draft, "half a thought");
         assert!(toast_text(&app).contains("ready"), "{}", toast_text(&app));
@@ -10202,10 +10111,7 @@ mod tests {
         assert_eq!(view(&app).draft, "half a thought");
         // Asked from what is still shown: it opens at once.
         let origin = app.chat_shown_key();
-        app.handle_reply(
-            Pending::ChatOpen(origin),
-            Ok(Reply::Chat { info: chat_info("dddd", false) }),
-        );
+        app.handle_reply(Pending::ChatOpen(origin), Ok(Reply::Chat { info: chat_info("dddd") }));
         assert_eq!(shown_chat(&app).as_deref(), Some("dddd"));
     }
 
@@ -10213,9 +10119,9 @@ mod tests {
     fn an_archived_chat_keeps_its_header_and_only_its_own_view_closes() {
         let mut app = app();
         with_project(&mut app);
-        let mut a = chat_info("aaaa", false);
+        let mut a = chat_info("aaaa");
         a.cost_micro_usd = 12_000;
-        app.chat_list = vec![a.clone(), chat_info("bbbb", false)];
+        app.chat_list = vec![a.clone(), chat_info("bbbb")];
         app.open_chat("aaaa");
         // Archived elsewhere (the CLI): it leaves the list but the view still knows it.
         let mut archived = a.clone();
@@ -10247,31 +10153,27 @@ mod tests {
     }
 
     #[test]
-    fn f_on_a_chat_row_opens_it_then_asks_where_to_fork() {
+    fn edit_on_a_chat_row_opens_it_then_asks_for_its_last_message_again() {
         let mut app = app();
         with_project(&mut app);
-        app.chat_list = vec![chat_info("aaaa", false), chat_info("bbbb", false)];
+        app.chat_list = vec![chat_info("aaaa"), chat_info("bbbb")];
         app.open_chat("aaaa");
         app.focus = Focus::Sidebar;
         let rows = app.rows();
         let at = rows.iter().position(|r| *r == Row::Chat("bbbb".into())).unwrap();
         app.set_sel(&rows, at);
-        press(&mut app, 'f', crossterm::event::KeyModifiers::NONE);
+        act(&mut app, "chat.edit");
         assert_eq!(shown_chat(&app).as_deref(), Some("bbbb"), "the row's chat, not the one open");
         assert!(app.overlay.is_none(), "its messages aren't here yet");
-        app.chat_live(
-            "bbbb".into(),
-            1,
-            true,
-            vec![user_item("n1", "how do lifetimes work")],
-            vec![],
-        );
-        let Some(Overlay::Picker { palette, purpose: Purpose::ChatForkAt(c) }) = &app.overlay
+        app.chat_live("bbbb".into(), 1, true, vec![user_item("n1", "how do lifetimes work")]);
+        let Some(Overlay::Prompt { kind: PromptKind::ChatEdit(c, n), text, .. }) = &app.overlay
         else {
-            panic!("asks where")
+            panic!("asks for the new words")
         };
-        assert_eq!(c, "bbbb");
-        assert_eq!(palette.item(1).label, "how do lifetimes work");
+        assert_eq!(
+            (c.as_str(), n.as_str(), text.as_str()),
+            ("bbbb", "n1", "how do lifetimes work")
+        );
         // Find in a chat from the list: that chat opens and the answer is found there.
         app.overlay = None;
         app.open_chat_list(None);
@@ -10288,10 +10190,10 @@ mod tests {
     #[test]
     fn the_chat_lists_message_hits_are_selected_scrolled_to_and_clicked() {
         let mut app = app();
-        app.chat_list = (0..30).map(|i| chat_info(&format!("c{i:03}"), false)).collect();
+        app.chat_list = (0..30).map(|i| chat_info(&format!("c{i:03}"))).collect();
         app.open_chat_list(None);
         let hit: ptyro_core::chats::ChatHit = serde_json::from_value(serde_json::json!({
-            "chat": chat_info("c007", false), "node": "n9", "kind": "user", "snippet": "the needle",
+            "chat": chat_info("c007"), "node": "n9", "kind": "user", "snippet": "the needle",
             "how": "words", "rank": 1, "at_ms": 0,
         }))
         .unwrap();
@@ -10320,7 +10222,7 @@ mod tests {
         use ptyro_core::model::MachineState as S;
         let mut app = app();
         with_laptop2(&mut app, S::Online);
-        let mut c = chat_info("rrrr", false);
+        let mut c = chat_info("rrrr");
         c.machine = Some("laptop2".into());
         c.workspace = "laptop2:work".into();
         app.chat_list = vec![c];
@@ -10354,7 +10256,7 @@ mod tests {
         use crossterm::event::KeyModifiers as M;
         let mut app = app();
         let (a, _) = with_agents(&mut app);
-        app.chat_list = vec![chat_info("aaaa", false)];
+        app.chat_list = vec![chat_info("aaaa")];
         app.open_chat_list(None);
         press(&mut app, 'q', M::CONTROL);
         press(&mut app, 'X', M::SHIFT);
@@ -10372,7 +10274,7 @@ mod tests {
     fn ctrl_c_stops_a_working_answer_whatever_the_draft_and_card_letters_are_typed() {
         use crossterm::event::KeyModifiers as M;
         let mut app = app();
-        let mut c = chat_info("aaaa", false);
+        let mut c = chat_info("aaaa");
         c.status = Some(ptyro_core::status::AgentStatus::Working);
         app.chat_list = vec![c];
         app.open_chat("aaaa");
@@ -10396,7 +10298,7 @@ mod tests {
                 decided: None,
             },
         );
-        app.chat_live("aaaa".into(), 1, true, vec![card], vec![]);
+        app.chat_live("aaaa".into(), 1, true, vec![card]);
         press(&mut app, 'y', M::NONE);
         assert_eq!(view(&app).draft, "y", "typing \"yes\" isn't an answer");
         ckey(&mut app, KeyCode::Esc);
@@ -10409,15 +10311,12 @@ mod tests {
     #[test]
     fn esc_goes_back_where_the_chat_was_opened_from() {
         let mut app = app();
-        app.chat_list = vec![chat_info("aaaa", false)];
+        app.chat_list = vec![chat_info("aaaa")];
+        // A chat opened from the list: back to the list.
+        app.open_chat_list(Some("main".into()));
         app.open_chat("aaaa");
-        let origin = app.chat_shown_key();
-        let mut side = chat_info("ssss", false);
-        side.side_of = Some("aaaa".into());
-        app.handle_reply(Pending::ChatOpen(origin), Ok(Reply::Chat { info: side }));
-        assert_eq!(shown_chat(&app).as_deref(), Some("ssss"));
         ckey(&mut app, KeyCode::Esc);
-        assert_eq!(shown_chat(&app).as_deref(), Some("aaaa"), "the side chat's own chat");
+        assert!(matches!(app.chat_panel, Some(crate::chats::ChatPanel::List(_))));
         // A new chat started from the list: back to the list.
         app.open_chat_list(Some("main".into()));
         press(&mut app, 'm', crossterm::event::KeyModifiers::NONE);
@@ -10436,54 +10335,31 @@ mod tests {
         }
         assert_eq!(view(&app).agent.as_deref(), Some("codex"));
         assert_eq!(view(&app).title.as_deref(), Some("release notes"));
-        // C-o: the agent, its tools, then a folder.
+        // C-o: the agent, then a folder.
         press(&mut app, 'o', crossterm::event::KeyModifiers::CONTROL);
         assert!(matches!(
             app.overlay,
             Some(Overlay::Picker { purpose: Purpose::ChatAgent(None), .. })
         ));
         app.overlay = None;
-        app.chat_picked("claude".into(), true, None);
-        assert!(matches!(
-            app.overlay,
-            Some(Overlay::Picker { purpose: Purpose::ChatPreset(None), .. })
-        ));
-        app.overlay = None;
-        app.chat_picked("read".into(), false, None);
+        app.chat_picked("claude".into(), None);
         assert!(matches!(
             app.overlay,
             Some(Overlay::Prompt { kind: PromptKind::ChatFolder(None), .. })
         ));
         app.overlay = None;
-        // Its first message, agreed to after a question: ⏎ waits for it.
+        // Its first message: ⏎ waits for it.
         app.chat_paste("hi");
-        let token = chat_token(&app);
         ckey(&mut app, KeyCode::Enter);
-        let req = Request::ChatNew {
-            workspace: None,
-            agent: None,
-            preset: None,
-            title: None,
-            prompt: Some("hi".into()),
-            incognito: Some(false),
-            folders: Vec::new(),
-            compare: Vec::new(),
-            confirmed: false,
-        };
-        let then = Pending::ChatMade { text: "hi".into(), token };
-        let e = ptyro_core::Error::new(ErrorCode::NeedsConfirmation, "another profile?");
-        app.handle_reply(Pending::Confirm(Box::new(req), Box::new(then)), Err(e));
-        assert!(!view(&app).sending);
-        app.overlay_key(KeyEvent::new(KeyCode::Char { c: 'y' }, Mods::NONE));
-        assert!(view(&app).sending, "sending again");
+        assert!(view(&app).sending);
     }
 
     #[test]
     fn the_chat_lists_paste_searches_and_its_filters_and_tab_keep_its_workspace() {
         let mut app = app();
-        let mut pinned = chat_info("pppp", false);
+        let mut pinned = chat_info("pppp");
         pinned.pinned = true;
-        app.chat_list = vec![pinned, chat_info("aaaa", false)];
+        app.chat_list = vec![pinned, chat_info("aaaa")];
         app.open_chat_list(Some("main".into()));
         asked(&mut app);
         app.chat_paste("redis");
@@ -10537,7 +10413,7 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         let mut app = app();
         app.keymap = map;
-        app.chat_list = vec![chat_info("aaaa", false)];
+        app.chat_list = vec![chat_info("aaaa")];
         app.open_chat("aaaa");
         assert!(screen(&app).contains("C-y find"), "{}", screen(&app));
         press(&mut app, 'y', crossterm::event::KeyModifiers::CONTROL);
@@ -10555,16 +10431,12 @@ mod tests {
     #[test]
     fn menus_offer_what_applies_and_toasts_offer_the_fix() {
         let mut app = app();
-        let mut side = chat_info("ssss", false);
-        side.side_of = Some("aaaa".into());
-        app.chat_list = vec![chat_info("aaaa", false), side];
+        app.chat_list = vec![chat_info("aaaa")];
         let a = app.chat_actions_for("aaaa");
-        for x in ["chat.retry", "chat.edit", "chat.fork", "chat.side", "chat.cite", "chat.find_in"]
-        {
+        for x in ["chat.retry", "chat.edit", "chat.cite", "chat.find_in", "chat.task"] {
             assert!(a.contains(&x), "{x}");
         }
-        assert!(!a.contains(&"chat.keep") && !a.contains(&"chat.stop"));
-        assert!(app.chat_actions_for("ssss").contains(&"chat.keep"));
+        assert!(!a.contains(&"chat.stop"), "nothing to stop");
         // A new chat's menu: its own choices.
         app.new_chat();
         act(&mut app, "row.menu");
@@ -10587,13 +10459,10 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_row_shows_a_fork_and_the_headings_plus_starts_a_chat_there() {
+    fn the_chats_headings_plus_starts_a_chat_there() {
         let mut app = app();
         with_project(&mut app);
-        let mut f = chat_info("ffff", false);
-        f.forked = true;
-        app.chat_list = vec![f];
-        assert!(rows_say(&app, "⎇"), "{:?}", sidebar(&app));
+        app.chat_list = vec![chat_info("ffff")];
         let y = sidebar(&app).iter().position(|l| l.contains("CHATS")).unwrap() as u16;
         let side = app.sidebar_area().unwrap();
         let click = crossterm::event::MouseEvent {
@@ -10614,7 +10483,7 @@ mod tests {
     #[test]
     fn a_refused_message_goes_back_in_front_of_what_was_typed_since() {
         let mut app = app();
-        app.chat_list = vec![chat_info("aaaa", false)];
+        app.chat_list = vec![chat_info("aaaa")];
         app.open_chat("aaaa");
         app.chat_paste("first");
         ckey(&mut app, KeyCode::Enter);
@@ -10644,7 +10513,7 @@ mod tests {
         );
         let file = Config::path(&paths);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        app.chat_list = vec![chat_info("aaaa", false)];
+        app.chat_list = vec![chat_info("aaaa")];
         app.open_chat("aaaa");
         std::fs::write(&file, "[chat]\nenabled = false\n").unwrap();
         app.reload_config_with(false);

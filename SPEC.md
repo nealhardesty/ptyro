@@ -1171,6 +1171,16 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-17] Protocol 1.47** (a removal): the chat trims (§22.7, §22.10, §22.14):
+comparing agents' answers, importing the agents' histories, tool presets, and branches, forks and
+side chats. The requests `chat_branch`, `chat_fork`, `chat_presets`, `chat_compare`, `chat_pick`
+and `chat_import` are in `RETIRED_REQUESTS`; the replies `ChatImported` and `ChatPresets`,
+`ChatTranscript.siblings`, `ChatLive.siblings`, the request fields `ChatNew.preset`, `.compare`
+and `.confirmed`, `ChatRead.all`, `ChatUpdate.preset` and `.keep`, and `ChatInfo`'s `forked`,
+`side_of`, `shell`, `comparing`, `source` and `source_dir` were removed. `Chats` gains
+`incognito`, the new-chat default `ChatPresets` carried. `ChatRetry` and `ChatEdit` stay, and now
+replace the last turn.
+
 **[built 2026-11-17] Protocol 1.46** (a removal): the session extras are gone (§7.1, §7.6, §8.7,
 §11.2h): starting or converting a session structured (chats still run on structured sessions,
 §22.2), session summaries, adopting an agent started by hand, `ptyro report`, and replaying and
@@ -3255,7 +3265,7 @@ learning anything up front.
   multi-line prompt as one bracketed paste, so the agent gets one prompt.
 - **Summaries** (UX1.3: a `≈` line from a small model after each turn, `ptyro summarize`) were
   removed 2026-11-17. Their redaction (`crates/ptyro-daemon/src/redact.rs`) stays for a chat's
-  titler and imported chats.
+  titler.
 - **`n` asks what to do** (UX1.9). One box, "What should it do?", with a preview under it:
   `→ fix-flaky-test · claude · new worktree in myrepo`. ⏎ starts the default agent on it in a
   new worktree named after it (here, with no project), the prompt also its title. Tab edits the
@@ -3646,8 +3656,8 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - **Keys.** ⏎ creates from any field, so typing a name and ⏎ is still the whole quick path;
   Tab/↑↓ move; `C-u` clears; Esc cancels. A field that is needed or wrong is selected and
   said in red; the form stays.
-- **What it makes.** Native requests where the TUI had them (workspace, chat
-  import, project, its workspaces, a SHELLS shell, a session or worktree), else the CLI's own
+- **What it makes.** Native requests where the TUI had them (workspace,
+  project, its workspaces, a SHELLS shell, a session or worktree), else the CLI's own
   command run full sized (`Make::Cli`: each field is a positional word, `--flag value`,
   repeated flags from a comma list, a switch, or a subset such as `--gates`/`--no-gates`).
 - **Where.** `+ new workspace` (name, profile (the one named like it chosen) or
@@ -3656,7 +3666,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   key, matching remotes, then a login); the task box's `C-o` and `N` (task, agent, shell or
   command, profile, where, start from, base, name, title, structured, setup,
   fetch); `project.add` and `project.workspaces`; `shells.command`;
-  `remote.pair`, `machine.add`, `machine.pair`, `chat.import`.
+  `remote.pair`, `machine.add`, `machine.pair`.
 - **Quick creates stay quick.** `n` ⏎ (the task box), `C-q C-c` (a shell, at once) and
   `Alt-N` keep their one-key paths; their form is one key away (`C-o`, `shells.command`).
 - **A project in several workspaces** shows under each in the sidebar; a session is listed
@@ -4359,7 +4369,9 @@ the whole table; its editor setting is gone too (`[editors]` stays, for worktree
 `notifications.channels` that still names `inbox` loads and ignores it. The worktree and project
 extras (2026-11-17) retire `worktrees.archive_purge_days`, `worktrees.auto_rename_branch`,
 `ports` (the whole table), `ui.show_ports`, `scripts.after_turn`, `scripts.archive`,
-`agents.*.after_turn` and `project.default_agent` (`[agents] default` stays). A `*` in a retired
+`agents.*.after_turn` and `project.default_agent` (`[agents] default` stays). The chat trims
+(2026-11-17) retire `chat.preset`, `chat.import` and `chat.tools` (the whole table of tool
+presets): every chat now searches the web and reads the folders it was given. A `*` in a retired
 key stands for any one name (`agents.*.after_turn` matches `agents.claude.after_turn`). The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
 
 ### 13.6 The scratchpad **[built NOTE1, removed 2026-11-17]**
@@ -6081,7 +6093,7 @@ tier was at its limit, and no provider was logged in).
   mode, so Claude's chats always use the one-shot title (§22.8).
 - **System prompt:** `--system-prompt "…"` replaces Claude Code's (the model then answers as a
   general assistant) and a one-line turn cost $0.00017 against $0.00046 with the default, so the
-  `chat` preset passes one. `--append-system-prompt` left the answer's identity as Claude Code.
+  chat passes one. `--append-system-prompt` left the answer's identity as Claude Code.
 
 **Codex (`codex app-server`, JSON-RPC)**
 
@@ -6138,7 +6150,7 @@ tier was at its limit, and no provider was logged in).
   `[[rule]] toolName = "*" | "name" | ["a", "b"]`, `decision = "allow" | "deny" | "ask_user"`,
   `priority` (higher wins; user-tier rules are above the built-in ones), optional `commandPrefix`,
   `argsPattern`, `mcpName`, `modes`, `denyMessage`. The shipped `plan.toml` uses a `toolName = "*"`
-  `deny` catch-all. So the `none` preset is a catch-all deny, and `chat` is that plus an `allow` for
+  `deny` catch-all. So a chat with no tools is a catch-all deny, and one that searches the web is that plus an `allow` for
   `google_web_search`, both in a file ptyro writes and passes with `--policy`. `--allowed-tools` is
   deprecated for it (the help says so). **Not tried:** that a rule stops a call, because a turn needs
   a login, and there is none here. Also present: `--approval-mode plan` (read-only),
@@ -6226,7 +6238,8 @@ where `agentCapabilities.sessionCapabilities` says so; read it at `initialize` a
   flush (an `UPDATE` through the triggers) 0.9 ms. So a search box needs no index beyond FTS5 at this
   size, and a prefix of fewer than three characters should wait for the third keystroke.
 
-**The agents' own histories, as CHAT5's import reads them** (2026-10-30; Claude Code and Codex
+**The agents' own histories, as CHAT5's import read them** (import removed 2026-11-17; the formats
+stay as facts. 2026-10-30; Claude Code and Codex
 read from this Mac's files, read-only **[V]**; Gemini from 0.66.0's bundle **[S]**: it isn't used
 here):
 - **Claude Code** (2.1.x): `<config dir>/projects/<cwd with every non-alphanumeric as ->/<session
@@ -6839,9 +6852,9 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   only the chat's own "answered". A machine can't be named `c`; another machine's archived chats
   are routed there once listed.
 - **Not built in CHAT1** (each is its later task): incognito, `history_tool`/`history_scope`
-  (CHAT3), the presets' `shell` and `mcp` (CHAT4), agent-sent titles (Claude and Codex send none;
-  OpenCode's and ACP's are not read yet: the titler is used), a `parent` on `ChatSend` and every
-  branch key (CHAT2), `C-g`, `make verify-chat`, and the search fan-out of §22.10 (CHAT3).
+  (CHAT3), agent-sent titles (Claude and Codex send none; OpenCode's and ACP's are not read yet:
+  the titler is used), retry and edit (CHAT2), `C-g`, `make verify-chat`, and the search fan-out
+  of §22.10 (CHAT3).
 - **Machines** (CHAT1.9, `machines.rs`, `conn.rs`): a link's mirror gains `chats` (non-archived
   `ChatInfo`, read with `ChatList` on (re)connect and kept by `ChatUpdated`/`ChatRemoved`, which
   reach clients with `machine` set); `ChatInfo`'s `workspace` and `profile` take the prefix, ids
@@ -6854,27 +6867,26 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   and every request with the link's offline message. Hiding a workspace hides its chats; removing a
   machine removes them. Alerts already arrive as relayed `Alert` events. Clients grey an offline
   machine's chats (`chat ls` says "(offline)"; `--machine M` filters).
-- **Branches and forks (CHAT2, 2026-10-29):** `put_node` moves `leaf` only when the new node
-  extends the shown branch, so a retry or edit sets it explicitly. **Retry** (`ChatRetry{chat,
-  node}`) re-asks the user message above `node` as a new answer sibling; **edit** is its own request
-  (`ChatEdit{chat, node, text}`, not `ChatSend.parent`) that adds a user sibling. Both stop the
-  engine and start it seeded with the branch above the message (a native conv can't rewind).
-  `ChatBranch{chat, to}` shows the branch through `to` (a node, its tip followed down);
-  `ChatTranscript` and `ChatLive` carry `siblings` (`{node, at, of, ids}`) for every message that has
-  them, drawn as `‹ 2/3 ›`. **Fork** (`ChatFork{chat, node?, agent?, side}`) copies the branch to
-  `node` with new ids; it is native (`--resume X --fork-session`, conv `fork_pending`) only for
-  Claude, the same agent and profile, when the source conv ends exactly at the fork point; every
-  other fork is seeded. **Side chats** carry `side_of` (schema v2, `ChatInfo.side_of`, `↳`), are
-  never listed (they show under their parent while open) and are deleted when closed unkept;
-  `ChatUpdate.keep` makes one a normal fork. **Incognito** (`ChatNew.incognito`, `[chat] incognito`,
-  `Tab`/`C-i` in a new chat) keeps its record in the daemon's memory only; retry and edit there truncate instead of
-  branching. No chat engine is recorded (`pty.log`) or saved as a session row in `ptyro.db`
-  (CHAT1 made its first message the row's title); rows left from then are removed at start.
-  A chat's agent is confined before any routing: it can't reach another machine's chats, and an
-  ambiguous or out-of-scope name is simply not found. A native fork stays `fork_pending` until its
-  first answer has its own conversation, so a restart before then forks the source again. Node ids are shown and taken by their last 8 characters (any unique suffix of 6+).
-  Slash commands in the TUI and web composer: `/retry /edit /fork /side /keep /agent /tools /title
-  /search /find /export /incognito /branch /cite /help`.
+- **Retry, edit and incognito (CHAT2, 2026-10-29; linear since 2026-11-17):** `put_node` moves
+  `leaf` only when the new node extends the shown branch, so a retry or an edit sets it
+  explicitly. **Retry** (`ChatRetry{chat, node?}`) asks your last message again, and the new
+  answer **replaces** the last one; **edit** (`ChatEdit{chat, node, text}`) replaces your last
+  message and its answer. Only the last turn: `node` must be your last message (or, for a retry, a
+  node of its answer); an earlier one is refused with the real alternative ("send a new message to
+  go back to an earlier point"). Both stop the engine and start it seeded with what comes before
+  the message (a native conv can't rewind). The replaced turn stays in `chat.db`, unreachable
+  (never deleted: §22.7). Branches, forks and side chats (`ChatBranch`, `ChatFork`,
+  `ChatUpdate.keep`, `side_of`, `siblings`, the `‹ 2/3 ›` navigator) were built here and removed
+  on 2026-11-17 (pare-down): chat stays linear. **Incognito** (`ChatNew.incognito`,
+  `[chat] incognito`, `Tab`/`C-i` in a new chat) keeps its record in the daemon's memory only; a
+  retry or an edit there truncates. No chat engine is recorded (`pty.log`) or saved as a session
+  row in `ptyro.db` (CHAT1 made its first message the row's title); rows left from then are
+  removed at start. A chat's agent is confined before any routing: it can't reach another
+  machine's chats, and an ambiguous or out-of-scope name is simply not found. A conv a fork left
+  `fork_pending` before 2026-11-17 is never resumed natively: its chat's next message is seeded.
+  Node ids are shown and taken by their last 8 characters (any unique suffix of 6+). Slash
+  commands in the TUI and web composer: `/retry /edit /agent /title /search /find /export
+  /incognito /cite /help`.
 - **Search (CHAT3, 2026-10-29):** `ChatSearch{query, chat?, workspace?, agent?, pinned, archived,
   limit, machines}` → `ChatHits{hits}` (`ChatHit{chat, node, kind, snippet, at_ms, rank}`; `rank` is
   bm25×1000, user messages weighted ×1.3, titles matched too; marks are `\u{2}`/`\u{3}`, which each
@@ -6890,36 +6902,33 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   engines get the line of §20.8 instead of `--safe-mode`; Codex gets `mcp_servers.ptyro` in the
   thread's config; Gemini engines get them in `session/new` since CHAT4; OpenCode engines get none yet. Not built: `--machine` on
   search (the fan-out and `--here` are), the trigram index for CJK.
-- **Tools and tasks (CHAT4) and Gemini (2026-10-30):** `ChatTools` gains `shell` and `mcp`
-  (schema entries; a built-in preset with `shell` is refused, an MCP name with `_` too).
-  `ChatTools::describe` is each preset's one line, shown by `/tools`, every picker, the settings
-  panel and `ptyro chat presets` (`ChatPresets`, 1.24). **Folders** are the chat's own:
-  `ChatNew.folders`, `ChatUpdate.folders` (all of them; empty clears), `chat.db` v4 (`chat.folders`,
-  JSON), `ChatInfo.folders`; the daemon makes them full paths that exist, a fork copies them, and a
-  chat given folders with no preset asked for gets `read`. A preset that reads uses them with its
-  `dirs`. `ChatInfo.best_effort` and `.shell` are worked out per agent when a row is sent (§22.5's
-  table), and the clients show `tools: P · best effort · ⚠ shell` (a shell chat's row has `⚠`, as a
-  `dangerous` session's). **Task:** `ChatTask{chat, project?, agent?, name?, confirmed}` →
+- **Tools and tasks (CHAT4) and Gemini (2026-10-30):** tool presets of your own
+  (`[chat.tools.*]` with `shell` and `mcp`, `ChatPresets`, `ptyro chat presets`, `/tools`) were
+  built here and removed on 2026-11-17 (pare-down): every chat may search the web and read the
+  folders it was given (§22.5). **Folders** are the chat's own: `ChatNew.folders`,
+  `ChatUpdate.folders` (all of them; empty clears), `chat.db` v4 (`chat.folders`, JSON),
+  `ChatInfo.folders`; the daemon makes them full paths that exist, and a chat with folders reads
+  them. `ChatInfo.best_effort` is worked out per agent when a row is sent (§22.5's table), and
+  the clients show `best effort` in the header. **Task:** `ChatTask{chat, project?, agent?, name?, confirmed}` →
   `WorktreeCreated`: `create_worktree` with the chat's agent (the project's profile), the title, and
   a first prompt of the shown branch's seed block, "The plan from that conversation (chat c:…, its
   last answer)", the answer and "Carry this out in this repository."; the chat gets a notice naming
   the worktree and the session. **What moves where:** a task is the person's explicit act of
   carrying the conversation into coding work, so its text goes where a session's does: typed into
   a terminal session (its scrollback and recording), the chat's title into the worktree's (in
-  `ptyro.db`), and into the coding agent's own history (which `chat import` may later read back).
-  So: an **incognito chat can't become a task** (refused: "`chat export` copies it out, or ask it
-  again in a chat that isn't incognito"; the web hides the item), nor an imported one (the fork
-  advice); and when the profile the task would run under (as `create_worktree` resolves it: the
+  `ptyro.db`), and into the coding agent's own history. So: an **incognito chat can't become a
+  task** (refused: "`chat export` copies it out, or ask it again in a chat that isn't incognito";
+  the web hides the item); and when the profile the task would run under (as `create_worktree` resolves it: the
   agent's `@profile`, the project's pin, the workspace's) isn't the chat's, the daemon asks first
   (`NeedsConfirmation`, "c:… is a chat of profile personal, and the task in alpha would run under
   work (pinned): carry the conversation over to that account?"); `confirmed` (CLI `--yes`, the
   TUI's `y`, the web's sheet) goes ahead, and also answers a profile guard's question (it no longer
-  skips one). It waits its turn like a message: refused while the chat answers or compares. The project defaults to the only one of the chat's workspace (or the only one there is);
+  skips one). It waits its turn like a message: refused while the chat answers. The project defaults to the only one of the chat's workspace (or the only one there is);
   otherwise the error lists them with `--project`, and the TUI and web ask with a picker. The link
   back is that notice and the worktree's title (the chat's): `SessionInfo` has no `forked_from_chat`
   (27 places build it, and `ptyro.db` would need a column). **Gemini:** a chat runs with
-  `--admin-policy F --policy F --extensions none --allowed-mcp-server-names <ptyro and the preset's
-  servers, or "">` (and `--include-directories` per folder when it reads); the history tools reach any
+  `--admin-policy F --policy F --extensions none --allowed-mcp-server-names <ptyro, or "">` (and
+  `--include-directories` per folder when it reads); the history tools reach any
   ACP agent through `Opts.params.mcpServers`, which the driver merges into `session/new` and
   `session/load` (no new `Opts` field: `params` already is "more fields for the call that starts or
   resumes the conversation"). Another ACP agent gets no Gemini flags. Deleting a Gemini chat, or an
@@ -6956,102 +6965,21 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
 - **Meaning search (CHAT5, 2026-10-30):** opt-in `[chat] meaning`, model2vec `potion-base-8M` in
   pure Rust (`crates/ptyro-meaning`), int8 vectors in schema v3 `node_vec`, a background backfill,
   RRF with the keyword hits, `by:meaning`/`by:words`, `ChatHit.how` and `≈`. See §22.10 tier 3.
-- **Compare (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/compare.rs`):** `ChatCompare{chat,
-  agents, text?, confirmed}` (1.24; `ChatNew.compare`/`confirmed` for a new chat's first message)
-  asks each agent the same message, and each answer is a **sibling branch under it**. **Profiles:**
-  a bare agent name is the **chat's own profile's** (`claude` in a `claude@personal` chat is
-  `claude@personal`, wherever the chat's workspace points), so the branch never reaches another
-  profile's account, nor do a helper's history tools search another profile's chats; a name with
-  another profile (`codex@work`) is asked about first (`NeedsConfirmation`; CLI `--yes`, the TUI's
-  `y`, the web's sheet). Agents are counted once each after resolving (`claude,claude` or
-  `claude,claude@default` is one), and a new chat's `--compare` of fewer than two is refused before
-  the chat is made. With `text` it is a new message
-  on the shown branch; without, the last message of the person's again, for the agents that haven't
-  answered it (a new message needs two agents or more). Default agents: the chat's own, then every
-  installed one with a structured protocol. The chat's own agent (same agent and profile) answers
-  in its own conversation, natively where it can (§22.6), as a message would; every other agent
-  answers in a **helper**: an in-memory chat as an incognito one is (so `--no-session-persistence`
-  / `ephemeral`, no agent-side copy kept; Gemini's folders removed), registered in
-  `Chats.helpers`, which no list, `find_chat`, `ChatUpdated`/`ChatRemoved` or alert ever sees,
-  seeded with the branch above the message. Its answer (words, tool calls, cards, turn end; not
-  ptyro's own info notices) is copied under the message with new ids by `put_branch`, which
-  leaves `leaf` alone, and attributed by a `conv` row (`how = compare`, inserted ended: it says who
-  wrote it, it is not a conversation to continue). Then the helper's engine, scratch folder and
-  agent copy go, before its agent counts as in. **Labels:** `ChatSiblings.agents` (`agent`, or
-  `agent@profile` off the default profile), worked out per sibling as the first node at or below it
-  that a conv produced; `ChatSiblings::label` is the shown one's when they differ, so a retry's
-  siblings stay unlabelled and a compare's read `‹ 2/3 codex ›` in the TUI, the web and `chat show
-  --branches`. **Progress:** `ChatInfo.comparing` (`ChatCompare{node, agents: [{agent, state,
-  note}]}`, `line()` = `comparing: claude ✓ · codex … · gemini ✗ why`), a live item under the
-  message while it runs (not a node), and at the end a notice on the shown branch (`compared: …`
-  with the hint to `/pick`). With no answer of the chat's own agent, the first other answer in is
-  shown. **Rules:** one answer at a time holds for the whole compare (`busy_check` refuses a send,
-  retry, edit, branch or a second compare); `ChatStop` interrupts every helper too, and one that
-  hasn't stopped 10 s later is stopped (so is the chat's own engine, compare or not, with a notice
-  that says so; an engine still starting after 2 minutes is ended the same way, and isn't retried);
-  a helper not done in 10 minutes is stopped as `✗ timed out`, and the chat's own answer too
-  (what it said so far left out); deleting the chat stops its compare, and nothing is copied into a
-  chat deleted meanwhile; at the daemon's start, scratch folders of chats that no longer exist (a
-  crash's helpers and incognito chats) are removed, with Gemini's copies; a helper that fails (not installed, not logged in, ends
-  without an answer) is `✗` with the reason and the others go on; a helper is never shown a
-  permission card: what its preset doesn't allow is **denied** (the preset is ptyro's answer
-  anyway; the progress says "a tool it asked for was denied"), while the chat's own agent asks as
-  ever. **Pick:** `ChatPick{chat, node?}` shows the branch through `node` (default: the shown one)
-  and sets the chat's agent to the one whose conv wrote its newest node (`branch_agent`); the next
-  message is seeded on it (§22.6 rule 3). Like a message, it waits its turn (refused mid-answer or
-  mid-compare). Losers stay as branches (CHAT2 deletes none).
-- **Import (CHAT5, 2026-10-30; `ptyro-daemon/src/chats/import.rs`):** `ChatImport{agent?,
-  profile?, since?, dry_run}` → `ChatImported{report}` (1.24, scope `full`: it copies coding history
-  into `chat.db`, as the setting does) reads every profile's (or one's) Claude Code, Codex and
-  Gemini history (§20.8 has the formats, verified 2026-10-30) **read-only** and makes each session a
-  chat: `chat.db` v5 adds `chat.source` (`claude:<session id>`, unique), `chat.source_dir` (the
-  folder it ran in) and `import(source, chat, path, size, mtime, offset, tail, at)`. Its user and
-  assistant text become nodes, tool calls tool nodes (their output only with `index_tools`, 2 KB),
-  with the session's own timestamps; thinking, side chains, meta lines, compaction summaries and the
-  wrappers around slash commands and Codex's own context are left out. Node ids are made from the
-  source's ids (`node_id`: SHA-256 to 26 Crockford characters), so an import is idempotent; an
-  append-only file (Claude, Codex) is read on from `offset`, the end of the last line after which no
-  tool call waited for its result, parented on `tail`; Gemini's file is read whole (its patches
-  change earlier messages); a file unchanged in size and mtime isn't opened. Title: Claude's
-  `custom-title`, else `ai-title`/`summary`; Codex's `session_index.jsonl` `thread_name`;
-  Gemini's `summary`; else the first message's first line (`title_src = agent`, so a title you
-  give wins). Workspace: the one whose project or worktree contains the session's folder, else
-  `main`; profile: the profile whose folder it came from (two profiles sharing a folder: the first).
-  **Skipped:** sessions that ran in ptyro's own chat engines' and summaries' folders
-  (`<data>/chat`, `<data>/summaries`; sessions in its worktrees, `<data>/worktrees`, are history and
-  imported), sessions with nothing said, and a session whose chat you deleted (the `import` row
-  outlives the chat, so a delete is never undone); a file passed over isn't read again until its
-  size or mtime changes (remembered in memory). Lines over 4 MB are passed over unread: a tool
-  result among them closes its call ("its output was too large to import", found by its id in the
-  line's first 64 KB), and a call still unanswered 1,000 lines on no longer holds `offset` back. A
-  Gemini file over 64 MB is skipped with a note. A file that can't be read, or a parser that
-  panics, is skipped with a note, never the whole import. A tool node's title (its command, path
-  or URL) is redacted as summaries are (`Bearer …`, `TOKEN=…`, `sk-…`). The parse runs in a
-  blocking task and each session is one transaction, so the request loop and other chats' writes
-  wait at most one session. Imported chats are **read-only**: `ChatSend` forks one (the fork says
-  "continued as a fork of the imported c:…", and the reply names the fork, which each client then
-  shows); the next message to the import carries on in its newest fork (kept, not archived)
-  rather than making another; `ChatRetry`, `ChatEdit`, `ChatCompare`, `ChatPick`, `ChatTask` and `ChatUpdate`'s
-  agent, preset and folders are refused with that advice (title, pin and archive are the
-  person's). A re-import moves the shown branch on only from where the last import left it
-  (`chat.db` v6 `import.leaf`): a person who went to another branch stays there. They are searched (the FTS triggers, the meaning backfill on `ChatUpdated`),
-  obey `history_scope` (their profile), and are listed like any chat, marked `⇣` with "imported
-  from claude · ~/repo" in the header; `chat ls --imported` lists only them (`i` in the TUI's chat
-  list, Imported on the web's Chats page). The TUI's `chat.import` asks first in a prompt that takes
-  the CLI's flags (`codex --since 30d --profile work --dry-run`; ⏎ alone: everything), the web's in
-  a form (whose, profile, since, Only count them), with no request timeout. The TUI refuses retry
-  and edit of one up front, as the web hides them. `[chat] import =
-  true` (default off: it copies coding history) imports at once and then every 10 minutes. On
-  this Mac, 2026-10-30 (debug build): 104 sessions, 11,326 messages, 785 MB of Claude history
-  imported in 7.5 s, again in 0.01 s. **OpenCode is not imported**: it isn't installed here to read
-  its storage, and ptyro doesn't guess a format; the report says so. ACP `session/list` isn't used
-  either (Gemini 0.66.0 doesn't offer it, §22.6).
-- **Configuration renamed:** `[chat] tools = "chat"` became **`[chat] preset`**: TOML can't hold
-  both that string and the `[chat.tools.<name>]` tables. Built keys: `enabled`, `recent`, `agent`,
-  `preset`, `hibernate_after`, `seed_tokens`, `title`, `title_command`, `daily_cap`, `index_tools`,
-  `notify`, `archive_purge_days`, and `chat.tools.*.{web, read, dirs, allow}`.
-  CHAT2 and CHAT3 add `incognito`, `history_tool` (default on) and `history_scope` (`profile`,
-  `workspace`, `all`); CHAT4 adds `chat.tools.*.{shell, mcp}`.
+- **Compare and pick (CHAT5, 2026-10-30):** asking several agents one message, each answer a
+  branch, and keeping one (`ChatCompare`, `ChatPick`, `ChatNew.compare`) were built and removed on
+  2026-11-17 (pare-down): with chat linear there is no branch to hold each answer.
+- **Import (CHAT5, 2026-10-30):** importing the agents' own histories as chats (`ChatImport`,
+  `[chat] import`, `chat.db` v5–v6's `chat.source`, `chat.source_dir` and `import` table) was built
+  and removed on 2026-11-17 (pare-down): it copied coding history into `chat.db` for little use.
+  Imported chats already in `chat.db` are ordinary chats: they open, are searched, and a message
+  sent to one carries it on, seeded to its agent (§22.6). `chat.db` v7 drops the `import` table
+  (which held file offsets, no text), after a private copy of the file beside it
+  (`chat.db.bak-v6`), as `ptyro.db` gets.
+- **Configuration:** built keys: `enabled`, `recent`, `agent`, `hibernate_after`, `seed_tokens`,
+  `title`, `title_command`, `daily_cap`, `index_tools`, `notify`, `archive_purge_days`. CHAT2 and
+  CHAT3 add `incognito`, `history_tool` (default on) and `history_scope` (`profile`, `workspace`,
+  `all`). `chat.preset`, `chat.import` and the `[chat.tools.*]` presets are retired (2026-11-17,
+  §13.8: accepted, reported, and `ptyro doctor` takes them out).
 - **Seeds:** the "N earlier messages left out" line is used (no summary paragraph yet). The seed
   notice sits on the branch between the message and its answer.
 - **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|rename|pin|unpin|archive|
@@ -7080,9 +7008,9 @@ shown in every workspace, including those of linked machines (§16.4b).
 
 ### 22.2 What a chat is, and is not
 
-- A chat is **ptyro's own durable record** (a tree of nodes in `chat.db`). The agent's
-  conversation is an **engine** that serves it: replaceable, and rebuilt from the record when it is
-  gone, can't fork, or is a different agent. ADR 19.
+- A chat is **ptyro's own durable record** (nodes in `chat.db`, each with its parent). The
+  agent's conversation is an **engine** that serves it: replaceable, and rebuilt from the record
+  when it is gone, can't continue, or is a different agent. ADR 19.
 - It is **not a session**. Sessions are processes with terminals in worktrees. A chat's engine
   *is* a structured session (§7.1) with `chat = <id>`, so every driver, the permission cards and
   the live upgrade carry over, but:
@@ -7103,8 +7031,8 @@ shown in every workspace, including those of linked machines (§16.4b).
   last resort (§2.3), by a title substring that matches one chat. A chat of another machine is `laptop2:c:7f3k`, as sessions are
   (§16.4b); a handle only one linked machine has is that machine's (requests and `ChatSubscribe`
   alike).
-- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `fork --at` and search
-  hits. The web's citation links look for 6 or more characters after the slash: that only finds
+- A node is addressed `7f3k/01JB…` (chat, node id suffix ≥ 4, §2.3), for `retry`, `edit`, search
+  hits and citations. The web's citation links look for 6 or more characters after the slash: that only finds
   citations in prose (fewer would catch ordinary words); the daemon resolves the link.
 
 ### 22.4 Storage: `chat.db`
@@ -7125,9 +7053,9 @@ CREATE TABLE chat (
   workspace TEXT NOT NULL,            -- workspace id on this machine
   title TEXT, title_src TEXT,         -- auto | agent | user (a user's title is never replaced)
   pinned INTEGER NOT NULL DEFAULT 0, archived_at INTEGER, deleted_at INTEGER,   -- deleted = tombstone
-  agent TEXT NOT NULL, profile TEXT NOT NULL, tools TEXT NOT NULL,              -- current; a preset name
-  leaf TEXT,                          -- the shown branch's tip (a node id)
-  forked_from_chat TEXT, forked_from_node TEXT,
+  agent TEXT NOT NULL, profile TEXT NOT NULL, tools TEXT NOT NULL,              -- chat | none (before 2026-11-17) | find
+  leaf TEXT,                          -- the shown conversation's last node
+  forked_from_chat TEXT, forked_from_node TEXT,                                 -- written by forks before 2026-11-17
   created_at INTEGER, updated_at INTEGER, last_at INTEGER,                      -- last_at: last message
   nodes INTEGER NOT NULL DEFAULT 0, unread INTEGER NOT NULL DEFAULT 0, cost_micro_usd INTEGER NOT NULL DEFAULT 0,
   origin TEXT NOT NULL);              -- meta.machine_id of the machine that made it
@@ -7152,16 +7080,22 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   agent TEXT NOT NULL, profile TEXT NOT NULL,
   conversation_id TEXT,               -- the agent's own id (Claude session_id, Codex thread id, ACP session id)
   node TEXT,                          -- the last node that conversation has seen
-  how TEXT NOT NULL,                  -- new | native_fork | seed
+  how TEXT NOT NULL,                  -- new | seed (native_fork, fork_pending, compare: before 2026-11-17)
   started_at INTEGER, ended_at INTEGER);
+-- v2 side_of, v5 source and source_dir: written before 2026-11-17, no longer read.
+-- v7 drops v5's `import` table (offsets of imported files; no text). Before any migration the
+-- file is copied beside it first, as `ptyro.db` is.
 ```
 
 - **Nodes are immutable once complete.** A streaming assistant node is written when it completes,
   and every 2 s while it streams, so a daemon crash keeps what had arrived; the next start closes
-  the turn with a `turn_end` whose `stop` is `interrupted`. **Editing and regenerating add a sibling
-  node (a new branch); deleting a message sets `deleted_at`.** Nothing is rewritten in place.
-- **Every node has a `parent`.** One chat is a tree; `leaf` names the branch that is shown. A
-  branch is the path from the root to a node.
+  the turn with a `turn_end` whose `stop` is `interrupted`. **A retry or an edit adds the new turn
+  beside the old one and moves `leaf` to it; deleting a message sets `deleted_at`.** Nothing is
+  rewritten in place.
+- **Every node has a `parent`; a chat is the path from the root to `leaf`.** That path is all a
+  client sees, all a search finds, and all an engine is given. A turn a retry or an edit replaced,
+  and the other branches of a chat that had some before 2026-11-17, stay in the file, unreachable,
+  never deleted: **a chat that had branches opens on the branch it last showed** (its `leaf`).
 - **What is indexed:** `text` of user and assistant nodes, tool *titles*, and chat titles (`[chat]
   index_tools = true` adds tool output, capped at 2 KB a node). Thinking and diffs are never indexed.
 - **Incognito chats write nothing** (§22.9). **Retention:** forever by default. `[chat]
@@ -7186,42 +7120,32 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   checklist, the web's setup page, `ptyro setup`). An agent without a structured
   protocol is not offered (a `protocol = "acp"` entry makes it one). `agent@profile` works as it
   does for sessions. The agent of a chat can be changed at any time (§22.7).
-- **Permissions.** Tools the chat's preset allows are approved at launch where the agent can
+- **Permissions.** Tools a chat may use are approved at launch where the agent can
   say so (below), otherwise by ptyro's answer `allow_once` to exactly those tools; a request for
   any other tool shows as a normal permission card in the chat, the row says `⚠`, and the notifier
   hears of it. An answer never widens itself (§7.1). Answers from `read`-scope devices are refused
   as for sessions.
-- **What the presets mean per agent** (CHAT0, 2026-10-29: every cell marked **[V]** was tried through
+- **What a chat may use, per agent** (every chat searches the web; one given folders also reads
+  them; `none` is only a chat made with no tools before 2026-11-17, when tool presets were removed)
+  (CHAT0, 2026-10-29: every cell marked **[V]** was tried through
   the real agent, §20.8; **[S]** was read from the agent's own files or schema and **not** run, because
   a turn needs a login or a model that wasn't available):
 
-  | | `chat` (default) | `read` | `none` |
+  | | every chat | with folders | `none` |
   |---|---|---|---|
   | **Claude** (stream-json) **[V]** | `--tools "WebSearch,WebFetch" --allowedTools WebSearch WebFetch --strict-mcp-config --safe-mode --system-prompt <chat prompt>` | `--tools "Read,Glob,Grep"` and `--add-dir` for each attached folder, **no** `--allowedTools` for them (a bare allow reads anywhere), plus the same flags | `--tools ""` plus `--strict-mcp-config --safe-mode` |
   | **Codex** (app-server) **[V]** | `thread/start {sandbox: "read-only", config: {web_search: "live", features: {shell_tool: false, unified_exec: false, hooks: false, …}, mcp_servers: {<each>: {enabled: false}}}}`. `read-only` alone is not enough: it still reads any file | a profile `extends ":read-only"` that denies `$HOME` and re-allows the attached folders and what Codex needs to start; **no** `sandbox` parameter; shell on. Files outside `$HOME` stay readable, so the header says `tools: best effort` | the `chat` config with `web_search: "disabled"` |
   | **Gemini** (ACP) **[S]** (2026-10-30, read from 0.66.0's source; §20.8) | a policy file ptyro writes, passed as `--admin-policy` (the tier above the user's rules and "always allow" answers) and `--policy` (which replaces the user's own; for when a system policy makes Gemini ignore `--admin-policy`): `toolName = "*"` `deny` at 900, `google_web_search` and `web_fetch` `allow` at 950, `mcp_ptyro_*` with the history tools; `--extensions none`; `--allowed-mcp-server-names ptyro` (or `""`: none). The history server comes in `session/new`. 0.66.0 has no `--safe-mode`; the user's hooks and skills in a chat stay **[U]** | the same, with `read_file`, `read_many_files`, `glob`, `grep_search`, `list_directory` allowed and `--include-directories` for each folder: its file tools read only the workspace (the scratch folder and those) | the catch-all `deny` only |
   | **OpenCode** (serve) **[S]** | `POST /session {permission: [{"*","*",deny}, {websearch,*,allow}, {webfetch,*,allow}]}`, set again after every fork; per-message `tools` as a second fence | `read`, `glob`, `grep` allowed for the attached folders' patterns | the catch-all `deny` only |
 
-  **`shell` and `mcp` (CHAT4, a preset of your own only):** Claude `Bash` in `--tools` and
-  `--allowedTools`, each named server's definition from `<config dir>/.claude.json` `mcpServers` in
-  `--mcp-config <scratch>/mcp.json` (a `0600` file in the chat's `0700` scratch folder, never the
-  JSON on the command line: a definition can carry its tokens, and argv is in `ps` and in every
-  client's `SessionInfo`) with `mcp__<server>` allowed (any MCP server means `--setting-sources ""
-  --disable-slash-commands` instead of `--safe-mode`); Codex `shell_tool` and `unified_exec` on, the
-  `workspace-write` sandbox (commands write only the scratch folder; with `read`, its profile), the
-  named servers left out of the switched-off list; Gemini `run_shell_command` and `mcp_<server>_*`
-  allowed, the names in `--allowed-mcp-server-names`; OpenCode `bash` and `<server>_*` allowed [S].
-  A name the agent's config lacks is left out, and the chat says so. A shell chat shows `⚠`.
-
   Every Claude engine also gets `--safe-mode`: without it the user's hooks, CLAUDE.md, skills and
   plugins run inside the chat (§20.8). A Codex thread's hooks and MCP servers are switched off by
-  name for the same reason. A chat whose agent can't enforce its preset natively, or can only
-  partly (the `read` preset on Codex, anything on Gemini and OpenCode until a login lets CHAT1.3
-  test it), shows `tools: best effort` in its header, not silence, and ptyro's own answer to each
-  permission request still stands behind it: any tool the preset doesn't name is denied. Web content
-  is untrusted text: with no shell and no file tools in the default preset, a page can say what it
-  likes and the chat can't act on it. That is why `chat` is the default, and why `read` and `work`
-  are opt-in per chat.
+  name for the same reason. A chat whose agent can't enforce its tools natively, or can only
+  partly (folders on Codex, anything on Gemini and OpenCode until a login lets CHAT1.3 test it),
+  shows `best effort` in its header, not silence, and ptyro's own answer to each permission
+  request still stands behind it: any other tool is denied. Web content is untrusted text: with no
+  shell and no file tools beyond the folders a chat was given, a page can say what it likes and
+  the chat can't act on it.
 - **Rules the engine takes from CHAT0** (CHAT1.3 builds them in; each is verified in §20.8):
   - Claude's chat launch line is the table's, always with `--safe-mode` and `--strict-mcp-config`, and
     never `--bare`. A chat's scratch directory is a project folder in the profile's Claude history
@@ -7229,8 +7153,8 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
     directory, so Claude's own `--resume` list doesn't fill with dead chats.
   - Codex: the end of a turn is `thread/status/changed → idle` after `turn/started`, not only
     `turn/completed`. The launch lists the user's MCP servers (`codex mcp list --json`) and switches
-    each one off in the thread's `config`. A `read` chat sends a permission profile and **no**
-    `sandbox`; every other preset sends `sandbox: "read-only"` and no profile. Incognito is
+    each one off in the thread's `config`. A chat with folders sends a permission profile and
+    **no** `sandbox`; every other chat sends `sandbox: "read-only"` and no profile. Incognito is
     `ephemeral: true`.
   - ACP: the driver reads `agentCapabilities.sessionCapabilities` at `initialize` and offers list,
     resume and fork only where it says so (§22.6). OpenCode: its permission ruleset is set at session
@@ -7238,9 +7162,7 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
     as a notice with its link, and no call waits for the model synchronously.
 - **Web search out of the box.** All four agents ship one (Claude `WebSearch` and `WebFetch`;
   Codex `web_search`; Gemini `google_web_search`; OpenCode `websearch` where Exa's hosted search is
-  on **[S]**), so the `chat` preset only has to leave it on. No search MCP is installed. A keyless MCP
-  (DuckDuckGo or a fetch server) is listed in `[chat.tools.chat] mcp` only as a fallback the user
-  can enable for an agent that has none.
+  on **[S]**), so a chat only has to leave it on. No search MCP is installed.
 
 ### 22.6 Continuing a conversation: native, or seeded
 
@@ -7250,14 +7172,12 @@ from the stored record (never from the agent's own files):
 1. **Continue natively** when the conv's `node` is on the shown branch (it is the leaf, or an
    ancestor of it), the agent and profile are unchanged, and the agent can still resume the
    `conversation_id` (Claude `--resume`, Codex `thread/resume`, ACP `session/load`, OpenCode the
-   same session). Nodes after the conv's `node` that the agent hasn't seen (added from another
-   branch, or a message sent while it was down) are **folded into the prompt** as a seed block.
-2. **Fork natively** when a new chat or branch starts at a node the conv already reached: Claude
-   `--resume ID --fork-session` (from the conversation's end only), Codex `thread/fork` with
-   `lastTurnId` (from any turn). A new `conv` row (`how = native_fork`).
-3. **Otherwise seed**: a new conv (`how = seed`), the first prompt carrying the branch as a
-   transcript. This covers an agent switch, a fork from the middle for Claude, an agent that can't
-   resume, a lost conversation, and a different profile.
+   same session). Nodes after the conv's `node` that the agent hasn't seen (a message sent while
+   it was down) are **folded into the prompt** as a seed block.
+2. **Otherwise seed**: a new conv (`how = seed`), the first prompt carrying the conversation as a
+   transcript. This covers an agent switch, a retry or an edit (a conversation can't rewind), an
+   agent that can't resume, a lost conversation, and a different profile. (Forking natively, for
+   forks and branches, went with them on 2026-11-17; a conv left `fork_pending` is seeded.)
 
 CHAT0 (§20.8) settled which agents can do what: **Claude** resumes (`--resume`, same id) and forks
 at its end (`--fork-session`, new id, original untouched) but has no fork at a message; **Codex**
@@ -7265,8 +7185,7 @@ resumes in a new process (`thread/resume`) and forks at any turn (`thread/fork` 
 verified); **Gemini 0.66.0** offers `session/load` only (no `session/list`, `resume` or `fork`: read
 `agentCapabilities.sessionCapabilities` at `initialize` and use what it lists); **OpenCode** forks at
 a message (`POST /session/:id/fork`, which copies the messages *before* it and drops the session's
-permission rules, so set them again) and resumes by id. Rule 2 therefore holds for Codex at any
-turn, for Claude at the end, and for OpenCode at a message; every other fork is seeded.
+permission rules, so set them again) and resumes by id. Chats use only the resumes now.
 
 Seed format (the block ahead of the user's message, in the one prompt, so it costs no extra turn):
 
@@ -7287,29 +7206,25 @@ command (§22.10), and when that fails, "(N earlier messages left out)". The tra
 sent. Seeding costs tokens; the header shows it once. Because the record is the truth, **the
 agent's own history is a cache**: losing it, or an agent's updated format, loses nothing.
 
-### 22.7 Branches, forks, side chats and agent switches
+### 22.7 Retry, edit and agent switches
 
-- **Branch** (in one chat): *edit* a user message, or *retry* an answer. Both add a **sibling**
-  node, set `leaf` there and run the engine from that parent (§22.6). The chat view shows `‹ 2/3 ›`
-  where a message has siblings; `Alt-←` / `Alt-→` (and the buttons on the web) move between them.
-  Branches are never merged.
-- **Fork** (a new chat): copies the path from the root to a node into a new chat
-  (`forked_from_chat`, `forked_from_node`, new node ids, so the two are independent), with the
-  title "fork of …" until renamed. From the end of a chat, or at any message (`fork --at`).
-  Native where §22.6 allows, else seeded. The copy-fork model is Codex's, gptme's and LibreChat's;
-  the in-chat tree is Open WebUI's and llm's (RESEARCH R-CHAT-02).
-- **Side chat** (`fork --side`): a fork that reads the chat's context and **never writes back**:
-  its engine gets the branch as a seed, it is not listed under CHATS (it shows under its parent while
-  open), and it is dropped on close unless **kept** (then it is a normal fork). The client that
-  closes it deletes it; the daemon deletes any nobody has followed for `hibernate_after` (one left
-  by a quit, a crash or a reload; checked again at start), and a chat's side chats go with it.
-  Claude Desktop, Codex and Claude Code's `/btw` have one (R-CHAT-04).
+- **Retry and edit replace the last turn.** *Retry* asks your last message again, and the new
+  answer replaces the last one; *edit* says your last message differently, and it and its answer
+  are replaced. Both run a seeded engine from what comes before the message (§22.6). Only the last
+  turn: an earlier message is refused with the real alternative, to send a new message from where
+  the chat is. The replaced turn stays in `chat.db`, unreachable (§22.4).
+- **Branches, forks and side chats** (an `‹ 2/3 ›` navigator, `chat fork`, `fork --side`, `chat
+  keep`) were built (CHAT2) and removed on 2026-11-17 (pare-down): a chat is one conversation,
+  read top to bottom. A chat that had branches opens on the branch it last showed (`leaf`); the
+  others stay in the file, never deleted. Forks and kept or unkept side chats already in `chat.db`
+  are ordinary chats, listed with the others.
 - **Switch agent** (`/agent codex`, `chat.agent`, `chat update --agent`): the next message starts a
   seeded conv on the other agent. A bare name is the chat's own profile's; another profile's
   (`codex@work`) asks first, as the conversation goes to that account. The chat is unchanged; no
   other chat app can do this.
 - **Make it a task** (CHAT4): start a normal session in a worktree whose first prompt carries the
-  branch as a seed block and the chat's last answer, linked back by `forked_from_chat`.
+  conversation as a seed block and the chat's last answer, linked back by a notice in the chat and
+  the worktree's title.
 
 ### 22.8 Titles
 
@@ -7353,7 +7268,8 @@ Three tiers; each one is useful without the next.
    highlighted, user messages weighted above assistant text as `llm` does. Filters: `--in CHAT`,
    `--workspace`, `--agent`, `--machine`, `--since 7d`, `--pinned`, `--archived`. A query is plain
    words (all must match), `"a phrase"`, `-word`, `prefix*`, or `agent:codex`, `since:7d`. A hit opens
-   the chat at that node. In the chat, find-in-chat searches the shown branch.
+   the chat at that node. In the chat, find-in-chat searches the chat. Only what a chat shows is
+   found, by words or by meaning: a turn a retry or an edit replaced is not (§22.4).
 2. **Ask (CHAT3).** `ptyro chat find "what did we decide about the retry policy?"` runs a one-shot
    engine with **only** the chat tools (below) and no others, and answers with citations (`7f3k/01JB…`)
    that open. The same tools are in every chat when `[chat] history_tool = true`, so a chat can look
@@ -7460,7 +7376,7 @@ The owner's rule: chats show in the workspaces of connected machines. They follo
   (`[chat]` settings, `chat.db` doctor and backup).
 - **Open and use.** `ChatSubscribe` (the live stream, `ServerMsg::Chat` with nodes) goes over the
   client's own upstream connection to the machine, as screens do, so streaming, answering a
-  permission card, sending, branching and forking work on a remote chat exactly as on a local one.
+  permission card, sending, retrying and editing work on a remote chat exactly as on a local one.
   The engine runs on the owning machine, with its agents.
 - **Offline.** An unreachable machine's chats stay listed, greyed, from the last list heard, with
   "offline since 14:02"; opening one says "laptop2 is offline; its chats open when it is back"
@@ -7471,7 +7387,7 @@ The owner's rule: chats show in the workspaces of connected machines. They follo
 - **Hidden workspaces** (`machine hide laptop2 work`) hide their chats too.
 - **Scopes** (§16.3, checked on both ends): listing, reading, searching and exporting need
   `read` (a lost `read` token is a leak of chats, exactly as it is of screens); sending, creating,
-  forking, branching, retitling, pinning, archiving and answering a card need `control`; deleting
+  retrying, editing, retitling, pinning, archiving and answering a card need `control`; deleting
   needs `control`; the `[chat]` settings need `full`. Links between machines are `full`.
 - **Alerts.** A chat doesn't notify for everything by default: only a **permission request** or an
   **error** raise attention (`[chat] notify = "blocked"`; `"all"` adds a finished reply while no
@@ -7479,8 +7395,6 @@ The owner's rule: chats show in the workspaces of connected machines. They follo
   with the same push `tag` as sessions, so a phone paired with both hears one. A reply that arrives
   while no client is looking raises the chat's `unread` count (a `●` on its row), cleared when it
   is shown, on every machine's view.
-- **Not here: cross-machine copies.** Forking a remote chat into a local one is a fork whose
-  source is on another machine; CHAT6 may do it, and until then it is refused with that reason.
 
 ### 22.12 Surfaces
 
@@ -7506,78 +7420,71 @@ hides when `enabled`):
   opens the **chat list** (full sized): every chat of the workspace (or `all workspaces`, `all
   machines`), grouped Today / Yesterday / This week / Earlier, with `/` search, pin, archive, delete,
   the state filters, and a preview. Rows reuse the status glyphs (§11.1) plus `★` pinned, `●`
-  unread, `◌` incognito, `⎇` a fork, the agent, and the machine chip where it isn't this machine.
+  unread, `◌` incognito, the agent, and the machine chip where it isn't this machine.
 - **Chat view** = the existing structured-session chat view (§7.1: cards, diffs, permission
-  card `a/A/d`, composer, PageUp/Down) plus: a header (title, `agent@profile`, tools preset, `⎇ branch
-  2/3`, cost, machine chip); the branch navigator; a composer that takes **slash commands**
-  (`/fork`, `/side`, `/agent`, `/tools`, `/title`, `/retry`, `/search`, `/export`, `/incognito`,
-  `/task [PROJECT] [--agent A] [--name N]`, `/compare [AGENTS…] [question]` (agents space- or
-  comma-separated, `codex@work` kept as typed), `/pick`), each also a palette action (`//` sends a
+  card `a/A/d`, composer, PageUp/Down) plus: a header (title, `agent@profile`, `best effort` where
+  it applies, cost, machine chip); a composer that takes **slash commands** (`/agent`, `/title`,
+  `/retry`, `/edit`, `/search`, `/export`, `/incognito`, `/task [PROJECT] [--agent A] [--name
+  N]`), each also a palette action (`//` sends a
   message starting with `/`, a path like `/etc/hosts …` is a message as it is, and a name that
   isn't a command stays in the composer, never lost); an `@` completion for attached folders (TUI and web: the matching folders shown, `↑`/`↓` to
   choose, Tab or ⏎ to put one in; `chats::at_query`); and find-in-chat.
 - **Keys** (prefix, then; proposed, `m` and `g` are free in `docs/keys.md` on 2026-10-29; CHAT1.7
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
-  once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
-  (searchable), `C-g` find across all chats, `Alt-←/→` branches. In the sidebar on a chat row (no
-  prefix): `⏎` open, `,` rename (its title), `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu; on
+  once, ⏎ sends; `C-o` picks the agent and folder; `Tab`/`C-i` incognito), `g` the **chat list**
+  (searchable), `C-g` find across all chats. In the sidebar on a chat row (no prefix): `⏎` open,
+  `,` rename (its title), `*` pin, `x` archive, `X` delete (asks), `.` its menu; on
   the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it), and a click on
   its `＋` starts a chat in that workspace. Opening a chat or the list gives it the keyboard; a
-  slow reply (a fork, a side chat, `/find`) opens its chat only if what asked for it is still
-  shown, else it is offered (`C-q u`). Each chat keeps its draft while it isn't shown; Esc goes
-  back to the list a chat was opened from, a side chat to its chat. While the chat panel is shown
+  slow reply (`/find`) opens its chat only if what asked for it is still shown, else it is
+  offered (`C-q u`). Each chat keeps its draft while it isn't shown; Esc goes back to the list a
+  chat was opened from. While the chat panel is shown
   the session keys `,` `x` `X` mean its chat, never the session under it. The composer edits like a shell line: `←/→`, `C-a`/`C-e`
   (Home/End) to the line's start and end, `C-u`/`C-k` delete to them, `C-w` the word before. The
   shared keys (`/` find, `.` menu, `j/k`, `Tab`, `z`, `t` where it applies) behave as for sessions.
-  The view's own keys (`C-f`, `C-o`, `Tab`/`C-i`, `a`/`A`/`d` on a card, `C-c`, `Alt-←/→`,
-  `PageUp/Down`) are the key map's `chat` table and the list's (`/ m * x X , f e s A i I Tab .`)
+  The view's own keys (`C-f`, `C-o`, `Tab`/`C-i`, `a`/`A`/`d` on a card, `C-c`, `PageUp/Down`)
+  are the key map's `chat` table and the list's (`/ m * x X , e s A Tab .`)
   its `chatlist` table: `[keys]` names them `chat:KEY` and `chatlist:KEY`. A `chat` key whose
   action doesn't apply now (a card letter with no card) is typed instead. Every key is in
   `[keys]` and the settings panel, and each action in the palette (`chat.*`).
 - **CLI** (an address may be `laptop2:…`). `--json` on a verb that asks (`new`, `ask`, `send`,
-  `retry`, `edit`, `fork`, `find`, `compare`) waits for the answer, unless `--no-wait`, and prints
-  `{"chat", "message", "answers": [{"agent", "node", "text"}]}` (`compare`'s also has `agents`);
-  on one that changes a chat (`set`, `rename`, `keep`, `branch`, `pick`) it prints `{"chat"}`,
-  and on `pin`/`unpin`/`archive`/`unarchive` `{"chats": […]}`; `ls`, `search`, `presets`,
-  `task` and `import` print their lists and reports; `show` and `export` take `--format json`;
+  `retry`, `edit`, `find`) waits for the answer, unless `--no-wait`, and prints
+  `{"chat", "message", "answers": [{"agent", "node", "text"}]}`; on one that changes a chat
+  (`set`, `rename`) it prints `{"chat"}`, and on `pin`/`unpin`/`archive`/`unarchive`
+  `{"chats": […]}`; `ls`, `search` and `task` print their lists; `show` and `export` take `--format json`;
   `answer`, `stop`, `rm` and `open` print nothing to parse. A question whose first word names a
   verb (`ptyro chat show me how…`) needs `chat new` or quotes; `show`, `open` and `set` given
   more words than a chat say so.
 
   ```
-  ptyro chat [new] [PROMPT] [--agent A[@P]] [--preset|--tools PRESET] [--folder DIR]… [--incognito|--keep]
-                   [--workspace W] [--title T] [--compare A,B] [--no-wait] [--timeout S]   # new chat; with no PROMPT, opens it in a terminal
-  ptyro chat ask QUESTION [--keep] [--agent A] [--preset|--tools PRESET] [--no-stdin] [--timeout S]   # one-shot answer on stdout; stdin is context
-  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [--imported] [-l N]   # every workspace's unless -w
-  ptyro chat show CHAT [--all] [--ids] [--branches] [--format text|md|json]
+  ptyro chat [new] [PROMPT] [--agent A[@P]] [--folder DIR]… [--incognito|--keep]
+                   [--workspace W] [--title T] [--no-wait] [--timeout S]   # new chat; with no PROMPT, opens it in a terminal
+  ptyro chat ask QUESTION [--keep] [--agent A] [--no-stdin] [--timeout S]   # one-shot answer on stdout; stdin is context
+  ptyro chat ls [--workspace W] [--machine M] [--pinned] [--archived] [-l N]   # every workspace's unless -w
+  ptyro chat show CHAT [--ids] [--format text|md|json]
   ptyro chat open CHAT                               # the chat view
   ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]   # waits for the answer by default
-  ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
-  ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes] [PROMPT] [--no-wait] [--timeout S]
-  ptyro chat rename CHAT TITLE…|--title T|--auto · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
+  ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT   # replace the last answer, or your last message
+  ptyro chat rename CHAT TITLE…|--title T|--auto · pin|unpin|archive|unarchive|rm CHAT…
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION   # no match is exit 0
   ptyro chat answer CHAT allow|always|deny  ·  ptyro chat stop CHAT
   ptyro chat export CHAT [--format md|json] [-o FILE]
-  ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
-  ptyro chat presets [--json]  ·  ptyro chat task CHAT [-p P] [-a A] [-n NAME] [-d]
-  ptyro chat compare CHAT [-a A,B…] [TEXT]  ·  ptyro chat pick CHAT [NODE]   # (built, CHAT5)
-  ptyro chat import [--agent A|all] [--profile P] [--since 30d] [--dry-run]  ·  chat ls --imported
+  ptyro chat set CHAT [--agent A] [--folder DIR]… [--no-folders] [--yes]   # (built, CHAT4)
+  ptyro chat task CHAT [-p P] [-a A] [-n NAME] [-d]
   ```
 
   `git diff | ptyro chat ask "review this"` works from any shell, even outside a ptyro session.
 - **Web.** A **Chats** page beside Sessions (recent, pinned, a live search box), the chat view
-  (with the same header, branch navigator, composer and slash commands; touch targets for
-  fork/retry/edit; the machine chip), `#/c/<id>` URLs, a preset and an agent picker, incognito
-  toggle, export, and the same sidebar section on wide screens (beside the sessions: the pinned
-  chats and the newest `[chat] recent`, with `all chats…`). Side chats list under their chat; `m`
-  starts a chat, `Ctrl-G` searches them all, and `@` in the composer lists the chat's folders. Each
+  (with the same header, composer and slash commands; touch targets for retry and edit; the
+  machine chip), `#/c/<id>` URLs, an agent picker, incognito toggle, export, and the same sidebar
+  section on wide screens (beside the sessions: the pinned chats and the newest `[chat] recent`,
+  with `all chats…`). `m` starts a chat, `Ctrl-G` searches them all, and `@` in the composer lists the chat's folders. Each
   control is an entry in `ACTIONS` (`web/src/app.ts`, `web/src/chats.ts`) with its tooltip.
 - **Parity.** One row in `docs/parity.md` for every `chat` verb, with its TUI action and its web
   action; none is waivable (`chat ask` is `chat.new` with `C-i`, and its answer is the view).
 - **Settings panel.** Every `[chat]` key below has its schema entry (type, default, help, when it
   applies, `also` words like "history", "ai", "web search"), a **Chat** section in the panel (TUI
-  and web), and the tool presets are a collection (`chat.tools.*`) with a `title` and an `empty`
-  sentence.
+  and web).
 
 ### 22.13 Configuration
 
@@ -7586,7 +7493,6 @@ hides when `enabled`):
 enabled = true            # live: off hides the section, keys, CLI group and web page
 recent = 5                # live: chats shown under CHATS in the sidebar
 agent = ""                # next: "" = the workspace's default agent, else the first installed one
-preset = "chat"           # next: preset for new chats: chat | read | none | your own ([chat.tools.X])
 incognito = false         # next: new chats start incognito
 hibernate_after = "2m"    # next: an idle engine stops; the next message resumes or seeds
 seed_tokens = 30000       # next: the most a seed block carries (§22.6)
@@ -7597,64 +7503,59 @@ history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
 index_tools = false       # also index tool output (2 KB a node)
 meaning = false           # live: meaning search (§22.10 tier 3); on downloads a 31 MB model once
-import = false            # live: import the agents' own histories every 10 min (CHAT5; copies them)
 notify = "blocked"        # blocked | all | off (§22.11)
 archive_purge_days = 0    # 0 = keep archived chats forever
-
-[chat.tools.chat]         # `tools` is the preset map: built-in `chat`, `read`, `none`; yours add to them
-                          # (`find` is `chat find`'s own, history tools only: a preset of that name is refused)
-web = true                # the agent's own web search and fetch
-read = false              # read files in `dirs`
-dirs = []                 # folders every chat of this preset may read
-shell = false             # never in a built-in preset; a user preset may, and shows ⚠ like `dangerous`
-mcp = []                  # extra MCP servers by name (from the agent's own config or [mcp.*])
-allow = []                # extra tool names approved without a card
 ```
 
-Presets and the keys marked *next* apply to chats started or resumed after the change; `live`
+`chat.preset`, `chat.import` and `[chat.tools.*]` are retired (removed 2026-11-17 with tool presets
+and import; §13.8). The keys marked *next* apply to chats started or resumed after the change; `live`
 ones to every screen at once. `[chat]` is refused in a repository's `.ptyro.toml` (§13.1), as
 agents are. `ptyro init` asks nothing about chats: they work on first use.
 
 ### 22.14 Protocol (additive, the next minor after 1.20)
 
 **As built** (1.22–1.25; `ptyro-protocol`'s doc comments are the reference). Requests:
-`ChatNew{workspace?, agent?, preset?, title?, prompt?, incognito?, folders, compare, confirmed}` →
-`Chat{info}`; `ChatList{workspace?, all, pinned, archived, limit?}` → `Chats{chats}` (other machines'
-chats merged in from their mirrors, archived ones asked of each); `ChatRead{chat, all, from?,
-limit?}` → `ChatTranscript{info, nodes, siblings}` (`from`/`limit`, 1.25: a part, oldest first, for a
+`ChatNew{workspace?, agent?, title?, prompt?, incognito?, folders}` →
+`Chat{info}`; `ChatList{workspace?, all, pinned, archived, limit?}` → `Chats{chats, incognito}` (other machines'
+chats merged in from their mirrors, archived ones asked of each); `ChatRead{chat, from?,
+limit?}` → `ChatTranscript{info, nodes}` (`from`/`limit`, 1.25: a part, oldest first, for a
 chat too big for one reply, whose error says so); `ChatSubscribe{chat}` / `ChatUnsubscribe{chat}`
-(the live `ServerMsg::ChatLive{chat, rev, reset, items, siblings}`, whose items carry node ids; a
+(the live `ServerMsg::ChatLive{chat, rev, reset, items}`, whose items carry node ids; a
 reset too big for one frame comes as several, the first with `reset`; a subscription is kept by the
 chat's full id, so any of its addresses ends it); `ChatSend{chat, text}`; `ChatRetry{chat, node?}`;
-`ChatEdit{chat, node, text}`; `ChatBranch{chat, to}`; `ChatFork{chat, node?, agent?, side,
-confirmed}`; `ChatUpdate{chat, title?, pinned?, archived?, agent?, preset?, keep?, folders?,
-confirmed}` (a new agent, preset or folders is refused mid-answer, as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.38);
+`ChatEdit{chat, node, text}` (both only of the last turn, §22.7); `ChatUpdate{chat, title?,
+pinned?, archived?, agent?, folders?, confirmed}` (a new agent or folders is refused mid-answer,
+as a retry is); `ChatDelete{chat, confirmed}` (an exact address; asks unless confirmed, 1.38);
 `ChatAnswer{chat, decision}`; `ChatStop{chat}`; `ChatSearch{query, chat?, workspace?, agent?,
 pinned, archived, limit?, machines}` → `ChatHits{hits}`; `ChatFind{question, agent?, workspace?}` →
 `Chat{info}` (an incognito chat that answers; the client follows it); `ChatExport{chat, format}` →
-`Text{text}`; `ChatTask{chat, project?, agent?, name?, confirmed}` (answered as `WorktreeNew`);
-`ChatPresets` → `ChatPresets{presets, incognito}`; `ChatCompare{chat, agents, text?, confirmed}`;
-`ChatPick{chat, node?}`; `ChatImport{agent?, profile?, since?, dry_run}` → `ChatImported{report}`.
+`Text{text}`; `ChatTask{chat, project?, agent?, name?, confirmed}` (answered as `WorktreeNew`).
 Events `ChatUpdated{info}`, `ChatRemoved{id, machine?}`. `ChatInfo` carries `id, handle, workspace,
-machine, title, title_src, agent, profile, tools, pinned, archived, incognito, forked, side_of, leaf,
+machine, title, title_src, agent, profile, tools, pinned, archived, incognito, leaf,
 nodes, unread, created_ms, last_ms, cost_micro_usd, status, attention, engine` (1.24 adds `folders`,
-`best_effort`, `shell`, `comparing`, `source`, `source_dir`; `ChatSiblings.agents`;
-`AgentChoice.found`; 1.25: `ChatNew.incognito` is optional, none meaning `[chat] incognito` and
-`false` a kept chat even when that is on, and `ChatPresets.incognito` says the default, which a new
-chat's toggle starts from; `ChatUpdate.confirmed` and `ChatFork.confirmed`: a bare agent name is the
-chat's own profile's, and another profile's asks first with `NeedsConfirmation`, as compare and task
-do; `ChatAnswer.node`: the card answered, refused when another (or none) is waiting, so a double
+`best_effort`; `AgentChoice.found`; 1.25: `ChatNew.incognito` is optional, none meaning `[chat]
+incognito` and `false` a kept chat even when that is on, and `Chats.incognito` (1.47; it was
+`ChatPresets.incognito`) says the default, which a new chat's toggle starts from;
+`ChatUpdate.confirmed`: a bare agent name is the chat's own profile's, and another profile's asks
+first with `NeedsConfirmation`, as task does; `ChatAnswer.node`: the card answered, refused when another (or none) is waiting, so a double
 tap or a card answered elsewhere never decides the next request; the TUI and the web send it,
 `chat answer --node` too; `ChatSearch.profile`: only that profile's chats, what a chat's history
 tools give another machine's search). `SessionInfo` gains `chat` (the chat id of an engine). Scopes as in §22.11, listed in
 `devices::needed`.
 
+**1.47 (2026-11-17, pare-down):** `chat_branch`, `chat_fork`, `chat_presets`, `chat_compare`,
+`chat_pick` and `chat_import` are retired (`RETIRED_REQUESTS`: an older client that sends one is
+told to update); `ChatNew.preset`, `.compare` and `.confirmed`, `ChatRead.all`, `ChatUpdate.preset`
+and `.keep`, the `ChatImported` and `ChatPresets` replies, `ChatTranscript.siblings`,
+`ChatLive.siblings`, and `ChatInfo`'s `forked`, `side_of`, `shell`, `comparing`, `source` and
+`source_dir` went (with `ChatSiblings`, `ChatCompare`, `ChatPreset`, `ImportReport`). `ChatInfo.tools`
+stays: `chat`, `none` or `find`. `Chats` gains `incognito`, a new chat's default.
+
 **Not built** (in the first draft; nothing needs them yet): `ChatNew.profile` (it is
 `agent@profile`); `ChatList.machine`, `cursor` and `next` (no paging: a list is metadata, and
-`limit` caps it); `ChatGet{from, branches}` (it is `ChatRead`, whose `all` is every branch);
-`ChatSend.parent` and `.agent` (a branch is `ChatEdit` or `ChatRetry`, an agent `ChatUpdate.agent`);
-`ChatBranch.leaf` (it is `to`, any node, shown to its newest tip); `ChatFork.keep` (a side chat is
-kept by `ChatUpdate.keep`); `ChatFind.machines` and a `ChatAnswer{text, cites}` reply (`ChatFind`
+`limit` caps it); `ChatGet{from, branches}` (it is `ChatRead`);
+`ChatSend.parent` and `.agent` (a retry or an edit is `ChatRetry` or `ChatEdit`, an agent
+`ChatUpdate.agent`); `ChatFind.machines` and a `ChatAnswer{text, cites}` reply (`ChatFind`
 answers with the chat that answers, whose answer cites `c:HANDLE/NODE`; `ChatAnswer` is the
 permission answer).
 
@@ -7684,24 +7585,23 @@ agent installed:
 - **Store:** migrations, the FTS triggers, a streaming node written in steps and a crash mid-turn
   (the next start closes it `interrupted`), tombstones and compaction, `chat.db` missing or locked
   (the daemon runs, the chat says why), backup with and without `--no-chats`.
-- **Engine:** native continue, native fork, seed (agent switch, fork from the middle, lost
-  conversation, other profile), the seed budget and the summary, hibernate and resume, the preset
-  per agent (the launch arguments are asserted for each), a denied tool, an incognito chat leaving no
+- **Engine:** native continue, seed (agent switch, a retry or an edit, lost conversation, other
+  profile), the seed budget and the summary, hibernate and resume, the tools per agent (the launch arguments are asserted for each), a denied tool, an incognito chat leaving no
   row, a live upgrade mid-turn.
 - **Search:** ranking, phrases, filters, scope by profile (a work chat is invisible to a personal
   one), incognito never found, the ask tools through `ptyro mcp`, the cap.
 - **Machines** (as `tests/mm1.rs`, two linked daemons): chats listed in the remote workspace,
   created there, opened and streamed over the upstream, a permission card answered, a search that
   spans both, `read`-scope refusals, offline listing and its message, hidden workspaces, no echoes.
-- **Surfaces:** the TUI in a headless emulator (the section, the list, a branch, the keys), the
+- **Surfaces:** the TUI in a headless emulator (the section, the list, a retry, the keys), the
   web (Chrome against a sandbox, as CFG1 did), `make parity`, the settings schema test (a key with
   no entry fails), and `make verify-chat` against a real Claude and Codex when logged in (a chat with
-  a web search, a fork, a seeded switch).
+  a web search, a seeded switch).
 
 ### 22.17 Not here, and unverified
 
 - **Not here:** a chat client for raw provider APIs (ptyro drives registered agents and their
-  accounts), voice, images and files as attachments (a folder in the `read` preset covers files),
+  accounts), voice, images and files as attachments (a chat's folders cover files),
   artifacts, shared chats between people, cloud storage of chats.
 - **Settled by CHAT0 (2026-10-29, §20.8):** the Claude flags through the stream-json driver
   (`--tools`, `--allowedTools`, `--strict-mcp-config`, `--safe-mode`, `--fork-session`,
@@ -7721,7 +7621,7 @@ agent installed:
     at a limit (a free tier at its limit, no provider logged in);
   - `session/resume` and `session/fork` of ACP on an agent that offers them (Gemini 0.66.0 doesn't);
   - Linux: every result above is from macOS (Codex's sandbox and permission profiles differ there);
-  - the `read` preset on Codex outside `$HOME` (it stays readable).
+  - a chat's folders on Codex: files outside `$HOME` stay readable.
   The first three fit `make verify-chat` (§22.16), which CHAT1.3 writes with a login for each.
   Facts found so far, dated and tagged, are in RESEARCH §IV.3.
 
@@ -9742,7 +9642,7 @@ such message now offers the fix, in one set of words shared by the CLI, the TUI 
 **Tests:** `locate.rs` (the words, Gemini CLI never first, Antigravity named, `setup_offer` and
 what it refuses); `doctor.rs` (`fix_for`); the TUI's `a_missing_agent_offers_the_setup_checklist`
 (a refused spawn and a chat not made, with the offer and its `app.setup` argument) and
-`health.rs` (the doctor's new lines opening the checklist); `crates/ptyro/tests/chat_compare.rs`'s
+`health.rs` (the doctor's new lines opening the checklist); `crates/ptyro/tests/chat_agents.rs`'s
 `a_missing_agent_offers_setup_not_the_os_error` (a chat with no agent, and `ptyro new --agent`
 of one that isn't there, against a real daemon); `web/test/setup.mjs` (`setupOffer`).
 

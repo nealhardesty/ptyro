@@ -1,12 +1,12 @@
 //! Chats (SPEC §22): plain conversations with an agent, kept in `chat.db`.
 //!
-//! A chat is ptyro's own record (a tree of nodes). Its *engine* is a hidden structured session
+//! A chat is ptyro's own record (a line of nodes). Its *engine* is a hidden structured session
 //! (`Place::chat`) running in the chat's scratch directory under its workspace's profile; it
 //! serves the record and can be replaced. Sending a message:
-//! 1. writes the user's node (its parent is the shown branch's tip, the chat's `leaf`);
+//! 1. writes the user's node (its parent is the conversation's last node, the chat's `leaf`);
 //! 2. starts an engine when none runs: the chat's current conv continued natively when the agent
 //!    can (`--resume`, `thread/resume`, `session/load`), else a new conv whose first prompt
-//!    carries the branch as a seed block (§22.6);
+//!    carries the conversation as a seed block (§22.6);
 //! 3. follows the engine's transcript: each item becomes a node (a streaming answer is written
 //!    every 2 s and when it completes), and every follower of the chat sees it.
 //!
@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use ptyro_agents::Decision;
 use ptyro_core::chat::{ChatBody, NoticeLevel, Transcript};
-use ptyro_core::chats::{self, ChatHit, ChatInfo, ChatNode, ChatSiblings};
+use ptyro_core::chats::{self, ChatHit, ChatInfo, ChatNode};
 use ptyro_core::config::{ChatTools, parse_duration};
 use ptyro_core::model::MAIN_WORKSPACE;
 use ptyro_core::session::SessionKind;
@@ -35,12 +35,9 @@ use crate::daemon::Daemon;
 use crate::launch::{AgentStart, Launch};
 use crate::session::{Place, Session};
 
-mod compare;
-pub(crate) mod import;
-
-/// A fork's conv until its first answer has its own conversation (then it is `native_fork`, by
-/// `update_conv`): Claude resumes the source's
-/// conversation with `--fork-session`, leaving it as it was.
+/// A fork's conv until its first answer had its own conversation (forks were removed on
+/// 2026-11-17): it names the source chat's conversation, so it is never resumed (that would
+/// carry on the source's); the fork's next message is seeded instead.
 const FORK_PENDING: &str = "fork_pending";
 
 /// How long an incognito chat whose agent has gone outlives its last reader (a reload).
@@ -69,26 +66,19 @@ pub struct Chats {
     incognito: Mutex<HashMap<String, ChatInfo>>,
     /// Meaning search (SPEC §22.10 tier 3).
     pub(crate) meaning: crate::meaning::Meaning,
-    /// Compares under way, by chat (SPEC §22.7).
-    comparing: Mutex<HashMap<String, Arc<compare::Compare>>>,
-    /// A compare's helpers (in-memory chats nobody lists, finds or follows): helper → its chat.
-    helpers: Mutex<HashMap<String, String>>,
-    /// One import of the agents' histories at a time (SPEC §22.10), and the files it passed
-    /// over (path → size and mtime): not read again until they change.
-    importing: tokio::sync::Mutex<HashMap<String, (u64, u64)>>,
 }
 
 /// A chat someone follows or an engine serves.
 pub(crate) struct Live {
     pub id: String,
-    /// The shown branch, as the chat view's items (their ids are node ids).
+    /// The conversation, as the chat view's items (their ids are node ids).
     pub items: Mutex<Transcript>,
     /// Bumped on every change; followers wait on it.
     pub rev: watch::Sender<u64>,
-    /// Bumped when the shown branch is reloaded: followers start over.
+    /// Bumped when the conversation is reloaded (a retry, an edit): followers start over.
     pub epoch: watch::Sender<u64>,
     pub viewers: AtomicU32,
-    /// The tip of the shown branch (the next node's parent).
+    /// The conversation's last node (the next node's parent).
     leaf: Mutex<Option<String>>,
     engine: Mutex<Option<Engine>>,
     /// A resumed engine that hasn't answered yet: what it says (a failed resume's error) is
@@ -97,8 +87,6 @@ pub(crate) struct Live {
     /// Stopped by the person (`ChatStop`): a resumed engine's turn end before it answered is
     /// that stop, not a resume that failed (which would send the message again).
     stopping: std::sync::atomic::AtomicBool,
-    /// Where the shown branch has others, sent with every reset (SPEC §22.7).
-    pub siblings: Mutex<Vec<ChatSiblings>>,
     /// The last node its engine was given (for a chat with no conv row: an incognito one).
     given: Mutex<Option<String>>,
     /// The engine given a message, and how many turns it had ended then: busy until it ends
@@ -119,24 +107,6 @@ impl Live {
 
     fn engine(&self) -> Option<Engine> {
         self.engine.locked().clone().filter(|e| e.session.is_live())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn for_test(id: &str) -> Self {
-        Self {
-            id: id.to_owned(),
-            items: Mutex::new(Transcript::default()),
-            rev: watch::Sender::new(0),
-            epoch: watch::Sender::new(0),
-            viewers: AtomicU32::new(0),
-            leaf: Mutex::new(None),
-            engine: Mutex::new(None),
-            quiet: std::sync::atomic::AtomicBool::new(false),
-            stopping: std::sync::atomic::AtomicBool::new(false),
-            siblings: Mutex::new(Vec::new()),
-            given: Mutex::new(None),
-            prompted: Mutex::new(None),
-        }
     }
 
     /// Given a message it hasn't ended a turn for yet (its status still says idle until its
@@ -190,9 +160,6 @@ impl Chats {
             sending: Mutex::new(HashMap::new()),
             incognito: Mutex::new(HashMap::new()),
             meaning: crate::meaning::Meaning::default(),
-            comparing: Mutex::new(HashMap::new()),
-            helpers: Mutex::new(HashMap::new()),
-            importing: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -212,7 +179,6 @@ impl Chats {
                 engine: Mutex::new(None),
                 quiet: std::sync::atomic::AtomicBool::new(false),
                 stopping: std::sync::atomic::AtomicBool::new(false),
-                siblings: Mutex::new(Vec::new()),
                 given: Mutex::new(None),
                 prompted: Mutex::new(None),
             })
@@ -305,9 +271,9 @@ impl Daemon {
             store.forget_sessions_in(self.paths.data.join("chat").to_string_lossy().into_owned());
         }
         // An incognito chat lived in the old image's memory alone, so it ends here: its folders
-        // go with it (SPEC §22.9). So do the folders of chats that are gone (a compare's helpers
-        // and incognito chats a crash cut off): which they are is taken now, before a new
-        // incognito chat can make one.
+        // go with it (SPEC §22.9). So do the folders of chats that are gone (incognito chats a
+        // crash cut off, a compare's helpers from before 2026-11-17): which they are is taken
+        // now, before a new incognito chat can make one.
         let engines: Vec<String> = std::fs::read_dir(self.paths.data.join("chat"))
             .map(|rd| {
                 rd.flatten()
@@ -338,10 +304,7 @@ impl Daemon {
                 }
             }
         });
-        // Side chats left by the image before (or a crash): gone, unless followed again soon.
-        self.drop_unfollowed_sides(None);
         self.start_meaning(db.clone());
-        self.start_chat_import();
         let me = Arc::clone(self);
         tokio::spawn(async move {
             loop {
@@ -366,16 +329,9 @@ impl Daemon {
 
     // ── the record: chat.db, or memory for an incognito chat ─────────────────────────────
 
-    /// The incognito chats people see (a compare's helpers are not among them).
+    /// The incognito chats.
     fn visible_incognito(&self) -> Vec<ChatInfo> {
-        let helpers = self.chats.helpers.locked();
-        self.chats
-            .incognito
-            .locked()
-            .values()
-            .filter(|c| !helpers.contains_key(&c.id))
-            .cloned()
-            .collect()
+        self.chats.incognito.locked().values().cloned().collect()
     }
 
     pub(crate) fn incognito_of(&self, id: &str) -> Option<ChatInfo> {
@@ -400,10 +356,11 @@ impl Daemon {
         ids
     }
 
-    /// The branch to `leaf` (the shown one when `None`); an incognito chat's is what it showed.
+    /// The conversation up to `leaf` (all of it when `None`); an incognito chat's is what it
+    /// showed.
     async fn rec_branch(&self, id: &str, leaf: Option<String>) -> Result<Vec<ChatNode>, Error> {
         if self.incognito_of(id).is_some() {
-            // One branch, in order: up to `leaf`, when given.
+            // In order: up to `leaf`, when given.
             let mut nodes = self.chats.get_live(id).map(|l| live_nodes(&l)).unwrap_or_default();
             if let Some(i) = leaf.and_then(|l| nodes.iter().position(|n| n.id == l)) {
                 nodes.truncate(i + 1);
@@ -420,7 +377,7 @@ impl Daemon {
         self.chat_db()?.put_node_now(id.to_owned(), n, None, false).await.map_err(store_err)
     }
 
-    /// Load the shown branch (and where it has others) into the live chat; followers start over.
+    /// Load the conversation into the live chat; followers start over.
     async fn reload_branch(&self, live: &Arc<Live>) {
         let id = live.id.clone();
         if self.incognito_of(&id).is_some() {
@@ -429,26 +386,8 @@ impl Daemon {
             return;
         }
         let Ok(db) = self.chat_db() else { return };
-        let branch = db.branch(id.clone(), None).await.unwrap_or_default();
-        let ids = branch.iter().map(|n| n.id.clone()).collect();
-        *live.siblings.locked() = db.siblings(id, ids).await.unwrap_or_default();
+        let branch = db.branch(id, None).await.unwrap_or_default();
         load_branch(live, &branch);
-    }
-
-    /// Where the shown branch has others, again (a new answer beside an old one).
-    async fn refresh_siblings(&self, live: &Arc<Live>) {
-        if self.incognito_of(&live.id).is_some() {
-            return;
-        }
-        let Ok(db) = self.chat_db() else { return };
-        let ids: Vec<String> = live.items.locked().items.iter().map(|i| i.id.clone()).collect();
-        let sib = db.siblings(live.id.clone(), ids).await.unwrap_or_default();
-        let changed = *live.siblings.locked() != sib;
-        if changed {
-            *live.siblings.locked() = sib;
-            live.epoch.send_modify(|e| *e += 1);
-            live.bump();
-        }
     }
 
     /// A node of a chat by its id or the end of it (at least 4 characters), or `7f3k/01jb…`
@@ -481,17 +420,11 @@ impl Daemon {
             // (A caller may hold it: it ends with the chat either way.)
             self.chats.drop_lock(id, 2);
             self.remove_chat_dirs(id, Some((&info.agent, &info.profile))).await;
-            // A compare's helper was never listed: nobody is told it went.
-            if self.chats.helpers.locked().remove(id).is_none() {
-                let _ =
-                    self.events.send(DomainEvent::ChatRemoved { id: id.to_owned(), machine: None });
-            }
+            let _ = self.events.send(DomainEvent::ChatRemoved { id: id.to_owned(), machine: None });
         }
     }
 
     async fn delete_chat(self: &Arc<Self>, info: &ChatInfo) -> Result<(), Error> {
-        // A compare under way stops with it (its answers have nowhere to go).
-        self.stop_compare(&info.id);
         // After a message being sent: the engine it starts is stopped here, and one waiting to
         // be sent finds no chat.
         let lock = self.chats.lock_for(&info.id);
@@ -511,41 +444,6 @@ impl Daemon {
         Ok(())
     }
 
-    /// Side chats not kept (archived ones too).
-    async fn side_chats(&self) -> Vec<ChatInfo> {
-        let Ok(db) = self.chat_db() else { return Vec::new() };
-        let mut all = Vec::new();
-        for archived in [false, true] {
-            let f = ListFilter { archived, sides: true, ..ListFilter::default() };
-            all.extend(db.list(f).await.unwrap_or_default());
-        }
-        all.retain(|c| c.side_of.is_some());
-        all
-    }
-
-    /// Side chats nobody has followed for `[chat] hibernate_after` (as long as its agent would
-    /// stay) go (`only`: that one; SPEC §22.7). A client deletes the one it leaves; these are the
-    /// ones none could: a quit, a crash, a reload, a device that left it while another had it.
-    pub(crate) fn drop_unfollowed_sides(self: &Arc<Self>, only: Option<String>) {
-        let me = Arc::clone(self);
-        let grace =
-            parse_duration(&self.config().chat.hibernate_after).unwrap_or(Duration::from_secs(120));
-        tokio::spawn(async move {
-            tokio::time::sleep(grace).await;
-            for c in me.side_chats().await {
-                let followed =
-                    me.chats.get_live(&c.id).is_some_and(|l| l.viewers.load(Ordering::SeqCst) > 0);
-                if followed || only.as_ref().is_some_and(|o| *o != c.id) {
-                    continue;
-                }
-                tracing::debug!(chat = %c.id, "a side chat nobody follows goes");
-                if let Err(e) = me.delete_chat(&c).await {
-                    tracing::warn!(chat = %c.id, "side chat: {}", e.message);
-                }
-            }
-        });
-    }
-
     // ── addressing ────────────────────────────────────────────────────────────────────────
 
     /// A chat by address (SPEC §2.3): a handle (`7f3k`, `c:7f3k`), a full id, `@last`,
@@ -559,12 +457,9 @@ impl Daemon {
     /// (SPEC §12.1). A title, `@pinned` or `@unread` is refused there, its chats listed.
     pub(crate) async fn find_chat_as(&self, addr: &str, exact: bool) -> Result<ChatInfo, Error> {
         let db = self.chat_db()?;
-        let all = db
-            .list(ListFilter { sides: true, ..ListFilter::default() })
-            .await
-            .map_err(store_err)?;
+        let all = db.list(ListFilter::default()).await.map_err(store_err)?;
         let mut archived = db
-            .list(ListFilter { archived: true, sides: true, ..ListFilter::default() })
+            .list(ListFilter { archived: true, ..ListFilter::default() })
             .await
             .map_err(store_err)?;
         let mut all = all;
@@ -656,10 +551,8 @@ impl Daemon {
         c.handle = lookup::handle(&c.id, all.iter().map(|x| x.id.as_str()));
         c.workspace = self.workspace_name(&c.workspace);
         let config = self.config();
-        let preset = config.chat.preset(&c.tools).unwrap_or_default();
-        c.shell = preset.shell;
-        c.best_effort = best_effort(&ptyro_agents::adapter_name(&config, &c.agent), &preset);
-        c.comparing = self.chats.comparing.locked().get(&c.id).map(|x| x.state.locked().clone());
+        let tools = ptyro_core::config::Chat::tools_for(&c.tools, !c.folders.is_empty());
+        c.best_effort = best_effort(&ptyro_agents::adapter_name(&config, &c.agent), &tools);
         if let Some(e) = self.chats.get_live(&c.id).and_then(|l| l.engine()) {
             let info = self.info(&e.session);
             c.status = info.status.map(|s| s.status);
@@ -687,9 +580,6 @@ impl Daemon {
     }
 
     async fn chat_changed(&self, id: &str) {
-        if self.chats.helpers.locked().contains_key(id) {
-            return;
-        }
         match self.chat_info_now(id).await {
             Ok(info) => {
                 let _ = self.events.send(DomainEvent::ChatUpdated { info });
@@ -797,55 +687,11 @@ impl Daemon {
                         c
                     })
                     .collect();
-                Ok(Reply::Chats { chats })
+                Ok(Reply::Chats { chats, incognito: false })
             }
-            Request::ChatNew {
-                workspace,
-                agent,
-                preset,
-                title,
-                prompt,
-                incognito,
-                folders,
-                compare,
-                confirmed,
-            } => {
+            Request::ChatNew { workspace, agent, title, prompt, incognito, folders } => {
                 let incognito = incognito.unwrap_or(self.config().chat.incognito);
-                let compare: Vec<String> = compare
-                    .iter()
-                    .flat_map(|a| a.split(','))
-                    .map(|a| a.trim().to_owned())
-                    .filter(|a| !a.is_empty())
-                    .collect();
-                if !compare.is_empty() {
-                    // Asked of several agents: every name is known before the chat is made.
-                    if incognito {
-                        return Err(Error::invalid(
-                            "an incognito chat keeps no branches, and each answer of a compare is one",
-                        ));
-                    }
-                    let ws = workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.to_owned());
-                    let ws = self.find_workspace(&ws)?.name;
-                    let (a, p) = self.chat_agent(agent.as_deref(), &ws)?;
-                    // Counted once each (`claude,claude` is one agent).
-                    let (who, cant) = self.compare_who((&a, &p), &ws, &compare, confirmed)?;
-                    if who.len() + cant.len() < 2 {
-                        return Err(Error::invalid(
-                            "a compare needs two different agents or more (claude,codex)",
-                        ));
-                    }
-                }
-                let info =
-                    self.chat_new(workspace, agent, preset, title, incognito, folders).await?;
-                if !compare.is_empty()
-                    && let Some(p) = prompt.clone().filter(|p| !p.trim().is_empty())
-                {
-                    if let Err(e) = self.chat_compare(&info, compare, Some(p), confirmed).await {
-                        let live = self.chats.live(&info.id);
-                        self.chat_notice(&live, &info.id, NoticeLevel::Error, &e.message).await;
-                    }
-                    return Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? });
-                }
+                let info = self.chat_new(workspace, agent, title, incognito, folders).await?;
                 // The chat is made whatever the agent does: an agent that won't start is said in
                 // it (a notice), and the reply still names it, so a client shows it, retries in
                 // it, or deletes it, rather than making another.
@@ -870,7 +716,6 @@ impl Daemon {
                         pinned_only: pinned,
                         archived,
                         limit: limit.unwrap_or(0) as usize,
-                        sides: true,
                     })
                     .await
                     .map_err(store_err)?;
@@ -895,84 +740,46 @@ impl Daemon {
                         c
                     })
                     .collect();
-                Ok(Reply::Chats { chats })
+                Ok(Reply::Chats { chats, incognito: self.config().chat.incognito })
             }
-            Request::ChatRead { chat, all, from, limit } => {
+            Request::ChatRead { chat, from, limit } => {
                 // A history tool reading another machine's chat (a hit of a search of every
                 // machine): there, if the scope lets it see that chat.
                 if let Some(s) = &scope
                     && let Err(e) = self.find_scoped(&chat, Some(s)).await
                 {
                     let Some((m, id)) = self.scoped_remote_chat(&chat, s) else { return Err(e) };
-                    let req = Request::ChatRead { chat: format!("{m}:{id}"), all, from, limit };
+                    let req = Request::ChatRead { chat: format!("{m}:{id}"), from, limit };
                     return self.forward(&m, req).await;
                 }
                 let info = self.find_scoped(&chat, scope.as_ref()).await?;
-                let nodes = if all && !info.incognito {
-                    self.chat_db()?.nodes(info.id.clone()).await.map_err(store_err)?
-                } else {
-                    self.rec_branch(&info.id, None).await?
-                };
+                let nodes = self.rec_branch(&info.id, None).await?;
                 // A part of them (a chat too big for one reply).
                 let nodes: Vec<ChatNode> = nodes
                     .into_iter()
                     .skip(from.unwrap_or(0) as usize)
                     .take(limit.map_or(usize::MAX, |l| l as usize))
                     .collect();
-                let siblings = if info.incognito {
-                    Vec::new()
-                } else {
-                    let shown = self.rec_branch(&info.id, None).await?;
-                    let ids = shown.into_iter().map(|n| n.id).collect();
-                    self.chat_db()?.siblings(info.id.clone(), ids).await.map_err(store_err)?
-                };
-                Ok(Reply::ChatTranscript { info, nodes, siblings })
+                Ok(Reply::ChatTranscript { info, nodes })
             }
             Request::ChatRetry { chat, node } => {
                 let info = self.find_chat(&chat).await?;
-                if info.source.is_some() {
-                    return Err(compare::imported_refusal(&info));
-                }
                 self.chat_retry(&info, node.as_deref()).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
             Request::ChatEdit { chat, node, text } => {
                 let info = self.find_chat(&chat).await?;
-                if info.source.is_some() {
-                    return Err(compare::imported_refusal(&info));
-                }
                 if text.trim().is_empty() {
                     return Err(Error::invalid("nothing to send"));
                 }
                 self.chat_edit(&info, &node, text).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
-            Request::ChatBranch { chat, to } => {
-                let info = self.find_chat(&chat).await?;
-                self.chat_branch(&info, &to).await?;
-                Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
-            }
-            Request::ChatFork { chat, node, agent, side, confirmed } => {
-                let info = self.find_chat(&chat).await?;
-                let agent = agent.map(|a| self.switch_agent(&info, &a, confirmed)).transpose()?;
-                let made = self.chat_fork(&info, node.as_deref(), agent, side).await?;
-                if side {
-                    // Gone unless someone opens it (or keeps it) soon.
-                    self.drop_unfollowed_sides(Some(made.id.clone()));
-                }
-                Ok(Reply::Chat { info: made })
-            }
             Request::ChatSend { chat, text } => {
                 let info = self.find_chat(&chat).await?;
                 if text.trim().is_empty() {
                     return Err(Error::invalid("nothing to send"));
                 }
-                // An imported chat stays as its agent wrote it: it carries on as a fork, and the
-                // reply names the fork (SPEC §22.10).
-                let info = match &info.source {
-                    Some(_) => self.continue_imported(&info).await?,
-                    None => info,
-                };
                 self.chat_send(&info.id, text).await?;
                 Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
             }
@@ -1007,7 +814,6 @@ impl Daemon {
             }
             Request::ChatStop { chat } => {
                 let info = self.find_chat(&chat).await?;
-                self.stop_compare(&info.id);
                 if let Some(live) = self.chats.get_live(&info.id)
                     && let Some(e) = live.engine()
                     && let Some(st) = e.session.structured.clone()
@@ -1024,8 +830,6 @@ impl Daemon {
                 pinned,
                 archived,
                 agent,
-                preset,
-                keep,
                 folders,
                 confirmed,
                 auto_title,
@@ -1034,23 +838,15 @@ impl Daemon {
                 let folders = folders.map(|f| chat_folders(&f)).transpose()?;
                 // Checked before anything is written: a refusal changes nothing.
                 let agent = agent.map(|a| self.switch_agent(&info, &a, confirmed)).transpose()?;
-                if let Some(p) = &preset
-                    && self.config().chat.preset(p).is_none()
-                {
-                    return Err(Error::invalid(format!(
-                        "{p:?} isn't a preset ({})",
-                        self.config().chat.presets().join(", ")
-                    )));
-                }
-                // A new agent, preset or folders means a new engine: not mid-answer (as a retry
-                // isn't), and not while a message is starting one (it would keep the old agent).
-                let switching = agent.is_some() || preset.is_some() || folders.is_some();
+                // A new agent or folders means a new engine: not mid-answer (as a retry isn't),
+                // and not while a message is starting one (it would keep the old agent).
+                let switching = agent.is_some() || folders.is_some();
                 let lock = self.chats.lock_for(&info.id);
                 let _one = match switching {
                     true => Some(lock.lock().await),
                     false => None,
                 };
-                // (No live chat: no engine, and no compare.)
+                // (No live chat: no engine.)
                 if switching && let Some(live) = self.chats.get_live(&info.id) {
                     self.busy_check(&live, &info)?;
                 }
@@ -1067,15 +863,8 @@ impl Daemon {
                         false => title,
                     };
                     return self
-                        .update_incognito(&info, title, pinned, archived, agent, preset, folders)
+                        .update_incognito(&info, title, pinned, archived, agent, folders)
                         .await;
-                }
-                // An imported chat keeps the agent that wrote it (its title, pin and archive
-                // are the person's to change).
-                if info.source.is_some()
-                    && (agent.is_some() || preset.is_some() || folders.is_some())
-                {
-                    return Err(compare::imported_refusal(&info));
                 }
                 let db = self.chat_db()?;
                 // A new automatic title: the titler's, as for a new chat. It is made from the
@@ -1087,21 +876,6 @@ impl Daemon {
                         return Err(Error::invalid(
                             "nothing to make a title from yet: the chat's first message gives it one",
                         ));
-                    }
-                }
-                if keep == Some(true) && info.side_of.is_some() {
-                    db.keep_side(info.id.clone()).await.map_err(store_err)?;
-                    // A kept side chat is a fork (§22.7); a title the user typed stays.
-                    if let Some(rest) = info.title.as_deref().and_then(|t| t.strip_prefix("side: "))
-                        && info.title_src != "user"
-                    {
-                        db.set_title(
-                            info.id.clone(),
-                            Some(format!("fork of {rest}")),
-                            "auto".into(),
-                        )
-                        .await
-                        .map_err(store_err)?;
                     }
                 }
                 if auto_title {
@@ -1121,10 +895,6 @@ impl Daemon {
                 if let Some((agent, profile)) = agent {
                     db.set_agent(info.id.clone(), agent, profile).await.map_err(store_err)?;
                     // The next message goes to the new agent, seeded with the conversation.
-                    self.stop_chat_engine(&info.id).await;
-                }
-                if let Some(p) = preset {
-                    db.set_tools(info.id.clone(), p).await.map_err(store_err)?;
                     self.stop_chat_engine(&info.id).await;
                 }
                 if let Some(f) = folders {
@@ -1147,54 +917,11 @@ impl Daemon {
                         ),
                     ));
                 }
-                // Its side chats go with it: they were questions about it.
-                for side in self
-                    .side_chats()
-                    .await
-                    .into_iter()
-                    .filter(|c| c.side_of == Some(info.id.clone()))
-                {
-                    self.delete_chat(&side).await?;
-                }
                 self.delete_chat(&info).await?;
                 Ok(Reply::Done)
             }
             Request::ChatTask { chat, project, agent, name, confirmed } => {
                 self.chat_task(&chat, project, agent, name, confirmed).await
-            }
-            Request::ChatCompare { chat, agents, text, confirmed } => {
-                let info = self.find_chat(&chat).await?;
-                self.chat_compare(&info, agents, text, confirmed).await?;
-                Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
-            }
-            Request::ChatPick { chat, node } => {
-                let info = self.find_chat(&chat).await?;
-                self.chat_pick(&info, node.as_deref()).await?;
-                Ok(Reply::Chat { info: self.chat_info_now(&info.id).await? })
-            }
-            Request::ChatImport { agent, profile, since, dry_run } => {
-                let report = self.chat_import(agent, profile, since, dry_run).await?;
-                Ok(Reply::ChatImported { report })
-            }
-            Request::ChatPresets => {
-                let config = self.config();
-                let presets = config
-                    .chat
-                    .presets()
-                    .into_iter()
-                    .filter_map(|name| {
-                        let t = config.chat.preset(&name)?;
-                        Some(chats::ChatPreset {
-                            builtin: ptyro_core::config::Chat::BUILTIN.contains(&name.as_str())
-                                && !config.chat.tools.contains_key(&name),
-                            about: t.describe(),
-                            read: t.read,
-                            shell: t.shell,
-                            name,
-                        })
-                    })
-                    .collect();
-                Ok(Reply::ChatPresets { presets, incognito: config.chat.incognito })
             }
             Request::ChatExport { chat, format } => {
                 let info = self.find_chat(&chat).await?;
@@ -1215,7 +942,7 @@ impl Daemon {
 
     /// The agent and profile for a chat: the one asked for (`agent@profile`), else `[chat]
     /// agent`, else the default agent, else the first installed one that has a structured mode.
-    /// The agent a chat switches to (`/agent`, a fork's `--agent`): a bare name under the
+    /// The agent a chat switches to (`/agent`, `chat set --agent`): a bare name under the
     /// chat's own profile; another profile only when the person agreed (SPEC §22.7), since the
     /// conversation goes to that account.
     fn switch_agent(
@@ -1301,7 +1028,6 @@ impl Daemon {
         self: &Arc<Self>,
         workspace: Option<String>,
         agent: Option<String>,
-        preset: Option<String>,
         title: Option<String>,
         incognito: bool,
         folders: Vec<String>,
@@ -1312,20 +1038,9 @@ impl Daemon {
             None => self.find_workspace(MAIN_WORKSPACE)?,
         };
         let (agent, profile) = self.chat_agent(agent.as_deref(), &ws.name)?;
-        let config = self.config();
         let folders = chat_folders(&folders)?;
-        // Folders and no preset asked for: a chat given folders reads them (§22.5).
-        let preset = preset.unwrap_or_else(|| {
-            let default = config.chat.preset.clone();
-            let reads = config.chat.preset(&default).is_some_and(|t| t.read);
-            if folders.is_empty() || reads { default } else { "read".into() }
-        });
-        if config.chat.preset(&preset).is_none() {
-            return Err(Error::invalid(format!(
-                "{preset:?} isn't a preset ({})",
-                config.chat.presets().join(", ")
-            )));
-        }
+        // Web search, and the folders it is given (§22.5).
+        let tools = "chat".to_owned();
         let id = chats::new_id();
         let title = title.map(|t| chats::first_line_title(&t)).filter(|t| !t.is_empty());
         if incognito {
@@ -1340,12 +1055,10 @@ impl Daemon {
                 title,
                 agent,
                 profile,
-                tools: preset,
+                tools,
                 pinned: false,
                 archived: false,
                 incognito: true,
-                forked: false,
-                side_of: None,
                 leaf: None,
                 nodes: 0,
                 unread: 0,
@@ -1357,10 +1070,6 @@ impl Daemon {
                 engine: None,
                 folders,
                 best_effort: false,
-                shell: false,
-                comparing: None,
-                source: None,
-                source_dir: None,
             };
             self.chats.incognito.locked().insert(id.clone(), row);
             let info = self.chat_info_now(&id).await?;
@@ -1374,9 +1083,7 @@ impl Daemon {
             title,
             agent,
             profile,
-            tools: preset,
-            forked_from: None,
-            side_of: None,
+            tools,
             folders,
         })
         .await
@@ -1423,8 +1130,8 @@ impl Daemon {
                 self.chat_changed(id).await;
                 return Ok(());
             }
-            // It knows another branch (a compare showed another agent's answer): the message
-            // goes to a new engine, seeded with this one.
+            // It knows a turn that was replaced since: the message goes to a new engine, seeded
+            // with the conversation.
             self.stop_chat_engine(id).await;
         }
         let started = self.start_engine(&live, &info, &branch, &user).await;
@@ -1436,7 +1143,7 @@ impl Daemon {
     }
 
     /// What of `branch` a live engine hasn't seen: after the last node it was given. `None`:
-    /// that node isn't on `branch` (the engine knows another branch).
+    /// that node isn't on `branch` (the engine knows a turn that was replaced).
     async fn unseen_by_engine(
         &self,
         live: &Live,
@@ -1638,7 +1345,7 @@ impl Daemon {
         if question.trim().is_empty() {
             return Err(Error::invalid("what should it find?"));
         }
-        let info = self.chat_new(workspace, agent, None, None, true, Vec::new()).await?;
+        let info = self.chat_new(workspace, agent, None, true, Vec::new()).await?;
         let capped = self.count_cap(
             &format!("chat-cap:{}", info.profile),
             self.config().chat.daily_cap,
@@ -1649,7 +1356,7 @@ impl Daemon {
             return Err(e);
         }
         if let Some(c) = self.chats.incognito.locked().get_mut(&info.id) {
-            c.tools = FIND_PRESET.into();
+            c.tools = FIND_TOOLS.into();
             c.title = Some(chats::first_line_title(&format!("find: {question}")));
             c.title_src = "user".into();
         }
@@ -1665,15 +1372,6 @@ impl Daemon {
     /// One answer at a time: a message sent mid-answer would interleave with it (and be
     /// answered after it anyway). The client says so and keeps the text.
     fn busy_check(&self, live: &Live, info: &ChatInfo) -> Result<(), Error> {
-        if self.chats.comparing.locked().contains_key(&info.id) {
-            return Err(Error::new(
-                ErrorCode::Busy,
-                format!(
-                    "c:{} is comparing answers: wait for them, or stop it first",
-                    lookup::handle(&info.id, [info.id.as_str()])
-                ),
-            ));
-        }
         let Some(e) = live.engine() else { return Ok(()) };
         let given = live.given_unbegun(&e.session);
         match e.session.status() {
@@ -1699,8 +1397,8 @@ impl Daemon {
         }
     }
 
-    /// Ask again (SPEC §22.7): the message `node` answers (or is), answered afresh beside the old
-    /// answer, which stays as a branch.
+    /// Ask again (SPEC §22.7): a new answer to the last message replaces the last answer.
+    /// `node`, when given, must be that message or a node of its answer.
     async fn chat_retry(
         self: &Arc<Self>,
         info: &ChatInfo,
@@ -1711,22 +1409,23 @@ impl Daemon {
         let live = self.chats.live(&info.id);
         self.busy_check(&live, info)?;
         let branch = self.rec_branch(&info.id, None).await?;
-        // The person's message it answers: `node` itself, or the last before it.
-        let upto = match node {
-            Some(n) => {
-                let n = self.find_node(&info.id, n).await?;
-                let full = self.rec_branch(&info.id, Some(n.id.clone())).await?;
-                full.iter()
-                    .rposition(|x| matches!(x.body, ChatBody::User { .. }))
-                    .map(|i| full[i].clone())
+        let at = branch.iter().rposition(|x| matches!(x.body, ChatBody::User { .. }));
+        let user = at.map(|i| branch[i].clone());
+        let user = user.ok_or_else(|| Error::invalid("nothing to retry: no message yet"))?;
+        if let Some(n) = node {
+            let n = self.find_node(&info.id, n).await?;
+            let last_turn = at.map_or(&[][..], |i| &branch[i..]);
+            if !last_turn.iter().any(|x| x.id == n.id) {
+                return Err(Error::invalid(
+                    "only the last answer can be asked again: send a new message to go back to an earlier point",
+                ));
             }
-            None => branch.iter().rev().find(|x| matches!(x.body, ChatBody::User { .. })).cloned(),
-        };
-        let user = upto.ok_or_else(|| Error::invalid("nothing to retry: no message yet"))?;
+        }
         self.answer_afresh(&live, info, user).await
     }
 
-    /// Say it differently (SPEC §22.7): `text` beside the message `node`, answered afresh.
+    /// Say it differently (SPEC §22.7): `text` replaces the last message `node` (and its
+    /// answer), answered afresh.
     async fn chat_edit(
         self: &Arc<Self>,
         info: &ChatInfo,
@@ -1741,6 +1440,13 @@ impl Daemon {
         if !matches!(old.body, ChatBody::User { .. }) {
             return Err(Error::invalid("only a message of yours can be edited (retry an answer)"));
         }
+        let branch = self.rec_branch(&info.id, None).await?;
+        let last = branch.iter().rev().find(|x| matches!(x.body, ChatBody::User { .. }));
+        if last.is_none_or(|l| l.id != old.id) {
+            return Err(Error::invalid(
+                "only your last message can be edited: send a new message to say it differently",
+            ));
+        }
         let new = ChatNode {
             id: chats::new_id(),
             parent: old.parent.clone(),
@@ -1751,8 +1457,9 @@ impl Daemon {
         self.answer_afresh(&live, info, new).await
     }
 
-    /// Show the branch ending at `user` (a person's message) and have it answered by a new
-    /// engine, seeded with what comes before it: a retry, or an edit.
+    /// Make the conversation end at `user` (a person's message: the last turn is replaced, and
+    /// stays in chat.db, unreachable) and have it answered by a new engine, seeded with what
+    /// comes before it: a retry, or an edit.
     async fn answer_afresh(
         self: &Arc<Self>,
         live: &Arc<Live>,
@@ -1765,7 +1472,7 @@ impl Daemon {
             None => Vec::new(),
         };
         if info.incognito {
-            // Memory only: the old answer goes (an incognito chat keeps no branches).
+            // Memory only: the old answer goes.
             let mut items = before.clone();
             items.push(user.clone());
             replace_items(live, &items);
@@ -1782,120 +1489,8 @@ impl Daemon {
         started
     }
 
-    /// Show another branch: the one through `to`, to its newest tip.
-    async fn chat_branch(self: &Arc<Self>, info: &ChatInfo, to: &str) -> Result<(), Error> {
-        if info.incognito {
-            return Err(Error::invalid("an incognito chat keeps no branches"));
-        }
-        let lock = self.chats.lock_for(&info.id);
-        let _one = lock.lock().await;
-        let live = self.chats.live(&info.id);
-        self.busy_check(&live, info)?;
-        self.show_branch(&live, info, to).await
-    }
-
-    /// `chat_branch` with the send lock held and the chat free.
-    async fn show_branch(
-        self: &Arc<Self>,
-        live: &Arc<Live>,
-        info: &ChatInfo,
-        to: &str,
-    ) -> Result<(), Error> {
-        let node = self.find_node(&info.id, to).await?;
-        let db = self.chat_db()?;
-        let shown = db.branch(info.id.clone(), None).await.map_err(store_err)?;
-        // Already on it (an ancestor of what is shown): nothing changes.
-        if shown.iter().any(|n| n.id == node.id) {
-            return Ok(());
-        }
-        let tip = db.tip(info.id.clone(), node.id).await.map_err(store_err)?;
-        // Its engine knows the other branch: the next message seeds a new one.
-        self.stop_chat_engine(&info.id).await;
-        db.set_leaf(info.id.clone(), tip).await.map_err(store_err)?;
-        self.reload_branch(live).await;
-        self.chat_changed(&info.id).await;
-        Ok(())
-    }
-
-    /// A new chat from this one's branch up to `node` (SPEC §22.7): its own nodes (a copy), its
-    /// own engine. Claude continues natively from the end (`--fork-session`, CHAT0); every other
-    /// fork is seeded. A side chat reads the chat and never writes back.
-    async fn chat_fork(
-        self: &Arc<Self>,
-        info: &ChatInfo,
-        node: Option<&str>,
-        agent: Option<(String, String)>,
-        side: bool,
-    ) -> Result<ChatInfo, Error> {
-        if info.incognito {
-            return Err(Error::invalid(
-                "an incognito chat keeps nothing to fork: `chat export` copies it out",
-            ));
-        }
-        let db = self.chat_db()?;
-        let at = match node {
-            Some(n) => Some(self.find_node(&info.id, n).await?.id),
-            None => None,
-        };
-        let path = db.branch(info.id.clone(), at.clone()).await.map_err(store_err)?;
-        let ws = self.workspace_name(&info.workspace);
-        let (agent, profile) = agent.unwrap_or_else(|| (info.agent.clone(), info.profile.clone()));
-        let id = chats::new_id();
-        let title = format!("{} {}", if side { "side:" } else { "fork of" }, info.label());
-        let src_ws = self.find_workspace(&ws).map(|w| w.id).unwrap_or_default();
-        db.create(NewChat {
-            id: id.clone(),
-            workspace: src_ws,
-            title: Some(chats::first_line_title(&title)),
-            title_src: "auto".into(),
-            agent: agent.clone(),
-            profile: profile.clone(),
-            tools: info.tools.clone(),
-            forked_from: Some((
-                info.id.clone(),
-                path.last().map(|n| n.id.clone()).unwrap_or_default(),
-            )),
-            side_of: side.then(|| info.id.clone()),
-            folders: info.folders.clone(),
-        })
-        .await
-        .map_err(store_err)?;
-        let map = db
-            .copy_branch(id.clone(), path, self.config().chat.index_tools)
-            .await
-            .map_err(store_err)?;
-        // Natively, where the agent can: the source's conversation ends where the fork starts,
-        // and it is Claude's (it forks at its end only).
-        let conv = db.current_conv(info.id.clone()).await.map_err(store_err)?;
-        let adapter = ptyro_agents::adapter_name(&self.config(), &agent);
-        if let Some(c) = conv
-            && adapter == "claude"
-            && c.agent == agent
-            && c.profile == profile
-            && c.conversation_id.is_some()
-            && let Some((_, mine)) = map.last().filter(|(src, _)| c.node.as_deref() == Some(src))
-        {
-            db.add_conv(Conv {
-                id: chats::new_id(),
-                chat: id.clone(),
-                agent: agent.clone(),
-                profile: profile.clone(),
-                conversation_id: c.conversation_id.clone(),
-                node: Some(mine.clone()),
-                how: FORK_PENDING.into(),
-                ended_ms: None,
-            })
-            .await
-            .map_err(store_err)?;
-        }
-        let made = self.chat_info_now(&id).await?;
-        let _ = self.events.send(DomainEvent::ChatUpdated { info: made.clone() });
-        Ok(made)
-    }
-
-    /// An incognito chat's changes, in memory (it can't be archived: it isn't kept).
     /// Make a chat a task (SPEC §22.7): an agent session in a new worktree of `project`, whose
-    /// first prompt is the shown branch and its last answer; the chat says where it went.
+    /// first prompt is the conversation and its last answer; the chat says where it went.
     async fn chat_task(
         self: &Arc<Self>,
         chat: &str,
@@ -1912,10 +1507,7 @@ impl Daemon {
                 "an incognito chat keeps nothing, and a task would write it into a session and the agent's own history: `chat export` copies it out, or ask it again in a chat that isn't incognito",
             ));
         }
-        if info.source.is_some() {
-            return Err(compare::imported_refusal(&info));
-        }
-        // One thing at a time: not while it answers or compares (its last answer is the plan).
+        // One thing at a time: not while it answers (its last answer is the plan).
         let lock = self.chats.lock_for(&info.id);
         let _one = lock.lock().await;
         let live = self.chats.live(&info.id);
@@ -2043,7 +1635,7 @@ impl Daemon {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// An incognito chat's changes, in memory (it can't be archived: it isn't kept).
     async fn update_incognito(
         self: &Arc<Self>,
         info: &ChatInfo,
@@ -2051,19 +1643,13 @@ impl Daemon {
         pinned: Option<bool>,
         archived: Option<bool>,
         agent: Option<(String, String)>,
-        preset: Option<String>,
         folders: Option<Vec<String>>,
     ) -> Result<Reply, Error> {
         if archived == Some(true) {
             return Err(Error::invalid("an incognito chat isn't kept, so it can't be archived"));
         }
-        let switched = agent.is_some() || preset.is_some() || folders.is_some();
+        let switched = agent.is_some() || folders.is_some();
         let resolved = agent;
-        if let Some(p) = &preset
-            && self.config().chat.preset(p).is_none()
-        {
-            return Err(Error::invalid(format!("{p:?} isn't a preset")));
-        }
         {
             let mut m = self.chats.incognito.locked();
             let Some(c) = m.get_mut(&info.id) else { return Err(Error::missing("chat", &info.id)) };
@@ -2077,9 +1663,6 @@ impl Daemon {
             if let Some((a, prof)) = resolved {
                 c.agent = a;
                 c.profile = prof;
-            }
-            if let Some(p) = preset {
-                c.tools = p;
             }
             if let Some(f) = folders {
                 c.folders = f;
@@ -2129,11 +1712,11 @@ impl Daemon {
             true => None,
             false => db.current_conv(info.id.clone()).await.map_err(store_err)?,
         };
-        let fork_pending = conv.as_ref().is_some_and(|c| c.how == FORK_PENDING);
-        // Native continue: same agent and profile, a conversation id, and its last node on
-        // this branch (a fork's: the source's conversation, forked).
+        // Native continue: same agent and profile, a conversation id, and its last node in
+        // this conversation (not a fork's from before 2026-11-17: that is the source's).
         let native = conv.as_ref().filter(|c| {
-            c.agent == info.agent
+            c.how != FORK_PENDING
+                && c.agent == info.agent
                 && c.profile == info.profile
                 && c.conversation_id.is_some()
                 && c.node.as_ref().is_some_and(|n| branch.iter().any(|b| &b.id == n))
@@ -2153,11 +1736,8 @@ impl Daemon {
                 (chats::new_id(), None, branch.to_vec(), Some(how))
             }
         };
-        // `find`'s tools are the history ones alone, whatever the config says.
-        let preset = match info.tools.as_str() {
-            FIND_PRESET => ChatTools::default(),
-            t => config.chat.preset(t).unwrap_or_default(),
-        };
+        // `find`'s tools are the history ones alone.
+        let tools = ptyro_core::config::Chat::tools_for(&info.tools, !info.folders.is_empty());
         let dir = scratch(self, &info.id);
         ptyro_core::os::create_private_dirs(&dir)
             .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
@@ -2174,7 +1754,7 @@ impl Daemon {
         let session_id = SessionId::new();
         // The chat history tools (SPEC §22.10), from `ptyro mcp --chat` in the engine itself;
         // the daemon scopes what they see by the engine they run in.
-        let history = (config.chat.history_tool || info.tools == FIND_PRESET).then(|| {
+        let history = (config.chat.history_tool || info.tools == FIND_TOOLS).then(|| {
             let ptyro = std::env::current_exe()
                 .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
             serde_json::json!({
@@ -2188,32 +1768,15 @@ impl Daemon {
                 },
             })
         });
-        // The MCP servers the preset keeps on, from the agent's own configuration.
-        let (claude_mcp, missing) = match adapter.as_str() {
-            "claude" => claude_mcp_defs(&plan, &preset.mcp),
-            "codex" => {
-                // (One that is off in Codex is missing too: the chat can't use it.)
-                let known = mcp.clone().unwrap_or_default();
-                let missing = preset
-                    .mcp
-                    .iter()
-                    .filter(|m| !known.iter().any(|(n, _)| n == *m))
-                    .cloned()
-                    .collect();
-                (serde_json::Map::new(), missing)
-            }
-            _ => (serde_json::Map::new(), Vec::new()),
-        };
         let extra = ChatLaunch {
             incognito: info.incognito,
             history,
-            system: (info.tools == FIND_PRESET).then_some(FIND_PROMPT),
+            system: (info.tools == FIND_TOOLS).then_some(FIND_PROMPT),
             folders: info.folders.clone(),
             adapter: adapter.clone(),
-            claude_mcp,
         };
         let (args, params) =
-            preset_launch(&protocol, &preset, &dir, mcp.unwrap_or_default(), &readable, &extra);
+            tools_launch(&protocol, &tools, &dir, mcp.unwrap_or_default(), &readable, &extra);
         let handle = lookup::handle(&info.id, self.rec_ids().await.iter().map(String::as_str));
         let ws = self.workspace_name(&info.workspace);
         let session = self
@@ -2240,18 +1803,10 @@ impl Daemon {
                     command: None,
                     structured: true,
                     params,
-                    fork: fork_pending && resume.is_some(),
                 }),
             })
             .await?;
-        let helper = self.chats.helpers.locked().contains_key(&info.id);
-        if helper && adapter != "claude" && adapter != "codex" && adapter != "gemini" {
-            // A compare's answer (copied into the chat): ptyro removes the rest of its helper,
-            // but not this agent's own copy.
-            let what =
-                format!("{} may keep its own copy of this question and its answer", info.agent);
-            self.chat_notice(live, &info.id, NoticeLevel::Warn, &what).await;
-        } else if info.incognito && !helper && adapter != "claude" && adapter != "codex" {
+        if info.incognito && adapter != "claude" && adapter != "codex" {
             // Gemini's copy is in a folder named for the scratch folder: ptyro removes it
             // when the chat ends (`remove_chat_dirs`). Others' it can't find.
             let what = if adapter == "gemini" {
@@ -2262,15 +1817,6 @@ impl Daemon {
             } else {
                 format!("incognito: ptyro keeps nothing; {} may keep its own copy", info.agent)
             };
-            self.chat_notice(live, &info.id, NoticeLevel::Warn, &what).await;
-        }
-        if !missing.is_empty() {
-            let what = format!(
-                "MCP {} isn't in {}'s own configuration, so this chat goes without it: add it to {} (its own MCP settings), or take it out of the preset",
-                missing.join(", "),
-                info.agent,
-                info.agent
-            );
             self.chat_notice(live, &info.id, NoticeLevel::Warn, &what).await;
         }
         if let (Some(how), false) = (how, info.incognito) {
@@ -2298,7 +1844,7 @@ impl Daemon {
         if let (Some((_, n)), None) = (&seed, &resume) {
             let what =
                 format!("continued with {} from the saved conversation ({n} messages)", info.agent);
-            // On the branch, between the message and its answer; never sent to an engine.
+            // In the conversation, between the message and its answer; never sent to an engine.
             self.chat_notice(live, &info.id, NoticeLevel::Info, &what).await;
         }
         let prompt = match &seed {
@@ -2307,7 +1853,6 @@ impl Daemon {
         };
         live.prompt(&session, prompt);
         *live.given.locked() = Some(user.id.clone());
-        // (A native fork that can't resume the source's conversation is seeded too.)
         let resumed = resume.is_some();
         self.follow_engine(Arc::clone(live), session, conv_id, resumed, user.id.clone());
         Ok(())
@@ -2396,9 +1941,9 @@ impl Daemon {
                         if matches!(it.body, ChatBody::User { .. }) {
                             continue; // the chat wrote the person's message itself
                         }
-                        // Taken from it (a retry, an edit, a branch, another agent or folders):
-                        // what it still says (a killed agent's last stderr) isn't the branch now
-                        // shown. Only what it had begun is finished, in the record.
+                        // Taken from it (a retry, an edit, another agent or folders): what it
+                        // still says (a killed agent's last stderr) isn't the conversation now.
+                        // Only what it had begun is finished, in the record.
                         let ours = live
                             .engine
                             .locked()
@@ -2439,7 +1984,6 @@ impl Daemon {
                         if matches!(it.body, ChatBody::Notice { level: NoticeLevel::Error, .. }) {
                             said_error = true;
                         }
-                        let fresh = !nodes.contains_key(&it.id);
                         let entry = nodes.entry(it.id.clone()).or_insert_with(|| {
                             let parent = live.leaf.locked().clone();
                             let id = chats::new_id();
@@ -2447,17 +1991,6 @@ impl Daemon {
                             (id, parent, Instant::now() - FLUSH, None, it.body.clone())
                         });
                         entry.4 = it.body.clone();
-                        // An answer's first node may sit beside an earlier one (a retry, an
-                        // edit): say where the branch now has others.
-                        let first_of_turn = fresh
-                            && entry.1.as_ref().is_some_and(|p| {
-                                live.items.locked().get(p).is_some_and(|i| {
-                                    matches!(
-                                        i.body,
-                                        ChatBody::User { .. } | ChatBody::Notice { .. }
-                                    )
-                                })
-                            });
                         let node = ChatNode {
                             id: entry.0.clone(),
                             parent: entry.1.clone(),
@@ -2474,9 +2007,6 @@ impl Daemon {
                             }
                             entry.2 = Instant::now();
                             entry.3 = Some(it.body.clone());
-                        }
-                        if first_of_turn && keep {
-                            me.refresh_siblings(&live).await;
                         }
                         if let (ChatBody::TurnEnd { .. }, true) = (&it.body, ours) {
                             let leaf = live.leaf.locked().clone();
@@ -2782,11 +2312,12 @@ impl Daemon {
 
     // ── following ─────────────────────────────────────────────────────────────────────────
 
-    /// A client follows a chat: the branch now, then each change. Being shown clears unread.
+    /// A client follows a chat: the conversation now, then each change. Being shown clears
+    /// unread.
     pub(crate) async fn chat_follow(self: &Arc<Self>, addr: &str) -> Result<Arc<Live>, Error> {
         let info = self.find_chat(addr).await?;
         let db = self.chat_db()?;
-        // Not while a message is starting its engine: loading the branch then would replace
+        // Not while a message is starting its engine: loading the conversation then would replace
         // what that engine has already said.
         let lock = self.chats.lock_for(&info.id);
         let _one = lock.lock().await;
@@ -2794,8 +2325,6 @@ impl Daemon {
         if live.engine().is_none() && !info.incognito {
             db.branch(info.id.clone(), None).await.map_err(store_err)?;
             self.reload_branch(&live).await;
-        } else if live.siblings.locked().is_empty() && !info.incognito {
-            self.refresh_siblings(&live).await;
         }
         if info.unread > 0 && !info.incognito {
             let _ = db.set_unread(info.id.clone(), 0).await;
@@ -2816,13 +2345,9 @@ impl Daemon {
 
     pub(crate) fn chat_unfollow(self: &Arc<Self>, live: &Arc<Live>) {
         if live.viewers.fetch_sub(1, Ordering::SeqCst) == 1 {
-            // The last one left: a side chat goes, unless someone comes back to it.
-            self.drop_unfollowed_sides(Some(live.id.clone()));
             // An incognito chat whose agent has gone ends, unless someone is back soon (a
             // reload, a reconnect). One whose agent runs ends with it.
-            if self.incognito_of(&live.id).is_some()
-                && !self.chats.helpers.locked().contains_key(&live.id)
-            {
+            if self.incognito_of(&live.id).is_some() {
                 let (me, live) = (Arc::clone(self), Arc::clone(live));
                 tokio::spawn(async move {
                     tokio::time::sleep(INCOGNITO_GRACE).await;
@@ -2840,10 +2365,6 @@ impl Daemon {
     /// Whether a chat engine's attention of `kind` reaches you (`[chat] notify`, §22.11).
     pub(crate) fn chat_wants(&self, s: &Session, kind: AttentionKind) -> bool {
         let Some(chat) = s.meta.locked().place.chat.clone() else { return true };
-        // A compare's helper: its chat tells how it went (SPEC §22.7).
-        if self.chats.helpers.locked().contains_key(&chat) {
-            return false;
-        }
         let live = self.chats.get_live(&chat);
         // A resume being retried: its error isn't news. A permission request is: a failed
         // resume never asks, and this one isn't raised again once its answer begins.
@@ -3172,38 +2693,6 @@ fn remove_codex_rollouts(home: &std::path::Path, chat: &str, threads: &[String])
     }
 }
 
-/// The MCP servers `names`, as Claude's own config defines them (`<config dir>/.claude.json`,
-/// else `~/.claude.json`: `mcpServers`), and the names it doesn't have.
-fn claude_mcp_defs(
-    plan: &ptyro_agents::profile::Plan,
-    names: &[String],
-) -> (serde_json::Map<String, serde_json::Value>, Vec<String>) {
-    if names.is_empty() {
-        return (serde_json::Map::new(), Vec::new());
-    }
-    let file = plan
-        .set
-        .iter()
-        .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
-        .map(|(_, d)| PathBuf::from(d).join(".claude.json"))
-        .unwrap_or_else(|| ptyro_core::config::expand_home("~/.claude.json"));
-    let all: serde_json::Value = std::fs::read_to_string(file)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
-    let mut found = serde_json::Map::new();
-    let mut missing = Vec::new();
-    for n in names {
-        match all["mcpServers"].get(n) {
-            Some(def) => {
-                found.insert(n.clone(), def.clone());
-            }
-            None => missing.push(n.clone()),
-        }
-    }
-    (found, missing)
-}
-
 /// The folders a folder-limited Codex chat must still read to start (§20.8): the profile's
 /// `CODEX_HOME` and the folder of the `codex` it runs (`program`: found, as `agent_program`;
 /// with the `node` that runs it when it is a script).
@@ -3224,7 +2713,6 @@ fn codex_needs(plan: &ptyro_agents::profile::Plan, program: &[String]) -> Vec<Pa
     v
 }
 
-/// A preset as launch arguments and driver fields, per protocol (§22.5, CHAT0 §20.8).
 /// What a chat's history tools may see.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct HistoryScope {
@@ -3260,7 +2748,7 @@ fn interleave(lists: Vec<Vec<ChatHit>>) -> Vec<ChatHit> {
     }
 }
 
-/// What a chat's launch adds to its preset.
+/// What a chat's launch adds to what it may use.
 #[derive(Debug, Default)]
 struct ChatLaunch {
     /// Nothing kept by the agent either, where it can say so (SPEC §22.9).
@@ -3269,12 +2757,10 @@ struct ChatLaunch {
     history: Option<serde_json::Value>,
     /// Instead of the chat system prompt (`chat find`'s).
     system: Option<&'static str>,
-    /// The chat's own folders: read with the preset's `dirs` when the preset reads (CHAT4).
+    /// The chat's own folders (CHAT4).
     folders: Vec<String>,
     /// The agent's adapter (`gemini`: the policy flags; another ACP agent gets none).
     adapter: String,
-    /// The preset's MCP servers as Claude's own config defines them, by name.
-    claude_mcp: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The chat history tools, by their names in Claude.
@@ -3282,7 +2768,7 @@ const HISTORY_TOOLS: [&str; 3] =
     ["mcp__ptyro__chat_search", "mcp__ptyro__chat_read", "mcp__ptyro__chat_list"];
 
 /// `chat find`'s engine: no tools but the history ones, and this prompt.
-const FIND_PRESET: &str = ptyro_core::config::Chat::FIND;
+const FIND_TOOLS: &str = ptyro_core::config::Chat::FIND;
 const FIND_PROMPT: &str = "You answer questions about the user's past chats, and nothing else. \
     Use chat_search (try several phrasings and words), then chat_read around the best hits, \
     before you answer. Answer briefly, and cite every fact with the message it comes from, \
@@ -3375,7 +2861,8 @@ fn codex_mcp_off(s: &serde_json::Value) -> Option<(String, serde_json::Value)> {
     Some((name.to_owned(), off.into()))
 }
 
-fn preset_launch(
+/// What a chat may use as launch arguments and driver fields, per protocol (§22.5, CHAT0 §20.8).
+fn tools_launch(
     protocol: &str,
     p: &ChatTools,
     dir: &std::path::Path,
@@ -3384,16 +2871,7 @@ fn preset_launch(
     extra: &ChatLaunch,
 ) -> (Vec<String>, Option<serde_json::Value>) {
     use serde_json::json;
-    let mut dirs: Vec<String> = p
-        .dirs
-        .iter()
-        .map(|d| ptyro_core::config::expand_home(d).to_string_lossy().into_owned())
-        .collect();
-    for f in &extra.folders {
-        if !dirs.contains(f) {
-            dirs.push(f.clone());
-        }
-    }
+    let dirs = &extra.folders;
     match protocol {
         "stream-json" => {
             let mut tools: Vec<String> = Vec::new();
@@ -3406,30 +2884,20 @@ fn preset_launch(
                 // No allow for the read tools: a bare allow reads anywhere (CHAT0).
                 tools.extend(["Read".into(), "Glob".into(), "Grep".into()]);
             }
-            if p.shell {
-                tools.push("Bash".into());
-                allowed.push("Bash".into());
-            }
-            for a in &p.allow {
-                tools.push(a.clone());
-                allowed.push(a.clone());
-            }
             if extra.history.is_some() {
                 allowed.extend(HISTORY_TOOLS.map(str::to_owned));
             }
-            // Every tool of a server the preset names (`mcp__<server>`).
-            allowed.extend(extra.claude_mcp.keys().map(|n| format!("mcp__{n}")));
             let mut v = vec!["--tools".to_owned(), tools.join(",")];
             if !allowed.is_empty() {
                 v.extend(["--allowedTools".into(), allowed.join(",")]);
             }
             if p.read {
-                for d in &dirs {
+                for d in dirs {
                     v.extend(["--add-dir".into(), d.clone()]);
                 }
             }
             v.push("--strict-mcp-config".into());
-            let mut servers = extra.claude_mcp.clone();
+            let mut servers = serde_json::Map::new();
             if let Some(h) = &extra.history {
                 servers.insert("ptyro".into(), h.clone());
             }
@@ -3437,10 +2905,10 @@ fn preset_launch(
                 v.push("--safe-mode".into());
             } else {
                 // `--safe-mode` drops even an explicit MCP server (verified, Claude 2.1.314):
-                // with MCP servers, the same customizations are kept out by naming no setting
-                // sources and no slash commands (CLAUDE.md, hooks, skills, plugins). The servers
-                // go in a file only its owner reads: a server's definition can carry its
-                // tokens, and a command line is anyone's to see (`ps`, a session's argv).
+                // with the history tools' server, the same customizations are kept out by naming
+                // no setting sources and no slash commands (CLAUDE.md, hooks, skills, plugins).
+                // The server goes in a file only its owner reads: a command line is anyone's to
+                // see (`ps`, a session's argv), and its entry names the daemon's socket.
                 let file = dir.join("mcp.json");
                 let _ = write_private(&file, &json!({ "mcpServers": servers }).to_string());
                 v.extend([
@@ -3458,12 +2926,11 @@ fn preset_launch(
             (v, None)
         }
         "app-server" => {
-            // Every server of the user's is switched off by name, but the ones the preset keeps.
-            let mcp: serde_json::Map<String, serde_json::Value> =
-                codex_mcp.into_iter().filter(|(n, _)| !p.mcp.contains(n)).collect();
+            // Every server of the user's is switched off by name.
+            let mcp: serde_json::Map<String, serde_json::Value> = codex_mcp.into_iter().collect();
             let mut config = json!({
                 "web_search": if p.web { "live" } else { "disabled" },
-                "features": { "shell_tool": p.read || p.shell, "unified_exec": p.shell, "hooks": false },
+                "features": { "shell_tool": p.read, "unified_exec": false, "hooks": false },
                 "mcp_servers": mcp,
             });
             if let Some(server) = &extra.history {
@@ -3477,8 +2944,8 @@ fn preset_launch(
             if extra.incognito {
                 params["ephemeral"] = json!(true);
             }
-            // A `read` chat always gets the folder-limited profile, folders or none: the
-            // read-only sandbox alone still reads every file (CHAT0).
+            // A chat that reads its folders gets the folder-limited profile: the read-only
+            // sandbox alone still reads every file (CHAT0).
             if p.read {
                 // A folder-limited read: a profile that denies $HOME and re-allows the folders and
                 // what Codex needs to start; no sandbox parameter (it would win over it).
@@ -3495,16 +2962,13 @@ fn preset_launch(
                     fs.insert(d.to_string_lossy().into_owned(), json!("read"));
                 }
                 fs.insert(dir.to_string_lossy().into_owned(), json!("write"));
-                for d in &dirs {
+                for d in dirs {
                     fs.insert(d.clone(), json!("read"));
                 }
                 config["default_permissions"] = json!("ptyro-chat");
                 config["permissions"] =
                     json!({ "ptyro-chat": { "extends": ":read-only", "filesystem": fs } });
                 params["sandbox"] = serde_json::Value::Null;
-            } else if p.shell {
-                // Commands run in Codex's sandbox: they write only the chat's scratch folder.
-                params["sandbox"] = json!("workspace-write");
             } else {
                 params["sandbox"] = json!("read-only");
             }
@@ -3520,7 +2984,7 @@ fn preset_launch(
                 return (Vec::new(), params);
             }
             // Gemini's policy engine (read from its source, 0.66.0): deny everything, then allow
-            // what the preset names. Loaded as an admin policy, the tier above the user's own
+            // what the chat may use. Loaded as an admin policy, the tier above the user's own
             // rules and "always allow" answers, so nothing of theirs widens a chat; and as the
             // user policy too, which replaces theirs, for when a system policy makes Gemini
             // ignore `--admin-policy`.
@@ -3538,16 +3002,11 @@ fn preset_launch(
                         .map(str::to_owned),
                 );
             }
-            if p.shell {
-                allow.push("run_shell_command".into());
-            }
-            allow.extend(p.allow.iter().cloned());
             // MCP tools are `mcp_<server>_<tool>`.
             let mut names: Vec<String> = Vec::new();
             if extra.history.is_some() {
                 names.push("ptyro".into());
             }
-            names.extend(p.mcp.iter().cloned());
             allow.extend(names.iter().map(|n| format!("mcp_{n}_*")));
             for a in allow {
                 rules.push_str(&format!(
@@ -3571,7 +3030,7 @@ fn preset_launch(
                 names.join(","),
             ];
             if p.read {
-                for d in &dirs {
+                for d in dirs {
                     v.extend(["--include-directories".into(), d.clone()]);
                 }
             }
@@ -3585,23 +3044,11 @@ fn preset_launch(
                 }
             }
             if p.read {
-                for d in &dirs {
+                for d in dirs {
                     for t in ["read", "glob", "grep"] {
                         rules.push(json!({ "permission": t, "pattern": format!("{d}/**"), "action": "allow" }));
                     }
                 }
-            }
-            if p.shell {
-                rules.push(json!({ "permission": "bash", "pattern": "*", "action": "allow" }));
-            }
-            // OpenCode names a server's tools `<server>_<tool>` (its docs; not run).
-            for m in &p.mcp {
-                rules.push(
-                    json!({ "permission": format!("{m}_*"), "pattern": "*", "action": "allow" }),
-                );
-            }
-            for a in &p.allow {
-                rules.push(json!({ "permission": a, "pattern": "*", "action": "allow" }));
             }
             (Vec::new(), Some(json!({ "permission": rules })))
         }
@@ -3609,7 +3056,7 @@ fn preset_launch(
     }
 }
 
-/// The shown branch as Markdown (`ptyro chat export`).
+/// The conversation as Markdown (`ptyro chat export`).
 pub(crate) fn markdown(info: &ChatInfo, nodes: &[ChatNode]) -> String {
     let mut out = format!("# {}\n\n", info.label());
     out.push_str(&format!("*{}@{} · {}*\n\n", info.agent, info.profile, info.addr()));
@@ -3628,6 +3075,7 @@ pub(crate) fn markdown(info: &ChatInfo, nodes: &[ChatNode]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ptyro_core::config::Chat;
 
     fn node(id: &str, body: ChatBody) -> ChatNode {
         ChatNode { id: id.into(), parent: None, at_ms: 0, body }
@@ -3647,10 +3095,10 @@ mod tests {
     }
 
     #[test]
-    fn presets_per_agent() {
+    fn tools_per_agent() {
         let dir = std::path::Path::new("/d/chat/c1");
-        let chat = ChatTools { web: true, ..ChatTools::default() };
-        let (a, p) = preset_launch("stream-json", &chat, dir, vec![], &[], &ChatLaunch::default());
+        let chat = Chat::tools_for("chat", false);
+        let (a, p) = tools_launch("stream-json", &chat, dir, vec![], &[], &ChatLaunch::default());
         assert_eq!(
             &a[..4],
             ["--tools", "WebSearch,WebFetch", "--allowedTools", "WebSearch,WebFetch"]
@@ -3660,20 +3108,19 @@ mod tests {
                 && a.contains(&"--strict-mcp-config".into())
                 && p.is_none()
         );
-        let none = ChatTools::default();
-        let (a, _) = preset_launch("stream-json", &none, dir, vec![], &[], &ChatLaunch::default());
+        // A chat made with no tools before 2026-11-17 keeps none.
+        let none = Chat::tools_for("none", true);
+        let (a, _) = tools_launch("stream-json", &none, dir, vec![], &[], &ChatLaunch::default());
         assert_eq!(&a[..2], ["--tools", ""]);
         assert!(!a.contains(&"--allowedTools".into()));
-        let read = ChatTools {
-            web: true,
-            read: true,
-            dirs: vec!["/notes".into()],
-            ..ChatTools::default()
-        };
-        let (a, _) = preset_launch("stream-json", &read, dir, vec![], &[], &ChatLaunch::default());
+        // A chat given folders reads them, and nothing else.
+        let read = Chat::tools_for("chat", true);
+        let notes = ChatLaunch { folders: vec!["/notes".into()], ..ChatLaunch::default() };
+        let (a, _) = tools_launch("stream-json", &read, dir, vec![], &[], &notes);
+        assert_eq!(a[1], "WebSearch,WebFetch,Read,Glob,Grep");
         assert!(a.windows(2).any(|w| w == ["--add-dir", "/notes"]));
         assert_eq!(a[3], "WebSearch,WebFetch", "the read tools are not allowed outright");
-        let (_, p) = preset_launch(
+        let (_, p) = tools_launch(
             "app-server",
             &chat,
             dir,
@@ -3685,15 +3132,10 @@ mod tests {
         assert_eq!(p["sandbox"], "read-only");
         assert_eq!(p["config"]["web_search"], "live");
         assert_eq!(p["config"]["features"]["shell_tool"], false);
+        assert_eq!(p["config"]["features"]["unified_exec"], false);
         assert_eq!(p["config"]["mcp_servers"]["GitHub"]["enabled"], false);
-        let (_, p) = preset_launch(
-            "app-server",
-            &read,
-            dir,
-            vec![],
-            &["/opt/codex/bin".into()],
-            &ChatLaunch::default(),
-        );
+        let (_, p) =
+            tools_launch("app-server", &read, dir, vec![], &["/opt/codex/bin".into()], &notes);
         let p = p.unwrap();
         assert!(
             p["sandbox"].is_null()
@@ -3703,15 +3145,14 @@ mod tests {
             p["config"]["permissions"]["ptyro-chat"]["filesystem"]["/opt/codex/bin"],
             "read"
         );
-        // `read` with no folders: still the limited profile, never the read-only sandbox (which
-        // reads every file).
-        let bare = ChatTools { web: true, read: true, ..ChatTools::default() };
-        let (_, p) = preset_launch("app-server", &bare, dir, vec![], &[], &ChatLaunch::default());
-        assert!(p.unwrap()["sandbox"].is_null());
-        let (_, p) = preset_launch("opencode", &chat, dir, vec![], &[], &ChatLaunch::default());
+        let (_, p) = tools_launch("opencode", &chat, dir, vec![], &[], &ChatLaunch::default());
         let rules = p.unwrap()["permission"].as_array().unwrap().clone();
         assert_eq!(rules[0]["action"], "deny");
         assert!(rules.iter().any(|r| r["permission"] == "websearch" && r["action"] == "allow"));
+        let (_, p) = tools_launch("opencode", &read, dir, vec![], &[], &notes);
+        let rules = p.unwrap()["permission"].as_array().unwrap().clone();
+        assert!(rules.iter().any(|r| r["pattern"] == "/notes/**"));
+        assert!(!rules.iter().any(|r| r["permission"] == "bash"));
     }
 
     #[test]
@@ -3742,79 +3183,49 @@ mod tests {
     }
 
     #[test]
-    fn shell_mcp_and_folders_per_agent() {
+    fn the_history_tools_and_folders_per_agent() {
         let t = tempfile::tempdir().unwrap();
         let dir = t.path();
-        let shell = ChatTools {
-            web: true,
-            read: true,
-            shell: true,
-            mcp: vec!["github".into()],
-            ..ChatTools::default()
-        };
-        let mut gh = serde_json::Map::new();
-        gh.insert("github".into(), serde_json::json!({ "type": "stdio", "command": "gh-mcp" }));
-        let extra = ChatLaunch {
+        let read = Chat::tools_for("chat", true);
+        let history = serde_json::json!({ "type": "stdio", "command": "/bin/ptyro", "args": ["mcp", "--chat"], "env": { "PTYRO_CHAT_ID": "c1" } });
+        // Claude: the history tools allowed; their server in --mcp-config (so no --safe-mode,
+        // which would drop it), in a file only its owner reads, never on the command line.
+        let claude = ChatLaunch {
             folders: vec!["/notes".into()],
-            claude_mcp: gh,
+            history: Some(history.clone()),
             adapter: "claude".into(),
             ..ChatLaunch::default()
         };
-        // Claude: Bash among the tools and allowed; the named server in --mcp-config (so no
-        // --safe-mode, which would drop it); the chat's folder added.
-        let (a, _) = preset_launch("stream-json", &shell, dir, vec![], &[], &extra);
-        assert_eq!(a[1], "WebSearch,WebFetch,Read,Glob,Grep,Bash");
-        assert_eq!(a[3], "WebSearch,WebFetch,Bash,mcp__github");
-        assert!(a.windows(2).any(|w| w == ["--add-dir", "/notes"]));
+        let (a, _) = tools_launch("stream-json", &read, dir, vec![], &[], &claude);
+        assert!(a[3].starts_with("WebSearch,WebFetch,mcp__ptyro__chat_search"));
         assert!(!a.contains(&"--safe-mode".into()));
-        // Its definition (a server's tokens, maybe) in a file only its owner reads, never on
-        // the command line.
         let cfg = &a[a.iter().position(|x| x == "--mcp-config").unwrap() + 1];
         assert_eq!(std::path::Path::new(cfg), dir.join("mcp.json"));
-        assert!(std::fs::read_to_string(cfg).unwrap().contains("gh-mcp"));
-        assert!(!a.iter().any(|x| x.contains("gh-mcp")));
+        assert!(std::fs::read_to_string(cfg).unwrap().contains("/bin/ptyro"));
+        assert!(!a.iter().any(|x| x.contains("/bin/ptyro")));
         if let Some(mode) = ptyro_core::os::mode(&std::fs::metadata(cfg).unwrap()) {
             assert_eq!(mode & 0o777, 0o600);
         }
-        // Codex: the shell on, the named server kept, the others off.
-        let (_, p) = preset_launch(
-            "app-server",
-            &shell,
-            dir,
-            ["github", "jira"].map(|n| (n.into(), serde_json::json!({ "enabled": false }))).into(),
-            &[],
-            &extra,
-        );
-        let p = p.unwrap();
-        assert_eq!(p["config"]["features"]["unified_exec"], true);
-        assert!(p["config"]["mcp_servers"].get("github").is_none());
-        assert_eq!(p["config"]["mcp_servers"]["jira"]["enabled"], false);
-        assert_eq!(p["config"]["permissions"]["ptyro-chat"]["filesystem"]["/notes"], "read");
-        let only_shell = ChatTools { shell: true, ..ChatTools::default() };
-        let (_, p) = preset_launch("app-server", &only_shell, dir, vec![], &[], &extra);
-        assert_eq!(p.unwrap()["sandbox"], "workspace-write");
-        // Gemini: an admin policy (and the user one), no extensions, only the named servers,
+        // Gemini: an admin policy (and the user one), no extensions, only the history server,
         // the folders as its workspace, the history server in `session/new`.
-        let history = serde_json::json!({ "type": "stdio", "command": "/bin/ptyro", "args": ["mcp", "--chat"], "env": { "PTYRO_CHAT_ID": "c1" } });
         let gem = ChatLaunch {
             folders: vec!["/notes".into()],
             adapter: "gemini".into(),
             history: Some(history),
             ..ChatLaunch::default()
         };
-        let (a, p) = preset_launch("acp", &shell, dir, vec![], &[], &gem);
+        let (a, p) = tools_launch("acp", &read, dir, vec![], &[], &gem);
         let policy = dir.join("policy.toml").to_string_lossy().into_owned();
         assert!(a.windows(2).any(|w| w == ["--admin-policy".to_owned(), policy.clone()]));
         assert!(a.windows(2).any(|w| w == ["--policy".to_owned(), policy.clone()]));
         assert!(a.windows(2).any(|w| w == ["--extensions", "none"]));
-        assert!(a.windows(2).any(|w| w == ["--allowed-mcp-server-names", "ptyro,github"]));
+        assert!(a.windows(2).any(|w| w == ["--allowed-mcp-server-names", "ptyro"]));
         assert!(a.windows(2).any(|w| w == ["--include-directories", "/notes"]));
         let rules = std::fs::read_to_string(&policy).unwrap();
-        for tool in
-            ["run_shell_command", "read_file", "google_web_search", "mcp_ptyro_*", "mcp_github_*"]
-        {
+        for tool in ["read_file", "google_web_search", "mcp_ptyro_*"] {
             assert!(rules.contains(&format!("toolName = \"{tool}\"")), "{tool}: {rules}");
         }
+        assert!(!rules.contains("run_shell_command"));
         let p = p.unwrap();
         assert_eq!(p["mcpServers"][0]["name"], "ptyro");
         assert_eq!(
@@ -3822,24 +3233,18 @@ mod tests {
             serde_json::json!({ "name": "PTYRO_CHAT_ID", "value": "c1" })
         );
         // The default chat on Gemini: web only, and not one MCP server (Gemini's "none").
-        let chat = ChatTools { web: true, ..ChatTools::default() };
+        let chat = Chat::tools_for("chat", false);
         let plain = ChatLaunch { adapter: "gemini".into(), ..ChatLaunch::default() };
-        let (a, p) = preset_launch("acp", &chat, dir, vec![], &[], &plain);
+        let (a, p) = tools_launch("acp", &chat, dir, vec![], &[], &plain);
         assert!(a.windows(2).any(|w| w == ["--allowed-mcp-server-names", ""]) && p.is_none());
         assert!(!a.contains(&"--include-directories".into()));
         let rules = std::fs::read_to_string(&policy).unwrap();
         assert!(!rules.contains("read_file") && rules.contains("google_web_search"));
         // Another ACP agent: told nothing it wouldn't understand.
         let other = ChatLaunch { adapter: "generic".into(), ..ChatLaunch::default() };
-        assert!(preset_launch("acp", &shell, dir, vec![], &[], &other).0.is_empty());
-        // OpenCode: bash allowed, the named server's tools.
-        let (_, p) = preset_launch("opencode", &shell, dir, vec![], &[], &extra);
-        let rules = p.unwrap()["permission"].as_array().unwrap().clone();
-        assert!(rules.iter().any(|r| r["permission"] == "bash" && r["action"] == "allow"));
-        assert!(rules.iter().any(|r| r["permission"] == "github_*"));
-        assert!(rules.iter().any(|r| r["pattern"] == "/notes/**"));
-        assert!(best_effort("gemini", &chat) && !best_effort("claude", &shell));
-        assert!(best_effort("codex", &shell) && !best_effort("codex", &chat));
+        assert!(tools_launch("acp", &read, dir, vec![], &[], &other).0.is_empty());
+        assert!(best_effort("gemini", &chat) && !best_effort("claude", &read));
+        assert!(best_effort("codex", &read) && !best_effort("codex", &chat));
     }
 
     #[test]
@@ -3867,8 +3272,6 @@ mod tests {
             pinned: false,
             archived: false,
             incognito: false,
-            forked: false,
-            side_of: None,
             leaf: None,
             nodes: 3,
             unread: 0,
@@ -3880,10 +3283,6 @@ mod tests {
             engine: None,
             folders: Vec::new(),
             best_effort: false,
-            shell: false,
-            comparing: None,
-            source: None,
-            source_dir: None,
         };
         let md = markdown(&info, &b);
         assert!(

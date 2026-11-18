@@ -39,8 +39,6 @@ async fn main() {
             agent: "claude".into(),
             profile: "default".into(),
             tools: "chat".into(),
-            forked_from: None,
-            side_of: None,
             folders: Vec::new(),
         })
         .await

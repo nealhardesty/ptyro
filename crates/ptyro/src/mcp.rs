@@ -105,18 +105,12 @@ async fn chat_call(client: &Client, name: &str, a: &Value) -> Result<Value, Erro
                 None => (chat.clone(), None),
             };
             let around = a["around"].as_u64().unwrap_or(6).min(40) as usize;
-            let Reply::ChatTranscript { info, nodes, .. } = client
-                .request(Request::ChatRead {
-                    chat: c,
-                    all: node.is_some(),
-                    from: None,
-                    limit: None,
-                })
-                .await?
+            let Reply::ChatTranscript { info, nodes, .. } =
+                client.request(Request::ChatRead { chat: c, from: None, limit: None }).await?
             else {
                 return Err(Error::internal("unexpected reply"));
             };
-            // The branch through the node asked about (or the shown one's end).
+            // The conversation up to the node asked about (or all of it).
             let path: Vec<&ptyro_core::chats::ChatNode> = match &node {
                 Some(n) => {
                     let by_id: std::collections::HashMap<&str, &ptyro_core::chats::ChatNode> =
@@ -161,7 +155,7 @@ async fn chat_call(client: &Client, name: &str, a: &Value) -> Result<Value, Erro
                 archived: false,
                 limit: Some(a["limit"].as_u64().unwrap_or(20).min(100) as u32),
             };
-            let Reply::Chats { chats } = client.request(req).await? else {
+            let Reply::Chats { chats, .. } = client.request(req).await? else {
                 return Err(Error::internal("unexpected reply"));
             };
             Ok(json!({ "chats": chats.iter().filter(|c| !c.incognito).map(|c| json!({

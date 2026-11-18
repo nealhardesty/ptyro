@@ -1,6 +1,5 @@
-//! Keeping secrets out of what is sent to a small model (a chat's title, an imported chat's
-//! lines): the profile's secret values and anything that looks like a credential are replaced
-//! before the text leaves.
+//! Keeping secrets out of what is sent to a small model (a chat's title): the profile's secret
+//! values and anything that looks like a credential are replaced before the text leaves.
 
 use ptyro_core::session::brief;
 

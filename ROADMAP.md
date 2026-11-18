@@ -2704,7 +2704,7 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
     TUI and web, `make spike-chat-meaning` (SPEC §22.10 tier 3). Left: compare the embedding with
     model2vec's Python on the real model, once the owner agrees to download it, and tune the 0.3
     cosine floor on real chats.
-  - **Left (compare and import):** a helper's permission card is denied rather than shown (the
+  - **Left (compare and import; moot since both were removed 2026-11-17):** a helper's permission card is denied rather than shown (the
     chat's own agent's cards show as ever); OpenCode's history and ACP `session/list` are not
     imported (OpenCode isn't installed here to read its storage); Gemini's import is read from its
     source only (no Gemini history on this machine); a rewound Gemini part stays in ptyro's copy
@@ -2729,6 +2729,26 @@ rows, its `[chat]` settings schema entries and its `make` targets, and the miles
 - [ ] **CHAT6 Sync and merge across machines** (R-CHAT-14; **needs its own brainstorm first**) **L+**
   - Merge chats across every linked machine (§22.15 lists what CHAT1's schema already guarantees and
     what is open). Do not start before that brainstorm's decisions are in SPEC §22.
+
+**Removed (2026-11-17): chat trims, pare-down batch 7.** Deep, not wide
+(`docs/review-2026-11/pare-down.md`): the owner keeps chat and will invest in it on a smaller,
+linear base. Gone from every surface (CLI, TUI, web): asking several agents and picking one
+(`chat compare`, `chat pick`, `chat new --compare`, `/compare`, `/pick`; CHAT5, R-CHAT-10),
+importing the agents' own histories (`chat import`, `chat ls --imported`, `[chat] import`, `⇣`;
+CHAT5, R-CHAT-12), tool presets (`chat presets`, `--preset`/`--tools`, `/tools`, `[chat] preset`,
+`[chat.tools.*]`; CHAT4, R-CHAT-09: every chat searches the web and reads the folders it was given),
+and branches, forks and side chats (`chat branch`, `chat fork`, `chat keep`, `chat show --all` and
+`--branches`, `/branch`, `/fork`, `/side`, `/keep`, the `‹ 2/3 ›` navigator, `Alt-←/→` in a chat
+and `f`, `i`, `I` in the chat list, now unbound; CHAT2, R-CHAT-02, R-CHAT-04). **Retry and edit
+stay, linear:** a retry's new answer replaces the last one, an edit replaces your last message and
+its answer, and only the last turn can be retried or edited (an earlier one is refused: send a new
+message instead). **Nothing of `chat.db`'s text is deleted:** a chat that had branches opens on
+the branch it last showed (`leaf`), the others stay in the file, unreachable; forks, side chats
+and imported chats already there are ordinary chats (a message to an imported one carries it on);
+search finds only what a chat shows; `chat.db` v7 drops the `import` table (file offsets, no text)
+after a private copy of the file beside it (`chat.db.bak-v6`). Meaning and word search, incognito, `chat find` (`ptyro mcp`)
+and chat → task stay. Protocol 1.47 (six requests retired; `Chats.incognito` carries the new-chat
+default that `chat_presets` did); `chat.preset`, `chat.import` and `chat.tools` are retired keys.
 
 **Done when (milestone):** the CHAT1…CHAT4 demos run in the TUI, on Linux and macOS, and a chat on one
 machine is used from the other; CHAT5 and CHAT6 are separate.

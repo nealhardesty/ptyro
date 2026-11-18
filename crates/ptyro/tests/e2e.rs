@@ -363,6 +363,13 @@ async fn a_removed_request_is_answered_with_what_went() {
         (serde_json::json!({ "t": "project_suggest", "addr": "p" }), "setup suggestions"),
         (serde_json::json!({ "t": "project_line_endings", "addr": "p" }), "rewriting"),
         (serde_json::json!({ "t": "last_launch", "workspace": "" }), "quick new"),
+        // The chat trims (the same day): branches, forks, presets, compare and import.
+        (serde_json::json!({ "t": "chat_branch", "chat": "c", "to": "n" }), "chat branches"),
+        (serde_json::json!({ "t": "chat_fork", "chat": "c", "side": true }), "forks and side"),
+        (serde_json::json!({ "t": "chat_presets" }), "chat tool presets"),
+        (serde_json::json!({ "t": "chat_compare", "chat": "c" }), "comparing agents' answers"),
+        (serde_json::json!({ "t": "chat_pick", "chat": "c" }), "comparing agents' answers"),
+        (serde_json::json!({ "t": "chat_import", "dry_run": true }), "importing the agents'"),
     ]
     .into_iter()
     .enumerate()

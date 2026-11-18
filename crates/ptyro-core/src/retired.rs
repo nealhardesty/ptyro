@@ -108,6 +108,21 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "session summaries were removed; a chat's titler is `chat.title_command`",
     },
+    Retired {
+        key: "chat.preset",
+        removed: "2026-11-17",
+        why: "chat tool presets were removed; every chat may search the web and read the folders you give it",
+    },
+    Retired {
+        key: "chat.tools",
+        removed: "2026-11-17",
+        why: "chat tool presets were removed; every chat may search the web and read the folders you give it",
+    },
+    Retired {
+        key: "chat.import",
+        removed: "2026-11-17",
+        why: "importing your agents' own histories was removed; chats imported before stay, as ordinary chats",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when

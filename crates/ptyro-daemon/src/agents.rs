@@ -976,7 +976,6 @@ impl Daemon {
                     // agent's own terminal UI, in the same conversation.
                     structured: m.structured.is_some() && m.place.chat.is_some(),
                     params: None,
-                    fork: false,
                 }),
             })
             .await?;

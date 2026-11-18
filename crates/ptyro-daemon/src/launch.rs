@@ -33,8 +33,6 @@ pub struct AgentStart {
     pub structured: bool,
     /// More fields for the structured driver's start call (a chat's tool limits).
     pub params: Option<serde_json::Value>,
-    /// With `resume`: fork that conversation instead of continuing it (a chat's fork).
-    pub fork: bool,
 }
 
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
@@ -490,7 +488,6 @@ impl Daemon {
                     resume: a.resume.clone(),
                     session_id: session_id.clone(),
                     params: a.params.clone(),
-                    fork: a.fork,
                 };
                 let http = (protocol == "opencode")
                     .then(free_port)

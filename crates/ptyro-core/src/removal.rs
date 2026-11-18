@@ -5,8 +5,7 @@
 //! by the test below).
 
 /// `chat rm`: the daemon asks with it (`ChatDelete` unconfirmed).
-pub const CHAT: &str =
-    "It goes from every list, on every device, with its side chats. This can't be undone.";
+pub const CHAT: &str = "It goes from every list, on every device. This can't be undone.";
 /// `project rm`.
 pub const PROJECT: &str = "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.";
 /// Letting a project's running sessions go: after `PROJECT` in `project rm --release`, and in

@@ -923,7 +923,6 @@ impl Daemon {
             command: None,
             structured: false,
             params: None,
-            fork: false,
         });
         if let Some(r) = &reservation {
             self.pend_shelf(id, r, scratch.clone(), asked_loose);
@@ -1006,7 +1005,6 @@ impl Daemon {
             // Only a chat's engine stays structured (see `resume`).
             structured: meta.structured.is_some() && meta.place.chat.is_some(),
             params: None,
-            fork: false,
         });
         let new = self
             .launch(Launch {
@@ -1172,14 +1170,8 @@ impl Daemon {
             | Request::ChatExport { .. }
             | Request::ChatRetry { .. }
             | Request::ChatEdit { .. }
-            | Request::ChatBranch { .. }
-            | Request::ChatFork { .. }
             | Request::ChatSearch { .. }
             | Request::ChatTask { .. }
-            | Request::ChatPresets
-            | Request::ChatCompare { .. }
-            | Request::ChatPick { .. }
-            | Request::ChatImport { .. }
             | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }

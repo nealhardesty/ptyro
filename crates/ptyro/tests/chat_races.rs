@@ -106,7 +106,7 @@ fn a_change_of_agent_waits_for_the_answer() {
     // Like a retry, a change that needs a new agent is refused mid-answer, saying what to do.
     for args in [
         vec!["chat", "set", addr.as_str(), "--agent", "codex"],
-        vec!["chat", "set", addr.as_str(), "--preset", "none"],
+        vec!["chat", "set", addr.as_str(), "--no-folders"],
     ] {
         let out = w.cli(&args);
         assert!(!out.status.success(), "{args:?}");
@@ -171,13 +171,10 @@ fn an_incognito_chat_lasts_while_it_is_read() {
             .request(Request::ChatNew {
                 workspace: None,
                 agent: None,
-                preset: None,
                 title: None,
                 prompt: None,
                 incognito: Some(true),
                 folders: Vec::new(),
-                compare: Vec::new(),
-                confirmed: false,
             })
             .await
             .unwrap()
