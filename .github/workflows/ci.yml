@@ -64,23 +64,6 @@ jobs:
           make rust-install
           make test-wsl
 
-  # Windows itself (WIN13): `make test`, every crate's tests natively, native daemons in ConPTY
-  # with the packaged ConPTY beside them; a failing test runs again once and flakes are counted
-  # (the job summary names them). Line endings stay as committed: fixtures and scripts compare
-  # bytes.
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 120
-    defaults:
-      run: { shell: bash }
-    steps:
-      - run: git config --global core.autocrlf false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { persist-credentials: false }
-      - run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: command -v make || choco install make -y --no-progress
-      - run: make test
 
   # The oldest compiler `rust-version` claims: what `cargo install` users may have.
   msrv:

@@ -8,9 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ptyro_agents::catalog;
 use ptyro_agents::setup::login::{self, LoginRow, LoginState};
-use ptyro_agents::setup::{self, Host, Where};
-use ptyro_client::wsl_setup;
-use ptyro_core::paths::Paths;
+use ptyro_agents::setup::{self, Host};
 use ptyro_core::{Error, ErrorCode};
 
 use crate::cli::Ctx;
@@ -19,14 +17,12 @@ pub struct LoginArgs {
     pub names: Vec<String>,
     pub check: bool,
     pub json: bool,
+    /// The removed `--where` (hidden): refused with what to do instead.
     pub place: Option<String>,
-    pub tty: bool,
-    /// Hidden `--installed IDS`: the names are setup's list of what to log in (not asked for by
-    /// name), these just installed (Windows' ptyro running WSL's walk).
-    pub installed: Option<String>,
 }
 
 pub async fn login(ctx: &Ctx, a: LoginArgs) -> Result<i32, Error> {
+    crate::setup::where_removed(a.place.as_deref())?;
     let mut ids = Vec::new();
     for n in a.names.iter().flat_map(|n| n.split([',', ' '])).filter(|n| !n.is_empty()) {
         let item = setup::resolve(n).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
@@ -41,111 +37,32 @@ pub async fn login(ctx: &Ctx, a: LoginArgs) -> Result<i32, Error> {
             ids.push(item.id.clone());
         }
     }
-    // Setup's list (from Windows' ptyro): not named, and these just installed.
-    let fresh: Vec<String> = a
-        .installed
-        .as_deref()
-        .map(|i| i.split(',').filter(|x| !x.is_empty()).map(str::to_owned).collect())
-        .unwrap_or_default();
-    let named = !ids.is_empty() && a.installed.is_none();
+    let named = !ids.is_empty();
     let check = a.check || a.json;
-    if !check && !crate::setup::interactive(a.tty) {
+    if !check && !crate::setup::interactive() {
         return Err(Error::invalid(
             "a login shows its sign-in (a browser page, or a link and a code) in the terminal: run `ptyro login` in one. `ptyro login --check` says where each stands",
         ));
     }
     let host = setup::host(&ctx.paths);
-    let mut ok = true;
-    let mut rows: Vec<LoginRow> = Vec::new();
-    let sides = sides(&ctx.paths, &*host, a.place.as_deref()).await?;
-    let two = sides.len() > 1;
-    for distro in sides {
-        if two && !a.json {
-            eprintln!(
-                "\n── {} ──",
-                distro.as_deref().map_or("Windows".into(), |d| format!("WSL ({d})"))
-            );
-        }
-        match distro {
-            None if a.json => rows.extend(login::rows(&*host, &ids)),
-            None if check => ok &= show(&login::rows(&*host, &ids), named, &fresh),
-            None => ok &= walk(&*host, &ids, named, &fresh),
-            Some(d) if a.json => {
-                rows.extend(
-                    wsl_setup::logins(&d, &ids)
-                        .map_err(|e| Error::new(ErrorCode::Unsupported, e))?,
-                );
-            }
-            Some(d) => {
-                let mut args = vec!["login".to_owned()];
-                if check {
-                    args.push("--check".into());
-                }
-                if a.tty {
-                    args.push("--tty".into());
-                }
-                if let Some(i) = &a.installed {
-                    args.push(format!("--installed={i}"));
-                }
-                args.extend(ids.iter().cloned());
-                // Ctrl+C there skips that login (WSL's ptyro handles it); it never ends this one.
-                ok &= interrupts_skip(|| wsl_setup::interact(&d, &args))
-                    .map_err(|e| Error::new(ErrorCode::Unsupported, e))?
-                    == 0;
-            }
-        }
-    }
-    if a.json {
-        ok = rows.iter().all(|r| fine(r, named));
+    let ok = if a.json {
+        let rows: Vec<LoginRow> = login::rows(&*host, &ids);
+        let ok = rows.iter().all(|r| fine(r, named));
         let text =
             serde_json::to_string_pretty(&rows).map_err(|e| Error::internal(e.to_string()))?;
         println!("{text}");
-    }
+        ok
+    } else if check {
+        show(&login::rows(&*host, &ids), named, &[])
+    } else {
+        walk(&*host, &ids, named, &[])
+    };
     Ok(if ok { 0 } else { 1 })
 }
 
 /// The commands `ptyro login` knows (`claude`, `opencode`, `gh`…).
 fn programs() -> Vec<String> {
     catalog::items().iter().filter(|i| i.login.is_some()).map(|i| i.program.clone()).collect()
-}
-
-/// The sides to log in on: `None` this computer, `Some` a WSL distro. On Windows by `--where`
-/// (default: the daemon's side, as setup's); elsewhere this computer.
-async fn sides(
-    paths: &Paths,
-    host: &dyn Host,
-    given: Option<&str>,
-) -> Result<Vec<Option<String>>, Error> {
-    let platform = host.platform();
-    let place = crate::setup::place_of(given, platform, "login")?;
-    if !platform.is_windows() {
-        return Ok(vec![None]);
-    }
-    let windows = None;
-    if matches!(place, Some(Where::Windows | Where::Local)) {
-        return Ok(vec![windows]);
-    }
-    let remote = crate::winclient::resolve(None, paths, false).await;
-    let prefer = remote.as_deref().and_then(ptyro_client::remote::wsl_distro).map(str::to_owned);
-    let status = wsl_setup::probe(prefer.as_deref()).await;
-    let wsl = status.usable().map(|d| Some(d.to_owned()));
-    let place = place
-        .unwrap_or_else(|| crate::setup::default_place(prefer.as_deref(), Some(&status), false));
-    Ok(match (place, wsl) {
-        (Where::Wsl, Some(w)) => vec![w],
-        (Where::Wsl, None) => {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!("--where wsl: {}", status.words()),
-            ));
-        }
-        (Where::Both, Some(w)) => vec![windows, w],
-        (Where::Both, None) => {
-            eprintln!("{}", status.words());
-            vec![windows]
-        }
-        _ => vec![windows],
-    })
 }
 
 /// A row is as it should be: logged in, or can't be checked; not installed only when it wasn't
@@ -321,10 +238,7 @@ fn interrupts_skip<T>(f: impl FnOnce() -> T) -> T {
                 return;
             };
             rt.block_on(async move {
-                #[cfg(unix)]
                 let sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt());
-                #[cfg(windows)]
-                let sig = tokio::signal::windows::ctrl_c();
                 let _ = ready.send(());
                 let Ok(mut sig) = sig else { return };
                 while sig.recv().await.is_some() {
@@ -343,59 +257,26 @@ fn interrupts_skip<T>(f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// After setup's run on a side (`distro`: WSL's): walk through the logins of what it installed
-/// (`fresh`) or was picked and is here (`ids` holds both), when a person is at the terminal
-/// (`person`); otherwise say where each stands and how to log in later. True when there were
-/// logins to speak of.
-pub(crate) fn after_setup(
-    host: &dyn Host,
-    ids: &[String],
-    fresh: &[String],
-    distro: Option<&str>,
-    person: bool,
-) -> bool {
+/// After setup's run: walk through the logins of what it installed (`fresh`) or was picked and
+/// is here (`ids` holds both), when a person is at the terminal (`person`); otherwise say where
+/// each stands and how to log in later. True when there were logins to speak of.
+pub(crate) fn after_setup(host: &dyn Host, ids: &[String], fresh: &[String], person: bool) -> bool {
     if ids.is_empty() {
         return false;
     }
     eprintln!("\nLogins: one account each, through each tool's own sign-in.");
-    match distro {
-        None if person => {
-            walk(host, ids, false, fresh);
-        }
-        None => {
-            show(&login::rows(host, ids), false, fresh);
-            eprintln!("`ptyro login` logs them in, in a terminal.");
-        }
-        Some(d) => {
-            let mut args = vec!["login".to_owned(), format!("--installed={}", fresh.join(","))];
-            if person {
-                // Windows' ptyro has a person here; WSL's sees its terminal through wsl.exe.
-                args.push("--tty".into());
-            } else {
-                args.push("--check".into());
-            }
-            args.extend(ids.iter().cloned());
-            // Ctrl+C there skips that login (WSL's ptyro handles it); it never ends this one.
-            if let Err(e) = interrupts_skip(|| wsl_setup::interact(d, &args)) {
-                eprintln!("✗ couldn't reach ptyro in {d} (WSL): {e}");
-                eprintln!("  fix: `wsl -d {d} -- ptyro login {}`", ids.join(" "));
-            } else if !person {
-                eprintln!("`ptyro login --where wsl` logs them in, in a terminal.");
-            }
-        }
+    if person {
+        walk(host, ids, false, fresh);
+    } else {
+        show(&login::rows(host, ids), false, fresh);
+        eprintln!("`ptyro login` logs them in, in a terminal.");
     }
     true
 }
 
-/// A session on the daemon running `ptyro login --where <place> <id>` (the web's "Log in"): the
-/// tool's own sign-in in a terminal the web shows, confirmed there as in the CLI. `place` is
-/// `local` (the daemon's computer) or `wsl` (a Windows daemon's WSL distro: WSL's own ptyro runs
-/// it through `wsl.exe`, in the same terminal).
-pub(crate) async fn spawn(
-    ctx: &Ctx,
-    id: &str,
-    place: &str,
-) -> Result<ptyro_core::session::SessionInfo, Error> {
+/// A session on the daemon running `ptyro login <id>` (the web's "Log in"): the tool's own
+/// sign-in in a terminal the web shows, confirmed there as in the CLI.
+pub(crate) async fn spawn(ctx: &Ctx, id: &str) -> Result<ptyro_core::session::SessionInfo, Error> {
     use ptyro_core::session::SpawnSpec;
     use ptyro_protocol::Request;
     let item = setup::resolve(id).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
@@ -404,23 +285,14 @@ pub(crate) async fn spawn(
     }
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
     // The installed binary's own name, as the self-update's session uses (`own::spawn_update`):
-    // after `ptyro update ptyro`, `current_exe` can be `…/ptyro (deleted)` or `ptyro.exe.old`.
+    // after `ptyro update ptyro`, `current_exe` can be `…/ptyro (deleted)`.
     let exe = ptyro_agents::own::installed_name(&exe);
-    // Windows sets only USERPROFILE.
-    let home = ["HOME", "USERPROFILE"]
-        .into_iter()
-        .find_map(|v| std::env::var_os(v).filter(|h| !h.is_empty()))
+    let home = std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
         .map_or_else(std::env::temp_dir, std::path::PathBuf::from);
     let c = ctx.connect(true).await?;
     let spec = SpawnSpec {
-        // The side the page listed it on: the daemon machine's, or its WSL distro's.
-        argv: vec![
-            exe.to_string_lossy().into_owned(),
-            "login".into(),
-            "--where".into(),
-            place.into(),
-            item.program.clone(),
-        ],
+        argv: vec![exe.to_string_lossy().into_owned(), "login".into(), item.program.clone()],
         cwd: home,
         // The default profile: the agents' own folders, where setup's one account each goes.
         profile: Some(ptyro_core::model::DEFAULT_PROFILE.to_owned()),

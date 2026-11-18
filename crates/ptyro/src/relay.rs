@@ -42,57 +42,6 @@ pub fn request(req: Request, budget: Duration) -> Option<ServerMsg> {
     request_at(std::path::Path::new(&std::env::var_os("PTYRO_SOCKET")?), req, budget)
 }
 
-/// On Windows, the daemon's named pipe (WIN5): refused when another user serves it, as the
-/// client does. A pipe opened this way has no read timeout, so the exchange runs on a thread
-/// and is given up when the budget runs out (the thread ends with this short-lived process).
-#[cfg(windows)]
-pub fn request_at(socket: &std::path::Path, req: Request, budget: Duration) -> Option<ServerMsg> {
-    let start = Instant::now();
-    let mut pipe = loop {
-        match std::fs::OpenOptions::new().read(true).write(true).open(socket) {
-            Ok(f) => break f,
-            // Every instance busy: another client is connecting this moment.
-            Err(e) if e.raw_os_error() == Some(231) && start.elapsed() < budget => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => return None,
-        }
-    };
-    if !ptyro_pty::pipe::file_server_is_ours(&pipe).ok()? {
-        return None;
-    }
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(exchange(&mut pipe, req));
-    });
-    rx.recv_timeout(budget.checked_sub(start.elapsed())?).ok()?
-}
-
-/// Hello, one request, and its answer (frames in between are pushes, skipped).
-#[cfg(windows)]
-fn exchange(s: &mut (impl Read + Write), req: Request) -> Option<ServerMsg> {
-    let hello = ClientMsg::Hello {
-        proto: PROTO,
-        client: ClientInfo {
-            kind: ClientKind::Hook,
-            version: env!("CARGO_PKG_VERSION").into(),
-            pid: std::process::id(),
-            outer: None,
-            token: None,
-            via: None,
-        },
-        features: vec![],
-    };
-    s.write_all(&frame(&hello)?).ok()?;
-    s.write_all(&frame(&ClientMsg::Request { id: 1, req })?).ok()?;
-    loop {
-        let (msg, _): (ServerMsg, _) = decode(&read_frame(s)?).ok()?;
-        if matches!(msg, ServerMsg::Response { .. } | ServerMsg::Reject { .. }) {
-            return Some(msg);
-        }
-    }
-}
-
 /// [`request`] to a given socket (shell completions use the client's own).
 #[cfg(unix)]
 pub fn request_at(socket: &std::path::Path, req: Request, budget: Duration) -> Option<ServerMsg> {
@@ -149,7 +98,7 @@ pub fn hook(adapter: &str, event: &str, args: &[String]) -> i32 {
     // The user's notify runs whatever happens to ptyro.
     if let Some((argv, json)) = chain {
         let mut cmd = std::process::Command::new(&argv[0]);
-        ptyro_core::os::quoted_args(&mut cmd, argv[1..].iter().chain(std::iter::once(&json)));
+        cmd.args(argv[1..].iter().chain(std::iter::once(&json)));
         let _ = cmd.stdin(std::process::Stdio::null()).spawn();
     }
     let Ok(session) = std::env::var("PTYRO_SESSION_ID") else { return 0 };
@@ -190,10 +139,8 @@ pub fn statusline() -> i32 {
         );
     }
     if let Some(cmd) = user_statusline(&payload) {
-        // Where Claude Code itself would run it: `sh` on Unix; Git Bash, else PowerShell, on
-        // Windows (WIN8).
-        let argv =
-            ptyro_core::shell::ScriptEnv::here(|e| ptyro_core::shell::claude_command_argv(&cmd, e));
+        // Where Claude Code itself would run it: `sh`.
+        let argv = ptyro_core::shell::command_argv("sh", &cmd);
         let child = std::process::Command::new(&argv[0])
             .args(&argv[1..])
             .stdin(std::process::Stdio::piped())

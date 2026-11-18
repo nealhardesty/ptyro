@@ -47,7 +47,6 @@ impl Machine {
             .env("USERPROFILE", self.home())
             .env("SHELL", "/bin/bash")
             // A Windows machine looks for WSL (BOOT8): never the real one.
-            .env("PTYRO_WSL", self.dir.path().join("no-wsl"))
             .env("PTYRO_NO_AUTOSPAWN", "1");
         for v in ["PTYRO_SOCKET", "PTYRO_SESSION_ID", "PTYRO_CONFIG", "PTYRO_REMOTE"] {
             c.env_remove(v);
@@ -299,23 +298,18 @@ async fn the_daemon_plans_and_installs_without_admin() {
     let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
     let mut c = d.client().await.unwrap();
     let Reply::SetupPlan { plan, .. } =
-        c.request(Request::SetupPlan { picks: None, wsl_picks: None }).await.unwrap()
+        c.request(Request::SetupPlan { picks: None }).await.unwrap()
     else {
         panic!("not a plan");
     };
     let steps: Vec<&str> = plan.steps().iter().map(|e| e.id.as_str()).collect();
     assert_eq!(steps, ["claude", "codex", "git", "gh"]);
-    let r =
-        c.request(Request::SetupPlan { picks: Some(vec!["vim".into()]), wsl_picks: None }).await;
+    let r = c.request(Request::SetupPlan { picks: Some(vec!["vim".into()]) }).await;
     assert!(r.is_err());
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun {
-            picks: vec!["opencode".into(), "git".into()],
-            wsl_picks: None,
-            moves: vec![],
-        })
+        .request(Request::SetupRun { picks: vec!["opencode".into(), "git".into()], moves: vec![] })
         .await
         .unwrap()
     else {
@@ -356,7 +350,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let fake = m.fake().display().to_string();
     let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
     let mut c = d.client().await.unwrap();
-    let plan_req = || Request::SetupPlan { picks: None, wsl_picks: None };
+    let plan_req = || Request::SetupPlan { picks: None };
     let Reply::SetupPlan { plan, lines, default_agent, running, held_by } =
         c.request(plan_req()).await.unwrap()
     else {
@@ -376,11 +370,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun {
-            picks: vec!["opencode".into()],
-            wsl_picks: None,
-            moves: vec![],
-        })
+        .request(Request::SetupRun { picks: vec!["opencode".into()], moves: vec![] })
         .await
         .unwrap()
     else {
@@ -409,9 +399,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let kept: Vec<(u64, Value)> =
         going.events.iter().map(|l| (l.seq, serde_json::to_value(&l.event).unwrap())).collect();
     assert_eq!(kept, live, "the events so far, as they were sent");
-    let again = c
-        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
-        .await;
+    let again = c.request(Request::SetupRun { picks: vec!["codex".into()], moves: vec![] }).await;
     assert!(
         format!("{again:?}").contains("setup is already running (from the web app"),
         "{again:?}"
@@ -422,7 +410,6 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
         .cmd()
         .args(["install", "codex", "--yes"])
         .env("PTYRO_TEST_SETUP", &fake)
-        .env("PTYRO_WSL", m.dir.path().join("no-wsl"))
         .output()
         .unwrap();
     let said = String::from_utf8_lossy(&o.stderr);
@@ -461,79 +448,6 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(m.calls().iter().all(|c| !c.contains("codex")), "{:?}", m.calls());
-}
-
-/// The final review's I1: a daemon that was running before setup installed an agent starts it
-/// afterwards, without a restart. On Windows the installer adds its folder only to the
-/// registry's `Path`, which a running process never sees; the fake models that with
-/// `path_adds` (its `stored-path`), and the daemon takes it in when the run ends and before it
-/// looks for an agent.
-#[tokio::test]
-async fn an_agent_setup_installed_starts_without_a_daemon_restart() {
-    let m = Machine::new(fresh_linux(json!({ "path_adds": { "codex": "Codex" } })));
-    // Where the "installer" puts codex: off every PATH the daemon has, and nowhere `locate`
-    // looks, until the stored Path names it.
-    let bin = m.fake().join("Codex");
-    std::fs::create_dir_all(&bin).unwrap();
-    if cfg!(windows) {
-        std::fs::write(bin.join("codex.cmd"), "@ping -n 60 127.0.0.1 >nul\r\n").unwrap();
-    } else {
-        let f = bin.join("codex");
-        std::fs::write(&f, "#!/bin/sh\nsleep 60\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
-    let fake = m.fake().display().to_string();
-    let home = m.home().display().to_string();
-    let mut env = vec![("PTYRO_TEST_SETUP", fake.as_str()), ("HOME", home.as_str())];
-    // No real codex the developer has on PATH may answer for the fake's.
-    if cfg!(unix) {
-        env.push(("PATH", "/usr/bin:/bin"));
-    }
-    let d = TempDaemon::start_with_env(BIN, &env).unwrap();
-    let mut c = d.client().await.unwrap();
-    let codex = |r: Reply| match r {
-        Reply::Agents { agents, .. } => agents.into_iter().find(|a| a.name == "codex").unwrap(),
-        r => panic!("not agents: {r:?}"),
-    };
-    assert!(!codex(c.request(Request::Agents).await.unwrap()).installed);
-    let new = || d.cmd().args(["new", "-d", "--agent", "codex"]).output().unwrap();
-    let o = new();
-    assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("codex isn't installed"), "{o:?}");
-
-    let mut pushes = c.pushes();
-    c.send(ClientMsg::WatchEvents).unwrap();
-    let Reply::SetupStarted { .. } = c
-        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
-        .await
-        .unwrap()
-    else {
-        panic!("not started");
-    };
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(Instant::now() < deadline, "no report");
-        if let Ok(Some(ServerMsg::Event {
-            event:
-                DomainEvent::SetupProgress {
-                    event: ptyro_agents::setup::Event::Finished { report },
-                    ..
-                },
-        })) = tokio::time::timeout(Duration::from_millis(500), pushes.recv()).await
-        {
-            assert_eq!(report.done, ["codex"]);
-            break;
-        }
-    }
-    let found = codex(c.request(Request::Agents).await.unwrap());
-    assert!(found.installed, "{found:?}");
-    assert!(found.found.unwrap_or_default().contains("Codex"), "found in the stored folder");
-    let o = new();
-    assert!(o.status.success(), "a codex session starts: {o:?}");
 }
 
 /// One install at a time on a machine, from any client (the machine's setup lock): a second
@@ -587,7 +501,6 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
         .cmd()
         .args(["install", "opencode", "--yes"])
         .env("PTYRO_TEST_SETUP", &fake)
-        .env("PTYRO_WSL", m.dir.path().join("no-wsl"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -599,16 +512,14 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
         std::thread::sleep(Duration::from_millis(50));
     }
     let c = d.client().await.unwrap();
-    let plan_req = || Request::SetupPlan { picks: None, wsl_picks: None };
+    let plan_req = || Request::SetupPlan { picks: None };
     let Reply::SetupPlan { running, held_by, .. } = c.request(plan_req()).await.unwrap() else {
         panic!("not a plan");
     };
     assert!(running.is_none(), "not the daemon's run");
     let by = held_by.expect("who holds it");
     assert!(by.starts_with("`ptyro install` (process "), "{by}");
-    let r = c
-        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
-        .await;
+    let r = c.request(Request::SetupRun { picks: vec!["codex".into()], moves: vec![] }).await;
     std::fs::write(m.fake().join("go"), "").unwrap();
     let said = format!("{r:?}");
     assert!(said.contains("setup is already running (from `ptyro install` (process "), "{said}");
@@ -620,10 +531,8 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
     };
     assert!(held_by.is_none(), "free again");
     // A refused run doesn't keep the daemon's own flag: the next one starts.
-    let Reply::SetupStarted { .. } = c
-        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
-        .await
-        .unwrap()
+    let Reply::SetupStarted { .. } =
+        c.request(Request::SetupRun { picks: vec!["codex".into()], moves: vec![] }).await.unwrap()
     else {
         panic!("not started");
     };
@@ -651,34 +560,6 @@ fn the_rc_line_is_offered_and_puts_the_tools_on_path() {
     let o = m.run(&["install", "node", "--yes"], "");
     assert!(o.status.success());
     assert_eq!(std::fs::read_to_string(m.home().join(".bashrc")).unwrap(), rc);
-}
-
-/// Windows: WinGet's Node.js adds its folder only to the stored Path; the next step (OpenCode's
-/// `npm install -g`) still finds it, because the PATH is refreshed after each step.
-#[test]
-fn a_folder_an_installer_stored_is_on_path_for_the_next_step() {
-    let m = Machine::new(json!({
-        "platform": "windows-x64",
-        "programs": ["winget"],
-        "path_adds": { "node": "Program Files/nodejs" },
-        "path_needs": { "opencode": "Program Files/nodejs" },
-    }));
-    let o = m.run(&["install", "opencode", "--yes"], "");
-    let t = text(&o);
-    assert!(o.status.success(), "{t}");
-    assert_eq!(
-        m.calls(),
-        ["install node via winget admin=true", "install opencode via npm admin=false"]
-    );
-    // Without the folder, the fake's npm isn't found: the check is real.
-    let m = Machine::new(json!({
-        "platform": "windows-x64",
-        "programs": ["winget"],
-        "path_needs": { "opencode": "Program Files/nodejs" },
-    }));
-    let o = m.run(&["install", "opencode", "--yes"], "");
-    assert_eq!(o.status.code(), Some(1));
-    assert!(text(&o).contains("npm: command not found"), "{}", text(&o));
 }
 
 /// Ticked but impossible here (a Linux with neither apt nor dnf): said with its fix, in the

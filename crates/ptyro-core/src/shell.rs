@@ -1,7 +1,7 @@
 //! Shells and ptyro's shell integration (SPEC §5.7, §8.7; ROADMAP WIN1).
 //!
 //! The integration is a small snippet per shell that reports, over OSC 133, where each prompt and
-//! command starts and how the command ended, and over OSC 7 (OSC 9;9 on Windows) the directory.
+//! command starts and how the command ended, and over OSC 7 the directory.
 //! Copy mode's prompt jumps, a shell session's working/idle and its last command, and the session's
 //! directory all come from it.
 //!
@@ -19,7 +19,7 @@ pub enum ShellKind {
     Bash,
     Zsh,
     Fish,
-    /// PowerShell: `pwsh` (7+, every platform) and Windows PowerShell 5.1 (`powershell.exe`).
+    /// PowerShell: `pwsh` (7+).
     Pwsh,
 }
 
@@ -82,11 +82,7 @@ impl ShellKind {
 
 /// `pwsh`'s profile for the current host (`$PROFILE.CurrentUserCurrentHost`).
 fn pwsh_profile(home: &Path) -> PathBuf {
-    if cfg!(windows) {
-        home.join("Documents").join("PowerShell").join("Microsoft.PowerShell_profile.ps1")
-    } else {
-        crate::config::config_home(home).join("powershell/Microsoft.PowerShell_profile.ps1")
-    }
+    crate::config::config_home(home).join("powershell/Microsoft.PowerShell_profile.ps1")
 }
 
 /// Is `argv` an interactive shell and nothing else: a known shell with at most login,
@@ -114,51 +110,26 @@ fn is_login(kind: ShellKind, args: &[String]) -> bool {
     })
 }
 
-/// The shell to start when nothing names one: on Unix `$SHELL`, else `/bin/sh`. On Windows
-/// (RESEARCH DD3.4 item 4) PowerShell 7 (`pwsh.exe`) when it is installed, else Windows
-/// PowerShell, else `%COMSPEC%` (cmd.exe).
+/// The shell to start when nothing names one: `$SHELL`, else `/bin/sh`.
 pub fn default_shell() -> String {
-    let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    default_shell_from(cfg!(windows), &var, &|prog| {
-        std::env::split_paths(&path).any(|d| d.join(prog).is_file())
-    })
+    default_shell_from(&|k: &str| std::env::var(k).ok().filter(|v| !v.is_empty()))
 }
 
-/// [`default_shell`] with the environment and the `PATH` lookup given.
-fn default_shell_from(
-    windows: bool,
-    var: &dyn Fn(&str) -> Option<String>,
-    on_path: &dyn Fn(&str) -> bool,
-) -> String {
-    if windows {
-        ["pwsh.exe", "powershell.exe"]
-            .into_iter()
-            .find(|p| on_path(p))
-            .map(str::to_owned)
-            .or_else(|| var("COMSPEC"))
-            .unwrap_or_else(|| "cmd.exe".into())
-    } else {
-        var("SHELL").unwrap_or_else(|| "/bin/sh".into())
-    }
+/// [`default_shell`] with the environment given.
+fn default_shell_from(var: &dyn Fn(&str) -> Option<String>) -> String {
+    var("SHELL").unwrap_or_else(|| "/bin/sh".into())
 }
 
 /// What a new shell session runs when `[shell] command` is empty: the default shell, as a login
-/// shell on Unix (`$SHELL -l`). Windows has no login shells.
+/// shell (`$SHELL -l`).
 pub fn default_shell_argv() -> Vec<String> {
-    let shell = default_shell();
-    if cfg!(windows) { vec![shell] } else { vec![shell, "-l".into()] }
+    vec![default_shell(), "-l".into()]
 }
 
 /// How `shell` runs one command line: `-c` for POSIX shells and fish, `-NoProfile -Command` for
-/// PowerShell, `/d /s /c` for cmd.exe. (cmd.exe doesn't read the `\"` that Rust's `Command`
-/// quotes with, so a line with quotes needs `raw_arg` there: WIN6. Windows 11 always has Windows
-/// PowerShell on `PATH`, so cmd.exe is only the last resort of [`default_shell`].)
+/// PowerShell.
 pub fn command_argv(shell: &str, line: &str) -> Vec<String> {
-    let base = shell.rsplit(['/', '\\']).next().unwrap_or(shell).to_ascii_lowercase();
-    let flags: &[&str] = if base == "cmd" || base == "cmd.exe" {
-        &["/d", "/s", "/c"]
-    } else if ShellKind::of_program(shell) == Some(ShellKind::Pwsh) {
+    let flags: &[&str] = if ShellKind::of_program(shell) == Some(ShellKind::Pwsh) {
         &["-NoProfile", "-Command"]
     } else {
         &["-c"]
@@ -171,9 +142,9 @@ pub fn command_argv(shell: &str, line: &str) -> Vec<String> {
 }
 
 /// The argv that runs a command line ptyro itself was given to run (a check, a status line's
-/// command): `sh -c` on Unix, the [`default_shell`] on Windows.
+/// command): `sh -c`.
 pub fn command_shell(line: &str) -> Vec<String> {
-    if cfg!(windows) { command_argv(&default_shell(), line) } else { command_argv("sh", line) }
+    command_argv("sh", line)
 }
 
 /// Which shell runs a project's scripts (`[scripts] shell`, WIN6; RESEARCH DD3.4 item 3).
@@ -182,17 +153,19 @@ pub fn command_shell(line: &str) -> Vec<String> {
 pub enum ScriptShell {
     /// By what the script is: a `.ps1` file is PowerShell's, a `.sh` file bash's, and so is a
     /// script imported from another tool's config (they're written for bash); anything else
-    /// runs in the default shell ([`default_shell`]: `$SHELL` on Unix, PowerShell on Windows).
+    /// runs in the default shell ([`default_shell`]: `$SHELL`).
     #[default]
     Auto,
     Pwsh,
     Bash,
+    /// Windows' cmd.exe, which ptyro no longer runs on (removed 2026-11-18): kept so a project
+    /// that names it still loads, and its scripts say what to choose instead.
     Cmd,
     Sh,
 }
 
 impl ScriptShell {
-    pub const ALL: [ScriptShell; 5] = [Self::Auto, Self::Pwsh, Self::Bash, Self::Cmd, Self::Sh];
+    pub const ALL: [ScriptShell; 4] = [Self::Auto, Self::Pwsh, Self::Bash, Self::Sh];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -211,10 +184,7 @@ impl ScriptShell {
 
 /// What [`script_argv`] needs from the computer, given (so tests can say what's installed).
 pub struct ScriptEnv<'a> {
-    /// Windows' rules (else Unix's).
-    pub windows: bool,
     pub var: &'a dyn Fn(&str) -> Option<String>,
-    pub is_file: &'a dyn Fn(&Path) -> bool,
     /// Whether a program is on `PATH`.
     pub on_path: &'a dyn Fn(&str) -> Option<PathBuf>,
 }
@@ -223,14 +193,13 @@ impl ScriptEnv<'_> {
     /// This computer.
     pub fn here<R>(f: impl FnOnce(&ScriptEnv<'_>) -> R) -> R {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let is_file = |p: &Path| p.is_file();
         let path = std::env::var_os("PATH").unwrap_or_default();
         let on_path = |prog: &str| {
             std::env::split_paths(&path)
                 .flat_map(|d| crate::os::program_names(prog).into_iter().map(move |n| d.join(n)))
                 .find(|p| p.is_file())
         };
-        f(&ScriptEnv { windows: cfg!(windows), var: &var, is_file: &is_file, on_path: &on_path })
+        f(&ScriptEnv { var: &var, on_path: &on_path })
     }
 }
 
@@ -255,10 +224,7 @@ pub fn script_argv(
             Some(ext) if ext == "ps1" => ScriptShell::Pwsh,
             Some(ext) if ext == "sh" => ScriptShell::Bash,
             _ if imported => ScriptShell::Bash,
-            _ => {
-                let on_path = |p: &str| (env.on_path)(p).is_some();
-                return Ok(command_argv(&default_shell_from(env.windows, env.var, &on_path), line));
-            }
+            _ => return Ok(command_argv(&default_shell_from(env.var), line)),
         },
         other => other,
     };
@@ -266,38 +232,25 @@ pub fn script_argv(
     match shell {
         ScriptShell::Auto => unreachable!("resolved above"),
         ScriptShell::Pwsh => {
-            let ps = (env.on_path)("pwsh")
-                .or_else(|| env.windows.then(|| (env.on_path)("powershell")).flatten())
-                .ok_or_else(|| {
-                    missing(
-                        "this script is PowerShell's, and PowerShell isn't installed: \
+            let ps = (env.on_path)("pwsh").ok_or_else(|| {
+                missing(
+                    "this script is PowerShell's, and PowerShell isn't installed: \
                      https://aka.ms/powershell (or set [scripts] shell)"
-                            .into(),
-                    )
-                })?;
-            // A trusted project's script runs whatever the execution policy (Windows
-            // PowerShell's default refuses every .ps1 file): ptyro's trust is the gate.
+                        .into(),
+                )
+            })?;
+            // A trusted project's script runs whatever the execution policy: ptyro's trust is
+            // the gate.
             let mut argv = command_argv(&ps.to_string_lossy(), line);
             argv.splice(2..2, ["-ExecutionPolicy".to_owned(), "Bypass".to_owned()]);
             Ok(argv)
         }
-        ScriptShell::Bash | ScriptShell::Sh if env.windows => {
-            let bash = git_bash(env).ok_or_else(|| missing(GIT_BASH_MISSING.into()))?;
-            let bash = bash.to_string_lossy().into_owned();
-            let prog = match bash.rsplit_once('\\') {
-                Some((dir, _)) if shell == ScriptShell::Sh => format!("{dir}\\sh.exe"),
-                _ => bash,
-            };
-            Ok(command_argv(&prog, line))
-        }
         ScriptShell::Bash => Ok(command_argv("bash", line)),
         ScriptShell::Sh => Ok(command_argv("sh", line)),
-        ScriptShell::Cmd if env.windows => {
-            let root = (env.var)("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-            Ok(command_argv(&format!(r"{root}\System32\cmd.exe"), line))
-        }
         ScriptShell::Cmd => Err(missing(
-            "[scripts] shell = \"cmd\" runs on Windows only: choose auto, bash or sh here".into(),
+            "[scripts] shell = \"cmd\" ran scripts in Windows' cmd.exe, and ptyro no longer runs on \
+             Windows itself (removed 2026-11-18): choose auto, bash, sh or pwsh"
+                .into(),
         )),
     }
 }
@@ -309,92 +262,17 @@ fn first_word(line: &str) -> &str {
         Some(q @ ('"' | '\'')) => line[1..].split(q).next().unwrap_or(""),
         _ => line.split_whitespace().next().unwrap_or(""),
     };
-    word.strip_prefix("./").or_else(|| word.strip_prefix(".\\")).unwrap_or(word)
-}
-
-/// What a script that needs bash says when Windows has none.
-pub const GIT_BASH_MISSING: &str = "this script is bash's, and Windows has no bash for it: \
-    install Git for Windows, which brings Git Bash (`winget install --id Git.Git -e`), \
-    or set [scripts] shell for the project";
-
-/// Git for Windows' `bash.exe` (its `sh.exe` is beside it), where its installer puts it or
-/// beside the `git` on `PATH`. Never `System32\bash.exe`: that one starts WSL.
-pub fn git_bash(env: &ScriptEnv<'_>) -> Option<PathBuf> {
-    // Windows paths as strings: this runs (and is tested) where `\` may not be a separator.
-    let join = |dir: &str, rest: &str| format!("{}\\{rest}", dir.trim_end_matches('\\'));
-    let parent = |p: &str| p.rsplit_once('\\').map(|(d, _)| d.to_owned());
-    let mut candidates: Vec<String> = ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"]
-        .into_iter()
-        .filter_map(|k| (env.var)(k))
-        .map(|d| join(&d, r"Git\bin\bash.exe"))
-        .collect();
-    if let Some(local) = (env.var)("LOCALAPPDATA") {
-        candidates.push(join(&local, r"Programs\Git\bin\bash.exe"));
-    }
-    if let Some(dir) = (env.on_path)("git").and_then(|g| parent(&g.to_string_lossy())) {
-        // `Git\cmd\git.exe` (the installer's PATH entry) or `Git\bin\git.exe`.
-        candidates.push(join(&dir, "bash.exe"));
-        if let Some(up) = parent(&dir) {
-            candidates.push(join(&up, r"bin\bash.exe"));
-        }
-    }
-    let system = (env.var)("SystemRoot").map(|r| r.to_ascii_lowercase());
-    candidates.into_iter().map(PathBuf::from).find(|p| {
-        let lower = p.to_string_lossy().to_ascii_lowercase();
-        system.as_ref().is_none_or(|s| !lower.starts_with(s.as_str())) && (env.is_file)(p)
-    })
-}
-
-/// How Claude Code runs a status line's (or a hook's) command, so ptyro runs the user's own the
-/// same way: `sh -c` on Unix; on Windows in Git Bash (`CLAUDE_CODE_GIT_BASH_PATH`, else where
-/// Git for Windows puts it), else in Windows PowerShell [S: Claude's status line and hooks docs,
-/// 2026-11-04] (WIN8).
-pub fn claude_command_argv(line: &str, env: &ScriptEnv<'_>) -> Vec<String> {
-    if !env.windows {
-        return command_argv("sh", line);
-    }
-    let set =
-        (env.var)("CLAUDE_CODE_GIT_BASH_PATH").map(PathBuf::from).filter(|p| (env.is_file)(p));
-    if let Some(bash) = set.or_else(|| git_bash(env)) {
-        return command_argv(&bash.to_string_lossy(), line);
-    }
-    let ps = (env.on_path)("powershell").map_or_else(
-        || {
-            let root = (env.var)("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-            format!(r"{root}\System32\WindowsPowerShell\v1.0\powershell.exe")
-        },
-        |p| p.to_string_lossy().into_owned(),
-    );
-    command_argv(&ps, line)
+    word.strip_prefix("./").unwrap_or(word)
 }
 
 /// The argv that opens `path` in `editor`, a command line such as `$VISUAL` (`code --wait`,
-/// `vim +12`): on Unix `sh -c '<editor> "$1"' sh <path>`, so the path is never parsed by the
-/// shell; on Windows the default shell, with the path quoted for it.
+/// `vim +12`): `sh -c '<editor> "$1"' sh <path>`, so the path is never parsed by the shell.
 pub fn editor_command(editor: &str, path: &Path) -> Vec<std::ffi::OsString> {
-    if !cfg!(windows) {
-        let line = format!("{editor} \"$1\"");
-        let mut argv: Vec<std::ffi::OsString> =
-            command_argv("sh", &line).into_iter().map(Into::into).collect();
-        argv.extend(["sh".into(), path.as_os_str().to_owned()]);
-        return argv;
-    }
-    editor_command_in(&default_shell(), editor, &path.to_string_lossy())
-        .into_iter()
-        .map(Into::into)
-        .collect()
-}
-
-/// [`editor_command`] on Windows, for `shell`.
-fn editor_command_in(shell: &str, editor: &str, path: &str) -> Vec<String> {
-    let line = if ShellKind::of_program(shell) == Some(ShellKind::Pwsh) {
-        // `&` runs a quoted program path too; single quotes are literal, `''` is one quote.
-        format!("& {editor} '{}'", path.replace('\'', "''"))
-    } else {
-        // cmd.exe: a Windows path holds no `"`.
-        format!("{editor} \"{path}\"")
-    };
-    command_argv(shell, &line)
+    let line = format!("{editor} \"$1\"");
+    let mut argv: Vec<std::ffi::OsString> =
+        command_argv("sh", &line).into_iter().map(Into::into).collect();
+    argv.extend(["sh".into(), path.as_os_str().to_owned()]);
+    argv
 }
 
 /// The variables [`integrate`] may set, cleared from every shell's environment first, so none
@@ -464,7 +342,7 @@ pub fn integrate(argv: &[String], dir: &Path, zdotdir: Option<&str>) -> Option<I
         // switch must stay first (pwsh requires it there).
         ShellKind::Pwsh => {
             let mut a = vec![prog.clone()];
-            if login && !cfg!(windows) {
+            if login {
                 a.push("-Login".into());
             }
             // The user's own switches (`-NoProfile`), then ptyro's.
@@ -506,11 +384,11 @@ pub fn path_lines(kind: ShellKind, dirs: &[PathBuf]) -> String {
         let d = d.to_string_lossy();
         out.push_str(&match kind {
             ShellKind::Bash | ShellKind::Zsh => {
-                let q = sh_quote(&msys_form(&d));
+                let q = sh_quote(&d);
                 format!("case \":$PATH:\" in *:{q}:*) ;; *) PATH={q}:\"$PATH\"; export PATH ;; esac\n")
             }
             ShellKind::Fish => {
-                let q = fish_quote(&msys_form(&d));
+                let q = fish_quote(&d);
                 format!("contains -- {q} $PATH; or set -gx PATH {q} $PATH\n")
             }
             ShellKind::Pwsh => {
@@ -522,22 +400,6 @@ pub fn path_lines(kind: ShellKind, dirs: &[PathBuf]) -> String {
         });
     }
     out
-}
-
-/// A Windows folder as a POSIX shell on Windows takes it in `PATH` (Git Bash, MSYS2, fish on
-/// MSYS): `C:\Users\me\x` → `/c/Users/me/x`, as `cygpath -u` gives it; `PATH` there is
-/// `:`-separated, so a drive's colon can't stay. Anything else is left as it is.
-pub fn msys_form(p: &str) -> String {
-    let b = p.as_bytes();
-    if b.len() >= 2
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b.len() == 2 || matches!(b[2], b'\\' | b'/'))
-    {
-        format!("/{}{}", (b[0] as char).to_ascii_lowercase(), p[2..].replace('\\', "/"))
-    } else {
-        p.to_owned()
-    }
 }
 
 /// POSIX single quotes.
@@ -679,7 +541,7 @@ if set -q PTYRO; and not set -q __ptyro_integrated
 end
 "#;
 
-/// PowerShell 7+ and Windows PowerShell 5.1 (so no `` `e ``, no `$IsWindows`).
+/// PowerShell 7+.
 ///
 /// - The prompt is wrapped, not replaced: oh-my-posh, starship or the user's own `prompt` keep
 ///   drawing it, and still see `$?` and `$LASTEXITCODE` as the command left them (a failing
@@ -687,8 +549,7 @@ end
 /// - The exit status: 0 when the command succeeded, else a native program's `$LASTEXITCODE`,
 ///   else 1 (a cmdlet failed: `$Error` got a new entry while `$LASTEXITCODE` stayed as it was).
 /// - The command line (133;C) comes from PSReadLine, when it's loaded: the line it returns.
-/// - The directory: OSC 7 on macOS and Linux, OSC 9;9 (Windows Terminal's) on Windows, and only
-///   when the location is a folder (not `Env:` or `HKLM:`).
+/// - The directory: OSC 7, and only when the location is a folder (not `Env:`).
 const PWSH: &str = r#"# ptyro shell integration for PowerShell. ptyro adds it to the shells it starts; for others,
 # add to $PROFILE:  ptyro shell-init pwsh | Out-String | Invoke-Expression
 if ($env:PTYRO -and -not $global:__ptyro_integrated) {
@@ -707,11 +568,7 @@ if ($env:PTYRO -and -not $global:__ptyro_integrated) {
     $loc = $executionContext.SessionState.Path.CurrentLocation
     if ($loc.Provider.Name -eq 'FileSystem') {
       $p = $loc.ProviderPath -replace '[\x00-\x1f\x7f]', ''
-      if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
-        $out += "$e]9;9;`"$p`"$a"
-      } else {
-        $out += "$e]7;file://$([System.Net.Dns]::GetHostName())$($p -replace '%', '%25')$a"
-      }
+      $out += "$e]7;file://$([System.Net.Dns]::GetHostName())$($p -replace '%', '%25')$a"
     }
     $out += "$e]133;A$a"
     $global:LASTEXITCODE = $code
@@ -758,110 +615,26 @@ mod tests {
         assert!(sh.contains(r"'/h/it'\''s/npm/bin'"));
         let fish = path_lines(ShellKind::Fish, &dirs);
         assert!(fish.contains("contains -- '/h/ptyro-tools/node/bin' $PATH; or set -gx PATH '/h/ptyro-tools/node/bin' $PATH"));
-        // Windows folders for Git Bash's and fish's PATH: `/c/…`; PowerShell keeps its own form.
-        let win = [PathBuf::from(r"C:\Users\RUNNER~1\ptyro-tools\node")];
-        assert!(
-            path_lines(ShellKind::Bash, &win)
-                .contains("PATH='/c/Users/RUNNER~1/ptyro-tools/node':\"$PATH\"")
-        );
-        assert!(path_lines(ShellKind::Fish, &win).contains("'/c/Users/RUNNER~1/ptyro-tools/node'"));
-        assert!(
-            path_lines(ShellKind::Pwsh, &win).contains(r"'C:\Users\RUNNER~1\ptyro-tools\node'")
-        );
-        assert_eq!(msys_form("D:"), "/d");
-        assert_eq!(msys_form("/usr/bin"), "/usr/bin");
         let ps = path_lines(ShellKind::Pwsh, &dirs);
         assert!(ps.contains("-notcontains '/h/it''s/npm/bin'"), "{ps}");
     }
 
     #[test]
-    fn the_default_shell_is_shell_on_unix_and_powershell_first_on_windows() {
-        let env = |k: &str| match k {
-            "SHELL" => Some("/bin/zsh".to_owned()),
-            "COMSPEC" => Some(r"C:\Windows\system32\cmd.exe".to_owned()),
-            _ => None,
-        };
-        assert_eq!(default_shell_from(true, &env, &|_| true), "pwsh.exe");
-        assert_eq!(default_shell_from(true, &env, &|p| p == "powershell.exe"), "powershell.exe");
-        assert_eq!(default_shell_from(true, &env, &|_| false), r"C:\Windows\system32\cmd.exe");
-        assert_eq!(default_shell_from(true, &|_| None, &|_| false), "cmd.exe");
-        assert_eq!(default_shell_from(false, &env, &|_| true), "/bin/zsh");
-        assert_eq!(default_shell_from(false, &|_| None, &|_| true), "/bin/sh");
-    }
-
-    /// A Windows computer as `script_argv` sees it: Git for Windows in Program Files (or not),
-    /// PowerShell 7 or only Windows PowerShell.
-    fn windows_env<R>(git: bool, pwsh: bool, f: impl FnOnce(&ScriptEnv<'_>) -> R) -> R {
-        let var = |k: &str| match k {
-            "ProgramFiles" => Some(r"C:\Program Files".to_owned()),
-            "SystemRoot" => Some(r"C:\Windows".to_owned()),
-            _ => None,
-        };
-        let is_file = move |p: &Path| git && p == Path::new(r"C:\Program Files\Git\bin\bash.exe");
-        let on_path = move |prog: &str| match prog {
-            "pwsh" | "pwsh.exe" if pwsh => {
-                Some(PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"))
-            }
-            "powershell" | "powershell.exe" => {
-                Some(PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"))
-            }
-            // WSL's launcher: never Git Bash.
-            "bash" => Some(PathBuf::from(r"C:\Windows\System32\bash.exe")),
-            _ => None,
-        };
-        f(&ScriptEnv { windows: true, var: &var, is_file: &is_file, on_path: &on_path })
+    fn the_default_shell_is_shell_else_sh() {
+        let env = |k: &str| (k == "SHELL").then(|| "/bin/zsh".to_owned());
+        assert_eq!(default_shell_from(&env), "/bin/zsh");
+        assert_eq!(default_shell_from(&|_| None), "/bin/sh");
     }
 
     fn unix_env<R>(f: impl FnOnce(&ScriptEnv<'_>) -> R) -> R {
         let var = |k: &str| (k == "SHELL").then(|| "/bin/zsh".to_owned());
         let on_path = |prog: &str| (prog == "pwsh").then(|| PathBuf::from("/usr/bin/pwsh"));
-        f(&ScriptEnv { windows: false, var: &var, is_file: &|_| false, on_path: &on_path })
+        f(&ScriptEnv { var: &var, on_path: &on_path })
     }
 
     #[test]
     fn a_projects_scripts_run_in_the_shell_they_are_written_for() {
         use ScriptShell::*;
-        let gb = r"C:\Program Files\Git\bin\bash.exe";
-        windows_env(true, true, |e| {
-            let run = |c, line: &str, imported| script_argv(c, line, imported, e).unwrap();
-            // Inline: the default shell, PowerShell 7 here.
-            assert_eq!(run(Auto, "npm ci", false)[..3], v(&["pwsh.exe", "-NoProfile", "-Command"]));
-            // A .sh file, quoted or behind ./, and anything imported: Git Bash.
-            assert_eq!(
-                run(Auto, "./scripts/setup.sh --fast", false),
-                v(&[gb, "-c", "./scripts/setup.sh --fast"])
-            );
-            assert_eq!(run(Auto, "'my dir/x.SH'", false)[0], gb);
-            assert_eq!(run(Auto, "npm ci", true)[0], gb, "imported scripts are bash's");
-            // A .ps1 file: PowerShell, whatever the execution policy.
-            assert_eq!(
-                run(Auto, r".\setup.ps1", false),
-                v(&[
-                    r"C:\Program Files\PowerShell\7\pwsh.exe",
-                    "-NoProfile",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-Command",
-                    r".\setup.ps1"
-                ])
-            );
-            // Chosen: each one, sh beside Git Bash, cmd from System32.
-            assert_eq!(run(Sh, "make", false)[0], r"C:\Program Files\Git\bin\sh.exe");
-            assert_eq!(
-                run(Cmd, "dir", false),
-                v(&[r"C:\Windows\System32\cmd.exe", "/d", "/s", "/c", "dir"])
-            );
-            assert_eq!(run(Bash, "make", false)[0], gb);
-        });
-        // Without PowerShell 7, Windows PowerShell; without Git, bash scripts say what to do.
-        windows_env(false, false, |e| {
-            let ps = script_argv(Auto, "x.ps1", false, e).unwrap();
-            assert!(ps[0].ends_with("powershell.exe"), "{ps:?}");
-            let no = script_argv(Auto, "./setup.sh", false, e).unwrap_err();
-            assert_eq!(no.shell, Bash);
-            assert!(no.message.contains("winget install --id Git.Git"), "{}", no.message);
-            assert!(script_argv(Auto, "npm ci", true, e).is_err(), "System32's bash is WSL's");
-        });
         unix_env(|e| {
             let run = |c, line: &str, imported| script_argv(c, line, imported, e).unwrap();
             assert_eq!(
@@ -871,48 +644,28 @@ mod tests {
             );
             assert_eq!(run(Auto, "./setup.sh", false), v(&["bash", "-c", "./setup.sh"]));
             assert_eq!(run(Auto, "npm ci", true), v(&["bash", "-c", "npm ci"]));
-            assert_eq!(run(Auto, "./setup.ps1", false)[0], "/usr/bin/pwsh");
-            assert_eq!(run(Sh, "make", false), v(&["sh", "-c", "make"]));
-            assert!(
-                script_argv(Cmd, "dir", false, e).unwrap_err().message.contains("Windows only")
-            );
-        });
-    }
-
-    #[test]
-    fn a_claude_status_line_runs_where_claude_would_run_it() {
-        let gb = r"C:\Program Files\Git\bin\bash.exe";
-        windows_env(true, true, |e| {
-            assert_eq!(claude_command_argv("~/sl.sh", e), v(&[gb, "-c", "~/sl.sh"]));
-        });
-        // Without Git Bash: Windows PowerShell, never PowerShell 7 or WSL's bash.
-        windows_env(false, true, |e| {
             assert_eq!(
-                claude_command_argv("node C:/sl.mjs", e),
+                run(Auto, "./setup.ps1", false),
                 v(&[
-                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                    "/usr/bin/pwsh",
                     "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
                     "-Command",
-                    "node C:/sl.mjs"
+                    "./setup.ps1"
                 ])
             );
+            assert_eq!(run(Auto, "'my dir/x.SH'", false)[0], "bash");
+            assert_eq!(run(Sh, "make", false), v(&["sh", "-c", "make"]));
+            // A project from before 2026-11-18 that chose cmd.exe still loads, and says what to choose.
+            let cmd = script_argv(Cmd, "dir", false, e).unwrap_err().message;
+            assert!(cmd.contains("choose auto, bash, sh or pwsh"), "{cmd}");
         });
-        // The Git Bash a user points Claude at wins.
-        let var =
-            |k: &str| (k == "CLAUDE_CODE_GIT_BASH_PATH").then(|| r"D:\Git\bin\bash.exe".to_owned());
-        let is_file = |p: &Path| p == Path::new(r"D:\Git\bin\bash.exe");
-        let e = ScriptEnv { windows: true, var: &var, is_file: &is_file, on_path: &|_| None };
-        assert_eq!(claude_command_argv("x", &e)[0], r"D:\Git\bin\bash.exe");
-        unix_env(|e| assert_eq!(claude_command_argv("x", e), v(&["sh", "-c", "x"])));
-    }
-
-    #[test]
-    fn git_bash_is_found_beside_git_too() {
-        let var = |k: &str| (k == "SystemRoot").then(|| r"C:\Windows".to_owned());
-        let git = |prog: &str| (prog == "git").then(|| PathBuf::from(r"D:\Tools\Git\cmd\git.exe"));
-        let is_file = |p: &Path| p == Path::new(r"D:\Tools\Git\bin\bash.exe");
-        let e = ScriptEnv { windows: true, var: &var, is_file: &is_file, on_path: &git };
-        assert_eq!(git_bash(&e), Some(PathBuf::from(r"D:\Tools\Git\bin\bash.exe")));
+        let (no_var, no_prog) = (|_: &str| None, |_: &str| None);
+        let e = ScriptEnv { var: &no_var, on_path: &no_prog };
+        assert!(
+            script_argv(Pwsh, "x", false, &e).unwrap_err().message.contains("aka.ms/powershell")
+        );
     }
 
     #[test]
@@ -924,34 +677,13 @@ mod tests {
             command_argv("pwsh.exe", "Get-Date"),
             v(&["pwsh.exe", "-NoProfile", "-Command", "Get-Date"])
         );
-        assert_eq!(
-            command_argv(r"C:\WINDOWS\system32\WindowsPowerShell\v1.0\powershell.exe", "x")[1],
-            "-NoProfile"
-        );
-        assert_eq!(
-            command_argv(r"C:\Windows\system32\cmd.exe", "dir"),
-            v(&[r"C:\Windows\system32\cmd.exe", "/d", "/s", "/c", "dir"])
-        );
-        assert_eq!(command_argv("CMD.EXE", "dir")[1], "/d");
-        if !cfg!(windows) {
-            assert_eq!(command_shell("echo hi"), v(&["sh", "-c", "echo hi"]));
-        }
+        assert_eq!(command_shell("echo hi"), v(&["sh", "-c", "echo hi"]));
     }
 
     #[test]
-    fn an_editor_gets_the_path_unparsed_or_quoted_for_its_shell() {
-        if !cfg!(windows) {
-            let argv = editor_command("vim +3", Path::new("/a b/$x's.toml"));
-            assert_eq!(argv, ["sh", "-c", "vim +3 \"$1\"", "sh", "/a b/$x's.toml"]);
-        }
-        assert_eq!(
-            editor_command_in("pwsh.exe", "code --wait", r"C:\it's\c.toml"),
-            v(&["pwsh.exe", "-NoProfile", "-Command", r"& code --wait 'C:\it''s\c.toml'"])
-        );
-        assert_eq!(
-            editor_command_in("cmd.exe", "notepad", r"C:\a b\c.toml"),
-            v(&["cmd.exe", "/d", "/s", "/c", r#"notepad "C:\a b\c.toml""#])
-        );
+    fn an_editor_gets_the_path_unparsed() {
+        let argv = editor_command("vim +3", Path::new("/a b/$x's.toml"));
+        assert_eq!(argv, ["sh", "-c", "vim +3 \"$1\"", "sh", "/a b/$x's.toml"]);
     }
 
     #[cfg(unix)] // runs sh
@@ -1006,7 +738,6 @@ mod tests {
                 "{k:?}: says how to add it"
             );
         }
-        assert!(PWSH.contains("]9;9;"), "Windows Terminal's directory report on Windows");
     }
 
     #[cfg(unix)] // shells start in the daemon's sessions (Unix)
@@ -1051,11 +782,10 @@ mod tests {
         let f = integrate(&v(&["fish", "-l"]), Path::new("/d"), None).unwrap();
         assert_eq!(f.argv, v(&["fish", "-l", "--init-command", "source '/d/ptyro.fish'"]));
         let p = integrate(&v(&["pwsh", "-l"]), Path::new("/it's"), None).unwrap();
-        let login: &[&str] = if cfg!(windows) { &[] } else { &["-Login"] };
-        let mut want = vec!["pwsh"];
-        want.extend(login);
-        want.extend(["-NoLogo", "-NoExit", "-Command", ". '/it''s/ptyro.ps1'"]);
-        assert_eq!(p.argv, v(&want));
+        assert_eq!(
+            p.argv,
+            v(&["pwsh", "-Login", "-NoLogo", "-NoExit", "-Command", ". '/it''s/ptyro.ps1'"])
+        );
         let np = integrate(&v(&["pwsh", "-NoProfile"]), Path::new("/d"), None).unwrap();
         assert_eq!(np.argv[..3], v(&["pwsh", "-NoProfile", "-NoLogo"]), "the user's switches stay");
         assert!(integrate(&v(&["sh"]), Path::new("/d"), None).is_none());

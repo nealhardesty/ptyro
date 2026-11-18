@@ -2,9 +2,8 @@
 //! signal the whole process group, stop gracefully, and probe the foreground process and cwd.
 
 //!
-//! What differs by platform is in `unix` (pty-process, signals and process groups) and `windows`
-//! (ConPTY and Job Objects, WIN5; until then it compiles and says so), behind the same functions
-//! and types: [`Reader`], [`Writer`], [`Master`], [`Signal`].
+//! The platform's side is in `unix` (pty-process, signals and process groups): [`Reader`],
+//! [`Writer`], [`Master`], [`Signal`].
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -13,46 +12,23 @@ use std::time::Duration;
 use ptyro_core::TermSize;
 
 pub mod acl;
-#[cfg(any(windows, test))]
-mod cmdline;
 pub mod console;
 #[cfg(unix)]
 pub mod handoff;
-#[cfg(windows)]
-pub mod pipe;
 mod probe;
 #[cfg(unix)]
 mod unix;
-#[cfg(windows)]
-pub mod winproc;
 #[cfg(unix)]
 pub use unix::*;
-#[cfg(windows)]
-mod windows;
-#[cfg(windows)]
-pub mod winread;
-#[cfg(windows)]
-pub mod winreg;
 
-/// Whether process `pid` is running: [`ptyro_core::os::alive`] on Unix; on Windows (WIN11, where
-/// `ptyro serve` and its record run natively) whether it can be waited on and hasn't exited.
+/// Whether process `pid` is running: [`ptyro_core::os::alive`].
 pub fn alive(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        pid != 0 && !wait_for_exit(pid, std::time::Duration::ZERO)
-    }
-    #[cfg(not(windows))]
-    {
-        ptyro_core::os::alive(pid)
-    }
+    ptyro_core::os::alive(pid)
 }
 pub use probe::{
-    cwd_of, exec_env_var, load_average, local_time_hm, local_time_hm_at, parent_pid, process_name,
+    cwd_of, exec_env_var, load_average, local_time_hm, local_time_hm_at, others_in_group,
+    parent_pid, process_name, session_leader,
 };
-#[cfg(not(windows))]
-pub use probe::{others_in_group, session_leader};
-#[cfg(windows)]
-pub use windows::*;
 
 /// Variables that would make the child talk to the *outer* terminal or multiplexer, or that mark
 /// a *parent* Claude Code session (SPEC §5.1, §20.1).
@@ -158,16 +134,10 @@ pub struct PtyChild {
     pub master: Master,
 }
 
-/// A command for `argv` (a program and its arguments). On Windows, cmd.exe's command text goes
-/// raw (`cmdline::cmd_tail`): Rust's quoting is the MSVC rules, which cmd doesn't follow.
+/// A command for `argv` (a program and its arguments).
 pub fn command(argv: &[String]) -> tokio::process::Command {
     let (prog, args) = argv.split_first().map_or(("", &[][..]), |(p, a)| (p.as_str(), a));
     let mut c = tokio::process::Command::new(prog);
-    #[cfg(windows)]
-    if let Some(tail) = cmdline::cmd_tail(Path::new(prog), args) {
-        c.raw_arg(tail);
-        return c;
-    }
     c.args(args);
     c
 }

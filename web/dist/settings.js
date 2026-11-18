@@ -36,7 +36,7 @@ const ACTIONS = {
     "daemon.restart": "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
     "daemon.stop": "Stop every session and the daemon",
     "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
-    "daemon.service": "Start ptyro at login (a systemd or launchd service, or a Windows logon task)",
+    "daemon.service": "Start ptyro at login (a systemd or launchd service)",
     "daemon.unservice": "Remove the login service",
     "web.status": "The web app's server: whether it is up, its address, and who started it",
     "web.on": "Have the daemon run the web app's server, now and whenever it starts",
@@ -48,12 +48,11 @@ const ACTIONS = {
     "setup.admin": "A step that needs administrator rights runs only on the computer itself (the owner's exception): the command to run there, and the TUI's checklist that does it",
     "setup.running": "One setup run at a time: while one is going, from here or elsewhere, this page shows its progress instead of starting another",
     "setup.install": "Install the ticked agents and tools on the computer, with what they need first; a step that needs administrator rights shows the command to run there",
-    "setup.where": "On Windows with WSL: where each agent or tool goes, into WSL's distro, onto Windows, or both (tick either column)",
     "setup.login": "Log in to each agent and the GitHub CLI, one account each: the tool's own sign-in in a session here, confirmed by its own status command (ptyro never sees the credentials)",
     "updates.update": "Update an agent that has a newer version out, on the computer, the way it was installed: the command it runs is shown first, and sessions running it keep the old version until they restart",
-    "updates.retry": "An update Windows (or the system) refused because the agent is running: end the sessions running it, then try again from here",
+    "updates.retry": "An update the system refused because the agent is running: end the sessions running it, then try again from here",
     "updates.self": "Update ptyro itself on the computer: the release is downloaded, checked against its SHA256SUMS and put in place, then the daemon is upgraded live (every session carries on); on Windows with WSL both halves. A binary only an administrator can replace shows the command to run there",
-    "setup.move": "Move an agent installed another way (npm, Homebrew, WinGet) to the vendor's recommended installer: the new one is installed and checked first, then the old copy is removed; settings and logins stay. Tick it in the checklist, or from its Health finding",
+    "setup.move": "Move an agent installed another way (npm, Homebrew) to the vendor's recommended installer: the new one is installed and checked first, then the old copy is removed; settings and logins stay. Tick it in the checklist, or from its Health finding",
     "setup.keep": "Keep an agent installed another way as it is: the move isn't offered again, and it updates the way it's installed (Settings → Updates → keep_installer)",
     "setup.offer": "An agent or tool that isn't installed (a chat, a new task, a Health finding) offers setup: the checklist opens with it ticked, to install on the computer",
     "updates.check": "Look for newer versions of your agents now (ptyro looks once a day by itself; Settings → Updates turns that off or skips one)",
@@ -221,7 +220,7 @@ function askMove(m) {
         ], []);
         return;
     }
-    confirm(`Move ${m.name}?`, h("span", {}, moveWords(m)), "Move", () => { installKey = ""; go("#/setup"); void startInstall([m.program], null, [m.program]); }, false);
+    confirm(`Move ${m.name}?`, h("span", {}, moveWords(m)), "Move", () => { installKey = ""; go("#/setup"); void startInstall([m.program], [m.program]); }, false);
 }
 /// Keep an agent installed another way as it is (BOOT7): the computer's `updates.keep_installer`.
 async function keepInstaller(program, name, from) {
@@ -266,7 +265,7 @@ async function startSelfUpdate() {
 function startUpdate(program) {
     installKey = "";
     go("#/setup");
-    void startInstall([program], null);
+    void startInstall([program]);
 }
 /// Look for newer versions now (`ptyro update --check`), then show what's out of date.
 async function checkUpdates() {
@@ -642,7 +641,7 @@ function daemonView() {
         ["Upgrades", s.generation ? `${s.generation}${s.rolled_back ? " (the last was rolled back)" : ""}` : null],
         ["Holds WSL", s.wsl_hold ? aboutDoc(null, s).daemon.holds_wsl : null],
         ["Memory", s.metrics ? `${Math.round(s.metrics.rss_kib / 1024)} MB · ${s.metrics.open_fds} fds · lag ${s.metrics.loop_lag_ms_max} ms` : null], ["Socket", s.socket], ["Logs", s.log_dir]]), conn.scope === "full" ? h("div", { class: "stack-in" }, bar(h("button", { title: tip("daemon.logs"), onclick: () => showLogs() }, "Logs"), h("button", { title: tip("daemon.upgrade"), onclick: upgradeDaemon }, "Upgrade"), h("button", { title: tip("daemon.restart"), onclick: restartDaemon }, "Restart"), h("button", { class: "deny", title: tip("daemon.stop"), onclick: () => confirm("Stop the daemon?", "Every session is stopped and ptyro goes away, this app with it, until you run ptyro again on the computer.", "Stop it", async () => { if (await doHost("daemon.stop", {}, "Stopping…"))
-            ui.toast("Stopped: run ptyro to start it again"); }) }, "Stop")), section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service, or on Windows a logon task, starts the daemon (and this server) when you log in."), bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r)
+            ui.toast("Stopped: run ptyro to start it again"); }) }, "Stop")), section("Start at login", h("p", { class: "sub" }, "A systemd or launchd service starts the daemon (and this server) when you log in."), bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r)
             showNotes("Login service", r.notes ?? []); } }, "Install the service"), h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r)
             showNotes("Login service", r.notes ?? []); } }, "Remove it"))), section("Leave", h("p", { class: "sub" }, "Uninstalling removes ptyro; your repositories stay."), bar(h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
     return h("div", {}, ui.header("Daemon", "#/more"), h("main", { class: "stack" }, body));
@@ -756,17 +755,16 @@ function setupView(rest) {
 }
 // ── the checklist (BOOT1's engine in the daemon, SPEC §24.2; BOOT3's page, §24.6) ────────────
 /// The checklist for some picks. The key: this computer's ids joined by commas ("" is the
-/// defaults, "none" nothing), then on Windows with WSL `|` and WSL's (BOOT8). The reply is
+/// defaults, "none" nothing). The reply is
 /// `SetupPlan`: the plan, each entry's line in the TUI's words, the default agent, and the run
 /// going now, which this page then follows.
 const ids = (k) => k === "" ? null : k === "none" ? [] : k.split(",");
 const setupPlan = new Cache((key) => {
-    const [mine, wsl] = key.split("|");
     // What this page followed when it asked, and how many asks came before: a plan that says
     // nothing is running means the run ended only if it was asked for after the run was known.
     const asked = installRun.id;
     const at = asks;
-    return conn.request({ t: "setup_plan", picks: ids(mine), wsl_picks: wsl === undefined ? null : ids(wsl) ?? [] }).then((r) => {
+    return conn.request({ t: "setup_plan", picks: ids(key) }).then((r) => {
         const said = installRun.sync(r.running, asked);
         // The checklist and the logins as they are after a run that ended out of this page's sight
         // (or that a join found finished): this survey may be from before its end.
@@ -864,14 +862,6 @@ export function setupBanner() {
         return null;
     return h("div", { class: "banner warn setup-banner", title: tip("setup.banner") }, h("b", {}, "No coding agent is installed on this computer yet. "), "Tick Claude Code, Codex or another, and ptyro installs it with what it needs, then logs you in.", bar(h("a", { class: "button primary", href: "#/setup" }, "Set up agents and tools"), h("button", { class: "small", onclick: () => { store.set("ptyro.setup.later", "1"); ui.render(); } }, "Not now")));
 }
-/// What WSL is, for the page (the CLI's words for it).
-function wslText(w) {
-    if (w?.state === "unusable")
-        return `WSL: ${w.reason}, so this sets up Windows only. For WSL too: ${w.fix}`;
-    if (w?.state === "inside")
-        return `This is WSL${w.distro ? ` (${w.distro})` : ""}: setup here installs into it. For Windows itself, run \`ptyro setup --where windows\` in a Windows terminal.`;
-    return null;
-}
 const copyButton = (text) => h("button", { class: "small", onclick: () => void navigator.clipboard?.writeText(text).then(() => ui.toast("Copied"), () => ui.toast("Couldn't copy")) }, "Copy");
 function installSection() {
     const title = "Agents and tools";
@@ -883,107 +873,77 @@ function installSection() {
         return section(title, waiting ?? h("p", { class: "sub" }, "Looking…"));
     const plan = reply.plan;
     const lines = reply.lines ?? [];
-    const lineOf = (e) => lines.find((l) => l.id === e.id && l.side === e.side) ?? {};
-    const two = plan.wsl?.state === "usable";
-    const mineSide = plan.entries[0]?.side ?? "local";
-    const sides = two ? [mineSide, "wsl"] : [mineSide];
-    const rows = (side) => plan.entries.filter((e) => e.side === side);
-    const picked = (side) => rows(side).filter((e) => e.picked).map((e) => e.id);
-    const keyOf = (mine, wsl) => {
-        const k = (l) => l.length ? l.join(",") : "none";
-        return two ? `${k(mine)}|${wsl.join(",")}` : k(mine);
-    };
-    const toggle = (side, id, on) => {
-        const next = (l) => on ? [...l, id] : l.filter((p) => p !== id);
-        const mine = picked(mineSide), wsl = picked("wsl");
-        installKey = side === "wsl" ? keyOf(mine, next(wsl)) : keyOf(next(mine), wsl);
+    const lineOf = (e) => lines.find((l) => l.id === e.id) ?? {};
+    const picked = () => plan.entries.filter((e) => e.picked).map((e) => e.id);
+    const toggle = (id, on) => {
+        const now = picked();
+        const next = on ? [...now, id] : now.filter((p) => p !== id);
+        installKey = next.length ? next.join(",") : "none";
         ui.render();
     };
     // Setup running on the computer, but not as the daemon's run (a terminal's, the TUI's).
     const held = !installRun.running && !installRun.starting ? reply.held_by ?? null : null;
     const running = installRun.running || installRun.starting || !!held;
-    const all = plan.entries;
-    const entryOn = (id, side) => all.find((y) => y.id === id && y.side === side);
     const box = (e) => {
-        const c = h("input", { type: "checkbox", "aria-label": two ? `${e.name} on ${sideName(e.side)}` : e.name });
+        const c = h("input", { type: "checkbox", "aria-label": e.name });
         c.checked = e.ticked;
         // A prerequisite something ticked needs stays ticked (untick that first).
         c.disabled = running || (e.ticked && !e.picked);
-        c.addEventListener("change", () => toggle(e.side, e.id, c.checked));
+        c.addEventListener("change", () => toggle(e.id, c.checked));
         return c;
     };
-    const sideName = (s) => s === "wsl" ? `WSL (${plan.wsl.distro})` : s === "windows" ? "Windows" : "this computer";
-    // An item is open while some side doesn't have it (the engine's `rows`); here on every side,
-    // it is under Already here (`already`).
-    const open = rows(mineSide).filter((e) => sides.some((s) => { const x = entryOn(e.id, s); return x && !isHere(x); }));
-    const here = rows(mineSide).filter((e) => !open.includes(e));
-    // Installed another way and offered the move (BOOT7): Keep stops offering it (this computer's
-    // side; WSL keeps its own, in its config).
-    const keepButton = (e) => {
-        const x = entryOn(e.id, mineSide);
-        return x?.moves ? h("button", { class: "small setup-keep", title: tip("setup.keep"), disabled: running, onclick: (ev) => { ev.preventDefault(); void keepInstaller(e.id, e.name, x.moves.from); } }, `Keep ${viaWords(x.moves.from)}`) : null;
-    };
+    // An item is open while it isn't here (the engine's `rows`); else it is under Already here
+    // (`already`).
+    const open = plan.entries.filter((e) => !isHere(e));
+    const here = plan.entries.filter((e) => isHere(e));
+    // Installed another way and offered the move (BOOT7): Keep stops offering it.
+    const keepButton = (e) => e.moves ? h("button", { class: "small setup-keep", title: tip("setup.keep"), disabled: running, onclick: (ev) => { ev.preventDefault(); void keepInstaller(e.id, e.name, e.moves.from); } }, `Keep ${viaWords(e.moves.from)}`) : null;
     const item = (e) => {
         const about = lineOf(e).about ?? "";
-        if (!two)
-            return h("div", { class: "setup-item-row" }, h("label", { class: "field check setup-item", title: e.moves ? tip("setup.move") : undefined }, box(e), h("span", {}, h("b", {}, e.name)), about ? h("small", {}, about) : null), keepButton(e));
-        const cells = sides.map((s) => {
-            const x = entryOn(e.id, s);
-            if (!x)
-                return null;
-            const l = lineOf(x);
-            if (isHere(x))
-                return h("div", { class: "setup-cell" }, h("small", {}, `${sideName(s)}: ${l.how ?? "✓"}`));
-            return h("label", { class: "field check setup-cell" }, box(x), h("span", {}, sideName(s), l.how ? h("small", {}, ` ${l.how}`) : null), (l.why ?? []).length ? h("small", {}, l.why.join("; ")) : null);
-        });
-        return h("div", { class: "setup-item" }, h("b", {}, e.name), about ? h("small", {}, about) : null, h("div", { class: "setup-cells" }, ...cells), keepButton(e));
+        return h("div", { class: "setup-item-row" }, h("label", { class: "field check setup-item", title: e.moves ? tip("setup.move") : undefined }, box(e), h("span", {}, h("b", {}, e.name)), about ? h("small", {}, about) : null), keepButton(e));
     };
     const group = (name, kind) => {
         const these = open.filter((e) => e.kind === kind);
         return these.length ? h("div", { class: "setup-group" }, h("h4", {}, name), ...these.map(item)) : null;
     };
     const hereLine = (e) => {
-        const each = sides.map((s) => entryOn(e.id, s)).filter(Boolean).map((x) => {
-            const at = x.path ? ` (${x.path})` : "";
-            const words = lineOf(x).state ?? x.state;
-            return two ? `${sideName(x.side)} ${words}${at}` : `${words}${at}`;
-        });
+        const at = e.path ? ` (${e.path})` : "";
+        const words = `${lineOf(e).state ?? e.state}${at}`;
         // Out of date, installed another way (npm, Homebrew): it updates that way (BOOT5).
-        const stale = sides.map((s) => entryOn(e.id, s)).find((x) => x?.state === "other" && x.latest);
-        return h("div", { class: "setup-here" }, h("span", { class: "lvl ok" }, "✓"), " ", h("b", {}, e.name), h("small", {}, ` ${each.join(" · ")}${e.id === reply.default_agent ? " · your default agent" : ""}`), stale ? h("button", { class: "small", title: tip("updates.update"), disabled: running, onclick: () => void startInstall([e.id], null) }, `Update to ${stale.latest}`) : null);
+        const stale = e.state === "other" && e.latest ? e : null;
+        return h("div", { class: "setup-here" }, h("span", { class: "lvl ok" }, "✓"), " ", h("b", {}, e.name), h("small", {}, ` ${words}${e.id === reply.default_agent ? " · your default agent" : ""}`), stale ? h("button", { class: "small", title: tip("updates.update"), disabled: running, onclick: () => void startInstall([e.id]) }, `Update to ${stale.latest}`) : null);
     };
     const steps = webSteps(plan);
     const admin = adminSteps(plan);
     const waits = waitsForAdmin(plan);
-    const wsl = wslText(plan.wsl);
     const who = held
         ? `Setup is already running on the computer (from ${held}): Install waits until it's done, and this page looks again on its own.`
         : installRun.theirs
             ? "Setup is already running on the computer (started from another window, device or before this page opened): its progress is below. The checklist opens again once it's done."
             : "Installing on the computer: its progress is below.";
-    return section(title, running ? h("p", { class: "banner setup-running", title: tip("setup.running") }, `⏳ ${who}`) : null, h("div", { title: tip(two ? "setup.where" : "setup.plan") }, two ? h("p", { class: "sub" }, `WSL's ${plan.wsl.distro} has ${plan.wsl.version}: tick an agent or tool under Windows, WSL, or both.`) : null, group("Agents", "agent"), group("Tools", "tool"), open.length ? null : h("p", { class: "sub" }, "Every agent and tool ptyro sets up is here already."), here.length ? h("div", { class: "setup-group" }, h("h4", {}, "Already here"), ...here.map(hereLine)) : null, wsl ? h("p", { class: "sub" }, wsl) : null), admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") }, h("b", {}, "Administrator rights are asked for only on the computer itself"), h("p", { class: "sub" }, "A password or a Windows prompt never goes through this page, so these aren't installed from here. On the computer, run:"), ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}${two ? ` on ${sideName(a.side)}` : ""}: left for the computer`))), h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."), ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(mineSide), two ? picked("wsl") : null, movesOf(plan)) }, held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null, installRun.report ? retrySection(plan) : null);
+    return section(title, running ? h("p", { class: "banner setup-running", title: tip("setup.running") }, `⏳ ${who}`) : null, h("div", { title: tip("setup.plan") }, group("Agents", "agent"), group("Tools", "tool"), open.length ? null : h("p", { class: "sub" }, "Every agent and tool ptyro sets up is here already."), here.length ? h("div", { class: "setup-group" }, h("h4", {}, "Already here"), ...here.map(hereLine)) : null), admin.length ? h("div", { class: "banner warn setup-admin", title: tip("setup.admin") }, h("b", {}, "Administrator rights are asked for only on the computer itself"), h("p", { class: "sub" }, "A password never goes through this page, so these aren't installed from here. On the computer, run:"), ...admin.map((a) => h("div", { class: "setup-cmd" }, h("code", {}, a.command), copyButton(a.command), h("small", {}, ` ${a.names.join(", ")}: left for the computer`))), h("p", { class: "sub" }, "Or in ptyro there: press the prefix (C-q unless you changed it), then U, for this checklist, which asks for the password once. ", h("code", {}, "ptyro setup"), " in a terminal does the same."), ...waits.map(([what, first]) => h("p", { class: "sub" }, `${what} needs ${first} first, so it's in that command too.`))) : null, bar(h("button", { class: "primary", title: tip("setup.install"), disabled: running || !steps.length, onclick: () => void startInstall(picked(), movesOf(plan)) }, held ? "Waiting for the other setup" : running ? "Installing…" : steps.length ? `Install ${steps.length}` : "Nothing to install from here")), installRun.lines.length ? h("pre", { class: "log" }, installRun.lines.join("\n")) : null, installRun.report ? h("p", { class: "sub setup-summary" }, installRun.summary()) : null, installRun.report ? retrySection(plan) : null);
 }
 /// An update refused because the agent is running (BOOT5): which sessions run it, and Try again
 /// once they've ended (the CLI and the TUI ask "Try again now?" the same way).
 function retrySection(plan) {
     if (!installRun.retry.length)
         return null;
-    return h("div", { class: "banner warn setup-retry", title: tip("updates.retry") }, ...installRun.retry.map(({ id, side }) => {
+    return h("div", { class: "banner warn setup-retry", title: tip("updates.retry") }, ...installRun.retry.map(({ id }) => {
         const name = plan?.entries?.find((e) => e.id === id)?.name ?? id;
-        const again = retryOf({ id, side }, name);
+        const again = retryOf({ id }, name);
         const running = runningAgent(allSessions().values(), id);
-        return h("div", { class: "stack-in" }, h("p", {}, h("b", {}, `${name} is still running`), running.length ? ` (${running.join(", ")})` : "", ", so its update couldn't replace it. End those sessions (or quit it wherever else it runs), then try again."), bar(h("button", { class: "primary", title: tip("updates.retry"), onclick: () => void startInstall(again.picks, again.wslPicks) }, again.label)));
+        return h("div", { class: "stack-in" }, h("p", {}, h("b", {}, `${name} is still running`), running.length ? ` (${running.join(", ")})` : "", ", so its update couldn't replace it. End those sessions (or quit it wherever else it runs), then try again."), bar(h("button", { class: "primary", title: tip("updates.retry"), onclick: () => void startInstall(again.picks) }, again.label)));
     }));
 }
 /// Run picks on the computer. `moves`: the agents installed another way to move to the
 /// recommended installer (BOOT7: ticked where offered, or Move on Health); every other one stays
 /// as it is.
-async function startInstall(picks, wslPicks, moves = []) {
+async function startInstall(picks, moves = []) {
     installRun.start();
     ui.render();
     try {
-        const r = await conn.request({ t: "setup_run", picks, wsl_picks: wslPicks, moves });
-        // The plan the daemon runs (it looked at WSL again), not the page's: its sides each report.
+        const r = await conn.request({ t: "setup_run", picks, moves });
+        // The plan the daemon runs (it looked again), not the page's.
         installRun.started(r.run, r.plan);
     }
     catch (e) {
@@ -996,8 +956,8 @@ async function startInstall(picks, wslPicks, moves = []) {
     ui.render();
 }
 // ── logins (BOOT4: each tool's own sign-in, confirmed by its status command, SPEC §24.4) ─────
-/// Keyed by side: "" the daemon's computer, "wsl" a Windows daemon's WSL distro (its own ptyro).
-const setupLogins = new Cache((side) => host("login.list", side ? { where: side } : {}));
+/// The daemon's computer's logins (the key is always "").
+const setupLogins = new Cache(() => host("login.list", {}));
 const reloadLogins = () => setupLogins.reload();
 const LOGIN_STATE = {
     logged_in: "✓ logged in",
@@ -1013,29 +973,18 @@ function loginsSection() {
     const waiting = pending(setupLogins, "", "Checking each login…");
     if (waiting || !r)
         return section(title, waiting ?? h("p", { class: "sub" }, "Checking…"));
-    const plan = setupPlan.get(installKey)?.plan;
-    const wsl = plan?.wsl?.state === "usable" ? plan.wsl.distro : null;
-    // One list per side: the computer's, and on a Windows daemon with WSL, WSL's too.
-    const list = (side, logins) => {
+    const list = (logins) => {
         const rows = logins.filter((l) => l.state !== "missing");
         return rows.length
-            ? h("div", { class: "rows" }, ...rows.map((l) => row(l.name, `${LOGIN_STATE[l.state] ?? l.state}${l.state === "logged_in" ? "" : ` · runs ${l.command}`}`, l.state === "logged_in" ? null : h("button", { class: "small", title: tip("setup.login"), onclick: () => void startLogin(l.id, l.name, side) }, "Log in"))))
+            ? h("div", { class: "rows" }, ...rows.map((l) => row(l.name, `${LOGIN_STATE[l.state] ?? l.state}${l.state === "logged_in" ? "" : ` · runs ${l.command}`}`, l.state === "logged_in" ? null : h("button", { class: "small", title: tip("setup.login"), onclick: () => void startLogin(l.id, l.name) }, "Log in"))))
             : h("p", { class: "sub" }, "No agent or GitHub CLI is installed yet: install them above, then log in here.");
     };
-    const wslPart = () => {
-        if (!wsl)
-            return [];
-        const w = setupLogins.get("wsl");
-        const failed = setupLogins.error("wsl");
-        return [h("h3", { class: "day" }, `WSL (${wsl})`),
-            w ? list("wsl", w.logins) : h("p", { class: "sub" }, failed ? `WSL's logins can't be checked: ${failed}` : "Checking WSL's logins…")];
-    };
-    return section(title, h("p", { class: "sub", title: tip("setup.login") }, "One account each, through each tool's own sign-in. Log in runs it in a session here: follow the link it shows and enter its code (at the computer, it may open the browser there). ptyro never sees the credentials; each tool's own status command says whether it worked."), wsl ? h("h3", { class: "day" }, "Windows") : null, list("", r.logins), ...wslPart(), bar(h("button", { onclick: reloadLogins }, "Check again")), h("p", { class: "sub" }, r.profiles));
+    return section(title, h("p", { class: "sub", title: tip("setup.login") }, "One account each, through each tool's own sign-in. Log in runs it in a session here: follow the link it shows and enter its code (at the computer, it may open the browser there). ptyro never sees the credentials; each tool's own status command says whether it worked."), list(r.logins), bar(h("button", { onclick: reloadLogins }, "Check again")), h("p", { class: "sub" }, r.profiles));
 }
-async function startLogin(id, name, side) {
-    const r = await doHost("login.start", side ? { id, where: side } : { id });
+async function startLogin(id, name) {
+    const r = await doHost("login.start", { id });
     if (r) {
-        ui.toast(`Logging in to ${name}${side === "wsl" ? " in WSL" : ""}: its own sign-in; come back and Check again when it's done`);
+        ui.toast(`Logging in to ${name}: its own sign-in; come back and Check again when it's done`);
         go(`#/s/${enc(r.session)}`);
     }
 }

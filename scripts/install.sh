@@ -87,7 +87,7 @@ have tar || die "tar is needed"
 case "$(uname -s)" in
   Linux) os=unknown-linux-gnu ;;
   Darwin) os=apple-darwin ;;
-  MINGW* | MSYS* | CYGWIN*) die "on Windows, install ptyro.exe from PowerShell: irm https://github.com/$REPO/releases/latest/download/install.ps1 | iex (and this script inside WSL for the daemon)" ;;
+  MINGW* | MSYS* | CYGWIN*) die "on Windows, ptyro runs inside WSL2: open your WSL terminal (wsl --install, if you have none) and run this there" ;;
   *) die "$(uname -s) isn't supported: ptyro runs on Linux and macOS (WSL2 works on Windows)" ;;
 esac
 case "$(uname -m)" in

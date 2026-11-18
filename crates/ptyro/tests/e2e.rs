@@ -270,7 +270,7 @@ async fn an_incompatible_protocol_major_is_rejected() {
     use futures::{SinkExt, StreamExt};
     use ptyro_protocol::{ClientInfo, ClientKind, Encoding, Version, decode, encode, framing};
     let d = TempDaemon::start(BIN).unwrap();
-    // The daemon's own socket (a named pipe on Windows), spoken to directly.
+    // The daemon's own socket, spoken to directly.
     let mut opts = ptyro_client::ConnectOptions::new(d.paths.clone(), ClientKind::Test);
     opts.autospawn = false;
     let stream = ptyro_client::connect_raw(&opts).await.unwrap();
@@ -389,7 +389,6 @@ fn only_one_daemon_per_home_and_stale_sockets_are_recovered() {
     assert!(String::from_utf8_lossy(&second.stderr).contains("already running"));
 
     d.crash();
-    // (Unix: a named pipe goes with the process that served it.)
     #[cfg(unix)]
     assert!(d.paths.socket.exists(), "a crash leaves the socket behind");
     // A new client auto-spawns a daemon, which clears the stale socket (autospawn allowed here:

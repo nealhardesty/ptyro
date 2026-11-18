@@ -642,14 +642,13 @@ impl Updates {
     }
 }
 
-/// This ptyro as a client (WIN3): where its daemon is when none runs on this computer.
+/// This ptyro as a client: where its daemon is.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Client {
-    /// The daemon to use when `--remote` and `PTYRO_REMOTE` don't say: `wsl://` (the default WSL
-    /// distro), `wsl://<distro>`, an ssh host (`[ssh://][user@]host[:port]`), or `local`: this
-    /// computer's own daemon (on Windows, the native one: WIN5). Windows asks once, when a WSL
-    /// distro has ptyro, and keeps the answer here.
+    /// The daemon to use when `--remote` and `PTYRO_REMOTE` don't say: an ssh host
+    /// (`[ssh://][user@]host[:port]`), or `local`: this computer's own daemon. (`wsl://…`, which
+    /// Windows' own ptyro used, was removed on 2026-11-18: `ptyro doctor` takes it out.)
     pub default_remote: Option<String>,
 }
 
@@ -657,9 +656,7 @@ impl Client {
     fn validate(&self) -> Result<(), String> {
         match self.default_remote.as_deref().map(str::trim) {
             Some(r) if r.is_empty() || r.contains(char::is_whitespace) || r.starts_with('-') => {
-                Err(format!(
-                    "client.default_remote: {r:?} (wsl://, wsl://<distro>, an ssh host, or local)"
-                ))
+                Err(format!("client.default_remote: {r:?} (an ssh host, or local)"))
             }
             _ => Ok(()),
         }
@@ -1807,13 +1804,7 @@ pub const BUILTIN_EDITORS: &[&str] = &["nvim", "vim", "hx", "code", "zed", "curs
 
 /// This computer's file manager, by its own name. Any of `finder`, `explorer` and `files` opens
 /// it, so a config shared between computers keeps working.
-pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
-    "finder"
-} else if cfg!(windows) {
-    "explorer"
-} else {
-    "files"
-};
+pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") { "finder" } else { "files" };
 const FILE_MANAGERS: [&str; 3] = ["finder", "explorer", "files"];
 
 /// Terminal apps that open a window of their own in the worktree, offered after the editors and
@@ -2036,8 +2027,6 @@ impl Config {
                 } else if let Some(w) = here.wsl.as_ref().filter(|w| w.interop) {
                     // Windows' own file manager, not a Linux one WSL rarely has.
                     def(&[&w.windows_exe("explorer.exe").to_string_lossy(), "{winpath}"], false)
-                } else if cfg!(windows) {
-                    def(&["explorer", "{path}"], false)
                 } else if here.program("xdg-open") {
                     def(&["xdg-open", "{path}"], false)
                 } else if here.program("gio") {

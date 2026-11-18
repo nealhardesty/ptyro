@@ -7,8 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-# `ptyrow` (src/bin) is the windowless trampoline Windows starts ptyro through (WIN10).
-default-run = "ptyro"
 
 [lints]
 workspace = true
@@ -50,8 +48,6 @@ time.workspace = true
 toml_edit.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# The daemon, on Windows too (WIN5: ConPTY and a named pipe). ptyro.exe still uses the daemon in
-# WSL unless told otherwise (`client.default_remote = local`).
 ptyro-daemon.workspace = true
 ptyro-pty.workspace = true
 ptyro-testkit.workspace = true

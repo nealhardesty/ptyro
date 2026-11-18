@@ -30,17 +30,10 @@ impl World {
         let h = ptyro_core::os::canonicalize(home.path()).unwrap();
         std::fs::write(h.join(".gitconfig"), "[user]\n\tname = Test User\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n").unwrap();
         // A fake `claude` on PATH: prints where and as whom it runs.
-        let say = ptyro_testkit::program::say_then_wait(
-            "fake-claude wt=${PTYRO_WORKTREE_NAME} profile=${PTYRO_PROFILE}",
-            60,
-        );
         ptyro_testkit::program::program(
             &h.join("bin"),
             "claude",
-            BIN,
             "echo \"fake-claude wt=$PTYRO_WORKTREE_NAME profile=$PTYRO_PROFILE\"\nexec sleep 60",
-            &say.iter().map(String::as_str).collect::<Vec<_>>(),
-            &[],
         );
         let hs = h.to_string_lossy().into_owned();
         let path = ptyro_testkit::program::path_with(&h.join("bin"));

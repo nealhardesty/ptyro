@@ -150,15 +150,12 @@ fn bring_files(git: &Git, root: &Path, dst: &Path, cfg: &ProjectConfig) -> Vec<S
         if let Some(parent) = to.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let symlink = || ptyro_core::os::symlink(&from, &to);
+        let symlink = || std::os::unix::fs::symlink(&from, &to);
         let how = match cfg.worktree.share_mode {
-            ShareMode::Symlink => symlink().map(|l| l.words()),
+            ShareMode::Symlink => symlink().map(|()| "linked"),
             ShareMode::Clone => match ptyro_git::clone_tree(&from, &to, false) {
                 Ok(_) => Ok("cloned (copy-on-write)"),
-                Err(_) => symlink().map(|l| match l {
-                    ptyro_core::os::Linked::Symlink => "linked (no copy-on-write here)",
-                    other => other.words(),
-                }),
+                Err(_) => symlink().map(|()| "linked (no copy-on-write here)"),
             },
             ShareMode::Copy => ptyro_git::clone_tree(&from, &to, true)
                 .map(|cow| if cow { "cloned (copy-on-write)" } else { "copied" }),

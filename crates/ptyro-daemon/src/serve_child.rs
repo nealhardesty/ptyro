@@ -180,10 +180,8 @@ impl Daemon {
         let child = std::process::Command::new(exe)
             .args(["serve", "--managed"])
             .envs(self.base_env().iter().map(|(k, v)| (k, v)))
-            // Who to outlive by no more than a moment (Windows has no parent to watch: WIN11).
+            // Who to outlive by no more than a moment.
             .env("PTYRO_DAEMON_PID", std::process::id().to_string())
-            // And when it started (Windows): a later process given the same id isn't it (WIN11).
-            .envs(Self::started_env())
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log)
@@ -193,15 +191,6 @@ impl Daemon {
         r.started_with = Some(self.config().remote);
         r.since_ms = Some(now_ms());
         Ok(())
-    }
-
-    /// `PTYRO_DAEMON_STARTED` on Windows, beside `PTYRO_DAEMON_PID`.
-    fn started_env() -> Vec<(&'static str, String)> {
-        #[cfg(windows)]
-        if let Some(t) = ptyro_pty::process_started(std::process::id()) {
-            return vec![("PTYRO_DAEMON_STARTED", t.to_string())];
-        }
-        Vec::new()
     }
 
     /// How the web app's server is.

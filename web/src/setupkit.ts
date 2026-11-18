@@ -3,21 +3,13 @@
 // or one already going when the page opened), whether the first-run banner shows, and what an
 // administrator step says to run on the computer instead.
 
-type Plan = { platform?: string; wsl?: any; entries?: any[] } | null | undefined;
-
-/// How many sides a setup run reports on (each ends with its own `finished`, BOOT8): those with
-/// a ticked entry that runs or is blocked, in the plan the daemon actually runs.
-export function setupSides(plan: { entries?: { side?: string; ticked?: boolean; action?: unknown; blocked?: unknown }[] } | null | undefined): number {
-  const sides = new Set((plan?.entries ?? []).filter((e) => e.ticked && (e.action || e.blocked)).map((e) => e.side ?? "local"));
-  return Math.max(1, sides.size);
-}
+type Plan = { platform?: string; entries?: any[] } | null | undefined;
 
 /// Installed already, as wanted (the engine's `here_already`): one installed another way and
 /// offered the move to the recommended installer (BOOT7, `moves`) is a row to tick instead.
 export const isHere = (e: any): boolean => e.state === "installed" || (e.state === "other" && !e.moves);
 
-/// No coding agent on any side (missing everywhere; an outdated one is still there): the
-/// first-run banner shows.
+/// No coding agent (an outdated one is still there): the first-run banner shows.
 export const noAgent = (plan: Plan): boolean => !!plan?.entries?.length && !plan.entries.some((e) => e.kind === "agent" && e.state !== "missing");
 
 /// Whether the first-run banner may ask (a survey) and show: only on a device that can install
@@ -28,48 +20,38 @@ export function bannerWants(o: { scope: string; later: boolean; seen: boolean })
 }
 
 /// What is left for the computer (the owner's parity exception, 2026-11-06): the ticked
-/// administrator steps, and what waits for one on its side (OpenCode after Node.js from WinGet),
-/// in the plan's order. The daemon skips them all (`Admin::Never`).
+/// administrator steps, and what waits for one, in the plan's order. The daemon skips them all
+/// (`Admin::Never`).
 export function leftForComputer(plan: Plan): any[] {
   const entries = plan?.entries ?? [];
-  const key = (side: string | undefined, id: string): string => `${side ?? "local"}:${id}`;
-  const left = new Set(entries.filter((e) => e.ticked && e.action?.admin).map((e) => key(e.side, e.id)));
+  const left = new Set(entries.filter((e) => e.ticked && e.action?.admin).map((e) => e.id as string));
   for (let grew = true; grew;) {
     grew = false;
     for (const e of entries) {
-      if (!e.ticked || !e.action || left.has(key(e.side, e.id))) continue;
-      if ((e.action.after ?? []).some((id: string) => left.has(key(e.side, id)))) { left.add(key(e.side, e.id)); grew = true; }
+      if (!e.ticked || !e.action || left.has(e.id)) continue;
+      if ((e.action.after ?? []).some((id: string) => left.has(id))) { left.add(e.id); grew = true; }
     }
   }
-  return entries.filter((e) => left.has(key(e.side, e.id)));
+  return entries.filter((e) => left.has(e.id));
 }
 
-/// Per side, what is left for the computer and the command to run there.
-export interface AdminStep { side: string; names: string[]; command: string }
+/// What is left for the computer and the command to run there.
+export interface AdminStep { names: string[]; command: string }
 export function adminSteps(plan: Plan): AdminStep[] {
-  const entries = plan?.entries ?? [];
-  const sides = [...new Set(entries.map((e) => e.side ?? "local"))];
-  const two = sides.length > 1;
   const left = leftForComputer(plan);
-  const out: AdminStep[] = [];
-  for (const side of sides) {
-    const these = left.filter((e) => (e.side ?? "local") === side);
-    if (!these.length) continue;
-    const where = two ? ` --where ${side === "wsl" ? "wsl" : "windows"}` : "";
-    out.push({ side, names: these.map((e) => e.name), command: `ptyro install ${these.map((e) => e.id).join(" ")}${where}` });
-  }
-  return out;
+  if (!left.length) return [];
+  return [{ names: left.map((e) => e.name), command: `ptyro install ${left.map((e) => e.id).join(" ")}` }];
 }
 
-/// Ticked items with no administrator step of their own that wait for one (OpenCode after
-/// Node.js from WinGet): `["OpenCode", "Node.js"]` pairs, so the page says why they're left too.
+/// Ticked items with no administrator step of their own that wait for one:
+/// `["OpenCode", "Node.js"]` pairs, so the page says why they're left too.
 export function waitsForAdmin(plan: Plan): [string, string][] {
   const left = leftForComputer(plan);
   const out: [string, string][] = [];
   for (const e of left) {
     if (e.action?.admin) continue;
     for (const id of e.action?.after ?? []) {
-      const dep = left.find((x) => x.id === id && x.side === e.side);
+      const dep = left.find((x) => x.id === id);
       if (dep) out.push([e.name, dep.name]);
     }
   }
@@ -82,31 +64,27 @@ export function webSteps(plan: Plan): any[] {
   return (plan?.entries ?? []).filter((e) => e.ticked && e.action && !left.has(e));
 }
 
-/// A `setup_progress` event: `{run, side, event, seq}` (`seq` from 1, 0 from an older daemon).
-export interface Progress { run: string; side?: string; event: any; seq?: number }
+/// A `setup_progress` event: `{run, event, seq}` (`seq` from 1, 0 from an older daemon).
+export interface Progress { run: string; event: any; seq?: number }
 
 /// A run as `SetupPlan.running` carries it.
-export interface Running { run: string; plan: Plan; events: { seq: number; side?: string; event: any }[] }
+export interface Running { run: string; plan: Plan; events: { seq: number; event: any }[] }
 
-/// A setup run as this page follows it: its lines, then its report once every side has
-/// finished. `theirs`: it was going already (another device, or before a reload), not started
+/// A setup run as this page follows it: its lines, then its report once it has finished. `theirs`: it was going already (another device, or before a reload), not started
 /// here. `ended`: it finished while this page was away, so there is no report to show.
 export class SetupLog {
   id = "";
   starting = false;
   theirs = false;
   ended = false;
-  sides = 1;
   seq = 0;
-  /// The plan the run runs (`SetupStarted`'s or `running.plan`), for its sides and its words.
+  /// The plan the run runs (`SetupStarted`'s or `running.plan`), for its words.
   plan: Plan = null;
   lines: string[] = [];
-  /// Each side's report, as its `finished` said, with the side.
-  reports: { side: string; report: any }[] = [];
   report: { done: string[]; failed: string[]; skipped: string[]; blocked: string[] } | null = null;
   /// Updates that failed because the program is running (BOOT5, `failed.in_use`): the page offers
   /// to try each again once its sessions end.
-  retry: { id: string; side: string }[] = [];
+  retry: { id: string }[] = [];
   /// Events from before this page's own run said its id.
   private early: Progress[] = [];
   /// Events of the followed run that came after a gap in `seq`: held until the plan's `running`
@@ -119,7 +97,7 @@ export class SetupLog {
   get running(): boolean { return this.id !== "" && !this.report && !this.ended; }
 
   private reset(): void {
-    Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, retry: [], early: [], held: [] });
+    Object.assign(this, { id: "", starting: false, theirs: false, ended: false, seq: 0, plan: null, lines: [], report: null, retry: [], early: [], held: [] });
   }
 
   private line(t: string): void { this.lines.push(t); if (this.lines.length > 400) this.lines.shift(); }
@@ -130,12 +108,11 @@ export class SetupLog {
   /// It was refused or failed: nothing is followed.
   failed(): void { this.starting = false; this.early = []; }
 
-  /// The daemon said this page's run started (`SetupStarted`): count the sides from the plan it
-  /// runs, never the page's own.
+  /// The daemon said this page's run started (`SetupStarted`), with the plan it runs (never the
+  /// page's own).
   started(run: string, plan: Plan): void {
     this.id = run;
     this.plan = plan;
-    this.sides = setupSides(plan);
     this.starting = false;
     for (const e of this.early.splice(0)) this.event(e);
   }
@@ -156,7 +133,6 @@ export class SetupLog {
       this.id = running.run;
       this.theirs = true;
       this.plan = running.plan;
-      this.sides = setupSides(running.plan);
       const stray = this.stray.run === running.run ? this.stray.events.splice(0) : [];
       this.merge([...running.events.map((e) => ({ run: running.run, ...e })), ...stray]);
       return "joined";
@@ -170,7 +146,7 @@ export class SetupLog {
 
   /// Add `events` (in `seq` order, those not seen yet) and what was held, saying so when some
   /// are gone (the daemon keeps the latest 500). True when that ended the run.
-  private merge(events: { seq?: number; side?: string; event: any }[]): boolean {
+  private merge(events: { seq?: number; event: any }[]): boolean {
     const all = [...events, ...this.held.splice(0)].map((e) => ({ run: this.id, ...e }))
       .filter((e) => !e.seq || e.seq > this.seq)
       .sort((x, y) => (x.seq ?? 0) - (y.seq ?? 0));
@@ -205,40 +181,35 @@ export class SetupLog {
       this.seq = e.seq;
     }
     const ev = e.event;
-    const at = this.sides > 1 ? (e.side === "wsl" ? "WSL: " : "Windows: ") : "";
-    const left = (id: string): boolean => leftForComputer(this.plan).some((x) => x.id === id && (x.side ?? "local") === (e.side ?? "local"));
-    if (ev.event === "started") this.line(`▸ ${at}${ev.name}: ${ev.command}`);
+    const left = (id: string): boolean => leftForComputer(this.plan).some((x) => x.id === id);
+    if (ev.event === "started") this.line(`▸ ${ev.name}: ${ev.command}`);
     else if (ev.event === "line") this.line(`  │ ${ev.text}`);
-    else if (ev.event === "done") this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
+    else if (ev.event === "done") this.line(`✓ ${ev.id}${ev.version ? " " + ev.version : ""}`);
     else if (ev.event === "failed") {
-      this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
-      if (ev.in_use) this.retry.push({ id: ev.id, side: e.side ?? "local" });
+      this.line(`✗ ${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+      if (ev.in_use) this.retry.push({ id: ev.id });
     }
-    else if (ev.event === "skipped" && left(ev.id)) this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
-    else if (ev.event === "skipped") this.line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
-    else if (ev.event === "blocked") this.line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
+    else if (ev.event === "skipped" && left(ev.id)) this.line(`– ${ev.id}: left for the computer: ${ev.fix}`);
+    else if (ev.event === "skipped") this.line(`– ${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
+    else if (ev.event === "blocked") this.line(`✗ ${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
     else if (ev.event === "finished") {
-      this.reports.push({ side: e.side ?? "local", report: ev.report });
-      if (this.reports.length >= this.sides) {
-        const all = (k: string): string[] => this.reports.flatMap((r) => r.report[k] ?? []);
-        this.report = { done: all("done"), failed: all("failed"), skipped: all("skipped"), blocked: all("blocked") };
-        return "done";
-      }
+      const rep = ev.report ?? {};
+      this.report = { done: rep.done ?? [], failed: rep.failed ?? [], skipped: rep.skipped ?? [], blocked: rep.blocked ?? [] };
+      return "done";
     }
     return "";
   }
 
   /// The report in words: `2 installed, 1 failed. git and GitHub CLI are left for the computer
-  /// (administrator rights): run ptyro install git gh there.` What was left for the computer is
-  /// told apart by side and id: a skip on one side for another reason stays "not run".
+  /// (administrator rights): run ptyro install git gh there.` A skip for another reason stays
+  /// "not run".
   summary(): string {
     const r = this.report;
     if (!r) return "";
     const left = leftForComputer(this.plan);
-    const leftOn = (side: string, id: string): any => left.find((e) => e.id === id && (e.side ?? "local") === side);
-    const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id: string) => leftOn(side, id)).filter(Boolean));
+    const kept = r.skipped.map((id: string) => left.find((e) => e.id === id)).filter(Boolean);
     // An outdated agent ticked (BOOT5) runs its update: said as updated.
-    const doneAs = (what: (a: any) => boolean): string[] => this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id: string) => (this.plan?.entries ?? []).some((e: any) => e.id === id && (e.side ?? "local") === side && e.action && what(e.action))));
+    const doneAs = (what: (a: any) => boolean): string[] => r.done.filter((id: string) => (this.plan?.entries ?? []).some((e: any) => e.id === id && e.action && what(e.action)));
     const updated = doneAs((a) => a.update);
     // One installed another way, ticked (BOOT7): moved to the recommended installer.
     const moved = doneAs((a) => a.moving);
@@ -271,7 +242,7 @@ export function updateOffer(c: { section?: string; level?: string; data?: any })
 }
 
 /// How an installer is said (the engine's `Via::words`).
-export const VIA_WORDS: Record<string, string> = { vendor: "the vendor's installer", npm: "npm", brew: "Homebrew", winget: "WinGet", apt: "apt", dnf: "dnf", xcode: "Xcode's Command Line Tools", "node-dist": "nodejs.org's build" };
+export const VIA_WORDS: Record<string, string> = { vendor: "the vendor's installer", npm: "npm", brew: "Homebrew", apt: "apt", dnf: "dnf", xcode: "Xcode's Command Line Tools", "node-dist": "nodejs.org's build" };
 export const viaWords = (v: string | null | undefined): string => (v && VIA_WORDS[v]) || v || "its installer";
 
 /// An agent installed another way, offered the move to the recommended installer (BOOT7): from a
@@ -283,7 +254,7 @@ export function moveOffer(c: { section?: string; data?: any }): MoveOffer | null
   return { id: m.id, program: m.program, name: m.name ?? m.id, from: m.from, to: m.to, uninstall: m.uninstall ?? "", admin: !!m.admin, keeps: m.keeps ?? [] };
 }
 
-/// The moves a run asks for (BOOT7): the agents ticked where the move is offered, either side.
+/// The moves a run asks for (BOOT7): the agents ticked where the move is offered.
 export function movesOf(plan: Plan): string[] {
   return [...new Set((plan?.entries ?? []).filter((e) => e.picked && e.moves).map((e) => e.id as string))];
 }
@@ -340,10 +311,9 @@ export function runningAgent(sessions: Iterable<{ name: string; agent?: string |
 }
 
 /// The Try again of an update refused because the agent runs (BOOT5): its label, and what to run
-/// (`SetupRun`'s picks for the daemon's side, or WSL's `wsl_picks` for one on WSL's side).
-export function retryOf(r: { id: string; side: string }, name: string): { label: string; picks: string[]; wslPicks: string[] | null } {
-  const wsl = r.side === "wsl";
-  return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
+/// (`SetupRun`'s picks).
+export function retryOf(r: { id: string }, name: string): { label: string; picks: string[] } {
+  return { label: `Try updating ${name} again`, picks: [r.id] };
 }
 
 /// A setup offer's button (BOOT9): each pick by the name the checklist gives it ("Set up

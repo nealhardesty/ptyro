@@ -80,7 +80,6 @@ impl Machine {
             .env("HOME", self.dir.path().join("home"))
             .env("USERPROFILE", self.dir.path().join("home"))
             .env("SHELL", "/bin/bash")
-            .env("PTYRO_WSL", self.dir.path().join("no-wsl"))
             .env("PTYRO_NO_AUTOSPAWN", "1");
         for (k, v) in self.env() {
             c.env(k, v);
@@ -424,7 +423,7 @@ async fn the_web_moves_through_the_daemon_and_keeps_admin_moves_for_the_computer
     }
     let mut c = d.client().await.unwrap();
     let Reply::SetupPlan { plan, lines, .. } =
-        c.request(Request::SetupPlan { picks: Some(vec![]), wsl_picks: None }).await.unwrap()
+        c.request(Request::SetupPlan { picks: Some(vec![]) }).await.unwrap()
     else {
         panic!("not a plan");
     };
@@ -442,7 +441,6 @@ async fn the_web_moves_through_the_daemon_and_keeps_admin_moves_for_the_computer
     c.send(ClientMsg::WatchEvents).unwrap();
     let run = |picks: &[&str], moves: &[&str]| Request::SetupRun {
         picks: picks.iter().map(|s| (*s).to_owned()).collect(),
-        wsl_picks: None,
         moves: moves.iter().map(|s| (*s).to_owned()).collect(),
     };
     // The Health page's update (or any client that names no move, an older one too): npm's
@@ -484,7 +482,7 @@ async fn finish(
             // Let the run let go of its place before the next.
             for _ in 0..100 {
                 if let Ok(Reply::SetupPlan { running: None, .. }) =
-                    c.request(Request::SetupPlan { picks: Some(vec![]), wsl_picks: None }).await
+                    c.request(Request::SetupPlan { picks: Some(vec![]) }).await
                 {
                     break;
                 }

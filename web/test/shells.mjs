@@ -10,17 +10,12 @@ for (const [argv0, name] of [
   ["-zsh", "zsh"],
   ["bash", "bash"],
   ["/opt/My Tools/Fish", "Fish"],
-  ["C:\\Program Files\\PowerShell\\7\\pwsh.exe", "pwsh"],
-  ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\PowerShell.EXE", "powershell"],
-  ["C:\\Windows\\System32\\cmd.exe", "cmd"],
-  ["C:\\Program Files\\Git\\bin\\bash", "bash"],
-  ["pwsh.exe", "pwsh"],
+  ["/usr/bin/pwsh", "pwsh"],
 ]) assert.equal(programName(argv0), name, argv0);
 
-// A Windows daemon's idle PowerShell reads as where it is; something run in it, as that.
+// An idle shell reads as where it is; something run in it, as that.
 const sh = (argv0, fg, cwd) => ({ kind: "shell", name: "s1", argv: [argv0], foreground: fg, cwd, live_cwd: cwd });
-const pwsh = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
-assert.equal(shellLabel(sh(pwsh, "pwsh", "D:\\src\\app")), "…\\app");
-assert.equal(shellLabel(sh(pwsh, "htop", "D:\\src\\app")), "htop · …\\app");
+assert.equal(shellLabel(sh("/usr/bin/pwsh", "pwsh", "/src/app")), "…/app");
+assert.equal(shellLabel(sh("/usr/bin/pwsh", "htop", "/src/app")), "htop · …/app");
 assert.equal(shellLabel(sh("/bin/zsh", "zsh", "/home/me/dl")), "…/dl", "as before");
 console.log("shells: ok");

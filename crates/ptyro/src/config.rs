@@ -146,8 +146,8 @@ fn extra_for(layer: &Layer) -> impl Fn(&str) -> Result<(), String> + use<> {
     move |text: &str| if user { semantic(text) } else { Ok(()) }
 }
 
-/// With a remote daemon (ptyro.exe and WSL, or ssh), a setting it reads lives in its own file, not
-/// this computer's: say so after changing this one, and how to change it there (WIN3).
+/// With a remote daemon (over ssh), a setting it reads lives in its own file, not this
+/// computer's: say so after changing this one, and how to change it there (WIN3).
 fn elsewhere(ctx: &Ctx, user: bool, key: &str, args: &str) {
     if let Some(r) = ctx.remote.as_deref().filter(|_| user && !settings::read_by_client(key)) {
         eprintln!("note: {}", there(r, key, args));
@@ -156,13 +156,9 @@ fn elsewhere(ctx: &Ctx, user: bool, key: &str, args: &str) {
 
 /// What [`elsewhere`] says, for the remote `r`.
 fn there(r: &str, key: &str, args: &str) -> String {
-    let run = match ptyro_client::remote::wsl_distro(r) {
-        Some("") => format!("wsl -- ptyro config {args}"),
-        Some(d) => format!("wsl -d {d} -- ptyro config {args}"),
-        None => match ptyro_client::remote::parse(r) {
-            (dest, Some(port)) => format!("ssh -p {port} {dest} ptyro config {args}"),
-            (dest, None) => format!("ssh {dest} ptyro config {args}"),
-        },
+    let run = match ptyro_client::remote::parse(r) {
+        (dest, Some(port)) => format!("ssh -p {port} {dest} ptyro config {args}"),
+        (dest, None) => format!("ssh {dest} ptyro config {args}"),
     };
     format!(
         "the daemon on {r} reads {key} from its own config, not this computer's: change it there with `{run}` (or in the TUI's settings, which opens it there)"
@@ -599,13 +595,6 @@ pub(crate) fn write_private(path: &std::path::Path, text: &str) -> Result<(), Er
             .map_err(|e| Error::internal(format!("{}: {e}", dir.display())))?;
     }
     write_atomic(path, text, 0o600)?;
-    // On Windows the file takes its folder's access list: one wider than the user (a folder
-    // shared on purpose, or copied in) is narrowed to the user, SYSTEM and Administrators.
-    #[cfg(windows)]
-    if ptyro_pty::acl::readable_by_others(path).is_some() {
-        ptyro_pty::acl::make_private(path)
-            .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
-    }
     Ok(())
 }
 
@@ -642,21 +631,7 @@ pub(crate) fn write_atomic(path: &std::path::Path, text: &str, mode: u32) -> Res
         f.write_all(text.as_bytes())?;
         f.sync_all()?;
         drop(f);
-        // Windows refuses a rename onto a file another writer (or a virus scanner) has open at
-        // that moment (os errors 5, 32): tried again briefly, as two saves at once are (WIN13).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            match std::fs::rename(&tmp, &target) {
-                Err(e)
-                    if cfg!(windows)
-                        && matches!(e.raw_os_error(), Some(5 | 32))
-                        && std::time::Instant::now() < deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                r => break r,
-            }
-        }
+        std::fs::rename(&tmp, &target)
     })();
     if let Err(e) = written {
         let _ = std::fs::remove_file(&tmp);
@@ -691,8 +666,8 @@ pub(crate) fn with_lock<T>(path: &std::path::Path, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// Who besides its owner can read the file: its mode (`644`) on Unix when group or others can
-/// read or write it; on Windows the names its access list lets read (WIN7).
+/// Who besides its owner can read the file: its mode (`644`) when group or others can read or
+/// write it.
 pub(crate) fn too_open(path: &std::path::Path) -> Option<String> {
     ptyro_pty::acl::readable_by_others(path)
 }
@@ -770,9 +745,6 @@ mod tests {
 
     #[test]
     fn a_remote_daemons_setting_says_where_to_change_it() {
-        let w = there("wsl://Ubuntu", "daemon.hold_wsl", "set daemon.hold_wsl off");
-        assert!(w.contains("`wsl -d Ubuntu -- ptyro config set daemon.hold_wsl off`"), "{w}");
-        assert!(there("wsl://", "k", "unset k").contains("`wsl -- ptyro config unset k`"));
         let s = there("ssh://me@box:2222", "k", "unset k");
         assert!(s.contains("`ssh -p 2222 me@box ptyro config unset k`"), "{s}");
         assert!(there("box", "k", "unset k").contains("`ssh box ptyro config unset k`"));
@@ -825,7 +797,7 @@ mod tests {
         let real = d.path().join("dotfiles/ptyro.toml");
         std::fs::create_dir_all(real.parent().unwrap()).unwrap();
         std::fs::write(&real, "[ui]\nmouse = true\n").unwrap();
-        // Through a link where links need no privilege (Windows wants Developer Mode for one).
+        // Through a link.
         #[cfg(unix)]
         {
             let link = d.path().join("config.toml");
@@ -861,7 +833,7 @@ mod tests {
         assert_eq!(with_lock(&real, || 7), 7);
     }
 
-    // Unix modes; on Windows write_private's access list is tested by tests/win11.rs.
+    // Unix modes.
     #[cfg(unix)]
     #[test]
     fn configs_are_written_private() {

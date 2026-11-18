@@ -1,5 +1,13 @@
 //! The single `ptyro` binary (SPEC §3.3, ADR 12): CLI, TUI, daemon and dev helpers.
 
+// Native Windows was removed on 2026-11-18 (SPEC §3.4): on Windows, ptyro is the Linux build in WSL2.
+#[cfg(target_os = "windows")]
+compile_error!(
+    "ptyro doesn't build for Windows itself: on Windows it runs inside WSL2. In a WSL terminal, \
+     install it with `curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh`, \
+     or build it there with `make build`"
+);
+
 mod about;
 mod agents;
 mod chat;
@@ -28,8 +36,7 @@ mod shells;
 mod tls;
 mod uninstall;
 mod webapp;
-mod winapp;
-mod winclient;
+
 mod wsl_conf;
 
 use std::path::PathBuf;
@@ -49,9 +56,9 @@ struct Cli {
     /// Talk to the daemon in JSON instead of MessagePack (debugging).
     #[arg(long, global = true, hide = true)]
     json_wire: bool,
-    /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]`, or in a WSL
-    /// distro: `wsl://[distro]`, or `local` for this computer's own (or set PTYRO_REMOTE;
-    /// `client.default_remote` keeps one). Needs ptyro there, and for ssh a key-based login
+    /// Use the daemon on another machine, over ssh: `[ssh://][user@]host[:port]`, or `local` for
+    /// this computer's own (or set PTYRO_REMOTE; `client.default_remote` keeps one). Needs ptyro
+    /// there, and a key-based login
     #[arg(long, global = true, value_name = "HOST")]
     remote: Option<String>,
     #[command(subcommand)]
@@ -181,6 +188,11 @@ const REMOVED_COMMANDS: &[(&[&str], &str, &str)] = &[
     (&["convert"], "it switched an agent between chat view and its own UI", ""),
     (&["summarize"], "one-line session summaries", "`ptyro status` says what every agent is doing"),
     (&["retitle"], "it is part of rename now", "`ptyro rename SESSION --title TITLE`"),
+    (
+        &["open-url"],
+        "it opened a toast's `ptyro://` link for native Windows' ptyro",
+        "on Windows, run ptyro inside WSL",
+    ),
 ];
 
 /// The error for a removed command (`ptyro init`), when the command line names one, whatever
@@ -202,7 +214,9 @@ fn removed_command(argv: &[std::ffi::OsString]) -> Option<String> {
         _ if instead.is_empty() => "nothing replaces it".to_owned(),
         _ => instead.to_string(),
     };
-    Some(format!("`ptyro {first}` was removed on 2026-11-17 ({what}): {instead}"))
+    // Native Windows' own went later.
+    let when = if names[0] == "open-url" { "2026-11-18" } else { "2026-11-17" };
+    Some(format!("`ptyro {first}` was removed on {when} ({what}): {instead}"))
 }
 
 /// Where the old scratchpad kept its notes: the retired `[scratchpad] path`, else
@@ -684,24 +698,16 @@ enum Cmd {
         /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
         #[arg(long)]
         json: bool,
-        /// On Windows: install into WSL, onto Windows, or both (wsl, windows, both). The default
-        /// is the side your daemon runs on (WSL's when client.default_remote is wsl://…)
-        #[arg(long = "where", value_name = "WHERE")]
+        /// Removed with native Windows (2026-11-18): says so
+        #[arg(long = "where", value_name = "WHERE", hide = true)]
         place: Option<String>,
-        /// What is installed, as JSON (for Windows' ptyro, asking a WSL distro's)
-        #[arg(long, hide = true)]
-        survey: bool,
-        /// With --yes, move a ticked agent installed another way (npm, Homebrew, WinGet) to the
+        /// With --yes, move a ticked agent installed another way (npm, Homebrew) to the
         /// recommended installer; without it, --yes leaves such an agent as it is
         #[arg(long = "move")]
         move_: bool,
-        /// A person answers on stdin though it isn't a terminal (Windows' ptyro started from a
-        /// split in WSL, whose console is a pipe there)
-        #[arg(long, hide = true)]
-        tty: bool,
     },
     /// Install agents or tools by name, with what they need first: `ptyro install codex`,
-    /// `ptyro install opencode gh`. An agent installed another way (npm, Homebrew, WinGet) is
+    /// `ptyro install opencode gh`. An agent installed another way (npm, Homebrew) is
     /// offered the move to the recommended installer, which asks first; with --yes it is left as
     /// it is (updated the way it's installed) unless --move
     Install {
@@ -718,29 +724,18 @@ enum Cmd {
         /// With --dry-run, the plan as JSON; otherwise each step's progress as a JSON line
         #[arg(long)]
         json: bool,
-        /// On Windows: install into WSL, onto Windows, or both (wsl, windows, both). The default
-        /// is the side your daemon runs on
-        #[arg(long = "where", value_name = "WHERE")]
+        /// Removed with native Windows (2026-11-18): says so
+        #[arg(long = "where", value_name = "WHERE", hide = true)]
         place: Option<String>,
-        /// Asked already by Windows' ptyro: ask (sudo may prompt here), silent (only without
-        /// a prompt: --yes) or never (BOOT8)
-        #[arg(long, hide = true, value_name = "ask|silent|never")]
-        admin: Option<String>,
-        /// A person answers on stdin though it isn't a terminal (as for setup)
-        #[arg(long, hide = true)]
-        tty: bool,
         /// The person said yes already, in the TUI's checklist (BOOT2): no question first;
         /// administrator rights are still asked for here, and the logins walked through
         #[arg(long, hide = true)]
         confirmed: bool,
-        /// Move a named agent installed another way (npm, Homebrew, WinGet) to the recommended
+        /// Move a named agent installed another way (npm, Homebrew) to the recommended
         /// installer without asking (with --yes): the new one is installed and checked first,
         /// then the old copy removed; settings and logins stay
         #[arg(long = "move")]
         move_: bool,
-        /// Asked already by Windows' ptyro: the agents it may move (BOOT7)
-        #[arg(long, hide = true, value_name = "IDS", value_delimiter = ',')]
-        moves: Vec<String>,
     },
     /// Update agents, and ptyro itself, when a newer version is out (or those named), each the
     /// way it was installed: `ptyro update`, `ptyro update codex`, `ptyro update ptyro`;
@@ -760,9 +755,6 @@ enum Cmd {
         /// line
         #[arg(long)]
         json: bool,
-        /// A person answers on stdin though it isn't a terminal (as for setup)
-        #[arg(long, hide = true)]
-        tty: bool,
         /// Only this machine: not the machines linked to it that run an older ptyro (which are
         /// otherwise offered too, each updating itself)
         #[arg(long)]
@@ -781,17 +773,9 @@ enum Cmd {
         /// Where each stands, as JSON (implies --check)
         #[arg(long)]
         json: bool,
-        /// On Windows: log in on WSL's side, Windows', or both (wsl, windows, both). The default
-        /// is the side your daemon runs on
-        #[arg(long = "where", value_name = "WHERE")]
+        /// Removed with native Windows (2026-11-18): says so
+        #[arg(long = "where", value_name = "WHERE", hide = true)]
         place: Option<String>,
-        /// A person answers on stdin though it isn't a terminal (as for setup)
-        #[arg(long, hide = true)]
-        tty: bool,
-        /// Setup's list of what to log in (from Windows' ptyro, for WSL's side): the names
-        /// aren't asked for by name, and these (comma-separated, maybe none) were just installed
-        #[arg(long, hide = true, value_name = "IDS")]
-        installed: Option<String>,
     },
     /// Which ptyro this is: version, repository, licence, build, where things live, whether the
     /// daemon and the web app run, and a block to paste into a bug report
@@ -907,9 +891,7 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Internal: open a `ptyro://attach/…` link (what Windows runs when a toast is clicked)
-    #[command(hide = true)]
-    OpenUrl { uri: String },
+
     /// Internal: Claude's statusLine command (usage meters)
     #[command(hide = true)]
     StatuslineRelay,
@@ -927,13 +909,7 @@ enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Built-in fake wsl.exe for setup's WSL side in tests (BOOT8); debug builds only
-    #[cfg(debug_assertions)]
-    #[command(hide = true)]
-    FakeWsl {
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
+
     /// Built-in fake agent for tests and `ptyro doctor` (see SPEC §18.2)
     #[command(hide = true)]
     FakeAgent {
@@ -1258,19 +1234,9 @@ fn parse_number(s: &str) -> Result<u32, String> {
 }
 
 fn main() {
-    // A debug build under another name is a test's stand-in program (WIN13, Windows only).
-    #[cfg(all(windows, debug_assertions))]
-    if let Some(code) = ptyro_testkit::program::run_shim() {
-        std::process::exit(code);
-    }
     // A shell asking for completions: answer and exit before anything else happens.
     complete::handle(Cli::command);
     let cli = parse_cli(std::env::args_os()).unwrap_or_else(|e| e.exit());
-    // Windows: what an update renamed aside while it ran (`ptyro.exe.old`), once it doesn't
-    // (BOOT6). Not on the hooks' path, which runs inside agents on every event.
-    if cfg!(windows) && !matches!(cli.cmd, Some(Cmd::Hook { .. } | Cmd::StatuslineRelay)) {
-        ptyro_agents::own::sweep(&ptyro_agents::own::binary());
-    }
     let code = match cli.cmd {
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { serve: true, .. } }) => {
             eprintln!(
@@ -1279,20 +1245,18 @@ fn main() {
             ptyro_core::ErrorCode::Invalid.exit_code()
         }
         Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, .. } }) => {
-            winclient::start_in_wsl(cli.remote.as_deref())
-                .unwrap_or_else(|| cli::daemon_start(foreground, spawned))
+            cli::daemon_start(foreground, spawned)
         }
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
         #[cfg(debug_assertions)]
         Some(Cmd::FakeGh { args }) => ptyro_testkit::fake_gh::main(&args),
         #[cfg(debug_assertions)]
         Some(Cmd::FakeInstaller { args }) => ptyro_agents::setup::fake_installer(&args),
-        #[cfg(debug_assertions)]
-        Some(Cmd::FakeWsl { args }) => ptyro_testkit::fake_wsl::main(&args),
+
         // These run inside agents on every hook: no runtime, no config, never a failure.
         Some(Cmd::Hook { adapter, event, args }) => relay::hook(&adapter, &event, &args),
         Some(Cmd::StatuslineRelay) => relay::statusline(),
-        Some(Cmd::OpenUrl { uri }) => winapp::open_url(&uri),
+
         cmd => {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1398,6 +1362,9 @@ mod tests {
             let argv: Vec<std::ffi::OsString> = argv.iter().map(Into::into).collect();
             super::removed_command(&argv)
         };
+        // Native Windows' own, on the day it went.
+        let url = said(&["ptyro", "open-url", "ptyro://attach/x"]).unwrap();
+        assert!(url.contains("removed on 2026-11-18") && url.contains("inside WSL"), "{url}");
         let init = said(&["ptyro", "init", "--yes"]).unwrap();
         assert!(
             init.contains("`ptyro init` was removed") && init.contains("`ptyro setup`"),

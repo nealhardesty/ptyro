@@ -2,17 +2,10 @@
 // tested without a browser (web/test/setup.mjs): following a setup run's progress (this page's,
 // or one already going when the page opened), whether the first-run banner shows, and what an
 // administrator step says to run on the computer instead.
-/// How many sides a setup run reports on (each ends with its own `finished`, BOOT8): those with
-/// a ticked entry that runs or is blocked, in the plan the daemon actually runs.
-export function setupSides(plan) {
-    const sides = new Set((plan?.entries ?? []).filter((e) => e.ticked && (e.action || e.blocked)).map((e) => e.side ?? "local"));
-    return Math.max(1, sides.size);
-}
 /// Installed already, as wanted (the engine's `here_already`): one installed another way and
 /// offered the move to the recommended installer (BOOT7, `moves`) is a row to tick instead.
 export const isHere = (e) => e.state === "installed" || (e.state === "other" && !e.moves);
-/// No coding agent on any side (missing everywhere; an outdated one is still there): the
-/// first-run banner shows.
+/// No coding agent (an outdated one is still there): the first-run banner shows.
 export const noAgent = (plan) => !!plan?.entries?.length && !plan.entries.some((e) => e.kind === "agent" && e.state !== "missing");
 /// Whether the first-run banner may ask (a survey) and show: only on a device that can install
 /// (`full`: on another the page could only say it can't), not after "Not now", and not once this
@@ -21,42 +14,32 @@ export function bannerWants(o) {
     return o.scope === "full" && !o.later && !o.seen;
 }
 /// What is left for the computer (the owner's parity exception, 2026-11-06): the ticked
-/// administrator steps, and what waits for one on its side (OpenCode after Node.js from WinGet),
-/// in the plan's order. The daemon skips them all (`Admin::Never`).
+/// administrator steps, and what waits for one, in the plan's order. The daemon skips them all
+/// (`Admin::Never`).
 export function leftForComputer(plan) {
     const entries = plan?.entries ?? [];
-    const key = (side, id) => `${side ?? "local"}:${id}`;
-    const left = new Set(entries.filter((e) => e.ticked && e.action?.admin).map((e) => key(e.side, e.id)));
+    const left = new Set(entries.filter((e) => e.ticked && e.action?.admin).map((e) => e.id));
     for (let grew = true; grew;) {
         grew = false;
         for (const e of entries) {
-            if (!e.ticked || !e.action || left.has(key(e.side, e.id)))
+            if (!e.ticked || !e.action || left.has(e.id))
                 continue;
-            if ((e.action.after ?? []).some((id) => left.has(key(e.side, id)))) {
-                left.add(key(e.side, e.id));
+            if ((e.action.after ?? []).some((id) => left.has(id))) {
+                left.add(e.id);
                 grew = true;
             }
         }
     }
-    return entries.filter((e) => left.has(key(e.side, e.id)));
+    return entries.filter((e) => left.has(e.id));
 }
 export function adminSteps(plan) {
-    const entries = plan?.entries ?? [];
-    const sides = [...new Set(entries.map((e) => e.side ?? "local"))];
-    const two = sides.length > 1;
     const left = leftForComputer(plan);
-    const out = [];
-    for (const side of sides) {
-        const these = left.filter((e) => (e.side ?? "local") === side);
-        if (!these.length)
-            continue;
-        const where = two ? ` --where ${side === "wsl" ? "wsl" : "windows"}` : "";
-        out.push({ side, names: these.map((e) => e.name), command: `ptyro install ${these.map((e) => e.id).join(" ")}${where}` });
-    }
-    return out;
+    if (!left.length)
+        return [];
+    return [{ names: left.map((e) => e.name), command: `ptyro install ${left.map((e) => e.id).join(" ")}` }];
 }
-/// Ticked items with no administrator step of their own that wait for one (OpenCode after
-/// Node.js from WinGet): `["OpenCode", "Node.js"]` pairs, so the page says why they're left too.
+/// Ticked items with no administrator step of their own that wait for one:
+/// `["OpenCode", "Node.js"]` pairs, so the page says why they're left too.
 export function waitsForAdmin(plan) {
     const left = leftForComputer(plan);
     const out = [];
@@ -64,7 +47,7 @@ export function waitsForAdmin(plan) {
         if (e.action?.admin)
             continue;
         for (const id of e.action?.after ?? []) {
-            const dep = left.find((x) => x.id === id && x.side === e.side);
+            const dep = left.find((x) => x.id === id);
             if (dep)
                 out.push([e.name, dep.name]);
         }
@@ -76,21 +59,17 @@ export function webSteps(plan) {
     const left = new Set(leftForComputer(plan));
     return (plan?.entries ?? []).filter((e) => e.ticked && e.action && !left.has(e));
 }
-/// A setup run as this page follows it: its lines, then its report once every side has
-/// finished. `theirs`: it was going already (another device, or before a reload), not started
+/// A setup run as this page follows it: its lines, then its report once it has finished. `theirs`: it was going already (another device, or before a reload), not started
 /// here. `ended`: it finished while this page was away, so there is no report to show.
 export class SetupLog {
     id = "";
     starting = false;
     theirs = false;
     ended = false;
-    sides = 1;
     seq = 0;
-    /// The plan the run runs (`SetupStarted`'s or `running.plan`), for its sides and its words.
+    /// The plan the run runs (`SetupStarted`'s or `running.plan`), for its words.
     plan = null;
     lines = [];
-    /// Each side's report, as its `finished` said, with the side.
-    reports = [];
     report = null;
     /// Updates that failed because the program is running (BOOT5, `failed.in_use`): the page offers
     /// to try each again once its sessions end.
@@ -105,7 +84,7 @@ export class SetupLog {
     stray = { run: "", events: [] };
     get running() { return this.id !== "" && !this.report && !this.ended; }
     reset() {
-        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, sides: 1, seq: 0, plan: null, lines: [], reports: [], report: null, retry: [], early: [], held: [] });
+        Object.assign(this, { id: "", starting: false, theirs: false, ended: false, seq: 0, plan: null, lines: [], report: null, retry: [], early: [], held: [] });
     }
     line(t) { this.lines.push(t); if (this.lines.length > 400)
         this.lines.shift(); }
@@ -113,12 +92,11 @@ export class SetupLog {
     start() { this.reset(); this.starting = true; }
     /// It was refused or failed: nothing is followed.
     failed() { this.starting = false; this.early = []; }
-    /// The daemon said this page's run started (`SetupStarted`): count the sides from the plan it
-    /// runs, never the page's own.
+    /// The daemon said this page's run started (`SetupStarted`), with the plan it runs (never the
+    /// page's own).
     started(run, plan) {
         this.id = run;
         this.plan = plan;
-        this.sides = setupSides(plan);
         this.starting = false;
         for (const e of this.early.splice(0))
             this.event(e);
@@ -141,7 +119,6 @@ export class SetupLog {
             this.id = running.run;
             this.theirs = true;
             this.plan = running.plan;
-            this.sides = setupSides(running.plan);
             const stray = this.stray.run === running.run ? this.stray.events.splice(0) : [];
             this.merge([...running.events.map((e) => ({ run: running.run, ...e })), ...stray]);
             return "joined";
@@ -202,47 +179,42 @@ export class SetupLog {
             this.seq = e.seq;
         }
         const ev = e.event;
-        const at = this.sides > 1 ? (e.side === "wsl" ? "WSL: " : "Windows: ") : "";
-        const left = (id) => leftForComputer(this.plan).some((x) => x.id === id && (x.side ?? "local") === (e.side ?? "local"));
+        const left = (id) => leftForComputer(this.plan).some((x) => x.id === id);
         if (ev.event === "started")
-            this.line(`▸ ${at}${ev.name}: ${ev.command}`);
+            this.line(`▸ ${ev.name}: ${ev.command}`);
         else if (ev.event === "line")
             this.line(`  │ ${ev.text}`);
         else if (ev.event === "done")
-            this.line(`✓ ${at}${ev.id}${ev.version ? " " + ev.version : ""}`);
+            this.line(`✓ ${ev.id}${ev.version ? " " + ev.version : ""}`);
         else if (ev.event === "failed") {
-            this.line(`✗ ${at}${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
+            this.line(`✗ ${ev.id}: ${ev.error}\n  fix: ${ev.fix}`);
             if (ev.in_use)
-                this.retry.push({ id: ev.id, side: e.side ?? "local" });
+                this.retry.push({ id: ev.id });
         }
         else if (ev.event === "skipped" && left(ev.id))
-            this.line(`– ${at}${ev.id}: left for the computer: ${ev.fix}`);
+            this.line(`– ${ev.id}: left for the computer: ${ev.fix}`);
         else if (ev.event === "skipped")
-            this.line(`– ${at}${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
+            this.line(`– ${ev.id}: ${ev.reason}\n  fix: ${ev.fix}`);
         else if (ev.event === "blocked")
-            this.line(`✗ ${at}${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
+            this.line(`✗ ${ev.id}: can't be installed here: ${ev.reason}\n  fix: ${ev.fix}`);
         else if (ev.event === "finished") {
-            this.reports.push({ side: e.side ?? "local", report: ev.report });
-            if (this.reports.length >= this.sides) {
-                const all = (k) => this.reports.flatMap((r) => r.report[k] ?? []);
-                this.report = { done: all("done"), failed: all("failed"), skipped: all("skipped"), blocked: all("blocked") };
-                return "done";
-            }
+            const rep = ev.report ?? {};
+            this.report = { done: rep.done ?? [], failed: rep.failed ?? [], skipped: rep.skipped ?? [], blocked: rep.blocked ?? [] };
+            return "done";
         }
         return "";
     }
     /// The report in words: `2 installed, 1 failed. git and GitHub CLI are left for the computer
-    /// (administrator rights): run ptyro install git gh there.` What was left for the computer is
-    /// told apart by side and id: a skip on one side for another reason stays "not run".
+    /// (administrator rights): run ptyro install git gh there.` A skip for another reason stays
+    /// "not run".
     summary() {
         const r = this.report;
         if (!r)
             return "";
         const left = leftForComputer(this.plan);
-        const leftOn = (side, id) => left.find((e) => e.id === id && (e.side ?? "local") === side);
-        const kept = this.reports.flatMap(({ side, report }) => (report.skipped ?? []).map((id) => leftOn(side, id)).filter(Boolean));
+        const kept = r.skipped.map((id) => left.find((e) => e.id === id)).filter(Boolean);
         // An outdated agent ticked (BOOT5) runs its update: said as updated.
-        const doneAs = (what) => this.reports.flatMap(({ side, report }) => (report.done ?? []).filter((id) => (this.plan?.entries ?? []).some((e) => e.id === id && (e.side ?? "local") === side && e.action && what(e.action))));
+        const doneAs = (what) => r.done.filter((id) => (this.plan?.entries ?? []).some((e) => e.id === id && e.action && what(e.action)));
         const updated = doneAs((a) => a.update);
         // One installed another way, ticked (BOOT7): moved to the recommended installer.
         const moved = doneAs((a) => a.moving);
@@ -276,7 +248,7 @@ export function updateOffer(c) {
     return { id: d.id, program: d.program, name: d.name ?? d.id, latest: d.latest, version: d.version, command: d.command ?? null, admin: !!d.admin, path: d.path ?? null, managed: d.managed ?? null, via: d.via ?? null };
 }
 /// How an installer is said (the engine's `Via::words`).
-export const VIA_WORDS = { vendor: "the vendor's installer", npm: "npm", brew: "Homebrew", winget: "WinGet", apt: "apt", dnf: "dnf", xcode: "Xcode's Command Line Tools", "node-dist": "nodejs.org's build" };
+export const VIA_WORDS = { vendor: "the vendor's installer", npm: "npm", brew: "Homebrew", apt: "apt", dnf: "dnf", xcode: "Xcode's Command Line Tools", "node-dist": "nodejs.org's build" };
 export const viaWords = (v) => (v && VIA_WORDS[v]) || v || "its installer";
 export function moveOffer(c) {
     const m = c.data?.move;
@@ -284,7 +256,7 @@ export function moveOffer(c) {
         return null;
     return { id: m.id, program: m.program, name: m.name ?? m.id, from: m.from, to: m.to, uninstall: m.uninstall ?? "", admin: !!m.admin, keeps: m.keeps ?? [] };
 }
-/// The moves a run asks for (BOOT7): the agents ticked where the move is offered, either side.
+/// The moves a run asks for (BOOT7): the agents ticked where the move is offered.
 export function movesOf(plan) {
     return [...new Set((plan?.entries ?? []).filter((e) => e.picked && e.moves).map((e) => e.id))];
 }
@@ -335,10 +307,9 @@ export function runningAgent(sessions, id) {
     return out;
 }
 /// The Try again of an update refused because the agent runs (BOOT5): its label, and what to run
-/// (`SetupRun`'s picks for the daemon's side, or WSL's `wsl_picks` for one on WSL's side).
+/// (`SetupRun`'s picks).
 export function retryOf(r, name) {
-    const wsl = r.side === "wsl";
-    return { label: `Try updating ${name} again`, picks: wsl ? [] : [r.id], wslPicks: wsl ? [r.id] : null };
+    return { label: `Try updating ${name} again`, picks: [r.id] };
 }
 /// A setup offer's button (BOOT9): each pick by the name the checklist gives it ("Set up
 /// Claude Code", never "claude"). A program goes to its agent through `agents` (the daemon's list),

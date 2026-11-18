@@ -1,8 +1,6 @@
-//! File-system layout (SPEC §14.1): XDG on Linux *and* macOS; on Windows, the config under
-//! `%APPDATA%\ptyro` and the rest under `%LOCALAPPDATA%\ptyro` (WIN3), unless the XDG variables
-//! are set, which win there too (WIN4); `PTYRO_HOME` puts
-//! everything under one directory (tests, portable installs); `PTYRO_SOCKET` overrides only the
-//! socket, and under a `PTYRO_HOME` only with one of that home's.
+//! File-system layout (SPEC §14.1): XDG on Linux *and* macOS; `PTYRO_HOME` puts everything under
+//! one directory (tests, portable installs); `PTYRO_SOCKET` overrides only the socket, and under
+//! a `PTYRO_HOME` only with one of that home's.
 
 use std::path::{Path, PathBuf};
 
@@ -41,24 +39,6 @@ impl Paths {
                 socket: PathBuf::new(),
                 tools: home.join("ptyro-tools"),
             }
-        } else if cfg!(windows) {
-            // Windows' own places: roaming config, the rest local to this computer, unless an
-            // XDG variable names one (a user who keeps one layout across machines, Git Bash's).
-            // The daemon's "socket" is a named pipe, set below.
-            let w = etcetera::base_strategy::Windows::new().map_err(std::io::Error::other)?;
-            let local = w.cache_dir().join("ptyro");
-            let xdg = |k: &str| var(k).filter(|p| p.is_absolute()).map(|p| p.join("ptyro"));
-            Self {
-                config: xdg("XDG_CONFIG_HOME").unwrap_or_else(|| w.config_dir().join("ptyro")),
-                data: xdg("XDG_DATA_HOME").unwrap_or_else(|| local.join("data")),
-                state: xdg("XDG_STATE_HOME").unwrap_or_else(|| local.join("state")),
-                runtime: xdg("XDG_RUNTIME_DIR").unwrap_or_else(|| local.join("run")),
-                socket: PathBuf::new(),
-                tools: var("XDG_DATA_HOME")
-                    .filter(|p| p.is_absolute())
-                    .unwrap_or_else(|| w.cache_dir())
-                    .join("ptyro-tools"),
-            }
         } else {
             let xdg = etcetera::base_strategy::Xdg::new().map_err(std::io::Error::other)?;
             let runtime = match var("XDG_RUNTIME_DIR") {
@@ -79,34 +59,14 @@ impl Paths {
         // Every session's environment carries its daemon's `PTYRO_SOCKET`. A `PTYRO_HOME` set on
         // top means another ptyro, so a socket that isn't that home's is the outer daemon's and
         // is ignored: a sandbox's `daemon stop` must never reach the daemon it runs in.
-        let default = if cfg!(windows) {
-            pipe_for(&paths.runtime)
-        } else {
-            short_enough(paths.runtime.join("ptyro.sock"), uid)
-        };
+        let default = short_enough(paths.runtime.join("ptyro.sock"), uid);
         let given = var("PTYRO_SOCKET").filter(|s| match &home {
             None => true,
             Some(h) => {
                 let s = absolute(s.clone());
-                s == default || (!cfg!(windows) && s.starts_with(h))
+                s == default || s.starts_with(h)
             }
         });
-        if cfg!(windows) {
-            paths.socket = match given {
-                Some(p) if p.to_string_lossy().starts_with(PIPE_PREFIX) => p,
-                Some(p) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!(
-                            "PTYRO_SOCKET is {}, but on Windows it names a pipe: {PIPE_PREFIX}<name>",
-                            p.display()
-                        ),
-                    ));
-                }
-                None => default,
-            };
-            return Ok(paths);
-        }
         paths.socket = match given.map(absolute) {
             Some(s) if s.as_os_str().len() > MAX_SOCKET_PATH + 3 => {
                 return Err(std::io::Error::new(
@@ -135,29 +95,13 @@ impl Paths {
     /// Where `ptyro setup` puts the tools it installs without admin rights (BOOT1, SPEC §24.2):
     /// nodejs.org's Node.js and an npm prefix. Beside the data directory, not in it, because the
     /// tools are the user's and `ptyro uninstall` leaves them: `~/.local/share/ptyro-tools`,
-    /// `%LOCALAPPDATA%\ptyro-tools`, `$PTYRO_HOME/ptyro-tools`.
+    /// `$PTYRO_HOME/ptyro-tools`.
     pub fn tools(&self) -> PathBuf {
         self.tools.clone()
     }
 }
 
-/// Where every Windows named pipe's name starts.
-pub const PIPE_PREFIX: &str = r"\\.\pipe\";
-
-/// The daemon's pipe on Windows (WIN5): one per user and per `PTYRO_HOME`, named after the
-/// runtime folder (under the user's own profile), so two users or two homes never meet. The
-/// pipe admits only its user, and a client checks who serves it (`ptyro_pty::pipe`).
-fn pipe_for(runtime: &Path) -> PathBuf {
-    let key = runtime.to_string_lossy().to_lowercase();
-    PathBuf::from(format!("{PIPE_PREFIX}ptyro-{:08x}", fnv1a(key.as_bytes())))
-}
-
-/// Whether `socket` names a Windows pipe rather than a file.
-pub fn is_pipe(socket: &Path) -> bool {
-    socket.to_string_lossy().starts_with(PIPE_PREFIX)
-}
-
-/// The user this process runs as (0 on Windows, which has no uids: `crate::os::uid`).
+/// The user this process runs as.
 pub fn current_uid() -> u32 {
     crate::os::uid().unwrap_or(0)
 }
@@ -187,54 +131,6 @@ fn fnv1a(bytes: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_keeps_the_config_roaming_and_the_rest_local() {
-        let p = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| PathBuf::from(r"C:\h"))).unwrap();
-        assert_eq!(p.config, PathBuf::from(r"C:\h\config"));
-        let p = Paths::resolve(|_| None).unwrap();
-        let roaming = p.config.to_string_lossy().to_ascii_lowercase();
-        assert!(roaming.ends_with(r"appdata\roaming\ptyro"), "{roaming}");
-        let local = p.data.to_string_lossy().to_ascii_lowercase();
-        assert!(local.ends_with(r"appdata\local\ptyro\data"), "{local}");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_names_a_pipe_per_user_and_home() {
-        let plain = Paths::resolve(|_| None).unwrap();
-        assert!(is_pipe(&plain.socket), "{}", plain.socket.display());
-        let home = |h: &str| {
-            let h = PathBuf::from(h);
-            Paths::resolve(move |k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap().socket
-        };
-        assert_ne!(home(r"C:\a"), home(r"C:\b"));
-        assert_eq!(home(r"C:\a"), home(r"C:\A"), "Windows paths ignore case");
-        let given =
-            Paths::resolve(|k| (k == "PTYRO_SOCKET").then(|| PathBuf::from(r"\\.\pipe\mine")))
-                .unwrap();
-        assert_eq!(given.socket, PathBuf::from(r"\\.\pipe\mine"));
-        let e = Paths::resolve(|k| (k == "PTYRO_SOCKET").then(|| PathBuf::from(r"C:\x.sock")))
-            .unwrap_err();
-        assert!(e.to_string().contains("names a pipe"), "{e}");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_takes_the_xdg_variables_when_they_are_set() {
-        let p = Paths::resolve(|k| match k {
-            "XDG_CONFIG_HOME" => Some(PathBuf::from(r"D:\cfg")),
-            "XDG_STATE_HOME" => Some(PathBuf::from(r"D:\state")),
-            "XDG_DATA_HOME" => Some(PathBuf::from("relative")),
-            _ => None,
-        })
-        .unwrap();
-        assert_eq!(p.config, PathBuf::from(r"D:\cfg\ptyro"));
-        assert_eq!(p.state, PathBuf::from(r"D:\state\ptyro"));
-        let data = p.data.to_string_lossy().to_ascii_lowercase();
-        assert!(data.ends_with(r"appdata\local\ptyro\data"), "a relative one is ignored: {data}");
-    }
-
     #[cfg(unix)] // Unix paths
     #[test]
     fn ptyro_home_puts_everything_under_one_dir() {
@@ -248,7 +144,7 @@ mod tests {
         assert_eq!(p.tools(), PathBuf::from("/t/ptyro/ptyro-tools"));
     }
 
-    #[cfg(unix)] // a socket's path; Windows names a pipe
+    #[cfg(unix)] // a socket's path
     #[test]
     fn long_socket_paths_fall_back_to_tmp() {
         let deep = PathBuf::from("/x".repeat(80));

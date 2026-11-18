@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 48 };
+pub const PROTO: Version = Version { major: 1, minor: 49 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -466,10 +466,6 @@ pub enum Request {
     SetupPlan {
         #[serde(default)]
         picks: Option<Vec<String>>,
-        /// Protocol 1.32 (BOOT8): on a Windows daemon with a usable WSL, what to tick in WSL's
-        /// distro too (its rows come after Windows', `side: wsl`); `None`, nothing there.
-        #[serde(default)]
-        wsl_picks: Option<Vec<String>>,
     },
     /// Setup (protocol 1.31): install `picks` and what they need on the daemon's machine, one
     /// run at a time. Steps that need administrator rights are never run here (a password never
@@ -477,9 +473,6 @@ pub enum Request {
     /// `SetupProgress` events. Replies `SetupStarted`.
     SetupRun {
         picks: Vec<String>,
-        /// Protocol 1.32: install these in WSL's distro too, through its ptyro (`wsl.exe`).
-        #[serde(default)]
-        wsl_picks: Option<Vec<String>>,
         /// Protocol 1.36 (BOOT7): the agents installed another way to move to the recommended
         /// installer (the person ticked the offer, or chose Move). Every other agent installed
         /// another way stays as it is (updated its own way), so a client that names none, or
@@ -1687,10 +1680,6 @@ pub enum DomainEvent {
     SetupProgress {
         run: String,
         event: ptyro_agents::setup::Event,
-        /// Protocol 1.32: the side it happened on (`windows` or `wsl` on Windows; each side
-        /// ends with its own `finished`).
-        #[serde(default)]
-        side: ptyro_agents::setup::Side,
         /// Protocol 1.34: the event's number in its run, from 1 (0: an older daemon's,
         /// unnumbered), so a client joining a run mid-way can tell what `SetupRunning` held.
         #[serde(default)]
@@ -1698,8 +1687,8 @@ pub enum DomainEvent {
     },
 }
 
-/// The setup run going now (protocol 1.34, `Reply::SetupPlan`): its id, the plan it runs (its
-/// sides each end with a `finished`), and its events so far (the latest few hundred).
+/// The setup run going now (protocol 1.34, `Reply::SetupPlan`): its id, the plan it runs, and its
+/// events so far (the latest few hundred).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupRunning {
     pub run: String,
@@ -1711,7 +1700,6 @@ pub struct SetupRunning {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupLogged {
     pub seq: u64,
-    pub side: ptyro_agents::setup::Side,
     pub event: ptyro_agents::setup::Event,
 }
 

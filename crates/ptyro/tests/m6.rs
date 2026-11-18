@@ -28,14 +28,7 @@ impl World {
         .unwrap();
         // A fake `gh` on the daemon's PATH.
         let bin = h.join("fakebin");
-        ptyro_testkit::program::program(
-            &bin,
-            "gh",
-            BIN,
-            &format!("exec \"{BIN}\" fake-gh \"$@\""),
-            &[BIN, "fake-gh"],
-            &[],
-        );
+        ptyro_testkit::program::program(&bin, "gh", &format!("exec \"{BIN}\" fake-gh \"$@\""));
         let gh = h.join("gh-state");
         std::fs::create_dir_all(&gh).unwrap();
         let path = ptyro_testkit::program::path_with(&bin);

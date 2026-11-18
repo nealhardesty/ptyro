@@ -8,7 +8,7 @@
 //! | `world.json` | the machine (read): see [`World`] |
 //! | `installed/<id>` | an item installed since (written by the fake installer): its version |
 //! | `calls.log` | each step run and each elevation asked, one per line (written) |
-//! | `stored-path` | folders installers "added to the registry's Path", one per line (written) |
+
 //! | `logged-in/<id>` | an item logged in since (written by the fake login, BOOT4) |
 //! | `logins.log` | each login run and each status asked, one per line (written) |
 //! | `new/<id>` | an item installed the recommended way beside its `other` copy (a move, BOOT7) |
@@ -39,7 +39,7 @@ use crate::catalog::{Item, Method, Platform, Via};
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct World {
-    /// The platform to plan for (`linux`, `windows-x64`…); default: this one.
+    /// The platform to plan for (`linux`, `macos`, `wsl`); default: this one.
     pub platform: Option<Platform>,
     /// Programs on `PATH` besides the installed items' own: `apt-get`, `brew`, `sudo`…
     pub programs: Vec<String>,
@@ -53,20 +53,15 @@ pub struct World {
     pub elevation: Option<String>,
     /// What asking for it (`sudo -v`) gets: default yes.
     pub elevate: Option<bool>,
-    /// Per item: `ok` (default), `fail`, `busy` (fails once as Windows does replacing a running
-    /// program, then ok), `slow` (three lines, 300 ms apart, then ok), `wait` (a
+    /// Per item: `ok` (default), `fail`, `busy` (fails once as a system refusing to replace a
+    /// running program does, then ok), `slow` (three lines, 300 ms apart, then ok), `wait` (a
     /// line, then ok once the fake's directory holds a file `go`, or after a minute: a run that
     /// is still going for as long as a test needs), or `quiet` (ok, but nothing to find
     /// afterwards: an installer that put it off `PATH`).
     pub outcomes: BTreeMap<String, String>,
     /// The version an item installs as (default `1.0.0`; Node.js `26.13.0`).
     pub versions: BTreeMap<String, String>,
-    /// Per item: a folder (under the fake's directory) its installer adds only to the stored
-    /// `Path`, as WinGet's Node.js does on Windows.
-    pub path_adds: BTreeMap<String, String>,
-    /// Per item: a folder that must be on the `PATH` its step runs with, or it fails as `npm`
-    /// not found would.
-    pub path_needs: BTreeMap<String, String>,
+
     /// Items logged in already (BOOT4).
     pub logged_in: Vec<String>,
     /// Per item, what its login does: `ok` (default: logs in), `fail` (exits 1, still logged
@@ -109,23 +104,12 @@ fn log_to(dir: &Path, file: &str, what: &str) {
     }
 }
 
-/// The folders the fake's installers "added to the registry's Path" (`stored-path`).
-pub(super) fn stored(dir: &Path) -> Vec<PathBuf> {
-    std::fs::read_to_string(dir.join("stored-path"))
-        .unwrap_or_default()
-        .lines()
-        .map(PathBuf::from)
-        .collect()
-}
-
 pub(super) struct FakeHost {
     dir: PathBuf,
     world: World,
     used: AtomicBool,
-    /// The `PATH` steps run with, refreshed from `stored-path` after each, as the real host does
-    /// from the registry on Windows.
+    /// The `PATH` steps run with.
     path: Mutex<OsString>,
-    dirs: Vec<PathBuf>,
 }
 
 impl FakeHost {
@@ -133,7 +117,7 @@ impl FakeHost {
         let world = World::read(&dir);
         let dirs = super::path_dirs(paths);
         let path = super::path_with(&dirs, &std::env::var_os("PATH").unwrap_or_default());
-        Self { dir, world, used: AtomicBool::new(false), path: Mutex::new(path), dirs }
+        Self { dir, world, used: AtomicBool::new(false), path: Mutex::new(path) }
     }
 
     /// A copy's file, under the fake's folder.
@@ -313,11 +297,6 @@ impl Host for FakeHost {
         if r.is_ok() && step.method.via == Via::NodeDist {
             self.used.store(true, Ordering::Relaxed);
         }
-        if r.is_ok()
-            && let Ok(mut p) = self.path.lock()
-        {
-            *p = super::refreshed_path(&p, &stored(&self.dir), &self.dirs);
-        }
         r
     }
 
@@ -386,20 +365,12 @@ pub fn installer(args: &[String]) -> i32 {
     }
     let outcome = world.outcomes.get(id).map_or("ok", String::as_str);
     println!("fake {via}: {what} {id}");
-    if let Some(need) = world.path_needs.get(id) {
-        let want = dir.join(need);
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        if !std::env::split_paths(&path).any(|p| p == want) {
-            eprintln!("fake {via}: {need} isn't on PATH (npm: command not found)");
-            return 1;
-        }
-    }
     match outcome {
         "fail" => {
             eprintln!("fake {via}: E: could not reach the server for {id}");
             return 1;
         }
-        // Windows refusing to replace a running program, the first time only (BOOT5).
+        // The system refusing to replace a running program, the first time only (BOOT5).
         "busy" if !dir.join(format!("busy-{id}")).exists() => {
             let _ = std::fs::write(dir.join(format!("busy-{id}")), "");
             eprintln!(
@@ -441,12 +412,7 @@ pub fn installer(args: &[String]) -> i32 {
         let d = dir.join(if beside { "new" } else { "installed" });
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::write(d.join(id), v);
-        if let Some(add) = world.path_adds.get(id)
-            && let Ok(mut f) =
-                std::fs::OpenOptions::new().create(true).append(true).open(dir.join("stored-path"))
-        {
-            let _ = writeln!(f, "{}", dir.join(add).display());
-        }
+
         // nodejs.org's build lands in ptyro's tools folder, as the real one does.
         if via == "node-dist"
             && let Ok(paths) = Paths::from_env()

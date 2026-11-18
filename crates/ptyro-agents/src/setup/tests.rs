@@ -286,22 +286,6 @@ fn installed_items_are_not_ticked_and_need_nothing() {
 }
 
 #[test]
-fn a_prerequisite_is_ticked_and_goes_first() {
-    // OpenCode on Windows needs Node.js; WinGet is here.
-    let host = TestHost::on(Platform::WindowsX64).with(&["winget"]);
-    let p = plan(&survey(&host, &BTreeMap::new()), &picks(&["opencode"]));
-    let node = p.entry("node").unwrap();
-    assert!(node.ticked && !node.picked);
-    assert_eq!(node.needed_by, ["opencode"]);
-    assert!(node.action.as_ref().unwrap().command.starts_with("winget install"));
-    let opencode = p.entry("opencode").unwrap().action.clone().unwrap();
-    assert_eq!(opencode.after, ["node"]);
-    assert_eq!(opencode.command, "npm install -g opencode-ai", "npm will be there");
-    let order: Vec<&str> = p.steps().iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(order, ["node", "opencode"]);
-}
-
-#[test]
 fn node_ticked_on_its_own_comes_from_apt() {
     let mut h = TestHost::on(Platform::Linux).with(&["apt-get", "sudo"]);
     h.candidates.insert("apt".into(), "18.19.1".into());
@@ -312,12 +296,12 @@ fn node_ticked_on_its_own_comes_from_apt() {
 
 #[test]
 fn no_way_here_says_why() {
-    // Windows without WinGet: git has no other method.
-    let h = TestHost::on(Platform::WindowsX64);
+    // A Linux with neither apt nor dnf: git has no other method.
+    let h = TestHost::on(Platform::Linux);
     let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["git"]));
     let git = p.entry("git").unwrap();
     assert!(git.action.is_none());
-    assert!(git.blocked.as_deref().unwrap().contains("`winget`"), "{:?}", git.blocked);
+    assert!(git.blocked.as_deref().unwrap().contains("`apt-get`"), "{:?}", git.blocked);
     assert!(p.steps().is_empty());
 }
 
@@ -345,13 +329,12 @@ fn states_other_and_outdated() {
 
 #[test]
 fn a_run_reports_each_step_and_a_failure_leaves_the_rest() {
-    let mut h = TestHost::on(Platform::WindowsX64);
+    let mut h = TestHost::on(Platform::Linux);
     h.fail.insert("node".into());
-    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["opencode", "claude"]));
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["node", "claude"]));
     let (r, events) = run_all(&p, &h, Admin::Ask);
     assert_eq!(r.done, ["claude"]);
     assert_eq!(r.failed, ["node"]);
-    assert_eq!(r.skipped, ["opencode"], "it needs the Node.js that failed");
     assert!(!r.ok());
     assert!(events.iter().any(
         |e| matches!(e, Event::Line { id, text } if id == "claude" && text == "installing claude")
@@ -361,11 +344,6 @@ fn a_run_reports_each_step_and_a_failure_leaves_the_rest() {
         _ => None,
     });
     assert!(fix.unwrap().contains("ptyro install node"));
-    let why = events.iter().find_map(|e| match e {
-        Event::Skipped { id, reason, .. } if id == "opencode" => Some(reason.clone()),
-        _ => None,
-    });
-    assert!(why.unwrap().contains("Node.js"));
     assert!(matches!(events.last(), Some(Event::Finished { .. })));
     // Claude was installed and has a login: the logins' turn (BOOT4) names it.
     assert!(events.iter().any(|e| matches!(e, Event::Logins { ids } if ids == &["claude"])));
@@ -418,13 +396,13 @@ fn admin_is_asked_once_and_only_where_allowed() {
 
 #[test]
 fn nodejs_orgs_build_marks_the_tools_folder_used() {
-    let h = TestHost::on(Platform::WindowsArm64);
-    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["opencode"]));
-    // OpenCode on Windows needs Node.js; no WinGet: nodejs.org's build.
+    let h = TestHost::on(Platform::Linux);
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["node"]));
+    // No apt, no dnf: nodejs.org's build.
     assert_eq!(p.entry("node").unwrap().action.as_ref().unwrap().via, Via::NodeDist);
     let (r, _) = run_all(&p, &h, Admin::Ask);
     assert!(r.ok() && r.tools);
-    assert_eq!(r.done, ["node", "opencode"]);
+    assert_eq!(r.done, ["node"]);
 }
 
 #[test]
@@ -509,50 +487,6 @@ fn a_blocked_item_is_reported_and_counts_as_not_installed() {
     assert!(h.calls().iter().all(|c| !c.starts_with("git") && !c.starts_with("gh")));
 }
 
-#[test]
-fn a_refreshed_path_keeps_what_it_had_and_adds_what_installers_stored() {
-    let tools = vec![std::path::PathBuf::from("/t/node/bin")];
-    let cur = std::env::join_paths(["/usr/bin", "/t/node/bin", "/bin"]).unwrap();
-    let fresh = [std::path::PathBuf::from("/opt/nodejs"), std::path::PathBuf::from("/usr/bin")];
-    let out = refreshed_path(&cur, &fresh, &tools);
-    let parts: Vec<_> = std::env::split_paths(&out).collect();
-    assert_eq!(
-        parts,
-        ["/t/node/bin", "/usr/bin", "/bin", "/opt/nodejs"].map(std::path::PathBuf::from)
-    );
-}
-
-/// A quoted or padded entry in a stored `Path` (common on Windows) is read as its folder, so
-/// one such entry can't make `join_paths` refuse the whole refresh.
-#[test]
-fn stored_path_entries_are_trimmed_and_unquoted() {
-    assert_eq!(
-        host::path_entries(r#" "C:\Program Files\nodejs" ;;C:\Tools\ ;" ";C:\a"b"#),
-        [r"C:\Program Files\nodejs", r"C:\Tools\"].map(std::path::PathBuf::from)
-    );
-    let cur = std::env::join_paths(["/usr/bin"]).unwrap();
-    let fresh = host::path_entries(r#""/opt/x y""#);
-    let out = refreshed_path(&cur, &fresh, &[]);
-    assert!(std::env::split_paths(&out).any(|p| p == std::path::Path::new("/opt/x y")));
-}
-
-#[test]
-fn stored_paths_expand_and_prepend_without_touching_the_rest() {
-    let var = |k: &str| (k == "USERPROFILE").then(|| r"C:\Users\me".to_owned());
-    assert_eq!(
-        expand_vars(r"%USERPROFILE%\bin;%NOPE%\x;50%;C:\y", var),
-        r"C:\Users\me\bin;%NOPE%\x;50%;C:\y"
-    );
-    let raw = r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;;C:\Tools\;c:\pt\node";
-    let out = prepend_entries(raw, &[r"C:\pt\node".into(), r"C:\pt\npm".into()]);
-    assert_eq!(
-        out,
-        r"C:\pt\node;C:\pt\npm;%USERPROFILE%\AppData\Local\Microsoft\WindowsApps;C:\Tools\"
-    );
-    // Again: unchanged.
-    assert_eq!(prepend_entries(&out, &[r"C:\pt\node".into(), r"C:\pt\npm".into()]), out);
-}
-
 /// An installer that leaves a background process holding its output doesn't hang the step.
 #[cfg(unix)]
 #[test]
@@ -576,72 +510,6 @@ fn ids(v: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn windows_rows_say_windows_and_wsls_plan_joins_them_as_a_second_side() {
-    let win = TestHost::on(Platform::WindowsX64).with(&["winget"]);
-    let linux = TestHost::on(Platform::Linux).with(&["apt-get", "sudo", "curl"]);
-    let mine = plan(&survey(&win, &BTreeMap::new()), &ids(&["opencode"]));
-    assert!(mine.entries.iter().all(|e| e.side == Side::Windows));
-    let theirs = plan(&survey(&linux, &BTreeMap::new()), &ids(&["opencode", "gh"]));
-    assert!(theirs.entries.iter().all(|e| e.side == Side::Local));
-    let status = WslStatus::Usable { distro: "Ubuntu".into(), version: "ptyro 0.0.63".into() };
-    let both = Plan::merge(mine, Some(theirs), Some(status.clone()));
-    assert_eq!(both.sides(), [Side::Windows, Side::Wsl]);
-    // Each side in order, each item after what it needs on its own side.
-    let steps: Vec<(Side, &str)> = both.steps().iter().map(|e| (e.side, e.id.as_str())).collect();
-    assert_eq!(
-        steps,
-        [
-            (Side::Windows, "node"),
-            (Side::Windows, "opencode"),
-            (Side::Wsl, "opencode"),
-            (Side::Wsl, "gh"),
-        ]
-    );
-    let wsl = both.side(Side::Wsl);
-    assert!(wsl.entries.iter().all(|e| e.side == Side::Wsl));
-    assert_eq!(wsl.entry_on("gh", Side::Wsl).unwrap().action.as_ref().unwrap().via, Via::Apt);
-    assert!(both.entry_on("gh", Side::Windows).is_some_and(|e| !e.ticked));
-    // The JSON carries the sides and WSL's state, and reads back.
-    let j = serde_json::to_value(&both).unwrap();
-    assert_eq!(
-        j["wsl"],
-        serde_json::json!({"state": "usable", "distro": "Ubuntu", "version": "ptyro 0.0.63"})
-    );
-    let back: Plan = serde_json::from_value(j).unwrap();
-    assert_eq!(back, both);
-    // A plan from before BOOT8 (no `wsl`, no `side`) still reads.
-    let old = serde_json::json!({"platform": "linux", "entries": []});
-    assert_eq!(serde_json::from_value::<Plan>(old).unwrap().wsl, None);
-}
-
-#[test]
-fn where_means_sides_and_events_carry_theirs() {
-    assert_eq!("both".parse::<Where>().unwrap().sides(Side::Windows), [Side::Windows, Side::Wsl]);
-    assert_eq!("WSL".parse::<Where>().unwrap().sides(Side::Windows), [Side::Wsl]);
-    assert_eq!("windows".parse::<Where>().unwrap().sides(Side::Windows), [Side::Windows]);
-    assert_eq!("local".parse::<Where>().unwrap().sides(Side::Local), [Side::Local]);
-    assert!("mars".parse::<Where>().unwrap_err().contains("wsl, windows or both"));
-    let ev = Sided { side: Side::Wsl, event: Event::Done { id: "gh".into(), version: None } };
-    let j = serde_json::to_value(&ev).unwrap();
-    assert_eq!(j, serde_json::json!({"side": "wsl", "event": "done", "id": "gh", "version": null}));
-    // A reader that knows only events reads it too.
-    assert_eq!(serde_json::from_value::<Event>(j.clone()).unwrap(), ev.event);
-    assert_eq!(serde_json::from_value::<Sided>(j).unwrap(), ev);
-    let mut r = Report { done: ids(&["claude"]), ..Report::default() };
-    r.merge(&Report { failed: ids(&["gh"]), tools: true, ..Report::default() });
-    assert!(!r.ok() && r.tools && r.done == ["claude"]);
-    let no = WslStatus::Unusable {
-        reason: "WSL has no Linux distro".into(),
-        fix: "`wsl --install`".into(),
-    };
-    assert_eq!(
-        no.words(),
-        "WSL: WSL has no Linux distro, so this sets up Windows only. For WSL too: `wsl --install`"
-    );
-    assert_eq!(no.usable(), None);
-}
-
-#[test]
 fn a_login_is_decided_by_its_status_commands_exit_code_alone() {
     let item = |id: &str| catalog::item(id).unwrap();
     let h = TestHost::on(Platform::Linux).have("gh", "2.57.0").have("opencode", "1.19.5");
@@ -660,7 +528,6 @@ fn a_login_is_decided_by_its_status_commands_exit_code_alone() {
     let gh = rows.iter().find(|r| r.id == "gh").unwrap();
     assert_eq!(gh.command, "gh auth login --web");
     assert_eq!(gh.check.as_deref(), Some("gh auth status"));
-    assert_eq!(gh.side, Side::Local);
     let only = login::rows(&h, &picks(&["gh", "git"]));
     assert_eq!(only.len(), 1, "git has no login");
 }
@@ -706,49 +573,27 @@ fn the_logins_after_a_run_are_what_it_installed_and_what_was_picked() {
     assert!(events.iter().any(|e| matches!(e, Event::Logins { ids } if ids == &["claude", "gh"])));
 }
 
-/// The web's lines (BOOT3): each entry's words as the TUI says them. One side: the method in
-/// the line; two sides: the method in each side's cell, what a cell can't say beside it.
+/// The web's lines (BOOT3): each entry's words as the TUI says them, the method in the line.
 #[test]
 fn the_checklists_lines_say_what_the_tui_does() {
     use super::checklist::{cell, lines};
     let linux =
         TestHost::on(Platform::Linux).with(&["apt-get", "sudo", "curl"]).have("claude", "2.1.3");
     let here = survey(&linux, &BTreeMap::new());
-    let one = plan(&here, &ids(&["opencode"]));
-    let ls = lines(&one, &here, None);
+    let one = plan(&here, &ids(&["opencode", "git"]));
+    let ls = lines(&one, &here);
     assert_eq!(ls.len(), one.entries.len());
-    let of = |ls: &[super::checklist::Line], id: &str, side: Side| {
-        ls.iter().find(|l| l.id == id && l.side == side).unwrap().clone()
-    };
-    let opencode = of(&ls, "opencode", Side::Local);
+    let of =
+        |ls: &[super::checklist::Line], id: &str| ls.iter().find(|l| l.id == id).unwrap().clone();
+    let opencode = of(&ls, "opencode");
     assert!(opencode.about.ends_with("then log in"), "{opencode:?}");
     // Unticked: the method it would use, from what is on PATH.
-    assert!(
-        of(&ls, "gh", Side::Local).about.contains("apt · asks for admin"),
-        "{:?}",
-        of(&ls, "gh", Side::Local)
-    );
-    assert_eq!(of(&ls, "gh", Side::Local).how, "");
-    let claude = of(&ls, "claude", Side::Local);
+    assert!(of(&ls, "gh").about.contains("apt · asks for admin"), "{:?}", of(&ls, "gh"));
+    assert_eq!(of(&ls, "gh").how, "");
+    let claude = of(&ls, "claude");
     assert_eq!((claude.how.as_str(), claude.state.as_str()), ("✓ 2.1.3", "installed 2.1.3"));
-
-    let win = TestHost::on(Platform::WindowsX64).with(&["winget"]);
-    let mine_s = survey(&win, &BTreeMap::new());
-    let status = WslStatus::Usable { distro: "Ubuntu".into(), version: "ptyro 0.0.63".into() };
-    let both = Plan::merge(
-        plan(&mine_s, &ids(&["git", "opencode"])),
-        Some(plan(&here, &ids(&["gh"]))),
-        Some(status),
-    );
-    let ls = lines(&both, &mine_s, Some(&here));
-    let git = of(&ls, "git", Side::Windows);
-    assert!(!git.about.contains("WinGet"), "the method is the cell's: {git:?}");
-    assert_eq!(git.how, "WinGet (admin)");
-    assert_eq!(cell(both.entry_on("git", Side::Windows)), "[x] WinGet (admin)");
-    let opencode = of(&ls, "opencode", Side::Windows);
-    assert!(opencode.about.contains("needs Node.js"), "{opencode:?}");
-    let node = of(&ls, "node", Side::Windows);
-    assert_eq!(node.why, ["ticked because OpenCode needs it"]);
+    assert_eq!(of(&ls, "git").how, "apt (admin)");
+    assert_eq!(cell(one.entry("git")), "[x] apt (admin)");
     // It travels as JSON and reads back.
     let back: Vec<super::checklist::Line> =
         serde_json::from_value(serde_json::to_value(&ls).unwrap()).unwrap();
@@ -901,14 +746,12 @@ fn the_start_up_note_says_each_new_version_once() {
 }
 
 #[test]
-fn windows_refusing_to_replace_a_running_program_says_why_and_how_to_retry() {
-    let mut host = TestHost::on(Platform::WindowsX64).have("claude", "2.1.300");
-    host.fail.insert("claude".into());
-    host.errors.insert(
-        "claude".into(),
-        "it exited with 1: The process cannot access the file because it is being used by another process.".into(),
-    );
+fn a_program_running_while_its_update_replaces_it_says_why_and_how_to_retry() {
+    // A running program's file is busy (ETXTBSY).
     let latest = BTreeMap::from([("claude".to_owned(), "2.1.400".to_owned())]);
+    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300");
+    host.fail.insert("claude".into());
+    host.errors.insert("claude".into(), "it exited with 1: Text file busy".into());
     let p = plan(&survey(&host, &latest), &picks(&["claude"]));
     let (r, events) = run_all(&p, &host, Admin::Ask);
     assert_eq!(r.failed, ["claude"]);
@@ -919,24 +762,9 @@ fn windows_refusing_to_replace_a_running_program_says_why_and_how_to_retry() {
             _ => None,
         })
         .unwrap();
-    assert!(fix.contains("Windows won't replace a program while it runs"), "{fix}");
+    assert!(fix.contains("its file couldn't be replaced while it runs"), "{fix}");
     assert!(fix.contains("then try the update again (`ptyro update claude`)"), "{fix}");
     assert!(events.iter().any(|e| matches!(e, Event::Failed { in_use: true, .. })));
-    // Elsewhere a running program's file is busy too (ETXTBSY), without blaming Windows.
-    let mut host = TestHost::on(Platform::Linux).have("claude", "2.1.300");
-    host.fail.insert("claude".into());
-    host.errors.insert("claude".into(), "it exited with 1: Text file busy".into());
-    let p = plan(&survey(&host, &latest), &picks(&["claude"]));
-    let (_, events) = run_all(&p, &host, Admin::Ask);
-    let fix = events
-        .iter()
-        .find_map(|e| match e {
-            Event::Failed { fix, .. } => Some(fix.clone()),
-            _ => None,
-        })
-        .unwrap();
-    assert!(fix.contains("its file couldn't be replaced while it runs"), "{fix}");
-    assert!(!fix.contains("Windows"), "{fix}");
     assert!(in_use("npm ERR! code EBUSY"));
     assert!(!in_use("it exited with 1: E: no network"));
 }
@@ -981,7 +809,7 @@ fn an_agent_installed_another_way_without_an_update_command_is_not_offered_one()
         assert!(m.update.is_some(), "every row today has one: {:?}", m.via);
     }
     assert!(other_update(item, Platform::Linux, Via::Npm).is_some());
-    assert!(other_update(item, Platform::Linux, Via::Winget).is_none());
+    assert!(other_update(item, Platform::Linux, Via::Apt).is_none());
 }
 
 #[test]
@@ -1016,7 +844,7 @@ fn an_agent_installed_another_way_is_offered_the_move_and_ticking_it_moves() {
     // A row of the checklist (not "already here"), with the offer in its words.
     assert!(!checklist::here_already(e));
     assert!(checklist::rows(&p).iter().any(|r| r.id == "codex"));
-    let line = checklist::about(&p, e, &|_| true, false);
+    let line = checklist::about(&p, e, &|_| true);
     assert!(line.contains("installed with npm · move to the recommended installer?"), "{line}");
     // Ticked: installed the vendor's way, checked, then npm's copy removed.
     let p = plan(&s, &picks(&["codex"]));
@@ -1181,19 +1009,9 @@ fn a_homebrew_keg_is_homebrews_even_with_node_modules_inside_and_npm_has_its_pre
         "/home/me/.nvm/versions/node/v22.1.0/lib/node_modules/@openai/codex/bin/codex.js",
     );
     assert_eq!(npm_prefix(nvm).as_deref(), Some("/home/me/.nvm/versions/node/v22.1.0"));
-    let win = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js");
-    assert_eq!(
-        super::host::npm_prefix_on(win, true).as_deref(),
-        Some(r"C:\Users\me\AppData\Roaming\npm")
-    );
     // Bun's global folder isn't npm's to remove from.
     let bun = Path::new("/home/me/.bun/install/global/node_modules/@openai/codex/bin/codex.js");
     assert_eq!(npm_prefix(bun), None);
-    // The layout follows the path, wherever the tests run: a Windows prefix holds node_modules.
-    let win = Path::new(r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js");
-    assert_eq!(npm_prefix(win).as_deref(), Some(r"C:\Users\me\AppData\Roaming\npm"));
-    let win_lib = Path::new(r"D:\tools\lib\node_modules\@openai\codex\bin\codex.js");
-    assert_eq!(npm_prefix(win_lib).as_deref(), Some(r"D:\tools\lib"));
 }
 
 #[test]
@@ -1211,17 +1029,13 @@ fn no_move_is_offered_without_a_prefix_or_for_someone_elses_homebrew() {
     let none = BTreeSet::new();
     assert!(offer(item, Platform::Linux, &st(Via::Npm, false, None), &none, &|_| true).is_none());
     assert!(offer(item, Platform::Macos, &st(Via::Brew, true, None), &none, &|_| true).is_none());
-    // A backslash is taken as it is inside single quotes, by sh as by PowerShell (a Windows
-    // folder a test's fake machine plans for Linux from).
-    let back = offer(
-        item,
-        Platform::Linux,
-        &st(Via::Npm, false, Some(r"C:\t\npm-prefix")),
-        &none,
-        &|_| true,
-    )
-    .unwrap();
-    assert_eq!(back.uninstall, r"npm uninstall -g --prefix 'C:\t\npm-prefix' @openai/codex");
+    // A backslash is taken as it is inside single quotes.
+    let back =
+        offer(item, Platform::Linux, &st(Via::Npm, false, Some(r"/t/npm\prefix")), &none, &|_| {
+            true
+        })
+        .unwrap();
+    assert_eq!(back.uninstall, r"npm uninstall -g --prefix '/t/npm\prefix' @openai/codex");
     let mine = offer(item, Platform::Macos, &st(Via::Brew, false, None), &none, &|_| true).unwrap();
     assert_eq!(mine.uninstall, "brew uninstall --cask codex");
 }
@@ -1307,52 +1121,40 @@ fn an_unknown_installers_copy_never_counts_and_an_unknown_vendor_place_offers_no
 }
 
 #[test]
-fn npm_prefixes_by_the_platforms_layout_and_never_inside_a_tool_store() {
-    use super::host::npm_prefix_on;
+fn npm_prefixes_are_above_lib_node_modules_and_never_inside_a_tool_store() {
+    use super::host::npm_prefix;
     use std::path::Path;
     let lin = Path::new("/home/me/.npm-global/lib/node_modules/@openai/codex/bin/codex.js");
-    assert_eq!(npm_prefix_on(lin, false).as_deref(), Some("/home/me/.npm-global"));
-    // Windows: the prefix holds node_modules, even under a folder named lib.
-    let win = Path::new(r"D:\tools\lib\node_modules\npm\node_modules\@openai\codex\bin\codex.js");
-    assert_eq!(npm_prefix_on(win, true).as_deref(), Some(r"D:\tools\lib"));
+    assert_eq!(npm_prefix(lin).as_deref(), Some("/home/me/.npm-global"));
     let mise = Path::new(
         "/home/me/.local/share/mise/installs/npm-openai-codex/0.162.1/lib/node_modules/@openai/codex/bin/codex.js",
     );
-    assert_eq!(npm_prefix_on(mise, false), None);
+    assert_eq!(npm_prefix(mise), None);
 }
 
 #[test]
-fn a_vendor_place_follows_its_installers_variables_and_windows_home() {
+fn a_vendor_place_follows_its_installers_variables() {
     let env = |pairs: &'static [(&'static str, &'static str)]| {
         move |v: &str| pairs.iter().find(|(k, _)| *k == v).map(|(_, x)| (*x).to_owned())
     };
-    let set = env(&[
-        ("HOME", "/c/Users/me"),
-        ("USERPROFILE", r"C:\Users\me"),
-        ("CODEX_HOME", "/data/codex"),
-    ]);
+    let set = env(&[("HOME", "/home/me"), ("CODEX_HOME", "/data/codex")]);
     assert_eq!(
-        expand_place_with("%CODEX_HOME%/packages/standalone", &set, false).as_deref(),
+        expand_place_with("%CODEX_HOME%/packages/standalone", &set).as_deref(),
         Some("/data/codex/packages/standalone")
     );
     // Unset: that place is skipped, and the installer's default is the next one.
     let unset = env(&[("HOME", "/home/me")]);
-    assert_eq!(expand_place_with("%CODEX_HOME%/packages/standalone", &unset, false), None);
+    assert_eq!(expand_place_with("%CODEX_HOME%/packages/standalone", &unset), None);
     assert_eq!(
-        expand_place_with("~/.codex/packages/standalone", &unset, false).as_deref(),
+        expand_place_with("~/.codex/packages/standalone", &unset).as_deref(),
         Some("/home/me/.codex/packages/standalone")
     );
-    // Windows' home is USERPROFILE, whatever Git Bash's HOME says.
     assert_eq!(
-        expand_place_with("~/.local/share/claude", &set, true).as_deref(),
-        Some(r"C:\Users\me/.local/share/claude")
-    );
-    assert_eq!(
-        expand_place_with("~/.local/share/claude", &set, false).as_deref(),
-        Some("/c/Users/me/.local/share/claude")
+        expand_place_with("~/.local/share/claude", &set).as_deref(),
+        Some("/home/me/.local/share/claude")
     );
     // The table names CODEX_HOME before the default, on every platform.
-    for p in [Platform::Linux, Platform::WindowsX64] {
+    for p in Platform::ALL {
         let m = catalog::item("codex").unwrap().method(p, |_| true).unwrap();
         assert_eq!(m.places.first().map(String::as_str), Some("%CODEX_HOME%/packages/standalone"));
     }
@@ -1383,22 +1185,19 @@ fn the_vendors_own_copy_not_answering_is_repaired_never_deleted() {
 
 #[test]
 fn npm_under_mise_or_asdf_node_is_a_prefix_and_their_own_stores_name_their_command() {
-    use super::host::{npm_prefix_on, npm_store};
+    use super::host::{npm_prefix, npm_store};
     use std::path::Path;
     let mise_node = Path::new(
         "/home/me/.local/share/mise/installs/node/22.1.0/lib/node_modules/@openai/codex/bin/codex.js",
     );
     assert_eq!(
-        npm_prefix_on(mise_node, false).as_deref(),
+        npm_prefix(mise_node).as_deref(),
         Some("/home/me/.local/share/mise/installs/node/22.1.0")
     );
     let asdf_node = Path::new(
         "/home/me/.asdf/installs/nodejs/22.1.0/lib/node_modules/@openai/codex/bin/codex.js",
     );
-    assert_eq!(
-        npm_prefix_on(asdf_node, false).as_deref(),
-        Some("/home/me/.asdf/installs/nodejs/22.1.0")
-    );
+    assert_eq!(npm_prefix(asdf_node).as_deref(), Some("/home/me/.asdf/installs/nodejs/22.1.0"));
     let mise_npm = Path::new(
         "/home/me/.local/share/mise/installs/npm-openai-codex/0.162.1/lib/node_modules/@openai/codex/bin/codex.js",
     );
@@ -1425,28 +1224,9 @@ fn npm_under_mise_or_asdf_node_is_a_prefix_and_their_own_stores_name_their_comma
 }
 
 #[test]
-fn a_windows_npm_leftover_is_deleted_by_its_shims_and_package_folder() {
-    let cmd = super::moving::delete_command(
-        r"C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js",
-        Some(r"C:\Users\me\AppData\Roaming\npm"),
-        Some("@openai/codex"),
-        "codex",
-        Platform::WindowsX64,
-    );
-    assert_eq!(
-        cmd,
-        r"`Remove-Item -LiteralPath 'C:\Users\me\AppData\Roaming\npm\codex', 'C:\Users\me\AppData\Roaming\npm\codex.cmd', 'C:\Users\me\AppData\Roaming\npm\codex.ps1'; Remove-Item -Recurse -LiteralPath 'C:\Users\me\AppData\Roaming\npm\node_modules\@openai\codex'`"
-    );
-    assert!(!cmd.contains("codex.js"));
-    // Elsewhere: the link PATH finds.
-    let unix = super::moving::delete_command(
-        "/home/me/.npm-global/bin/codex",
-        Some("/home/me/.npm-global"),
-        Some("@openai/codex"),
-        "codex",
-        Platform::Linux,
-    );
-    assert_eq!(unix, "`rm '/home/me/.npm-global/bin/codex'`");
+fn an_npm_leftover_is_deleted_by_the_link_path_finds() {
+    let cmd = super::moving::delete_command("/home/me/.npm-global/bin/codex");
+    assert_eq!(cmd, "`rm '/home/me/.npm-global/bin/codex'`");
 }
 
 /// A new ptyro release is announced on the desktop once (SPEC §24.8), not with `notify` off.

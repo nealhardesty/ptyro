@@ -135,17 +135,6 @@ store.set("k", "v");
   assert.equal(aboutDoc(undefined, null).daemon.running, false);
 }
 {
-  // Setup's sides (BOOT8): the summary waits for one report per side the daemon runs.
-  const { setupSides } = await import("../dist/kit.js");
-  const e = (side, ticked, action, blocked) => ({ side, ticked, action, blocked });
-  assert.equal(setupSides(null), 1);
-  assert.equal(setupSides({ entries: [] }), 1);
-  assert.equal(setupSides({ entries: [e("windows", true, {}), e("wsl", true, {})] }), 2);
-  // WSL went away between the page's plan and the run: the daemon's plan has Windows only.
-  assert.equal(setupSides({ entries: [e("windows", true, {}), e("windows", true, null, "no way")] }), 1);
-  assert.equal(setupSides({ entries: [e("windows", true, {}), e("wsl", false, {}), e("wsl", true, null, null)] }), 1);
-}
-{
   // Creation forms' pickers: a profile select lists the machine's own profiles by their bare
   // names, a new workspace starts with the profile named like it, and agent arguments split as
   // a shell would.

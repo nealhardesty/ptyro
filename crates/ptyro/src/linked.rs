@@ -138,7 +138,7 @@ pub async fn machine_update(
         out
     };
     if !yes {
-        if !crate::setup::interactive(false) {
+        if !crate::setup::interactive() {
             return Err(Error::invalid(
                 "`ptyro machine update` asks first: run it in a terminal, or pass --yes",
             ));

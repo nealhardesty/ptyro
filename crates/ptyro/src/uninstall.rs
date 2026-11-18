@@ -146,9 +146,6 @@ pub struct Plan {
     pub worktrees: Vec<Worktree>,
     pub uncommitted_total: usize,
     pub service: Option<PathBuf>,
-    /// Windows knows ptyro as an app (WIN10): its AppUserModelID and its `ptyro:` link handler.
-    #[serde(default)]
-    pub windows_app: bool,
     pub rc: Vec<RcEdit>,
     pub tailscale: Option<String>,
     pub refs: Vec<Refs>,
@@ -335,8 +332,7 @@ pub fn rewrite_rc(
         return (kept, gone, Vec::new());
     };
     let lines = ptyro_core::shell::path_lines(kind, tools);
-    let first = ptyro_core::shell::msys_form(&tools[0].to_string_lossy());
-    if kept.contains(&first) || kept.contains(&tools[0].to_string_lossy().into_owned()) {
+    if kept.contains(&tools[0].to_string_lossy().into_owned()) {
         return (kept, gone, Vec::new());
     }
     let sep = if kept.is_empty() || kept.ends_with('\n') { "" } else { "\n" };
@@ -517,13 +513,6 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     // The machine's own files: only when this is the install, not a sandbox.
     let machine = sandbox.is_none();
     let service = (machine && crate::service::installed()).then(crate::service::file);
-    #[cfg(windows)]
-    let windows_app = machine && {
-        let (named, opener) = crate::winapp::status();
-        named || opener.is_some()
-    };
-    #[cfg(not(windows))]
-    let windows_app = false;
     let tools: Vec<PathBuf> =
         ptyro_agents::setup::path_dirs(paths).into_iter().filter(|d| d.is_dir()).collect();
     let mut rc = Vec::new();
@@ -572,15 +561,6 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
             paths.tools().display()
         ));
     }
-    #[cfg(windows)]
-    if machine && let Some(raw) = ptyro_pty::winreg::get_raw(false, "Environment", "Path") {
-        let root = paths.tools().display().to_string().to_ascii_lowercase();
-        let ours: Vec<&str> =
-            raw.text.split(';').filter(|e| e.to_ascii_lowercase().starts_with(&root)).collect();
-        if !ours.is_empty() {
-            kept.push(format!("your PATH's entries for those tools: {}", ours.join("; ")));
-        }
-    }
     // What an older ptyro installed into Gemini CLI's and Antigravity's own folders (removed
     // 2026-11-17): the person's files, outside ptyro's own (those go with the data directory).
     if machine {
@@ -589,12 +569,6 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
                 kept.push(text);
             }
         }
-    }
-    if cfg!(windows) {
-        kept.push(
-            "ptyro in WSL, with its daemon and sessions: `wsl -- ptyro uninstall` removes it there"
-                .to_owned(),
-        );
     }
     Ok(Plan {
         sandbox,
@@ -607,7 +581,6 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         worktrees,
         uncommitted_total,
         service,
-        windows_app,
         rc,
         tailscale,
         refs,
@@ -699,12 +672,6 @@ pub fn render(plan: &Plan, env: &Env) -> String {
     if let Some(f) = &plan.service {
         let _ = writeln!(s, "  service       {} (starts the daemon at login)", tilde(f, home));
     }
-    if plan.windows_app {
-        let _ = writeln!(
-            s,
-            "  windows       ptyro's toast name and icon, and its ptyro: link handler (your registry)"
-        );
-    }
     for r in plan.rc.iter().filter(|r| !r.lines.is_empty()) {
         let _ = writeln!(
             s,
@@ -767,65 +734,9 @@ pub struct Step {
     pub detail: String,
 }
 
-#[cfg(unix)]
 fn remove_binary(path: &Path) -> Result<String, String> {
     std::fs::remove_file(path).map(|()| String::new()).map_err(|e| {
         format!("{e}: remove it yourself (`sudo rm {}` if it needs it)", path.display())
-    })
-}
-
-/// Windows won't delete a running program, but it will move one: ptyro.exe goes to the temp
-/// folder, and a detached `cmd` deletes it there once this process has ended. The folder it was
-/// in goes too when nothing else is in it, and leaves your PATH, where install.ps1 put it.
-#[cfg(windows)]
-fn remove_binary(path: &Path) -> Result<String, String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    let manual = |e: std::io::Error| format!("{e}: delete {} yourself", path.display());
-    if std::fs::remove_file(path).is_err() {
-        let gone =
-            std::env::temp_dir().join(format!("ptyro-uninstalled-{}.exe", std::process::id()));
-        std::fs::rename(path, &gone).map_err(manual)?;
-        let _ = std::process::Command::new("cmd.exe")
-            .raw_arg(format!("/d /c ping -n 3 127.0.0.1 >nul & del /f /q \"{}\"", gone.display()))
-            .creation_flags(CREATE_NO_WINDOW)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-    }
-    let Some(dir) = path.parent() else { return Ok(String::new()) };
-    // The packaged ConPTY beside it (WIN5; the daemon, and so every OpenConsole.exe, has
-    // stopped by now), and what install.ps1 renamed aside when it couldn't overwrite a file.
-    // ptyrow.exe too, the windowless launcher (WIN10).
-    for f in ["conpty.dll", "OpenConsole.exe", "ptyrow.exe"] {
-        let _ = std::fs::remove_file(dir.join(f));
-        let _ = std::fs::remove_file(dir.join(format!("{f}.old")));
-    }
-    let _ = std::fs::remove_file(dir.join("ptyro.exe.old"));
-    if std::fs::remove_dir(dir).is_err() {
-        return Ok(String::new());
-    }
-    // `…\Programs\ptyro\bin`: its parent too, when that's empty now.
-    if dir.file_name().is_some_and(|n| n.eq_ignore_ascii_case("bin")) {
-        let _ = dir.parent().map(std::fs::remove_dir);
-    }
-    let quoted = dir.display().to_string().replace('\'', "''");
-    // Prints `removed` when the folder was on the user's PATH and now isn't.
-    let script = format!(
-        "$old = [Environment]::GetEnvironmentVariable('Path', 'User'); \
-         $p = @($old -split ';' | Where-Object {{ $_ -and $_ -ne '{quoted}' }}) -join ';'; \
-         if ($p -ne $old) {{ [Environment]::SetEnvironmentVariable('Path', $p, 'User'); 'removed' }}"
-    );
-    let out = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output();
-    Ok(match out {
-        Ok(o) if o.status.success() && String::from_utf8_lossy(&o.stdout).contains("removed") => {
-            format!("and {} left your PATH", dir.display())
-        }
-        Ok(o) if o.status.success() => String::new(),
-        _ => format!("take {} off your PATH if it's there", dir.display()),
     })
 }
 
@@ -845,28 +756,11 @@ fn step(out: &mut Vec<Step>, json: bool, name: &str, r: Result<String, String>) 
 }
 
 fn remove_tree(p: &Path) -> std::io::Result<()> {
-    // Windows keeps a file in use for a moment after the process that had it exits (a virus
-    // scanner, the indexer, a child still closing): a sharing violation (32) or a denial (5)
-    // there is tried again for a few seconds before it counts (WIN13, seen right after the
-    // daemon stopped).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let r = match std::fs::symlink_metadata(p) {
-            Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
-            Ok(_) => std::fs::remove_file(p),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e),
-        };
-        match r {
-            Err(e)
-                if cfg!(windows)
-                    && matches!(e.raw_os_error(), Some(32 | 5))
-                    && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            r => return r,
-        }
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
+        Ok(_) => std::fs::remove_file(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -926,15 +820,7 @@ async fn execute(ctx: &Ctx, plan: &Plan, opts: &Opts, json: bool) -> (Vec<Step>,
         let r = crate::service::uninstall(ctx, false).map(|_| String::new()).map_err(|e| e.message);
         step(&mut steps, json, "remove the login service", r);
     }
-    #[cfg(windows)]
-    if plan.windows_app {
-        let r = crate::winapp::remove(&ctx.paths.data)
-            .map(|()| String::new())
-            .map_err(|e| e.to_string());
-        step(&mut steps, json, "unregister ptyro from Windows", r);
-    }
-    // The daemon, and what it holds: nothing is deleted under one that still runs. On Windows
-    // that is a native daemon (WIN5); WSL's own ptyro is left alone, as the plan says.
+    // The daemon, and what it holds: nothing is deleted under one that still runs.
     let stopped = {
         let stop = crate::cli::stop_daemon(ctx, true, false).await;
         let stopped = stop.is_ok() && !daemon_running(&ctx.paths);

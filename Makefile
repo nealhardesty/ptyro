@@ -1,19 +1,11 @@
 # ptyro — every workflow has a make target (see AGENTS.md). `make` alone lists them.
 
 # rustup installs to ~/.cargo/bin; make it work even when that isn't on the caller's PATH yet.
-# On Windows that is under %USERPROFILE%, which MSYS2 (unlike Git Bash) doesn't make $HOME.
-# Windows with no sh on PATH (a plain PowerShell): make then runs recipes in cmd.exe and names
-# its shell bare `sh.exe`. The lookups below are POSIX shell, so they're skipped there; only
-# `windows-setup` and `build-windows` are meant to run from there.
-NO_SH := $(and $(filter Windows_NT,$(OS)),$(filter sh.exe,$(SHELL)))
-CARGO_BIN := $(or $(if $(filter Windows_NT,$(OS)),$(if $(NO_SH),,$(shell cygpath -u '$(USERPROFILE)' 2>/dev/null))),$(HOME))/.cargo/bin
+CARGO_BIN := $(HOME)/.cargo/bin
 CALLER_PATH := $(PATH)
-# A native Windows make (Chocolatey's) sees Windows' own PATH, where rustup-init puts cargo itself.
-ifeq ($(findstring ;,$(PATH)),)
 export PATH := $(CARGO_BIN):$(PATH)
-endif
 # Resolved with the PATH above: make execs simple recipes with its startup PATH, not the exported one.
-CARGO ?= $(if $(NO_SH),cargo,$(or $(shell PATH="$(PATH)" command -v cargo),cargo))
+CARGO ?= $(or $(shell PATH="$(PATH)" command -v cargo),cargo)
 PTYRO := target/debug/ptyro
 HEADLESS := target/debug/ptyro-headless
 # Program for `make try` / `make headless` / `make fixture`.
@@ -32,13 +24,13 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-shells spike-chat spike-chat-fts spike-wsl spike-conpty test-wsl check-windows conpty windows-setup build-windows test-windows tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-shells spike-chat spike-chat-fts spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 ## ── build ──────────────────────────────────────────────────────────────────
-rust-install: ## Install rustup and the pinned Rust toolchain (Linux, macOS, Windows)
+rust-install: ## Install rustup and the pinned Rust toolchain (Linux, macOS; on Windows, inside WSL2)
 	PTYRO_CALLER_PATH='$(CALLER_PATH)' sh scripts/rust-install.sh
 
 build: ## Debug build of the whole workspace
@@ -64,46 +56,11 @@ install-release: ## Install the fully optimized build (what a release ships: slo
 # once, alone; passing then, it is a flake, named in the output, target/flakes.txt and CI's job
 # summary. More than FLAKE_BUDGET flakes, or a test failing twice, fails the run.
 FLAKE_BUDGET ?= 2
-ifeq ($(OS),Windows_NT)
-# On Windows the packaged ConPTY goes beside the test binaries, and the tests that need it are
-# told it's there (they'd skip without it); scripted TUI runs take twice their times and two
-# tests run at a time per binary (CI's Windows runners start processes slower: m7's nine tests
-# at once took 144 s and missed their windows, each alone takes 14 s); there's nothing to
-# cross-check from Windows itself.
-TEST_ENV = PTYRO_TEST_PACKAGED_CONPTY=1 PTYRO_TEST_TIME_SCALE=2 RUST_TEST_THREADS=2
-TEST_PREP = for d in target/debug target/debug/deps; do INTO=$$d sh scripts/conpty.sh || exit 1; done
-TEST_CROSS = @echo "check-windows: this is Windows: the tests above ran here"
-else
 # macOS runners have three cores: m7's nine tests at once took 102 s there, and missed windows.
 TEST_ENV = $(if $(filter Darwin,$(shell uname -s)),RUST_TEST_THREADS=2)
-TEST_PREP = @true
-TEST_CROSS = OPTIONAL=1 sh scripts/check-windows.sh
-endif
 
-test: ## Run all tests (every test binary runs; a failing test runs again once, and more than FLAKE_BUDGET=2 flakes fail the run), then the Windows cross-check when cargo-xwin is installed. On Windows (Git Bash), the same tests natively
-	$(TEST_PREP)
+test: ## Run all tests (every test binary runs; a failing test runs again once, and more than FLAKE_BUDGET=2 flakes fail the run)
 	PTYRO_WSL_HOLD=0 FLAKE_BUDGET=$(FLAKE_BUDGET) $(TEST_ENV) $(CARGO) run -q -p ptyro-testkit --bin ptyro-flaky -- --workspace
-	$(TEST_CROSS)
-
-# Windows itself, from PowerShell or Git Bash: one command each, so make's cmd.exe runs them too
-# (no sh on PATH in a plain PowerShell). Elsewhere (Linux, WSL) they say where to run them.
-ifeq ($(OS),Windows_NT)
-WINDOWS_SETUP = powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-setup.ps1
-else
-WINDOWS_SETUP = @echo "this runs on Windows itself (PowerShell or Git Bash); from Linux or WSL, make check-windows cross-checks and cargo xwin cross-builds" && false
-endif
-
-windows-setup: ## On Windows (PowerShell or Git Bash): install what building needs with winget (Git, rustup, the C++ build tools, make), then build ptyro.exe with its ConPTY beside it
-	$(WINDOWS_SETUP)
-
-build-windows: ## On Windows: release ptyro.exe in target/release/, with the packaged ConPTY beside it (installs nothing)
-	$(WINDOWS_SETUP) -NoInstall
-
-conpty: ## Fetch Microsoft's packaged ConPTY (pinned, SHA-256 checked) that ptyro.exe ships with into target/conpty/ (INTO=<dir> ARCH=x86_64|aarch64 copies one beside a ptyro.exe)
-	INTO='$(INTO)' ARCH='$(ARCH)' sh scripts/conpty.sh
-
-test-windows: ## On Windows itself (Git Bash; CI's windows job and the release check): `make test`, every test natively, a native daemon's in ConPTY with the packaged ConPTY beside them
-	$(MAKE) test
 
 fmt: ## Format all code
 	$(CARGO) fmt --all
@@ -138,7 +95,7 @@ catalog-fixtures: ## Re-record the version table's newest-version replies (npm, 
 	python3 scripts/catalog-fixtures.py
 
 # The oldest compiler the workspace claims to build with (`rust-version` in Cargo.toml).
-MSRV := $(if $(NO_SH),,$(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1)).0
+MSRV := $(shell sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml | head -1).0
 msrv: ## Type-check the workspace with the oldest supported compiler (installs it with rustup)
 	rustup toolchain install $(MSRV) --profile minimal
 	$(CARGO) +$(MSRV) check --workspace --locked
@@ -187,11 +144,6 @@ spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Code
 spike-wsl: build ## WIN0.1: does WSL keep the daemon alive after the last terminal closes? Run inside WSL2: ARGS="start [label]", then (an hour later) check, clean; none = status
 	scripts/spike-wsl.sh $(ARGS)
 
-spike-conpty: ## WIN0.2/WIN0.3: play what ptyro needs through ConPTY (Windows' own and Microsoft's newer conpty.dll), test taking a pseudoconsole over, write spikes/conpty/REPORT.md; from WSL or Git Bash (ARGS=report: report again)
-	scripts/spike-conpty.sh $(ARGS)
-
-check-windows: ## Cross-check for Windows x64 and ARM64 with cargo-xwin (WIN0.4): the bundled C libraries today, the ptyro crates as WIN3 makes them build; TARGETS=x86_64|aarch64, XWIN_ACCEPT_LICENSE=1 once
-	TARGETS='$(TARGETS)' CRATES='$(CRATES)' sh scripts/check-windows.sh
 
 test-wsl: ## CI's main job (make check) inside WSL2: run inside the distro, or on Windows (Git Bash) with DISTRO=… WSL_DIR=… (default ~/dev/ptyro)
 	DISTRO='$(DISTRO)' WSL_DIR='$(WSL_DIR)' sh scripts/test-wsl.sh
@@ -282,7 +234,7 @@ latency: release ## Key → echo → frame round trip through a real daemon, p50
 bump: ## Bump the version in Cargo.toml and Cargo.lock (V=patch|minor|major|X.Y.Z; default patch); then commit and tag
 	CARGO=$(CARGO) scripts/bump.sh $(V)
 
-dist: ## Release tarball (Windows: zip) + .sha256 for this platform in dist/ (TRIPLE=<rust target> to cross-build)
+dist: ## Release tarball + .sha256 for this platform in dist/ (TRIPLE=<rust target> to cross-build)
 	TARGET=$(TRIPLE) CARGO=$(CARGO) scripts/dist.sh
 
 changelog: ## Regenerate CHANGELOG.md from git history (tags → sections, commit prefixes → groups)
@@ -294,7 +246,7 @@ homebrew-formula: ## Render dist/ptyro.rb from the release checksums in dist/ (a
 sbom: ## Software bill of materials (CycloneDX) from Cargo.lock: dist/ptyro-<version>.cdx.json
 	python3 scripts/sbom.py
 
-dist-check: ## Install the tarball in dist/ with scripts/install.sh (Windows: the zip with install.ps1) into a temp prefix, run it, and uninstall it with --uninstall (after `make dist`)
+dist-check: ## Install the tarball in dist/ with scripts/install.sh into a temp prefix, run it, and uninstall it with --uninstall (after `make dist`)
 	TARGET=$(TRIPLE) scripts/installer-check.sh
 
 brew-check: ## Install the tarball in dist/ through the Homebrew formula from a throwaway tap, test and audit it (after `make dist`; PTYRO_REQUIRE_BREW=1 fails without brew)

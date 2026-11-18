@@ -587,10 +587,9 @@ const SCRIPT_SHELL: &[Choice] = &[
         "auto",
         "a .ps1 file in PowerShell, a .sh file (or another tool's imported script) in bash, the rest in your default shell",
     ),
-    c("pwsh", "PowerShell: pwsh, or Windows PowerShell where that's all there is"),
-    c("bash", "bash; on Windows, Git for Windows' Git Bash"),
-    c("cmd", "cmd.exe (Windows only)"),
-    c("sh", "sh; on Windows, Git Bash's"),
+    c("pwsh", "PowerShell (pwsh)"),
+    c("bash", "bash"),
+    c("sh", "sh"),
 ];
 
 const CHAT_TITLE: &[Choice] = &[
@@ -706,7 +705,7 @@ pub const SETTINGS: &[Setting] = &[
     s("editors.*.inside", "editors", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
     // ── Shells ──
-    s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell; on Windows PowerShell 7, else Windows PowerShell, else cmd").eg("pwsh -Login").new_only(),
+    s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell").eg("pwsh -Login").new_only(),
     s("shell.integration", "shells", Kind::Bool, "Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts, after your own startup files: prompt jumps in copy mode, working and idle, each command and its exit code, and the directory. Nothing to add to your rc file or $PROFILE.").also("osc 133 prompt marks profile rc").new_only(),
     s("shell.section", "shells", pick(SHELLS_SECTION), "Each workspace's SHELLS section in the sidebar: your numbered terminals that belong to no repository (any command), made with C-q C-c and reached with Alt-1…9.").also("shells tmux windows numbered terminals sidebar alt"),
     s("shell.notify_after", "shells", Kind::Duration, "A command in a SHELLS shell that ran at least this long tells you when it ends, if you weren't looking: done ✓ or error ✗ with its exit code. off: never.").also("notify long command finished done monitor activity bell"),
@@ -721,7 +720,7 @@ pub const SETTINGS: &[Setting] = &[
     s("recorder.enabled", "daemon", Kind::Bool, "Record every session's output, for scrolling back past what is in memory and for a stopped session's last screen.").new_only(),
     s("recorder.max_bytes", "daemon", Kind::Bytes, "The most one session's recording takes, like 16MiB (at least 256KiB).").new_only(),
     // ── Web app and remote ──
-    s("client.default_remote", "remote", Kind::Text, "Where this ptyro's daemon is, when --remote and PTYRO_REMOTE don't say: `wsl://` (the default WSL distro), `wsl://<distro>`, an ssh host, or `local` (this computer's own daemon; on Windows the native one, still being built). On Windows, ptyro offers the WSL distro that has ptyro the first time, and keeps the answer here.").also("wsl windows daemon remote ssh host distro client local native").or("this computer's own daemon (on Windows, asked the first time)").eg("wsl://Ubuntu"),
+    s("client.default_remote", "remote", Kind::Text, "Where this ptyro's daemon is, when --remote and PTYRO_REMOTE don't say: an ssh host, or `local` (this computer's own daemon).").also("daemon remote ssh host client local").or("this computer's own daemon").eg("me@devbox"),
     s("remote.serve", "remote", Kind::Bool, "The web app (for your phone or another computer) is on: the daemon runs its server and starts it again whenever the daemon starts. This is what `ptyro web on` and `ptyro web off` switch.").also("web app server phone serve on off start"),
     s("remote.access", "remote", pick(ACCESS), "Who can reach the web app. It is always HTTPS (ptyro makes the certificate; trust it once from /ca.crt on a phone).").also("tailscale tailnet lan wifi network phone listen bind interface localhost open"),
     s("remote.port", "remote", int(1024, 65535), "The port the web app listens on, whoever may reach it. Pairing links and QR codes use it too.").also("listen bind address https"),
@@ -812,8 +811,8 @@ pub fn matches(pattern: &str, key: &str) -> bool {
 /// The setting a concrete key is.
 /// Whether the client (the TUI, the CLI) reads `key` from its own computer's file, rather than
 /// the daemon from its own: the screen, keys, the clipboard and where the daemon is. With
-/// a remote daemon (`ptyro.exe` and WSL, or ssh) the two files differ, so the settings panel and
-/// `config set` say whose a setting is (ROADMAP WIN3). `ui.shell_exit` is the daemon's: it
+/// a remote daemon (over ssh) the two files differ, so the settings panel and `config set` say
+/// whose a setting is (ROADMAP WIN3). `ui.shell_exit` is the daemon's: it
 /// decides what happens to a shell that exits.
 pub fn read_by_client(key: &str) -> bool {
     let top = key.split('.').next().unwrap_or(key);

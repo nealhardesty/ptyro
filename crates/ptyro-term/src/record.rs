@@ -17,7 +17,6 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-#[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -61,29 +60,6 @@ fn now_unix_ms() -> u64 {
 
 fn open_append(path: &Path) -> io::Result<File> {
     ptyro_core::os::private(OpenOptions::new().create(true).read(true).append(true)).open(path)
-}
-
-/// `pread` on Windows: `seek_read` until `buf` is full. It moves the file's cursor, which an
-/// append-mode file ignores for its writes.
-#[cfg(windows)]
-trait FileExt {
-    fn read_exact_at(&self, buf: &mut [u8], off: u64) -> io::Result<()>;
-}
-#[cfg(windows)]
-impl FileExt for File {
-    fn read_exact_at(&self, mut buf: &mut [u8], mut off: u64) -> io::Result<()> {
-        use std::os::windows::fs::FileExt as _;
-        while !buf.is_empty() {
-            match self.seek_read(buf, off)? {
-                0 => return Err(io::ErrorKind::UnexpectedEof.into()),
-                n => {
-                    buf = &mut buf[n..];
-                    off += n as u64;
-                }
-            }
-        }
-        Ok(())
-    }
 }
 
 /// A recording that begins with another magic than ours is another version's (a rollback, or a

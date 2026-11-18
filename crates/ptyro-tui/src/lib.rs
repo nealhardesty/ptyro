@@ -122,9 +122,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
     let mut tui = ratatui::init();
     let (outer, typed) = outer::query();
     let push_kitty = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-    // A Windows console hands keys over as records with every modifier, so Shift+Enter, Ctrl-I
-    // and Tab already arrive apart, as the kitty protocol has them elsewhere (SPEC §20.11).
-    let kitty = push_kitty || cfg!(windows);
+    let kitty = push_kitty;
     connect.outer = Some(ptyro_protocol::OuterTerm { kitty_keyboard: kitty, ..outer });
     let mut out = std::io::stdout();
     if push_kitty {

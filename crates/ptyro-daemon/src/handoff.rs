@@ -14,17 +14,6 @@
 //! runtime didn't spawn them. The listening socket never closes, so clients and hooks queue in
 //! its backlog for the few milliseconds it takes. If the new binary refuses the image (another
 //! version), it re-execs `daemon.prev`, which reads its own image.
-//!
-//! **Windows (WIN9)** has no `execve`, so the next daemon is another process. The old one parks
-//! every reader (each pipe's thread stops, its read cancelled, and what it read goes into the
-//! emulator), starts the new binary waiting for its image, copies every live session's handles
-//! into it (`DuplicateHandle`: nothing is made inheritable), writes the image with the values the
-//! new process has, and waits for it to say it took everything over and listens. Then it exits
-//! without closing a thing: the pseudoconsoles, programs and jobs live on in the new process. The
-//! pipe's name never goes away (the old daemon's instances last until the new one has its own),
-//! so no client starts a daemon of its own meanwhile; the new daemon takes `daemon.lock` once the
-//! old has exited. If anything fails, the new process is ended (its copies with it) and the old
-//! daemon carries on, as a rollback.
 
 use ptyro_core::sync::MutexExt;
 use std::collections::HashMap;
@@ -53,18 +42,6 @@ pub const ENV_ROLLBACK: &str = "PTYRO_HANDOFF_ROLLBACK";
 pub const ENV_LOCK: &str = "PTYRO_HANDOFF_LOCK";
 /// Tests: make the new image refuse the handoff once (rollback is then exercised).
 pub const ENV_TEST_REFUSE: &str = "PTYRO_TEST_REFUSE_HANDOFF";
-/// Windows: the image file the previous daemon writes for the new one (WIN9).
-#[cfg(windows)]
-pub const ENV_IMAGE: &str = "PTYRO_HANDOFF_IMAGE";
-/// Windows: the previous daemon's pid: the new one takes the lock once it has exited.
-pub const ENV_PARENT: &str = "PTYRO_HANDOFF_PARENT";
-
-/// Windows: where the new daemon says it took over (it then listens and holds every session).
-#[cfg(windows)]
-pub fn ack_path(state_dir: &Path, old_pid: u32) -> PathBuf {
-    state_dir.join(format!("handoff-{old_pid}.ack"))
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct Image {
     pub version: u32,
@@ -126,11 +103,6 @@ impl Reaper {
             }
         }
     }
-
-    /// Reap on every SIGCHLD, and every few seconds in case one was coalesced away. Windows reaps
-    /// nothing: a handed-over program's exit comes from its process handle (WIN9).
-    #[cfg(windows)]
-    pub fn start(self: &Arc<Self>) {}
 
     /// Reap on every SIGCHLD, and every few seconds in case one was coalesced away.
     #[cfg(unix)]
@@ -196,196 +168,6 @@ fn version_of(binary: &Path) -> String {
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().trim_start_matches("ptyro ").to_owned())
         .unwrap_or_default()
-}
-
-#[cfg(windows)]
-impl Daemon {
-    /// `ptyro daemon upgrade [--binary B]` on Windows: check, answer, then hand over a moment
-    /// later (WIN9). The binary is the one this daemon was started from unless another is named:
-    /// an install renames the running `ptyro.exe` aside and puts the new one in its place.
-    pub(crate) async fn upgrade(self: &Arc<Self>, binary: Option<PathBuf>) -> Result<Reply, Error> {
-        let target = binary.unwrap_or_else(|| crate::started_from().to_path_buf());
-        if !target.is_file() {
-            return Err(no_binary(&target));
-        }
-        let probe = target.clone();
-        let versions = tokio::time::timeout(
-            Duration::from_secs(15),
-            tokio::task::spawn_blocking(move || accepts(&probe)),
-        )
-        .await
-        .map_err(|_| {
-            Error::new(ErrorCode::Timeout, format!("{} didn't answer in 15 s", target.display()))
-        })?
-        .map_err(|e| Error::internal(e.to_string()))?
-        .map_err(|e| Error::new(ErrorCode::Unsupported, e))?;
-        if !versions.contains(&IMAGE_VERSION) {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "{} reads handoff images {versions:?}, this daemon writes {IMAGE_VERSION}: restart the daemon instead, `ptyro daemon restart --hibernate` (agents hibernate and resume their conversations; shells and running commands start again)",
-                    target.display()
-                ),
-            ));
-        }
-        if self.upgrading.swap(true, Ordering::SeqCst) {
-            return Err(Error::conflict("an upgrade is already in progress"));
-        }
-        let probe = target.clone();
-        let to = tokio::task::spawn_blocking(move || version_of(&probe)).await.unwrap_or_default();
-        let sessions = self.sessions().len() as u32;
-        let me = Arc::clone(self);
-        let target2 = target.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            if let Err(e) = me.hand_over(&target2).await {
-                tracing::error!("upgrade called off: {e}");
-                // The fix first: the TUI and the web offer a finding's first `ptyro …` command.
-                me.warn(format!(
-                    "the last daemon upgrade was called off, and this daemon carries on with every session. `ptyro daemon restart --hibernate` restarts it on the new binary instead (agents resume their conversations; shells and running commands start again). Why: {e}"
-                ));
-                me.call_off_handover();
-            }
-        });
-        Ok(Reply::Upgrading {
-            from: env!("CARGO_PKG_VERSION").into(),
-            to,
-            binary: target,
-            sessions,
-        })
-    }
-
-    /// Back to normal after a handover that failed: readers read again, connections are taken
-    /// again. Said as a rollback (the CLI waits for a new generation and reads `rolled_back`).
-    fn call_off_handover(&self) {
-        self.upgrading.store(false, Ordering::SeqCst);
-        let _ = self.io_pause.send(false);
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        self.rolled_back.store(true, Ordering::SeqCst);
-        let _ = self.goodbye.send(None);
-    }
-
-    async fn hand_over(self: &Arc<Self>, target: &Path) -> std::io::Result<()> {
-        self.wait_for_launches().await?;
-        let started = now_ms();
-        let _ = self.goodbye.send(Some("the daemon is upgrading; reconnecting".into()));
-        self.serve_child.kill();
-        let _ = self.io_pause.send(true);
-        // A pause cancels each pipe's read (up to 3 s for a stubborn one).
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while self.io.parked.load(Ordering::SeqCst) < self.io.readers.load(Ordering::SeqCst) {
-            if std::time::Instant::now() >= deadline {
-                return Err(std::io::Error::other(
-                    "a session's output didn't stop for the handover, so it would have lost some",
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        tokio::time::sleep(Duration::from_millis(30)).await;
-        if let Some(store) = &self.store {
-            let _ = store.flush().await;
-        }
-        let pid = std::process::id();
-        let image_path = self.paths.state.join(format!("handoff-{pid}.img"));
-        let ack = ack_path(&self.paths.state, pid);
-        let _ = std::fs::remove_file(&image_path);
-        let _ = std::fs::remove_file(&ack);
-        let foreground = self.foreground.load(Ordering::SeqCst);
-        let mut cmd = std::process::Command::new(target);
-        cmd.args(["daemon", "start", if foreground { "--foreground" } else { "--spawned" }])
-            .env(ENV_IMAGE, &image_path)
-            .env(ENV_PARENT, pid.to_string())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        ptyro_pty::std_handles_private();
-        ptyro_core::os::detach(&mut cmd);
-        let mut next = cmd.spawn()?;
-        let result = self.write_handover(&mut next, &image_path, &ack, started).await;
-        if result.is_err() {
-            // Its copies of our handles end with it; ours never moved.
-            let _ = next.kill();
-            let _ = next.wait();
-            let _ = std::fs::remove_file(&image_path);
-            let _ = std::fs::remove_file(&ack);
-        }
-        result
-    }
-
-    /// The image, with each live session's handles as `next` has them; then wait for `next` to
-    /// say it took over, and go.
-    async fn write_handover(
-        self: &Arc<Self>,
-        next: &mut std::process::Child,
-        image_path: &Path,
-        ack: &Path,
-        started: u64,
-    ) -> std::io::Result<()> {
-        let all = self.sessions();
-        let mut sessions = std::thread::scope(|sc| {
-            let handles: Vec<_> = all.iter().map(|s| sc.spawn(move || s.image())).collect();
-            handles
-                .into_iter()
-                .map(|h| h.join().unwrap_or_else(|_| Err(std::io::Error::other("image panicked"))))
-                .collect::<std::io::Result<Vec<_>>>()
-        })?;
-        for (s, img) in all.iter().zip(sessions.iter_mut()) {
-            if !s.is_live() {
-                continue;
-            }
-            s.copy_handles_into(next, img)?;
-        }
-        let image = Image {
-            version: IMAGE_VERSION,
-            binary: env!("CARGO_PKG_VERSION").into(),
-            run_id: self.run_id.clone(),
-            started_ms: self.started_ms,
-            generation: self.generation.load(Ordering::SeqCst) + 1,
-            listener_fd: -1,
-            foreground: self.foreground.load(Ordering::SeqCst),
-            sessions,
-            focused: self.focused_id().map(|i| i.full()),
-            sidecars: self
-                .sidecars
-                .locked()
-                .iter()
-                .map(|(k, (p, pw))| (k.full(), *p, pw.clone()))
-                .collect(),
-            written_ms: now_ms(),
-            counters: crate::watchdog::counters(),
-        };
-        let bytes = rmp_serde::to_vec_named(&image).map_err(std::io::Error::other)?;
-        // Whole or not at all: the new daemon waits for the name.
-        let tmp = image_path.with_extension("tmp");
-        std::fs::write(&tmp, &bytes)?;
-        std::fs::rename(&tmp, image_path)?;
-        tracing::info!(
-            sessions = image.sessions.len(),
-            bytes = bytes.len(),
-            ms = now_ms().saturating_sub(started),
-            pid = next.id(),
-            "handing over"
-        );
-        let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        loop {
-            if ack.exists() {
-                break;
-            }
-            if let Some(status) = next.try_wait()? {
-                return Err(std::io::Error::other(format!(
-                    "the new daemon exited ({status}) before it took over; see `ptyro daemon logs`"
-                )));
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(std::io::Error::other("the new daemon didn't take over within 30 s"));
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        let _ = std::fs::remove_file(ack);
-        tracing::info!(ms = now_ms().saturating_sub(started), "handed over; exiting");
-        // Nothing is closed on the way out: every console, program and job is the new daemon's.
-        std::process::exit(0)
-    }
 }
 
 impl Daemon {
@@ -609,38 +391,6 @@ fn decode(bytes: &[u8]) -> Result<Image, String> {
     Ok(img)
 }
 
-/// At startup on Windows: the image the previous daemon writes once it has started us and
-/// copied its handles in (WIN9). We wait for it; a refused image ends this process, and the
-/// previous daemon, still running, carries on (the rollback).
-#[cfg(windows)]
-pub fn take_image(_state_dir: &Path) -> Option<Inherited> {
-    let path = PathBuf::from(std::env::var_os(ENV_IMAGE)?);
-    let parent: u32 = std::env::var(ENV_PARENT).ok()?.parse().ok()?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let bytes = loop {
-        if let Ok(b) = std::fs::read(&path) {
-            break b;
-        }
-        if std::time::Instant::now() >= deadline || ptyro_pty::wait_for_exit(parent, Duration::ZERO)
-        {
-            tracing::error!("no handoff image from pid {parent}; exiting");
-            std::process::exit(3);
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    };
-    let _ = std::fs::remove_file(&path);
-    let refused = (ptyro_core::test_knob(ENV_TEST_REFUSE).is_some())
-        .then(|| "refused for a test (PTYRO_TEST_REFUSE_HANDOFF)".to_owned());
-    match refused.map_or_else(|| decode(&bytes), Err) {
-        Ok(image) => Some(Inherited { image, rolled_back: false }),
-        Err(why) => {
-            // The previous daemon sees us exit and carries on with every session.
-            tracing::error!("handoff refused ({why}); exiting, the previous daemon carries on");
-            std::process::exit(3);
-        }
-    }
-}
-
 /// At startup: an image handed to us by the previous daemon, if any. A refused image re-execs
 /// the previous binary (`daemon.prev`), which wrote it; this never returns in that case.
 #[cfg(unix)]
@@ -727,7 +477,6 @@ mod tests {
             stale_after_ms: 30_000,
             engine_clocks: [Some(1), None, Some(3)],
             structured: None,
-            win_handles: None,
         };
         Image {
             version: IMAGE_VERSION,

@@ -708,8 +708,7 @@ impl Store {
                 reg.projects.push(ProjectInfo { machine: None,
                     id: r.get(0)?,
                     slug: r.get(1)?,
-                    // A root stored on Windows before WIN7 may carry `\\?\`: shown without it.
-                    root: ptyro_core::os::plain(std::path::Path::new(&r.get::<_, String>(2)?)),
+                    root: std::path::PathBuf::from(r.get::<_, String>(2)?),
                     default_branch: r.get(3)?,
                     remote_url: r.get(4)?,
                     pin: r.get(5)?,
@@ -731,7 +730,7 @@ impl Store {
                     project: r.get(1)?,
                     project_slug: r.get(2)?,
                     name: r.get(3)?,
-                    path: ptyro_core::os::plain(std::path::Path::new(&r.get::<_, String>(4)?)),
+                    path: std::path::PathBuf::from(r.get::<_, String>(4)?),
                     branch: r.get(5)?,
                     base: r.get(6)?,
                     is_root: r.get::<_, i64>(7)? != 0,

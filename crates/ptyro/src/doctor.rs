@@ -166,26 +166,19 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
         Ok(c) => {
             r.add("ptyro", "config", Level::Ok, format!("{} is valid", config_path.display()));
             if let Some(who) = crate::config::too_open(&config_path) {
-                let text = if cfg!(windows) {
-                    format!(
-                        "{} is readable by {who}: other users of this computer can read it, and it \
-                         can hold secrets",
-                        config_path.display()
-                    )
-                } else {
-                    format!(
-                        "{} is {who}: other users can read it, and it can hold secrets \
-                         (`chmod 600 {}`)",
-                        config_path.display(),
-                        config_path.display()
-                    )
-                };
+                let text = format!(
+                    "{} is {who}: other users can read it, and it can hold secrets \
+                     (`chmod 600 {}`)",
+                    config_path.display(),
+                    config_path.display()
+                );
                 r.add("ptyro", "config mode", Level::Warn, text);
             }
             if let Ok(text) = std::fs::read_to_string(&config_path) {
                 retired(&text, None, &mut r);
             }
             stale_keys(&c, &mut r);
+            wsl_remote(&c, &mut r);
             unknown_theme(&c, &mut r);
             removed_agents(&c, &mut r);
             // Every shell ptyro starts reads its integration (SPEC §8.7): a folder others can
@@ -225,11 +218,6 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
     }
     daemon(ctx, &config, quick, &mut r).await;
     scripts(ctx, &mut r).await;
-    #[cfg(windows)]
-    if ctx.local {
-        conpty(&mut r);
-        windows_app(&mut r);
-    }
     remote(ctx, &config, &mut r);
     old_scratchpad(ctx, &mut r);
     old_integrations(ctx, &config, &mut r);
@@ -556,8 +544,7 @@ fn on_windows_drive(w: &ptyro_core::wsl::Wsl, root: &Path) -> bool {
 }
 
 /// The projects' scripts (WIN6): bash scripts with Windows (CRLF) line endings, which bash
-/// can't run (anywhere, WSL and Git Bash included), each with the command that rewrites them;
-/// and on a native Windows daemon, a script that needs a shell Windows hasn't got.
+/// can't run (anywhere, WSL included), each with the command that rewrites them.
 async fn scripts(ctx: &Ctx, r: &mut Report) {
     const S: &str = "scripts";
     let Ok(c) = ctx.connect(false).await else { return };
@@ -579,24 +566,6 @@ async fn scripts(ctx: &Ctx, r: &mut Report) {
         }
         if let Some(text) = port_vars_text(&p.slug, &pc.scripts.describe()) {
             r.add(S, &format!("{} ports", p.slug), Level::Warn, text);
-        }
-        if cfg!(windows) && ctx.local {
-            let mut roles: Vec<(String, String)> =
-                pc.scripts.setup.iter().map(|v| ("setup".to_owned(), v.clone())).collect();
-            roles.extend(
-                pc.scripts.run.iter().map(|(n, r)| (format!("run:{n}"), r.command.clone())),
-            );
-            if let Some((role, m)) = roles
-                .iter()
-                .find_map(|(role, line)| pc.script_argv(role, line).err().map(|m| (role, m)))
-            {
-                r.add(
-                    S,
-                    &format!("{} shell", p.slug),
-                    Level::Warn,
-                    format!("{role}: {}", m.message),
-                );
-            }
         }
     }
 }
@@ -1003,7 +972,7 @@ fn print(r: &Report, json: bool) {
 
 async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     const S: &str = "daemon";
-    // The socket directory must be private (SPEC §17). Windows has no socket of its own.
+    // The socket directory must be private (SPEC §17).
     #[cfg(unix)]
     if let Some(dir) = ctx.paths.socket.parent() {
         use std::os::unix::fs::MetadataExt;
@@ -1106,10 +1075,6 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     if quick {
         return;
     }
-    #[cfg(windows)]
-    if ctx.local {
-        windows_worktrees(&c, r).await;
-    }
     // The hook self-test: the fake agent through each agent's hooks (or OpenCode's events).
     for adapter in ["claude", "codex", "opencode"] {
         match c.request(Request::SelfTest { adapter: adapter.into() }).await {
@@ -1123,141 +1088,6 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             Err(e) => r.add("hooks", adapter, Level::Problem, e.message),
         }
     }
-}
-
-/// Codex's Windows sandbox, from its `config.toml`: `[windows] sandbox` (`elevated`,
-/// `unelevated`, `mxc`) or `[features] prefer_mxc`. Unset, Codex 0.166 runs each command as you,
-/// outside any sandbox, and asks before it (seen on Windows, 2026-11-05: "Environment: local");
-/// it offered no setup.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn codex_sandbox(config: Option<&str>) -> (Level, String) {
-    let v: toml::Value = config
-        .and_then(|t| toml::from_str(t).ok())
-        .unwrap_or(toml::Value::Table(Default::default()));
-    if let Some(mode) = v.get("windows").and_then(|w| w.get("sandbox")).and_then(|m| m.as_str()) {
-        return (Level::Ok, format!("commands run in its Windows sandbox ({mode})"));
-    }
-    if v.get("features").and_then(|f| f.get("prefer_mxc")).and_then(toml::Value::as_bool)
-        == Some(true)
-    {
-        return (
-            Level::Ok,
-            "commands run in its Windows sandbox (MXC, where Windows supports it)".into(),
-        );
-    }
-    (
-        Level::Note,
-        "no Windows sandbox: Codex runs each command as you and asks first. To sandbox it, set \
-         `[windows] sandbox = \"unelevated\"` in its config.toml (no administrator needed; weaker \
-         network isolation), or set up the elevated one as OpenAI's guide says: \
-         https://learn.chatgpt.com/docs/windows/windows-sandbox"
-            .into(),
-    )
-}
-
-/// A native daemon's worktrees (on Windows drives; a WSL daemon's live on ext4): a file whose path
-/// nears Windows' 260 characters while long paths are off, and a Dev Drive for them (WIN8).
-#[cfg(windows)]
-async fn windows_worktrees(c: &ptyro_client::Client, r: &mut Report) {
-    let Ok(Reply::Worktrees { worktrees }) =
-        c.request(Request::WorktreeList { project: None }).await
-    else {
-        return;
-    };
-    let on_drives: Vec<PathBuf> =
-        worktrees.into_iter().map(|w| w.path).filter(|p| drive(p).is_some()).collect();
-    if on_drives.is_empty() {
-        return;
-    }
-    let deepest = on_drives.iter().take(50).filter_map(|p| deepest_file(p)).max();
-    if let Some((level, text)) =
-        long_paths_finding(deepest, ptyro_pty::winproc::long_paths_enabled())
-    {
-        r.add("windows", "long paths", level, text);
-    }
-    let mut seen = Vec::new();
-    for p in &on_drives {
-        let Some(d) = drive(p) else { continue };
-        if seen.contains(&d) {
-            continue;
-        }
-        seen.push(d.clone());
-        let fs = ptyro_pty::winproc::filesystem(Path::new(&format!("{d}\\")));
-        let folder = p.parent().unwrap_or(p).display().to_string();
-        let (level, text) = dev_drive_finding(&d, fs.as_deref(), &folder);
-        r.add("windows", "dev drive", level, text);
-    }
-}
-
-/// `C:` for a path on a drive letter.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn drive(p: &Path) -> Option<String> {
-    let s = p.to_string_lossy();
-    let s = s.strip_prefix(r"\\?\").unwrap_or(&s);
-    let b = s.as_bytes();
-    (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
-        .then(|| s[..2].to_ascii_uppercase())
-}
-
-/// The longest path of a file git tracks in the worktree `wt`, with its length.
-#[cfg(windows)]
-fn deepest_file(wt: &Path) -> Option<(usize, String)> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(wt)
-        .args(["ls-files", "-z"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let base = wt.to_string_lossy();
-    String::from_utf8_lossy(&out.stdout)
-        .split('\0')
-        .filter(|f| !f.is_empty())
-        .map(|f| format!("{base}\\{}", f.replace('/', "\\")))
-        .map(|p| (p.chars().count(), p))
-        .max()
-}
-
-/// Windows refuses a path past 260 characters to most programs unless long paths are on: warn at
-/// 230, before a deeper worktree folder or a dependency's files get there.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn long_paths_finding(deepest: Option<(usize, String)>, enabled: bool) -> Option<(Level, String)> {
-    let (n, path) = deepest?;
-    if enabled || n < 230 {
-        return None;
-    }
-    let how = if n > 260 { "past" } else { "near" };
-    Some((
-        Level::Warn,
-        format!(
-            "{path} is {n} characters, {how} Windows' 260, and long paths are off: many tools \
-             (npm, build tools) fail on it. Turn them on, in an administrator PowerShell: \
-             `New-ItemProperty -Path HKLM:\\SYSTEM\\CurrentControlSet\\Control\\FileSystem -Name \
-             LongPathsEnabled -Value 1 -PropertyType DWORD -Force`, or keep worktrees in a \
-             shorter folder ([worktrees] location). ptyro turns on git's own (core.longpaths)"
-        ),
-    ))
-}
-
-/// Worktrees on a Dev Drive (ReFS, which only a Dev Drive is among Windows' own drives) are
-/// faster for git and builds; elsewhere, how to make one, and Defender's part.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn dev_drive_finding(drive: &str, fs: Option<&str>, folder: &str) -> (Level, String) {
-    if fs.is_some_and(|f| f.eq_ignore_ascii_case("ReFS")) {
-        return (Level::Ok, format!("worktrees on {drive} are on a Dev Drive (ReFS)"));
-    }
-    let fs = fs.map_or_else(String::new, |f| format!(" ({f})"));
-    (
-        Level::Note,
-        format!(
-            "worktrees are on {drive}{fs}: a Dev Drive makes git and builds faster. Settings → \
-             System → Storage → Advanced storage settings → Disks & volumes → Create Dev Drive, \
-             then point [worktrees] location at it. Until then, Microsoft Defender scanning every \
-             file costs time: an exclusion for {folder} (administrator PowerShell: \
-             `Add-MpPreference -ExclusionPath '{folder}'`) trades that scanning for speed"
-        ),
-    )
 }
 
 /// Worktrees left behind once their work is done (and their build output with them): a warning,
@@ -1324,86 +1154,7 @@ fn stale_text(entries: &[ptyro_core::model::GcEntry], stale_days: u32) -> String
     )
 }
 
-/// Which ConPTY a native Windows daemon's sessions run in (WIN5, SPEC §20.13), when it is the
-/// packaged one. Windows' own is the daemon's warning (shown under `daemon`, and in the TUI and
-/// the web), not said twice here.
-#[cfg(windows)]
-fn conpty(r: &mut Report) {
-    if let Some(dll) = ptyro_pty::packaged_conpty() {
-        r.add(
-            "windows",
-            "conpty",
-            Level::Ok,
-            format!(
-                "the packaged ConPTY ({}): programs' output passes through as it is",
-                dll.display()
-            ),
-        );
-    }
-}
-
-/// What makes ptyro an app Windows knows (WIN10): toasts under its own name whose click opens
-/// the session, and the logon task that starts the daemon.
-#[cfg(windows)]
-fn windows_app(r: &mut Report) {
-    let (named, opener) = crate::winapp::status();
-    let task = crate::service::installed();
-    for (name, level, text) in app_findings(named, opener.as_deref(), task) {
-        r.add("windows", name, level, text);
-    }
-}
-
-/// `windows_app`'s findings, from what Windows has: pure, so they're tested everywhere.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn app_findings(
-    named: bool,
-    opener: Option<&Path>,
-    task: bool,
-) -> Vec<(&'static str, Level, String)> {
-    let mut out = Vec::new();
-    let fix = "run any ptyro command on Windows and it registers itself again";
-    match (named, opener) {
-        (true, Some(o)) if o.is_file() => out.push((
-            "notifications",
-            Level::Ok,
-            format!(
-                "toasts come from \"ptyro\" ({}); clicking one opens its session ({})",
-                crate::winapp::aumid(),
-                o.display()
-            ),
-        )),
-        (_, Some(o)) => out.push((
-            "notifications",
-            Level::Warn,
-            format!("a toast's click runs {}, which isn't there: {fix}", o.display()),
-        )),
-        _ => out.push((
-            "notifications",
-            Level::Warn,
-            format!("ptyro isn't registered with Windows, so toasts can't open sessions: {fix}"),
-        )),
-    }
-    out.push(if task {
-        (
-            "login",
-            Level::Ok,
-            format!("the daemon starts when you log on (Task Scheduler {})", crate::service::TASK),
-        )
-    } else {
-        (
-            "login",
-            Level::Note,
-            "the daemon starts with your first ptyro command; to have it running from logon \
-             (agents keep working, the web app answers): More → Daemon → Install the service \
-             in the web app, the palette's daemon.service in the TUI, or \
-             `ptyro daemon install-service`"
-                .into(),
-        )
-    });
-    out
-}
-
-/// Inside Windows Terminal (`WT_SESSION`, from Windows or WSL): a key binding of its own that
+/// Inside Windows Terminal (`WT_SESSION`, from WSL): a key binding of its own that
 /// takes ptyro's prefix, so the key never reaches ptyro (WIN3). Its built-in bindings don't use
 /// Ctrl+Q or Ctrl+Space \[S\], so only the user's `settings.json` can.
 fn windows_terminal(config: &Config, r: &mut Report) {
@@ -1498,14 +1249,10 @@ pub(crate) fn wt_takes(settings: &str, keys: &[String]) -> Vec<String> {
     out
 }
 
-/// Windows Terminal's `settings.json` (the Store build, its Preview, an unpackaged one), from
-/// Windows or from WSL.
+/// Windows Terminal's `settings.json` (the Store build, its Preview, an unpackaged one), from WSL.
 fn wt_settings_files() -> Vec<std::path::PathBuf> {
-    let local = if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
-    } else {
-        ptyro_core::wsl::detect().and_then(|w| w.windows_home()).map(|h| h.join("AppData/Local"))
-    };
+    let local =
+        ptyro_core::wsl::detect().and_then(|w| w.windows_home()).map(|h| h.join("AppData/Local"));
     let Some(local) = local else { return Vec::new() };
     [
         "Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState/settings.json",
@@ -1716,6 +1463,23 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
 /// `[keys]` lines that bind an action ptyro doesn't have (removed by a release, or misspelt):
 /// those keys do nothing and the TUI says "unknown action". One warning names them all, with
 /// the line that takes them out (the TUI runs it; the web takes `data.unbind` out itself).
+/// `client.default_remote = "wsl://…"`: what native Windows' ptyro reached WSL's daemon with,
+/// removed on 2026-11-18. Every command would refuse it; the fix takes it out (`doctor --fix`).
+fn wsl_remote(config: &Config, r: &mut Report) {
+    if let Some(remote) =
+        config.client.default_remote.as_deref().filter(|r| r.trim().starts_with("wsl://"))
+    {
+        r.add(
+            "ptyro",
+            "default remote",
+            Level::Problem,
+            format!(
+                "client.default_remote is {remote:?}, which native Windows' ptyro used to reach WSL's daemon (removed 2026-11-18): every command refuses it. Run ptyro inside WSL, and take it out: `ptyro config unset client.default_remote`"
+            ),
+        );
+    }
+}
+
 fn stale_keys(config: &Config, r: &mut Report) {
     let stale = ptyro_tui::keymap::stale_bindings(config);
     if stale.is_empty() {
@@ -2014,12 +1778,6 @@ async fn profiles(ctx: &Ctx, config: &Config, only: Option<String>, r: &mut Repo
                 }
             };
             r.add(&section, agent, level, format!("{state} · {shown}"));
-            // A native Codex on Windows: whether commands run in its sandbox (WIN8).
-            if cfg!(windows) && ctx.local && agent == "codex" {
-                let text = std::fs::read_to_string(dir.join("config.toml")).ok();
-                let (level, what) = codex_sandbox(text.as_deref());
-                r.add(&section, "codex sandbox", level, what);
-            }
         }
         match &info.git_email {
             Some(e) => r.add(&section, "git", Level::Ok, e.clone()),
@@ -2089,43 +1847,6 @@ mod tests {
         assert_eq!(fix("old: `ptyro daemon upgrade`"), None);
         assert_eq!(fix("`ptyro config edit` opens it"), None);
         assert_eq!(fix("nothing to run"), None);
-    }
-
-    #[test]
-    fn codex_says_whether_its_commands_run_in_a_windows_sandbox() {
-        use super::{Level, codex_sandbox};
-        let (l, t) = codex_sandbox(Some("[windows]\nsandbox = \"elevated\"\n"));
-        assert!(l == Level::Ok && t.contains("(elevated)"), "{t}");
-        let (l, t) = codex_sandbox(Some("[features]\nprefer_mxc = true\n"));
-        assert!(l == Level::Ok && t.contains("MXC"), "{t}");
-        let (l, t) = codex_sandbox(Some("[tui]\nscreen_reader_detection_done = true\n"));
-        assert!(l == Level::Note && t.contains("[windows] sandbox = \"unelevated\""), "{t}");
-        assert_eq!(codex_sandbox(None).0, Level::Note, "no config.toml at all");
-    }
-
-    #[test]
-    fn windows_worktrees_say_when_paths_near_260_and_suggest_a_dev_drive() {
-        use super::{Level, dev_drive_finding, drive, long_paths_finding};
-        use std::path::Path;
-        assert_eq!(drive(Path::new(r"c:\Users\me\wt")).as_deref(), Some("C:"));
-        assert_eq!(drive(Path::new(r"\\?\D:\wt")).as_deref(), Some("D:"));
-        assert_eq!(drive(Path::new("/home/me/wt")), None, "a WSL daemon's worktrees");
-        let deep = |n| Some((n, "C:\\w\\x".to_owned()));
-        assert_eq!(long_paths_finding(deep(229), false), None, "far enough");
-        assert_eq!(long_paths_finding(deep(300), true), None, "long paths are on");
-        let (l, t) = long_paths_finding(deep(240), false).unwrap();
-        assert!(
-            l == Level::Warn && t.contains("near Windows' 260") && t.contains("LongPathsEnabled")
-        );
-        assert!(long_paths_finding(deep(261), false).unwrap().1.contains("past"));
-        let (l, t) = dev_drive_finding("D:", Some("ReFS"), r"D:\wt");
-        assert!(l == Level::Ok && t.contains("Dev Drive"), "{t}");
-        let (l, t) = dev_drive_finding("C:", Some("NTFS"), r"C:\wt");
-        assert!(
-            l == Level::Note
-                && t.contains("(NTFS)")
-                && t.contains("Add-MpPreference -ExclusionPath 'C:\\wt'")
-        );
     }
 
     #[test]
@@ -2262,6 +1983,24 @@ mod tests {
         );
         (one.bytes, one.bytes_partial) = (Some(2048), true);
         assert!(stale_text(&[one], 14).contains("taking at least 2.0 KiB"));
+    }
+
+    /// `client.default_remote = "wsl://…"` (native Windows' ptyro, removed 2026-11-18) is found
+    /// with the change `--fix` makes; an ssh host is quiet.
+    #[test]
+    fn a_wsl_default_remote_is_found_with_its_fix() {
+        use super::{Report, config_fix, wsl_remote};
+        let parse = |t: &str| ptyro_core::config::Config::parse(t).unwrap();
+        let mut r = Report::default();
+        wsl_remote(&parse("[client]\ndefault_remote = \"me@box\"\n"), &mut r);
+        assert!(r.0.is_empty());
+        wsl_remote(&parse("[client]\ndefault_remote = \"wsl://Ubuntu\"\n"), &mut r);
+        let [check] = &r.0[..] else { panic!("{:?}", r.0) };
+        assert!(check.text.contains("inside WSL"), "{}", check.text);
+        assert_eq!(
+            config_fix(&check.text),
+            Some(vec!["config".into(), "unset".into(), "client.default_remote".into()])
+        );
     }
 
     /// A `ui.theme` naming a theme of your own (removed 2026-11-17) is one warning with the

@@ -78,7 +78,7 @@ fn binary_timeout() -> Duration {
 
 /// Run `exe` with `args` in `dir`, its output passed through as it comes; whether it passed, and
 /// the tests it said failed. It's done when the process exits, not when its output closes: a
-/// daemon a test started may hold that pipe for as long as it runs (Windows hands handles down).
+/// daemon a test started may hold that pipe for as long as it runs.
 /// Past [`binary_timeout`] it is killed and fails.
 fn run(b: &Binary, args: &[&str]) -> (bool, Vec<String>) {
     let child = Command::new(&b.exe)

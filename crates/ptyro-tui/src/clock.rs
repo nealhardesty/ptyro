@@ -1,5 +1,5 @@
-//! The local wall clock for the status bar and timestamps, honouring `TZ` on Unix (WIN3): libc's
-//! `localtime_r` through `ptyro-pty` on Unix; on Windows the time crate's local offset.
+//! The local wall clock for the status bar and timestamps, honouring `TZ` (WIN3): libc's
+//! `localtime_r` through `ptyro-pty`.
 
 /// The local hour and minute now.
 pub fn local_hm() -> Option<(u8, u8)> {
@@ -9,14 +9,5 @@ pub fn local_hm() -> Option<(u8, u8)> {
 
 /// The local hour and minute of a moment (seconds since the epoch).
 pub fn local_hm_at(secs: i64) -> Option<(u8, u8)> {
-    #[cfg(unix)]
-    {
-        ptyro_pty::local_time_hm_at(secs)
-    }
-    #[cfg(windows)]
-    {
-        let at = time::OffsetDateTime::from_unix_timestamp(secs).ok()?;
-        let local = at.to_offset(time::UtcOffset::local_offset_at(at).ok()?);
-        Some((local.hour(), local.minute()))
-    }
+    ptyro_pty::local_time_hm_at(secs)
 }

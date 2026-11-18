@@ -136,7 +136,7 @@ async fn until(t: Option<Instant>) {
 }
 
 /// How much slower than the script's own times to run it (`PTYRO_TEST_TIME_SCALE`, default 1):
-/// a loaded machine (CI's Windows runners: `make test` sets 2 there, WIN13) draws slower than a
+/// a loaded machine draws slower than a
 /// script written on a fast one expects. Sends, resizes, snapshots and the timeout stretch;
 /// [`Report::at`] still takes the script's own times.
 pub fn time_scale() -> f64 {

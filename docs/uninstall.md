@@ -15,9 +15,8 @@ ptyro uninstall                    # the plan, then [y/N]
 
 The install scripts hand over to it, passing their remaining arguments along:
 `curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh -s -- --uninstall`
-(on Windows, `install.ps1 -Uninstall`; see the README). If the installed binary won't run, they
-remove only what they installed (the binary, its completions, on Windows the ConPTY files and the
-`PATH` entry), and `--dry-run` only says so.
+If the installed binary won't run, it removes only what it installed (the binary and its
+completions), and `--dry-run` only says so.
 
 It stops the daemon and every session, then removes:
 
@@ -28,8 +27,7 @@ It stops the daemon and every session, then removes:
 - **its worktrees**, through `git worktree remove` so the repository forgets them (the branches
   stay). Each is checked with git, not the daemon's last look: uncommitted changes are listed and
   **will be lost**; commits not pushed anywhere are noted (they are on the branch, which stays);
-- **the login service** (a launchd agent, systemd user unit, or Windows logon task), ptyro's
-  **registration with Windows** (its toasts' name and icon, its `ptyro:` link handler);
+- **the login service** (a launchd agent or systemd user unit);
 - **the lines ptyro added to your shell's rc files**: only the exact lines `ptyro setup` and the
   mend list write (`source <(ptyro completions zsh)`, `eval "$(ptyro shell-init zsh)"`, their
   bash, fish and PowerShell forms, the last in `$PROFILE`) with the comment ptyro put above one. Anything else that mentions ptyro
@@ -43,8 +41,7 @@ It stops the daemon and every session, then removes:
   `~/.cargo/bin` runs `cargo uninstall ptyro`; a build in a `target/` directory is never removed.
 
 **What stays, always:** the agents and tools `ptyro setup` installed, its tools folder
-(`~/.local/share/ptyro-tools`, `%LOCALAPPDATA%\ptyro-tools`) and, on Windows, the entries it put in
-your `PATH` (the plan names them); your repositories, their branches, `.ptyro.toml` and `.ptyro.local.toml`,
+(`~/.local/share/ptyro-tools`); your repositories, their branches, `.ptyro.toml` and `.ptyro.local.toml`,
 the lines ptyro added to `.git/info/exclude`, and, unless you say `--purge-refs`, the snapshots
 under `refs/ptyro/` in your repositories (checkpoints, and work an older ptyro archived or took
 over). They stay as ordinary git refs (`git for-each-ref refs/ptyro`), so the work can be

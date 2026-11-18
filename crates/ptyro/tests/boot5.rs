@@ -82,7 +82,6 @@ impl Machine {
             .env("HOME", self.dir.path().join("home"))
             .env("USERPROFILE", self.dir.path().join("home"))
             .env("SHELL", "/bin/bash")
-            .env("PTYRO_WSL", self.dir.path().join("no-wsl"))
             .env("PTYRO_NO_AUTOSPAWN", "1");
         for (k, v) in self.env() {
             c.env(k, v);
@@ -291,38 +290,6 @@ fn an_update_waits_for_a_running_install_and_another_way_updates_its_own_way() {
     assert_eq!(m.calls(), ["update codex via npm admin=false"]);
 }
 
-#[test]
-fn windows_wont_replace_a_running_agent_and_offers_a_retry() {
-    let m = Machine::new(json!({
-        "platform": "windows-x64",
-        "programs": ["curl"],
-        "installed": { "claude": "2.1.300" },
-        "versions": { "claude": "2.1.400" },
-        "outcomes": { "claude": "busy" },
-    }));
-    m.publish("claude", "2.1.400");
-    let o = m.run(&["update", "claude"], "y\ny\n");
-    let t = text(&o);
-    assert!(o.status.success(), "{t}");
-    assert!(t.contains("being used by another process"), "{t}");
-    assert!(t.contains("Windows won't replace a program while it runs"), "{t}");
-    assert!(t.contains("Try again now? [Y/n]"), "{t}");
-    assert!(t.contains("✓ Claude Code 2.1.400"), "{t}");
-    assert_eq!(m.calls(), ["update claude via vendor admin=false"; 2]);
-    // Said no: it stays as it was, with the fix.
-    let m = Machine::new(json!({
-        "platform": "windows-x64",
-        "installed": { "claude": "2.1.300" },
-        "outcomes": { "claude": "busy" },
-    }));
-    m.publish("claude", "2.1.400");
-    let o = m.run(&["update", "claude"], "y\nn\n");
-    let t = text(&o);
-    assert_eq!(o.status.code(), Some(1), "{t}");
-    assert!(t.contains("then try the update again (`ptyro update claude`)"), "{t}");
-    assert_eq!(m.calls().len(), 1);
-}
-
 /// The daemon looks once a day in the background (never at start-up's moment), remembers it,
 /// and between looks only asks the installed versions again; the web's update is its
 /// `SetupRun` of the outdated agent, which runs the update and refreshes what's remembered.
@@ -352,10 +319,8 @@ async fn the_daemon_looks_once_a_day_and_the_webs_update_runs_through_it() {
     wait_for("the next day's look", || m.asked().len() == 6);
     // The web's checklist plans with what was remembered: Claude Code is out of date there.
     let mut c = d.client().await.unwrap();
-    let Reply::SetupPlan { plan, .. } = c
-        .request(Request::SetupPlan { picks: Some(vec!["claude".into()]), wsl_picks: None })
-        .await
-        .unwrap()
+    let Reply::SetupPlan { plan, .. } =
+        c.request(Request::SetupPlan { picks: Some(vec!["claude".into()]) }).await.unwrap()
     else {
         panic!("not a plan");
     };
@@ -367,10 +332,8 @@ async fn the_daemon_looks_once_a_day_and_the_webs_update_runs_through_it() {
     // The web's Update: a run of it.
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
-    let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun { picks: vec!["claude".into()], wsl_picks: None, moves: vec![] })
-        .await
-        .unwrap()
+    let Reply::SetupStarted { run, .. } =
+        c.request(Request::SetupRun { picks: vec!["claude".into()], moves: vec![] }).await.unwrap()
     else {
         panic!("not started");
     };

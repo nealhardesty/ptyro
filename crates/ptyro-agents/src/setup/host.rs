@@ -21,13 +21,13 @@ pub struct Installed {
     pub version: Option<String>,
     /// Where, for people (`~/.local/bin/claude`).
     pub path: Option<String>,
-    /// How it was installed, when its folder says (npm's, Homebrew's, WinGet's).
+    /// How it was installed, when its folder says (npm's, Homebrew's).
     pub via: Option<Via>,
     /// Its folder is an administrator's (a system npm prefix): removing it needs those rights.
     pub system: bool,
-    /// npm's: the global prefix it was installed into (the folder above `lib/node_modules`; on
-    /// Windows above `node_modules`), so removing it acts there, not on npm's prefix of the
-    /// moment. `None` for one npm didn't put there (Bun's global folder).
+    /// npm's: the global prefix it was installed into (the folder above `lib/node_modules`), so
+    /// removing it acts there, not on npm's prefix of the moment. `None` for one npm didn't put
+    /// there (Bun's global folder).
     pub prefix: Option<String>,
     /// npm's copy that another tool's global store holds instead of an npm prefix (`bun`,
     /// `mise`, `pnpm`, `asdf`): that tool removes it.
@@ -42,10 +42,9 @@ pub struct Installed {
 /// Whether administrator rights can be had.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Elevation {
-    /// Without a prompt: root, sudo's remembered password or a passwordless rule, an elevated
-    /// Windows terminal.
+    /// Without a prompt: root, sudo's remembered password or a passwordless rule.
     Ready,
-    /// With one: sudo asks for a password, or Windows' UAC asks (each installer, itself).
+    /// With one: sudo asks for a password.
     Prompt,
     /// Not at all: no sudo.
     Unavailable,
@@ -121,14 +120,10 @@ pub fn host(paths: &Paths) -> Box<dyn Host + Send> {
 }
 
 /// ptyro's tools folders' program directories, for `PATH`: nodejs.org's Node.js and the npm
-/// prefix used when npm's own needs admin rights. `bin` under each, except on Windows.
+/// prefix used when npm's own needs admin rights. `bin` under each.
 pub fn path_dirs(paths: &Paths) -> Vec<PathBuf> {
     let t = paths.tools();
-    if cfg!(windows) {
-        vec![t.join("node"), t.join("npm")]
-    } else {
-        vec![t.join("node").join("bin"), t.join("npm").join("bin")]
-    }
+    vec![t.join("node").join("bin"), t.join("npm").join("bin")]
 }
 
 /// `base` (a `PATH`) with `dirs` in front, each once.
@@ -137,27 +132,7 @@ pub fn path_with(dirs: &[PathBuf], base: &OsStr) -> OsString {
     std::env::join_paths(dirs.iter().cloned().chain(rest)).unwrap_or_else(|_| base.to_owned())
 }
 
-/// `current` (a `PATH`) after an installer changed the stored one: every entry it had, then the
-/// `fresh` entries it lacks, with ptyro's tools folders in front. Windows' installers (WinGet's
-/// Node.js) add their folder only to the registry's `Path`, so the next step (`npm install -g`)
-/// wouldn't find it without this.
-pub fn refreshed_path(current: &OsStr, fresh: &[PathBuf], tools: &[PathBuf]) -> OsString {
-    let same = |a: &Path, b: &Path| {
-        let n = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_ascii_lowercase();
-        if cfg!(windows) { n(a) == n(b) } else { a == b }
-    };
-    let mut all: Vec<PathBuf> = std::env::split_paths(current).collect();
-    for f in fresh.iter().filter(|f| !f.as_os_str().is_empty()) {
-        if !all.iter().any(|a| same(a, f)) {
-            all.push(f.clone());
-        }
-    }
-    let joined = std::env::join_paths(all).unwrap_or_else(|_| current.to_owned());
-    path_with(tools, &joined)
-}
-
-/// `%NAME%` in a stored `Path` replaced by `var(NAME)` (one that isn't set stays as written), as
-/// Windows expands REG_EXPAND_SZ.
+/// `%NAME%` in a catalog place replaced by `var(NAME)` (one that isn't set stays as written).
 pub fn expand_vars(s: &str, var: impl Fn(&str) -> Option<String>) -> String {
     let mut out = String::new();
     let mut rest = s;
@@ -185,69 +160,12 @@ pub fn expand_vars(s: &str, var: impl Fn(&str) -> Option<String>) -> String {
     out
 }
 
-/// A stored `Path` (`;`-separated, `%VAR%` as written) with `dirs` in front, each once (case
-/// doesn't matter, nor a trailing `\`); nothing else is changed or expanded.
-pub fn prepend_entries(raw: &str, dirs: &[String]) -> String {
-    let key = |e: &str| e.trim().trim_end_matches(['\\', '/']).to_ascii_lowercase();
-    let mine: Vec<String> = dirs.iter().map(|d| key(d)).collect();
-    let rest = raw.split(';').filter(|e| !e.trim().is_empty() && !mine.contains(&key(e)));
-    dirs.iter().map(String::as_str).chain(rest).collect::<Vec<_>>().join(";")
-}
-
-/// The folders in a stored `Path`, as a new terminal reads them: each trimmed and unquoted
-/// (`"C:\Program Files\x"` is common there, and a `"` would make `join_paths` refuse the lot).
-#[cfg(any(windows, test))]
-pub fn path_entries(text: &str) -> Vec<PathBuf> {
-    text.split(';')
-        .map(|e| e.trim().trim_matches('"').trim())
-        .filter(|e| !e.is_empty() && !e.contains('"'))
-        .map(PathBuf::from)
-        .collect()
-}
-
-/// The machine's and the user's stored `Path` on Windows, expanded: what a new terminal gets.
-#[cfg(windows)]
-pub fn registry_path() -> Vec<PathBuf> {
-    use ptyro_pty::winreg::get_raw;
-    let machine =
-        get_raw(true, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment", "Path");
-    let user = get_raw(false, "Environment", "Path");
-    let var = |k: &str| std::env::var(k).ok();
-    [machine, user]
-        .into_iter()
-        .flatten()
-        .flat_map(|r| {
-            let text = if r.expand { expand_vars(&r.text, var) } else { r.text };
-            path_entries(&text)
-        })
-        .collect()
-}
-
-/// The folders installers stored in the `Path` a new terminal gets, for a process that has run
-/// since (the daemon, SPEC §24.2): Windows' registry; on the fake machine a test names
-/// (`PTYRO_TEST_SETUP`, debug builds), its `stored-path`. `None` elsewhere: a Unix `PATH` is
-/// the shell's, with nothing stored to read again (a vendor's own folder is one `locate`
-/// searches).
-pub fn stored_path() -> Option<Vec<PathBuf>> {
-    if let Some(dir) = ptyro_core::test_knob("PTYRO_TEST_SETUP") {
-        return Some(super::fake::stored(Path::new(&dir)));
-    }
-    #[cfg(windows)]
-    return Some(registry_path());
-    #[cfg(not(windows))]
-    None
-}
-
 /// This computer.
 pub struct RealHost {
     platform: Platform,
-    /// `PATH` with the tools folders first: what every step and probe runs with. Refreshed from
-    /// the registry after each step on Windows.
+    /// `PATH` with the tools folders first: what every step and probe runs with.
     path: Mutex<OsString>,
     tools: PathBuf,
-    /// The tools folders' program directories ([`path_dirs`]), kept in front of `path`.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    dirs: Vec<PathBuf>,
     used: AtomicBool,
 }
 
@@ -258,7 +176,6 @@ impl RealHost {
             platform: Platform::current(),
             path: Mutex::new(path_with(&path_dirs(paths), &base)),
             tools: paths.tools(),
-            dirs: path_dirs(paths),
             used: AtomicBool::new(false),
         }
     }
@@ -284,10 +201,6 @@ impl RealHost {
 
     /// npm's global prefix when the user can write to it; else ptyro's own, which is then used.
     fn npm_env(&self) -> Vec<(OsString, OsString)> {
-        if cfg!(windows) {
-            // npm's prefix on Windows is `%APPDATA%\npm`, the user's own.
-            return Vec::new();
-        }
         let prefix = capture(&argv(&["npm", "prefix", "-g"]), &self.env(), Duration::from_secs(20))
             .filter(|(ok, _)| *ok)
             .map(|(_, out)| PathBuf::from(out.trim()));
@@ -341,7 +254,7 @@ impl RealHost {
         line("its checksum matches SHASUMS256.txt");
         let tar = ["tar", "-xf", &archive.to_string_lossy(), "-C", &work.to_string_lossy()];
         stream(&argv(&tar), &self.env(), line)?;
-        let stem = file.trim_end_matches(".tar.xz").trim_end_matches(".zip");
+        let stem = file.trim_end_matches(".tar.xz");
         let unpacked = work.join(stem);
         let dest = self.tools.join("node");
         let old = self.tools.join("node.old");
@@ -357,7 +270,7 @@ impl RealHost {
         Ok(())
     }
 
-    /// A small text over HTTPS (curl: on every platform the table covers, Windows 10 too).
+    /// A small text over HTTPS (curl: on every platform the table covers).
     fn fetch(&self, url: &str) -> Result<String, String> {
         match capture(&argv(&["curl", "-fsSL", url]), &self.env(), Duration::from_secs(120)) {
             Some((true, body)) => Ok(body),
@@ -407,7 +320,7 @@ impl Host for RealHost {
         line: &mut dyn FnMut(&str),
     ) -> Result<(), String> {
         let shell = method.shell.ok_or("the table names no shell for this")?;
-        let cmd = if cfg!(unix) && self.root() && !self.has("sudo") && command.contains("sudo ") {
+        let cmd = if self.root() && !self.has("sudo") && command.contains("sudo ") {
             format!("sudo() {{ \"$@\"; }}; {command}")
         } else {
             command.to_owned()
@@ -427,13 +340,6 @@ impl Host for RealHost {
     }
 
     fn elevation(&self) -> Elevation {
-        if cfg!(windows) {
-            // `net session` answers only an elevated (administrator) process.
-            return match capture(&argv(&["net", "session"]), &self.env(), Duration::from_secs(10)) {
-                Some((true, _)) => Elevation::Ready,
-                _ => Elevation::Prompt,
-            };
-        }
         if self.root() {
             return Elevation::Ready;
         }
@@ -447,8 +353,7 @@ impl Host for RealHost {
     }
 
     fn elevate(&self) -> bool {
-        if cfg!(windows) || self.root() {
-            // Windows: each installer that needs it raises its own UAC prompt.
+        if self.root() {
             return true;
         }
         // The real terminal: sudo asks for the password itself, never through ptyro.
@@ -462,7 +367,7 @@ impl Host for RealHost {
         let cmd = step.command().ok_or("the table has no command for this")?;
         let shell = step.method.shell.ok_or("the table names no shell for this")?;
         // As root without sudo (a fresh container), the table's `sudo …` runs as it is.
-        let cmd = if cfg!(unix) && self.root() && !self.has("sudo") && cmd.contains("sudo ") {
+        let cmd = if self.root() && !self.has("sudo") && cmd.contains("sudo ") {
             format!("sudo() {{ \"$@\"; }}; {cmd}")
         } else {
             cmd.to_owned()
@@ -471,14 +376,7 @@ impl Host for RealHost {
         if step.method.via == Via::Npm {
             env.extend(self.npm_env());
         }
-        let r = stream(&shell.argv(&cmd), &env, line);
-        #[cfg(windows)]
-        if r.is_ok()
-            && let Ok(mut p) = self.path.lock()
-        {
-            *p = refreshed_path(&p, &registry_path(), &self.dirs);
-        }
-        r
+        stream(&shell.argv(&cmd), &env, line)
     }
 
     fn tools_used(&self) -> bool {
@@ -495,8 +393,7 @@ impl Host for RealHost {
             .resolve(argv)
             .ok_or_else(|| format!("{} isn't found", argv.first().map_or("it", String::as_str)))?;
         let (prog, args) = cmd.split_first().ok_or("nothing to run")?;
-        // The person's own terminal: no window of its own on Windows either, since it shares
-        // this console (CREATE_NO_WINDOW would take the console away from it).
+        // The person's own terminal.
         let status = Command::new(prog)
             .args(args)
             .env("PATH", self.path())
@@ -570,8 +467,6 @@ pub(super) fn installed_via(path: &Path) -> Option<Via> {
         Some(Via::Npm)
     } else if p.contains("/homebrew/") {
         Some(Via::Brew)
-    } else if p.contains("/winget/") {
-        Some(Via::Winget)
     } else {
         None
     }
@@ -587,23 +482,6 @@ pub(super) fn package_version(out: &str, field: &str) -> Option<String> {
     let value = value.split_once(':').map_or(value.as_str(), |(_, v)| v);
     let upstream = value.split(['+', '~', '-']).next()?;
     Version::parse(upstream).map(|v| v.to_string())
-}
-
-/// npm's global prefix for a file it installed: the folder above `lib/node_modules` (Windows:
-/// above `node_modules`, `%APPDATA%\npm`). `None` for Bun's global folder (`~/.bun/…`, which npm
-/// doesn't manage) or a path not under a prefix.
-pub(super) fn npm_prefix(real: &Path) -> Option<String> {
-    npm_prefix_on(real, windows_path(real))
-}
-
-/// The path is a Windows one (a drive letter, `C:\…`, or a share, `\\\\host\…`): npm's Windows layout
-/// applies to it, whatever this process runs on (a Linux path in WSL keeps the Unix one).
-fn windows_path(p: &Path) -> bool {
-    let s = p.to_string_lossy();
-    let b = s.as_bytes();
-    (b.len() > 2 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
-        || s.starts_with("\\\\")
-        || s.starts_with("//")
 }
 
 /// Another tool's global store holding a node package (`bun`, `mise`'s `npm:` backend, `pnpm`,
@@ -624,21 +502,19 @@ pub(super) fn npm_store(real: &Path) -> Option<&'static str> {
     }
 }
 
-/// [`npm_prefix`] for a platform's layout: Windows' prefix holds `node_modules` itself, elsewhere
-/// it is `lib/node_modules`. Another tool's store ([`npm_store`]) is no prefix.
-pub(super) fn npm_prefix_on(real: &Path, windows: bool) -> Option<String> {
-    let s = real.to_string_lossy();
-    let norm = s.replace('\\', "/");
+/// npm's global prefix for a file it installed: the folder above `lib/node_modules`. `None` for
+/// another tool's store ([`npm_store`], Bun's global folder `~/.bun/…`, which npm doesn't manage)
+/// or a path not under a prefix.
+pub(super) fn npm_prefix(real: &Path) -> Option<String> {
     if npm_store(real).is_some() {
         return None;
     }
-    let cut = if windows { norm.find("/node_modules/")? } else { norm.find("/lib/node_modules/")? };
-    Some(s[..cut].to_owned())
+    let s = real.to_string_lossy();
+    Some(s[..s.find("/lib/node_modules/")?].to_owned())
 }
 
 /// `dir` is an administrator's (BOOT7: a system npm prefix), by its owner and mode, without
-/// writing in it: neither this user's nor writable by everyone. Windows: never (npm's prefix is
-/// the user's own, and WinGet's uninstaller raises its own prompt).
+/// writing in it: neither this user's nor writable by everyone.
 fn admins_folder(dir: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -671,17 +547,6 @@ pub(crate) fn sha256_file(p: &Path) -> Result<String, String> {
     Ok(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// No console window of its own on Windows (SPEC §20.12).
-pub(crate) fn quiet(cmd: &mut Command) -> &mut Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd
-}
-
 fn spawn(argv: &[String], env: &[(OsString, OsString)]) -> Result<std::process::Child, String> {
     let (prog, args) = argv.split_first().ok_or("nothing to run")?;
     let mut cmd = Command::new(prog);
@@ -689,7 +554,7 @@ fn spawn(argv: &[String], env: &[(OsString, OsString)]) -> Result<std::process::
     for (k, v) in env {
         cmd.env(k, v);
     }
-    quiet(&mut cmd).spawn().map_err(|e| format!("couldn't start {prog}: {e}"))
+    cmd.spawn().map_err(|e| format!("couldn't start {prog}: {e}"))
 }
 
 /// Each line of `pipe` to `tx`. A progress bar's carriage returns keep only the last state.
@@ -804,7 +669,7 @@ fn exit_ok(argv: &[String], env: &[(OsString, OsString)], limit: Duration) -> Op
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let mut child = quiet(&mut cmd).spawn().ok()?;
+    let mut child = cmd.spawn().ok()?;
     let start = Instant::now();
     loop {
         if let Ok(Some(s)) = child.try_wait() {
