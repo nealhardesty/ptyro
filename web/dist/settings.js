@@ -92,7 +92,6 @@ else
 function moreView() {
     const scope = SCOPES.find(([k]) => k === conn.scope);
     const items = [
-        ["Review queue", "Worktrees waiting for you", "#/review"],
         ["Inbox", "What happened while you were away", "#/inbox"],
         ["Health", "What's wrong, with its fixes", "#/health"],
         ["Usage", "Your accounts' limits", "#/usage"],
@@ -1054,7 +1053,7 @@ async function startLogin(id, name, side) {
 }
 // ── the tour ────────────────────────────────────────────────────────────────────────────────
 function tourView() {
-    return h("div", {}, ui.header("Tour", "#/more"), h("main", { class: "stack", title: tip("help.tour") }, h("p", { class: "intro" }, "ptyro's daily loop, done for real: start a task, answer the agent, review what it changed, finish it, clean up. It runs in a ptyro of its own, with a demo repository and a pretend agent: your sessions, projects and config are never touched, and it all goes away when you end the tour."), conn.scope !== "full" ? h("p", { class: "empty" }, "Starting a tour needs a device paired with --scope full.") : bar(h("button", { class: "primary", onclick: startTour }, "Start the tour")), h("p", { class: "sub" }, "It opens in a new tab served from this computer (localhost), so open this page from the computer that runs ptyro. The tour's own page has a coach that says what to do next.")));
+    return h("div", {}, ui.header("Tour", "#/more"), h("main", { class: "stack", title: tip("help.tour") }, h("p", { class: "intro" }, "ptyro's daily loop, done for real: start a task, answer the agent, clean up, keep a shell of your own. It runs in a ptyro of its own, with a demo repository and a pretend agent: your sessions, projects and config are never touched, and it all goes away when you end the tour."), conn.scope !== "full" ? h("p", { class: "empty" }, "Starting a tour needs a device paired with --scope full.") : bar(h("button", { class: "primary", onclick: startTour }, "Start the tour")), h("p", { class: "sub" }, "It opens in a new tab served from this computer (localhost), so open this page from the computer that runs ptyro. The tour's own page has a coach that says what to do next.")));
 }
 async function startTour() {
     // Open the tab now, inside the tap, or a popup blocker refuses it once the tour is ready.
@@ -1078,7 +1077,7 @@ async function startTour() {
     }
 }
 // the coach, in a tour's own page (`ptyro.tour` is set when its pairing link says so)
-const STEPS = ["Start a task", "Answer the agent", "Review its change", "Finish it", "Clean up", "Keep a shell"];
+const STEPS = ["Start a task", "Answer the agent", "Clean up", "Keep a shell"];
 const tour = { step: 0, worktree: "", agent: "", blocked: false };
 function advanceTour() {
     for (;;) {
@@ -1100,23 +1099,13 @@ function advanceTour() {
                 tour.step = 2;
         }
         else if (tour.step === 2) {
-            if (location.hash.startsWith(`#/wt/${enc(tour.worktree)}/changes`))
+            if (!data.worktrees.has(tour.worktree))
                 tour.step = 3;
         }
         else if (tour.step === 3) {
-            const w = data.worktrees.get(tour.worktree);
-            const st = w?.status;
-            if (w && ((w.pr?.state === "MERGED") || (w.integrated && st && (st.staged ?? 0) + (st.modified ?? 0) + (st.untracked ?? 0) === 0 && st.head && w.integrated.startsWith(st.head))))
-                tour.step = 4;
-        }
-        else if (tour.step === 4) {
-            if (!data.worktrees.has(tour.worktree))
-                tour.step = 5;
-        }
-        else if (tour.step === 5) {
             // A shell of your own in SHELLS (SPEC §23): numbered, in no worktree.
             if (sessions.some((s) => s.loose && s.slot != null))
-                tour.step = 6;
+                tour.step = 4;
         }
         if (tour.step === before)
             break;
@@ -1125,9 +1114,7 @@ function advanceTour() {
 const COACH = [
     ["Tap ＋ (top right) and say what to do:", "fix the typo in greeting.txt", "Pick “demo · in a new worktree” and Start. It gets a worktree and a branch of its own."],
     ["It wants to run a command and asks first.", "Open its session (Sessions tab) and tap Allow."],
-    ["See what it changed: Projects tab → its worktree → Changes.", "Tap a line to leave a comment for the agent."],
-    ["Ship it: on the worktree's page tap Finish → Merge into the main branch."],
-    ["Clean up: on the worktree's page, ⋯ → Archive (or Remove)."],
+    ["It's done: its worktree's page (Projects tab) says what it changed.", "Clean up: on the worktree's page, ⋯ → Archive."],
     ["Keep a shell of your own: on the Sessions tab, tap ＋ beside SHELLS → A shell.", "It's numbered and in no worktree: tap its number on a shell's page to come back to it."],
     ["That's the loop, and a shell of your own. Everything you did was real, in a ptyro of its own."],
 ];

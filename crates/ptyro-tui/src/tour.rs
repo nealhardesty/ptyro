@@ -1,8 +1,7 @@
 //! The tour (UX1.22, `ptyro tour`): ptyro's daily loop, done for real. A pretend agent works in
 //! a throwaway repository under a ptyro of its own; a coach in the corner says what to do next,
 //! with the keys as this keymap binds them, and moves on when it has been done: start a task,
-//! answer the agent, review its change, finish it into main, clean up, and keep a shell of your
-//! own in SHELLS (SPEC §23).
+//! answer the agent, clean up, and keep a shell of your own in SHELLS (SPEC §23).
 //!
 //! The coach never takes keys: everything is done with the real ones, in the real TUI.
 
@@ -17,8 +16,6 @@ use crate::keymap::Table;
 pub enum Step {
     Task,
     Answer,
-    Review,
-    Finish,
     CleanUp,
     /// A shell of your own in SHELLS: numbered, in no worktree (SPEC §23).
     Shells,
@@ -40,7 +37,7 @@ impl Default for Tour {
     }
 }
 
-const STEPS: usize = 6;
+const STEPS: usize = 4;
 
 impl Tour {
     /// Move on as far as what's on screen allows; whether the step changed.
@@ -69,14 +66,8 @@ impl Tour {
                     let idle = matches!(status, Some(AgentStatus::Idle | AgentStatus::Done));
                     let working = status == Some(AgentStatus::Working);
                     ((self.blocked_once && (working || idle)) || (idle && self.turned(app)))
-                        .then_some(Step::Review)
+                        .then_some(Step::CleanUp)
                 }
-                Step::Review => app
-                    .inspector
-                    .as_ref()
-                    .is_some_and(|i| Some(&i.worktree) == self.worktree.as_ref())
-                    .then_some(Step::Finish),
-                Step::Finish => self.shipped(app).then_some(Step::CleanUp),
                 // Archived (or removed): gone from the list.
                 Step::CleanUp => self
                     .worktree
@@ -104,10 +95,6 @@ impl Tour {
         self.agent.and_then(|id| app.session(id)).is_some_and(|s| s.turns > 0)
     }
 
-    fn shipped(&self, app: &App) -> bool {
-        self.worktree.as_deref().and_then(|w| app.worktree(w)).is_some_and(|w| w.shipped())
-    }
-
     /// The coach's title and lines, keys as bound (`C-q n`), or as they work where the focus is.
     pub fn coach(&self, app: &App) -> (String, Vec<String>) {
         let key = |action: &str| {
@@ -116,17 +103,12 @@ impl Tour {
                 .flatten();
             nav.or_else(|| app.keymap.key_for(action)).unwrap_or_else(|| format!("`{action}`"))
         };
-        let nav = |action: &str| {
-            app.keymap.key_in(Table::Nav, action).unwrap_or_else(|| format!("`{action}`"))
-        };
-        let sidebar = app.keymap.key_for("focus.toggle").unwrap_or_else(|| "C-q Tab".into());
+        let palette = app.keymap.key_for("palette").unwrap_or_else(|| "C-q :".into());
         let n = match self.step {
             Step::Task => 1,
             Step::Answer => 2,
-            Step::Review => 3,
-            Step::Finish => 4,
-            Step::CleanUp => 5,
-            Step::Shells => 6,
+            Step::CleanUp => 3,
+            Step::Shells => 4,
             Step::Done => STEPS,
         };
         let (title, lines): (&str, Vec<String>) = match self.step {
@@ -156,37 +138,12 @@ impl Tour {
                     ],
                 ),
             },
-            Step::Review => (
-                "review its change",
-                vec![
-                    match self.agent_status(app) {
-                        Some(AgentStatus::Working) => "It's finishing; its row will say when.".into(),
-                        _ => "It's done: its row says what it replied.".into(),
-                    },
-                    format!("Press {} to see what it changed.", key("inspector")),
-                ],
-            ),
-            Step::Finish => (
-                "finish it",
-                vec![
-                    "Ship it. Close the inspector (q), go to the sidebar".into(),
-                    format!(
-                        "({sidebar}), and press {} on it; pick integrate.",
-                        nav("worktree.finish")
-                    ),
-                    "Its agent commits the change, then ptyro puts it on main.".into(),
-                ],
-            ),
             Step::CleanUp => (
                 "clean up",
                 vec![
-                    "It's in main now: its row says so.".into(),
-                    format!(
-                        "Press {} on it again (or {}) to clean up: the worktree is archived,",
-                        nav("worktree.finish"),
-                        nav("session.stop")
-                    ),
-                    "its branch kept, and you can restore it.".into(),
+                    "It's done: its row says what it replied, and its worktree what it changed.".into(),
+                    format!("Press {palette}, type worktree.archive and ⏎:"),
+                    "the worktree goes, its branch is kept, and it can come back.".into(),
                 ],
             ),
             Step::Shells => {
@@ -212,7 +169,7 @@ impl Tour {
             Step::Done => (
                 "that's the loop",
                 vec![
-                    "Task, answer, review, finish, clean up, and a shell of your own: by keys alone.".into(),
+                    "Task, answer, clean up, and a shell of your own: by keys alone.".into(),
                     format!(
                         "{} lists every key, {} finds any action.",
                         key("help"),

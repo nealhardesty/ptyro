@@ -705,7 +705,6 @@ mod tests {
             last_prompt_ms: None,
             turns: 0,
             last_output_ms: None,
-            verify: None,
             held: false,
             structured: None,
             task: None,

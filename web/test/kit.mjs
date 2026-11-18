@@ -105,7 +105,7 @@ store.set("k", "v");
 
 // What is left to do with a worktree (UX2.2): the same rule as ptyro-core's `RepoStatus::left`.
 {
-  const { repoLeft, leftWords, shipped } = await import("../dist/data.js");
+  const { repoLeft, leftWords } = await import("../dist/data.js");
   const st = (o) => ({ ahead: 0, behind: 0, staged: 0, modified: 0, untracked: 0, conflicts: 0, base_ahead: 1, ...o });
   assert.equal(leftWords(repoLeft(st({ upstream: "origin/x", pushed: true }))), "✓ pushed");
   assert.equal(leftWords(repoLeft(st({ upstream: "origin/x", ahead: 2, modified: 1, untracked: 2 }))), "↑2 ● 3");
@@ -115,12 +115,6 @@ store.set("k", "v");
   assert.equal(leftWords(repoLeft(st({}))), "", "no commits of its own, nothing to say");
   // Old daemons' status has none of the new fields.
   assert.equal(repoLeft({ ahead: 0, behind: 0, staged: 0 }).pushed, false);
-  const wt = (o) => ({ is_root: false, status: st({ head: "abc123def" }), ...o });
-  assert.equal(shipped(wt({ pr: { state: "MERGED" } })), true);
-  assert.equal(shipped(wt({ pr: { state: "OPEN" } })), false);
-  assert.equal(shipped(wt({ integrated: "abc123def456" })), true);
-  assert.equal(shipped(wt({ integrated: "abc123def456", status: st({ head: "abc123def", modified: 1 }) })), false);
-  assert.equal(shipped(wt({ is_root: true, pr: { state: "MERGED" } })), false);
 }
 
 // About (UX2.1): the constants match Cargo.toml, and a device that can't ask the machine still

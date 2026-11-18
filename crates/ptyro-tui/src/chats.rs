@@ -2682,7 +2682,6 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
     let focused = app.overlay.is_none()
         && !app.prefix
         && app.focus == Focus::Pane
-        && app.inspector.is_none()
         && app.pad_popup.is_none()
         && !app.sidebar_zoom;
     if v.id.is_none() && v.view.items.is_empty() && v.draft.is_empty() {

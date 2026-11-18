@@ -991,7 +991,8 @@ Push messages have no id.
 - `SessionInfo` gains `prompt_pending`, `last_prompt_ms`, `turns` and `last_output_ms`, which
   `wait` needs (§12.2).
 
-**[built M6] Protocol 1.5** (additive):
+**[built M6] Protocol 1.5** (additive; all of it but `WorktreePair` and `WorktreeSpec.issue` was
+removed on 2026-11-17 with review, pull requests and landing, protocol 1.43):
 - **Requests:**
   - `WorktreeDiff{against: base|upstream|last_turn|head}` → `Diff{doc: DiffDoc}`;
   - `WorktreeLog` → `Commits`;
@@ -1027,7 +1028,8 @@ and lead requests below were removed on 2026-11-17 with orchestration, protocol 
   `LeaseRelease{holder, patterns}` and `LeaseList` → `Leases{leases, refused}`;
   `Radar{project}` → `Radar`; `CheckpointList{addr}` → `Checkpoints`; `CheckpointDiff{addr, n,
   to}` → `Diff`; `CheckpointRestore{addr, n, turn}` → `Notes`.
-- **Agents:** `SetVerify{addr, check, max_bounces}` → `Session`; `LeadStart{addr, policy}` → `Run`;
+- **Agents** (`SetVerify` removed 2026-11-17 with verified-done, protocol 1.43):
+  `SetVerify{addr, check, max_bounces}` → `Session`; `LeadStart{addr, policy}` → `Run`;
   `Lead{lead, op: LeadOp}` → `LeadResult{value}` (the `ptyro mcp` surface, §15.6).
 - **Hooks** may now be answered `HookOutput{stdout}`: the relay prints it for the agent (§8.3).
 - **Event:** `RunUpdated{run}` to every watcher.
@@ -1101,7 +1103,7 @@ and lead requests below were removed on 2026-11-17 with orchestration, protocol 
   else its first prompt, else the window title), and the window title is `window_title`.
 - `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`,
   `WorktreeArchiveDelete{addr}` → `Notes`
-  → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8).
+  → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8; removed 2026-11-17).
 - `SessionInfo` gains `summary` (`Summary{text, turn, at_ms}`), and a new request,
   `Summarize{addr}` (control scope), makes one now and replies `Session` (§11.2h).
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
@@ -1164,6 +1166,16 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built 2026-11-17] Protocol 1.43** (a removal): pull requests, review, the diff inspector,
+landing and verified-done are gone (§10.8, §10.9, §15.6). The requests `worktree_diff`,
+`worktree_log`, `worktree_commit`, `worktree_integrate`, `worktree_finish`, `pr_get`, `pr_create`,
+`pr_fix`, `pr_automerge`, `pr_watch`, `pr_reply`, `review_add`, `review_list`, `review_remove`,
+`review_send`, `review_queue`, `review_done` and `set_verify`, the replies `Commits`, `Committed`,
+`Pr`, `Comments`, `ReviewQueue` and `Queued`, `WorktreeInfo.pr` and `.integrated`,
+`SessionInfo.verify`, `SpawnSpec.verify` and `.unqueued`, `WorktreeSpec.verify` and
+`DiffDoc.against` were removed. Each removed request is in `RETIRED_REQUESTS` ("this ptyro no
+longer has pull requests (removed 2026-11-17)…"). `Diff` stays, for `CheckpointDiff`.
 
 **[built 2026-11-17] Protocol 1.42** (a removal): orchestration is gone (§15). The requests
 `run_list`, `run_get`, `run_events`, `run_cancel`, `run_retry`, `run_fork`, `recipe_list`,
@@ -1444,7 +1456,6 @@ project trust` `` and the like).
   same conversation in the other mode: Claude `--resume`, Codex `thread/resume` / `codex
   resume`, ACP `session/load`, OpenCode the same `ses_` id. The protocol is kept in `Meta` and
   the stored launch, so resume, restart and dormant restore stay structured.
-- **Verified-done** uses follow-ups (no Stop hook).
 - **Live upgrade.** The driver parks between lines like a PTY reader. Its state (serde), unread
   bytes, transcript, draft and rendering state, plus the stdin/stdout/stderr fds, cross the exec.
 - **Not yet:** after a full daemon restart (not an upgrade) a dormant
@@ -1870,9 +1881,8 @@ the relay and never blocked by it.
 
 **[built M7]** The daemon can answer a hook for the agent (`HookOutput`), and the relay prints
 that on stdout (nothing otherwise):
-- **Stop** (Claude) with verified-done: `{"decision":"block","reason":…}` until the check passes
-  (§15.6). A Stop waits up to 900 s (the check runs first); the Claude plugin's Stop hook timeout
-  is 900 s to match, every other hook keeps 5 s.
+- **Stop** (Claude): nothing since 2026-11-17 (it bounced a turn whose verified-done check
+  failed; removed). Its hook timeout is back to 5 s, like every hook but `PermissionRequest`.
 - **PreToolUse / BeforeTool**: nothing since 2026-11-17 (it denied a tool call over a file lease
   or a recipe guard, both removed with orchestration).
 
@@ -2200,7 +2210,7 @@ spinner-only redraws (rows whose text didn't change). Derives `active` / `quiet`
 ### 9.3b Turns **[built 2026-10-23]**
 
 A turn is what the agent did between a prompt and its answer. Its end runs the turn-end work:
-`turns` + 1, the checkpoint (§15.6), verified-done (M7.9), the summary (UX1.3) and the
+`turns` + 1, the checkpoint (§15.6), the summary (UX1.3) and the
 `after_turn` script.
 - **Agents with a turn-end signal** (every built-in adapter whose hooks are on, and every
   structured session): the turn ends at the agent's own end, `Signal::TurnEnd` (Claude's and
@@ -2551,7 +2561,6 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   --id Git.Git -e`), by the script's start and by `doctor` (`scripts <project> shell`). cmd's
   command text goes raw (after `/c`): it doesn't read Rust's `\"` quoting. A shell other than
   `auto` is part of the trust fingerprint (`auto` isn't, so scripts trusted before still are).
-  Verify checks (§15.6.5) resolve the same way.
 - **[built WIN6] Line endings:** a bash script (a `.sh` file, or a `#!` line naming a POSIX
   shell) named by a project's scripts with Windows (CRLF) line endings is a `doctor` finding
   (`scripts <project>`, every platform: bash reads the `\r` as part of each command). `ptyro
@@ -2566,8 +2575,8 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   Untrusted scripts never run; worktree creation still works without them.
 - **What trust covers [security review M3]:** the fingerprint pins the *text* of the commands,
   not the files they call. `cargo test`, `make check` or `./scripts/lint.sh` run whatever the
-  checkout holds at that moment, and agents edit the checkout. Trusted scripts, `after_turn` and
-  verify checks (§15.6.5) run as the user, with the daemon's full environment and network,
+  checkout holds at that moment, and agents edit the checkout. Trusted scripts and `after_turn`
+  run as the user, with the daemon's full environment and network,
   outside any sandbox an agent runs in. So trusting a command trusts every file it reads, now
   and after any agent's edit. Sandboxing them is not attempted.
 - `run_mode = "concurrent" | "exclusive"`: `exclusive` stops the run script in other worktrees of the
@@ -2694,8 +2703,7 @@ branches, no sessions for N days.
 - **[changed 2026-10-30] gc, measured and kept:**
   - *Merged* means the branch moved from where its reflog says it was made and its tip is in
     the base. The old test asked for commits outside the base that were also in it, so it never
-    fired. A squash- or rebase-merged PR, or an integrate (`WorktreeInfo::shipped`), counts too
-    ("its PR merged", "integrated into the main branch").
+    fired. (A merged PR and an integrate counted too, until both were removed on 2026-11-17.)
   - A **locked** worktree is kept on purpose: gc leaves it out unless its directory is gone. Every
     gc offers *keep* (CLI `k`, TUI `^l`, web "Keep it"), which locks it.
   - `GcEntry::bytes` (`bytes_partial`: it stopped early, "≥") is what the directory takes on disk:
@@ -2710,7 +2718,7 @@ branches, no sessions for N days.
   (`🧹3`). `archived` is only a note: how many, the oldest, and whether
   `archive_purge_days` deletes them.
 
-**[built UX1.12] Archive, restore and finish** (`crates/ptyro-daemon/src/finish.rs`):
+**[built UX1.12] Archive and restore** (`crates/ptyro-daemon/src/archive.rs`):
 - **Archive** (`WorktreeArchive`, `ptyro wt archive`): a snapshot commit of the files as they are
   (`Git::checkpoint`: a private index, untracked included, ignored not, parent HEAD) goes to
   `refs/ptyro/archive/<name>` (`-2`, `-3` when taken), then the worktree is removed with the
@@ -2726,17 +2734,10 @@ branches, no sessions for N days.
   branch has moved since) puts the snapshot back with the changes uncommitted again, untracked
   files untracked. The entry leaves the list. Several archives of one name are listed (handle
   and age), never picked between; the handle says which (§2.3, owner, 2026-11-09).
-- **Finish** (`WorktreeFinish`, `ptyro wt finish [--integrate]`): when there are changes, the
-  worktree's live agent (not mid-turn) is asked to commit and its turn awaited (up to 10 min,
-  or 1 min if it never starts); what's left is committed as the worktree's profile with its
-  title as the message (`Work on <name>` without one). Then a PR (`github.draft` decides draft)
-  or integrating. Progress goes out as `WorktreeProgress`.
-- **Archive on merge** (`[worktrees] archive_on_merge`, default off): a PR refresh that sees a PR
-  it knew open now merged archives the worktree, when nothing runs in it. A first sighting
-  doesn't count, so a worktree restored after its PR merged stays. Integrating it into the main
-  branch counts too (`WorktreeInfo::shipped`). A worktree is archived by one archive at a time:
-  a second one while it runs is refused (before, a PR poll and a refresh seeing the same merge
-  could both snapshot it and both list it).
+- **Finish** and **archive on merge**: removed 2026-11-17. ptyro makes and removes worktrees;
+  committing, pushing and merging are the user's, with git. `[worktrees] archive_on_merge` is a
+  retired key (§13.8). A worktree is archived by one archive at a time: a second one while it
+  runs is refused.
 - `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
 - **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name|handle…`, asks
   unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
@@ -2749,9 +2750,8 @@ branches, no sessions for N days.
 ### 10.9 Repository status
 
 Per worktree, refreshed on `notify` file events (debounced 500 ms) and after every agent turn:
-branch, ahead/behind base and upstream, dirty file count, diffstat (+/−), last commit, PR number and
-CI check status (via `gh`, when available, polled ≤ 1/min, M6). `gh` runs under the worktree's
-profile (§10.10).
+branch, ahead/behind base and upstream, dirty file count, diffstat (+/−), last commit. (A PR's
+number and CI checks, through `gh`, were removed on 2026-11-17.)
 
 **[built M3]**
 - **Watching:** each worktree is watched recursively with `notify` (500 ms debounce; churn in
@@ -2774,15 +2774,13 @@ profile (§10.10).
   surface uses: `uncommitted` = staged + modified + untracked + conflicts; `unpushed` = `ahead`
   when there is an upstream, else the counted commits; `not_pushed` = no upstream and commits;
   `pushed`. Shown as `↑N` / `not pushed ↑N` (unpushed), `● N` (uncommitted) and a quiet
-  `✓ pushed`; the `+N −M` line counts only while uncommitted or unpushed work exists. A shipped
-  worktree (PR merged, or integrated) shows nothing of it, and an open PR's badge stands in for
-  `✓ pushed`. The TUI sidebar row and pane header (`diffstat` in ui.rs), `ptyro wt ls|info`
+  `✓ pushed`; the `+N −M` line counts only while uncommitted or unpushed work exists. The TUI
+  sidebar row and pane header (`diffstat` in ui.rs), `ptyro wt ls|info`
   (`status_line`) and the web's worktree rows and page (`summary`, `repoLeft` in web/src/data.ts)
   follow it; the web test keeps the TS mirror equal to the Rust one. Refreshing: the push moves
   `refs/remotes/<remote>/<branch>` in the main repository's git directory, outside a linked
   worktree, so each linked worktree's watcher also watches `.git/refs/remotes` there (the status
-  is recomputed within the 500 ms debounce); the ship, finish and push paths refresh the status
-  themselves, and the 10 s / 60 s poll covers the rest.
+  is recomputed within the 500 ms debounce), and the 10 s / 60 s poll covers the rest.
 - **Locks:** every git call runs with `GIT_OPTIONAL_LOCKS=0`. Without it, the background
   `git status` takes `index.lock`, and a user's or agent's concurrent `git add` fails (seen in
   the tests).
@@ -2792,42 +2790,16 @@ profile (§10.10).
   worktrees can write) can name code in both, and these calls run as the user, unasked,
   outside any sandbox. Status, diffs (also `--no-ext-diff --no-textconv`), logs, checkpoints,
   conflict checks, scratch worktrees and ref updates run no hooks. Hooks do run for what the user
-  asks ptyro to do and would expect them on: `commit`, `push`, `merge`, `rebase`,
-  `cherry-pick` and the `worktree add` of a new worktree (`Git::run_hooked`). Agents can edit
+  asks ptyro to do and would expect them on: the `worktree add` of a new worktree
+  (`Git::run_hooked`). Agents can edit
   those hooks too; that is the same trust as running git there yourself. Clean/smudge filters
   are left alone (LFS needs them).
 - **A vanished directory** turns the worktree `missing`; it goes back to `ready` when the
   directory returns.
 
-**[built M6] PRs and checks:**
-- **The poller:** `gh` runs in the worktree under its profile's environment (so `GH_CONFIG_DIR`
-  or `GH_TOKEN` pick the account), with prompts disabled. Every 10 s the poller asks about
-  worktrees that are due: their branch is pushed (an upstream), they have a PR, or they're
-  watched. Each is asked at most once per `github.poll` (default 60 s, floor 30 s).
-- **Lookup:** `gh pr view <branch> --json number,url,title,state,isDraft,reviewDecision,autoMergeRequest`,
-  then `gh pr checks <n> --json name,bucket,link,workflow`. Its JSON is read even when it exits
-  non-zero (it exits 8 while checks are pending).
-- **No `gh`:** the poller is idle (checked once a minute), and PR commands say what's missing.
-- The sidebar shows `#7 ✓` / `#7 ✗2` / `#7 ◌` / `merged` on worktree rows.
-
-**[built M6] The PR-event loop** (M6.10, R-GIT-01) runs for watched PRs: the ones ptyro opened
-(`github.watch`), or `pr watch`.
-- **Baseline:** the first poll records the existing comments and failures; only what changes
-  after that is news.
-- **New failures:** a check that newly fails sends the agent "[via ptyro: CI on PR #N is
-  failing]", the check names and links, and the last `github.log_lines` lines of
-  `gh run view --log-failed`.
-- **Comments:** a new review (line) comment is sent as "[via ptyro: review comment from X on
-  PR #N on path:line (comment ID)]". Conversation comments that look like questions (a short
-  text with `?`, "why …", "should we", "wdyt") **raise attention instead**: the human decides.
-  Bots' comments and ptyro's own replies are skipped.
-- **Delivery** happens only when the agent's turn is over (it isn't working and the input box
-  is ready). Several messages are joined into one prompt.
-- **Replies** made with `pr reply` end with "— via ptyro".
-- **Escalation:** a PR that stays failing, or keeps messages waiting, for
-  `github.escalate_after` raises an `errored` attention once ("PR #N needs you: …").
-- **Persistence:** state per worktree (watched, seen ids, failing checks, pending messages) lives
-  in `kv` (`pr_watches`), so a daemon restart doesn't re-deliver anything.
+**[built M6, removed 2026-11-17] PRs and checks, the PR-event loop:** removed with the rest of
+pull requests, so ptyro stays out of the forge; `gh` is used only to start from an issue (and for a
+`--pr` worktree's title, best effort; §20.6b).
 
 ### 10.10 Profiles: one identity per workspace **[decided 2026-10-20: concept · details proposed]**
 
@@ -2848,7 +2820,7 @@ difference.
 | Gemini | `GEMINI_CLI_HOME=<dir>`; or `GEMINI_API_KEY`, or `GOOGLE_CLOUD_PROJECT` + `GOOGLE_APPLICATION_CREDENTIALS` | docs; spike M0.10 |
 | OpenCode | `OPENCODE_CONFIG_DIR`, plus the auth file under `$XDG_DATA_HOME/opencode/` | unverified (not installed); spike once installed |
 | git identity | `GIT_AUTHOR_*` / `GIT_COMMITTER_*`, or a whole `GIT_CONFIG_GLOBAL=<file>` (signing key, `url.*.insteadOf`); `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes"` | git docs |
-| GitHub CLI (M6 PRs/checks) | `GH_CONFIG_DIR=<dir>`, or `GH_TOKEN` via `secrets` | gh docs |
+| GitHub CLI (`--issue`) | `GH_CONFIG_DIR=<dir>`, or `GH_TOKEN` via `secrets` | gh docs |
 | Anything else | `env`, `env_file`, `secrets` (`AWS_PROFILE`, `KUBECONFIG`, npm tokens, …) | — |
 
 Profiles apply to **every** session kind — agents, shells, scripts, editors — so `git push` typed
@@ -3205,38 +3177,17 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   five pages of keys; UX1.22 replaced them with the hands-on tour in §11.2h.)*
 - `ptyro attach --workspace W` opens a workspace's own view.
 
-### 11.2f What M6 added **[built M6]**
+### 11.2f What M6 added **[removed 2026-11-17]**
 
-- **The inspector** (`D` after the prefix, or in the sidebar) covers the panes for one worktree
-  (the selected row's, else the focused session's). Five tabs (`1`–`5`, `Tab`):
-  - **Diff:**
-    - a file list (marks: `◆` staged for commit, `💬N` comments) next to the hunks;
-    - unified with old/new line numbers, or side by side (`s`);
-    - against the base, the upstream, the last turn or HEAD (`a` cycles);
-    - keys: `j/k` lines, `d`/`u` 20 lines, `n/p` (or `]`/`[`) files, `c`/`⏎` comment on the
-      cursor line, `x` drop it, `S` send all comments to the agent, `Space` mark a file, `C`
-      commit the marked files (or everything) with a message, `E` commit in your editor, `A` ask
-      the agent to commit, `P` push and open a PR (a draft while `github.draft`), `I` integrate
-      (asks first), `r` refresh, `q` close.
-  - **Commits** since the base.
-  - **Checks:** the PR, its review state and each check. `f` sends the failing logs to the
-    agent, `m` turns on auto-merge, `w` watches.
-  - **Ports:** the port block and what listens, as URLs.
-  - **Events:** the worktree's sessions' persisted events as one timeline (status transitions
-    coloured, hooks, prompts, deliveries).
-
-  Syntax highlighting (`syntect`) is not built: optional in the proposal, and left out for
-  binary size.
-- **The review queue** (`Q` after the prefix): the ranked list. `⏎` opens the inspector on it,
-  `d` marks it reviewed.
-- **Sidebar:** PR badges on worktree rows (§10.9).
+The inspector (`D`: diff, comments, commit, PR, checks, ports, events), the review queue (`Q`)
+and the sidebar's PR badges were removed on 2026-11-17: ptyro makes and removes worktrees, git is
+the user's. `D` and `Q` are unbound; a session's events are `session.events` (§11.5).
 
 ### 11.2g What M7 added **[built M7]**
 
 - **The runs view** (`O`), its compare view and gates were removed on 2026-11-17 with
   orchestration (§15); `O` is unbound.
-- **Verified-done** in the sidebar: `✔` verified, `◌` checking, `↩N` sent back N times, `✘`
-  claimed only (the check still fails).
+- **Verified-done** in the sidebar (`✔`, `◌`, `↩N`, `✘`): removed 2026-11-17 with verified-done.
 
 ### 11.2h What UX1 added **[built UX1]**
 
@@ -3296,22 +3247,16 @@ learning anything up front.
   names the keys as bound (or as they work where the focus is) and moves on when it's done:
   1. start a task (`n`): an agent with a task, in a worktree of its own;
   2. answer it (`p`, `y`): it blocked on a permission and got going again (or its turn ended);
-  3. review (`D`): the inspector is open on its worktree;
-  4. finish (sidebar `F`, integrate): its agent commits, ptyro integrates into main;
-  5. clean up (`F` or `x`): the worktree is archived.
+  3. clean up (`worktree.archive` from the palette): the worktree is archived;
+  4. keep a shell of your own in SHELLS.
 
-  The pretend agent asks before running `sed` on `greeting.txt`, fixes the typo once allowed
-  (leaves it, told no), and commits when finish asks. `help.tour` inside the tour starts it over.
-- **Shipped worktrees** (UX1.12, UX1.22): `WorktreeInfo::shipped()` is true when the PR merged,
-  or when ptyro integrated it into the main branch (`WorktreeInfo.integrated`, the commit, kept
-  in kv across restarts) and the worktree is still clean at that commit. A shipped worktree's
-  row says `in main` (or `merged`), its hint is "clean up", `F` and `x` archive it, and
-  `archive_on_merge` archives it on its own. Before, only a merged PR counted, and `F` on a
-  merged worktree opened the finish picker again despite the hint.
-- **Short choices pick by key** (`Palette::with_hotkeys`): in the finish picker, `p` (a PR) and
-  `i` (integrate) pick their item while nothing is typed. In the palette, keys are only shown.
+  (Review and finish were steps until 2026-11-17.) The pretend agent asks before running `sed`
+  on `greeting.txt`, and fixes the typo once allowed (leaves it, told no). `help.tour` inside the tour starts it over.
+- **Shipped worktrees** (UX1.12, UX1.22): removed 2026-11-17 with pull requests and integrating.
+- **Short choices pick by key** (`Palette::with_hotkeys`): in the "open in" picker, `!` (a shell)
+  picks its item while nothing is typed. In the palette, keys are only shown.
 - **Several lines in ptyro's own boxes** (UX1.26): in the task box, peek's reply and the
-  prompts for free text (a broadcast, a review comment, a commit message), `Shift+Enter`,
+  prompts for free text (a broadcast), `Shift+Enter`,
   `Alt+Enter` and `Ctrl+J` start a new line (`app::is_newline_key`; without the kitty keyboard
   protocol only the last two can be told from Enter, and the hint says `C-j`). The box wraps and
   grows to a third of the screen, keeping its end in view (`ui::edit_rows`). A paste goes into
@@ -3383,12 +3328,11 @@ learning anything up front.
 - **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
   `session.convert`, `project.remove|untrust|pin|unpin|leave|mute`, `worktree.lock|unlock|pair|
-  unpair|rename_branch`, `workspace.rename|remove|profile|notify|mute`, `pr.open` (the PR's
-  worktree and session, else a new worktree on it). The long tail is
+  unpair|rename_branch`, `workspace.rename|remove|profile|notify|mute`. The long tail is
   `crates/ptyro-tui/src/cli_actions.rs`: a table of `ptyro …` templates whose words come from the
   selection (`{session}`, `{worktree}`, `{project}`), a pick (`{profile}`, `{agent}`,
   `{choose:…}`) or a question (`{ask:…}`, optional when left empty), then
-  run in a split: profiles (login included), checkpoints, verify, PR replies,
+  run in a split: profiles (login included), checkpoints, a session's events,
   serving, pairing (its QR code in the split),
   devices, replay and export, `config show`.
 - **About** (UX2.1, `crates/ptyro/src/about.rs`, `crates/ptyro-tui/src/about.rs`,
@@ -3438,12 +3382,10 @@ learning anything up front.
     back. `first.run` opens it again; `ptyro init` stays the terminal's version, with the
     terminal checks and shell extras (and the CLI's checklist offered);
   - else, when the workspace has no project: **home** (`home`, `H`), one list of who needs you,
-    worktrees with PRs and their checks, projects (most recently used first; ⏎ starts a task
+    projects (most recently used first; ⏎ starts a task
     there), repositories found (⏎ adds one, then the task box), and a shell here.
-- **Finish and clean up** (UX1.12, §10.8): `worktree.finish` (`F` in the sidebar, the row menu)
-  asks "a pull request" or "integrate", then runs it while messages say how far it got. A merged
-  worktree's hint is "clean up", and `x` on it archives instead of removing. A removal refused for
-  work it would lose offers `a`: archive instead. `worktree.archive`, `worktree.restore` (a picker
+- **Clean up** (UX1.12, §10.8): `worktree.finish` (`F`) was removed on 2026-11-17, and `F` is
+  unbound. A removal refused for work it would lose offers `a`: archive instead. `worktree.archive`, `worktree.restore` (a picker
   of archived worktrees; `^x` deletes the selected one, asked first), `worktree.archive_delete`
   (the same picker, ⏎ deletes) and `worktree.gc` (`G`; stale ones; ⏎ archives) are in the
   palette. The web's Archived list offers Restore and Delete on each.
@@ -3499,7 +3441,7 @@ learning anything up front.
   - **Quiet:** `raise` drops its attention and notifications, except `blocked` (an agent started
     in it that waits for you). `exit` forgets it (no exited row; the name is free again), and the
     TUI closes its drawer.
-  - **It doesn't hold up its worktree:** removing, archiving and `archive_on_merge` refuse only
+  - **It doesn't hold up its worktree:** removing and archiving refuse only
     for sessions that are `busy()`. A quick terminal at its prompt (its shell is the PTY's
     foreground process group) isn't busy, and is stopped with the worktree; one running a
     command is.
@@ -3508,15 +3450,14 @@ learning anything up front.
     to "look at the error in my terminal" can run `ptyro shell --read` from its worktree.
 - **A row's menu** (UX1.15, `row.menu`: `.` after the prefix or in the sidebar, or a
   right-click): every action that applies to that row now, with its key. A session's (peek,
-  resume or restart, adopt, title, rename, explain, hibernate, mute, its worktree's inspector,
-  editor and scripts, split, stop or kill), a worktree's (a task there, a shell, the inspector,
-  finish, editor, scripts, title, archive, remove), a project's. Picked, it runs with that row
+  resume or restart, adopt, title, rename, explain, events, hibernate, mute, its worktree's
+  editor and scripts, split, stop or kill), a worktree's (a task there, a shell, editor, scripts,
+  title, archive, remove), a project's. Picked, it runs with that row
   selected, so it works on that row. In a pane, `.` is the focused session's.
 - **Hints follow the selection** (UX1.16): with no message up, the status bar says what you'd
   do next with the selected row (the focused session in a pane), with the key as it works
   there: `C-q p answer it` (blocked), `R restart · x remove` (exited, in the sidebar), `⏎
-  resumes it` (dormant), adopting a hand-started Claude, `D review its changes` (a worktree
-  with changes), clean up a merged one, `a who needs you`.
+  resumes it` (dormant), adopting a hand-started Claude, `a who needs you`.
 - **The palette finds everything** (UX1.18): besides actions, sessions, workspaces and themes,
   the workspace's worktrees (going to one shows its first session) and projects (selected in the
   sidebar), and the context worktree's scripts, which join once the daemon answers. Every line
@@ -3662,7 +3603,8 @@ action's key. Differences from the proposal below:
   that still shows. TUI only: the CLI has no tree to fold, and the web's session list is flat
   (sorted by who needs you), so there is nothing there to fold.
 
-**[built M6]** `D` opens the inspector (§11.2f), in the sidebar too; `Q` is the review queue.
+**[built M6]** `D` opened the inspector and `Q` the review queue; removed 2026-11-17, both
+unbound.
 
 **[built M7]** `O` opened the runs view; removed 2026-11-17 with orchestration, so `O` is unbound.
 
@@ -3692,7 +3634,6 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `h`/`l` (in split) | move focus between panes |
 | `z` | zoom pane |
 | `[` | copy/scroll mode (vi keys, `/` search, `y` yank via OSC 52, `]` / `[` prompt jumps via OSC 133) |
-| `D` | diff inspector for the focused session's worktree (M6) |
 | `o` | open worktree in editor (picker of configured editors; `nvim` opens *inside ptyro* as a session) |
 | `r` | run default run script; `R` picker |
 | `x` | stop session (confirm); `X` kill |
@@ -3723,8 +3664,8 @@ mouse), drag to select (copy mode), drag split borders.
 - **Peek** (above), **Inbox**, **Command palette**, **Help**.
 - **New session/worktree wizard** (fast path: `n`, `Enter`, `Enter` = the default agent in a new worktree of
   the current project with a random name).
-- **Inspector** (M6): Diff (file list + side-by-side/unified hunks, syntax highlighted via
-  `syntect` optional), Commits, Checks, Ports, Events (status timeline — "why is it blocked?").
+- **Events** (`session.events`): a session's persisted events in a split (`ptyro events
+  --session S`). The inspector (M6) was removed on 2026-11-17.
 
 ### 11.5a The creation form **[decided 2026-11-09 (owner); built 2026-11-09]**
 
@@ -3737,7 +3678,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - **Keys.** ⏎ creates from any field, so typing a name and ⏎ is still the whole quick path;
   Tab/↑↓ move; `C-u` clears; Esc cancels. A field that is needed or wrong is selected and
   said in red; the form stays.
-- **What it makes.** Native requests where the TUI had them (workspace, PR, chat
+- **What it makes.** Native requests where the TUI had them (workspace, chat
   import, project, its workspaces, a SHELLS shell, a session or worktree), else the CLI's own
   command run full sized (`Make::Cli`: each field is a positional word, `--flag value`,
   repeated flags from a comma list, a switch, or a subset such as `--gates`/`--no-gates`).
@@ -3745,9 +3686,9 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   `+ new profile…`, which makes it and comes back to this form, notifications);
   `profile.new` (name, label, colour, each agent's directory to adopt, git identity, SSH
   key, matching remotes, then a login); the task box's `C-o` and `N` (task, agent, shell or
-  command, profile, where, start from, base, name, title, verify, structured, setup,
+  command, profile, where, start from, base, name, title, structured, setup,
   fetch); `project.add` and `project.workspaces`; `shells.command`;
-  `P` in the inspector, `remote.pair`, `machine.add`, `machine.pair`, `chat.import`.
+  `remote.pair`, `machine.add`, `machine.pair`, `chat.import`.
 - **Quick creates stay quick.** `n` ⏎ (the task box), `C-q C-c` (a shell, at once) and
   `Alt-N` keep their one-key paths; their form is one key away (`C-o`, `shells.command`).
 - **A project in several workspaces** shows under each in the sidebar; a session is listed
@@ -3795,7 +3736,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 - **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
   (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
+  `machine rm`, `discard`, `config rm`; `gc` asks per
   item) asks on a
   terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
   (exit 5, `… (no terminal to ask: pass --yes)`) and changes nothing. The TUI and the web always
@@ -3811,7 +3752,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     their id, archives by name or handle, several of one name listed, never picked).
   - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
     found" without a question, and the question names what was found (`wt rm`, `ws rm`,
-    `project rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`,
+    `project rm`, `discard`, `machine rm`, `devices revoke`,
     `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
     `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
     resolves). What is removed after the yes is what was asked about, by its id or exact name,
@@ -3838,7 +3779,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 ### 12.2 Command tree **[decided]**
 
 The proposal as written. Built syntax differs in places (`export --format asciicast|text|ptylog`,
-`wt new --no-setup`, `profile env P [--json]`, `verify S [CHECK]`);
+`wt new --no-setup`, `profile env P [--json]`);
 [`docs/commands.md`](docs/commands.md) and `ptyro <command> --help` are the reference.
 
 ```text
@@ -3862,7 +3803,7 @@ ptyro profile ls|show <pr>|new <pr> [--adopt <agent>=<dir>…]|rm <pr>|rename <a
               |login <pr> <agent|gh>|env <pr> [--agent <a>]|sync <pr>|doctor [<pr>]
 ptyro project add [<path>]|ls|rm <p>|show <p>|rename <p> <new>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
 ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>] [--setup run|skip]
-         |rm <wt> [--force] [--keep-branch]|status <wt>|diff <wt>|open <wt> [--editor <e>]
+         |rm <wt> [--force] [--keep-branch]|status <wt>|open <wt> [--editor <e>]
          |run <wt> [<script>]|lock <wt>|unlock <wt>|rename <wt> <new>|rename-branch <wt> [<new>]
 ptyro broadcast <session…> <text>
 
@@ -4051,69 +3992,25 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   `new --here`/`--attach` were dropped: `new` attaches unless `-d`, and runs in the current
   directory unless `--wt`/`--new-wt`.
 
-**[built M6]**
-- **Worktree commands:**
-  - `wt diff [W] [--against base|upstream|last-turn|head] [--stat] [--json]` (now from the
-    daemon: untracked files included, renames detected);
-  - `wt log [W] [--json]`;
-  - `wt commit [W] -m MSG [--all] [-- FILES…] | --ask-agent`, which commits as the worktree's
-    profile (its git identity);
-  - `wt integrate W [--into B] [--cherry-pick] [--push]`;
-  - `wt pair W [--refresh]` and `wt unpair W`;
-  - `wt new --issue N|URL` and `--prompt`. `--pr` takes a URL too.
-- **`new`:** `new --pr N|URL` and `new --issue N|URL` imply a new worktree. `--unqueued` skips
-  the review gate.
-- **`pr`:**
-  - `pr create [W] [--draft|--ready] [--title] [--body] [--base]`;
-  - `pr status [W] [--refresh] [--json]`;
-  - `pr checks [W] [--json]` (exit 1 when a check fails, 7 while any runs);
-  - `pr fix [W]`;
-  - `pr automerge [W] [--method] [--off]`;
-  - `pr watch [W] [--off]` (also `watch-pr`);
-  - `pr reply [--wt W] [--comment ID] TEXT`;
-  - `pr open N|URL`.
-- **`review`:** `review add W FILE:LINE TEXT`, `review ls [W] [--json]`,
-  `review rm W ID|--all`, `review send [W] [--to S] [--note]`, `review queue [--json]`,
-  `review done W`.
+**[built M6]** (`wt diff`, `wt log`, `wt commit`, `wt integrate`, `pr …`, `watch-pr`, `review …`
+and `new --unqueued` were removed on 2026-11-17: ptyro makes and removes worktrees, git is the
+user's):
+- **Worktree commands:** `wt pair W [--refresh]` and `wt unpair W`; `wt new --issue N|URL` and
+  `--prompt`. `--pr` takes a URL too.
+- **`new`:** `new --pr N|URL` and `new --issue N|URL` imply a new worktree.
 
 **[built M7]** (shapes in `docs/cli-json.md`; `run`, `recipe`, `fanout`, `compare`, `pick`,
 `discard`, `iterate`, `gate`, `msg`, `lease`, `radar` and `new --lead` were removed on
 2026-11-17 with orchestration, §15):
 - **Checkpoints:** `checkpoint ls [S|W] [--json]`, `checkpoint diff S N [M] [--stat]`,
   `checkpoint restore S|W [N] [--turn T] [--yes]` (alias `ckpt`).
-- **Agents:** `verify S [CHECK] [--max-bounces N] | --off`; `new … --verify CHECK`; `mcp`
-  (stdio MCP server with the chat history tools, §22.10).
-- **`pr create`:**
-  - pushes with `--set-upstream` under the profile (its SSH key);
-  - takes the title from a single commit's subject, else the worktree name;
-  - builds the body from the commit list, plus a marker `<!-- ptyro:worktree=<id>
-    session=<id> -->` (R-GIT-03: `pr open` finds the worktree from a PR);
-  - refuses a branch with no commits beyond its base.
+- **Agents:** `mcp` (stdio MCP server with the chat history tools, §22.10). (`verify` and
+  `new --verify` were removed on 2026-11-17.)
+- **`--pr`:** git fetches `pull/N/head` into the branch (`pr/N`; no `gh` needed); then, best
+  effort and in the background, `gh pr view N --json title` titles the worktree `#N <title>`.
 - **`--issue`:** `gh issue view N --json number,title,body,url`, then name `issue-N`, branch
   `issue-N-<title slug>`, and (for an agent with no prompt) a first prompt carrying the issue,
   ending with "commit with `Fixes #N`".
-- **Diffs** come from `git diff -M --unified=3 <from>` against the working tree, plus untracked
-  files (`ls-files --others --exclude-standard`, ≤ 256 KiB each, binary detected), capped at
-  20 000 lines (`truncated`). `from` depends on `--against`:
-  - `base`: the merge base with the worktree's base;
-  - `upstream`: `@{upstream}`;
-  - `head`: `HEAD`;
-  - `last_turn`: a `git stash create` snapshot taken when the agent's turn started (no index,
-    stash-list or file is touched), keeping only untracked files written during the turn.
-- **Line comments** are kept by the daemon per worktree (in `kv`, so a TUI restart keeps them),
-  with the line's text.
-  - `review send` batches them into one prompt: "[via ptyro: review of your changes in W]",
-    then a numbered `file:line` list with the code and the comment.
-  - It is delivered only once the agent's turn is over (not working, input box ready), never
-    into a dialog. Then the comments clear and the worktree counts as reviewed.
-- **Integrate** refuses while an agent in the worktree is working, or when the worktree is
-  dirty (exit 5).
-  - Rebase onto the local target branch (aborted and reported on a conflict).
-  - Then fast-forward the target: with `merge --ff-only` where it's checked out (the main
-    checkout), else by moving the branch, only forward.
-  - `--cherry-pick` applies `merge-base..branch` where the target is checked out; that checkout
-    must be clean.
-  - `--push` pushes the target.
 - **Pair mode** (with stash safety):
   - **`pair`:**
     1. stashes the main checkout's own uncommitted work (`stash push --include-untracked`,
@@ -4262,15 +4159,8 @@ change (debounced) and emits `ConfigReloaded`.
 `ptyro init` writes `ui.prefix`, `worktrees.location`, `notifications.channels`,
 `discover.roots` and `[profiles.*]`, and only when they're absent.
 
-**[built M6]**
-- **`[github]`:**
-  - `poll = "60s"`;
-  - `draft = true`;
-  - `merge_method = "squash"` (`squash`, `merge` or `rebase`);
-  - `watch = true` (PRs ptyro opens are watched);
-  - `escalate_after = "2h"`;
-  - `log_lines = 80`.
-- **`[review]`:** `max_unreviewed = 0` (off) and `digest = "30m"` (`"off"` for never).
+**[built M6, removed 2026-11-17]** `[github]` (poll, draft, merge_method, watch,
+escalate_after, log_lines) and `[review]` (max_unreviewed, digest) are retired keys (§13.8).
 
 **[built M7]**
 - **`[orchestration]`:** `checkpoints = true` (a checkpoint per agent turn that changed its
@@ -4278,9 +4168,7 @@ change (debounced) and emits `ConfigReloaded`.
   `message_ttl` are retired (§13.8). The `gate` and `run` notification kinds and recipes (your
   own in `~/.config/ptyro/recipes/`, a repository's in `.ptyro/recipes/`) went with
   orchestration on 2026-11-17; recipe files left on disk are ignored.
-- **`.ptyro.toml [verify]`:** `check = "<run script name>"`, `max_bounces = 3`, `auto = false`
-  (verify every agent in the project's worktrees). `check` names a run script, so it's covered by
-  the scripts' trust, which pins the command text only (§10.5).
+- **`.ptyro.toml [verify]`:** removed 2026-11-17 with verified-done; a retired key (§13.8).
 
 ### 13.2 User config (example, all keys optional)
 
@@ -4322,7 +4210,6 @@ quiet_hours = "22:00-07:00"
 [worktrees]
 location = "data"                         # data | sibling | in-repo
 branch_template = "{name}"
-archive_on_merge = false                  # archive a worktree once its PR merges (UX1.12)
 archive_purge_days = 0                    # delete archives this old (and merged branches); 0 = keep
 
 [ports]
@@ -4522,8 +4409,10 @@ why): remove it, `ptyro config unset KEY`" (`-p SLUG [--shared]` for a repositor
 unset` takes a retired key out (the rest of the file as it was); the TUI's health list runs that
 command on ⏎, and the web's Health page offers "Remove KEY", which is `settings.apply` with that
 unset. Change sets had no settings; orchestration's (2026-11-17) are `orchestration.lease_ttl`,
-`orchestration.radar` and `orchestration.message_ttl` (`orchestration.checkpoints` stays). The
-tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
+`orchestration.radar` and `orchestration.message_ttl` (`orchestration.checkpoints` stays). Pull
+requests, review and verified-done (2026-11-17) retire whole tables, so an empty header left
+behind loads too: `github`, `review`, and a repository's `verify`; and `worktrees.archive_on_merge`,
+which only acted when a pull request merged. The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
 
 ### 13.6 The scratchpad **[built NOTE1; NOTE1.7 tried and dropped]**
 
@@ -4738,6 +4627,10 @@ and `run` entries. Step sessions stay the sessions they are. Worktrees, `refs/pt
 run folders under the data directory aren't ptyro's database, so they are left. `ptyro.db` is
 copied aside before migrating, as always.
 
+**[built 2026-11-17] Store v8** (migration 8, pull requests and review removed): deletes the
+`kv` rows `pr_watches`, `review_comments`, `reviewed` and `worktrees:integrated`. Pair mode's
+`pairs` stays. Branches, commits and worktrees are left as they are.
+
 ---
 
 ### 14.5 Backup and uninstall **[built H2.3]**
@@ -4776,7 +4669,7 @@ wrapper over it. Details: `docs/uninstall.md`.
 Orchestration was ptyro driving several agents for you: runs, recipes, gates, fan-out and
 compare, mail between agents, file leases, the collision radar and lead agents (M7). **[removed
 2026-11-17]** All of it went in the pare-down (deep, not wide): the owner never used it. What
-stays is the primitives below, checkpoints and verified-done (§15.6).
+stays is the primitives below and checkpoints (§15.6); verified-done went the same day.
 
 ### 15.1 Level 1 — primitives (M5/M7)
 
@@ -4784,7 +4677,7 @@ stays is the primitives below, checkpoints and verified-done (§15.6).
 
 ```bash
 s=$(ptyro new --agent claude --new-wt --prompt-file task.md --json | jq -r .id)
-ptyro wait "$s" --for idle --timeout 30m && ptyro wt diff "$s"
+ptyro wait "$s" --for idle --timeout 30m && ptyro checkpoint ls "$s"
 ```
 
 ### 15.2 Level 2 — fan-out and compare **[removed 2026-11-17]**
@@ -4807,8 +4700,7 @@ the owner never used them.
 
 ### 15.6 What M7 built **[built M7]**
 
-What remains of M7 is verified-done (§15.6.5) and checkpoints (§15.6.6), both in the daemon's
-`verify.rs`.
+What remains of M7 is checkpoints (§15.6.6), in the daemon's `checkpoints.rs`.
 
 #### 15.6.1 Runs, events and durability **[removed 2026-11-17]**
 
@@ -4828,28 +4720,11 @@ Removed with runs (§15.3). Signed links for permission prompts stay (§16.6).
 
 Removed with fan-out (§15.2), the judge included.
 
-#### 15.6.5 Verified-done (M7.9)
+#### 15.6.5 Verified-done (M7.9) **[removed 2026-11-17]**
 
-A session can have a check: `ptyro new --verify CHECK`, `ptyro verify S CHECK`, or
-`[verify] auto` in `.ptyro.toml`. CHECK is
-`scripts.run.<name>`, a run script's name, or a command; scripts need trust.
-
-The check runs `$SHELL -c` in the worktree as the user, with the daemon's environment and full
-network, outside the agent's sandbox. It is how agent-written code (tests, build scripts) gets
-run by something other than the agent; trust pins only the command's text (§10.5).
-
-- **Claude:** the Stop hook runs the check before the turn may end. If it fails and bounces are
-  left, the hook answers `{"decision":"block","reason": "[via ptyro: verify] Not done yet: … exits
-  N … output tail …"}`. The status stays working, so nothing downstream sees a false "done".
-- **Other agents:** after the turn the check runs; a failure becomes a follow-up prompt (the
-  same text) once the agent is idle.
-- **Evidence** `{command, exit_code, tail, tree, at_ms, duration_ms}` sits in
-  `SessionInfo.verify.last` and a `verify` session event.
-- **States:** `pending`, `checking`, `passed` (done, verified), `bounced`, `failed` (bounces ran
-  out: done, claimed). Bounces reset on a prompt that isn't a bounce, except while one is
-  outstanding (`bounced`): hooks arrive on separate connections, so the turn's own prompt can
-  be reported after the turn was checked.
-- The review queue uses it.
+A check an agent's turn had to pass (`--verify`, `ptyro verify`, `[verify]`, the Stop-hook
+bounce) was removed in the pare-down: it was little used and doubled what a test run does.
+`[verify]` in a `.ptyro.toml` is a retired key (§13.8).
 
 #### 15.6.6 Checkpoints (M7.11)
 
@@ -4863,6 +4738,9 @@ After every agent turn that changed its worktree, the turn is checkpointed:
 
 `checkpoint ls/diff/restore` (with `--turn T`):
 - **ls** lists a session's checkpoints, or a worktree's (every session in it).
+- **diff** prints what changed from checkpoint N (to M, or to now), coloured on a terminal
+  (`--stat`: files and counts). The TUI's `checkpoint.diff` runs it in a split, the web's
+  checkpoint menu shows it as text.
 - **restore** refuses while an agent works there. It first checkpoints the present as
   `…/before-restore-<ms>`, then:
   - resets HEAD to the checkpoint's parent;
@@ -5117,7 +4995,7 @@ is "the web is up when the daemon is".
     secrets leak too.
   - **Agents calling the daemon (`Hook`, `StatusLine`, `Report`) speak for their own session
     only:** a caller the daemon places in session X can't report on or feed hooks for Y. Under a
-    run policy the allow-list applies. Verified-done's `deny_cmds` and leases are
+    run policy the allow-list applies. Guards and leases were
     tripwires for an agent that is behaving, not a sandbox (`bash -c`, `sed -i`, links get past
     them).
 
@@ -5210,8 +5088,8 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
 - **Structure** (`web/src`): `conn.ts` (the connection, `host()`), `kit.ts` (the DOM helper,
   sheets, menus, forms, caches that re-render when data arrives, polling), `data.ts` (projects,
   worktrees, workspaces, agents: loaded at connect, kept by domain events), `flow.ts` (starting
-  work: the project's scripts to trust, a profile guard's question, the review queue's wait),
-  one module per kind of work (`sessions`, `projects`, `review`, `settings`), `qr.ts`
+  work: the project's scripts to trust, a profile guard's question),
+  one module per kind of work (`sessions`, `projects`, `settings`), `qr.ts`
   (a QR encoder, so pairing another device needs no library), `color.ts`, `app.ts` (the router,
   the tab bar, the session page, push).
 - **Navigation:** a bottom tab bar (Sessions, Chats, Projects, More) and hash routes
@@ -5490,15 +5368,15 @@ agent's *mistake*, or a prompt injection talking it into casual misuse of ptyro'
 They are not a boundary against code running as your user, which can read ptyro's files, edit
 a trusted script, or reach the socket from a process ptyro can't place. Run an agent you don't
 trust under another user, or in a sandbox without the ptyro socket. Also, an agent that can
-reach the socket can start commands outside its own sandbox (a shell session, a verify
-command): ptyro doesn't confine that.
+reach the socket can start commands outside its own sandbox (a shell session): ptyro doesn't
+confine that.
 
 | Asset / threat | Mitigation |
 |---|---|
 | Files only you should read (the config, shell integration) | mode `0600`/`0700`; **[built WIN7]** on Windows the access list (`ptyro_pty::acl`): one wider than the user, SYSTEM and Administrators is a `doctor` finding with its fix, a config save narrows it, and the daemon narrows a shell-integration folder others could change |
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept. **[built WIN5]** Windows: a named pipe whose every instance admits only the user's SID (`D:P(A;;GA;;;<sid>)`) and rejects remote clients; pipe names are one namespace per computer, so the client refuses a pipe whose server process runs as anyone else (`ptyro_pty::pipe`) |
 | Cloned repo runs arbitrary code | scripts require fingerprinted trust; agent executables only from user config |
-| Code ptyro runs for a repository: scripts, `after_turn`, verify checks, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts, `after_turn` and checks run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, §15.6.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for the operations the user asked for (commit, push, merge, rebase, cherry-pick, a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
+| Code ptyro runs for a repository: scripts, `after_turn`, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts and `after_turn` run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for what the user asked for (a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
 | Session content sent to a model provider by summaries (UX1.3) | off by default; on, only a trimmed view goes (§11.2h), through the session's own profile, so its own account and provider. The profile's secret values and anything shaped like a credential are replaced before sending; the summariser runs with no tools, no MCP servers and no project directory |
 | Agents' own permission prompts bypassed | ptyro never auto-answers permission prompts unless the user configured an explicit policy; "dangerous" agent args require `dangerous = true` and show a ⚠ badge |
 | Paste injection (`ESC[201~` in pasted text) | every ESC and C1 CSI is removed from bracketed-paste payloads, so nothing can close the bracket (a one-pass removal of `ESC[201~` was beatable by nesting) |
@@ -5810,7 +5688,7 @@ learn something the hard way.
 - **[verified 2026-10-22: 2.1.308 binary schema; live in 2.1.309 by `make verify-claude`]** `Stop`
   (and `StopFailure`, `SubagentStop`) carry an optional `last_assistant_message`: the text of the
   turn's last reply (session event `reply`). In the live run `Stop` came ~10 ms *before* 7501 `done`. ptyro maps it to
-  `Signal::Reply` and the review queue.
+  `Signal::Reply` and the session's row.
 - **[verified 2026-10-23, 2.1.309; `make verify-claude`]** `claude -p --model haiku
   --output-format json --strict-mcp-config --tools ""`, with a ~400-character prompt on stdin,
   prints one JSON object with `is_error`, `result` (the text) and `total_cost_usd`. The alias
@@ -5967,8 +5845,7 @@ learn something the hard way.
   notification and then `turn/completed` with status `failed` and the same message ("Your
   access token could not be refreshed…"); ptyro shows it once, as `errored`/`auth`.
 - **[unverified; M7]** Codex's hooks are treated as Claude-compatible for output: ptyro answers a
-  PreToolUse with Claude's `permissionDecision: deny` JSON, and bounces verified-done with a
-  follow-up prompt rather than a Stop decision. MCP servers go in as
+  PreToolUse with Claude's `permissionDecision: deny` JSON. MCP servers go in as
   `-c mcp_servers.<name>.command=…`, `.args=[…]`, `.env={…}`.
 
 ### 20.3 Gemini CLI
@@ -6181,24 +6058,10 @@ learn something the hard way.
 
 ### 20.6b GitHub CLI (`gh`), as ptyro uses it **[docs; tested against `fake-gh`, not the real `gh`]**
 
-- **Status and checks:**
-  - `gh pr view <branch|number> --json number,url,title,state,isDraft,reviewDecision,autoMergeRequest`;
-    without a PR it exits non-zero with "no pull requests found for branch".
-  - `gh pr checks <n> --json name,bucket,link,workflow`. `bucket` is `pass`, `fail`,
-    `pending`, `skipping` or `cancel`; the exit code is 8 while any is pending.
-  - `gh run view <run-id> --log-failed` (the run id is in the check link,
-    `/actions/runs/<id>/job/<job>`).
-- **Comments:**
-  - `gh api repos/{owner}/{repo}/pulls/<n>/comments`: review (line) comments with `id`, `path`,
-    `line`/`original_line`, `user.login`, `in_reply_to_id`. `gh api` fills in
-    `{owner}/{repo}` from the checkout.
-  - `gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies -f body=…`
-    replies on a thread.
-  - `gh pr view <n> --json comments` gives the conversation comments (node ids);
-    `gh pr comment <n> --body`.
-- **Changes:** `gh pr create --head B --base X --title T --body … [--draft]` prints the URL;
-  `gh pr merge <n> --auto --squash|--merge|--rebase` and `--disable-auto`;
-  `gh issue view <n> --json number,title,body,url`.
+- **What ptyro still runs** (pull requests and checks were removed on 2026-11-17):
+  `gh issue view <n> --json number,title,body,url` for `--issue`, and `gh pr view <n> --json
+  title` for a `--pr` worktree's title (best effort; without a PR it exits non-zero with "no
+  pull requests found").
 - `GH_PROMPT_DISABLED=1` keeps gh from asking anything; `GH_CONFIG_DIR`/`GH_TOKEN` pick the
   account (§10.10).
 

@@ -436,19 +436,17 @@ impl Source {
             Self::Agents => "agents",
             Self::Editors => "editors",
             Self::Actions => "actions",
-            Self::RunScripts => "run_scripts",
             Self::ChatPresets => "chat_presets",
         }
     }
 }
 
-const SOURCES: [Source; 7] = [
+const SOURCES: [Source; 6] = [
     Source::Themes,
     Source::BuiltinThemes,
     Source::Agents,
     Source::Editors,
     Source::Actions,
-    Source::RunScripts,
     Source::ChatPresets,
 ];
 
@@ -479,20 +477,20 @@ pub fn view(layer: &Layer, lk: &Lookups) -> View {
     let files: Vec<(Origin, &str)> =
         layers.iter().zip(&texts).map(|(l, t)| (l.origin(), t.as_str())).collect();
     let mut problem = None;
-    let (root, config, pconfig) = match layer {
+    let (root, config) = match layer {
         Layer::User(path) => {
             let c = Config::load(path).unwrap_or_else(|e| {
                 problem = Some(e.to_string());
                 Config::default()
             });
-            (serde_json::to_value(&c).unwrap_or_default(), c, None)
+            (serde_json::to_value(&c).unwrap_or_default(), c)
         }
         Layer::Shared(r) | Layer::Local(r) => {
             let p = ProjectConfig::load(r, r).unwrap_or_else(|e| {
                 problem = Some(e);
                 ProjectConfig::default()
             });
-            (serde_json::to_value(&p).unwrap_or_default(), Config::default(), Some(p))
+            (serde_json::to_value(&p).unwrap_or_default(), Config::default())
         }
     };
     let entries = super::entries(scope, &root, &files);
@@ -519,10 +517,7 @@ pub fn view(layer: &Layer, lk: &Lookups) -> View {
         }
     }
     let bindings = if in_scope("keys") { super::bindings(&root, lk) } else { Vec::new() };
-    let options = SOURCES
-        .iter()
-        .map(|s| (s.name(), super::options(*s, &config, pconfig.as_ref(), lk)))
-        .collect();
+    let options = SOURCES.iter().map(|s| (s.name(), super::options(*s, &config, lk))).collect();
     let files = layers.iter().map(|l| (l.origin(), l.path(), l.path().exists())).collect();
     View { scope, entries, maps, bindings, members, options, files, problem }
 }

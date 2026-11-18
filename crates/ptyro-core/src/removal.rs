@@ -33,9 +33,6 @@ pub const DEVICE: &str =
     "Its token stops working at once and its connections close. Pair it again to bring it back.";
 /// `machine rm`.
 pub const MACHINE: &str = "Its workspaces leave this list. Nothing changes on it, and its pairing stays until you revoke it there.";
-/// `review rm --all`: comments typed on a worktree's diff, not sent yet.
-pub const REVIEW_ALL: &str =
-    "They haven't been sent to its agent, and what you typed in them can't be brought back.";
 /// `config rm`.
 pub const CONFIG_ENTRY: &str = "Everything set in it goes too.";
 /// `rm` of a dormant session (owner, 2026-11-09: it asks, as `chat rm` does).
@@ -71,7 +68,6 @@ pub const DIALOGS: &[(&str, &[&str])] = &[
     ("Revoke device", &[DEVICE]),
     ("Stop mirroring", &[MACHINE]),
     ("Remove ${c.noun}", &[CONFIG_ENTRY]),
-    ("Remove every comment on", &[REVIEW_ALL]),
     ("Remove the dormant session", &[DORMANT]),
     ("Delete the scratch directory", &[SCRATCH]),
     ("Restart the daemon", &[DAEMON_RESTART]),

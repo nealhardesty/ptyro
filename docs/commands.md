@@ -18,7 +18,7 @@ Conventions:
 - Durations look like `30s`, `10m`, `2h`.
 - Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
   words): `chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `config rm`, `review rm --all`. `-y`/`--yes` doesn't ask; with no
+  `machine rm`, `config rm`. `-y`/`--yes` doesn't ask; with no
   terminal to ask and no `--yes`, the command refuses (exit 5) and changes nothing. They act on an
   exact address only: a chat's handle, id or `@last`, never words from its title.
 - A flag's value goes after a space or an `=`: `--project app` and `--project=app` are the same,
@@ -101,7 +101,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro new --again [--wt W] [-d]` | quick new: another of the agent this worktree last started (with its profile and arguments); the project's `default_agent`, else `[agents] default` (claude), when none has |
 | `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
-| `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
+| `ptyro new … --structured` | drive it over its protocol (chat view) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
 | `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop, keeping them listed: an agent's turn is interrupted and it gets a moment to exit, then the process gets HUP, TERM and KILL |
@@ -129,7 +129,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro scratchpad add [--section HEADING] [--bullet] [--no-stamp] [--json] TEXT…` | add a line, stamped with the time and the worktree or directory you are in (and the agent's name); `-` or a pipe reads standard input; makes a `- [ ]` item unless `--bullet` |
 | `ptyro scratchpad todo [--all] [--json]` | the open `- [ ]` items with line numbers (`--all`: ticked ones too) |
 | `ptyro scratchpad done [--undo] ITEM` | tick (or untick) an item: its line number, or words from exactly one open item |
-| `ptyro scratchpad start [-a A] [--dry-run] ITEM` | start the item as a task in a new worktree (like `ptyro "…"`); the item is tagged with the worktree and ticked once its PR merges or the worktree is removed |
+| `ptyro scratchpad start [-a A] [--dry-run] ITEM` | start the item as a task in a new worktree (like `ptyro "…"`); the item is tagged with the worktree and ticked once the worktree is removed |
 | `ptyro scratchpad log [--json]` / `restore REV` | saved copies of the file, newest first / put one back (the current text is saved first) |
 | `ptyro chat [new] [PROMPT…] [-a A[@P]] [--preset P] [--folder DIR]… [-w WS] [--title T] [--no-wait] [--json]` | a new chat with your agent (SPEC §22): the answer streams here and the chat is kept (the TUI's and web's CHATS show it). No prompt, at a terminal: the chat view. `-` or a pipe reads the prompt from standard input. `--folder` gives it a folder to read (with no `--preset`, the `read` preset) |
 | `ptyro chat ask [--keep] [--agent A] [--preset P] [--timeout S] QUESTION…` | one question, the answer on standard output; standard input is context (`git diff \| ptyro chat ask "review this"`); nothing is kept unless `--keep` |
@@ -191,42 +191,24 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro project discover [--refresh]` · `pin P PROFILE` · `unpin P` | find repos under `[discover] roots` · pin a project to a profile |
 | `ptyro project suggest [P] [--apply\|--decline] [--json]` | what the project needs (a setup script from its lockfile, `.env` files to copy); `--apply` writes it to `.ptyro.local.toml`. A first worktree asks on its own |
 | `ptyro wt new [-n NAME] [-p P] [--base REF] [--branch B [--existing]] [--pr N\|URL \| --issue N\|URL \| --take-changes] [-a A [--prompt P]] [--title T] [--profile P] [--no-setup] [--no-fetch] [-d] [--json]` | create a worktree (optionally with an agent, attached to in a terminal unless `-d`); `--take-changes` moves the main checkout's uncommitted work into it |
-| `ptyro wt ls [-p P]` / `status [W]` / `log [W]` | list worktrees / repository status / commits since the base |
-| `ptyro wt diff [W] [--against base\|upstream\|last-turn\|head] [--stat]` | a worktree's changes |
-| `ptyro wt commit [W] -m MSG [--all] [-- FILES…]` / `--ask-agent` | commit as the worktree's profile / ask its agent to |
-| `ptyro wt integrate W [--into B] [--cherry-pick] [--push]` | rebase onto main and fast-forward it (or cherry-pick) |
+| `ptyro wt ls [-p P]` / `status [W]` | list worktrees / repository status |
 | `ptyro wt pair W [--refresh]` / `unpair W` | show W's work in the main checkout / give the checkout back, your edits carried to W |
 | `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script / open in an editor |
 | `ptyro wt rm W [--force] [-y] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost. Its directory is deleted, and its branch too if it is merged or the same as its pushed copy, otherwise kept (`--keep-branch`: always kept). Asks unless `-y` (`--force` asks again, after saying what would be lost) |
 | `ptyro wt rename W NEW` | rename a worktree: its name, its address `project/NEW`, unique in its project. Its branch and its directory stay, so what runs in it carries on. The main checkout is always `@root` |
 | `ptyro wt lock\|unlock W` / `rename-branch W [NEW]` | manual lock / rename the branch (never once pushed) |
 | `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
-| `ptyro wt finish [W] [--integrate]` | commit what's left (its agent asked to; else its title is the message), then a PR, or integrate |
 | `ptyro wt archive [W] [--stop-sessions]` / `restore [P/]NAME\|HANDLE` / `archives [-p P] [--json]` | keep its branch and a snapshot of its files, remove the checkout (never loses work) / bring it back as it was / list them, each with the handle that tells apart archives of one name |
 | `ptyro wt archive-rm [P/]NAME\|HANDLE… [-y]` | delete archives for good: the saved files, and each branch if merged into its base or the same as its pushed copy (asks unless `-y`); `[worktrees] archive_purge_days` does it on its own |
 | `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; locked ones are kept), biggest on disk first; asks for each: archive, remove, keep (lock) or skip. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add-project\|remove-project …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`; `rm WS [-y]`: its sessions keep running and move to main, with its chats and the projects no other workspace has; `add-project WS PROJECT` / `remove-project WS PROJECT` put a project in one or take it out (it stays registered) |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
 
-## Review and ship
-
-| Command | Does |
-|---|---|
-| `ptyro review add W FILE:LINE TEXT` / `ls [W]` / `rm W [ID\|--all [-y]]` | line comments for the agent (`--all` asks first) |
-| `ptyro review send [W] [--to SESSION] [--note TEXT]` | send every comment as one prompt, once the turn is over |
-| `ptyro review queue` / `done W` | worktrees ready for review, best first / mark one reviewed (until its agent's next turn) |
-| `ptyro pr create [W] [--draft\|--ready] [--title T] [--body B] [--base B]` | push and open a PR through `gh`; ptyro watches it |
-| `ptyro pr status [W] [--refresh]` / `checks [W]` | the PR / its checks (exit 1 failing, 7 running) |
-| `ptyro pr fix [W]` / `automerge [W] [--method squash\|merge\|rebase] [--off]` | failing logs → the agent / `gh pr merge --auto` |
-| `ptyro pr watch [W] [--off]` (also `ptyro watch-pr`) | new CI failures and review comments go to the agent |
-| `ptyro pr reply TEXT [--wt W] [--comment ID]` / `open PR` | reply on the PR or a review thread, marked "via ptyro" / back to a PR's session |
-
-## Checkpoints and verified-done
+## Checkpoints
 
 | Command | Does |
 |---|---|
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |
-| `ptyro verify SESSION [CHECK] [--max-bounces N]` / `--off` | verified-done for a session |
 | `ptyro mcp` | the MCP server with the chat history tools a chat's agent gets (started for it) |
 
 ## Remote and phone
@@ -260,7 +242,7 @@ See [`remote.md`](remote.md).
 | `ptyro login [NAME…] [--check] [--json] [--where wsl\|windows\|both]` | log in to the agents and the GitHub CLI, one account each: each not logged in yet runs its own sign-in here (a browser page, or a link and a code), confirmed by its own status command; ptyro never sees a credential. `--check` only says where each stands (exit 1 when one is logged out), `--json` as JSON. Setup ends with these logins. More accounts: `ptyro profile login` |
 | `ptyro about [--json]` | which ptyro this is: version and protocol, the repository, licence, build, where config, data, logs and the socket live, the daemon and web app, the tools found, and a block to paste into a bug report |
 | `ptyro doctor [--quick] [--json]` | diagnose agents, logins, integrations, terminal, tmux, daemon, git |
-| `ptyro tour` | the daily loop for real (task, answer, review, finish, clean up) with a pretend agent in a ptyro of its own, deleted afterwards |
+| `ptyro tour` | the daily loop for real (task, answer, clean up, a shell of your own) with a pretend agent in a ptyro of its own, deleted afterwards |
 | `ptyro config path\|check\|show\|edit [KEY]` | your config; `edit` opens `$EDITOR` (at that setting) and validates |
 | `ptyro config list [SECTION] [--changed] [-p P] [--json]` | every setting with its value and where it comes from (default, your config, `.ptyro.toml`, `.ptyro.local.toml`); `SECTION` is `ui`, `remote`… or a key prefix |
 | `ptyro config get KEY [--explain] [-p P] [--json]` | one value, bare for scripts; `--explain`: what it does, its default, where it is set, when a change applies |
@@ -280,12 +262,12 @@ See [`remote.md`](remote.md).
 | Code | Meaning |
 |---|---|
 | `0` | ok (`wait`: got there) |
-| `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `daemon upgrade`: rolled back) |
+| `1` | error (`doctor`: found a problem; `daemon upgrade`: rolled back) |
 | `2` | invalid arguments |
 | `3` | not found |
 | `4` | ambiguous: a name, handle or selector matched several, or a removal was given words from a title instead of an address (the message lists the candidates) |
 | `5` | conflict: unsaved work, a question needing `--yes` (a removal, a profile) / `--override-pin`, or (`wait`) the session exited first |
 | `6` | untrusted scripts |
-| `7` | timeout (`wait`, `send --wait-ready`), `--stall` saw no output, or (`pr checks`) checks still running |
+| `7` | timeout (`wait`, `send --wait-ready`), or `--stall` saw no output |
 | `8` | no daemon |
 | `9` | the daemon speaks another major protocol version: run `ptyro daemon restart --hibernate` (within a major version, `ptyro daemon upgrade` switches live) |

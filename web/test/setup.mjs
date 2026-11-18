@@ -279,7 +279,7 @@ console.log("setup: ok");
   assert.deepEqual(setupOffer(noAgent), []);
   assert.deepEqual(setupOffer("No agent that can chat is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account, runs in sessions but can't chat)"), []);
   assert.deepEqual(setupOffer("codex isn't installed (codex is nowhere ptyro looks): `ptyro install codex` installs it"), ["codex"]);
-  assert.deepEqual(setupOffer("gh not found: pull requests (`wt new --pr`) need it; `ptyro install gh` installs it"), ["gh"]);
+  assert.deepEqual(setupOffer("gh not found (optional): starting work from a GitHub issue (`--issue`) needs it; `ptyro install gh` installs it"), ["gh"]);
   assert.equal(setupOffer("setup is running already: `ptyro install` (process 42)"), null);
   assert.equal(setupOffer("`ptyro install codex` moves it to the vendor's installer"), null);
   assert.equal(setupOffer("Codex 0.170.0 is out: `ptyro update codex` updates it"), null);

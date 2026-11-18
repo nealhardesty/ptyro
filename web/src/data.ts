@@ -6,11 +6,10 @@ import { ui } from "./kit.js";
 
 export interface Project { id: string; slug: string; root: string; default_branch?: string | null; remote_url?: string | null; pin?: string | null; created_ms: number; last_used_ms?: number | null }
 export interface RepoStatus { branch?: string | null; head?: string | null; ahead?: number; behind?: number; staged?: number; unstaged?: number; untracked?: number; conflicted?: number; insertions?: number; deletions?: number; upstream?: string | null; unpushed?: number | null; pushed?: boolean; [k: string]: any }
-export interface PrInfo { number: number; state: string; url: string; title?: string; draft?: boolean; checks?: any[]; review?: string; [k: string]: any }
 export interface Worktree {
   id: string; project: string; project_slug: string; name: string; path: string; branch?: string | null; base?: string | null;
   is_root: boolean; profile?: string | null; state: string; ports?: any; created_ms: number; last_used_ms?: number | null;
-  status?: RepoStatus | null; locked: boolean; pr?: PrInfo | null; title?: string | null; integrated?: string | null;
+  status?: RepoStatus | null; locked: boolean; title?: string | null;
 }
 export interface Workspace { id: string; name: string; profile: string; notify: string; projects: string[]; created_ms: number; machine?: string | null }
 /// Another machine this daemon mirrors (MM1.B): its workspaces show here as `laptop2:work`.
@@ -155,13 +154,6 @@ export function leftWords(l: Left): string {
   if (l.uncommitted > 0) v.push(`● ${l.uncommitted}`);
   if (l.pushed) v.push("✓ pushed");
   return v.join(" ");
-}
-/// Its work has shipped (`WorktreeInfo::shipped`): the PR merged, or integrated and unchanged since.
-export function shipped(w: Worktree): boolean {
-  if (w.is_root) return false;
-  if (w.pr?.state === "MERGED") return true;
-  const st = w.status;
-  return !!(w.integrated && st && repoLeft(st).uncommitted === 0 && st.head && w.integrated.startsWith(st.head));
 }
 
 export const projectOf = (w: Worktree): Project | undefined => data.projects.get(w.project);

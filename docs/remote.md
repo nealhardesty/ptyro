@@ -327,9 +327,8 @@ a device with less sees the pages and is told what it lacks.
   issue, a branch or your uncommitted changes; an existing one; a shell). A session's **⋯**: stop,
   restart, rename, summarize, hibernate, scrollback, events, replay, save its recording. ☑ types one
   thing into several.
-- **Projects**: the sidebar's tree. A worktree's page has its sessions and status; **Changes** is
-  the diff, where tapping a line comments for the agent and one button sends them all; **Commits**,
-  **Checks** (the PR and its CI), **Finish** (a PR, or merge into main), archive, remove.
+- **Projects**: the sidebar's tree. A worktree's page has its sessions and status, its
+  **Checkpoints** (what changed since each, and putting one back), archive, remove.
 - **More**: health (each finding with its fix), usage, devices (pair another with a link and a QR
   code), profiles and logins, the config editor (checked as you save, applied at once),
   integrations, the daemon (logs, upgrade, restart, login service), first-run setup, and a tour.
@@ -340,7 +339,7 @@ only when it runs on the same machine as the daemon (not with `--remote`).
 
 **The tour** (More → Take the tour) starts a ptyro of its own, with a demo repository and a pretend
 agent, and a second `ptyro serve` for it on a free port of this computer (loopback, plain HTTP),
-and opens it in a new tab with a coach: start a task, answer the agent, review, finish, clean up.
+and opens it in a new tab with a coach: start a task, answer the agent, clean up, keep a shell.
 It's reachable from this computer only, so it opens from a browser on it. "End the tour" stops
 its daemon and deletes everything it made; one left behind is swept the next time a tour starts.
 
@@ -365,7 +364,6 @@ through their protocol for structured sessions.
 | Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and `ptyro serve` takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
 | A paired phone changing the machine | The config file, profiles, the login service, the daemon's restart and the tour need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
-| Strangers steering an agent through a PR | PR review comments reach the agent only from the repository's owner, members and collaborators; anyone else's come to you. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
 | A browser posing as a local client | `ptyro serve` rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |
 | A device doing more than intended | Scopes, enforced in the daemon for every request and keystroke. Unknown requests need `full`. Remote actions on a session go to its event log (`ptyro events --session S`) with the device's name. |

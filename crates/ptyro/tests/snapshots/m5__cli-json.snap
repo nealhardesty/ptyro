@@ -315,7 +315,6 @@ expression: "Value::Object(all)"
       "name": "string",
       "path": "string",
       "ports": null,
-      "pr": null,
       "profile": null,
       "project": "string",
       "project_slug": "string",

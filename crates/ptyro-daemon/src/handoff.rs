@@ -712,7 +712,7 @@ mod tests {
             "state": {"t": "running"}, "pid": 4242, "client_env": {"TERM": "xterm-256color"},
             "place": {"profile": "default"}, "ports": [3000], "children": [],
             "dangerous": false, "summarizing": false, "prompt_pending": false,
-            "turns": 2, "turn_started_ms": 1_700_000_000_000u64,
+            "turns": 2,
         });
         let session = SessionImage {
             id: "0190aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee".into(),
@@ -821,6 +821,22 @@ mod tests {
         let a = img.sessions[0].meta.attention.as_ref().expect("its attention is kept");
         assert_eq!(a.kind, ptyro_core::status::AttentionKind::Notification);
         assert_eq!(img.sessions[0].meta.name, "build");
+    }
+
+    /// A daemon from before verified-done and the diff inspector were removed (2026-11-17)
+    /// hands over an agent with a check and a turn's snapshot: it comes across without them.
+    #[test]
+    fn a_session_with_a_verify_check_from_an_older_daemon_comes_across() {
+        let mut v = as_value(&sample());
+        let meta = &mut v["sessions"][0]["meta"];
+        meta["verify"] = serde_json::json!({
+            "check": "cargo test", "max_bounces": 3, "bounces": 1, "state": "bounced",
+            "last": { "command": "cargo test", "exit_code": 1, "tail": "x", "at_ms": 1, "duration_ms": 2 }
+        });
+        meta["turn_base"] = serde_json::json!("0e2da84");
+        meta["turn_started_ms"] = serde_json::json!(1_700_000_000_000u64);
+        let img = decode(&encode(&v)).expect("an image with a verified session decodes");
+        assert_eq!((img.sessions[0].meta.name.as_str(), img.sessions[0].meta.turns), ("build", 2));
     }
 
     #[test]

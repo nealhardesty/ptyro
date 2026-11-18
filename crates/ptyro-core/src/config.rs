@@ -586,8 +586,6 @@ pub struct Config {
     pub agents: Agents,
     pub notifications: Notifications,
     pub attention: AttentionConfig,
-    pub github: Github,
-    pub review: Review,
     pub orchestration: Orchestration,
     pub recorder: Recorder,
     pub remote: Remote,
@@ -1195,53 +1193,6 @@ pub enum ShellsRestore {
     Forget,
 }
 
-/// Pull requests through `gh` (M6.5, M6.10).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Github {
-    /// Ask `gh` about a worktree's PR this often (never more than once a minute per PR).
-    pub poll: String,
-    /// New PRs are drafts.
-    pub draft: bool,
-    /// `squash`, `merge` or `rebase` for `ptyro pr automerge`.
-    pub merge_method: String,
-    /// Feed new CI failures and review comments of PRs ptyro opened to their agent.
-    pub watch: bool,
-    /// Raise attention when a watched PR stays failing or unanswered this long.
-    pub escalate_after: String,
-    /// Lines of a failing check's log sent to the agent.
-    pub log_lines: usize,
-}
-
-impl Default for Github {
-    fn default() -> Self {
-        Self {
-            poll: "60s".into(),
-            draft: true,
-            merge_method: "squash".into(),
-            watch: true,
-            escalate_after: "2h".into(),
-            log_lines: 80,
-        }
-    }
-}
-
-/// The review queue (M6.9).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Review {
-    /// Hold new agent sessions while this many worktrees wait for review (0 = never).
-    pub max_unreviewed: u32,
-    /// Send a "ready for review" digest at most this often ("off" for never).
-    pub digest: String,
-}
-
-impl Default for Review {
-    fn default() -> Self {
-        Self { max_unreviewed: 0, digest: "30m".into() }
-    }
-}
-
 /// The recorder (SPEC §7.6, M8.2): every session's output, with timing, under
 /// `data/sessions/<id>/pty.log` (files 0600). Replay, export, and scrollback deeper than memory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1508,8 +1459,6 @@ pub struct Worktrees {
     pub stale_days: u32,
     /// Name the branch after the first prompt (until it's pushed; M3.16).
     pub auto_rename_branch: bool,
-    /// Archive a worktree when its PR merges and nothing runs in it (UX1.12).
-    pub archive_on_merge: bool,
     /// Delete archived worktrees after this many days (0: keep them).
     pub archive_purge_days: u32,
 }
@@ -1524,7 +1473,6 @@ impl Default for Worktrees {
             watch: true,
             stale_days: 14,
             auto_rename_branch: false,
-            archive_on_merge: false,
             archive_purge_days: 0,
         }
     }
@@ -1840,17 +1788,8 @@ impl Config {
             ("attention.min_work", &self.attention.min_work),
             ("notifications.coalesce", &self.notifications.coalesce),
             ("notifications.callback.link_ttl", &self.notifications.callback.link_ttl),
-            ("github.poll", &self.github.poll),
-            ("github.escalate_after", &self.github.escalate_after),
-            ("review.digest", &self.review.digest),
         ] {
             parse_duration(v).map_err(|e| format!("{k}: {e}"))?;
-        }
-        if !["squash", "merge", "rebase"].contains(&self.github.merge_method.as_str()) {
-            return Err(format!(
-                "github.merge_method: {:?} (squash, merge or rebase)",
-                self.github.merge_method
-            ));
         }
         if let Some(q) = &self.notifications.quiet_hours {
             parse_quiet_hours(q).map_err(|e| format!("notifications.quiet_hours: {e}"))?;
@@ -1884,9 +1823,6 @@ impl Config {
         }
         if self.discover.depth > 32 {
             return Err("discover.depth: at most 32".into());
-        }
-        if self.github.log_lines > 5000 {
-            return Err("github.log_lines: at most 5000".into());
         }
         if self.summaries.command.is_empty() {
             return Err("summaries.command: must not be empty".into());
@@ -3179,7 +3115,6 @@ mod hardening {
             ("[scratchpad]\nkeep = 300000000000\n", "scratchpad.keep"),
             ("[ui]\nsidebar_width = 60000\n", "ui.sidebar_width"),
             ("[discover]\ndepth = 200\n", "discover.depth"),
-            ("[github]\nlog_lines = 100000\n", "github.log_lines"),
             ("[summaries]\ncommand = []\n", "summaries.command"),
             ("[notifications]\ndesktop_command = []\n", "notifications.desktop_command"),
             ("[[notifications.sinks]]\ntype = \"command\"\ncommand = []\n", "command"),

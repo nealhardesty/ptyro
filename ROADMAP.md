@@ -29,8 +29,8 @@ Conventions:
 | **M3** | Projects & worktrees | The workspace model: projects, safe worktrees, scripts, ports, per-workspace profiles (accounts) |
 | **M4** | Agent intelligence | Adapters for Claude/Codex/Gemini/OpenCode, status engine, attention, notifications, resume |
 | **M5** | Scriptable control plane | CLI/API parity, `--json`, `wait`/`send`/`events`, onboarding, doctor |
-| **M6** | Review & ship | Diff inspector, comments → agent, commit/PR/checks via `gh`, integrate |
-| **M7** | Orchestration | Fan-out & compare, recipes, gates, `ptyro mcp` for lead agents (done; removed 2026-11-17 except checkpoints and verified-done) |
+| **M6** | Review & ship | Diff inspector, comments → agent, commit/PR/checks via `gh`, integrate (done; removed 2026-11-17 except pair mode and starting from an issue or a PR) |
+| **M7** | Orchestration | Fan-out & compare, recipes, gates, `ptyro mcp` for lead agents (done; removed 2026-11-17 except checkpoints) |
 | **M8** | Hardening | Live upgrade, recorder/replay, perf, fuzzing, crash safety |
 | **M9** | Remote | SSH remote TUI, WebSocket server, PWA/phone client, remote approvals |
 | **M10** | Structured sessions | ACP / stream-json / app-server sessions with a native chat view (done) |
@@ -654,6 +654,29 @@ Goal: close the loop from "agent finished" to "merged", without leaving ptyro.
 
 **Done when:** you review an agent's changes in the inspector, leave two line comments that become
 a follow-up prompt, the agent fixes them, you open a draft PR and watch its checks in the sidebar.
+
+**Removed (2026-11-17): pull requests, review, the diff inspector, landing and verified-done,
+pare-down batch 3.** Deep, not wide (`docs/review-2026-11/pare-down.md`): ptyro makes and removes
+worktrees, and git is the user's. Gone from every surface: `ptyro pr` (create, status, checks, fix,
+automerge, watch, reply, open), `watch-pr`, `review` (add, ls, rm, send, queue, done), `verify`,
+`wt finish`, `wt integrate`, `wt commit`, `wt log`, `wt diff`, `new --verify` and `--unqueued`; the
+TUI's inspector (`D`, every tab), the review queue (`Q`), `worktree.finish` (`F`), `pr.reply`,
+`pr.open`, `session.verify`, the session form's verify field, the sidebar's PR badges, `in main`
+and `merged`, and the verified-done marks; the web's Changes, Commits and Checks tabs, Finish,
+`#/review` (More → Review queue), "Verify when done…" and the new task's "Done when". In the
+daemon: the PR poller and the PR-event loop, `review.rs` (what stays, pair mode, is `pair.rs`),
+`finish.rs` (archiving stays, as `archive.rs`), the verified-done half of `verify.rs` (the rest is
+`checkpoints.rs`), the Stop-hook bounce (Claude's Stop hook timeout is 5 s again), the
+`max_unreviewed` hold, `archive_on_merge` and `WorktreeInfo::shipped`. Protocol 1.43 retires 18
+requests; store migration 8 deletes the `kv` rows `pr_watches`, `review_comments`, `reviewed` and
+`worktrees:integrated`; `[github]`, `[review]`, a repository's `[verify]` and
+`worktrees.archive_on_merge` are retired keys (SPEC §13.8); `fake-gh` keeps only `issue view` and
+`pr view`; `tests/m6.rs` keeps pair mode and starting from issues and PRs. Kept: `--issue` and
+`--pr` on `new` and `wt new` (`gh` is optional, for issues and a PR worktree's title), checkpoints
+(`checkpoint.diff` now shows the whole diff in its split), pair mode, archiving. A session's
+events, which lived in the inspector, are `session.events` (row menu, palette). RESEARCH:
+R-ORC-08, -23, -24, R-GIT-01 and -03 marked built and removed, R-WT-09's `archive_on_merge`
+removed; R-GIT-04 to -08, R-ORC-43, -44 and R-DD-10 moot.
 
 ---
 

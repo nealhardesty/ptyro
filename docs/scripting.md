@@ -27,7 +27,7 @@ and an idle from before that doesn't count, so `new --prompt …` then `wait --f
 Exit codes are stable and documented in [`cli-json.md`](cli-json.md#exit-codes): `0` reached,
 `7` timeout or stalled, `5` the session exited first, `8` no daemon.
 
-## Recipes
+## Examples
 
 ### One task, start to finish
 
@@ -44,7 +44,7 @@ ptyro read fixer | tail -20                    # what it said at the end
 ptyro wt run app/fix-login test                # your [scripts.run.test]
 ptyro wait fix-login.test --for exit
 ptyro read fix-login.test | tail -5
-ptyro wt diff app/fix-login
+git -C "$(ptyro wt status app/fix-login --json | jq -r .path)" diff   # what it changed
 ```
 
 If the agent stops to ask for permission, `wait --for idle` keeps waiting. Use
@@ -110,27 +110,6 @@ when it does.
 set -g status-right '#(ptyro ls --json 2>/dev/null | jq -r "[.[] | select(.status.status == \"blocked\")] | length | if . > 0 then \"⚠ \(.)\" else \"\" end") %H:%M'
 set -g status-interval 5
 ```
-
-### Review, then ship
-
-```sh
-ptyro wait fixer --for idle
-ptyro wt diff app/fix-login --stat
-ptyro review add app/fix-login src/login.rs:42 "handle the empty email case"
-ptyro review add app/fix-login src/login.rs:57 "this needs a test"
-ptyro review send app/fix-login            # one prompt; typed once the agent's turn is over
-ptyro wait fixer --for idle --timeout 30m
-ptyro wt commit app/fix-login -m "Fix login validation" --all
-ptyro pr create app/fix-login              # draft; ptyro feeds CI failures and review comments back
-until ptyro pr checks app/fix-login >/dev/null; do
-  [ $? -eq 7 ] || { ptyro pr fix app/fix-login; ptyro wait fixer --for idle; }
-  sleep 60
-done
-ptyro pr automerge app/fix-login
-```
-
-`pr checks` exits 0 when everything passed, 1 when something failed and 7 while checks still
-run.
 
 ### Wait for a dev server
 

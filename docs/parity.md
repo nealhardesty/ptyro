@@ -29,7 +29,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch, your changes), base, name, title, verify, structured, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it; `--again` is `session.again` (`C-n`): another of the agent this worktree last started (else the default agent), here, full sized | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch, done when (verify), chat mode (structured), lead; `--again` is `session.again`: the `+ claude` button on a project's and a worktree's page, and a session's ⋯ → Another … |
+| `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch, your changes), base, name, title, structured, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it; `--again` is `session.again` (`C-n`): another of the agent this worktree last started (else the default agent), here, full sized | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch, chat mode (structured); `--again` is `session.again`: the `+ claude` button on a project's and a worktree's page, and a session's ⋯ → Another … |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k`; `--tab`/`--pane`: `session.tab`, `session.pane` (the palette and a session's row menu, when the terminal is tmux or Windows Terminal) | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize`, `term.zoom` (pinch, a two-finger tap, Ctrl+wheel, Aa; this device's view only, so the TUI's is the terminal emulator's own font size); `--tab`: `session.tab`, a session's ⋯ → Open on the computer (a Windows Terminal tab there, when it is WSL) |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them; `--status running` / `active` is `sidebar.filter` (`f`, or click `running` / `active` under the sidebar title): only the live sessions, or only the busy ones, each machine, project and worktree with none hidden | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them; `sidebar.filter`: the `all` / `running` / `active` chips |
 | `stop` | `session.stop` (`x`; asks first unless `[ui] confirm_kill = false`) | `session.stop`: the session's ⋯ menu → Stop (asks first unless `[ui] confirm_kill = false`) |
@@ -50,7 +50,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `send` | `peek` (`p`): type a reply; or type into the pane | `session.reply`: Enter sends, Shift+Enter starts a new line; `term.type` types into the session key by key (`term.paste` pastes, `term.keys` for the keys a phone lacks); `session.keys` for a chat's keys |
 | `broadcast` | `broadcast` (`b`): mark sessions with `Space` in the sidebar first | `session.broadcast`: ☑ in the session list, pick sessions, then type once |
 | `wait` | waived: for scripts; the TUI shows status changes as they happen and notifies you | waived: for scripts; the web app shows status changes as they happen and notifies you |
-| `events` | `inspector` (`D`), Events tab (`5`) | `session.events`: ⋯ → Events |
+| `events` | `session.events` (a session's row menu, `.`; the palette): its last events, in a split | `session.events`: ⋯ → Events |
 | `report` | waived: run by programs inside a session to report their own state | waived: run by programs inside a session to report their own state |
 
 
@@ -151,13 +151,9 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `project pin` | `project.pin`: pick the profile | `project.pin`: a project's ⋯ menu: pick the profile |
 | `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |
 | `wt new` | `worktree.new` (`N`): the session form with a new worktree chosen, a free name in it (base, profile, setup, fetch…) | `worktree.new`: ＋ Task on a project, or `session.new` with "in a new worktree" |
-| `wt ls` | shown: the sidebar lists every worktree under its project, each with what is left to do: `↑2` unpushed, `not pushed ↑2` (no upstream yet), `● 3` uncommitted, a quiet `✓ pushed` when it is all done (UX2.2) | `projects`: every worktree under its project, with its changes, PR and sessions |
+| `wt ls` | shown: the sidebar lists every worktree under its project, each with what is left to do: `↑2` unpushed, `not pushed ↑2` (no upstream yet), `● 3` uncommitted, a quiet `✓ pushed` when it is all done (UX2.2) | `projects`: every worktree under its project, with its changes and sessions |
 | `wt rm` | `worktree.remove` (`x` on a worktree row; asks, saying what happens to its branch) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
-| `wt status` | shown: the sidebar's and the pane header's `↑N`, `●`, `✓ pushed` and `+N −N` (while something is left); `inspector` (`D`) for the details | `worktree.status`: a worktree's page, and its row on the Projects tab |
-| `wt diff` | `inspector` (`D`), Diff tab; `a` picks what to diff against | `review.diff`: a worktree's Changes tab; `review.against` picks what to diff against |
-| `wt log` | `inspector` (`D`), Commits tab | `worktree.log`: a worktree's Commits tab |
-| `wt commit` | `inspector` (`D`): `C` commits, `A` asks the agent | `worktree.commit`: Commit… on the Changes tab (pick the files, write the message); `worktree.ask_commit` asks the agent |
-| `wt integrate` | `inspector` (`D`): `I` | `worktree.integrate`: Merge into main… on the Commits tab |
+| `wt status` | shown: the sidebar's and the pane header's `↑N`, `●`, `✓ pushed` and `+N −N` (while something is left) | `worktree.status`: a worktree's page, and its row on the Projects tab |
 | `wt pair` | `worktree.pair` | `worktree.pair`: a worktree's ⋯ menu |
 | `wt unpair` | `worktree.unpair` | `worktree.unpair`: a worktree's ⋯ menu |
 | `wt run` | `script.run` (`r`), `script.pick` (`R`) | `worktree.run`: a worktree's ⋯ menu: pick a script; it opens its session |
@@ -167,8 +163,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt rename` | `worktree.rename` (a worktree's row menu, `.`; the palette): the live check flags a taken or bad name as you type; `C-t` there edits its title | `worktree.rename`: a worktree's ⋯ → Rename… |
 | `wt rename-branch` | `worktree.rename_branch` | `worktree.rename_branch`: a worktree's ⋯ menu |
 | `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
-| `wt finish` | `worktree.finish` (`F` in the sidebar): a PR or integrate | `worktree.finish`: Finish on a worktree's page: a PR, or merge into the main branch |
-| `wt archive` | `worktree.archive` (or `x` on a merged worktree) | `worktree.archive`: a worktree's ⋯ menu |
+| `wt archive` | `worktree.archive` (a worktree's row menu, `.`; the palette) | `worktree.archive`: a worktree's ⋯ menu |
 | `wt restore` | `worktree.restore`: pick from the archived ones (`^x` there deletes one) | `worktree.restore`: Archived (Projects tab): tap one |
 | `wt archives` | `worktree.restore` lists them | `worktree.restore`: Archived lists them |
 | `wt archive-rm` | `worktree.archive_delete`: pick an archived one (asks first), or `^x` in `worktree.restore`'s list | `worktree.archive_delete`: Archived (Projects tab): tap one → Delete |
@@ -196,34 +191,13 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `profile detect` | `first.run` finds them, as accounts to tick | `profile.detect`: 🔍 on Profiles: the accounts found, to tick |
 | `profile doctor` | `health`: the badge's findings include each profile's logins | `profile.doctor`: Check on a profile's page |
 
-## Review and ship
-
-| Command | In the TUI | On the web |
-|---|---|---|
-| `review add` | `inspector` (`D`): `c` on a line | `review.add`: tap a line on the Changes tab |
-| `review ls` | `inspector` (`D`): comments show on their lines | `review.list`: comments show under their lines, counted in a bar |
-| `review rm` | `inspector` (`D`): `x` on a comment, `X` every comment (asks first) | `review.rm`: ✕ on a comment, or Clear (asks first) |
-| `review send` | `inspector` (`D`): `S` | `review.send`: Send to agent, on the comments bar |
-| `review queue` | `review.queue` (`Q`) | `review.queue`: More → Review queue |
-| `review done` | `review.queue` (`Q`): `d` | `review.done`: a queue item's menu → Mark reviewed |
-| `pr create` | `inspector` (`D`): `P`: a form with the title, body, base and draft | `pr.create`: the Checks tab, with no PR yet |
-| `pr status` | `inspector` (`D`), Checks tab; the worktree row shows `#N` and its checks | `pr.checks`: a worktree's Checks tab; its row shows `#N` and its checks |
-| `pr checks` | `inspector` (`D`), Checks tab | `pr.checks`: a worktree's Checks tab |
-| `pr fix` | `inspector` (`D`), Checks tab: `f` | `pr.fix`: the Checks tab: Fix N failing |
-| `pr automerge` | `inspector` (`D`), Checks tab: `m` | `pr.automerge`: the Checks tab |
-| `pr watch` | `inspector` (`D`), Checks tab: `w` | `pr.watch`: the Checks tab |
-| `watch-pr` | `inspector` (`D`), Checks tab: `w` | `pr.watch`: the Checks tab |
-| `pr reply` | `pr.reply` | `pr.reply`: the Checks tab: Reply… |
-| `pr open` | `pr.open`: its worktree and session, or a new worktree on it | `pr.open`: ⎘ on the Review queue: its worktree and session, or a new worktree on it |
-
-## Checkpoints and verified-done
+## Checkpoints
 
 | Command | In the TUI | On the web |
 |---|---|---|
 | `checkpoint ls` | `checkpoint.list` | `checkpoint.list`: a worktree's Checkpoints tab |
 | `checkpoint diff` | `checkpoint.diff` | `checkpoint.diff`: a checkpoint's menu |
 | `checkpoint restore` | `checkpoint.restore` (it asks first, full sized) | `checkpoint.restore`: a checkpoint's menu (asks first; the state now is checkpointed) |
-| `verify` | `session.verify` | `session.verify`: ⋯ → Verify when done |
 | `mcp` | waived: the chat history tools' MCP server; a chat's agent starts it for itself | waived: the chat history tools' MCP server; a chat's agent starts it for itself |
 
 ## Remote, phone and recordings

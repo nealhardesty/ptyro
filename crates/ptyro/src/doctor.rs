@@ -1183,7 +1183,7 @@ fn stale_text(entries: &[ptyro_core::model::GcEntry], stale_days: u32) -> String
     let any = |e: &ptyro_core::model::GcEntry, words: &[&str]| {
         e.reasons.iter().any(|r| words.iter().any(|w| r.contains(w)))
     };
-    let merged = entries.iter().filter(|e| any(e, &["merged", "integrated"])).count();
+    let merged = entries.iter().filter(|e| any(e, &["merged"])).count();
     let gone = entries.iter().filter(|e| any(e, &["gone"])).count();
     let unused = entries.len() - merged - gone;
     let why: Vec<String> = [
@@ -1529,7 +1529,10 @@ pub(crate) async fn git(r: &mut Report) {
             "git",
             "gh",
             Level::Note,
-            format!("gh not found: pull requests (`wt new --pr`) need it{}", fix_for("gh")),
+            format!(
+                "gh not found (optional): starting work from a GitHub issue (`--issue`) needs it{}",
+                fix_for("gh")
+            ),
         );
     }
 }
@@ -1918,7 +1921,7 @@ mod tests {
         assert_eq!(stale_level(&[]), Level::Ok);
         let entries = [
             stale("a", "branch merged into origin/main", Some(3 << 30)),
-            stale("b", "its PR merged", Some(1 << 30)),
+            stale("b", "branch merged into main", Some(1 << 30)),
             stale("c", "no sessions for 20 days", None),
         ];
         assert_eq!(stale_level(&entries), Level::Warn);

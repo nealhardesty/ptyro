@@ -44,8 +44,8 @@ impl Claude {
         for ev in EVENTS {
             hooks.insert(
                 (*ev).to_owned(),
-                // A Stop may run a verified-done check (M7.9): give it time.
-                json!([{ "hooks": [hook_entry(ctx.ptyro, &format!("hook claude {ev}"), match *ev { "Stop" => 900, "PermissionRequest" => 3600, _ => 5 }, cfg!(windows))] }]),
+                // A permission prompt may wait for a phone's answer (M9.5): give it time.
+                json!([{ "hooks": [hook_entry(ctx.ptyro, &format!("hook claude {ev}"), if *ev == "PermissionRequest" { 3600 } else { 5 }, cfg!(windows))] }]),
             );
         }
         let hooks = serde_json::to_string_pretty(&json!({ "hooks": hooks })).unwrap_or_default();

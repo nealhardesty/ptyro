@@ -285,7 +285,6 @@ impl Daemon {
                         .chat
                         .is_some() => {}
                 Signal::Prompt { text } => {
-                    self.verify_on_prompt(s, &text);
                     let first = {
                         let mut m =
                             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -400,12 +399,11 @@ impl Daemon {
         std::mem::take(&mut m.turn_open)
     }
 
-    /// A turn finished: count it, then checkpoint and verify (M7) and summarize (UX1.3).
+    /// A turn finished: count it, then checkpoint (M7) and summarize (UX1.3).
     async fn turn_ended(self: &Arc<Self>, s: &Arc<Session>) {
         s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns += 1;
         if s.kind() == SessionKind::Agent {
             self.checkpoint_turn(s);
-            self.verify_after_turn(s);
         }
         if s.kind() == SessionKind::Agent
             || s.meta
@@ -456,9 +454,6 @@ impl Daemon {
             }),
         );
         if t.to.status == AgentStatus::Working {
-            if s.kind() == SessionKind::Agent && t.from != Some(AgentStatus::Blocked) {
-                self.snapshot_turn(s);
-            }
             // Someone answered, or it got going again: what it wanted is no longer pending. What
             // is for you (a program's own notification) stays until you look.
             let had = {
@@ -638,20 +633,6 @@ impl Daemon {
             signals
                 .retain(|x| !matches!(x.signal, Signal::Status { status: AgentStatus::Idle, .. }));
         }
-        // Verified-done: Claude's turn may not end until the check passes (M7.9).
-        if adapter == "claude"
-            && event == "Stop"
-            && let Some(out) = self.verify_stop_hook(&s).await
-        {
-            s.record_event("bounced", serde_json::json!({}));
-            // Not idle: it keeps working on the failures.
-            let working: Vec<Sourced> = signals
-                .into_iter()
-                .filter(|x| !matches!(x.signal, Signal::Status { .. } | Signal::TurnEnd))
-                .collect();
-            self.apply_queued(&s, working).await;
-            return Ok(Reply::HookOutput { stdout: out });
-        }
         // Remote approvals (M9.5): held before the prompt is announced, so an answer that comes
         // at once finds it; then wait for it. Claude's dialog stays up meanwhile.
         let hold = (adapter == "claude" && event == "PermissionRequest")
@@ -728,11 +709,6 @@ impl Daemon {
         let ready_screen = adapter.ready(&screen);
         let reliable_idle = reliable_idle && (!adapter.ready_needs_screen() || ready_screen);
         if reliable_idle || ready_screen || quiet { Readiness::Ready } else { Readiness::NotYet }
-    }
-
-    /// Ready for typed input right now (prompt delivery's test).
-    pub(crate) fn ready_for_input(&self, s: &Session) -> bool {
-        self.readiness(s) == Readiness::Ready
     }
 
     /// Type a prompt (text + Enter) and remember when, so `ptyro wait --for idle` waits for

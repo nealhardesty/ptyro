@@ -1,9 +1,9 @@
 //! The hook relay `ptyro hook <adapter> <event>` and the statusline relay (SPEC §8.3, M4.17).
 //!
 //! These run inside agents, on every hook, so they must never hurt them: no tokio runtime, a
-//! blocking socket with a 500 ms budget overall (a Stop waits longer: it may run a verified-done
-//! check), exit 0 whatever happens. Stdout carries only what the daemon answers for the agent (a
-//! Stop bounce, a PreToolUse denial). Outside ptyro (`PTYRO_SESSION_ID` unset) they do nothing.
+//! blocking socket with a 500 ms budget overall (a held permission prompt waits longer), exit 0
+//! whatever happens. Stdout carries only what the daemon answers for the agent (a phone's answer
+//! to a permission prompt). Outside ptyro (`PTYRO_SESSION_ID` unset) they do nothing.
 
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -14,8 +14,6 @@ use ptyro_protocol::{ClientInfo, ClientKind, PROTO, decode};
 use ptyro_protocol::{ClientMsg, Encoding, Request, ServerMsg, encode};
 
 const BUDGET: Duration = Duration::from_millis(500);
-/// Long enough for a verified-done check (the hook's own timeout in the agent caps it too).
-const STOP_BUDGET: Duration = Duration::from_secs(900);
 /// A held permission prompt (`[remote] approval_wait`, capped by the hook's own 3600 s).
 const APPROVAL_BUDGET: Duration = Duration::from_secs(3600);
 const MAX_STDIN: u64 = 4 * 1024 * 1024;
@@ -162,15 +160,13 @@ pub fn hook(adapter: &str, event: &str, args: &[String]) -> i32 {
     if let Ok(v) = std::env::var("CLAUDE_CODE_MESSAGING_TOKEN") {
         env.insert("CLAUDE_CODE_MESSAGING_TOKEN".to_owned(), v);
     }
-    // A Stop may run the session's verified-done check before answering (M7.9).
     // A Claude permission prompt may be held for a phone's answer (M9.5); the daemon bounds it.
     let budget = match event {
-        "Stop" => STOP_BUDGET,
         "PermissionRequest" if adapter == "claude" => APPROVAL_BUDGET,
         _ => BUDGET,
     };
     let req = Request::Hook { session, adapter: adapter.into(), event: event.into(), payload, env };
-    // The daemon may answer for the agent: a Stop bounce, a PreToolUse denial.
+    // The daemon may answer for the agent: a phone's answer to its permission prompt.
     if let Some(ServerMsg::Response { outcome, .. }) = request(req, budget)
         && let ptyro_protocol::Outcome::Ok { reply: ptyro_protocol::Reply::HookOutput { stdout } } =
             outcome

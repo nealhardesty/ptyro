@@ -1191,8 +1191,7 @@ async fn quitting_from_the_tui_stops_the_daemon() {
 }
 
 /// UX1.22: `ptyro tour` is the daily loop for real: a task, its permission prompt answered from
-/// peek, its diff reviewed, finished into main, cleaned up. Each key goes in once the coach
-/// asks for it. The tour runs in a ptyro of its own and deletes it afterwards.
+/// peek, cleaned up, a shell of your own. Each key goes in once the coach asks for it. The tour runs in a ptyro of its own and deletes it afterwards.
 // Unix: on Windows the tour runs in WSL (`wsl -- ptyro tour`), not natively.
 #[cfg(unix)]
 #[tokio::test]
@@ -1206,21 +1205,17 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
         .env("GIT_CONFIG_NOSYSTEM", "1");
     let r = ptyro_testkit::headless::run(
         script
-            .send_when("Tour 1/6: start a task", "\\x11n")
+            .send_when("Tour 1/4: start a task", "\\x11n")
             .send_when("What should it do?", "fix the typo in greeting.txt")
             .send_when("fix-typo-greeting", "\\r")
             .send_when("to peek, then y", "\\x11p")
             .send_when("y allow", "y")
-            .send_when("Tour 3/6", "")
-            .send_when("It's done", "\\x11D")
-            .send_when("Tour 4/6", "q")
-            .send_when("Tour 4/6", "\\x11\\t")
-            .send_when("Tour 4/6", "F")
-            .send_when("Finish ", "i")
-            .send_when("Tour 5/6", "F")
-            .send_when("snapshot", "\\r")
+            .send_when("Tour 3/4", "\\x11:")
+            .send_when("Command palette", "worktree.archive")
+            .send_when("worktree.archive", "\\r")
+            .send_when("[Y/n]", "\\r")
             // Alt-1 (ESC 1): shell 1 of SHELLS, the last stop.
-            .send_when("Tour 6/6", "\\x1b1")
+            .send_when("Tour 4/4", "\\x1b1")
             .send_when("that's the loop", "\\x11d")
             .until("the tour is over"),
     )
@@ -1230,13 +1225,13 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
     assert!(r.screen.contains("the tour is over"), "{}", r.screen);
 }
 
-/// UX1's "Done when", as written: on a fresh machine with only `claude` installed and no
-/// config, `cd myrepo && ptyro` registers the repo; `Ctrl-Q n`, a task, `⏎` puts Claude to work
-/// in a new worktree named after it; its row shows the task and, while it's blocked, what it
-/// wants and the keys that answer it; finishing commits and opens a PR, and once it merges one
-/// key cleans up. By keys alone. (`claude` here is the pretend agent, `gh` the fake one.)
+/// UX1's "Done when" (less its pull request, removed 2026-11-17): on a fresh machine with only
+/// `claude` installed and no config, `cd myrepo && ptyro` registers the repo; `Ctrl-Q n`, a
+/// task, `⏎` puts Claude to work in a new worktree named after it; its row shows the task and,
+/// while it's blocked, what it wants and the keys that answer it; once it's done the worktree is
+/// cleaned up from the palette. By keys alone. (`claude` here is the pretend agent.)
 #[tokio::test]
-async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
+async fn ux1_done_when_from_a_fresh_machine_to_a_cleaned_up_task() {
     let tmp = tempfile::Builder::new().prefix("ptyro-ux1-done-").tempdir().unwrap();
     let h = ptyro_core::os::canonicalize(tmp.path()).unwrap();
     std::fs::write(
@@ -1244,7 +1239,7 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
         "[user]\n\tname = Owner\n\temail = owner@example.com\n[init]\n\tdefaultBranch = main\n",
     )
     .unwrap();
-    // Only `claude` installed (the pretend one), and a `gh`.
+    // Only `claude` installed (the pretend one).
     let bin = h.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     ptyro_testkit::program::program(
@@ -1257,17 +1252,7 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
         &[BIN, "fake-agent", "--as", "claude"],
         &[("PTYRO_FAKE_TOUR", "1"), ("PTYRO_FAKE_PASTE", "1")],
     );
-    ptyro_testkit::program::program(
-        &bin,
-        "gh",
-        BIN,
-        &format!("exec \"{BIN}\" fake-gh \"$@\""),
-        &[BIN, "fake-gh"],
-        &[],
-    );
-    let gh = h.join("gh-state");
-    std::fs::create_dir_all(&gh).unwrap();
-    // myrepo, cloned from a "remote" (where the PR's branch is pushed).
+    // myrepo, cloned from a "remote".
     let git = |dir: &Path, args: &[&str]| {
         let out = std::process::Command::new("git")
             .args(args)
@@ -1286,36 +1271,16 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
     git(&repo, &["commit", "-qm", "A greeting"]);
     git(&repo, &["push", "-q", "origin", "main"]);
     let path = ptyro_testkit::program::path_with(&bin);
-    let (hs, gs) = (h.to_string_lossy().into_owned(), gh.to_string_lossy().into_owned());
+    let hs = h.to_string_lossy().into_owned();
     let env = [
         ("HOME", hs.as_str()),
         ("GIT_CONFIG_NOSYSTEM", "1"),
         ("SHELL", "/bin/sh"),
         ("PATH", path.as_str()),
-        ("PTYRO_FAKE_GH", gs.as_str()),
-        ("PTYRO_TEST_FAST_POLL", "1"),
     ];
     // No config at all.
     let d = TempDaemon::start_with(BIN, &env, None).unwrap();
     assert!(!d.paths.config.join("config.toml").exists());
-    // The PR merges on the forge once it's open.
-    let merger = {
-        let gh = gh.clone();
-        std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(120);
-            while Instant::now() < deadline {
-                if let Ok(t) = std::fs::read_to_string(gh.join("pr.json"))
-                    && let Ok(mut pr) = serde_json::from_str::<serde_json::Value>(&t)
-                {
-                    pr["state"] = serde_json::json!("MERGED");
-                    std::fs::write(gh.join("pr.json"), pr.to_string()).unwrap();
-                    return true;
-                }
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            false
-        })
-    };
     // The first run's setup checklist looks at a fake machine (BOOT1's), never this one.
     let fake = tempfile::tempdir().unwrap();
     let mut script = ptyro_testkit::headless::Script::new(vec![BIN.to_owned()])
@@ -1338,19 +1303,16 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
             // 3. Blocked: its row says what it wants, and the keys; answered from peek.
             .send_when("p y/a/n", "\\x11p")
             .send_when("y allow", "y")
-            // 4. Finish into a PR, from the sidebar.
-            .send_when("Fixed the typo", "\\x11\\t")
-            .send_when("Fixed the typo", "F")
-            .send_when("a pull request", "p")
-            // Merged: one key cleans up (F, as the hint says), ⏎ agrees.
-            .send_when("clean up (merged)", "F")
-            .send_when("snapshot", "\\r")
+            // 4. Done: the palette cleans its worktree up, ⏎ agrees.
+            .send_when("Fixed the typo", "\\x11:")
+            .send_when("Command palette", "worktree.archive")
+            .send_when("worktree.archive", "\\r")
+            .send_when("[Y/n]", "\\r")
             .send_when("archived", "\\x11d")
             .until("[detached]"),
     )
     .await
     .expect("headless run");
-    assert!(merger.join().unwrap(), "a PR was opened");
     assert!(r.screen.contains("[detached]"), "{}", r.screen);
     let c = d.client().await.unwrap();
     let Reply::Projects { projects } = c.request(Request::ProjectList).await.unwrap() else {

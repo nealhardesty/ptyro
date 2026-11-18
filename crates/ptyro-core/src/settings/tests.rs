@@ -177,8 +177,8 @@ fn setting_keeps_comments_order_and_the_rest() {
         out.contains("sidebar_width = 40") && out.contains("# my notes") && out.contains("# small")
     );
     // A section that isn't there is made.
-    let out = set(Scope::User, "", "github.draft", "no", &lk, &none).unwrap();
-    assert_eq!(out, "[github]\ndraft = false\n");
+    let out = set(Scope::User, "", "worktrees.fetch", "no", &lk, &none).unwrap();
+    assert_eq!(out, "[worktrees]\nfetch = false\n");
     // Unset takes the line out and nothing else.
     let out = unset(Scope::User, text, "daemon.scrollback_lines", &none).unwrap();
     assert!(
@@ -195,7 +195,7 @@ fn bad_values_are_refused_with_the_reason() {
     assert!(err("ui.sidebar_width", "wide").contains("isn't a number"));
     assert!(err("ui.on_stop", "never").contains("isn't one of next, stay"));
     assert!(err("ui.mouse", "maybe").contains("isn't yes or no"));
-    assert!(err("github.poll", "soon").contains("bad duration"));
+    assert!(err("attention.stale_after", "soon").contains("bad duration"));
     assert!(err("recorder.max_bytes", "1KiB").contains("at least 256KiB"));
     assert!(
         err("notifications.quiet_hours", "late").contains("expected HH:MM-HH:MM")

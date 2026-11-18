@@ -162,8 +162,6 @@ pub fn needed(req: &Request) -> Scope {
         | WorkspaceList
         | WorktreeList { .. }
         | WorktreeGet { .. }
-        | WorktreeDiff { .. }
-        | WorktreeLog { .. }
         | CheckpointList { .. }
         | CheckpointDiff { .. }
         | WorktreeArchives { .. }
@@ -176,9 +174,6 @@ pub fn needed(req: &Request) -> Scope {
         | Replay { .. }
         | Export { .. }
         | Web { on: None, .. }
-        | ReviewList { .. }
-        | ReviewQueue
-        | PrGet { .. }
         | LoadView { .. }
         | PushKey
         | PushSubscribe { .. }
@@ -210,8 +205,6 @@ pub fn needed(req: &Request) -> Scope {
         | Remove { .. }
         | Restart { .. }
         | Rename { .. }
-        | ReviewAdd { .. }
-        | ReviewSend { .. }
         | Convert { .. }
         | Retitle { .. }
         | Summarize { .. }
@@ -225,13 +218,7 @@ pub fn needed(req: &Request) -> Scope {
         QuickShell { create: false, .. } => Scope::Read,
         // A configured agent (its command comes from the user's config) is control; any other
         // command line is full.
-        // A verify check is a command line of its own: full.
-        Spawn { spec }
-            if spec.agent.is_some()
-                && spec.argv.is_empty()
-                && spec.command.is_none()
-                && spec.verify.is_none() =>
-        {
+        Spawn { spec } if spec.agent.is_some() && spec.argv.is_empty() && spec.command.is_none() => {
             Scope::Control
         }
         // The same requests when they start something: a shell, a command line of its own, a
@@ -249,7 +236,7 @@ pub fn needed(req: &Request) -> Scope {
         ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
-        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | CheckpointRestore { .. } | SetVerify { .. } => Scope::Full,
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreePair { .. } | CheckpointRestore { .. } => Scope::Full,
     }
 }
 
@@ -751,12 +738,6 @@ mod tests {
         );
         let any = SpawnSpec { argv: vec!["sh".into()], ..SpawnSpec::default() };
         assert_eq!(needed(&Request::Spawn { spec: any }), Scope::Full);
-        let verify = SpawnSpec {
-            agent: Some("claude".into()),
-            verify: Some("curl x | sh".into()),
-            ..SpawnSpec::default()
-        };
-        assert_eq!(needed(&Request::Spawn { spec: verify }), Scope::Full);
         // A command line is full scope, whether or not an agent is named beside it.
         for agent in [None, Some("claude".to_owned())] {
             let line =

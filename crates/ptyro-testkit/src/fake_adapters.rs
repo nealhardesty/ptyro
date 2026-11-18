@@ -43,8 +43,8 @@
 //! `PTYRO_FAKE_HOOK_DELAY_MS` are test knobs (`ptyro_core::test_knob`).
 //!
 //! Like Claude, a Stop hook that answers `{"decision":"block"}` keeps the turn going (the fake
-//! "works" again and stops again). A verified-done bounce (`[via ptyro: verify]…`) and mail
-//! (`<ptyro-message …>`) are prompts: they fire UserPromptSubmit and end a short turn.
+//! "works" again and stops again). Mail (`<ptyro-message …>`) is a prompt: it fires
+//! UserPromptSubmit and ends a short turn.
 
 use ptyro_core::sync::MutexExt;
 use std::collections::BTreeMap;
@@ -223,9 +223,7 @@ impl Fake {
 
     fn hook_out(&self, event: &str, payload: Value) -> Option<Value> {
         let (cmds, payload) = self.hook_prep(event, payload);
-        // A Stop may run the session's verified-done check first, as ptyro's relay allows.
-        let limit = if event == "Stop" { Duration::from_secs(900) } else { HOOK_TIMEOUT };
-        run_hooks(&cmds, &payload, limit)
+        run_hooks(&cmds, &payload, HOOK_TIMEOUT)
     }
 
     /// The hook commands for `event` and the payload they get.
@@ -886,38 +884,13 @@ pub fn main(args: &[String]) -> i32 {
             }
             "/exit" | "/quit" => return 0,
             "" => {}
-            // The tour's finish asks its agent to commit: it does, with a message saying what.
-            _ if std::env::var("PTYRO_FAKE_TOUR").is_ok()
-                && line.starts_with("[via ptyro] Please commit") =>
-            {
-                f.turn(&mut out, &line, |out| {
-                    let ok = std::process::Command::new("sh")
-                        .args([
-                            "-c",
-                            "git add -A && git commit -q -m 'Fix the typo in greeting.txt'",
-                        ])
-                        .status()
-                        .is_ok_and(|s| s.success());
-                    let msg = if ok {
-                        "Committed: Fix the typo in greeting.txt"
-                    } else {
-                        "Nothing to commit"
-                    };
-                    let _ = writeln!(out, "{msg}");
-                    msg.into()
-                });
-            }
             // `PTYRO_FAKE_TOUR=1` (`ptyro tour`): any prose is a task, done like an agent would.
             _ if std::env::var("PTYRO_FAKE_TOUR").is_ok()
-                && !line.starts_with("[via ptyro: verify]")
                 && !line.starts_with("<ptyro-message") =>
             {
                 f.tour_turn(&mut out, &line);
             }
-            _ if line.starts_with("[via ptyro: verify]")
-                || line.starts_with("<ptyro-message")
-                || prose =>
-            {
+            _ if line.starts_with("<ptyro-message") || prose => {
                 let _ = writeln!(out, "you said: {line}");
                 f.turn(&mut out, &line, |_| "read it".into());
             }

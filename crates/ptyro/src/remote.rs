@@ -472,10 +472,10 @@ pub async fn pair(
             Scope::Approve =>
                 "watch and answer prompts. `--scope control` also types into sessions, \
                 and starts configured agents; `--scope full` is the whole web app: tasks and \
-                worktrees, review and ship, the config, devices",
+                worktrees, the config, devices",
             Scope::Control =>
                 "watch, answer, type and start configured agents. `--scope full` is the whole \
-                web app: worktrees, review and ship, the config, devices",
+                web app: worktrees, the config, devices",
             Scope::Full => "do everything the web app does, and anything you can on this machine",
         }
     );

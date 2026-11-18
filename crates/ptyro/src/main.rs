@@ -29,7 +29,6 @@ mod serve;
 mod service;
 mod setup;
 mod shells;
-mod ship;
 mod tls;
 mod tour;
 mod uninstall;
@@ -131,13 +130,6 @@ enum Cmd {
         /// first prompt come from the issue
         #[arg(long, conflicts_with = "wt")]
         issue: Option<String>,
-        /// Start even if `review.max_unreviewed` worktrees wait for review
-        #[arg(long)]
-        unqueued: bool,
-        /// Verified-done: a turn counts as done only when this passes (`scripts.run.test`, a run
-        /// script's name, or a command); failures go back to the agent
-        #[arg(long)]
-        verify: Option<String>,
         /// Drive the agent over its structured protocol (Claude stream-json, Codex app-server,
         /// Gemini ACP, OpenCode's server) and show a chat view: every tool call visible
         #[arg(long)]
@@ -341,40 +333,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Pull requests: create, status and checks, fix failing checks, auto-merge, watch
-    Pr {
-        #[command(subcommand)]
-        cmd: ship::PrCmd,
-    },
-    /// Watch a PR: new CI failures and review comments go to the worktree's agent
-    #[command(name = "watch-pr")]
-    WatchPr {
-        #[arg(add = ArgValueCandidates::new(complete::worktrees))]
-        worktree: Option<String>,
-        #[arg(long)]
-        off: bool,
-    },
-    /// Review: line comments for the agent, and the queue of worktrees ready for review
-    Review {
-        #[command(subcommand)]
-        cmd: ship::ReviewCmd,
-    },
     /// Checkpoints: the worktree after every agent turn; diff or restore any of them
     #[command(alias = "checkpoints", alias = "ckpt")]
     Checkpoint {
         #[command(subcommand)]
         cmd: checkpoint::CheckpointCmd,
-    },
-    /// Verified-done: a session's turns count as done only when CHECK passes
-    Verify {
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        session: String,
-        /// `scripts.run.test`, a run script's name, or a command
-        check: Option<String>,
-        #[arg(long)]
-        off: bool,
-        #[arg(long)]
-        max_bounces: Option<u32>,
     },
     /// MCP server with the chat history tools (`chat_search`, `chat_read`, `chat_list`), for a
     /// chat's agent (started for you)
@@ -777,7 +740,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// The tour: start a task, answer the agent, review, finish and clean up, for real, with a
+    /// The tour: start a task, answer the agent, clean up and keep a shell, for real, with a
     /// pretend agent in a ptyro of its own (deleted afterwards)
     Tour {
         /// Internal: the coach on this ptyro (what the tour itself runs)

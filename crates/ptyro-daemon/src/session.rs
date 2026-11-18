@@ -137,13 +137,8 @@ pub struct Meta {
     /// Stop hook decides): the turn counts once the status moves to idle.
     #[serde(default)]
     pub turn_end_seen: bool,
-    /// The worktree's state when the current (or last) turn started (`git stash create`).
-    pub turn_base: Option<String>,
-    pub turn_started_ms: u64,
     /// The agent's last message of the current turn, once it ended (`Signal::Reply`).
     pub last_reply: Option<String>,
-    /// Verified-done (M7.9).
-    pub verify: Option<ptyro_core::session::Verify>,
     /// Its place in its workspace's SHELLS (SPEC §23), when it is loose. Left out when empty, so
     /// an image without SHELLS is byte for byte what it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -384,10 +379,7 @@ fn new_meta(
         turns: 0,
         turn_open: false,
         turn_end_seen: false,
-        turn_base: None,
-        turn_started_ms: 0,
         last_reply: None,
-        verify: None,
         shelf: None,
     }
 }
@@ -615,7 +607,6 @@ impl Session {
             last_prompt_ms: meta.last_prompt_ms,
             turns: meta.turns,
             last_output_ms: Some(self.last_output_ms.load(Ordering::Relaxed)).filter(|t| *t > 0),
-            verify: meta.verify.clone(),
             held: false,
             structured: self.structured.as_ref().map(|s| s.protocol.clone()),
             task: meta.first_prompt.as_deref().map(|p| ptyro_core::session::brief(p, 200)),

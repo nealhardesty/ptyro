@@ -110,13 +110,8 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
             f.render_widget(Clear, Rect { width: side.width + 1, ..side });
             draw_sidebar(app, f, side);
         }
-        if app.chat_panel.is_some() && app.inspector.is_none() {
+        if app.chat_panel.is_some() {
             crate::chats::draw(app, f, app.main_area());
-        }
-        if app.inspector.is_some() {
-            let h =
-                if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
-            crate::inspector::draw(app, f, Rect { height: h, ..area });
         }
         if let Some(id) = app.pad_popup {
             draw_pad_popup(app, f, area, id);
@@ -265,8 +260,6 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
     (
         "work",
         &[
-            ("inspector", "diff & ship"),
-            ("review.queue", "to review"),
             ("script.run", "run script"),
             ("worktree.open", "open in…"),
             ("worktree.gc", "clean up"),
@@ -400,15 +393,11 @@ fn profile_badge(app: &App, profile: &str) -> Option<Span<'static>> {
 
 /// What is left to do with a worktree's work (UX2.2): `↑2` unpushed commits (or `not pushed`
 /// when there is no upstream yet), `● 3` uncommitted files, the `+N −N` line counts only while
-/// either is true, and a quiet `✓ pushed` when committed work is all on the remote. A merged or
-/// integrated one says so elsewhere in the row, and an open PR's badge stands in for `✓ pushed`.
+/// either is true, and a quiet `✓ pushed` when committed work is all on the remote.
 pub(crate) fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Span<'static>> {
     let t = &app.theme;
     let mut v = Vec::new();
     let Some(s) = &w.status else { return v };
-    if w.shipped() {
-        return v;
-    }
     let l = s.left();
     if l.open() {
         if s.insertions > 0 {
@@ -429,7 +418,7 @@ pub(crate) fn diffstat(app: &App, w: &ptyro_core::model::WorktreeInfo) -> Vec<Sp
     if l.uncommitted > 0 {
         v.push(Span::styled(format!(" ● {}", l.uncommitted), fg(app, t.working)));
     }
-    if l.pushed && w.pr.is_none() {
+    if l.pushed {
         v.push(Span::styled(" ✓ pushed", fg(app, t.dim)));
     }
     v
@@ -691,36 +680,11 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     spans.push(Span::styled(format!(" {}", w.state.label()), fg(app, t.error)));
                 }
                 spans.extend(diffstat(app, w));
-                // Integrated into the main branch, and nothing new since (UX1.12).
-                if w.shipped() && w.pr.is_none() {
-                    spans.push(Span::styled(" in main", fg(app, t.done)));
-                }
-                // Its PR and checks (M6.5).
-                if let Some(pr) = &w.pr {
-                    let (pass, fail, pending) = pr.tally();
-                    let (mark, c) = if pr.state == "MERGED" {
-                        ("merged".to_owned(), t.done)
-                    } else if fail > 0 {
-                        (format!("✗{fail}"), t.error)
-                    } else if pending > 0 {
-                        ("◌".to_owned(), t.working)
-                    } else if pass > 0 {
-                        ("✓".to_owned(), t.done)
-                    } else {
-                        (String::new(), t.dim)
-                    };
-                    spans.push(Span::styled(
-                        format!(" #{}{}{mark}", pr.number, if mark.is_empty() { "" } else { " " }),
-                        fg(app, c),
-                    ));
-                }
                 // What it's for (UX1.24), last so a narrow sidebar cuts it first, and only when
-                // its name or PR doesn't already say it.
-                let pr_title = w.pr.as_ref().map(|pr| format!("#{} {}", pr.number, pr.title));
+                // its name doesn't already say it.
                 if let Some(title) = w.title.as_deref().filter(|t| {
-                    Some(*t) != pr_title.as_deref()
-                        && (ptyro_core::names::from_text(t).as_deref() != Some(w.name.as_str())
-                            || t.split_whitespace().count() > 3)
+                    ptyro_core::names::from_text(t).as_deref() != Some(w.name.as_str())
+                        || t.split_whitespace().count() > 3
                 }) {
                     spans.push(Span::styled(format!(" — {title}"), fg(app, t.dim)));
                 }
@@ -825,21 +789,6 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 let running = s.children.iter().filter(|c| c.running).count();
                 if running > 0 {
                     spans.push(Span::styled(format!(" +{running}"), fg(app, t.dim)));
-                }
-                // Verified-done (M7.9): done and proven (✔), being checked, sent back, or only
-                // claimed (✘: the check still fails).
-                if let Some(v) = &s.verify {
-                    use ptyro_core::session::VerifyState as V;
-                    let (mark, c) = match v.state {
-                        V::Passed => (" ✔".to_owned(), t.done),
-                        V::Checking => (" ◌".to_owned(), t.working),
-                        V::Bounced => (format!(" ↩{}", v.bounces), t.blocked),
-                        V::Failed => (" ✘".to_owned(), t.error),
-                        V::Pending => (String::new(), t.dim),
-                    };
-                    if !mark.is_empty() {
-                        spans.push(Span::styled(mark, fg(app, c)));
-                    }
                 }
                 if s.dangerous {
                     spans.push(Span::styled(" ⚠", fg(app, t.error)));
@@ -2119,37 +2068,6 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 input.x + reply_cursor.0,
                 input.y + reply_cursor.1,
             ));
-        }
-        Overlay::ReviewQueue { items, selected } => {
-            let r =
-                boxed(area, 100, (items.len() as u16 * 2 + 4).min(area.height.saturating_sub(2)));
-            f.render_widget(Clear, r);
-            let mut lines: Vec<Line<'_>> = Vec::new();
-            // Two lines an item: scroll so the selected one is always in view.
-            let per = (r.height.saturating_sub(2) / 2).max(1) as usize;
-            let first = (*selected + 1).saturating_sub(per);
-            for (n, it) in items.iter().enumerate().skip(first).take(per) {
-                let sel = n == *selected;
-                let style =
-                    if sel { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("{:>2}. {:<28}", n + 1, it.worktree.qualified()),
-                        style.add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!(" {}", it.reasons.join(" · ")), fg(app, t.dim)),
-                    Span::styled(format!("  {} ago", dur(it.waiting_ms)), fg(app, t.dim)),
-                ]));
-                lines.push(Line::styled(
-                    format!("      {}", it.last_message.as_deref().unwrap_or("")),
-                    fg(app, t.dim),
-                ));
-            }
-            f.render_widget(
-                Paragraph::new(lines)
-                    .block(block("Ready for review — ⏎ inspect · d reviewed · Esc".into())),
-                r,
-            );
         }
         Overlay::About { doc, sel, scroll } => {
             let Some(d) = doc else {

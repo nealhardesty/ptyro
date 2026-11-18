@@ -49,18 +49,6 @@ pub struct WorktreeSection {
     pub branch_template: Option<String>,
 }
 
-/// `[verify]`: a turn is done only when this check passes (SPEC §15, M7.9). `check` names a
-/// run script, so it is covered by the scripts' trust like everything else that executes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct VerifySection {
-    /// A run script's name (`test`, for `[scripts.run.test]`).
-    pub check: Option<String>,
-    pub max_bounces: Option<u32>,
-    /// Verify every agent session in this project's worktrees.
-    pub auto: bool,
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunMode {
@@ -298,18 +286,10 @@ impl ProjectConfig {
         })
     }
 
-    /// What a person trusts when they trust a project's scripts: the scripts, and (when set)
-    /// which of them is the verified-done check and whether it runs after every turn. With the
-    /// defaults it is exactly [`Scripts::fingerprint`], so scripts trusted before still are.
+    /// What a person trusts when they trust a project's scripts: exactly
+    /// [`Scripts::fingerprint`].
     pub fn trust_fingerprint(&self) -> String {
-        let v = &self.verify;
-        if v.check.is_none() && !v.auto && v.max_bounces.is_none() {
-            return self.scripts.fingerprint();
-        }
-        let canonical = serde_json::to_string(&(&self.scripts.trusted_view(), &self.verify))
-            .unwrap_or_default();
-        let digest = Sha256::digest(canonical.as_bytes());
-        digest.iter().map(|b| format!("{b:02x}")).collect()
+        self.scripts.fingerprint()
     }
 }
 
@@ -321,8 +301,6 @@ pub struct ProjectConfig {
     pub scripts: Scripts,
     /// Prompt snippets offered by the wizard and `--prompt @name`.
     pub prompts: BTreeMap<String, String>,
-    /// Verified-done (M7.9): the run script agents' turns must pass.
-    pub verify: VerifySection,
     /// Where each value came from: `scripts.setup` → `.ptyro.toml`, `scripts.run.web` →
     /// `.conductor/settings.toml` (`project config --explain`).
     #[serde(skip)]

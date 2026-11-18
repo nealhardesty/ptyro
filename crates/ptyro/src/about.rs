@@ -208,7 +208,7 @@ pub async fn collect(ctx: &Ctx) -> About {
             kind: "gh".into(),
             found: gh.is_some(),
             text: gh.map_or_else(
-                || "not found (pull request features need it)".into(),
+                || "not found (optional: starting work from a GitHub issue needs it)".into(),
                 |p| p.display().to_string(),
             ),
         },

@@ -252,7 +252,7 @@ impl Daemon {
     }
 
     /// The items started from worktree `qualified` are ticked (`tick_on_finish`).
-    pub(crate) fn pad_finished(&self, qualified: &str, pr: Option<u64>) {
+    pub(crate) fn pad_finished(&self, qualified: &str) {
         if !self.config().scratchpad.tick_on_finish {
             return;
         }
@@ -271,7 +271,7 @@ impl Daemon {
         let done = pad.modify(|t| {
             let mut t = t.to_owned();
             for line in &mine {
-                t = pad::tick(&t, *line, pr)?;
+                t = pad::tick(&t, *line, None)?;
             }
             Ok(t)
         });

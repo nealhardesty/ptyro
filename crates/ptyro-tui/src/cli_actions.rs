@@ -30,24 +30,16 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
             "{ask:File to write (e.g. session.cast)}",
         ],
     ),
-    (
-        "session.verify",
-        &[
-            "verify",
-            "{session}",
-            "{ask:The check its turns must pass (a run script or a command; empty: the project's)}",
-        ],
-    ),
+    ("session.events", &["events", "--session", "{session}"]),
     ("checkpoint.list", &["checkpoint", "ls", "{session}"]),
     (
         "checkpoint.diff",
-        &["checkpoint", "diff", "{session}", "{ask:Which checkpoint (its number)}", "--stat"],
+        &["checkpoint", "diff", "{session}", "{ask:Which checkpoint (its number)}"],
     ),
     (
         "checkpoint.restore",
         &["checkpoint", "restore", "{session}", "{ask:Back to which checkpoint (its number)}"],
     ),
-    ("pr.reply", &["pr", "reply", "{ask:Your reply on the PR}", "--wt", "{worktree}"]),
     ("project.show", &["project", "show", "{project}"]),
     ("project.config", &["project", "config", "{project}", "--explain"]),
     ("profile.list", &["profile", "ls"]),
