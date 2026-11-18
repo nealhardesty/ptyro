@@ -167,6 +167,26 @@ pub fn public_cert_for(served: Option<&Served>, base: &str) -> bool {
     })
 }
 
+/// Why a pairing link opens on a certificate warning: Tailscale's certificate, which every
+/// device trusts, should be in use and isn't, so the device gets ptyro's own, which it trusts
+/// only once its CA is installed. Browsers won't install the app over a certificate they
+/// don't trust. `None` when Tailscale's is in use or wasn't meant to be.
+pub fn untrusted_link(served: Option<&Served>, public: bool) -> Option<String> {
+    let s = served.filter(|s| !public && s.cert != "own")?;
+    let note = s.cert_note.as_deref()?;
+    // The fix, without the raw `tailscale cert` output it ends with.
+    let fix = note.split_once(" (").map_or(note, |x| x.0);
+    let fix = fix.lines().next().unwrap_or(fix);
+    let mut c = fix.chars();
+    let fix = c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default();
+    Some(format!(
+        "this link opens on a certificate warning, and the browser won't install the app, until \
+         the device trusts ptyro's certificate: Tailscale's, which every device trusts already, \
+         isn't in use. {fix}; the web app takes it up within 10 minutes (`ptyro web off` and `on` \
+         at once), then pair again"
+    ))
+}
+
 /// The running `ptyro serve`'s record, if it's still running.
 pub fn served(paths: &ptyro_core::paths::Paths) -> Option<Served> {
     let s: Served =
@@ -274,6 +294,120 @@ fn trust_on_windows(w: &ptyro_core::wsl::Wsl, ca_pem: &str) -> Result<(), Error>
     }
 }
 
+/// The NSS certificate databases this user's Linux browsers read: Chrome's and Chromium's
+/// shared one (`~/.pki/nssdb`, snap Chromium's own) and each Firefox profile's (also snap's and
+/// Flatpak's). Only ones that exist: a browser that never ran has nothing to trust in.
+fn browser_stores(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out: Vec<_> = [".pki/nssdb", "snap/chromium/current/.pki/nssdb"]
+        .iter()
+        .map(|d| home.join(d))
+        .filter(|d| d.join("cert9.db").is_file())
+        .collect();
+    for root in [
+        ".mozilla/firefox",
+        "snap/firefox/common/.mozilla/firefox",
+        ".var/app/org.mozilla.firefox/.mozilla/firefox",
+    ] {
+        let Ok(dir) = std::fs::read_dir(home.join(root)) else { continue };
+        let mut profiles: Vec<_> =
+            dir.flatten().map(|e| e.path()).filter(|p| p.join("cert9.db").is_file()).collect();
+        profiles.sort();
+        out.extend(profiles);
+    }
+    out
+}
+
+/// The name ptyro's CA goes by in an NSS database: one per CA, so a new CA is a new entry.
+fn nss_nickname(fingerprint: &str) -> String {
+    let hex: String = fingerprint.chars().filter(char::is_ascii_hexdigit).take(16).collect();
+    format!("ptyro local CA {hex}")
+}
+
+/// Whether `db` holds ptyro's CA. `None`: `certutil` isn't installed.
+fn nss_trusts(db: &std::path::Path, nickname: &str) -> Option<bool> {
+    let out = std::process::Command::new("certutil")
+        .args(["-L", "-d"])
+        .arg(format!("sql:{}", db.display()))
+        .args(["-n", nickname])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    Some(out.status.success())
+}
+
+/// Offer to trust ptyro's CA in the browsers' stores (`dbs`) that don't yet, so `pair --open`
+/// opens without a warning. Asks first (not with `--json`, which can't). What to tell the user
+/// when the browser will still warn.
+fn trust_on_linux(
+    dbs: &[std::path::PathBuf],
+    fingerprint: &str,
+    ca_pem: &std::path::Path,
+    json: bool,
+) -> Option<String> {
+    if dbs.is_empty() {
+        return Some(
+            "the browser may warn about ptyro's certificate first: there is no Chrome, Chromium \
+             or Firefox store here to trust it in; continue past the warning"
+                .into(),
+        );
+    }
+    let nick = nss_nickname(fingerprint);
+    let mut missing = Vec::new();
+    for db in dbs {
+        match nss_trusts(db, &nick) {
+            Some(true) => {}
+            Some(false) => missing.push(db),
+            None => {
+                return Some(
+                    "the browser warns about ptyro's certificate first: install certutil \
+                     (libnss3-tools on Debian and Ubuntu, nss-tools on Fedora, nss on Arch) and \
+                     run `ptyro pair --open` again to trust it, or continue past the warning"
+                        .into(),
+                );
+            }
+        }
+    }
+    if missing.is_empty() {
+        return None;
+    }
+    let later = "the browser warns about ptyro's certificate first (this computer's browsers \
+                 don't trust it yet): run `ptyro pair --open` in a terminal to trust it, or \
+                 continue past the warning";
+    if json
+        || !crate::cli::confirm(
+            "This computer's browsers (Chrome, Chromium, Firefox) don't trust ptyro's certificate \
+             yet, so the page would open on a warning. Trust it, for your user only?",
+        )
+    {
+        return Some(later.into());
+    }
+    let mut failed = Vec::new();
+    for db in missing {
+        let ok = std::process::Command::new("certutil")
+            .args(["-A", "-d"])
+            .arg(format!("sql:{}", db.display()))
+            .args(["-t", "C,,", "-n", &nick, "-i"])
+            .arg(ca_pem)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            failed.push(db.display().to_string());
+        }
+    }
+    if failed.is_empty() {
+        eprintln!("This computer's browsers trust ptyro's certificate now.");
+        None
+    } else {
+        Some(format!(
+            "certutil couldn't add ptyro's certificate to {}: that browser warns first; \
+             continue past the warning",
+            failed.join(", ")
+        ))
+    }
+}
+
 /// A QR code as text, two rows per line (fits in a terminal).
 pub fn qr(text: &str) -> Option<String> {
     let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
@@ -357,10 +491,14 @@ pub async fn pair(
             }
             r => return Err(unexpected(r)),
         };
-    let (base, notes, ca, _) = served_base(ctx, url);
+    let (base, mut notes, ca, _) = served_base(ctx, url);
     // Tailscale's certificate on this address: phones trust it already, no CA to hand out.
-    let public = public_cert_for(served(&ctx.paths).as_ref(), &base);
+    let running = served(&ctx.paths);
+    let public = public_cert_for(running.as_ref(), &base);
     let ca = ca.filter(|_| !public);
+    if let Some(w) = untrusted_link(running.as_ref(), public) {
+        notes.push(w);
+    }
     // What we print stays in scrollback and recordings, so it is a code the web app trades
     // (once, within minutes) for the token, never the token. It travels in the fragment:
     // browsers never send that to a server or put it in logs.
@@ -391,6 +529,19 @@ pub async fn pair(
                  run `ptyro pair --open` in a terminal to trust it, or continue past the warning"
                     .into(),
             ),
+        }
+    }
+    // On Linux itself, Chrome, Chromium and Firefox check certificates against their own NSS
+    // databases, not the system's: the same offer, for those (this user only, no sudo).
+    if open
+        && cfg!(target_os = "linux")
+        && wsl.is_none()
+        && let Some(f) = &ca
+    {
+        let ca_pem = crate::tls::dir(&ctx.paths.data).join("ca.pem");
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from).unwrap_or_default();
+        if let Some(n) = trust_on_linux(&browser_stores(&home), f, &ca_pem, json) {
+            notes.push(n);
         }
     }
     let opened = open && ptyro_core::open::open(&ptyro_core::open::Opened::Url(&link));
@@ -585,6 +736,60 @@ mod tests {
         let s = trust_check_script("71:50:16:D0:2A");
         assert!(s.starts_with("$h = '715016D02A';"), "{s}");
         assert!(s.contains(r"Cert:\CurrentUser\Root") && s.contains("SHA256"), "{s}");
+    }
+
+    fn served_with(cert: &str, note: Option<&str>) -> Served {
+        Served {
+            pid: 1,
+            url: "https://box.tail1234.ts.net:7091".into(),
+            ca_fingerprint: Some("AB:CD".into()),
+            listen: None,
+            cert: cert.into(),
+            tailscale_name: None,
+            cert_note: note.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_link_without_tailscales_certificate_says_why_and_the_fix() {
+        let note = "Tailscale won't let this user ask for a certificate: run `sudo tailscale set \
+                    --operator=$USER` once (Access denied: cert access denied\n\nUse 'sudo …'.)";
+        let w = untrusted_link(Some(&served_with("ptyro", Some(note))), false).unwrap();
+        assert!(w.contains("won't install the app"), "{w}");
+        assert!(w.contains("run `sudo tailscale set --operator=$USER` once;"), "{w}");
+        assert!(!w.contains("Access denied") && !w.contains('\n'), "{w}");
+        let w = untrusted_link(Some(&served_with("ptyro", Some("your tailnet has no …"))), false);
+        assert!(w.unwrap().contains("Your tailnet has no …;"));
+        // Tailscale's in use, not meant to be, or the owner's own certificate: nothing to say.
+        assert!(untrusted_link(Some(&served_with("tailscale", Some(note))), true).is_none());
+        assert!(untrusted_link(Some(&served_with("ptyro", None)), false).is_none());
+        assert!(untrusted_link(Some(&served_with("own", Some(note))), false).is_none());
+        assert!(untrusted_link(None, false).is_none());
+    }
+
+    #[test]
+    fn linux_browser_stores_are_the_ones_that_exist() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path();
+        assert!(browser_stores(h).is_empty());
+        for d in [".pki/nssdb", ".mozilla/firefox/b.default", ".mozilla/firefox/a.other"] {
+            std::fs::create_dir_all(h.join(d)).unwrap();
+            std::fs::write(h.join(d).join("cert9.db"), "").unwrap();
+        }
+        std::fs::create_dir_all(h.join(".mozilla/firefox/Crash Reports")).unwrap();
+        let got = browser_stores(h);
+        assert_eq!(
+            got,
+            [".pki/nssdb", ".mozilla/firefox/a.other", ".mozilla/firefox/b.default"]
+                .map(|d| h.join(d))
+        );
+        // No store: the note says so instead of asking.
+        let n = trust_on_linux(&[], "AB", std::path::Path::new("ca.pem"), true).unwrap();
+        assert!(n.contains("no Chrome, Chromium or Firefox store"), "{n}");
+        assert_eq!(
+            nss_nickname("2C:8F:44:57:92:6E:A4:B7:10:BB"),
+            "ptyro local CA 2C8F4457926EA4B7"
+        );
     }
 
     fn status(proxy: &str) -> serde_json::Value {
