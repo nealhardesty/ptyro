@@ -1257,7 +1257,7 @@ pub fn session_wizard(
         return Err(("where", "a command runs in a worktree that exists, or here".into()));
     }
     let which = form.opt("which");
-    let (mut pr, mut issue, mut branch, mut take) = (None, None, None, false);
+    let (mut pr, mut issue, mut branch) = (None, None, None);
     match form.get("from").as_str() {
         "" => {}
         _ if !new => return Err(("from", "only a new worktree starts from somewhere".into())),
@@ -1276,7 +1276,7 @@ pub fn session_wizard(
             Some(b) => branch = Some(b),
             None => return Err(("which", "the branch to check out".into())),
         },
-        _ => take = true,
+        _ => {}
     }
     let name = form.opt("name");
     let prompt = form.opt("prompt");
@@ -1292,7 +1292,6 @@ pub fn session_wizard(
         pr,
         issue,
         branch,
-        take,
         profile: form.opt("profile"),
         base: form.opt("base"),
         no_setup: form.get("setup").is_empty(),
@@ -1354,16 +1353,13 @@ impl App {
             ("pr".into(), "a pull request".into()),
             ("issue".into(), "an issue".into()),
             ("branch".into(), "a branch that exists".into()),
-            ("take".into(), "my uncommitted changes in the main checkout".into()),
         ]);
         let from_sel = if w.pr.is_some() {
             1
         } else if w.issue.is_some() {
             2
-        } else if w.branch.is_some() {
-            3
         } else {
-            usize::from(w.take) * 4
+            usize::from(w.branch.is_some()) * 3
         };
         let which =
             w.pr.map(|n| n.to_string())

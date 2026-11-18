@@ -20,7 +20,6 @@ pub mod console;
 pub mod handoff;
 #[cfg(windows)]
 pub mod pipe;
-mod ports;
 mod probe;
 #[cfg(unix)]
 mod unix;
@@ -34,7 +33,6 @@ mod windows;
 pub mod winread;
 #[cfg(windows)]
 pub mod winreg;
-pub use ports::listening_ports;
 
 /// Whether process `pid` is running: [`ptyro_core::os::alive`] on Unix; on Windows (WIN11, where
 /// `ptyro serve` and its record run natively) whether it can be waited on and hasn't exited.
@@ -103,6 +101,7 @@ pub const STRIP_ENV: &[&str] = &[
     "PTYRO_WORKTREE_PATH",
     "PTYRO_WORKTREE_NAME",
     "PTYRO_BRANCH",
+    // An older ptyro (before 2026-11-17) set these two: still stripped, never re-set.
     "PTYRO_PORT",
     "PTYRO_PORT_COUNT",
 ];

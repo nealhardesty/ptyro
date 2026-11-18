@@ -14,7 +14,7 @@ use ptyro_core::model::{
     WorkspaceInfo, WorktreeInfo, WorktreeSpec,
 };
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
-use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec, Watch};
+use ptyro_core::session::{HistoryEntry, SessionInfo, SpawnSpec, Watch};
 use ptyro_core::status::{Alert, AttentionKind, Usage};
 use ptyro_core::{ClientId, Error, SessionId, TermSize};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 44 };
+pub const PROTO: Version = Version { major: 1, minor: 45 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -95,6 +95,17 @@ pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
     ("scratch_pane", "the scratchpad"),
     ("inbox", "the inbox"),
     ("inbox_mark", "the inbox"),
+    ("worktree_archive", "archived worktrees"),
+    ("worktree_restore", "archived worktrees"),
+    ("worktree_archive_delete", "archived worktrees"),
+    ("worktree_archive_get", "archived worktrees"),
+    ("worktree_archives", "archived worktrees"),
+    ("worktree_pair", "pair mode"),
+    ("worktree_lock", "locking worktrees by hand"),
+    ("worktree_rename_branch", "renaming a worktree's branch"),
+    ("project_suggest", "setup suggestions"),
+    ("project_line_endings", "rewriting scripts' line endings"),
+    ("last_launch", "quick new (`new --again`)"),
 ];
 
 /// A checkpoint of a session's worktree, taken after an agent turn (SPEC §15.3).
@@ -522,15 +533,6 @@ pub enum Request {
     /// its own on this daemon (it survives the daemon's live upgrade at its end). Refused for a
     /// binary an administrator or a package manager owns, and a build. Replies `Session`.
     SelfUpdate,
-    /// What quick new (`SpawnSpec.again`) starts in `worktree` (an address; none: outside one):
-    /// its last agent, else its project's default agent, else the default agent (1.26, UX3.7).
-    /// `workspace` is no longer read (1.19 asked by workspace). Replies `LastLaunch`.
-    LastLaunch {
-        #[serde(default)]
-        workspace: String,
-        #[serde(default)]
-        worktree: Option<String>,
-    },
     /// A structured session's whole transcript (M10).
     ChatGet {
         addr: String,
@@ -612,11 +614,6 @@ pub enum Request {
     ProjectUntrust {
         addr: String,
     },
-    /// Rewrite with LF the files a project's scripts run with bash that have Windows (CRLF)
-    /// line endings, in its main checkout and every worktree (1.28, WIN6). `Notes` says what.
-    ProjectLineEndings {
-        addr: String,
-    },
     /// Git repositories under `discover.roots` (cached; `refresh` rescans).
     Discover {
         #[serde(default)]
@@ -674,8 +671,8 @@ pub enum Request {
     WorktreeRefresh {
         addr: String,
     },
-    /// Run a lifecycle script in a `script` session: `setup`, `archive`, `after_turn`, a run
-    /// script name, or `None` for the default run script.
+    /// Run a lifecycle script in a `script` session: `setup`, a run script name, or `None` for
+    /// the default run script.
     WorktreeRun {
         addr: String,
         #[serde(default)]
@@ -683,21 +680,11 @@ pub enum Request {
         #[serde(default)]
         size: Option<TermSize>,
     },
-    WorktreeLock {
-        addr: String,
-        lock: bool,
-    },
     /// Rename a worktree: its name, its address `project/name` (1.38, SPEC §2.3). Its branch and
     /// its directory stay as they are; `@root` can't be renamed.
     WorktreeRename {
         addr: String,
         name: String,
-    },
-    /// Rename the branch (refused once pushed); `None` derives a name from the first commit.
-    WorktreeRenameBranch {
-        addr: String,
-        #[serde(default)]
-        branch: Option<String>,
     },
     /// Stale worktrees (never removes anything).
     Gc,
@@ -705,40 +692,6 @@ pub enum Request {
     /// anywhere, then the main remote's without a local branch.
     Branches {
         project: String,
-    },
-    /// What a project's first worktree could use (UX1.11): a setup script from its lockfile,
-    /// `.env` files to copy. `apply`: `Some(true)` writes them to `.ptyro.local.toml`,
-    /// `Some(false)` declines; either way they're never offered again.
-    ProjectSuggest {
-        addr: String,
-        #[serde(default)]
-        apply: Option<bool>,
-    },
-    /// Archive a worktree (UX1.12): snapshot its files, keep its branch, remove it. Never loses
-    /// work, so it doesn't refuse the way removing does. `stop_sessions` stops what runs in it.
-    WorktreeArchive {
-        addr: String,
-        #[serde(default)]
-        stop_sessions: bool,
-    },
-    /// Bring an archived worktree back as it was (`name`, or `project/name`).
-    WorktreeRestore {
-        addr: String,
-    },
-    /// Delete an archived worktree for good (`name`, or `project/name`): its snapshot, the
-    /// ignored files kept with it, and its branch when that is merged or pushed.
-    WorktreeArchiveDelete {
-        addr: String,
-    },
-    /// The one archived worktree `addr` names, resolved as restoring and deleting resolve it
-    /// (`Reply::Archives` with that entry), so a client can ask about it by its name first.
-    WorktreeArchiveGet {
-        addr: String,
-    },
-    /// Archived worktrees, newest first.
-    WorktreeArchives {
-        #[serde(default)]
-        project: Option<String>,
     },
 
     // ── profiles (SPEC §10.10) ──
@@ -878,17 +831,6 @@ pub enum Request {
         adapter: String,
     },
 
-    // ── pair mode (SPEC §10.11) ──
-    /// Pair mode: show the worktree's state in the project's main checkout, and (`off`) put the
-    /// main checkout back, carrying edits made there into the worktree.
-    WorktreePair {
-        addr: String,
-        #[serde(default)]
-        off: bool,
-        /// Re-sync the main checkout with the worktree.
-        #[serde(default)]
-        refresh: bool,
-    },
     // ── checkpoints (SPEC §15.3) ──
     /// Checkpoints of a session (or of every session in a worktree).
     CheckpointList {
@@ -1183,6 +1125,10 @@ pub struct DaemonDoctor {
     /// run (SPEC §22.10).
     #[serde(default)]
     pub meaning: Option<String>,
+    /// What removed features left in ptyro's records that is still the person's (archived
+    /// worktrees' snapshots, a main checkout still paired), each with how to get it back (1.45).
+    #[serde(default)]
+    pub left_behind: Vec<String>,
 }
 
 /// The result of a hook self-test.
@@ -1377,7 +1323,6 @@ impl Request {
             self,
             Request::Remove { .. }
                 | Request::WorktreeRemove { .. }
-                | Request::WorktreeArchive { .. }
                 | Request::ProjectRemove { .. }
                 | Request::Shutdown { .. }
                 | Request::Convert { .. }
@@ -1393,9 +1338,6 @@ impl Request {
             (Request::Remove { stop, .. }, A::Stop) => *stop = true,
             (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
             (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
-            (Request::WorktreeArchive { stop_sessions, .. }, A::StopSessions) => {
-                *stop_sessions = true
-            }
             (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
             (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
                 *force = true
@@ -1419,12 +1361,6 @@ pub enum Reply {
     },
     Machine {
         info: ptyro_core::model::MachineInfo,
-    },
-    /// What quick new starts there (always some, from 1.26; `None` from an older daemon: the
-    /// default agent).
-    LastLaunch {
-        #[serde(default)]
-        launch: Option<LastLaunch>,
     },
     Sessions {
         sessions: Vec<SessionInfo>,
@@ -1493,7 +1429,7 @@ pub enum Reply {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         issue_prompt: Option<String>,
     },
-    /// What a removal did (kept branches, archive script, released ports).
+    /// What a removal did (kept branches).
     Removed {
         notes: Vec<String>,
     },
@@ -1503,14 +1439,8 @@ pub enum Reply {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         scratch: Vec<ptyro_core::model::ScratchLeftover>,
     },
-    Archives {
-        entries: Vec<ptyro_core::model::ArchiveEntry>,
-    },
     Branches {
         names: Vec<String>,
-    },
-    Suggestions {
-        suggestions: ptyro_core::model::SetupSuggestions,
     },
     Profiles {
         profiles: Vec<ProfileInfo>,

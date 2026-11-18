@@ -34,7 +34,7 @@ Status markers used below:
 7. Sessions: lifecycle, persistence, hibernation, resume
 8. Agent adapters
 9. Status engine and attention
-10. Projects, worktrees, setup scripts, ports, profiles
+10. Projects, worktrees, setup scripts, profiles
 11. The TUI
 12. The CLI
 13. Configuration
@@ -166,7 +166,7 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   - The renames (owner, 2026-11-09): `rename` (a session), `wt rename` (a worktree) and
     `project rename` (a project's slug, the `project` in `project/name`), in the CLI, the TUI
     (`session.rename`, `worktree.rename`, `project.rename`) and the web. A worktree keeps its
-    branch (`wt rename-branch` changes that) and its directory, and a project's worktrees keep
+    branch and its directory, and a project's worktrees keep
     theirs: moving a directory under running sessions would break them. A worktree's name is
     unique among its project's worktrees; a project's slug is unique; `@root`, the main
     checkout, is never renamed. A running process keeps the `PTYRO_WORKTREE_NAME` and
@@ -196,7 +196,7 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     `-3` (`names::numbered`), its base cut so the whole stays within 64.
   - **Project slugs** fold to the narrower `[a-z0-9-]`, at most 40 (`model::slugify`, built on the
     same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
-    its worktrees and archives, so this fold stays as it was: re-adding a repository finds them
+    its worktrees, so this fold stays as it was: re-adding a repository finds them
     again, and stored slugs keep working. A directory with nothing slug-like in its name gets
     `repo`; nothing else falls back to it. A slug a person gives (`project rename`, in every
     client) follows the same rule and is refused when it's wrong, never rewritten, with the fix
@@ -257,7 +257,7 @@ inside them, so CLI commands default to the worktree you're standing in. Ids are
 show the suggestion before ⏎ (§11.2h).
 
 **One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
-way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
+way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, devices and machines. The code is `ptyro_core::lookup`; each resolver
 uses it, so the rules can't drift apart.
 
 1. **Order**: an exact name (a project's slug) → the qualified form where the kind has one
@@ -271,15 +271,12 @@ uses it, so the rules can't drift apart.
 3. **Ambiguity** is always `ambiguous` (CLI exit 4), and the message lists the candidates as
    they can be addressed, at most 5 and then "and N more": `2 sessions are named "build": say
    which, app/build or lib/build`.
-   Several archived worktrees of one name are listed with their handles and ages. Each
-   candidate reads "address (description)": `a1b2c3d4e5f6 (Phone)`,
-   `c:7f3k (Fix the build)`, `7f3k (myrepo/feat, archived 3d ago)`.
+   Each candidate reads "address (description)": `a1b2c3d4e5f6 (Phone)`,
+   `c:7f3k (Fix the build)`.
 4. **Not found names the kind**: `no run matches "zz9q"`, `no device matches "phone"; the
    devices are laptop and tablet`. Where the set is small (devices, workspaces, profiles,
    machines) the message lists what there is.
-5. **Archived worktrees** have an id (protocol 1.38; earlier ones get a stable one when the list
-   is read) and resolve by name, `project/name` (the project by slug, id or path, as anywhere),
-   or handle. `ptyro wt archives` shows the handle; the TUI and the web send the id.
+5. **Archived worktrees** and their ids: removed 2026-11-17 with archiving (§10.8).
 
 ---
 
@@ -300,7 +297,7 @@ uses it, so the rules can't drift apart.
  │  Client hub (subscriptions, frame pacing)      Notifier (OSC 9, push…)   │
  │  Session actors ×N:  PTY ⇄ Emulator ⇄ row-versioned screen  ⇄ recorder   │
  │  Adapter layer: claude | codex | gemini | opencode | shell | generic     │
- │  Git/worktree service (git CLI)   Script runner (setup/run/archive)      │
+ │  Git/worktree service (git CLI)   Script runner (setup/run)              │
  │  Store actor (SQLite)             Config loader (TOML, layered)          │
  └───────────────┬──────────────────────────────────────────────────────────┘
                  │ owns PTY masters; children are its direct child processes
@@ -386,7 +383,7 @@ MSRV: latest stable at project start, pinned in `rust-toolchain.toml`; edition 2
 | Logging | `tracing`, `tracing-subscriber`, `tracing-appender` | |
 | Fuzzy find | `nucleo` 0.5 | pickers |
 | IDs | `ulid` | |
-| Process info | `sysinfo` 0.39 (or `/proc` + `libproc` direct) | cwd, fg process, ports |
+| Process info | `sysinfo` 0.39 (or `/proc` + `libproc` direct) | cwd, fg process |
 | Git reads | `gix` 0.89 (optional) | worktree add/remove always via git CLI |
 | Files | `notify` 8 + debouncer; `reflink-copy` | CoW copies for shared dirs |
 | Tests | `insta`, `proptest`, `assert_cmd` | |
@@ -449,7 +446,7 @@ Everything is message passing over `tokio::sync::mpsc`; no shared mutable state 
 | **Notifier** | 1 | desktop/OSC/push notifications, sinks, mute rules | |
 | **Store** | 1 OS thread | the `rusqlite::Connection` (WAL, `busy_timeout`) | async callers send closures + oneshot |
 | **Git service** | pool (≤4) | `git` subprocess invocations | serialized per project to avoid lock contention |
-| **Script runner** | per script | setup/run/archive processes (each in its own PTY session, kind `script`) | |
+| **Script runner** | per script | setup/run processes (each in its own PTY session, kind `script`) | |
 | **Ingress** | per transport | hook events, socket accept, later WebSocket | |
 
 ### 4.3 The session hot path
@@ -643,7 +640,7 @@ owner chose this over restart-and-resume, WIN0.5 d). `ptyro daemon upgrade [--bi
   of the session's program in its job (through a `cmd.exe` running a batch shim), its name the
   image's stem, lowercase, or for an interpreter (node, bun, deno, python…) the script it runs
   (a package's generic `cli.js` gives the package's folder); its directory is read from its
-  PEB; ports come from `GetExtendedTcpTable` with the Toolhelp32 tree; which session a process
+  PEB; which session a process
   is in is the job that holds it (`IsProcessInJob`: a process can't leave a job, and pids,
   which Windows reuses, aren't followed up parents). `is_raw` is unknown: only Unix job control
   reads it.
@@ -667,8 +664,7 @@ owner chose this over restart-and-resume, WIN0.5 d). `ptyro daemon upgrade [--bi
     to argv[0]'s basename (`/proc/<pid>/cmdline`, macOS `KERN_PROCARGS2`), §20.5;
   - cwd: `/proc/<pid>/cwd` (Linux) / `proc_pidinfo(PROC_PIDVNODEPATHINFO)` (macOS), preferring
     OSC 7 reports from the shell when present;
-  - listening TCP ports of the process tree (Linux `/proc/net/tcp*` + fd inodes; macOS `libproc`) —
-    shown in the sidebar (§11) and used for port-conflict warnings.
+  - listening TCP ports: no longer scanned (removed 2026-11-17, §10.7).
 - **Child environment** (§8.2 adds adapter-specific variables):
 
   | Variable | Value |
@@ -680,7 +676,7 @@ owner chose this over restart-and-resume, WIN0.5 d). `ptyro daemon upgrade [--bi
   | `PTYRO_SESSION_ID` | session ULID |
   | `PTYRO_PROFILE` | the session's profile name (§10.10) |
   | `PTYRO_SOCKET` | daemon socket path (for `ptyro hook` and nested `ptyro` CLI use) |
-  | `PTYRO_PROJECT`, `PTYRO_WORKTREE_PATH`, `PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` | when in a worktree (§10.6) |
+  | `PTYRO_PROJECT`, `PTYRO_WORKTREE_PATH`, `PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH` | when in a worktree (§10.6) |
   | removed | `TMUX`, `TMUX_PANE`, `STY`, `ZELLIJ*`, `WEZTERM_PANE`, `KITTY_WINDOW_ID`, `ITERM_SESSION_ID`, `TERM_SESSION_ID` — the child must see *ptyro* as its terminal, not the outer one |
   | removed | `COLUMNS`, `LINES` (stale from the outer terminal), `WEZTERM_UNIX_SOCKET`, `KITTY_LISTEN_ON`, `GHOSTTY_BIN_DIR`, `WT_SESSION`, and an enclosing ptyro session's `PTYRO_SESSION_ID` (re-set for the new session) |
   | from the client | `SSH_AUTH_SOCK`, `SSH_CONNECTION`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`: the *spawning* client's values win over the daemon's, like tmux's `update-environment` |
@@ -955,7 +951,7 @@ Push messages have no id.
 - `SpawnSpec` gains `agent`, `worktree`, `profile`, `workspace`, `override_pin` and
   `confirmed`.
 - `SessionInfo` gains `profile`, `worktree`, `project`, `workspace`, `agent`, `script` and
-  `ports`.
+  `ports` (removed 2026-11-17, protocol 1.45).
 - New error code `needs_confirmation` (exit code 5): the request would cross a profile guard or a
   pin, and the client resends it with consent (the CLI asks on a TTY; the TUI shows a dialog).
 
@@ -990,8 +986,9 @@ Push messages have no id.
 - `SessionInfo` gains `prompt_pending`, `last_prompt_ms`, `turns` and `last_output_ms`, which
   `wait` needs (§12.2).
 
-**[built M6] Protocol 1.5** (additive; all of it but `WorktreePair` and `WorktreeSpec.issue` was
-removed on 2026-11-17 with review, pull requests and landing, protocol 1.43):
+**[built M6] Protocol 1.5** (additive; all of it but `WorktreeSpec.issue` was removed on
+2026-11-17: `WorktreePair` with pair mode, protocol 1.45, the rest with review, pull requests and
+landing, protocol 1.43):
 - **Requests:**
   - `WorktreeDiff{against: base|upstream|last_turn|head}` → `Diff{doc: DiffDoc}`;
   - `WorktreeLog` → `Commits`;
@@ -1077,7 +1074,7 @@ and lead requests below were removed on 2026-11-17 with orchestration, protocol 
 - **Change sets:** `Cs{op}` → `Cs{value}`, `RunKind::Changeset` and the run state and events
   that carried a set. Removed on 2026-11-17 with change sets (§15.5).
 - `SpawnSpec` gains `mcp` (give the agent `ptyro mcp`); `WorktreeSpec` gains `path` (put the
-  worktree there instead of `worktrees.location`).
+  worktree there instead of `worktrees.location`; removed 2026-11-17, protocol 1.45).
 
 **[built] Protocol 1.10** (security review, M2; *not* additive for pairing):
 - **Pairing:** `DevicePair{name, scope}` now answers `Pairing{device, code, expires_ms}`, a
@@ -1102,14 +1099,16 @@ and lead requests below were removed on 2026-11-17 with orchestration, protocol 
   else its first prompt, else the window title), and the window title is `window_title`.
 - `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`,
   `WorktreeArchiveDelete{addr}` → `Notes`
-  → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8; removed 2026-11-17).
+  → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8; removed 2026-11-17:
+  finishing in protocol 1.43, archives in 1.45).
 - `SessionInfo` gains `summary` (`Summary{text, turn, at_ms}`), and a new request,
   `Summarize{addr}` (control scope), makes one now and replies `Session` (§11.2h).
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
 - `WorktreeSpec.take_changes`, `Branches{project}` → `Branches{names}`, and
-  `ProjectSuggest{addr, apply}` → `Suggestions{suggestions}` (§10.3, §10.4).
+  `ProjectSuggest{addr, apply}` → `Suggestions{suggestions}` (§10.3, §10.4; `take_changes` and
+  `ProjectSuggest` removed 2026-11-17, protocol 1.45).
 
 **[built UX1.25] Protocol 1.13** (additive): `SessionInfo.quick` and `SpawnSpec.quick`, and
 `QuickShell{worktree?, cwd, create, env, size?, workspace?}` → `Session`: a worktree's (or
@@ -1165,6 +1164,19 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built 2026-11-17] Protocol 1.45** (a removal): the worktree and project extras are gone
+(§10.3–§10.8): archived worktrees, pair mode, locking and renaming a branch by hand, setup
+suggestions, fixing line endings, ports and quick new. The requests `worktree_archive`,
+`worktree_restore`, `worktree_archive_delete`, `worktree_archive_get`, `worktree_archives`,
+`worktree_pair`, `worktree_lock`, `worktree_rename_branch`, `project_suggest`,
+`project_line_endings` and `last_launch`, the replies `Archives`, `Suggestions` and `LastLaunch`,
+the types `ArchiveEntry`, `PortBlock` and `LastLaunch`, `WorktreeInfo.ports`, `SessionInfo.ports`,
+`WorktreeSpec.take_changes` and `.path`, and `SpawnSpec.again` were removed; each removed request
+is in `RETIRED_REQUESTS` ("this ptyro no longer has …"). `DaemonDoctor` adds `left_behind`
+(`Vec<String>`): notes on what the removed features left on disk (archives), which `ptyro doctor`
+lists. `WorktreeInfo.locked` stays: the daemon still locks a worktree while sessions run in it. A
+handoff image from an older daemon whose sessions carry `ports` still decodes; they are dropped.
 
 **[built 2026-11-17] Protocol 1.44** (a removal): the scratchpad and the inbox are gone (§13.6,
 §9.5). The requests `scratch_get`, `scratch_put`, `scratch_add`, `scratch_todo`, `scratch_mark`,
@@ -1222,7 +1234,7 @@ the device `machine` (and still replaces an earlier one: update the machine that
   answers "unsupported request".
 - `ArchiveEntry.id`, so archived worktrees that share a name can be told apart (§2.3). Clients send
   it to `WorktreeRestore`/`WorktreeArchiveDelete`; an older daemon's entries have none (empty), and
-  the clients then send `project/name` as before.
+  the clients then send `project/name` as before. (Removed 2026-11-17 with archives, protocol 1.45.)
 - `ChatDelete` gains `confirmed` (default false). The daemon resolves its chat by an exact address
   only (a title is refused, exit 4, its matches listed) and, unconfirmed, answers
   `NeedsConfirmation` with the question every client asks ("Delete the chat “T”? It goes from every
@@ -1239,7 +1251,7 @@ the device `machine` (and still replaces an earlier one: update the machine that
   now only discards unsaved work (before, it also overrode the dependency).
 - `WorktreeArchiveGet{addr}` → `Archives` with the one archive `addr` names (read scope), resolved as
   restoring and deleting do, so `wt archive-rm` resolves before it asks. An older daemon answers
-  "unsupported request".
+  "unsupported request". (Removed 2026-11-17 with archives, protocol 1.45.)
 - `ChatUpdate.auto_title` asks for a new automatic title (§22.8). An empty `title` now clears a
   chat's title (before 1.38 it asked for an automatic one), as `Retitle` does for a session or a
   worktree. Clients send `auto_title` with an empty `title`, so an older daemon (which ignores
@@ -1315,7 +1327,7 @@ leaves it alone. An older daemon ignores the field and starts a shell.
 remembers the last agent per worktree id in `kv` (`last_agent`), from `Spawn` and `WorktreeNew`,
 never a shell, a command line, a tool or a quick terminal, and forgets a
 removed worktree's. `again` therefore always names an agent. An older client asking by workspace
-gets the default agent.
+gets the default agent. (Quick new was removed 2026-11-17, protocol 1.45.)
 
 **[built CHAT1] Protocol 1.22** (additive): chats (§22.14 as built). Requests `ChatNew`, `ChatList`,
 `ChatRead` (the draft's `ChatGet`: that name was a structured session's transcript already),
@@ -1342,6 +1354,7 @@ nothing has) and `tool` (a client's tool, not remembered). `LastLaunch{workspace
 `Spawn` per workspace, and a `WorktreeNew`'s agent, in `kv` (`last_launch`), never a tool, a quick
 terminal or the scratchpad's editor. `again` with no agent named is `full` scope (it may start a
 command line); the web asks `LastLaunch` and names the agent instead, which is `control`.
+(Quick new was removed 2026-11-17, protocol 1.45.)
 
 ### 6.5 Screen frames
 
@@ -1386,7 +1399,7 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
 
 **A refusal says what to do in words every client shares** (owner, 2026-11-09). The CLI, the TUI
 and the web all show the daemon's message, so it never names a CLI flag or tells you to run a
-CLI command: "stop them first", "archive it to keep it, or remove it anyway to discard it", not
+CLI command: "stop them first", "to keep it, commit and push it; to discard it, remove it anyway", not
 "use --stop-sessions" or "use --force". Each client then offers the way through in its own idiom:
 the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 (`refusals_name_no_cli_flag`) keeps flags out of the daemon's refusals.
@@ -1395,7 +1408,7 @@ the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
 second time: `force`, `stop_sessions`, `stop`, or `release` (`trust` went with recipes,
 2026-11-17). The daemon sets it exactly where that way applies (removing a running session: `stop`,
-"Stop and remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn
+"Stop and remove"; a busy worktree's remove: `stop_sessions`; unsaved work, a mid-turn
 convert, a daemon stop with sessions: `force`; forgetting a project with running sessions: `release`,
 "Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
 it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
@@ -1420,7 +1433,7 @@ project trust` `` and the like).
 | `agent` | Adapter-backed coding agent in interactive (PTY) mode. The default. |
 | `shell` | `$SHELL -l` (or configured) in a worktree/cwd. |
 | `command` | Arbitrary command (`nvim`, `lazygit`, `htop`, a dev server). |
-| `script` | ptyro-managed lifecycle script (setup/run/archive) — read-only by default. |
+| `script` | ptyro-managed lifecycle script (setup/run) — read-only by default. |
 | `structured` | **[built M10]** an agent driven over its structured protocol (stream-json / app-server / ACP / OpenCode's server); rendered as a chat view. On the wire it is an `agent` session with `structured: <protocol>`. |
 
 **[built M10] Structured sessions.**
@@ -1495,7 +1508,8 @@ struct SpawnSpec {
 }
 ```
 
-**[built UX3.2]** The real struct also has `again` and `tool` (§6.4, protocol 1.19).
+**[built UX3.2]** The real struct also has `tool` (§6.4, protocol 1.19; `again` was removed
+2026-11-17, protocol 1.45).
 **[proposed SH, §23.12]** `loose`, `slot` and `scratch`: a loose spawn starts in the directory given but is never placed under the worktree that holds it.
 
 **[built]** Where it starts: a worktree given by address (`Worktree`) starts at its root. A
@@ -2219,8 +2233,8 @@ spinner-only redraws (rows whose text didn't change). Derives `active` / `quiet`
 ### 9.3b Turns **[built 2026-10-23]**
 
 A turn is what the agent did between a prompt and its answer. Its end runs the turn-end work:
-`turns` + 1, the checkpoint (§15.6), the summary (UX1.3) and the
-`after_turn` script.
+`turns` + 1, the checkpoint (§15.6) and the summary (UX1.3). (The `after_turn` script was
+removed 2026-11-17.)
 - **Agents with a turn-end signal** (every built-in adapter whose hooks are on, and every
   structured session): the turn ends at the agent's own end, `Signal::TurnEnd` (Claude's and
   Codex's `Stop`, Codex's `notify`, Gemini's `AfterAgent`, OpenCode's `session.idle`, OSC 7501
@@ -2364,17 +2378,16 @@ conformance`):
 - Shown per profile in the sidebar title, the status bar and `ptyro usage`; `ptyro usage` adds
   `ccusage` daily totals when it's installed.
 
-**`after_turn`:** a trusted project's `[scripts] after_turn` runs after each completed turn
-(Working → Idle), with the worktree env (§10.6), unless `[agents.<name>] after_turn = false`.
-It runs as the user outside the agent's sandbox, and runs the files the agent just edited
-(§10.5, "What trust covers").
+**`after_turn`:** removed 2026-11-17 (the pare-down); an agent's own hooks can run a step after
+each turn. `[scripts] after_turn` and `[agents.<name>] after_turn` are retired keys
+(§13.8).
 
 **Workspace scope** (§9.6) is implemented: `notify`, `breakthrough`, the `attention.scope`
 modes and other-workspace badges.
 
 ---
 
-## 10. Projects, worktrees, setup scripts, ports, profiles
+## 10. Projects, worktrees, setup scripts, profiles
 
 ### 10.1 Projects
 
@@ -2390,8 +2403,7 @@ modes and other-workspace badges.
 - The slug comes from `.ptyro.toml [project] name`, else the directory name; `-2`, `-3` suffixes
   keep it unique. `ptyro project rename P NEW` changes it (§2.3; `.ptyro.toml` only names a
   project when it is added). Sessions, workspaces, trust and pins refer to the project by id,
-  so they follow on their own; its worktrees' `project/name` and its archives
-  (`wt restore NEW/name`) follow it.
+  so they follow on their own; its worktrees' `project/name` follows it.
   On another machine's project (MM1.B), the clients offer and check the name it has there
   (`app`, not `laptop2:app`), and the daemon takes the `laptop2:` off a rename's new name where it
   routes the request. Sessions and workspaces are renamed the same way.
@@ -2419,8 +2431,8 @@ modes and other-workspace badges.
   workspace the TUI showed last.
 - Discovery walks `[discover] roots` (depth 3). It stops at repositories and skips hidden dirs,
   `node_modules`, `target`, `vendor` and `venv`, and caches the result for an hour in kv
-  `discover:cache`. The CLI command is `project discover`; in the TUI it's the palette's
-  `project.add`.
+  `discover:cache`. The first run (`init`) and the TUI's and web's project pickers (the palette's
+  `project.add`) use it. (The CLI's `project discover` was removed 2026-11-17.)
 
 ### 10.2 Worktree layout **[decided]**
 
@@ -2436,8 +2448,7 @@ modes and other-workspace badges.
 - `<repo>.worktrees/<name>`;
 - `.ptyro/worktrees/<name>`.
 
-Symlinks higher up, like a macOS `/var` → `/private/var` or a symlinked home, are fine. An
-existing target path given with `WorktreeSpec.path` is refused.
+Symlinks higher up, like a macOS `/var` → `/private/var` or a symlinked home, are fine.
 
 **[built 2026-11-09]** The directory is named once, at creation; a rename never moves it (§2.3). A
 renamed worktree stays in its old directory, and a renamed project's worktrees under its old
@@ -2464,7 +2475,7 @@ Creation steps (async; progress streamed as events; each step retryable):
 2. `git worktree add -b <branch> <path> <base>` (or check out existing branch / `pull/<n>/head`).
 3. `git worktree lock --reason "ptyro:<worktree-ulid>" <path>` while any session runs in it.
 4. Write marker `<git-common-dir>/worktrees/<name>/ptyro.json` (`{id, created_at, project}`).
-5. Copy includes (§10.4). 6. Allocate ports (§10.6). 7. Run `setup` script (§10.5) in a `script`
+5. Copy includes (§10.4). 6. Run `setup` script (§10.5) in a `script`
    session — the user can watch it in a pane; agents may be started immediately or after setup
    (`start_agents = "after_setup" | "immediately"`).
 
@@ -2485,17 +2496,13 @@ needs one), else how to make one and what a Defender exclusion for the folder tr
 exclusions can't be read without an administrator, so it only suggests). A WSL daemon's worktrees
 live on ext4 and get neither.
 
-Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; optional **auto-rename**
-(optional): after the first agent turn, offer a branch name derived from the first prompt
-(`ptyro wt rename-branch`; never automatic once pushed).
+Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`. Renaming a branch
+(`wt rename-branch`, `[worktrees] auto_rename_branch`) was removed 2026-11-17: a branch is
+renamed with git.
 
 **[built UX1.10] Where work comes from.**
-- **`take_changes`** (`new --take-changes`, `wt new --take-changes`, the wizard's "+ with my
-  uncommitted changes" when the main checkout is dirty): the main checkout's work is snapshot
-  first (`Git::checkpoint`; refused when there's none), the new branch starts at the main
-  checkout's HEAD, the snapshot is restored into the worktree (uncommitted, untracked
-  untracked), a copy goes to `refs/ptyro/taken/<name>`, and only then is the main checkout
-  reset and cleaned. If restoring fails the main checkout keeps its changes.
+- **Taking the main checkout's changes** (`--take-changes`): removed 2026-11-17; commit or stash
+  them and start the worktree from that.
 - **`Branches{project}`**: local branches without a worktree, newest first, then the main
   remote's without a local one: the wizard's "+ on an existing branch…".
 - The task box and the wizard's "+ from a PR or an issue…" take a GitHub PR or issue URL, or
@@ -2514,9 +2521,6 @@ Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; option
 - **Agents:** `start_agents` is `[worktree] start_agents` in `.ptyro.toml`, else
   `[worktrees] start_agents`. With `after_setup` the agent is spawned when the setup session
   exits, and the TUI's pane follows it.
-- **Rename:** `wt rename-branch` refuses once the branch has an upstream or exists on a remote.
-  Without a name it uses the template with `{name}` set to a slug of the first commit's subject.
-  Deriving the name from the agent's first prompt comes with prompt delivery in M4.
 
 ### 10.4 Files that git doesn't carry
 
@@ -2541,23 +2545,14 @@ Branch-name templates: `{name}`, `{user}`, `{date}`, `{issue}`, `{slug}`; option
   `.git/info/exclude`. A symlinked `node_modules` is a *file* to git, which `node_modules/` doesn't
   match, so without this every removal would see "untracked work".
 
-**[built UX1.11] Setup suggestions** (`crates/ptyro-daemon/src/suggest.rs`,
-`ProjectSuggest{addr, apply}`, `ptyro project suggest`): before a project's first worktree, a
-lockfile implies a setup script (`pnpm-lock.yaml` → `pnpm install --frozen-lockfile`, `bun.lock`,
-`yarn.lock`, `package-lock.json` → `npm ci`, `uv.lock` → `uv sync`, `poetry.lock`, `Pipfile.lock`,
-`Gemfile.lock`, `composer.lock`, `mix.lock`, `go.sum`; the first found), and ignored `.env` /
-`.env.*` files at the root (not `*.example`, `*.sample`, `*.template`) are offered as `[worktree]
-copy`, unless the project has a setup script, a `.worktreeinclude` or `copy` already. A yes
-writes them into `.ptyro.local.toml` (`toml_edit`: what's there and its comments stay; nothing is
-overwritten) and excludes that file in `.git/info/exclude`; when they're then the project's only
-scripts, they are trusted. Yes or no, kv `suggested:<project>` keeps it from asking again. The
-TUI asks in a dialog before creating the first worktree (then the usual trust check); the CLI
-asks on a terminal; `project.suggest` shows them any time.
+**[built UX1.11, removed 2026-11-17] Setup suggestions** (`project suggest`, the first-worktree
+offer): removed; a project's setup script and `[worktree] copy` are the user's to write.
 
 ### 10.5 Lifecycle scripts and trust **[decided]**
 
-Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named run scripts with
-`default`), `archive` (before removal), `after_turn` (optional, after each agent turn — lint/format).
+Scripts are defined in the project config (§13.3): `setup` and `run.<name>` (named run scripts
+with `default`). The `archive` (before removal) and `after_turn` (after each agent turn) scripts
+were removed 2026-11-17; their keys are retired (§13.8).
 
 - Run via `$SHELL -c` in the worktree, in their own PTY session (kind `script`), own process group,
   with the env of §10.6. **[built WIN6]** In the shell they're written for, `[scripts] shell =
@@ -2574,19 +2569,17 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   `auto` is part of the trust fingerprint (`auto` isn't, so scripts trusted before still are).
 - **[built WIN6] Line endings:** a bash script (a `.sh` file, or a `#!` line naming a POSIX
   shell) named by a project's scripts with Windows (CRLF) line endings is a `doctor` finding
-  (`scripts <project>`, every platform: bash reads the `\r` as part of each command). `ptyro
-  project line-endings [P]` (TUI `project.line_endings`, the finding's ⏎; web: the project's ⋯,
-  and Health beside the finding; `Request::ProjectLineEndings`, protocol 1.28) rewrites them with
-  LF in the main checkout and every worktree (a temporary file, then a rename; links never
-  written through; `.bat`/`.cmd`, which want CRLF, and `.ps1` left alone), and says to commit
-  `*.sh text eol=lf` to `.gitattributes`.
+  (`scripts <project>`, every platform: bash reads the `\r` as part of each command). The finding
+  says how to fix it by hand: save the files with LF (`perl -pi -e 's/\r$//' FILES`) and add a
+  `*.sh text eol=lf` line to `.gitattributes`. (The command that rewrote them, `project
+  line-endings`, protocol 1.28, was removed 2026-11-17.)
 - **Trust:** scripts come from the repository and are arbitrary code. Before the first run — and
   after any change — ptyro shows the exact script text and asks to trust it. Trust is recorded as a
   SHA-256 fingerprint of the canonicalized `[scripts]` table per project. `ptyro project trust`.
   Untrusted scripts never run; worktree creation still works without them.
 - **What trust covers [security review M3]:** the fingerprint pins the *text* of the commands,
   not the files they call. `cargo test`, `make check` or `./scripts/lint.sh` run whatever the
-  checkout holds at that moment, and agents edit the checkout. Trusted scripts and `after_turn`
+  checkout holds at that moment, and agents edit the checkout. Trusted scripts
   run as the user, with the daemon's full environment and network,
   outside any sandbox an agent runs in. So trusting a command trusts every file it reads, now
   and after any agent's edit. Sandboxing them is not attempted.
@@ -2596,7 +2589,9 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
 
 **[built M3]**
 - **Fingerprint:** SHA-256 of the canonical JSON of the *merged* `[scripts]` table (`.ptyro.toml`
-  plus both `.ptyro.local.toml`), one approval per project.
+  plus both `.ptyro.local.toml`), one approval per project. It still serialises `archive` and
+  `after_turn` (as null since 2026-11-17), so a project that had neither stays trusted; one that
+  had either is asked again.
   - The CLI (`project trust`) and the TUI show `Scripts::describe()` (every script, labelled) and
     send back the fingerprint the user saw.
   - The TUI's wizard asks *before* creating the worktree, so `after_setup` still holds. A worktree
@@ -2605,8 +2600,6 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   above) in the worktree with
   the §10.6 environment. They run under the worktree's profile; a guard that refuses still
   refuses, since a script can't answer a question.
-- **`after_turn`** runs with `wt run W after_turn`. The status engine calls it after each turn
-  from M4.
 
 **[built M5] Other tools' committed config** (M5.10, R-WT-03):
 - **What fills in:** when `.ptyro.toml` leaves a script unset, it comes from another tool's file
@@ -2626,20 +2619,22 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   "setup not used: .conductor/settings.toml defines it", "cloud-only: skipped" and "skipped
   `uses: actions/setup-node`".
 - **Mappings** (the formats themselves are in §20.7):
-  - Conductor: `setup`/`archive`/`run` (a string or `[scripts.run.<id>]` with `args` and
+  - Conductor: `setup`/`run` (a string or `[scripts.run.<id>]` with `args` and
     `options.cwd`); `nonconcurrent` → `exclusive`; `[environment_variables]` are exported first.
+    Its `archive` script is not used (since 2026-11-17), and the notes say so.
   - Superset: array entries become one line each after `set -e`; the local layer's
-    `{before, after}` wrap; a missing key falls back to `.superset/<key>.sh`.
+    `{before, after}` wrap; a missing key falls back to `.superset/<key>.sh`. Its teardown is not
+    used (since 2026-11-17), and the notes say so.
   - Codex: `[setup] script` with a `[setup.<platform>]` override, `[[actions]]` as run scripts
-    (`Run` is the default), `[cleanup]` as archive.
-  - Claude Desktop: each configuration is a run script. With `autoPort` (the default) the
-    server gets `PORT` from the worktree's port block (`$PTYRO_PORT`, then `+1`…) and
-    `--port`/`-p` arguments are rewritten to match, as Claude does.
+    (`Run` is the default). `[cleanup]` is not used (since 2026-11-17), and the notes say so.
+  - Claude Desktop: each configuration is a run script, run as written (since 2026-11-17 there
+    is no `PORT` rewrite). A `port` is noted: worktrees running it at once collide.
   - Cursor: `install` is setup; `start` and each of `terminals[]` are run scripts.
   - Copilot: the `copilot-setup-steps` job's `run:` steps become setup. `uses:` steps and steps
     with `${{ }}` expressions are skipped and noted.
 - **Environment aliases:** scripts from a tool get that tool's variables:
-  - `CONDUCTOR_ROOT_PATH/WORKSPACE_PATH/WORKSPACE_NAME/PORT/DEFAULT_BRANCH/IS_LOCAL`;
+  - `CONDUCTOR_ROOT_PATH/WORKSPACE_PATH/WORKSPACE_NAME/DEFAULT_BRANCH/IS_LOCAL` (`CONDUCTOR_PORT`
+    removed 2026-11-17);
   - `SUPERSET_ROOT_PATH/WORKSPACE_PATH/WORKSPACE_NAME`;
   - `CODEX_SOURCE_TREE_PATH`, `CODEX_WORKTREE_PATH`.
 - **Opt-out:** `[project] import = false` turns all of it off.
@@ -2653,35 +2648,25 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
 | `PTYRO_WORKTREE_PATH` | this worktree |
 | `PTYRO_WORKTREE_NAME` | friendly name |
 | `PTYRO_BRANCH` | branch |
-| `PTYRO_PORT` | first port of this worktree's block (`PTYRO_PORT`..`PTYRO_PORT+count-1`) |
 | `PTYRO_SESSION_ID` | (sessions only) |
-| `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_WORKSPACE_NAME`, `CONDUCTOR_PORT` | only if `compat.conductor_env = true`, so existing setup scripts run unchanged |
+| `CONDUCTOR_ROOT_PATH`, `CONDUCTOR_WORKSPACE_PATH`, `CONDUCTOR_WORKSPACE_NAME` | only if `compat.conductor_env = true`, so existing setup scripts run unchanged |
 
-They are set when a process starts: a rename (§2.3) or `rename-branch` doesn't reach a process
-already running, and its next restart gets the new values.
+They are set when a process starts: a rename (§2.3) doesn't reach a process already running,
+and its next restart gets the new values.
 
-**[built M3]** Also `PTYRO_PORT_COUNT`. These variables, and `PTYRO_PROFILE`, are on the
+`PTYRO_PORT`, `PTYRO_PORT_COUNT` and `CONDUCTOR_PORT` were removed 2026-11-17 with port
+allocation (§10.7): a script that read one gets nothing, and `ptyro doctor` flags a project
+whose scripts mention one, with the fix (`${PTYRO_PORT:-3000}`, or name the port in the script).
+
+**[built M3]** These variables, and `PTYRO_PROFILE`, are on the
 child-env strip list, so a daemon started inside a ptyro session can't leak its worktree into
 others.
 
-### 10.7 Port allocation
+### 10.7 Port allocation **[removed 2026-11-17]**
 
-- Each worktree gets a block of `ports.count` (default 10) ports from `ports.range` (default
-  `20000-29999`), persisted in the DB, released on worktree removal.
-- Blocks are verified free at allocation (bind test) and skipped if occupied.
-- The sidebar shows *actually listening* ports per session (§5.1), so "which worktree is on :3000?"
-  is answered at a glance.
-
-**[built M3]**
-- **Allocation** is first fit, in steps of `count`: a block that overlaps no other worktree's and
-  whose every port binds on 127.0.0.1 right now. If none is free, the worktree is created without
-  ports and says so.
-- **Listening ports** come from one scan every 3 s for every live session, covering the leader
-  and all its descendants:
-  - Linux: `/proc/*/stat` for the process tree, `/proc/<pid>/fd` socket inodes,
-    `/proc/net/tcp{,6}` LISTEN rows;
-  - macOS: `ps -A -o pid=,ppid=` and `lsof -iTCP -sTCP:LISTEN -p …`.
-- Changes are announced as `SessionUpdated` and shown in the sidebar, pane header and `ls`.
+Removed: ptyro gives worktrees no ports and no longer scans for listening ones; scripts name
+their own ports, and `ptyro doctor` flags scripts that read the old variables (§10.6). `[ports]`
+and `ui.show_ports` are retired keys (§13.8).
 
 ### 10.8 Removal and cleanup **[decided — safety-critical]**
 
@@ -2692,10 +2677,10 @@ others.
 2. Compute state: uncommitted changes, untracked non-ignored files, commits not on any remote,
    stashes. If any: **refuse** with a precise report, unless `--force` *and* interactive confirmation
    (or `--force --yes` in scripts).
-3. Run `archive` script (if trusted). 4. `git worktree unlock`, `git worktree remove`.
-5. Branch: deleted only if fully merged into base or pushed and identical to its remote; otherwise
+3. `git worktree unlock`, `git worktree remove`. (An `archive` script ran first until 2026-11-17.)
+4. Branch: deleted only if fully merged into base or pushed and identical to its remote; otherwise
    kept and reported ("kept branch brisk-rook: 3 unpushed commits").
-6. Release ports; mark worktree `removed` in DB (history kept).
+5. Mark worktree `removed` in DB (history kept).
 
 `ptyro gc` lists (never deletes without confirmation) stale worktrees: removed-on-disk, merged
 branches, no sessions for N days.
@@ -2704,8 +2689,10 @@ branches, no sessions for N days.
 - **"Unpushed"** means commits on HEAD that are on no remote and not in the base. A local-only
   repository's merged work is therefore not "at risk".
 - **The report** lists each kind with up to five items. `--force` (the CLI asks unless `--yes`)
-  discards the work, and the result notes what was discarded.
-- **Archive** runs only if the scripts are trusted, and is stopped after 120 s.
+  discards the work, and the result notes what was discarded. The refusal says "To keep it,
+  commit and push it first; to discard it, remove it anyway." with the fix `force`
+  ("Remove anyway"): the TUI's dialog offers `y: remove it anyway · n: keep it`, the web "Keep it"
+  and "Remove anyway".
 - **Sessions:** `--stop-sessions` stops running sessions. Exited ones in the worktree are
   forgotten along with it.
 - **A missing directory** is just forgotten (`git worktree prune`).
@@ -2715,48 +2702,31 @@ branches, no sessions for N days.
   - *Merged* means the branch moved from where its reflog says it was made and its tip is in
     the base. The old test asked for commits outside the base that were also in it, so it never
     fired. (A merged PR and an integrate counted too, until both were removed on 2026-11-17.)
-  - A **locked** worktree is kept on purpose: gc leaves it out unless its directory is gone. Every
-    gc offers *keep* (CLI `k`, TUI `^l`, web "Keep it"), which locks it.
+  - A **locked** worktree (sessions run in it) is left out unless its directory is gone. Keeping
+    one leaves it as it is (locking one by hand was removed 2026-11-17).
   - `GcEntry::bytes` (`bytes_partial`: it stopped early, "≥") is what the directory takes on disk:
     allocated blocks, links not followed, build output included, each walk stopping after 3 s,
     side by side, cached for 30 min (`Daemon::gc_sizes`, only for worktrees still stale).
     Entries come biggest first; the CLI prints a size column and the total.
 - **The nudge (doctor `worktrees`):** `stale` is a warning when anything is stale: "3 stale
-  worktrees, taking 4.0 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` archives or removes
-  them; lock one to keep it". So it is the TUI's `⚕` (once per attach, its own toast: "…: `C-q G`
-  cleans up"; ⏎ in `M` opens `worktree.gc`, and a worktree removed or locked asks the doctor
+  worktrees, taking 4.0 GiB (2 merged, 1 unused for 14+ days): `ptyro gc` removes the ones you
+  say". So it is the TUI's `⚕` (once per attach, its own toast: "…: `C-q G`
+  cleans up"; ⏎ in `M` opens `worktree.gc`, and a worktree removed asks the doctor
   again) and the web's Health page ("Clean up"), where the Projects tab's 🧹 also counts them
-  (`🧹3`). `archived` is only a note: how many, the oldest, and whether
-  `archive_purge_days` deletes them.
+  (`🧹3`).
+- `ptyro gc` asks per stale worktree: `r` remove, ⏎ keep (a refusal over unsaved work prints
+  `ptyro wt rm NAME --force` beside it). The TUI's `G` picker's ⏎ removes (asked); the web's clean-up
+  offers Remove…, Keep it and Open.
 
-**[built UX1.12] Archive and restore** (`crates/ptyro-daemon/src/archive.rs`):
-- **Archive** (`WorktreeArchive`, `ptyro wt archive`): a snapshot commit of the files as they are
-  (`Git::checkpoint`: a private index, untracked included, ignored not, parent HEAD) goes to
-  `refs/ptyro/archive/<name>` (`-2`, `-3` when taken), then the worktree is removed with the
-  branch kept. Running sessions refuse unless `stop_sessions`, and they are stopped *before* the
-  snapshot, so what they write on the way out is in it (a quick terminal at its prompt doesn't
-  count, UX1.25). The snapshot leaves out ignored files, so small ones (a `.env`) are kept
-  beside it in `data/archive-extras/` and put back on restore, and an ignored file too big to
-  keep makes the archive refuse and name it, so nothing is lost silently. The archive list is
-  kv `archive:list` (`ArchiveEntry`, newest first; read and written under a lock, errors
-  propagated, the entry written after the removal; `WorktreeArchives`, `ptyro wt archives`).
-- **Restore** (`WorktreeRestore`, `ptyro wt restore [project/]name|handle`): the branch checked
-  out at its old path (when free), no setup, then `Git::restore_onto_tip` (it refuses when the
-  branch has moved since) puts the snapshot back with the changes uncommitted again, untracked
-  files untracked. The entry leaves the list. Several archives of one name are listed (handle
-  and age), never picked between; the handle says which (§2.3, owner, 2026-11-09).
+**[built UX1.12, removed 2026-11-17] Archive and restore** (`wt archive`, `wt restore`,
+`wt archives`, `wt archive-rm`, `[worktrees] archive_purge_days`): removed; a worktree is removed,
+and work to keep is committed and pushed first. Archives made before are left alone (kv
+`archive:list`, refs `refs/ptyro/archive/*`, `data/archive-extras/`): `ptyro doctor` lists them
+(`DaemonDoctor.left_behind`) with how to bring one back with git (`git -C REPO worktree add DIR
+BRANCH`, then `git -C DIR checkout SNAPSHOT -- .`).
 - **Finish** and **archive on merge**: removed 2026-11-17. ptyro makes and removes worktrees;
   committing, pushing and merging are the user's, with git. `[worktrees] archive_on_merge` is a
-  retired key (§13.8). A worktree is archived by one archive at a time: a second one while it
-  runs is refused.
-- `ptyro gc` asks per stale worktree: `a` archive (keeps the work), `r` remove, ⏎ skip.
-- **Delete an archive** (`WorktreeArchiveDelete`, `ptyro wt archive-rm [project/]name|handle…`, asks
-  unless `--yes`; 2026-10-30): the entry leaves the list first (an entry whose snapshot is gone
-  couldn't be restored), then the snapshot ref and its `archive-extras/` copies go, and its branch
-  by `wt rm`'s rule (deleted when merged into the base, kept in the archive as `ArchiveEntry::base`,
-  or identical to its upstream; kept and said why otherwise, and kept while another archive or a
-  worktree has it). **`[worktrees] archive_purge_days`** (default 0, never) does the same to
-  archives older than that, once a day and a minute after the daemon starts.
+  retired key (§13.8).
 
 ### 10.9 Repository status
 
@@ -3024,9 +2994,9 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
 ```
 
 - **Sidebar** (collapsible, resizable): workspace → project → worktree → session tree with status
-  glyphs, diffstat, ports, attention badges.
+  glyphs, diffstat, attention badges.
 - **Main area**: one or more panes (each showing one session), with a header line: status, agent,
-  branch, diffstat, ports, controller/size badge.
+  branch, diffstat, controller/size badge.
 - **Status bar**: global counts, mode indicator, key hints, clock. **[built SH.14]** The load
   average of the daemon's computer (`0.52 0.48 0.40`, from `/proc/loadavg` or `getloadavg`; none
   on Windows), first on the right so it is the first to go on a narrow terminal; amber once the
@@ -3114,7 +3084,7 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   - Rows show the pin's profile label (in its colour), the branch when it isn't the default
     `<name>` (or `ptyro/<name>`, the default before v0.0.13), what is left to do (`↑N` unpushed, `not pushed ↑N`, `● N` uncommitted, a
     quiet `✓ pushed`; the `+N −M` lines only while something is left, §10.9), the worktree state
-    when not ready, and listening ports.
+    when not ready. (Listening ports were shown until 2026-11-17.)
   - Folding: `⏎`/`Space`, `h`/`l`, or a click. `1`–`9` number the visible session rows. In the sidebar
     `j`/`k` move the selection; after the prefix they cycle every session of the workspace in
     tree order, skipping quick terminals (§11.2h).
@@ -3140,7 +3110,7 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   - After `project.add` (the palette) pins a project, "keep the pin? [Y/n]".
 - **Identity:**
   - the `[label]` badge in its colour on the sidebar's workspace title, project rows and every
-    pane header (with branch, diffstat and ports);
+    pane header (with branch and diffstat);
   - the focused session's profile and the workspace name in the status bar;
   - a session in a worktree pinned to another profile shows its own badge;
   - `ui.tint_borders` colours the dividers and a header marker with the focused session's profile
@@ -3254,7 +3224,8 @@ learning anything up front.
   names the keys as bound (or as they work where the focus is) and moves on when it's done:
   1. start a task (`n`): an agent with a task, in a worktree of its own;
   2. answer it (`p`, `y`): it blocked on a permission and got going again (or its turn ended);
-  3. clean up (`worktree.archive` from the palette): the worktree is archived;
+  3. clean up (`worktree.remove` from the palette, then `y` twice: asked, then the refusal over
+     the uncommitted fix): the worktree is removed;
   4. keep a shell of your own in SHELLS.
 
   (Review and finish were steps until 2026-11-17.) The pretend agent asks before running `sed`
@@ -3334,8 +3305,8 @@ learning anything up front.
   the deadline, not on its 250 ms tick.
 - **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
-  `session.convert`, `project.remove|untrust|pin|unpin|leave|mute`, `worktree.lock|unlock|pair|
-  unpair|rename_branch`, `workspace.rename|remove|profile|notify|mute`. The long tail is
+  `session.convert`, `project.remove|untrust|pin|unpin|leave|mute`,
+  `workspace.rename|remove|profile|notify|mute`. The long tail is
   `crates/ptyro-tui/src/cli_actions.rs`: a table of `ptyro …` templates whose words come from the
   selection (`{session}`, `{worktree}`, `{project}`), a pick (`{profile}`, `{agent}`,
   `{choose:…}`) or a question (`{ask:…}`, optional when left empty), then
@@ -3392,10 +3363,10 @@ learning anything up front.
     projects (most recently used first; ⏎ starts a task
     there), repositories found (⏎ adds one, then the task box), and a shell here.
 - **Clean up** (UX1.12, §10.8): `worktree.finish` (`F`) was removed on 2026-11-17, and `F` is
-  unbound. A removal refused for work it would lose offers `a`: archive instead. `worktree.archive`, `worktree.restore` (a picker
-  of archived worktrees; `^x` deletes the selected one, asked first), `worktree.archive_delete`
-  (the same picker, ⏎ deletes) and `worktree.gc` (`G`; stale ones; ⏎ archives) are in the
-  palette. The web's Archived list offers Restore and Delete on each.
+  unbound. A removal refused for work it would lose asks `y: remove it anyway · n: keep it`.
+  `worktree.gc` (`G`; stale ones; ⏎ removes, asked) is in the palette. Archiving and restoring
+  (`worktree.archive`, `worktree.restore`, `worktree.archive_delete`, the web's Archived list) were
+  removed on 2026-11-17.
 - **A companion shell** (UX1.13, `shell.here`: `!` after the prefix or in the sidebar): your
   shell in the selected worktree, under its profile. **[built UX1.25]** It is now the
   **quick terminal**, below.
@@ -3459,7 +3430,7 @@ learning anything up front.
   right-click): every action that applies to that row now, with its key. A session's (peek,
   resume or restart, adopt, title, rename, explain, events, hibernate, mute, its worktree's
   editor and scripts, split, stop or kill), a worktree's (a task there, a shell, editor, scripts,
-  title, archive, remove), a project's. Picked, it runs with that row
+  title, remove), a project's. Picked, it runs with that row
   selected, so it works on that row. In a pane, `.` is the focused session's.
 - **Hints follow the selection** (UX1.16): with no message up, the status bar says what you'd
   do next with the selected row (the focused session in a pane), with the key as it works
@@ -3512,18 +3483,15 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
     applies to a single pane). A restored view closes a split's empty panes and fills only a
     single one. Sessions that go are dropped from the kept layout, which goes when it is empty.
   - Unchanged: the drawer (`C-t`), asked for by name.
-- **Quick new** (UX3.2, **[changed UX3.7]**; `session.again`: `C-n` after the prefix and in the
-  sidebar, the row menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's
-  worktree (else here), full sized. It always starts an agent: the worktree's last one (with its
-  profile and arguments), else the project's `default_agent`, else `[agents] default`; `!` is the
-  shell key. The label comes from `LastLaunch { worktree }`, asked on attach, after each spawn,
-  and from `tick` whenever the context moves to another worktree (`App.again_for`).
+- **Quick new** (UX3.2, UX3.7; `session.again`): removed 2026-11-17, with the web's "+ claude"
+  and "Another …"; `n` starts an agent with every option shown. `C-n`, after the prefix and in the
+  sidebar, is unbound.
 - **Created means shown** (UX3.3, `reveal`): `show` unfolds the session's workspace, project and
   worktree and selects its row; a row the tree can't place yet is retried on each event for 5 s
   (`App.revealing`). A new worktree with no session shown is selected (`reveal_worktree`). A new
   workspace is upserted from `WorkspaceNew`'s reply.
 - **`!` is a new shell** (UX3.4, `shell.new`): another plain shell in the context's worktree,
-  every press, full sized; it counts for quick new. The quick terminal is `C-t`
+  every press, full sized. The quick terminal is `C-t`
   (`shell.drawer`) / `T` (`shell.pane`), and `shell.here` (⏎ on its line) follows
   `[ui] shell_style`, now `pane` by default. It belongs to a worktree: with no context worktree
   the TUI opens the project picker and carries on there (`AfterAdd::Run`); `QuickShell` refuses
@@ -3563,7 +3531,7 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   sessions under the one they started in. A session whose workspace isn't shown sits under its machine's `main`. Rows of another
   machine's sessions show their names without the machine (the header says it).
 - **The workspace you're in** is the selected row's in the sidebar, else the focused pane's
-  session's (`enter_workspace`): `n`, `C-n`, `N`, the status bar, quick new's label and new
+  session's (`enter_workspace`): `n`, `N`, the status bar and new
   workspace-wide things go by it. The sidebar title says this machine first: `● laptop1 · work`.
 - **One layout for every workspace**, saved as `view:_all` (`ALL_VIEW`); the last workspace's own,
   from before, is taken over once. `w` jumps to a workspace's header, unfolded, and leaves the panes
@@ -3741,7 +3709,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 - **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
-  (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
+  (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `ws rm`, `profile rm`, `devices revoke`,
   `machine rm`, `discard`, `config rm`; `gc` asks per
   item) asks on a
   terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
@@ -3755,18 +3723,15 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     never a substring. A chat's title words, `@pinned` or `@unread` are refused (exit 4) with the
     chats they match listed by handle (`ChatDelete` resolves with `find_chat_as(addr, exact)`).
     This holds for every kind: they all resolve by the one policy of §2.3 (runs by the end of
-    their id, archives by name or handle, several of one name listed, never picked).
+    their id).
   - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
     found" without a question, and the question names what was found (`wt rm`, `ws rm`,
     `project rm`, `discard`, `machine rm`, `devices revoke`,
-    `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
     `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
     resolves). What is removed after the yes is what was asked about, by its id or exact name,
     never the typed address again (`chat rm @last` can't delete a newer chat). `config rm` tries
     the removal first without writing it (`settings::preview`), so a name that matches nothing
-    is refused before the question; `discard` finds its run and candidate first; `wt archive-rm`
-    asks once about every archive it found (the same one named twice is one), deletes each, and
-    carries on past one that fails, reporting it (as `rm`, `stop` and `kill` do).
+    is refused before the question; `discard` finds its run and candidate first.
   - **Say exactly what happens.** Removing a worktree deletes its directory, and its branch too
     when it is merged into its base or the same as its upstream (`BranchFate`), else keeps it;
     `--keep-branch` always keeps it. Removing a workspace moves its sessions (still running), its
@@ -3810,7 +3775,7 @@ ptyro profile ls|show <pr>|new <pr> [--adopt <agent>=<dir>…]|rm <pr>|rename <a
 ptyro project add [<path>]|ls|rm <p>|show <p>|rename <p> <new>|trust <p>|config <p>|pin <p> <profile>|unpin <p>
 ptyro wt ls [--project <p>]|new [<name>] [--base <ref>] [--branch <b>] [--pr <n>] [--setup run|skip]
          |rm <wt> [--force] [--keep-branch]|status <wt>|open <wt> [--editor <e>]
-         |run <wt> [<script>]|lock <wt>|unlock <wt>|rename <wt> <new>|rename-branch <wt> [<new>]
+         |run <wt> [<script>]|rename <wt> <new>
 ptyro broadcast <session…> <text>
 
 ptyro init                             # first-run onboarding (§12.3)
@@ -3846,15 +3811,16 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
 
 **[built M3]**
 - **Commands:**
-  - `project add|ls|rm|show|trust|untrust|config|pin|unpin|discover`;
+  - `project add|ls|rm|show|trust|untrust|config|pin|unpin` (`discover` removed 2026-11-17);
   - `ws ls|new|set|rm|rename|add|remove`;
-  - `wt ls|new|rm|status|diff|run|open|lock|unlock|rename-branch`;
+  - `wt ls|new|rm|status|diff|run|open` (`lock`, `unlock` and `rename-branch` removed
+    2026-11-17);
   - `profile ls|show|new|rm|rename|env|login|sync|detect|doctor`;
   - `gc [--dry-run]`.
 - **`new`** gains `--agent A[@P]`, `--profile`, `--wt`, `--new-wt [NAME]`, `--project`,
   `--override-pin` and `--yes`.
 - **`ls`** shows WHERE (the worktree, else `~`-shortened cwd), PROFILE (when any session isn't
-  `default`), ports, and STATUS: an agent's status as `ptyro status` words it (`blocked:
+  `default`) and STATUS: an agent's status as `ptyro status` words it (`blocked:
   trust this folder?`, `(guess)` when low), else what the program reports of itself (OSC 7501).
   It showed only the latter, so an agent that reports nothing (Codex) read blank while blocked.
 - **Addresses** for projects and worktrees default to the one containing the current directory.
@@ -4000,8 +3966,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
 **[built M6]** (`wt diff`, `wt log`, `wt commit`, `wt integrate`, `pr …`, `watch-pr`, `review …`
 and `new --unqueued` were removed on 2026-11-17: ptyro makes and removes worktrees, git is the
 user's):
-- **Worktree commands:** `wt pair W [--refresh]` and `wt unpair W`; `wt new --issue N|URL` and
-  `--prompt`. `--pr` takes a URL too.
+- **Worktree commands:** `wt new --issue N|URL` and `--prompt`. `--pr` takes a URL too.
 - **`new`:** `new --pr N|URL` and `new --issue N|URL` imply a new worktree.
 
 **[built M7]** (shapes in `docs/cli-json.md`; `run`, `recipe`, `fanout`, `compare`, `pick`,
@@ -4016,26 +3981,10 @@ user's):
 - **`--issue`:** `gh issue view N --json number,title,body,url`, then name `issue-N`, branch
   `issue-N-<title slug>`, and (for an agent with no prompt) a first prompt carrying the issue,
   ending with "commit with `Fixes #N`".
-- **Pair mode** (with stash safety):
-  - **`pair`:**
-    1. stashes the main checkout's own uncommitted work (`stash push --include-untracked`,
-       remembered by commit id);
-    2. remembers its branch;
-    3. checks out the worktree's commit (detached);
-    4. applies the worktree's uncommitted changes as a binary patch;
-    5. copies its new files.
-  - **`refresh`** first carries the user's edits from the main checkout to the worktree: a
-    patch against the synced snapshot, new files, and copied files that changed. Then it
-    re-syncs.
-  - **`unpair`:**
-    1. carries edits back the same way;
-    2. resets, removing only the files ptyro copied and the ones carried over;
-    3. checks out the original branch;
-    4. applies the stash and drops exactly that stash entry.
-
-    If the edits don't apply to the worktree, nothing changes and pair mode stays. If the stash
-    doesn't apply, it stays in `git stash list` and ptyro says so.
-  - One worktree per project at a time; the state lives in `kv` (`pairs`).
+- **Pair mode** (`wt pair`, `wt unpair`): removed 2026-11-17; a worktree is opened where it is.
+  A main checkout still paired at the upgrade is a `ptyro doctor` warning (from the daemon's
+  warnings; kv `pairs` is kept for it) with the git commands that put it back (`git -C ROOT
+  checkout --force ORIG`, then `git stash apply SHA`).
 
 ### 12.3 `ptyro init` (onboarding, quick setup)
 
@@ -4105,7 +4054,7 @@ change (debounced) and emits `ConfigReloaded`.
 
 **[built M2]** The schema has `[ui]`, `[daemon]`, `[keys]` and `[themes.*]`.
 - Unknown keys inside them are errors with line and column (`deny_unknown_fields`).
-- Sections for later milestones (`[agents]`, `[profiles]`, `[worktrees]`, `[ports]`,
+- Sections for later milestones (`[agents]`, `[profiles]`, `[worktrees]`,
   `[discover]`, `[notifications]`, `[attention]`, `[recorder]`, `[editors]`, `[remote]`) are
   accepted and reported as "not used until Mn", so a config written from this SPEC never breaks.
 - The daemon watches the config *directory* with `notify` (debounced 200 ms), so atomic-rename
@@ -4118,8 +4067,8 @@ change (debounced) and emits `ConfigReloaded`.
 - A broken config never stops the daemon: it starts on defaults and logs the error.
 
 **[built M3]**
-- **Typed sections now:** `[profiles.*]`, `[worktrees]`, `[ports]`, `[discover]`, `[editors]` and
-  `[compat]`, plus `ui.show_ports` and `ui.tint_borders`.
+- **Typed sections now:** `[profiles.*]`, `[worktrees]`, `[discover]`, `[editors]` and
+  `[compat]`, plus `ui.tint_borders`. (`[ports]` and `ui.show_ports` were retired 2026-11-17.)
 - **`[agents.<name>]`** reads `command`, `args` and `default` now; the rest is still reserved for
   M4, as are `[notifications]`, `[attention]`, `[recorder]` and `[remote]`.
 - **Project config** (`ptyro_core::project`): `.ptyro.toml` with `[project]`, `[worktree]`,
@@ -4133,7 +4082,7 @@ change (debounced) and emits `ConfigReloaded`.
 **[built M4]**
 - `[agents.<name>]` is fully typed: `adapter`, `command`, `args`, `env` (wins over the
   profile's), `default`, `hibernate_after`, `dangerous`, `trust_worktrees`, `hooks` (default
-  true), `usage`, `after_turn`.
+  true), `usage` (`after_turn` retired 2026-11-17).
 - `[attention]`: `scope`, `breakthrough`, `stale_after`, `min_work`, `resume_on_focus`.
 - `[notifications]`:
   - `channels` (default `osc, bell`; `inbox`, a channel until 2026-11-17, is accepted and
@@ -4144,8 +4093,8 @@ change (debounced) and emits `ConfigReloaded`.
   - `[[notifications.sinks]]` with `type = ntfy|pushover|slack|discord|telegram|command` and a
     per-sink `on`;
   - `[notifications.callback] listen/public_url/link_ttl/insecure`.
-- `[daemon] restore_on_start`, `[worktrees] auto_rename_branch` (a branch without a name is
-  renamed from the first prompt), and `[prompts]` snippets.
+- `[daemon] restore_on_start` and `[prompts]` snippets. (`[worktrees] auto_rename_branch` was
+  retired 2026-11-17.)
 - Only `[recorder]` (M8) and `[remote]` (M9) remain reserved.
   **[built M8]** `[recorder]` is typed now (`enabled = true`, `max_bytes = "16MiB"`, at least
   256 KiB), and agents take `record = false`. Only `[remote]` is still reserved. The default
@@ -4183,7 +4132,6 @@ escalate_after, log_lines) and `[review]` (max_unreviewed, digest) are retired k
 prefix = ["C-q", "C-Space"]  # or one key: "C-]"
 theme = "ptyro-dark"
 sidebar_width = 30
-show_ports = true
 confirm_kill = true              # Stop, Kill, and Stop and remove ask first (TUI and web)
 shell_exit = "close"             # a shell that exits: close (disappears; agents stay) | keep
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
@@ -4216,21 +4164,14 @@ quiet_hours = "22:00-07:00"
 [worktrees]
 location = "data"                         # data | sibling | in-repo
 branch_template = "{name}"
-archive_purge_days = 0                    # delete archives this old (and merged branches); 0 = keep
-
-[ports]
-range = "20000-29999"
-count = 10
 
 [discover]
 roots = ["~/dev", "~/src"]
 auto_register = true             # the repository a session runs in becomes a project (§10.1)
 
 [agents]
-default = "claude"               # the default agent (UX3.7): `n`'s first choice, and what quick
-                                 # new starts in a worktree that hasn't run one; a project's
-                                 # default_agent wins in its worktrees. The older per-agent
-                                 # `default = true` still counts when this is unset.
+default = "claude"               # the default agent (UX3.7): `n`'s first choice. The older
+                                 # per-agent `default = true` still counts when this is unset.
 
 [agents.claude]
 adapter = "claude"
@@ -4305,7 +4246,6 @@ scope, as `!` does, while `WorktreeOpen` stays Control.
 ```toml
 [project]
 name = "myrepo"
-default_agent = "claude"
 base = "origin/main"
 
 [worktree]
@@ -4318,12 +4258,10 @@ setup = """
 pnpm install --frozen-lockfile
 cp -n .env.example .env
 """
-archive = "docker compose down -v"
 run_mode = "exclusive"
-after_turn = "pnpm -s lint --fix"   # optional
 
 [scripts.run.dev]
-command = "pnpm dev --port $PTYRO_PORT"
+command = "pnpm dev --port 5173"
 default = true
 
 [scripts.run.test]
@@ -4396,7 +4334,7 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
 - **What applies when** is true to the code: `daemon.log_level` follows the file while the daemon
   runs (`PTYRO_LOG` wins when set); a `[remote]` change starts a supervised web app again
   with it; `notifications.callback.*` binds when the daemon starts, so a change says so and
-  offers the restart; scrollback, recording, ports, agents and profiles apply to what starts
+  offers the restart; scrollback, recording, agents and profiles apply to what starts
   next.
 
 ### 13.8 Retired keys **[built 2026-11-17]**
@@ -4420,7 +4358,11 @@ requests, review and verified-done (2026-11-17) retire whole tables, so an empty
 behind loads too: `github`, `review`, and a repository's `verify`; and `worktrees.archive_on_merge`,
 which only acted when a pull request merged. The scratchpad (2026-11-17) retires `scratchpad`,
 the whole table; its editor setting is gone too (`[editors]` stays, for worktrees), and a
-`notifications.channels` that still names `inbox` loads and ignores it. The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
+`notifications.channels` that still names `inbox` loads and ignores it. The worktree and project
+extras (2026-11-17) retire `worktrees.archive_purge_days`, `worktrees.auto_rename_branch`,
+`ports` (the whole table), `ui.show_ports`, `scripts.after_turn`, `scripts.archive`,
+`agents.*.after_turn` and `project.default_agent` (`[agents] default` stays). A `*` in a retired
+key stands for any one name (`agents.*.after_turn` matches `agents.claude.after_turn`). The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
 
 ### 13.6 The scratchpad **[built NOTE1, removed 2026-11-17]**
 
@@ -4499,7 +4441,7 @@ CREATE TABLE worktree (id TEXT PRIMARY KEY, project_id TEXT REFERENCES project, 
                        path TEXT NOT NULL, branch TEXT, base TEXT, is_root INTEGER NOT NULL DEFAULT 0,
                        profile TEXT,                     -- fixed at creation; NULL for @root
                        state TEXT NOT NULL,              -- creating|ready|missing|removed|failed
-                       port_base INTEGER, port_count INTEGER, created_at INTEGER, removed_at INTEGER,
+                       created_at INTEGER, removed_at INTEGER,
                        UNIQUE (project_id, name));
 CREATE TABLE session (id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, agent TEXT,
                       worktree_id TEXT REFERENCES worktree, cwd TEXT NOT NULL,
@@ -4581,6 +4523,11 @@ copied aside before migrating, as always.
 
 **[built 2026-11-17] Store v9** (migration 9, the inbox removed): drops `inbox`. The scratchpad
 kept nothing in the database; its file is left as it is.
+
+**[built 2026-11-17] Store v10** (migration 10, the worktree and project extras removed): drops
+`worktree.port_base` and `worktree.port_count` (ports, §10.7) and deletes the `kv` row
+`last_agent` (quick new). kv `archive:list` and `pairs` stay, for `ptyro doctor` to say what was
+left behind (§10.8, §12.2); the archive refs and `data/archive-extras/` are left as they are.
 
 ---
 
@@ -5187,7 +5134,7 @@ holding several machines) was not chosen.
   header with its machine chip in the machine's colour (§16.4a): `laptop2 / work [profile]`, then
   project → worktree → session. **One pane layout for everything**: panes mix workspaces and
   machines; each pane header names workspace, machine and profile. "The current workspace" (for
-  `n`, `C-n`, `N`, the status bar's profile, attention scope) is the selected row's, else the
+  `n`, `N`, the status bar's profile, attention scope) is the selected row's, else the
   focused pane's. `w` jumps to a workspace's header (grouped by machine, offline greyed), unfolding
   it.
 
@@ -5327,7 +5274,7 @@ confine that.
 | Files only you should read (the config, shell integration) | mode `0600`/`0700`; **[built WIN7]** on Windows the access list (`ptyro_pty::acl`): one wider than the user, SYSTEM and Administrators is a `doctor` finding with its fix, a config save narrows it, and the daemon narrows a shell-integration folder others could change |
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept. **[built WIN5]** Windows: a named pipe whose every instance admits only the user's SID (`D:P(A;;GA;;;<sid>)`) and rejects remote clients; pipe names are one namespace per computer, so the client refuses a pipe whose server process runs as anyone else (`ptyro_pty::pipe`) |
 | Cloned repo runs arbitrary code | scripts require fingerprinted trust; agent executables only from user config |
-| Code ptyro runs for a repository: scripts, `after_turn`, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts and `after_turn` run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for what the user asked for (a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
+| Code ptyro runs for a repository: scripts, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for what the user asked for (a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
 | Session content sent to a model provider by summaries (UX1.3) | off by default; on, only a trimmed view goes (§11.2h), through the session's own profile, so its own account and provider. The profile's secret values and anything shaped like a credential are replaced before sending; the summariser runs with no tools, no MCP servers and no project directory |
 | Agents' own permission prompts bypassed | ptyro never auto-answers permission prompts unless the user configured an explicit policy; "dangerous" agent args require `dangerous = true` and show a ⚠ badge |
 | Paste injection (`ESC[201~` in pasted text) | every ESC and C1 CSI is removed from bracketed-paste payloads, so nothing can close the bracket (a one-pass removal of `ESC[201~` was beatable by nesting) |
@@ -6048,7 +5995,7 @@ Checked against each tool's documentation on 2026-10-20. Marks: [V] official doc
   - Layers: `settings.local.toml` on top; unknown keys are rejected. `conductor.json` is the
     legacy form, ignored once settings.toml exists.
   - `[scripts]`:
-    - `setup` and `archive` are shell strings;
+    - `setup` and `archive` are shell strings (ptyro doesn't use `archive` since 2026-11-17);
     - `run` is a string or `[scripts.run.<id>]` with `{command, args, options.cwd, default,
       icon, hide, available_in}`;
     - `run_mode` is `concurrent` or `nonconcurrent`.
@@ -6703,7 +6650,8 @@ judges the output with ptyro's own sniffer and emulator; the full tables are in
 - **Built (WIN7, 2026-11-04)** [V on Windows 11 25H2 with a release `ptyro.exe`]:
   - A shell session running `ping` reports `ping` as its foreground program, with its
     directory (read from the PEB at `ProcessParameters` 0x20, `CurrentDirectory` 0x38, the
-    64-bit layout); a session's PowerShell listening on a port has it in `ls --json`.
+    64-bit layout); a session's PowerShell listening on a port had it in `ls --json` (ports
+    removed 2026-11-17).
   - Windows refuses symbolic links without Developer Mode (`ERROR_PRIVILEGE_NOT_HELD`, 1314):
     a folder is then linked as a junction (`mklink /J`, no privilege needed) and a file as a hard
     link, or copied across drives; the notes say which.
@@ -7849,7 +7797,7 @@ agent installed:
     agents, whose numbers `restore_shells` gives back after `restore_dormant`.
   - When a workspace goes, only its shells are renumbered: main's keep theirs.
   - A move onto a number that a starting shell holds is refused.
-  - `--stop-sessions` (remove, archive) also stops the loose shells standing in the worktree.
+  - `--stop-sessions` (remove) also stops the loose shells standing in the worktree.
   - A `match` watch's baseline (the lines that already match) is taken when it is set.
   - `section = "never"` lists every session with no row under "other sessions", numbered ones
     included.
@@ -7913,7 +7861,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
   (`v`/`s`: a copy of it, a shell in its directory, as a pane of its window, §23.17), broadcast (`b` to the rows
   marked with `Space`: tmux's `synchronize-panes`), peek, the filter, the finder.
 - **It belongs to its workspace, not to a worktree.** It has no `worktree` and no `project`, gets
-  no worktree environment and no ports (§10.6, §10.7), and runs no lifecycle scripts. It runs under
+  no worktree environment (§10.6), and runs no lifecycle scripts. It runs under
   **the workspace's profile** (§10.10), so `git` and `gh` in it act as the workspace's identity.
 - **It stays where it was put (`loose`).** The daemon never places it under a worktree, wherever its
   directory is or becomes:
@@ -8089,9 +8037,9 @@ tmux has `break-pane` and `join-pane`; SHELLS has these:
 
 - **Set loose** (`shells loose`, a session's menu: "Move to SHELLS"): a worktree's session becomes
   loose with the next free number. It keeps its process, its environment (including the
-  worktree's variables and ports, which it started with) and its profile. Use it for a dev server
+  worktree's variables, which it started with) and its profile. Use it for a dev server
   or a long job that should outlive the worktree.
-  - **Removal safety (§10.8) still counts it.** Removing or archiving a worktree treats every
+  - **Removal safety (§10.8) still counts it.** Removing a worktree treats every
     session whose live directory is inside that worktree as the worktree's own for the busy
     check, loose or not. Removing the directory out from under a running command is what §10.8
     exists to prevent.
@@ -8099,7 +8047,7 @@ tmux has `break-pane` and `join-pane`; SHELLS has these:
   worktree, by default the one its live directory is in, and gives up its slot.
   - **Refused when the profiles differ.** A session's profile is fixed (§10.10), so the error
     offers a new shell in that worktree instead.
-  - It keeps the environment it started with. It gets no worktree variables or ports, and the
+  - It keeps the environment it started with. It gets no worktree variables, and the
     menu says so before it moves.
 - **Scratch shells** (`shells new --scratch`, `s` in the shells menu, the web's ＋ menu; R-UX-03):
   a shell in a new, empty directory `<data>/scratch/<id>/` (0700). Its row shows `◌`. When it is

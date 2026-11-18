@@ -31,10 +31,7 @@ NODE_ENV = "development"
     .unwrap();
     let s = &i.scripts;
     assert!(s.setup.as_deref().unwrap().starts_with("export NODE_ENV=development\npnpm install"));
-    assert_eq!(
-        s.archive.as_deref(),
-        Some("export NODE_ENV=development\n./script/workspace-archive.sh")
-    );
+    assert!(i.notes.iter().any(|n| n.contains("archive script isn't used")), "{:?}", i.notes);
     assert_eq!(s.run_mode, RunMode::Exclusive);
     assert!(s.run["web"].default);
     assert_eq!(
@@ -42,12 +39,13 @@ NODE_ENV = "development"
         "export NODE_ENV=development\ncd server && pnpm api --port '$((CONDUCTOR_PORT + 1))'"
     );
     assert!(!s.run.contains_key("deploy"), "cloud-only scripts are skipped");
-    assert!(i.notes[0].contains("cloud-only"));
+    assert!(i.notes.iter().any(|n| n.contains("cloud-only")));
     // The legacy string form.
     let i = conductor("[scripts]\nrun = \"npm start\"\n").unwrap();
     assert_eq!(i.scripts.run["run"].command, "npm start");
     let j = conductor_json(r#"{"scripts":{"setup":"npm ci","run":"npm start","archive":""},"runScriptMode":"nonconcurrent"}"#).unwrap();
-    assert_eq!((j.scripts.setup.as_deref(), j.scripts.archive.as_deref()), (Some("npm ci"), None));
+    assert_eq!(j.scripts.setup.as_deref(), Some("npm ci"));
+    assert!(j.notes.is_empty(), "an empty archive script is none: {:?}", j.notes);
     assert_eq!(j.scripts.run_mode, RunMode::Exclusive);
 }
 
@@ -70,10 +68,10 @@ fn superset_config_with_local_layer_and_script_fallback() {
         i.scripts.setup.as_deref(),
         Some("set -e\necho hi\nbun install\n./.superset/setup.sh\necho bye")
     );
-    assert_eq!(
-        i.scripts.archive.as_deref(),
-        Some("set -e\n./.superset/teardown.sh"),
-        "falls back to <key>.sh"
+    assert!(
+        i.notes.iter().any(|n| n.contains("teardown script isn't used")),
+        "teardown.sh is found, and said not to run: {:?}",
+        i.notes
     );
     assert_eq!(i.scripts.run["run"].command, "set -e\nbun dev");
     let e = superset(dir.path(), r#"{ "setup": "bun install" }"#).unwrap_err();
@@ -107,12 +105,12 @@ command = "pnpm dev"
     )
     .unwrap();
     assert_eq!(i.scripts.setup.as_deref(), Some("set -eu\npnpm install\n"));
-    assert_eq!(i.scripts.archive.as_deref(), Some("docker compose down"));
+    assert!(i.notes.iter().any(|n| n.contains("cleanup script isn't used")));
     assert!(i.scripts.run["run"].default && !i.scripts.run["test"].default);
 }
 
 #[test]
-fn claude_launch_json_ports_follow_the_worktree() {
+fn claude_launch_json_runs_as_written() {
     let i = claude_launch(
         r#"{ "version": "0.0.1",
   // comments are allowed
@@ -125,18 +123,14 @@ fn claude_launch_json_ports_follow_the_worktree() {
     )
     .unwrap();
     let r = &i.scripts.run;
-    assert_eq!(
-        r["frontend"].command,
-        "cd apps/web && PORT=\"$PTYRO_PORT\" npm run dev -- --port \"$PTYRO_PORT\""
-    );
+    assert_eq!(r["frontend"].command, "cd apps/web && npm run dev -- --port 3000");
     assert!(r["frontend"].default);
-    assert_eq!(
-        r["api"].command,
-        "export NODE_ENV=development\nPORT=\"$((PTYRO_PORT + 1))\" node server.js -p \"$((PTYRO_PORT + 1))\""
-    );
+    assert_eq!(r["api"].command, "export NODE_ENV=development\nnode server.js -p 8080");
     assert_eq!(r["oauth"].command, "npm start");
     assert!(!r.contains_key("remote"));
-    assert_eq!(i.notes.len(), 2, "{:?}", i.notes);
+    // The two fixed ports, and the server it can only attach to.
+    assert_eq!(i.notes.len(), 3, "{:?}", i.notes);
+    assert!(i.notes.iter().any(|n| n.contains("port 3000")), "{:?}", i.notes);
 }
 
 #[test]

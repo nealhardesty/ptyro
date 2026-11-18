@@ -591,182 +591,6 @@ async fn the_task_box_takes_several_lines_as_one_prompt() {
     assert_eq!(s.task.as_deref(), Some("fix the login and the logout"));
 }
 
-/// UX1.12: archiving keeps everything, uncommitted and untracked work included; restoring puts
-/// it back as it was.
-#[tokio::test]
-async fn archive_keeps_uncommitted_work_and_restore_brings_it_back() {
-    let w = World::new("exec sleep 60");
-    let dir = repo(&w, "myrepo");
-    let c = w.d.client().await.unwrap();
-    let spec = ptyro_core::model::WorktreeSpec {
-        project: dir.to_string_lossy().into_owned(),
-        name: Some("feat".into()),
-        fetch: Some(false),
-        ..Default::default()
-    };
-    let wt = match c.request(Request::WorktreeNew { spec }).await.unwrap() {
-        Reply::WorktreeCreated { info, .. } => info,
-        other => panic!("{other:?}"),
-    };
-    std::fs::write(wt.path.join("README"), "changed\n").unwrap();
-    std::fs::write(wt.path.join("notes.txt"), "untracked\n").unwrap();
-    // Removing refuses (work would be lost); archiving doesn't, and loses nothing.
-    let refused = c
-        .request(Request::WorktreeRemove { addr: "myrepo/feat".into(), opts: Default::default() })
-        .await
-        .unwrap_err();
-    assert_eq!(refused.code, ptyro_core::ErrorCode::DirtyWorktree);
-    let Reply::Notes { notes } = c
-        .request(Request::WorktreeArchive { addr: "myrepo/feat".into(), stop_sessions: false })
-        .await
-        .unwrap()
-    else {
-        panic!()
-    };
-    assert!(notes[0].contains("refs/ptyro/archive/feat"), "{notes:?}");
-    assert!(!wt.path.exists());
-    let Reply::Worktree { info } =
-        c.request(Request::WorktreeRestore { addr: "feat".into() }).await.unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(info.branch.as_deref(), Some("feat"));
-    assert_eq!(std::fs::read_to_string(info.path.join("README")).unwrap(), "changed\n");
-    assert_eq!(std::fs::read_to_string(info.path.join("notes.txt")).unwrap(), "untracked\n");
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(&info.path)
-        .args(["status", "--porcelain"])
-        .output()
-        .unwrap();
-    let status = String::from_utf8_lossy(&status.stdout);
-    assert!(
-        status.contains(" M README") && status.contains("?? notes.txt"),
-        "uncommitted again: {status}"
-    );
-}
-
-/// Deleting an archive drops its snapshot and its entry, and its branch only when that is
-/// merged; a branch with work of its own is kept.
-#[tokio::test]
-async fn deleting_an_archive_forgets_it_and_keeps_an_unmerged_branch() {
-    let w = World::new("exec sleep 60");
-    let dir = repo(&w, "myrepo");
-    let c = w.d.client().await.unwrap();
-    for name in ["done", "wip"] {
-        let spec = ptyro_core::model::WorktreeSpec {
-            project: dir.to_string_lossy().into_owned(),
-            name: Some(name.into()),
-            fetch: Some(false),
-            ..Default::default()
-        };
-        let Reply::WorktreeCreated { info, .. } =
-            c.request(Request::WorktreeNew { spec }).await.unwrap()
-        else {
-            panic!()
-        };
-        if name == "wip" {
-            std::fs::write(info.path.join("more.txt"), "x\n").unwrap();
-            git_out(&w, &info.path, &["add", "more.txt"]);
-            git_out(
-                &w,
-                &info.path,
-                &["-c", "user.name=t", "-c", "user.email=t@e", "commit", "-qm", "more"],
-            );
-        }
-        c.request(Request::WorktreeArchive {
-            addr: format!("myrepo/{name}"),
-            stop_sessions: false,
-        })
-        .await
-        .unwrap();
-    }
-    let refs = |w: &World| git_out(w, &dir, &["for-each-ref", "--format=%(refname)"]);
-    assert!(refs(&w).contains("refs/ptyro/archive/done"), "{}", refs(&w));
-    for (name, branch_note) in [("done", "deleted branch done"), ("wip", "kept branch wip")] {
-        let Reply::Notes { notes } = c
-            .request(Request::WorktreeArchiveDelete { addr: format!("myrepo/{name}") })
-            .await
-            .unwrap()
-        else {
-            panic!()
-        };
-        assert!(notes.iter().any(|n| n.starts_with(branch_note)), "{notes:?}");
-    }
-    let refs = refs(&w);
-    assert!(!refs.contains("refs/ptyro/archive/"), "snapshots gone: {refs}");
-    assert!(!refs.contains("refs/heads/done") && refs.contains("refs/heads/wip"), "{refs}");
-    let Reply::Archives { entries } =
-        c.request(Request::WorktreeArchives { project: None }).await.unwrap()
-    else {
-        panic!()
-    };
-    assert!(entries.is_empty(), "{entries:?}");
-    let missing =
-        c.request(Request::WorktreeArchiveDelete { addr: "done".into() }).await.unwrap_err();
-    assert_eq!(missing.code, ptyro_core::ErrorCode::NotFound);
-}
-
-/// Two archives of one name are never picked between silently: the error lists each with its
-/// handle and age, and the handle (or the id) says which (SPEC §2.3).
-#[tokio::test]
-async fn archives_of_one_name_are_told_apart_by_id() {
-    let w = World::new("exec sleep 60");
-    let dir = repo(&w, "myrepo");
-    let c = w.d.client().await.unwrap();
-    for again in [false, true] {
-        // The second time on the branch the first archive kept.
-        let spec = ptyro_core::model::WorktreeSpec {
-            project: dir.to_string_lossy().into_owned(),
-            name: Some("feat".into()),
-            branch: again.then(|| "feat".into()),
-            existing: again,
-            fetch: Some(false),
-            ..Default::default()
-        };
-        c.request(Request::WorktreeNew { spec }).await.unwrap();
-        c.request(Request::WorktreeArchive { addr: "myrepo/feat".into(), stop_sessions: false })
-            .await
-            .unwrap();
-    }
-    let Reply::Archives { entries } =
-        c.request(Request::WorktreeArchives { project: Some("MYREPO".into()) }).await.unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(entries.len(), 2, "by its slug in any case: {entries:?}");
-    assert!(entries.iter().all(|e| e.id.len() >= 4) && entries[0].id != entries[1].id);
-    for addr in ["feat", "myrepo/feat", "MyRepo/FEAT"] {
-        let e = c.request(Request::WorktreeRestore { addr: addr.into() }).await.unwrap_err();
-        assert_eq!(e.code, ptyro_core::ErrorCode::Ambiguous, "{addr}: {e:?}");
-        assert!(
-            e.message.starts_with(r#"2 archived worktrees are named "feat": say which, "#)
-                && e.message.contains("(myrepo/feat, archived ")
-                && !e.message.contains("{name}"),
-            "{}",
-            e.message
-        );
-    }
-    // The older one, by the end of its id.
-    let older = &entries[1];
-    let handle = older.id[older.id.len() - 6..].to_uppercase();
-    let Reply::Worktree { info } =
-        c.request(Request::WorktreeRestore { addr: handle }).await.unwrap()
-    else {
-        panic!()
-    };
-    assert_eq!(info.name, "feat");
-    // One left: its name is enough.
-    let Reply::Notes { .. } =
-        c.request(Request::WorktreeArchiveDelete { addr: "feat".into() }).await.unwrap()
-    else {
-        panic!()
-    };
-    let e = c.request(Request::WorktreeArchiveDelete { addr: "feat".into() }).await.unwrap_err();
-    assert_eq!(e.code, ptyro_core::ErrorCode::NotFound);
-    assert_eq!(e.message, r#"no archived worktree matches "feat""#);
-}
-
 async fn gc_entries(c: &Client) -> Vec<ptyro_core::model::GcEntry> {
     match c.request(Request::Gc).await.unwrap() {
         Reply::Gc { entries, .. } => entries,
@@ -774,10 +598,9 @@ async fn gc_entries(c: &Client) -> Vec<ptyro_core::model::GcEntry> {
     }
 }
 
-/// `gc` says what a stale worktree takes on disk, build output included, and leaves a locked
-/// one alone: locking is how you keep it (and quiet the doctor's nudge).
+/// `gc` says what a stale worktree takes on disk, build output included.
 #[tokio::test]
-async fn gc_measures_stale_worktrees_and_skips_locked_ones() {
+async fn gc_measures_stale_worktrees() {
     let w = World::new("exec sleep 60");
     let dir = repo(&w, "myrepo");
     // A remote, so the worktree's base (`origin/<branch>`) exists and merged can be seen.
@@ -819,9 +642,6 @@ async fn gc_measures_stale_worktrees_and_skips_locked_ones() {
     assert!(e.bytes.unwrap_or(0) >= 4 << 20, "its build output counts: {:?}", e.bytes);
     assert!(e.size_label().unwrap().ends_with("MiB"), "{:?}", e.size_label());
     assert!(entries.iter().all(|e| e.worktree.name != "fresh"), "{entries:?}");
-    c.request(Request::WorktreeLock { addr: info.id.clone(), lock: true }).await.unwrap();
-    let entries = gc_entries(&c).await;
-    assert!(entries.iter().all(|e| e.worktree.name != "shipped"), "kept: {entries:?}");
 }
 
 fn git_out(w: &World, dir: &std::path::Path, args: &[&str]) -> String {
@@ -836,10 +656,10 @@ fn git_out(w: &World, dir: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// UX1.10: a new worktree can take the main checkout's uncommitted work, or check out an
-/// existing branch.
+/// UX1.10: a new worktree can check out an existing branch; the main checkout's uncommitted
+/// work stays where it is (taking it along was removed, 2026-11-17).
 #[tokio::test]
-async fn work_moves_into_a_worktree_or_starts_from_a_branch() {
+async fn a_worktree_starts_from_a_branch_and_leaves_the_main_checkout_alone() {
     let w = World::new("exec sleep 60");
     let dir = repo(&w, "myrepo");
     git(&w.home(), &dir, &["branch", "spike"]);
@@ -855,38 +675,16 @@ async fn work_moves_into_a_worktree_or_starts_from_a_branch() {
             }
         }
     };
-    let (wt, notes) = new(ptyro_core::model::WorktreeSpec {
+    let (wt, _) = new(ptyro_core::model::WorktreeSpec {
         project: dir.to_string_lossy().into_owned(),
         name: Some("moved".into()),
-        take_changes: true,
         fetch: Some(false),
         ..Default::default()
     })
     .await;
-    assert!(
-        notes.iter().any(|n| n.contains("took the main checkout's uncommitted changes")),
-        "{notes:?}"
-    );
-    assert_eq!(std::fs::read_to_string(wt.path.join("README")).unwrap(), "edited in main\n");
-    assert!(wt.path.join("todo.txt").exists());
-    assert!(git_out(&w, &dir, &["status", "--porcelain"]).trim().is_empty(), "main is clean now");
-    assert!(
-        !git_out(&w, &dir, &["rev-parse", "refs/ptyro/taken/moved"]).trim().is_empty(),
-        "a copy"
-    );
-    // Nothing left to take: refused, nothing made.
-    let e = c
-        .request(Request::WorktreeNew {
-            spec: ptyro_core::model::WorktreeSpec {
-                project: dir.to_string_lossy().into_owned(),
-                take_changes: true,
-                fetch: Some(false),
-                ..Default::default()
-            },
-        })
-        .await
-        .unwrap_err();
-    assert!(e.message.contains("nothing to take"), "{}", e.message);
+    assert!(!wt.path.join("todo.txt").exists(), "the main checkout's work isn't taken");
+    let left = git_out(&w, &dir, &["status", "--porcelain"]);
+    assert!(left.contains("README") && left.contains("todo.txt"), "{left}");
     // Branches a worktree could check out: `spike` (main and `moved` have worktrees).
     let Reply::Branches { names } =
         c.request(Request::Branches { project: "myrepo".into() }).await.unwrap()
@@ -894,47 +692,6 @@ async fn work_moves_into_a_worktree_or_starts_from_a_branch() {
         panic!()
     };
     assert_eq!(names, vec!["spike".to_owned()]);
-}
-
-/// UX1.11: a project's first worktree gets what its lockfile and `.env` imply, written to
-/// `.ptyro.local.toml` after a yes, trusted, and never offered again.
-#[tokio::test]
-async fn a_first_worktree_is_offered_its_setup_once() {
-    let w = World::new("exec sleep 60");
-    let dir = repo(&w, "web");
-    std::fs::write(dir.join("package-lock.json"), "{}").unwrap();
-    std::fs::write(dir.join(".gitignore"), ".env\n").unwrap();
-    std::fs::write(dir.join(".env"), "TOKEN=1\n").unwrap();
-    git(&w.home(), &dir, &["add", "package-lock.json", ".gitignore"]);
-    git(&w.home(), &dir, &["commit", "-qm", "deps"]);
-    let c = w.d.client().await.unwrap();
-    c.request(Request::ProjectAdd { path: dir.clone(), workspace: None }).await.unwrap();
-    let suggest = |apply: Option<bool>| {
-        let c = &c;
-        async move {
-            match c.request(Request::ProjectSuggest { addr: "web".into(), apply }).await.unwrap() {
-                Reply::Suggestions { suggestions } => suggestions,
-                other => panic!("{other:?}"),
-            }
-        }
-    };
-    let s = suggest(None).await;
-    assert_eq!(
-        (s.setup.as_deref(), s.from.as_deref()),
-        (Some("npm ci"), Some("package-lock.json"))
-    );
-    assert_eq!(s.copy, vec![".env".to_owned()]);
-    assert!(!s.offered);
-    let after = suggest(Some(true)).await;
-    assert!(after.offered && after.setup.is_none(), "taken: nothing more to suggest: {after:?}");
-    let local = std::fs::read_to_string(dir.join(".ptyro.local.toml")).unwrap();
-    assert!(local.contains("setup = \"npm ci\"") && local.contains("copy = [\".env\"]"), "{local}");
-    let Reply::Scripts { scripts } =
-        c.request(Request::ProjectScripts { addr: "web".into(), worktree: None }).await.unwrap()
-    else {
-        panic!()
-    };
-    assert!(scripts.trusted, "the scripts you just approved are trusted");
 }
 
 /// UX1.19: on a fresh machine (no config, nothing running) `ptyro` opens the first run; once
@@ -1211,9 +968,10 @@ async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
             .send_when("to peek, then y", "\\x11p")
             .send_when("y allow", "y")
             .send_when("Tour 3/4", "\\x11:")
-            .send_when("Command palette", "worktree.archive")
-            .send_when("worktree.archive", "\\r")
-            .send_when("[Y/n]", "\\r")
+            .send_when("Command palette", "worktree.remove")
+            .send_when("worktree.remove", "\\r")
+            .send_when("[y/N]", "y")
+            .send_when("y: remove it anyway", "y")
             // Alt-1 (ESC 1): shell 1 of SHELLS, the last stop.
             .send_when("Tour 4/4", "\\x1b1")
             .send_when("that's the loop", "\\x11d")
@@ -1303,12 +1061,14 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_cleaned_up_task() {
             // 3. Blocked: its row says what it wants, and the keys; answered from peek.
             .send_when("p y/a/n", "\\x11p")
             .send_when("y allow", "y")
-            // 4. Done: the palette cleans its worktree up, ⏎ agrees.
+            // 4. Done: the palette removes its worktree; its fix was never committed, so it
+            // asks again before throwing that away.
             .send_when("Fixed the typo", "\\x11:")
-            .send_when("Command palette", "worktree.archive")
-            .send_when("worktree.archive", "\\r")
-            .send_when("[Y/n]", "\\r")
-            .send_when("archived", "\\x11d")
+            .send_when("Command palette", "worktree.remove")
+            .send_when("worktree.remove", "\\r")
+            .send_when("[y/N]", "y")
+            .send_when("y: remove it anyway", "y")
+            .send_when("removed myrepo/", "\\x11d")
             .until("[detached]"),
     )
     .await
@@ -1319,95 +1079,10 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_cleaned_up_task() {
         panic!()
     };
     assert_eq!(projects.iter().map(|p| p.slug.as_str()).collect::<Vec<_>>(), ["myrepo"]);
-    let Reply::Archives { entries } =
-        c.request(Request::WorktreeArchives { project: None }).await.unwrap()
+    let Reply::Worktrees { worktrees } =
+        c.request(Request::WorktreeList { project: None }).await.unwrap()
     else {
         panic!()
     };
-    assert_eq!(entries.len(), 1, "cleaned up: archived, its branch kept");
-    assert_eq!(entries[0].name, "fix-typo-greeting");
-}
-
-async fn next_agent(c: &Client, wt: &str) -> String {
-    let req = Request::LastLaunch { workspace: String::new(), worktree: Some(wt.into()) };
-    match c.request(req).await.unwrap() {
-        Reply::LastLaunch { launch: Some(l) } => l.label(),
-        other => panic!("{other:?}"),
-    }
-}
-
-/// UX3.7 quick new: `again` always starts an agent, the one its worktree last started (claude
-/// before any), never a shell; each worktree remembers its own; a project's `default_agent` is
-/// the first one there; a tool or a quick terminal doesn't count; `ptyro new --again` does the
-/// same.
-#[tokio::test]
-async fn again_starts_the_agent_the_worktree_last_started() {
-    let w = World::with_config(
-        "exec /bin/sh -i",
-        &format!("[agents.codex]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"codex\"]\n"),
-    );
-    let dir = repo(&w, "myrepo");
-    let c = w.d.client().await.unwrap();
-    let again = || SpawnSpec { again: true, cwd: dir.clone(), ..SpawnSpec::default() };
-    // Nothing yet: the default agent.
-    let first = spawn(&c, again()).await;
-    assert_eq!(first.agent.as_deref(), Some("claude"));
-    let root = first.worktree.clone().expect("in its main checkout");
-    // A shell doesn't count: still an agent.
-    spawn(&c, SpawnSpec { cwd: dir.clone(), ..SpawnSpec::default() }).await;
-    assert_eq!(next_agent(&c, &root).await, "claude");
-    // Another agent started here is what comes next.
-    spawn(&c, SpawnSpec { agent: Some("codex".into()), cwd: dir.clone(), ..SpawnSpec::default() })
-        .await;
-    assert_eq!(next_agent(&c, &root).await, "codex");
-    assert_eq!(spawn(&c, again()).await.agent.as_deref(), Some("codex"));
-    // A tool and a quick terminal leave it as it was.
-    spawn(
-        &c,
-        SpawnSpec {
-            argv: vec!["true".into()],
-            tool: true,
-            cwd: dir.clone(),
-            ..SpawnSpec::default()
-        },
-    )
-    .await;
-    quick(&c, Some("myrepo/@root"), Path::new(""), true).await.unwrap();
-    assert_eq!(next_agent(&c, &root).await, "codex");
-    // Another worktree has its own: the default agent, until its project names one.
-    let spec = ptyro_core::model::WorktreeSpec {
-        project: dir.to_string_lossy().into_owned(),
-        name: Some("feat".into()),
-        fetch: Some(false),
-        ..Default::default()
-    };
-    let feat = match c.request(Request::WorktreeNew { spec }).await.unwrap() {
-        Reply::WorktreeCreated { info, .. } => info,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(next_agent(&c, &feat.id).await, "claude");
-    std::fs::write(feat.path.join(".ptyro.toml"), "[project]\ndefault_agent = \"codex\"\n")
-        .unwrap();
-    assert_eq!(next_agent(&c, &feat.id).await, "codex");
-    // The CLI, in the main checkout.
-    let out =
-        w.d.cmd().args(["new", "--again", "-d", "--json"]).current_dir(&dir).output().unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let info: SessionInfo = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(info.agent.as_deref(), Some("codex"));
-}
-
-/// `[agents] default` (the Default agent setting) is what quick new starts where nothing has run.
-#[tokio::test]
-async fn again_starts_the_configured_default_agent_first() {
-    let w = World::with_config(
-        "exec /bin/sh -i",
-        &format!(
-            "[agents]\ndefault = \"codex\"\n[agents.codex]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"codex\"]\n"
-        ),
-    );
-    let dir = repo(&w, "myrepo");
-    let c = w.d.client().await.unwrap();
-    let s = spawn(&c, SpawnSpec { again: true, cwd: dir.clone(), ..SpawnSpec::default() }).await;
-    assert_eq!(s.agent.as_deref(), Some("codex"));
+    assert!(worktrees.iter().all(|w| w.name != "fix-typo-greeting"), "cleaned up: {worktrees:?}");
 }

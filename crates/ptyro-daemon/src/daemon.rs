@@ -53,11 +53,6 @@ pub struct Daemon {
     pub(crate) shown_workspace: Mutex<Option<String>>,
     /// Repository roots never to register on their own (UX1.5).
     pub(crate) declined: Mutex<std::collections::HashSet<std::path::PathBuf>>,
-    /// Worktrees being archived now: one archive each (a PR poll and a refresh can both see
-    /// it merge).
-    pub(crate) archiving: Mutex<std::collections::HashSet<String>>,
-    /// The archive list is read, changed and written back whole: one editor at a time.
-    pub(crate) archive_list: tokio::sync::Mutex<()>,
     /// What each stale worktree takes on disk, measured by `gc`: (bytes, partial, when).
     pub(crate) gc_sizes: Mutex<HashMap<String, (u64, bool, std::time::Instant)>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
@@ -83,8 +78,6 @@ pub struct Daemon {
     pub mirrored: broadcast::Sender<DomainEvent>,
     /// (machine, its client id) → our client whose upstream that is (`conn.rs`).
     pub(crate) upstream_ids: crate::machines::UpstreamIds,
-    /// The agent each worktree last started, by worktree id (UX3.7, `again.rs`).
-    pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     pub(crate) last_notified: Mutex<HashMap<SessionId, u64>>,
     /// Approve/deny link nonces already used → their expiry.
     pub(crate) used_links: Mutex<HashMap<String, u64>>,
@@ -98,8 +91,6 @@ pub struct Daemon {
     pub(crate) oc_pending: Mutex<crate::sidecar::Pending>,
     /// Problems worth showing in `ptyro doctor` (deduplicated).
     pub(crate) warnings: Mutex<Vec<String>>,
-    /// Pair mode per project (M6.7).
-    pub(crate) pairs: Mutex<crate::pair::Pairs>,
     // ── live upgrade (M8.1) ──
     pub(crate) upgrading: std::sync::atomic::AtomicBool,
     /// Tells every PTY reader to park.
@@ -203,8 +194,6 @@ impl Daemon {
             views: Mutex::new(BTreeMap::new()),
             shown_workspace: Mutex::new(None),
             declined: Mutex::new(std::collections::HashSet::new()),
-            archiving: Mutex::new(std::collections::HashSet::new()),
-            archive_list: tokio::sync::Mutex::new(()),
             gc_sizes: Mutex::new(HashMap::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
@@ -215,7 +204,6 @@ impl Daemon {
             feed_rx: Mutex::new(Some(feed_rx)),
             viewing: Mutex::new(HashMap::new()),
             mutes: Mutex::new(HashMap::new()),
-            last_launch: Mutex::new(HashMap::new()),
             links: Mutex::new(std::collections::BTreeMap::new()),
             mirrored: broadcast::channel(1024).0,
             upstream_ids: Mutex::new(HashMap::new()),
@@ -227,7 +215,6 @@ impl Daemon {
             sidecar_live: Mutex::new(std::collections::HashSet::new()),
             oc_pending: Mutex::new(HashMap::new()),
             warnings: Mutex::new(Vec::new()),
-            pairs: Mutex::new(HashMap::new()),
             upgrading: std::sync::atomic::AtomicBool::new(false),
             io_pause,
             io: crate::session::IoControl {
@@ -1202,11 +1189,8 @@ impl Daemon {
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
             Request::Spawn { spec } => {
-                let spec = if spec.again { self.resolve_again(spec).await? } else { spec };
-                let s = self.spawn(spec.clone()).await?;
-                let info = self.info(&s);
-                self.remember_launch(info.worktree.as_deref(), &spec).await;
-                Ok(Reply::Session { info })
+                let s = self.spawn(spec).await?;
+                Ok(Reply::Session { info: self.info(&s) })
             }
             req @ (Request::MachineList
             | Request::MachineAdd { .. }
@@ -1220,10 +1204,6 @@ impl Daemon {
             Request::SetupRun { picks, wsl_picks, moves } => {
                 self.setup_run(picks, wsl_picks, moves).await
             }
-            Request::LastLaunch { worktree, .. } => {
-                Ok(Reply::LastLaunch { launch: Some(self.launch_for(worktree.as_deref())?) })
-            }
-            Request::WorktreePair { addr, off, refresh } => self.pair(&addr, off, refresh).await,
             Request::List => {
                 let sessions = self.sessions().iter().map(|s| self.info(s)).collect();
                 Ok(Reply::Sessions { sessions })
@@ -1426,6 +1406,9 @@ impl Daemon {
             }
             Request::Doctor => {
                 let mut report = self.doctor();
+                let (notes, warnings) = self.left_behind().await;
+                report.left_behind = notes;
+                report.warnings.extend(warnings);
                 report.chats = self.chat_doctor().await;
                 report.meaning = self.meaning_doctor().await;
                 Ok(Reply::Doctor { report })
@@ -1731,7 +1714,7 @@ mod tests {
         // the TUI and the web turn into a button).
         const ELSEWHERE: &[&str] = &[
             "diff \x2d-git",                 // git's own output, parsed
-            "\x2d-frozen-lockfile",          // a setup script suggested for the repository
+            "checkout \x2d-force",           // git's, in the way back from pair mode
             "\x2d-password=",                // a redaction test's input
             "codex \x2d-version",            // another program
             "ptyro \x2d-version`",           // a shell command to try over ssh

@@ -694,7 +694,6 @@ mod tests {
             workspace: None,
             agent: None,
             script: None,
-            ports: vec![],
             status: None,
             attention: None,
             activity: None,

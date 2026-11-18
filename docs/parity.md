@@ -29,7 +29,7 @@ its row: its TUI action and its web one, or `waived:` and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch, your changes), base, name, title, structured, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it; `--again` is `session.again` (`C-n`): another of the agent this worktree last started (else the default agent), here, full sized | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue, a branch or your changes), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch, chat mode (structured); `--again` is `session.again`: the `+ claude` button on a project's and a worktree's page, and a session's ⋯ → Another … |
+| `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch), base, name, title, structured, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue or a branch), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch, chat mode (structured) |
 | `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k`; `--tab`/`--pane`: `session.tab`, `session.pane` (the palette and a session's row menu, when the terminal is tmux or Windows Terminal) | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize`, `term.zoom` (pinch, a two-finger tap, Ctrl+wheel, Aa; this device's view only, so the TUI's is the terminal emulator's own font size); `--tab`: `session.tab`, a session's ⋯ → Open on the computer (a Windows Terminal tab there, when it is WSL) |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them; `--status running` / `active` is `sidebar.filter` (`f`, or click `running` / `active` under the sidebar title): only the live sessions, or only the busy ones, each machine, project and worktree with none hidden | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them; `sidebar.filter`: the `all` / `running` / `active` chips |
 | `stop` | `session.stop` (`x`; asks first unless `[ui] confirm_kill = false`) | `session.stop`: the session's ⋯ menu → Stop (asks first unless `[ui] confirm_kill = false`) |
@@ -121,36 +121,24 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | Command | In the TUI | On the web |
 |---|---|---|
 | `project add` | `project.add`: pick from discovered repositories, "here" or `+ another path…`, then a form: the path and the workspace it joins | `project.add`: ＋ on the Projects tab: the workspace it joins, then a repository found on the computer, or a path |
-| `project discover` | `project.add` (it discovers) | `project.add`: it lists the repositories it found |
-| `project suggest` | `project.suggest`; a project's first worktree offers it on its own | `project.suggest`: a project's ⋯ menu |
 | `project ls` | shown: the sidebar lists the workspace's projects | `projects`: the Projects tab lists every project with its worktrees; its workspace chips filter them (`workspace.switch`) |
 | `project show` | `project.show` (full sized) | `project.show`: tap a project's name |
 | `project rename` | `project.rename` (a project's row menu, `.`; the palette): the live check flags a taken or bad name as you type | `project.rename`: a project's ⋯ → Rename… |
 | `project rm` | `project.remove` (asks first; with sessions running in it, offers to let them go, as `--release` does) | `project.remove`: a project's ⋯ menu (asks first; offers Let them go, as `--release` does) |
 | `project trust` | `project.trust` | `project.trust`: a project's page: review the scripts, then trust |
 | `project untrust` | `project.untrust` | `project.untrust`: a project's page |
-| `project line-endings` | `project.line_endings`; the health finding's ⏎ runs it | `project.line_endings`: a project's ⋯ → Fix scripts' line endings; Health offers it beside the finding |
 | `project config` | `project.config` (with where each value comes from, full sized) | `project.config`: a project's ⋯ menu, with where each value comes from |
 | `project pin` | `project.pin`: pick the profile | `project.pin`: a project's ⋯ menu: pick the profile |
 | `project unpin` | `project.unpin` | `project.pin`: a project's ⋯ menu → Unpin |
 | `wt new` | `worktree.new` (`N`): the session form with a new worktree chosen, a free name in it (base, profile, setup, fetch…) | `worktree.new`: ＋ Task on a project, or `session.new` with "in a new worktree" |
 | `wt ls` | shown: the sidebar lists every worktree under its project, each with what is left to do: `↑2` unpushed, `not pushed ↑2` (no upstream yet), `● 3` uncommitted, a quiet `✓ pushed` when it is all done (UX2.2) | `projects`: every worktree under its project, with its changes and sessions |
-| `wt rm` | `worktree.remove` (`x` on a worktree row; asks, saying what happens to its branch) | `worktree.remove`: a worktree's ⋯ menu (offers to archive when it has unsaved work) |
+| `wt rm` | `worktree.remove` (`x` on a worktree row; asks, saying what happens to its branch; with unsaved work, says what would be lost: `y` removes it anyway, `n` keeps it) | `worktree.remove`: a worktree's ⋯ menu (with unsaved work, says what would be lost and offers Remove anyway or Keep it) |
 | `wt status` | shown: the sidebar's and the pane header's `↑N`, `●`, `✓ pushed` and `+N −N` (while something is left) | `worktree.status`: a worktree's page, and its row on the Projects tab |
-| `wt pair` | `worktree.pair` | `worktree.pair`: a worktree's ⋯ menu |
-| `wt unpair` | `worktree.unpair` | `worktree.unpair`: a worktree's ⋯ menu |
 | `wt run` | `script.run` (`r`), `script.pick` (`R`) | `worktree.run`: a worktree's ⋯ menu: pick a script; it opens its session |
 | `wt open` | `worktree.open` (`o`): the installed editors, the file manager, the terminal apps, and `shell` (`!`), a new shell in it | `worktree.open`: a worktree's ⋯ → Open in…: the editors installed on the computer (a terminal editor opens as a session), its file manager and terminal apps, and `shell` (`shell.new`) |
-| `wt lock` | `worktree.lock` | `worktree.lock`: a worktree's ⋯ menu |
-| `wt unlock` | `worktree.unlock` | `worktree.unlock`: a worktree's ⋯ menu |
 | `wt rename` | `worktree.rename` (a worktree's row menu, `.`; the palette): the live check flags a taken or bad name as you type; `C-t` there edits its title | `worktree.rename`: a worktree's ⋯ → Rename… |
-| `wt rename-branch` | `worktree.rename_branch` | `worktree.rename_branch`: a worktree's ⋯ menu |
 | `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
-| `wt archive` | `worktree.archive` (a worktree's row menu, `.`; the palette) | `worktree.archive`: a worktree's ⋯ menu |
-| `wt restore` | `worktree.restore`: pick from the archived ones (`^x` there deletes one) | `worktree.restore`: Archived (Projects tab): tap one |
-| `wt archives` | `worktree.restore` lists them | `worktree.restore`: Archived lists them |
-| `wt archive-rm` | `worktree.archive_delete`: pick an archived one (asks first), or `^x` in `worktree.restore`'s list | `worktree.archive_delete`: Archived (Projects tab): tap one → Delete |
-| `gc` | `worktree.gc` (`G`, or ⏎ on the health finding): stale worktrees with their size, ⏎ archives one, `^l` keeps it (locks); a merged worktree's `x` archives it; scratch shells' directories left behind are listed after them, ⏎ deletes one (asked) | `worktree.gc`: 🧹 on the Projects tab (`🧹3` when some are stale): their size, archive or keep one; "Left behind by scratch shells" below them, Delete (asked) |
+| `gc` | `worktree.gc` (`G`, or ⏎ on the health finding): stale worktrees with their size, ⏎ removes one (asked; it refuses to lose work); scratch shells' directories left behind are listed after them, ⏎ deletes one (asked) | `worktree.gc`: 🧹 on the Projects tab (`🧹3` when some are stale): their size, remove or keep one; "Left behind by scratch shells" below them, Delete (asked) |
 | `ws ls` | `workspace.switch` (`w`) | `workspace.switch`: chips on the Projects tab; Workspaces lists them |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace": a form with its name, its profile (the one named like it chosen; `+ new profile…` makes one and comes back) and its notifications | `workspace.new`: ＋ on Workspaces: name, machine, profile (a pick; the one named like it chosen; `+ new profile…`), notifications |
 | `ws set` | `workspace.profile` and `workspace.notify` | `workspace.set`: a workspace's menu: its profile and notifications |

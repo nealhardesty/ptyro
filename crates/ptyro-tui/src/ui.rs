@@ -184,7 +184,6 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
         "start",
         &[
             ("session.new", "a task"),
-            ("session.again", "+ again"),
             ("shells.new", "a SHELLS shell"),
             ("worktree.new", "worktree"),
             ("project.add", "project"),
@@ -254,15 +253,10 @@ fn draw_which_key(app: &App, f: &mut Frame<'_>, area: Rect) {
     let key = |action: &str| {
         app.keymap.key_for(action).and_then(|k| k.strip_prefix(&prefix).map(str::to_owned))
     };
-    // Quick-new says what it starts: `+ claude`.
-    let label = |a: &str, label: &str| match a {
-        "session.again" => format!("+ {}", app.again_label()),
-        _ => label.to_owned(),
-    };
     let columns: Vec<(&str, Vec<(String, String)>)> = WHICH_KEY
         .iter()
         .map(|(group, items)| {
-            (*group, items.iter().filter_map(|(a, l)| Some((key(a)?, label(a, l)))).collect())
+            (*group, items.iter().filter_map(|(a, l)| Some((key(a)?, (*l).to_owned()))).collect())
         })
         .collect();
     let rows = columns.iter().map(|(_, v)| v.len()).max().unwrap_or(0) as u16;
@@ -755,11 +749,6 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 }
                 if s.dangerous {
                     spans.push(Span::styled(" ⚠", fg(app, t.error)));
-                }
-                if app.config.ui.show_ports && !s.ports.is_empty() {
-                    let ports: Vec<String> =
-                        s.ports.iter().take(3).map(|p| format!(":{p}")).collect();
-                    spans.push(Span::styled(format!(" {}", ports.join(" ")), fg(app, t.idle)));
                 }
                 // A session under another profile than its place's stands out.
                 let place_profile = s
@@ -1329,10 +1318,6 @@ fn draw_header(
                     left.push(Span { style: base.patch(d.style), ..d });
                 }
             }
-            if app.config.ui.show_ports && !s.ports.is_empty() {
-                let ports: Vec<String> = s.ports.iter().map(|p| format!(":{p}")).collect();
-                left.push(Span::styled(format!(" · {}", ports.join(" ")), base));
-            }
             if let Some(r) = &s.status {
                 // What it's doing ("Bash: cargo test"), else what the status says.
                 let kind = r.kind.as_deref().map(|k| format!("/{k}")).unwrap_or_default();
@@ -1690,42 +1675,6 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                 r.x + 3 + UnicodeWidthStr::width(palette.query.as_str()) as u16,
                 r.y + 1,
             ));
-        }
-        Overlay::Suggest { suggestions: s, .. } => {
-            let mut lines = vec![
-                Line::styled(
-                    format!("{}'s first worktree. ptyro found what it needs:", s.project),
-                    Style::new().add_modifier(Modifier::BOLD),
-                ),
-                Line::raw(""),
-            ];
-            if let Some(cmd) = &s.setup {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {} → setup: ", s.from.as_deref().unwrap_or("?")),
-                        fg(app, t.dim),
-                    ),
-                    Span::styled(cmd.clone(), fg(app, t.accent)),
-                ]));
-            }
-            if !s.copy.is_empty() {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("  {} → ", s.copy.join(", ")), fg(app, t.dim)),
-                    Span::styled("copied into each worktree (git ignores them)", fg(app, t.accent)),
-                ]));
-            }
-            lines.push(Line::raw(""));
-            lines.push(Line::styled(
-                "Written to .ptyro.local.toml: yours, not committed. Asked only once.",
-                fg(app, t.dim),
-            ));
-            lines.push(Line::styled(
-                "y use them · n not now (and not again) · Esc cancels",
-                fg(app, t.accent),
-            ));
-            let r = boxed(area, 84, lines.len() as u16 + 2);
-            f.render_widget(Clear, r);
-            f.render_widget(Paragraph::new(lines).block(block("Set up worktrees?".into())), r);
         }
         Overlay::Task { text, name, naming, wizard } => {
             let (do_rows, do_cursor) = edit_rows(

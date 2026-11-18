@@ -37,14 +37,13 @@ MD
   cat > .ptyro.toml <<'TOML'
 [scripts]
 setup = """
-echo "setting up $PTYRO_WORKTREE_NAME on port $PTYRO_PORT"
+echo "setting up $PTYRO_WORKTREE_NAME"
 sleep 1
 echo "copied: $(cat .env)"
 """
-archive = "echo archived $PTYRO_WORKTREE_NAME"
 
 [scripts.run.serve]
-command = "python3 -m http.server --bind 127.0.0.1 $PTYRO_PORT"
+command = "python3 -m http.server --bind 127.0.0.1 0"
 default = true
 TOML
   git add -A

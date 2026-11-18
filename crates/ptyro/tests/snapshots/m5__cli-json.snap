@@ -117,7 +117,6 @@ expression: "Value::Object(all)"
       "name": "string",
       "pane": "number",
       "pid": "number",
-      "ports": [],
       "profile": "string",
       "program_status": {
         "app": "string",
@@ -234,7 +233,6 @@ expression: "Value::Object(all)"
       "name": "string",
       "pane": "number",
       "pid": "number",
-      "ports": [],
       "profile": "string",
       "program_status": {
         "app": "string",
@@ -300,7 +298,6 @@ expression: "Value::Object(all)"
       "locked": "bool",
       "name": "string",
       "path": "string",
-      "ports": null,
       "profile": null,
       "project": "string",
       "project_slug": "string",

@@ -354,6 +354,15 @@ async fn a_removed_request_is_answered_with_what_went() {
         (serde_json::json!({ "t": "scratch_add", "text": "x" }), "the scratchpad"),
         (serde_json::json!({ "t": "inbox", "unread_only": false }), "the inbox"),
         (serde_json::json!({ "t": "inbox_mark", "all": true }), "the inbox"),
+        // The worktree and project extras (the same day).
+        (serde_json::json!({ "t": "worktree_archive", "addr": "w" }), "archived worktrees"),
+        (serde_json::json!({ "t": "worktree_archives" }), "archived worktrees"),
+        (serde_json::json!({ "t": "worktree_pair", "addr": "w" }), "pair mode"),
+        (serde_json::json!({ "t": "worktree_lock", "addr": "w", "lock": true }), "locking"),
+        (serde_json::json!({ "t": "worktree_rename_branch", "addr": "w" }), "renaming"),
+        (serde_json::json!({ "t": "project_suggest", "addr": "p" }), "setup suggestions"),
+        (serde_json::json!({ "t": "project_line_endings", "addr": "p" }), "rewriting"),
+        (serde_json::json!({ "t": "last_launch", "workspace": "" }), "quick new"),
     ]
     .into_iter()
     .enumerate()

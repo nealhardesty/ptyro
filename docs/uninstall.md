@@ -29,8 +29,7 @@ in again after a restore), the recordings (`--with-recordings`) and the certific
 
 **Putting it back** is by hand, with ptyro stopped (`ptyro daemon stop`): unpack it somewhere and
 copy `config/config.toml` to where `ptyro config path` says, and `data/ptyro.db` (and
-`data/chat.db`, your chats) into ptyro's data directory (usually `~/.local/share/ptyro`). Worktrees are not in a backup: they are in your repositories, and
-`ptyro wt restore` brings archived ones back from the snapshots there.
+`data/chat.db`, your chats) into ptyro's data directory (usually `~/.local/share/ptyro`). Worktrees are not in a backup: they are in your repositories.
 
 ## `ptyro uninstall`
 
@@ -74,10 +73,9 @@ It stops the daemon and every session, then removes:
 (`~/.local/share/ptyro-tools`, `%LOCALAPPDATA%\ptyro-tools`) and, on Windows, the entries it put in
 your `PATH` (the plan names them); your repositories, their branches, `.ptyro.toml` and `.ptyro.local.toml`,
 the lines ptyro added to `.git/info/exclude`, and, unless you say `--purge-refs`, the snapshots
-under `refs/ptyro/` in your repositories (archived and taken-over work). They stay as ordinary git refs
-(`git for-each-ref refs/ptyro`), so the work can be recovered with git, but ptyro's own list of
-archives goes with its database: `ptyro wt restore` can't find them after an uninstall, unless
-you restore a backup.
+under `refs/ptyro/` in your repositories (checkpoints, and work an older ptyro archived or took
+over). They stay as ordinary git refs (`git for-each-ref refs/ptyro`), so the work can be
+recovered with git.
 
 ### Confirmation
 

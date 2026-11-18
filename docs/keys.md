@@ -39,7 +39,6 @@ action by name.
 | `q` | send the prefix key itself to the program (`Ctrl-Q q` types `Ctrl-Q`): for a ptyro inside ptyro, emacs's `C-q`, or a program that quits on it |
 | `C-d` | quit ptyro: stop every session and the daemon, after a yes (agents hibernate and resume next time) |
 | `n` | new task: say what to do, ⏎ starts the default agent on it in a new worktree named after it (Tab edits the name, `C-o` picks the agent and where, an empty ⏎ is a random name) |
-| `C-n` | quick new: another of the agent this worktree last started (`claude`, `codex@work`…, with its arguments) in this worktree, no questions; where none has run, the project's default agent, else the Default agent setting (claude). Always an agent: `!` is the shell. The which-key menu says what it starts: `+ claude` |
 | `N` | new worktree of this project (+ an agent), after its setup script |
 | `w` | go to a workspace: every workspace (yours, then other machines') is in the sidebar, and this jumps to its header, unfolded; `+ new workspace` asks which machine when there are others |
 | `o` | open the worktree in an editor (`[editors]`; nvim opens inside ptyro) |
@@ -74,7 +73,7 @@ action by name.
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
 | `U` | set up agents and tools: the setup checklist (Agents, Tools, Already here). `Space` ticks (`←`/`→` picks the side, WSL or Windows, on Windows), `⏎` installs what's ticked in a split (live output, sudo's prompt there, then the logins), `s` not now. The first run opens with the same checklist at its top |
 | `^` | update: your agents and ptyro itself, when newer versions are out (looked for once a day), in a split. It shows each update's command and asks first; ptyro's own is checked against its SHA256SUMS, the daemon upgrades live, and every open TUI restarts into the new ptyro with its view kept |
-| `G` | clean up: stale worktrees (merged, gone or unused), biggest on disk first; `⏎` archives one (its work is kept), `Ctrl-L` keeps it (locks it, so clean-up and the health badge leave it alone). The health badge says when there are some. Archived ones: `worktree.restore` in the palette (`⏎` restores, `Ctrl-X` deletes for good) |
+| `G` | clean up: stale worktrees (merged, gone or unused), biggest on disk first; `⏎` removes one, after a yes (it refuses to lose work, saying what it would lose: `y` removes it anyway, `n` keeps it). The health badge says when there are some |
 | `I` | about ptyro: its version and protocol, the repository and where to report a problem (links: `⏎` opens, `y` copies), where config, data, logs and the socket live, whether the daemon and the web app run (`U` switches a daemon of another version to this one), the tools found, and `c` copies all of it for a bug report |
 | `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |
@@ -111,7 +110,7 @@ In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎`
 
 **Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
 they put there is a clone of the session they split. Everything else opens full sized: a new
-session (`n`, `C-n`, `!`, the wizard), the quick terminal's panel, a tool (an editor, a command's
+session (`n`, `!`, the wizard), the quick terminal's panel, a tool (an editor, a command's
 output, `config edit`), and a session you pick that isn't on screen. A split layout it replaces is
 kept whole: `` Ctrl-Q ` `` brings it back as it was, and so does picking one of its sessions in the
 sidebar. An editor you opened from ptyro gives its screen back on its own when you quit it. A
@@ -128,9 +127,9 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `h` / `l` (or `Left` / `Right`) | fold / unfold |
 | `Space` | mark a session for broadcast; on a workspace, project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
-| `n` / `C-n` / `N` | new task here / quick new (another of this worktree's agent, here) / new worktree |
+| `n` / `N` | new task here / new worktree |
 | `a` `p` `e` | next attention / peek / why this status |
-| `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead) / kill a session now. Its pane shows the next session |
+| `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, saying what: `y` removes it anyway, `n` keeps it) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
 | `m` / `*` | a new chat / pin the chat row. On a chat row `⏎` opens it, `,` titles it, `x` archives it (an archived one comes back), `X` deletes it (asks), `f` forks it, `.` its menu; `⏎` (or Space) on the CHATS heading folds it, as `h`/`l` do, and a click on its `＋` starts a chat in that workspace; `all chats…` (or `C-q g`) lists them |
@@ -271,8 +270,6 @@ key include: `project.add`
 - **Tour** (`ptyro tour`, `help.tour`): a coach in the corner says what to do next, with your keys;
   it never takes keys itself. Leave with `Ctrl-Q d`; everything the tour made is deleted.
   `help.tour` again starts it over.
-- **Finish** (`F` on a worktree): `p` a pull request, `i` integrate. On a worktree whose work is
-  in main already (`in main` or `merged` on its row), `F` and `x` clean it up (archive).
 - **Trust** (a project's scripts): `y` trusts, `n` goes on without them, `j` / `k` scroll.
 
 ## Rebinding

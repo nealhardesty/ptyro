@@ -301,14 +301,13 @@ impl Daemon {
                     if first {
                         s.save(None);
                         changed = true;
-                        self.after_first_prompt(s, &text).await;
                     }
                 }
                 // The agent's own turn ends count (once per turn: Stop, notify and OSC 7501 `done`
                 // can all end the same one); its working and idle flickers don't.
                 Signal::TurnEnd => {
                     if !self.counts_turn_ends(s) {
-                        self.after_turn(s).await;
+                        // Its turns are counted from its status instead (below).
                     } else if matches!(
                         s.status(),
                         Some(AgentStatus::Working | AgentStatus::Blocked)
@@ -318,7 +317,6 @@ impl Daemon {
                         m.turn_end_seen = m.turn_open;
                     } else if self.close_turn(s) {
                         self.turn_ended(s).await;
-                        self.after_turn(s).await;
                         changed = true;
                     }
                 }
@@ -432,7 +430,6 @@ impl Daemon {
                 && self.close_turn(s)
             {
                 self.turn_ended(s).await;
-                self.after_turn(s).await;
             }
         }
         if t.to.status == AgentStatus::Blocked && t.from != Some(AgentStatus::Blocked) {
@@ -903,66 +900,6 @@ impl Daemon {
                 }
             }
         });
-    }
-
-    /// The first prompt names the branch when `worktrees.auto_rename_branch` is on (M3.16).
-    async fn after_first_prompt(self: &Arc<Self>, s: &Arc<Session>, text: &str) {
-        if !self.config().worktrees.auto_rename_branch {
-            return;
-        }
-        let Some(wt) = s.meta.locked().place.worktree.clone().and_then(|w| self.worktree_by_id(&w))
-        else {
-            return;
-        };
-        if wt.is_root || !wt.default_branch() {
-            return;
-        }
-        let words: String =
-            ptyro_core::model::slugify(text).split('-').take(6).collect::<Vec<_>>().join("-");
-        // Nothing to name it after (a prompt of only symbols): the branch stays as it is.
-        if words.is_empty() {
-            return;
-        }
-        if let Err(e) = self.rename_branch_to(&wt.id, &words).await {
-            tracing::debug!("auto-rename skipped: {}", e.message);
-        }
-    }
-
-    // ── after_turn (M4.14) ─────────────────────────────────────────────────
-
-    async fn after_turn(self: &Arc<Self>, s: &Arc<Session>) {
-        let (agent, wt) = {
-            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (m.place.agent.clone(), m.place.worktree.clone())
-        };
-        let (Some(agent), Some(wt_id)) = (agent, wt) else { return };
-        if ptyro_agents::def(&self.config(), &agent).after_turn == Some(false) {
-            return;
-        }
-        let Some(wt) = self.worktree_by_id(&wt_id) else { return };
-        let Some(p) = self.project_by_id(&wt.project) else { return };
-        let cfg = ptyro_core::project::ProjectConfig::load(&p.root, &wt.path).unwrap_or_default();
-        if cfg.scripts.after_turn.is_none() || !self.is_trusted(&p.id, &cfg.trust_fingerprint()) {
-            return;
-        }
-        // One after_turn session per worktree, run again each turn.
-        let existing = self.sessions_in(&wt.id).into_iter().find(|x| {
-            x.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.script.as_deref()
-                == Some("after_turn")
-        });
-        match existing {
-            Some(x) if x.is_live() => {}
-            Some(x) => {
-                let _ = self.restart(&x.id.full()).await;
-            }
-            None => {
-                if let Err(e) =
-                    self.run_script(&wt, Some("after_turn"), None, BTreeMap::new()).await
-                {
-                    tracing::warn!("after_turn: {}", e.message);
-                }
-            }
-        }
     }
 
     // ── stop, hibernate, resume, answer ────────────────────────────────────

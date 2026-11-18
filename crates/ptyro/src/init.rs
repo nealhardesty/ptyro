@@ -307,7 +307,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
             eprintln!("  {:>2}. {}", i + 1, p.display());
         }
         if repos.len() > 40 {
-            eprintln!("  … and {} more (`ptyro project discover`)", repos.len() - 40);
+            eprintln!("  … and {} more (`ptyro project add PATH` registers one)", repos.len() - 40);
         }
         // `--yes` never registers a pile of repositories: that's a choice to make by hand.
         let answer = if yes {

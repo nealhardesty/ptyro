@@ -710,7 +710,7 @@ mod tests {
         let meta = serde_json::json!({
             "name": "build", "kind": "shell", "argv": ["/bin/zsh"], "cwd": "/work",
             "state": {"t": "running"}, "pid": 4242, "client_env": {"TERM": "xterm-256color"},
-            "place": {"profile": "default"}, "ports": [3000], "children": [],
+            "place": {"profile": "default"}, "children": [],
             "dangerous": false, "summarizing": false, "prompt_pending": false,
             "turns": 2,
         });
@@ -774,7 +774,16 @@ mod tests {
         );
         assert_eq!(got.master_fd, Some(9));
         assert_eq!(got.engine_clocks, [Some(1), None, Some(3)]);
-        assert_eq!(got.meta.ports, vec![3000]);
+    }
+
+    /// A daemon from before listening-port detection was removed (2026-11-17) hands its
+    /// sessions over with their ports: they come across without them.
+    #[test]
+    fn an_image_with_listening_ports_still_decodes() {
+        let mut v = as_value(&sample());
+        v["sessions"][0]["meta"]["ports"] = serde_json::json!([3000, 5173]);
+        let img = decode(&encode(&v)).expect("an image with ports decodes");
+        assert_eq!(img.sessions[0].meta.name, "build");
     }
 
     /// What the code writes now is what the fixture holds: a change to `Image` that alters the

@@ -19,8 +19,8 @@ the one that needs you.
 
 - **Sessions that survive.** Detach and reattach to the exact screen; a crash or reboot brings
   agents back, ready to resume the same conversation.
-- **One worktree per task.** A new branch and checkout, `.env` copied, setup script run, ports
-  allocated, agent started. Removing a worktree refuses to lose unpushed work.
+- **One worktree per task.** A new branch and checkout, `.env` copied, setup script run, agent
+  started. Removing a worktree refuses to lose unpushed work.
 - **Real agent status.** Working, blocked, idle or done, from the agents' own hooks, not screen
   scraping. The sidebar and notifications tell you who needs you.
 - **Work and personal, never crossed.** Profiles keep accounts, git author, SSH keys and secrets
@@ -377,7 +377,7 @@ to WSL. The zip ships Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.ex
 they're written for: a `.ps1` file in PowerShell, a `.sh` file (and Conductor's and the other
 tools' imported scripts) in Git Bash, the rest in PowerShell; `[scripts] shell` in
 `.ptyro.toml` (or the settings panel) picks one for the whole project. A bash script checked out
-with Windows line endings is a `doctor` finding, and `ptyro project line-endings` fixes it. The daemon listens on a named pipe only
+with Windows line endings is a `doctor` finding, which says how to fix it. The daemon listens on a named pipe only
 you can open. `ptyro daemon install-service` then starts this native daemon at logon instead of
 WSL's, and `ptyro serve` (the web app, with its own certificate, pairing and Tailscale's) runs
 here too. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
@@ -467,10 +467,6 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
 - From the shell: `ptyro status`.
-- `Ctrl-Q Ctrl-N` (`Ctrl-N` in the sidebar) is **quick new**: another of the agent this
-  worktree last started (`claude`, `codex@work`…) right there, no questions (`ptyro new
-  --again` from a shell). In a worktree that hasn't run one it starts the default agent, Claude
-  unless you pick another under Configuration → Agents → Default agent (`[agents] default`).
 - `Ctrl-Q !` starts a new shell in this worktree, full sized, every press. With no worktree
   around (an empty pane, a shell of SHELLS), it starts one in SHELLS instead.
 - **SHELLS**, tmux's windows: numbered terminals that belong to the workspace, not a worktree.
@@ -525,8 +521,8 @@ a row's menu (`.`), makes one at any time.
 A **project** is a git repository you registered. Each task gets a **worktree**: a separate
 checkout on its own branch (named like the worktree), so agents can't trample each other and your main
 checkout stays untouched. A new worktree gets the ignored files you list in `.worktreeinclude`
-(such as `.env`), a block of ports in `$PTYRO_PORT`, and the project's setup script, which runs
-only after you've reviewed and trusted it.
+(such as `.env`) and the project's setup script, which runs only after you've reviewed and
+trusted it.
 
 ```toml
 # .ptyro.toml in your repository (all optional)
@@ -537,22 +533,17 @@ share = ["node_modules"]                  # shared, not copied
 setup = "pnpm install --frozen-lockfile"
 
 [scripts.run.dev]
-command = "pnpm dev --port $PTYRO_PORT"   # Ctrl-Q r runs it
+command = "pnpm dev"                      # Ctrl-Q r runs it
 default = true
 ```
 
-ptyro makes and removes worktrees; committing, pushing and merging are yours, with git. When the
-work is done, **archiving** (`worktree.archive` in its row menu, `ptyro wt archive`) keeps its
-branch and a snapshot of every file, the checkout goes, and `ptyro wt restore` brings it back as
-it was. `ptyro wt rm` refuses to remove a worktree with running
-sessions, uncommitted or unpushed work, or stashes, lists exactly what would be lost, and offers
-archiving instead. Either way the checkout goes, build output (`target/`, `node_modules/`) with
-it, so disk comes back. `ptyro gc` (`Ctrl-Q G`) lists the stale ones, biggest on disk first, to
-archive, remove or keep (lock); the health badge (`⚕`, and Health on the web) reminds you when
-there are some, with how much disk they take. An archive is
-just a git ref: `ptyro wt archive-rm NAME` deletes one for good (`^x` in the TUI's restore list,
-Delete under Archived on the web), and `[worktrees] archive_purge_days` deletes them on its own
-once they're that old. ptyro also reads
+ptyro makes and removes worktrees; committing, pushing and merging are yours, with git.
+`ptyro wt rm` refuses to remove a worktree with running sessions, uncommitted or unpushed work,
+or stashes, lists exactly what would be lost, and offers to remove it anyway (`--force`), or you
+commit and push first. The checkout goes, build output (`target/`, `node_modules/`) with it, so
+disk comes back. `ptyro gc` (`Ctrl-Q G`) lists the stale ones, biggest on disk first, to remove
+or keep; the health badge (`⚕`, and Health on the web) reminds you when there are some, with how
+much disk they take. ptyro also reads
 setup config written for Conductor, Superset, the Codex app, Claude Desktop, Cursor and Copilot.
 Details: [`docs/config.md`](docs/config.md).
 
@@ -627,9 +618,8 @@ on = ["blocked"]
 
 ### Starting from GitHub
 
-`ptyro new --issue URL` starts from a GitHub issue (with `gh`), `--pr N` from a pull request's
-branch, and `ptyro wt pair` shows an agent's work in your main checkout, for your IDE and dev
-server.
+`ptyro new --issue URL` starts from a GitHub issue (with `gh`), and `--pr N` from a pull
+request's branch.
 
 ### Checkpoints
 
@@ -720,7 +710,7 @@ The web app does everything the CLI does, laid out for a phone, and its session 
 The rest of the app: a tab for sessions (blocked ones
 on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
 scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
-an issue or your changes; its checkpoints; archive it), and **More**:
+an issue or a branch; its checkpoints; remove it), and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.

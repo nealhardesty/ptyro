@@ -163,8 +163,6 @@ pub fn needed(req: &Request) -> Scope {
         | WorktreeGet { .. }
         | CheckpointList { .. }
         | CheckpointDiff { .. }
-        | WorktreeArchives { .. }
-        | WorktreeArchiveGet { .. }
         | Branches { .. }
         | ProfileList
         | Agents
@@ -179,7 +177,6 @@ pub fn needed(req: &Request) -> Scope {
         | PushUnsubscribe { .. }
         | PushTest
         | ChatGet { .. }
-        | LastLaunch { .. }
         | MachineList
         // What's installed on the machine, and what installing would run (BOOT1).
         | SetupPlan { .. }
@@ -226,7 +223,7 @@ pub fn needed(req: &Request) -> Scope {
         ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
-        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreePair { .. } | CheckpointRestore { .. } => Scope::Full,
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
     }
 }
 

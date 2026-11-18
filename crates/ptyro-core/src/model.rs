@@ -16,7 +16,7 @@ pub fn new_id() -> String {
 /// `My Repo.git` → `my-repo`: [`crate::names::fold`] to lowercase `[a-z0-9-]`, at most 40
 /// characters, `""` when nothing is left (the caller says what stands in). Narrower than a
 /// name on purpose: a project's slug is derived once, stored, and is the folder its worktrees
-/// and archives live under (`<data>/worktrees/<slug>/`); keeping this fold as it always was
+/// live under (`<data>/worktrees/<slug>/`); keeping this fold as it always was
 /// means re-adding a repository finds them again. Words taken from text (a branch from a
 /// prompt) use it too. A name someone gives never goes through it (SPEC §2.3).
 pub fn slugify(s: &str) -> String {
@@ -98,18 +98,6 @@ impl WorktreeState {
             Self::Removed => "removed",
             Self::Failed => "failed",
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PortBlock {
-    pub base: u16,
-    pub count: u16,
-}
-
-impl PortBlock {
-    pub fn contains(&self, p: u16) -> bool {
-        p >= self.base && u32::from(p) < u32::from(self.base) + u32::from(self.count)
     }
 }
 
@@ -240,8 +228,6 @@ pub struct WorktreeInfo {
     #[serde(default)]
     pub profile: Option<String>,
     pub state: WorktreeState,
-    #[serde(default)]
-    pub ports: Option<PortBlock>,
     pub created_ms: u64,
     #[serde(default)]
     pub removed_ms: Option<u64>,
@@ -494,40 +480,9 @@ pub struct WorktreeSpec {
     /// Start the agent in structured mode (M10).
     #[serde(default)]
     pub structured: bool,
-    /// Put the worktree here instead of `worktrees.location` (restoring an archive to its old place).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<std::path::PathBuf>,
     /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Move the main checkout's uncommitted changes into it (UX1.10): it starts at the main
-    /// checkout's HEAD, the changes go with it, and a copy stays at `refs/ptyro/taken/<name>`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub take_changes: bool,
-}
-
-/// What ptyro found a project needs, for its first worktree (UX1.11).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetupSuggestions {
-    pub project: String,
-    /// A setup script, from a lockfile.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub setup: Option<String>,
-    /// The file that suggested it (`pnpm-lock.yaml`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
-    /// Ignored files at the root to copy into each worktree (`.env`).
-    #[serde(default)]
-    pub copy: Vec<String>,
-    /// Offered already (taken or declined): never again on its own.
-    #[serde(default)]
-    pub offered: bool,
-}
-
-impl SetupSuggestions {
-    pub fn is_empty(&self) -> bool {
-        self.setup.is_none() && self.copy.is_empty()
-    }
 }
 
 fn yes() -> bool {
@@ -542,7 +497,7 @@ pub struct ScriptsInfo {
     pub text: String,
     pub fingerprint: String,
     pub trusted: bool,
-    /// Script names: `setup`, `archive`, `after_turn`, `run:<name>` (default run script first).
+    /// Script names: `setup`, `run:<name>` (default run script first).
     pub names: Vec<String>,
 }
 
@@ -601,29 +556,6 @@ pub fn human_bytes(b: u64) -> String {
         i += 1;
     }
     if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", U[i]) }
-}
-
-/// An archived worktree (UX1.12): its branch kept, its files (committed or not) in a snapshot
-/// commit under `refs/ptyro/archive/`, so `wt restore` brings it back as it was.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArchiveEntry {
-    /// Its address when several archives share a name (protocol 1.38; SPEC §2.3). Archives from
-    /// before then are given one when the list is read.
-    #[serde(default)]
-    pub id: String,
-    pub project: String,
-    pub project_slug: String,
-    pub name: String,
-    pub branch: String,
-    /// The ref holding the snapshot (`refs/ptyro/archive/<name>`).
-    pub snapshot: String,
-    pub path: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    pub archived_ms: u64,
-    /// The worktree's base, so deleting the archive knows whether its branch is merged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub base: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

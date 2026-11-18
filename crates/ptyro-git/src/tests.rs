@@ -265,7 +265,6 @@ fn safety_matrix() {
     assert!(
         matches!(f.git.branch_fate(&f.root, branch, Some("origin/main")), BranchFate::Delete(r) if r.contains("identical"))
     );
-    assert!(f.git.is_published(&f.root, branch));
     // Ahead of its upstream again: kept.
     commit(&f, &wt, "more.txt", "more");
     match f.git.branch_fate(&f.root, branch, Some("origin/main")) {
@@ -296,7 +295,6 @@ fn merged_local_branches_may_be_deleted() {
     f.git.worktree_remove(&f.root, &wt, false).unwrap();
     f.git.delete_branch(&f.root, "ptyro/m").unwrap();
     assert!(!f.git.branch_exists(&f.root, "ptyro/m"));
-    assert!(!f.git.is_published(&f.root, "main-only-local"));
 }
 
 #[test]
@@ -376,8 +374,6 @@ fn option_like_revisions_are_not_options() {
     let f = fixture();
     assert_eq!(f.git.rev(&f.root, "--all"), None);
     assert!(!f.git.ref_exists(&f.root, "--output=/tmp/x"));
-    assert!(f.git.subjects_since(&f.root, "--all").is_empty());
-    assert_eq!(f.git.subjects_since(&f.root, "HEAD"), Vec::<String>::new());
 }
 
 #[test]

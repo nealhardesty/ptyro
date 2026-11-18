@@ -92,8 +92,6 @@ fn table() -> Vec<Sample> {
         // Installs software (an unknown name is refused before anything runs).
         s(json!({"t":"setup_run","picks":[a]}), FULL, true),
         s(json!({"t":"checkpoint_diff","addr":a,"n":1,"to":null}), READ, true),
-        s(json!({"t":"worktree_archives","project":null}), READ, true),
-        s(json!({"t":"worktree_archive_get","addr":a}), READ, true),
         s(json!({"t":"branches","project":a}), READ, true),
         s(json!({"t":"profile_list"}), READ, true),
         s(json!({"t":"agents"}), READ, true),
@@ -112,7 +110,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"push_unsubscribe","endpoint":"https://push.invalid/x"}), READ, true),
         s(json!({"t":"push_test"}), READ, false),
         s(json!({"t":"chat_get","addr":a}), READ, true),
-        s(json!({"t":"last_launch","workspace":"main"}), READ, true),
         // Finding the shell reads; starting one is a shell.
         s(
             json!({"t":"quick_shell","worktree":null,"cwd":"/nonexistent-scopes-test","create":false,"env":{},"size":null,"workspace":null}),
@@ -206,8 +203,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"project_scripts","addr":a,"worktree":null}), FULL, false),
         s(json!({"t":"project_trust","addr":a,"fingerprint":"x"}), FULL, false),
         s(json!({"t":"project_untrust","addr":a}), FULL, false),
-        s(json!({"t":"project_line_endings","addr":a}), FULL, false),
-        s(json!({"t":"project_suggest","addr":a,"apply":null}), FULL, false),
         s(json!({"t":"discover","refresh":false}), FULL, false),
         s(json!({"t":"workspace_new","name":"x","profile":null,"notify":null}), FULL, false),
         s(json!({"t":"workspace_set","name":"x","profile":null,"notify":null}), FULL, false),
@@ -218,13 +213,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"worktree_remove","addr":a,"opts":{}}), FULL, false),
         s(json!({"t":"worktree_refresh","addr":a}), FULL, false),
         s(json!({"t":"worktree_run","addr":a,"script":null,"size":null}), FULL, false),
-        s(json!({"t":"worktree_lock","addr":a,"lock":true}), FULL, false),
         s(json!({"t":"worktree_rename","addr":a,"name":"x"}), FULL, false),
-        s(json!({"t":"worktree_rename_branch","addr":a,"branch":null}), FULL, false),
         s(json!({"t":"gc"}), FULL, false),
-        s(json!({"t":"worktree_archive","addr":a,"stop_sessions":false}), FULL, false),
-        s(json!({"t":"worktree_restore","addr":a}), FULL, false),
-        s(json!({"t":"worktree_archive_delete","addr":a}), FULL, false),
         s(json!({"t":"profile_env","name":a}), FULL, false),
         s(json!({"t":"profile_rename","old":a,"new":"x"}), FULL, false),
         s(json!({"t":"profile_resolve","spec":spawn_spec(json!({}))}), FULL, false),
@@ -242,7 +232,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"notify_test"}), FULL, false),
         s(json!({"t":"doctor"}), FULL, false),
         s(json!({"t":"self_test","adapter":a}), FULL, false),
-        s(json!({"t":"worktree_pair","addr":a,"off":true,"refresh":false}), FULL, false),
         s(json!({"t":"checkpoint_restore","addr":a,"n":null,"turn":null}), FULL, false),
     ]
 }

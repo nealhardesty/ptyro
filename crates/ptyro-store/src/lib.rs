@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::mpsc;
 
 use migrate::M;
-use ptyro_core::model::{PortBlock, ProjectInfo, WorkspaceInfo, WorktreeInfo};
+use ptyro_core::model::{ProjectInfo, WorkspaceInfo, WorktreeInfo};
 use ptyro_core::session::{ProcessState, SessionKind};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -213,6 +213,14 @@ const MIGRATIONS: &[M] = &[
     // The inbox was removed (2026-11-17): a session that wants you shows on its row and in
     // notifications, with no history kept.
     M::up("DROP TABLE inbox;"),
+    // Ports for worktrees and quick new were removed (2026-11-17): each worktree's port block,
+    // and the agent each worktree last started. The kept lists of archived worktrees and of a
+    // paired main checkout stay: what they point at is the person's, and doctor says where.
+    M::up(
+        "ALTER TABLE worktree DROP COLUMN port_base;
+    ALTER TABLE worktree DROP COLUMN port_count;
+    DELETE FROM kv WHERE key = 'last_agent';",
+    ),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -720,15 +728,13 @@ impl Store {
             }
             let mut st = c.prepare(
                 "SELECT w.id, w.project_id, p.slug, w.name, w.path, w.branch, w.base, w.is_root, w.profile, w.state,
-                        w.port_base, w.port_count, w.created_at, w.removed_at, w.last_used_at, w.title
+                        w.created_at, w.removed_at, w.last_used_at, w.title
                  FROM worktree w JOIN project p ON p.id = w.project_id
                  WHERE w.state != 'removed' ORDER BY w.is_root DESC, w.created_at",
             )?;
             let mut rows = st.query([])?;
             while let Some(r) = rows.next()? {
                 let state: String = r.get(9)?;
-                let port_base: Option<i64> = r.get(10)?;
-                let port_count: Option<i64> = r.get(11)?;
                 reg.worktrees.push(WorktreeInfo { machine: None,
                     id: r.get(0)?,
                     project: r.get(1)?,
@@ -740,13 +746,12 @@ impl Store {
                     is_root: r.get::<_, i64>(7)? != 0,
                     profile: r.get(8)?,
                     state: serde_json::from_value(serde_json::Value::String(state))?,
-                    ports: port_base.zip(port_count).map(|(b, n)| PortBlock { base: b as u16, count: n as u16 }),
-                    created_ms: r.get::<_, i64>(12)? as u64,
-                    removed_ms: opt_ms(r.get(13)?),
-                    last_used_ms: opt_ms(r.get(14)?),
+                    created_ms: r.get::<_, i64>(10)? as u64,
+                    removed_ms: opt_ms(r.get(11)?),
+                    last_used_ms: opt_ms(r.get(12)?),
                     status: None,
                     locked: false,
-                    title: r.get(15)?,
+                    title: r.get(13)?,
                 });
             }
             let mut st = c.prepare("SELECT project_id, scope, fingerprint, approved_at FROM trust")?;
@@ -826,11 +831,10 @@ impl Store {
         self.spawn(move |c| {
             c.execute(
                 "INSERT INTO worktree (id, project_id, name, path, branch, base, is_root, profile, state,
-                                       port_base, port_count, created_at, removed_at, last_used_at, title)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                                       created_at, removed_at, last_used_at, title)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
                  ON CONFLICT(id) DO UPDATE SET name = ?3, path = ?4, branch = ?5, base = ?6, profile = ?8, state = ?9,
-                                               port_base = ?10, port_count = ?11, removed_at = ?13, last_used_at = ?14,
-                                               title = ?15",
+                                               removed_at = ?11, last_used_at = ?12, title = ?13",
                 params![
                     w.id,
                     w.project,
@@ -841,8 +845,6 @@ impl Store {
                     i64::from(w.is_root),
                     w.profile,
                     w.state.label(),
-                    w.ports.map(|p| i64::from(p.base)),
-                    w.ports.map(|p| i64::from(p.count)),
                     w.created_ms as i64,
                     w.removed_ms.map(|m| m as i64),
                     w.last_used_ms.map(|m| m as i64),
@@ -1087,6 +1089,47 @@ mod tests {
         assert!(s.kv_get("k".into()).await.unwrap().is_some());
     }
 
+    /// Removing worktrees' ports and quick new drops the port columns and the agents each
+    /// worktree last started; a worktree still reads, and the kept lists of archived worktrees
+    /// and of a paired main checkout stay for doctor.
+    #[tokio::test]
+    async fn port_blocks_and_quick_new_memory_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ptyro.db");
+        database_at(&path, 9);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "INSERT INTO worktree (id, project_id, name, path, branch, is_root, state, port_base, port_count, created_at)
+                 VALUES ('t1', 'p1', 'feat', '/w/feat', 'feat', 0, 'ready', 20000, 10, 2);",
+            )
+            .unwrap();
+            for k in ["last_agent", "archive:list", "pairs"] {
+                c.execute(
+                    "INSERT INTO kv (key, value, updated_at) VALUES (?1, '{}', 1)",
+                    params![k],
+                )
+                .unwrap();
+            }
+        }
+        let s = Store::open(&path).unwrap();
+        let reg = s.load_registry().await.unwrap();
+        assert_eq!(reg.worktrees.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), ["feat"]);
+        assert_eq!(s.kv_get("last_agent".into()).await.unwrap(), None);
+        for kept in ["archive:list", "pairs"] {
+            assert!(s.kv_get(kept.into()).await.unwrap().is_some(), "{kept}");
+        }
+        let cols: Vec<String> = s
+            .call(|c| {
+                let mut st = c.prepare("SELECT name FROM pragma_table_info('worktree')")?;
+                let v = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
+                Ok(v)
+            })
+            .await
+            .unwrap();
+        assert!(!cols.iter().any(|c| c.starts_with("port_")), "{cols:?}");
+    }
+
     /// Removing change sets takes their runs (with their events and mail) and their templates'
     /// trust out of the database, and nothing else.
     #[tokio::test]
@@ -1313,7 +1356,6 @@ mod tests {
             is_root: false,
             profile: Some("work".into()),
             state: WorktreeState::Ready,
-            ports: Some(PortBlock { base: 20000, count: 10 }),
             created_ms: 2,
             removed_ms: None,
             last_used_ms: None,

@@ -1,6 +1,6 @@
 // Projects, worktrees and workspaces (ROADMAP WEB1.3): the sidebar's tree as the Projects tab,
-// a worktree's page, and everything the TUI does to them: new, archive, restore, remove,
-// scripts, ports, pair mode, locks, checkpoints and the clean-up.
+// a worktree's page, and everything the TUI does to them: new, remove, scripts, checkpoints and
+// the clean-up.
 
 import { conn } from "./conn.js";
 import { data, leftWords, liveWorktrees, machineOf, repoLeft, splitMachine, wsLabel, wtTabs } from "./data.js";
@@ -9,7 +9,7 @@ import type { Project, Worktree, Workspace } from "./data.js";
 import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
-import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
+import { newShell, newTask, openQuickShell, allSessions } from "./sessions.js";
 import type { Session } from "./screen.js";
 
 const ACTIONS = {
@@ -19,28 +19,18 @@ const ACTIONS = {
   "project.remove": "Forget a project (its worktrees stay on disk)",
   "project.trust": "Trust the project's scripts as they are now, so they run",
   "project.untrust": "Stop trusting the project's scripts",
-  "project.line_endings": "Rewrite the project's bash scripts that have Windows (CRLF) line endings with LF, in every checkout",
   "project.config": "The project's configuration, and where each value comes from",
   "project.pin": "Pin the project to a profile (its account)",
   "project.rename": "Rename the project: its address, which finds its worktrees and sessions (project/name)",
-  "project.suggest": "What a first worktree could use: a setup script, files to copy",
   "worktree.new": "A new worktree in this project, with an agent in it if you like",
   "worktree.show": "A worktree's page: its status, its sessions and what to do next",
-  "worktree.remove": "Remove the worktree (it refuses to lose work; archive keeps it)",
+  "worktree.remove": "Remove the worktree (it refuses to lose work, saying what it would lose)",
   "worktree.status": "Where the worktree stands: what is left to commit or push (✓ pushed when nothing is)",
-  "worktree.pair": "Pair mode: show the worktree's state in the project's main checkout",
-  "worktree.unpair": "Put the main checkout back, carrying edits made there into the worktree",
   "worktree.run": "Run one of the project's scripts in this worktree",
   "worktree.open": "Open the worktree in an editor installed on the computer, its file manager, a terminal app there, or a new shell",
-  "worktree.lock": "Keep the worktree from being removed or cleaned up",
-  "worktree.unlock": "Let the worktree be removed again",
   "worktree.rename": "Rename the worktree: its address (project/name). Its branch and its directory stay",
-  "worktree.rename_branch": "Rename the worktree's branch (until it's pushed)",
   "worktree.retitle": "Change what the worktree is titled",
-  "worktree.archive": "Archive: keep its work and its branch, remove the worktree",
-  "worktree.restore": "Bring an archived worktree back as it was",
-  "worktree.archive_delete": "Delete an archived worktree for good: its saved files, and its branch if merged into its base or the same as its pushed copy",
-  "worktree.gc": "Stale worktrees: merged, abandoned or missing; archive or remove them",
+  "worktree.gc": "Stale worktrees: merged, abandoned or missing; remove them or keep them",
   "workspace.switch": "Show one workspace's projects, or all of them",
   "workspace.new": "A new workspace",
   "workspace.set": "A workspace's profile and how it notifies",
@@ -114,7 +104,6 @@ function projectsView(): HTMLElement {
     h("button", { class: "icon plus", title: tip("project.add"), "aria-label": "Add a project", onclick: addProject }, "＋")),
     chips, h("main", { class: "list", title: tip("projects") }, ...body,
       h("div", { class: "foot-links" },
-        h("a", { href: "#/archives", title: tip("worktree.restore") }, "Archived"),
         h("a", { href: "#/ws", title: tip("workspace.set") }, "Workspaces"))));
 }
 
@@ -149,7 +138,7 @@ const projectScripts = new Cache<any>((id) => conn.request({ t: "project_scripts
 
 function trustProject(p: Project, scripts: any): void {
   const s = sheet(`Trust ${p.slug}'s scripts?`, [
-    h("p", { class: "intro" }, `They run on your computer, as you, when a worktree is made or removed (${scripts.names.join(", ")}).`),
+    h("p", { class: "intro" }, `They run on your computer, as you, when a worktree is made or you run one (${scripts.names.join(", ")}).`),
     h("pre", { class: "block" }, scripts.text)], [
     h("button", { onclick: () => s.close() }, "Cancel"),
     h("button", { class: "primary", onclick: async () => { s.close(); if (await ask({ t: "project_trust", addr: p.id, fingerprint: scripts.fingerprint }, "Trusted")) projectScripts.reload(p.id); } }, "Trust"),
@@ -162,21 +151,6 @@ async function pinProject(p: Project): Promise<void> {
   menu(`Pin ${p.slug} to a profile`, [
     ...(r.profiles as any[]).map((pr): Item => ({ label: pr.label || pr.name, hint: pr.name === p.pin ? "pinned now" : pr.git_email ?? undefined, run: async () => { await ask({ t: "project_pin", addr: p.id, profile: pr.name }, `Pinned to ${pr.name}`); } })),
     p.pin ? { label: "Unpin", danger: true, run: async () => { await ask({ t: "project_pin", addr: p.id, profile: null }, "Unpinned"); } } : null,
-  ]);
-}
-
-async function suggest(p: Project): Promise<void> {
-  const r = await ask({ t: "project_suggest", addr: p.id, apply: null });
-  if (!r) return;
-  const sg = r.suggestions;
-  if (!sg.setup && !sg.copy.length) { ui.toast("Nothing to suggest: it doesn't need more"); return; }
-  const s = sheet(`For ${p.slug}'s worktrees`, [
-    sg.setup ? h("div", {}, h("p", { class: "intro" }, `A setup script, from ${sg.from}:`), h("pre", { class: "block" }, sg.setup)) : null,
-    sg.copy.length ? h("div", {}, h("p", { class: "intro" }, "Ignored files copied into each new worktree:"), h("pre", { class: "block" }, sg.copy.join("\n"))) : null,
-    h("p", { class: "intro" }, "Saved to .ptyro.local.toml, which isn't committed."),
-  ], [
-    h("button", { onclick: async () => { s.close(); await ask({ t: "project_suggest", addr: p.id, apply: false }, "Not offered again"); } }, "No thanks"),
-    h("button", { class: "primary", onclick: async () => { s.close(); await ask({ t: "project_suggest", addr: p.id, apply: true }, "Saved"); } }, "Use these"),
   ]);
 }
 
@@ -207,18 +181,16 @@ function projectView(id: string): HTMLElement {
   const wts = liveWorktrees().filter((w) => w.project === p.id);
   const ws = [...data.workspaces.values()];
   return h("div", {}, ui.header(p.slug, "#/p", h("button", { class: "icon", "aria-label": "More", onclick: () => menu(p.slug, [
-    { title: tip("project.suggest"), label: "Suggestions for new worktrees", run: () => suggest(p) },
     { title: tip("project.config"), label: "Configuration", hint: "And where each value comes from", run: async () => { const r = await ask({ t: "project_config", addr: p.id }); if (r) textSheet(`${p.slug}: configuration`, r.text); } },
     { title: tip("project.rename"), label: "Rename…", run: () => renameProject(p) },
     { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
-    { title: tip("project.line_endings"), label: "Fix scripts' line endings", hint: "Windows (CRLF) endings bash can't run", run: () => void fixLineEndings(p.id, p.slug) },
     { title: tip("workspace.member"), label: "Workspaces…", run: () => projectWorkspaces(p) },
     { title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) },
   ]) }, "⋯")),
   h("main", { class: "stack", title: tip("project.show") },
     facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]),
     bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"),
-      ...((r) => r ? [h("button", { title: tipOf("session.again"), onclick: () => void startAgain(r) }, againWords(r)), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)),
+      ...((r) => r ? [h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)),
       h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Quick shell")),
     section("Scripts", pending(projectScripts, id) ?? (scripts.text.trim() ? h("div", {},
       h("div", { class: "bar" }, badge(scripts.trusted ? "trusted" : "not trusted", scripts.trusted ? "ok" : "warn"), h("span", { class: "sub" }, scripts.names.join(", "))),
@@ -228,13 +200,6 @@ function projectView(id: string): HTMLElement {
         : h("button", { class: "primary", title: tip("project.trust"), onclick: () => trustProject(p, scripts) }, "Review and trust…"))
       : h("p", { class: "sub" }, "This project has no scripts."))),
     section("Worktrees", h("div", { class: "rows" }, ...wts.map(worktreeRow)))));
-}
-
-/// Rewrite a project's bash scripts that have CRLF line endings, and say what was done.
-export async function fixLineEndings(id: string, slug: string): Promise<boolean> {
-  const r = await ask({ t: "project_line_endings", addr: id });
-  if (r) textSheet(`${slug}: line endings`, (r.notes as string[]).join("\n"));
-  return !!r;
 }
 
 function projectWorkspaces(p: Project): void {
@@ -302,29 +267,22 @@ function showNotes(title: string, notes: string[]): void {
   else textSheet(title, notes.join("\n"));
 }
 
-function archive(w: Worktree): void {
-  const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
-  confirm(`Archive ${w.title || w.name}?`, `Its files (uncommitted ones too) are saved and its branch kept; the worktree is removed. Restore brings it back.${n ? ` ${n} running session${n === 1 ? " is" : "s are"} stopped.` : ""}`, "Archive", async () => {
-    const r = await ask({ t: "worktree_archive", addr: w.id, stop_sessions: n > 0 }, "Archived");
-    if (r) go("#/p");
-  }, false);
-}
-
 function remove(w: Worktree, force = false, stopAgreed = false): void {
   const n = sessionsIn(w).filter((s) => s.state.t === "running" || s.state.t === "starting").length;
-  // Unsaved work offers archiving first; any other refusal with a way through (a session the
-  // count above missed: a loose shell, one starting) offers it, as `ask` does (SPEC §6.6).
+  // Unsaved work says what would be lost and offers removing anyway; any other refusal with a
+  // way through (a session the count above missed: a loose shell, one starting) offers it, as
+  // `ask` does (SPEC §6.6).
   const send = async (req: object): Promise<void> => {
     try {
       const r = await conn.request(req);
       for (const note of r.notes ?? []) ui.toast(note);
       go("#/p");
     } catch (e) {
-      // Work would be lost: its way through, offered beside archiving it instead.
+      // Work would be lost: what, and the way through (or commit and push it first).
       const f = fixOf(e), again = f && withFix(req, f);
       if (f?.fix === "force" && !force) {
         menu("It has work that isn't saved", [
-          { label: "Archive it instead", hint: "Keeps everything; restore brings it back", run: () => archive(w) },
+          { label: "Keep it", hint: "Commit and push it first, then remove it", run: () => ui.toast("Kept: nothing was removed") },
           { label: "Remove anyway", danger: true, hint: errText(e), run: () => remove(w, true, (req as { opts?: { stop_sessions?: boolean } }).opts?.stop_sessions === true) },
         ]);
       } else if (f && again) confirm(f.label, errText(e), f.label, () => send(again));
@@ -372,33 +330,16 @@ function renameWorktree(w: Worktree): void {
   });
 }
 
-function renameBranch(w: Worktree): void {
-  form("Rename the branch", [{ key: "branch", label: "New name", value: w.branch ?? "", placeholder: "from the first commit", slug: "branch", hint: "Refused once it's pushed. Empty derives a name from the first commit. A space or other character git refuses becomes -." }], "Rename", async (v) => {
-    await conn.request({ t: "worktree_rename_branch", addr: w.id, branch: (v.branch as string) || null });
-    ui.toast("Branch renamed");
-  });
-}
-
 function retitleWorktree(w: Worktree): void {
   form("Title", [{ key: "title", label: "Title", value: w.title ?? "", hint: "What this worktree is for, for people to read. Empty clears it." }], "Save", (v) => conn.request({ t: "retitle", addr: w.id, title: (v.title as string) || null, worktree: true }));
-}
-
-async function pairMode(w: Worktree, off: boolean): Promise<void> {
-  const r = await ask({ t: "worktree_pair", addr: w.id, off, refresh: false });
-  if (r) showNotes(off ? "Main checkout restored" : "Paired", r.notes ?? []);
 }
 
 function worktreeMenu(w: Worktree): void {
   menu(w.title || w.name, [
     { title: tip("worktree.open"), label: "Open in…", hint: "An editor, the file manager, a terminal or a shell", run: () => openIn(w) },
     { title: tip("worktree.run"), label: "Run a script…", run: () => runScript(w) },
-    { title: tip("worktree.pair"), label: "Pair mode: show it in the main checkout", hint: "Run it from the project's own directory", run: () => pairMode(w, false) },
-    { title: tip("worktree.unpair"), label: "End pair mode", hint: "Puts the main checkout back, carrying edits over", run: () => pairMode(w, true) },
     !w.is_root && { title: tip("worktree.retitle"), label: "Set title…", run: () => retitleWorktree(w) },
     !w.is_root && { title: tip("worktree.rename"), label: "Rename…", hint: "Its address; the branch stays", run: () => renameWorktree(w) },
-    !w.is_root && { title: tip("worktree.rename_branch"), label: "Rename the branch…", run: () => renameBranch(w) },
-    !w.is_root && { title: w.locked ? tip("worktree.unlock") : tip("worktree.lock"), label: w.locked ? "Unlock" : "Lock", hint: w.locked ? "Allow removing it" : "Keep it from being removed", run: async () => { await ask({ t: "worktree_lock", addr: w.id, lock: !w.locked }, w.locked ? "Unlocked" : "Locked"); } },
-    !w.is_root && { title: tip("worktree.archive"), label: "Archive", hint: "Keeps its work and branch", run: () => archive(w) },
     !w.is_root && { title: tip("worktree.remove"), label: "Remove…", danger: true, run: () => remove(w) },
   ]);
 }
@@ -417,7 +358,6 @@ function worktreeView(rest: string): HTMLElement {
   const overview = h("div", { class: "stack-in" },
     bar(
       h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`w:${w.id}`) }, "New session"),
-      h("button", { title: tipOf("session.again"), onclick: () => void startAgain(w) }, againWords(w)),
       h("button", { title: tipOf("shell.new"), onclick: () => void newShell(w) }, "New shell"),
       h("button", { title: tipOf("shell.pane"), onclick: () => void openQuickShell(w) }, "Quick shell")),
     section("Sessions", sess.length ? h("div", { class: "rows" }, ...sess.map((s) => row(
@@ -425,7 +365,6 @@ function worktreeView(rest: string): HTMLElement {
       s.activity ?? s.title ?? statusWord(statusOf(s)), ago(s.status?.since_ms ?? s.created_ms), { href: `#/s/${enc(s.id)}` }))) : h("p", { class: "sub" }, "Nothing is running here.")),
     section("Status", h("div", { title: tip("worktree.status") }, facts([
       ["Branch", w.branch], ["Base", w.base], ["Changes", st ? `${summary(w)}${st.subject ? ` — ${st.subject}` : ""}` : ""],
-      ["Ports", w.ports ? `${w.ports.base}–${w.ports.base + w.ports.count - 1}` : null],
       ["Profile", w.profile], ["Path", w.path], ["State", w.state === "ready" ? null : w.state]]))));
   const content = current === "overview" ? overview : (wtTabs.find((t) => t.id === current)?.render(w) ?? overview);
   return h("div", {}, ui.header(w.is_root ? `${proj?.slug ?? ""} · main` : w.title || w.name, "#/p", h("button", { class: "icon", title: tip("worktree.show"), "aria-label": "More", onclick: () => worktreeMenu(w) }, "⋯")),
@@ -433,11 +372,10 @@ function worktreeView(rest: string): HTMLElement {
     h("main", { class: "stack", title: tip("worktree.show") }, content));
 }
 
-// ── clean-up, archives ──────────────────────────────────────────────────────────────────────
+// ── clean-up ──────────────────────────────────────────────────────────────────────
 
 // Stale worktrees, and scratch shells' directories left behind (SPEC §23.8).
 const gc = new Cache<{ entries: any[]; scratch: any[] }>(() => conn.request({ t: "gc" }).then((r) => ({ entries: r.entries, scratch: r.scratch ?? [] })));
-const archives = new Cache<any[]>(() => conn.request({ t: "worktree_archives", project: null }).then((r) => r.entries));
 
 /// `512 B`, `3.4 MiB`, `12.0 GiB`, as the CLI and the TUI say it.
 function bytes(b: number): string {
@@ -448,7 +386,9 @@ function bytes(b: number): string {
 }
 const sizeOf = (e: any): string | null => (e.bytes == null ? null : `${e.bytes_partial ? "≥ " : ""}${bytes(e.bytes)}`);
 
-/// A worktree went, or was just locked (kept; called before the event is applied): the stale count is asked again, once it was known.
+/// A worktree went, or something started in it (it's locked while sessions run, and clean-up
+/// leaves it be; called before the event is applied): the stale count is asked again, once it
+/// was known.
 export function staleMaybeChanged(e: any): void {
   if (conn.scope === "full" && (e.t === "worktree_removed" || (e.t === "worktree_updated" && e.info?.locked && data.worktrees.get(e.info.id)?.locked === false))) gc.refresh("");
 }
@@ -468,8 +408,8 @@ function gcView(): HTMLElement {
   const body = pending(gc, "", "Looking for stale worktrees…") ?? (entries!.length
     ? h("div", { class: "rows" }, ...entries!.map((e) => row(e.worktree.title || e.worktree.name, `${e.worktree.project_slug} · ${e.reasons.join(", ")}`, sizeOf(e), {
         onclick: () => menu(e.worktree.title || e.worktree.name, [
-          { title: tip("worktree.archive"), label: "Archive", hint: "Keeps its work", run: () => done("Archived")({ t: "worktree_archive", addr: e.worktree.id, stop_sessions: false }) },
-          { title: tip("worktree.lock"), label: "Keep it", hint: "Locks it: clean-up leaves it alone", run: () => done("Kept: it's locked")({ t: "worktree_lock", addr: e.worktree.id, lock: true }) },
+          { title: tip("worktree.remove"), label: "Remove…", hint: "It refuses to lose work, saying what", danger: true, run: () => remove(e.worktree) },
+          { label: "Keep it", hint: "Leave it as it is", run: () => ui.toast("Kept") },
           { label: "Open", run: () => go(`#/wt/${enc(e.worktree.id)}`) },
         ]) })))
     : h("p", { class: "empty" }, "Nothing is stale."));
@@ -483,29 +423,6 @@ function gcView(): HTMLElement {
     }))) : null;
   return h("div", {}, ui.header("Clean up", "#/p", h("button", { class: "icon", onclick: () => gc.reload(""), "aria-label": "Look again" }, "↻")),
     h("main", { class: "stack", title: tip("worktree.gc") }, h("p", { class: "intro" }, `Worktrees that are merged, abandoned or gone, biggest first${total ? ` (${bytes(total)} in all, build output included)` : ""}. Nothing is removed unless you say so.`), body, left));
-}
-
-function archivesView(): HTMLElement {
-  const entries = archives.get("");
-  const body = pending(archives, "") ?? (entries!.length
-    ? h("div", { class: "rows" }, ...entries!.map((e) => {
-        // By id: several archives can share a name (an older daemon's have none).
-        const name = e.title || e.name, addr = e.id || `${e.project_slug}/${e.name}`;
-        return row(name, `${e.project_slug} · ${e.branch}`, ago(e.archived_ms), {
-          onclick: () => menu(name, [
-            { title: tip("worktree.restore"), label: "Restore", hint: "Back as it was", run: () => confirm(`Restore ${name}?`, "The branch is checked out again and the saved files come back as uncommitted work.", "Restore", async () => {
-              const r = await ask({ t: "worktree_restore", addr }, "Restored");
-              if (r?.info) go(`#/wt/${enc(r.info.id)}`);
-            }, false) },
-            { title: tip("worktree.archive_delete"), label: "Delete", hint: "For good", danger: true, run: () => confirm(`Delete the archive of ${name}?`, "Its saved files are deleted. Its branch is deleted too if it is merged into its base or the same as its pushed copy; otherwise it is kept. This can't be undone.", "Delete", async () => {
-              const r = await ask({ t: "worktree_archive_delete", addr }, "Deleted");
-              if (r) showNotes("Archive deleted", r.notes ?? []);
-              archives.reload("");
-            }) },
-          ]) });
-      }))
-    : h("p", { class: "empty" }, "No archived worktrees."));
-  return h("div", {}, ui.header("Archived", "#/p"), h("main", { class: "stack", title: tip("worktree.restore") }, body));
 }
 
 // ── checkpoints ──────────────────────────────────────────────────────────────────────────────
@@ -537,4 +454,3 @@ views.set("proj", projectView);
 views.set("wt", worktreeView);
 views.set("ws", () => workspacesView());
 views.set("gc", () => gcView());
-views.set("archives", () => archivesView());

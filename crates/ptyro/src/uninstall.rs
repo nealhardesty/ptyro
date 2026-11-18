@@ -7,7 +7,8 @@
 //!
 //! What it never touches: your repositories, their branches, `.ptyro.toml` and
 //! `.ptyro.local.toml`, `.git/info/exclude` lines, and (unless `--purge-refs`) the snapshots under
-//! `refs/ptyro/` in your repositories, which hold archived and taken-over work.
+//! `refs/ptyro/` in your repositories, which hold checkpoints and the work an older ptyro archived
+//! or took over.
 //!
 //! The plan is built without starting anything (`--dry-run` stops there). Work that would be lost
 //! (uncommitted changes in a worktree) has to be confirmed by typing `delete`. With `PTYRO_HOME`
@@ -584,7 +585,7 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     if !opts.purge_refs && !refs.is_empty() {
         let n: usize = refs.iter().map(|r| r.archive + r.taken + r.other).sum();
         kept.push(format!(
-            "{n} snapshot ref(s) under refs/ptyro/ in {} repositor{} (archived and taken-over work; --purge-refs deletes them)",
+            "{n} snapshot ref(s) under refs/ptyro/ in {} repositor{} (checkpoints, and work an older ptyro archived or took over; --purge-refs deletes them)",
             refs.len(),
             if refs.len() == 1 { "y" } else { "ies" }
         ));
@@ -771,7 +772,7 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         let n: usize = plan.refs.iter().map(|r| r.archive + r.taken + r.other).sum();
         let _ = writeln!(
             s,
-            "  snapshots     {n} ref(s) under refs/ptyro/ in {} repositor(ies): archived and taken-over work",
+            "  snapshots     {n} ref(s) under refs/ptyro/ in {} repositor(ies): checkpoints, and work an older ptyro archived or took over",
             plan.refs.len()
         );
     }

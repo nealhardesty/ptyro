@@ -1,4 +1,4 @@
-//! M3 end-to-end tests: projects, worktrees (includes, ports, setup, trust, locks, the removal
+//! M3 end-to-end tests: projects, worktrees (includes, setup, trust, locks, the removal
 //! safety matrix), workspaces, profiles (pins, guards, environments, the profile CLI), scripts,
 //! reconciliation and gc. Real daemon, real git, a fake `$HOME` so nothing of the developer's
 //! leaks in.
@@ -191,20 +191,15 @@ share = ["node_modules"]
 # POSIX shell lines: bash everywhere (Git Bash on Windows, where `auto` would be PowerShell).
 shell = "bash"
 setup = "echo setup-ran port=$PTYRO_PORT name=$PTYRO_WORKTREE_NAME conductor=$CONDUCTOR_WORKSPACE_NAME > setup.out"
-archive = "echo archived > $PTYRO_ROOT_PATH/archived.txt"
 
 [scripts.run.dev]
-command = "echo dev on $PTYRO_PORT; sleep 30"
+command = "echo dev; sleep 30"
 default = true
 "#;
 
 #[tokio::test]
 async fn the_worktree_lifecycle() {
-    // Below every OS's ephemeral range (Linux's starts at 32768, macOS's and Windows' at 49152):
-    // in it, an outgoing connection anywhere on the computer could hold a port of the block for
-    // a moment, and the daemon rightly skipped to the next block.
-    let w =
-        World::new("[ports]\nrange = \"21000-21099\"\ncount = 5\n[compat]\nconductor_env = true\n");
+    let w = World::new("[compat]\nconductor_env = true\n");
     let root = w.repo(
         "app",
         &[
@@ -248,8 +243,6 @@ async fn the_worktree_lifecycle() {
         std::fs::read_to_string(info.path.join("node_modules/dep/index.js")).unwrap(),
         "module.exports = 1\n"
     );
-    let ports = info.ports.expect("a port block");
-    assert_eq!((ports.base, ports.count), (21000, 5));
     assert!(!info.path.join("setup.out").exists());
 
     w.ok(&["project", "trust", "app", "--yes"]);
@@ -273,8 +266,8 @@ async fn the_worktree_lifecycle() {
     let out = std::fs::read_to_string(second.path.join("setup.out")).unwrap();
     assert_eq!(
         out.trim(),
-        "setup-ran port=21005 name=second conductor=second",
-        "the second block, SPEC §10.6 env"
+        "setup-ran port= name=second conductor=second",
+        "SPEC §10.6 env; no port of its own (port blocks were removed, 2026-11-17)"
     );
 
     // Changing the scripts takes the trust away until approved again.
@@ -366,8 +359,6 @@ async fn the_worktree_lifecycle() {
     };
     let notes = notes.join("\n");
     assert!(notes.contains("kept branch second"), "{notes}");
-    assert!(notes.contains("archive script exited 0"), "{notes}");
-    assert!(root.join("archived.txt").exists(), "archive ran before removal");
     assert!(!second.path.exists());
     assert!(w.git(&root, &["branch"]).contains("second"));
 
@@ -377,22 +368,7 @@ async fn the_worktree_lifecycle() {
     w.git(&root, &["push", "-q", "origin", "main"]);
     let out = w.ok(&["wt", "rm", "-y", "app/first"]);
     assert!(out.contains("deleted branch first"), "{out}");
-    assert!(out.contains("released ports 21000-21004"), "{out}");
     assert!(!w.git(&root, &["branch"]).contains("first"));
-    // The port block is free again.
-    let r = new_wt(
-        &c,
-        WorktreeSpec {
-            project: "app".into(),
-            name: Some("third".into()),
-            setup: false,
-            ..WorktreeSpec::default()
-        },
-    )
-    .await
-    .unwrap();
-    let Reply::WorktreeCreated { info: third, .. } = r else { panic!() };
-    assert_eq!(third.ports.unwrap().base, 21000);
     // The main checkout can't be removed as a worktree.
     let e = c
         .request(Request::WorktreeRemove { addr: "app/@root".into(), opts: RemoveOpts::default() })
@@ -467,59 +443,6 @@ async fn scripts_status_and_run_modes() {
     assert_eq!(wt.status.unwrap().insertions, 4, "README's 3 lines + new.txt's 1");
     let out = w.ok(&["wt", "status", "svc/a"]);
     assert!(out.contains("1 modified, 1 untracked"), "{out}");
-    // Rename the branch (not pushed, so allowed), from the first commit's subject.
-    w.git(&wt.path, &["add", "-A"]);
-    w.git(&wt.path, &["commit", "-q", "-m", "Add the new parser"]);
-    let out = w.ok(&["wt", "rename-branch", "svc/a"]);
-    assert!(out.contains("add-the-new-parser"), "{out}");
-    w.git(&wt.path, &["push", "-q", "-u", "origin", "add-the-new-parser"]);
-    let out = w.cli(&["wt", "rename-branch", "svc/a", "other"]);
-    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("pushed"));
-}
-
-#[tokio::test]
-async fn listening_ports_are_reported_per_session() {
-    if std::process::Command::new("python3").arg("--version").output().is_err() {
-        eprintln!("skipped: no python3");
-        return;
-    }
-    // Below the OSes' ephemeral ranges, as the lifecycle test's: its block is then never busy.
-    let w = World::new("[ports]\nrange = \"22000-22099\"\n");
-    let root = w.repo("web", &[]);
-    w.ok(&["project", "add", root.to_str().unwrap()]);
-    let c = w.d.client().await.unwrap();
-    new_wt(
-        &c,
-        WorktreeSpec {
-            project: "web".into(),
-            name: Some("x".into()),
-            fetch: Some(false),
-            ..WorktreeSpec::default()
-        },
-    )
-    .await
-    .unwrap();
-    let srv = "import os,socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('127.0.0.1', int(os.environ['PTYRO_PORT']))); s.listen(); print('listening', flush=True); time.sleep(30)";
-    let s = spawn(
-        &c,
-        SpawnSpec { argv: vec!["python3".into(), "-c".into(), srv.into()], ..sh("", "web/x") },
-    )
-    .await
-    .unwrap();
-    screen_with(&w.d, &c, &s.name, "listening").await;
-    let deadline = Instant::now() + WAIT;
-    loop {
-        let Reply::Session { info } =
-            c.request(Request::Get { addr: s.name.clone() }).await.unwrap()
-        else {
-            panic!()
-        };
-        if info.ports == vec![22000] {
-            break;
-        }
-        assert!(Instant::now() < deadline, "ports never showed: {:?}", info.ports);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
 }
 
 const PROFILES: &str = r#"
@@ -833,7 +756,6 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
         &["ws", "rm", "sdie"][..],
         &["project", "rm", "ap"],
         &["wt", "rm", "app/nope"],
-        &["wt", "archive-rm", "app/nope"],
         &["profile", "rm", "nope"],
     ] {
         let out = w.cli(args);
@@ -844,15 +766,6 @@ async fn removals_ask_first_and_project_rm_can_let_sessions_go() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    // An archive is found by its name (or handle) and asked about by its full name.
-    w.ok(&["wt", "new", "gone", "--project", "app"]);
-    w.ok(&["wt", "archive", "app/gone"]);
-    let out = w.cli(&["wt", "archive-rm", "gone"]);
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("archive of app/gone?"), "{err}");
-    // Named twice, it is one archive: deleted once, no failure for the second.
-    w.ok(&["wt", "archive-rm", "-y", "gone", "app/gone"]);
-    assert!(!w.ok(&["wt", "archives"]).contains("gone"), "deleted");
     // `config rm` finds what it removes before asking: a name that isn't there asks nothing.
     let out = w.cli(&["config", "rm", "agents", "nope"]);
     let err = String::from_utf8_lossy(&out.stderr);
@@ -1027,10 +940,7 @@ async fn tui_workspaces_tree_folding_and_worktree_removal() {
     assert!(r.at(2.9).contains("Remove worktree lib/dirty (dirty)?"), "{}", r.at(2.9));
     let refused = r.at(3.8);
     assert!(refused.contains("1 untracked file") && refused.contains("scratch.txt"), "{refused}");
-    assert!(
-        refused.contains("y: remove it anyway") && refused.contains("a: archive it instead"),
-        "{refused}"
-    );
+    assert!(refused.contains("y: remove it anyway") && !refused.contains("archive"), "{refused}");
     assert!(dirty.path.exists(), "nothing removed without consent");
     let switcher = r.at(4.7);
     assert!(
@@ -1139,10 +1049,10 @@ async fn tui_new_worktree_wizard() {
 }
 
 /// WIN6: a project's scripts run in the shell they're written for (`[scripts] shell`), and a
-/// bash script with Windows (CRLF) line endings, which bash can't run, is rewritten with LF by
-/// `project line-endings` (in every checkout), after which it runs.
+/// bash script with Windows (CRLF) line endings, which bash can't run, is found by the doctor,
+/// which says how to fix it; once fixed, it runs.
 #[tokio::test]
-async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
+async fn scripts_run_in_their_shell_and_crlf_scripts_are_found() {
     let toml = "[scripts]\nshell = \"bash\"\n[scripts.run.which]\ncommand = \"echo bash-says-${BASH_VERSION:+yes}; sleep 30\"\n[scripts.run.crlf]\ncommand = \"./crlf.sh\"\n";
     let w = World::new("[worktrees]\nfetch = false\n");
     let root = w.repo(
@@ -1171,15 +1081,10 @@ async fn scripts_run_in_their_shell_and_crlf_scripts_are_fixed() {
     screen_with(&w.d, &c, &info.name, "bash-says-yes").await;
     // The CRLF script: `#!/bin/sh\r` is no interpreter, and the doctor says how to fix it.
     let doctor = w.ok(&["doctor"]);
-    assert!(doctor.contains("`ptyro project line-endings shells`"), "{doctor}");
-    let fixed = w.ok(&["project", "line-endings", "shells"]);
-    assert!(fixed.contains("crlf.sh now LF"), "{fixed}");
-    assert!(fixed.contains("eol=lf"), "how to keep it so: {fixed}");
-    assert_eq!(
-        std::fs::read_to_string(root.join("crlf.sh")).unwrap(),
-        "#!/bin/sh\necho crlf-ran\nsleep 30\n"
-    );
-    assert!(w.ok(&["project", "line-endings", "shells"]).contains("no script here"));
+    assert!(doctor.contains("crlf.sh has Windows (CRLF) line endings"), "{doctor}");
+    assert!(doctor.contains("eol=lf"), "how to keep it so: {doctor}");
+    std::fs::write(root.join("crlf.sh"), "#!/bin/sh\necho crlf-ran\nsleep 30\n").unwrap();
+    assert!(!w.ok(&["doctor"]).contains("crlf.sh"), "fixed");
     let Reply::Session { info } = c.request(run("crlf")).await.unwrap() else { panic!() };
     screen_with(&w.d, &c, &info.name, "crlf-ran").await;
 }
@@ -1342,7 +1247,7 @@ async fn worktrees_and_projects_are_renamed() {
 
     // The old name is free again (its branch too, once renamed); its directory isn't, so the
     // new one gets the next.
-    w.ok(&["wt", "rename-branch", "app/login-fix", "login-fix"]);
+    w.git(&after.path, &["branch", "-m", "login-fix"]);
     let Reply::WorktreeCreated { info: again, .. } = new_wt(&c, wt("feat")).await.unwrap() else {
         panic!()
     };
@@ -1353,7 +1258,7 @@ async fn worktrees_and_projects_are_renamed() {
         panic!()
     };
     w.ok(&["wt", "rename", "app/tmp", "tmp-moved"]);
-    w.ok(&["wt", "rename-branch", "app/tmp-moved", "tmp-moved"]);
+    w.git(&tmp.path, &["branch", "-m", "tmp-moved"]);
     std::fs::rename(&tmp.path, tmp.path.with_extension("away")).unwrap();
     let Reply::WorktreeCreated { info: tmp2, .. } = new_wt(&c, wt("tmp")).await.unwrap() else {
         panic!()
@@ -1361,12 +1266,7 @@ async fn worktrees_and_projects_are_renamed() {
     assert!(tmp2.path != tmp.path && tmp2.path.ends_with("tmp-2"), "{tmp2:?}");
     std::fs::rename(tmp.path.with_extension("away"), &tmp.path).unwrap();
 
-    // An archive, to restore under the project's new name.
-    c.request(Request::WorktreeArchive { addr: "app/old".into(), stop_sessions: false })
-        .await
-        .unwrap();
-
-    // A project: the slug changes; sessions, worktrees and archives follow it.
+    // A project: the slug changes; sessions and worktrees follow it.
     let e = c
         .request(Request::ProjectRename { addr: "app".into(), name: "lib".into() })
         .await
@@ -1393,7 +1293,5 @@ async fn worktrees_and_projects_are_renamed() {
         (&after.id, "web", &after.path)
     );
     assert!(w.ok(&["wt", "ls"]).contains("web/feat"));
-    let restored = c.request(Request::WorktreeRestore { addr: "web/old".into() }).await;
-    assert!(restored.is_ok(), "{restored:?}");
     worktree(&c, "web/old").await;
 }

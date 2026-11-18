@@ -177,7 +177,6 @@ impl Daemon {
         self.registry.locked().worktrees.retain(|o| o.id != w.id);
         w.state = WorktreeState::Removed;
         w.removed_ms = Some(now_ms());
-        w.ports = None;
         w.status = None;
         if let Some(store) = &self.store {
             store.save_worktree(w.clone());
@@ -299,14 +298,8 @@ impl Daemon {
                 names.push(format!("run:{n}"));
             }
         }
-        for (n, s) in [
-            ("setup", &cfg.scripts.setup),
-            ("archive", &cfg.scripts.archive),
-            ("after_turn", &cfg.scripts.after_turn),
-        ] {
-            if s.is_some() {
-                names.push(n.into());
-            }
+        if cfg.scripts.setup.is_some() {
+            names.push("setup".into());
         }
         Ok(ptyro_core::model::ScriptsInfo {
             project: p.slug.clone(),
@@ -420,7 +413,6 @@ impl Daemon {
                     is_root: true,
                     profile: None,
                     state: WorktreeState::Ready,
-                    ports: None,
                     created_ms: now_ms(),
                     removed_ms: None,
                     last_used_ms: None,
@@ -510,7 +502,7 @@ impl Daemon {
 
     /// `ProjectRename` (SPEC §2.3): a new slug, the project's address. Sessions, workspaces and
     /// trust refer to it by id, so only what carries the slug follows: its worktrees (`newslug/
-    /// name`) and its archives. Worktree directories stay where they are.
+    /// name`). Worktree directories stay where they are.
     async fn project_rename(&self, addr: &str, name: &str) -> Result<Reply, Error> {
         let id = self.find_project(addr)?.id;
         ptyro_core::names::validate_slug(name).map_err(Error::invalid)?;
@@ -550,7 +542,6 @@ impl Daemon {
         for (_, w) in worktrees {
             let _ = self.events.send(DomainEvent::WorktreeUpdated { info: w });
         }
-        self.archives_follow_project(&p.id, &p.slug).await;
         Ok(Reply::Project { info: p, notes: Vec::new() })
     }
 
@@ -759,21 +750,6 @@ impl Daemon {
                     store.delete_trust(p.id.clone(), SCRIPTS_SCOPE.into());
                 }
                 Ok(Reply::Done)
-            }
-            Request::ProjectLineEndings { addr } => {
-                let p = self.find_project(&addr)?;
-                let checkouts: Vec<(String, std::path::PathBuf)> = {
-                    let reg = self.registry.locked();
-                    reg.worktrees
-                        .iter()
-                        .filter(|w| w.project == p.id)
-                        .map(|w| (w.qualified(), w.path.clone()))
-                        .collect()
-                };
-                let root = p.root.clone();
-                let notes =
-                    crate::worktrees::blocking(move || line_endings(&root, &checkouts)).await?;
-                Ok(Reply::Notes { notes })
             }
             Request::Discover { refresh } => self.discover(refresh).await,
             Request::WorkspaceList => {
@@ -1006,37 +982,6 @@ pub(crate) fn innermost<'a>(
         .map(|(w, _)| w)
 }
 
-/// `ProjectLineEndings`: in each checkout, the bash scripts its scripts run that have CRLF line
-/// endings, rewritten with LF (each checkout reads its own `.ptyro.toml`). What was done, and
-/// how to keep it from coming back.
-fn line_endings(root: &std::path::Path, checkouts: &[(String, std::path::PathBuf)]) -> Vec<String> {
-    let mut notes = Vec::new();
-    for (name, path) in checkouts {
-        let Ok(cfg) = ptyro_core::project::ProjectConfig::load(root, path) else { continue };
-        let files = cfg.scripts.crlf_files(path);
-        if files.is_empty() {
-            continue;
-        }
-        match ptyro_core::project::rewrite_lf(path, &files) {
-            Ok(done) if !done.is_empty() => {
-                notes.push(format!("{name}: {} now LF", done.join(", ")));
-            }
-            Ok(_) => {}
-            Err(e) => notes.push(format!("{name}: {e}")),
-        }
-    }
-    if notes.is_empty() {
-        notes.push("no script here has Windows (CRLF) line endings".into());
-    } else {
-        notes.push(
-            "git may check them out with CRLF again (core.autocrlf on Windows): a `*.sh text eol=lf` \
-             line in .gitattributes, committed, keeps them LF"
-                .into(),
-        );
-    }
-    notes
-}
-
 #[cfg(test)]
 mod tests {
     use ptyro_core::ErrorCode;
@@ -1070,7 +1015,6 @@ mod tests {
             is_root: false,
             profile: None,
             state: WorktreeState::Ready,
-            ports: None,
             created_ms: 0,
             removed_ms: None,
             last_used_ms: None,

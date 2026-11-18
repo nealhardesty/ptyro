@@ -280,7 +280,6 @@ async fn dispatch(
             json,
             agent,
             profile,
-            again,
             wt,
             new_wt,
             project,
@@ -289,7 +288,6 @@ async fn dispatch(
             prompt,
             prompt_file,
             title,
-            take_changes,
             pr,
             issue,
             structured,
@@ -311,21 +309,17 @@ async fn dispatch(
                 argv,
                 agent,
                 profile,
-                again,
                 wt,
                 override_pin,
                 yes,
                 prompt,
                 title,
-                take_changes,
                 pr,
                 issue,
                 structured,
                 welcome: false,
             };
-            let new_wt = new_wt.or_else(|| {
-                (a.pr.is_some() || a.issue.is_some() || a.take_changes).then(String::new)
-            });
+            let new_wt = new_wt.or_else(|| (a.pr.is_some() || a.issue.is_some()).then(String::new));
             match new_wt {
                 Some(wt_name) => {
                     crate::projects::new_in_new_worktree(&ctx, a, wt_name, project).await
@@ -931,16 +925,12 @@ pub struct NewArgs {
     pub argv: Vec<String>,
     pub agent: Option<String>,
     pub profile: Option<String>,
-    /// Another of what the workspace last started (UX3.2).
-    pub again: bool,
     pub wt: Option<String>,
     pub override_pin: bool,
     pub yes: bool,
     pub prompt: Option<String>,
     /// Its title (UX1.24).
     pub title: Option<String>,
-    /// A new worktree taking the main checkout's changes (UX1.10).
-    pub take_changes: bool,
     /// `ptyro` with nothing running: the TUI opens on the first run or home (UX1.19).
     pub welcome: bool,
     pub pr: Option<u32>,
@@ -1131,7 +1121,6 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         prompt: a.prompt,
         title: a.title,
         structured: a.structured,
-        again: a.again,
         ..SpawnSpec::default()
     };
     let reply = with_confirmation(&client, Request::Spawn { spec }, false, |r| {
@@ -1540,13 +1529,8 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                     _ => cwd,
                 }
             });
-        let ports = if s.ports.is_empty() {
-            String::new()
-        } else {
-            format!(" :{}", s.ports.iter().map(u16::to_string).collect::<Vec<_>>().join(" :"))
-        };
         println!(
-            "{:<8} {:<18} {:<11} {:<20} {}{:<24} {}{:>3}  {:<5} {}{ports}",
+            "{:<8} {:<18} {:<11} {:<20} {}{:<24} {}{:>3}  {:<5} {}",
             s.handle,
             truncate(&s.name, 18),
             s.state.label(),

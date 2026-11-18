@@ -31,8 +31,6 @@ pub struct Ui {
     pub mouse: bool,
     /// Ask before stopping, killing, or stopping and removing a session (the TUI and the web).
     pub confirm_kill: bool,
-    /// Show listening ports in the sidebar and pane headers.
-    pub show_ports: bool,
     /// Tint pane borders with the session's profile colour (SPEC §10.10).
     pub tint_borders: bool,
     /// What a pane shows after you stop its session from the TUI (UX1.23).
@@ -142,7 +140,6 @@ impl Default for Ui {
             load: true,
             mouse: true,
             confirm_kill: true,
-            show_ports: true,
             tint_borders: false,
             on_stop: OnStop::Next,
             sidebar_detail: SidebarDetail::Auto,
@@ -326,8 +323,6 @@ pub struct AgentDef {
     /// Report rate limits per profile (Claude statusline relay; Codex app-server). Default on
     /// for Claude, off for Codex.
     pub usage: Option<bool>,
-    /// Run the project's `after_turn` script after each turn (default true when trusted).
-    pub after_turn: Option<bool>,
     /// Record this agent's sessions (`[recorder]`; default true).
     pub record: Option<bool>,
     /// The structured protocol it speaks with `ptyro new --structured` (M10): `stream-json`,
@@ -577,7 +572,6 @@ pub struct Config {
     pub themes: BTreeMap<String, ThemeDef>,
     pub profiles: BTreeMap<String, ProfileDef>,
     pub worktrees: Worktrees,
-    pub ports: Ports,
     pub discover: Discover,
     /// `default = "nvim"` plus `<name> = { command = [...], inside = bool }`.
     pub editors: BTreeMap<String, EditorEntry>,
@@ -1406,10 +1400,6 @@ pub struct Worktrees {
     pub watch: bool,
     /// `ptyro gc` reports worktrees without sessions for this many days.
     pub stale_days: u32,
-    /// Name the branch after the first prompt (until it's pushed; M3.16).
-    pub auto_rename_branch: bool,
-    /// Delete archived worktrees after this many days (0: keep them).
-    pub archive_purge_days: u32,
 }
 
 impl Default for Worktrees {
@@ -1421,39 +1411,7 @@ impl Default for Worktrees {
             fetch: true,
             watch: true,
             stale_days: 14,
-            auto_rename_branch: false,
-            archive_purge_days: 0,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Ports {
-    /// `"20000-29999"`
-    pub range: String,
-    /// Ports per worktree.
-    pub count: u16,
-}
-
-impl Default for Ports {
-    fn default() -> Self {
-        Self { range: "20000-29999".into(), count: 10 }
-    }
-}
-
-impl Ports {
-    pub fn bounds(&self) -> Result<(u16, u16), String> {
-        let (a, b) = self.range.split_once('-').ok_or("expected LOW-HIGH, e.g. 20000-29999")?;
-        let lo: u16 = a.trim().parse().map_err(|_| format!("bad port {a:?}"))?;
-        let hi: u16 = b.trim().parse().map_err(|_| format!("bad port {b:?}"))?;
-        if lo < 1024 || hi < lo {
-            return Err("range must be LOW-HIGH with LOW ≥ 1024".into());
-        }
-        if u32::from(hi - lo) + 1 < u32::from(self.count) {
-            return Err(format!("range {} is smaller than count {}", self.range, self.count));
-        }
-        Ok((lo, hi))
     }
 }
 
@@ -1842,10 +1800,6 @@ impl Config {
                 crate::names::validate(name).map_err(|e| format!("profiles.{name}: {e}"))?;
             }
             p.validate().map_err(|e| format!("profiles.{name}.{e}"))?;
-        }
-        self.ports.bounds().map_err(|e| format!("ports.range: {e}"))?;
-        if self.ports.count == 0 {
-            return Err("ports.count: must be at least 1".into());
         }
         crate::model::check_branch_template(&self.worktrees.branch_template)
             .map_err(|e| format!("worktrees.branch_template: {e}"))?;
@@ -2767,10 +2721,6 @@ match  = { remotes = ["github.com:you/*"] }
 location = "sibling"
 branch_template = "{user}/{name}"
 
-[ports]
-range = "30000-30099"
-count = 5
-
 [editors]
 default = "nvim"
 code = { command = ["code", "{path}"] }
@@ -2786,7 +2736,6 @@ code = { command = ["code", "{path}"] }
         assert_eq!(w.guard, Guard::Refuse);
         assert_eq!(c.profiles["personal"].guard, Guard::Confirm);
         assert_eq!(c.worktrees.location, WorktreeLocation::Sibling);
-        assert_eq!(c.ports.bounds().unwrap(), (30000, 30099));
         let (_t, here) = installed(&["nvim", "code"], &[]);
         assert_eq!(c.default_editor_in(&here), "nvim");
         assert!(c.editor_in("nvim", &here).unwrap().inside);
@@ -2974,8 +2923,6 @@ code = { command = ["code", "{path}"] }
         assert!(e.contains("profiles.Work"), "{e}");
         let e = Config::parse("[profiles.w]\nsecret_ttl = \"5 minutes\"\n").unwrap_err();
         assert!(e.contains("secret_ttl"), "{e}");
-        let e = Config::parse("[ports]\nrange = \"10-20\"\n").unwrap_err();
-        assert!(e.contains("ports.range"), "{e}");
         let e = Config::parse("[worktrees]\nbranch_template = \"x/{nmae}\"\n").unwrap_err();
         assert!(e.contains("nmae"), "{e}");
         assert_eq!(parse_duration("10m").unwrap().as_secs(), 600);

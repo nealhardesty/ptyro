@@ -323,11 +323,11 @@ where each lives is [`parity.md`](parity.md)). `ptyro pair --scope full` gives a
 a device with less sees the pages and is told what it lacks.
 
 - **Sessions**: ＋ starts a task (the task, the agent, and where: a new worktree, from a PR, an
-  issue, a branch or your uncommitted changes; an existing one; a shell). A session's **⋯**: stop,
+  issue or a branch; an existing one; a shell). A session's **⋯**: stop,
   restart, rename, summarize, hibernate, scrollback, events, replay, save its recording. ☑ types one
   thing into several.
 - **Projects**: the sidebar's tree. A worktree's page has its sessions and status, its
-  **Checkpoints** (what changed since each, and putting one back), archive, remove.
+  **Checkpoints** (what changed since each, and putting one back), remove.
 - **More**: health (each finding with its fix), usage, devices (pair another with a link and a QR
   code), profiles and logins, the config editor (checked as you save, applied at once),
   integrations, the daemon (logs, upgrade, restart, login service), first-run setup, and a tour.

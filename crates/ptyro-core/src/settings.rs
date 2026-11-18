@@ -297,7 +297,7 @@ pub const SECTIONS: &[Section] = &[
     },
     Section {
         id: "worktrees",
-        title: "Worktrees and ports",
+        title: "Worktrees",
         blurb: "Where new work goes and how it is named.",
         scope: Scope::User,
     },
@@ -679,7 +679,6 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.load", "interface", Kind::Bool, "Show the load average of the computer ptyro runs on (1, 5 and 15 minutes) in the status bar and the web app's header. It turns amber once it passes the number of CPUs.").also("cpu busy uptime system"),
     s("ui.mouse", "interface", Kind::Bool, "Let ptyro take the mouse: click to focus, wheel to scroll, drag borders. Off leaves it to your terminal, so you can select and copy text with it.").also("click scroll select copy"),
     s("ui.confirm_kill", "interface", Kind::Bool, "Ask before ending a running session: Stop, Kill, and Stop and remove, in the terminal and the web app alike.").also("confirm ask stop kill remove"),
-    s("ui.show_ports", "interface", Kind::Bool, "Show the ports a session listens on, in the sidebar and pane headers."),
     s("ui.tint_borders", "interface", Kind::Bool, "Tint pane borders with the session's profile colour."),
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
@@ -713,17 +712,13 @@ pub const SETTINGS: &[Setting] = &[
     s("notifications.sinks.*.chat_id", "notifications", Kind::Text, "The chat to message.").when("type", &["telegram"]),
     s("notifications.sinks.*.command", "notifications", Kind::Argv, "The program to run.").when("type", &["command"]),
     s("notifications.sinks.*.on", "notifications", some(KINDS), "Which kinds go here. None chosen: blocked and errored."),
-    // ── Worktrees and ports ──
+    // ── Worktrees ──
     s("worktrees.location", "worktrees", pick(LOCATION), "Where new worktrees are made."),
     s("worktrees.branch_template", "worktrees", Kind::Text, "How a new branch is named: {name}, {user}, {date}, {issue}, {slug}."),
     s("worktrees.start_agents", "worktrees", pick(START_AGENTS), "When agents asked for with a new worktree start."),
     s("worktrees.fetch", "worktrees", Kind::Bool, "Fetch the latest base branch before making a worktree, so it starts up to date."),
     s("worktrees.watch", "worktrees", Kind::Bool, "Refresh a repository's status when its files change, not only every few seconds.").adv(),
     s("worktrees.stale_days", "worktrees", int(1, 3650), "`ptyro gc` reports a worktree with no sessions after this long.").unit("days"),
-    s("worktrees.auto_rename_branch", "worktrees", Kind::Bool, "Name the branch after the first prompt, until it is pushed."),
-    s("worktrees.archive_purge_days", "worktrees", int(0, 36_500), "Delete archived worktrees after this many days, and their branches when merged into their base or the same as their pushed copy. 0 keeps them.").unit("days"),
-    s("ports.range", "worktrees", Kind::Text, "The ports handed out to worktrees, LOW-HIGH (LOW at least 1024).").new_only(),
-    s("ports.count", "worktrees", int(1, 1000), "Ports for each worktree.").new_only().unit("ports"),
     s("discover.roots", "worktrees", Kind::List, "Folders to look in for git repositories.").or("none"),
     s("discover.depth", "worktrees", int(1, 10), "How deep to look in them.").unit("folders deep"),
     s("discover.auto_register", "worktrees", Kind::Bool, "Make the repository a session runs in a project by itself."),
@@ -790,7 +785,7 @@ pub const SETTINGS: &[Setting] = &[
     s("remote.push_hosts", "remote", Kind::List, "More push services a device may use besides the browsers' own, like a self-hosted ntfy.").adv().or("none"),
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),
     // ── Agents ──
-    s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice, and what quick new (`C-n`) starts in a worktree that hasn't run one yet. A project's own default agent wins there.").or("claude").also("default agent claude codex gemini opencode quick new"),
+    s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice.").or("claude").also("default agent claude codex gemini opencode"),
     // ── Updates ──
     s("updates.check", "updates", pick(UPDATE_CHECK), "Look for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) and of ptyro itself once a day. A newer one is offered with its one-step update at start-up, in the health badge (M), on the web's Health page and in `ptyro doctor`; nothing is downloaded or updated without you (ptyro's own update checks the release against its SHA256SUMS, then upgrades the daemon live). Offline, it stays quiet and looks again the next day.").also("update upgrade new version out of date outdated newer check latest self-update release"),
     s("updates.notify", "updates", Kind::Bool, "A desktop notification when a new ptyro release is out, once per release and outside quiet hours, saying how to update (the TUI's `C-q ^`, the web's Health page, or `ptyro update ptyro`). It is sent even when `notifications.channels` leaves the desktop out (that is for your sessions' alerts); turn this off to keep releases off the desktop. Either way the release is offered in the TUI, the web and `ptyro doctor`.").also("notify notification desktop alert release new version update self-update announce"),
@@ -806,7 +801,6 @@ pub const SETTINGS: &[Setting] = &[
     s("agents.*.trust_worktrees", "agents", Kind::Bool, "Codex: trust new worktrees of projects you trusted.").new_only().adv(),
     s("agents.*.hooks", "agents", Kind::Bool, "Wire ptyro's hooks, plugin or notify into the agent.").new_only().or("on"),
     s("agents.*.usage", "agents", Kind::Bool, "Report rate limits per profile.").new_only().or("on for Claude, off for Codex"),
-    s("agents.*.after_turn", "agents", Kind::Bool, "Run the project's after_turn script after each turn.").new_only().or("on when the project is trusted"),
     s("agents.*.record", "agents", Kind::Bool, "Record this agent's sessions.").new_only().or("on"),
     s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol `ptyro new --structured` speaks with it.").new_only().or("from its adapter"),
     // ── Themes ──
@@ -851,7 +845,6 @@ pub const SETTINGS: &[Setting] = &[
     s("profiles.*.secret_ttl", "profiles", Kind::Duration, "Remember resolved secrets this long.").new_only().adv().or("resolve at every start"),
     // ── This project (.ptyro.toml) ──
     s("project.name", "project", Kind::Text, "What the project is called.").or("the folder's name"),
-    s("project.default_agent", "project", dynamic(Source::Agents), "Which of your agents new sessions here use.").or("your default agent"),
     s("project.base", "project", Kind::Text, "What new worktrees start from, like origin/main.").or("the repository's main branch"),
     s("project.import", "project", Kind::Bool, "Read other tools' committed setup (Conductor, Cursor, Codex…) for scripts this file doesn't set.").or("on"),
     s("worktree.copy", "project", Kind::List, "Untracked files to copy into new worktrees, like .env.").or("none"),
@@ -861,11 +854,9 @@ pub const SETTINGS: &[Setting] = &[
     s("worktree.branch_template", "project", Kind::Text, "How branches here are named.").or("your worktrees setting"),
     // ── Project scripts ──
     s("scripts.setup", "scripts", Kind::Script, "Runs once in each new worktree.").or("none"),
-    s("scripts.archive", "scripts", Kind::Script, "Runs before a worktree is archived or removed.").or("none"),
-    s("scripts.after_turn", "scripts", Kind::Script, "Runs after each agent turn, like a linter.").or("none"),
     s("scripts.run_mode", "scripts", pick(RUN_MODE), "Whether run scripts of different worktrees may run together."),
     s("scripts.shell", "scripts", pick(SCRIPT_SHELL), "Which shell runs this project's scripts. Choosing one asks for the scripts' trust again: it changes what runs.").also("powershell pwsh bash git bash cmd sh windows interpreter"),
-    s("scripts.run.*.command", "scripts", Kind::Script, "What it runs; $PTYRO_PORT is this worktree's port."),
+    s("scripts.run.*.command", "scripts", Kind::Script, "What it runs."),
     s("scripts.run.*.default", "scripts", Kind::Bool, "The one that starts when none is named."),
 ];
 

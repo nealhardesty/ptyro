@@ -50,7 +50,79 @@ impl Daemon {
             config_error,
             chats: None,
             meaning: None,
+            left_behind: Vec::new(),
         }
+    }
+
+    /// What archived worktrees and pair mode (both removed 2026-11-17) left in ptyro's records,
+    /// read as plain JSON: notes for each archive (its branch and snapshot stay in the
+    /// repository) and a warning for each main checkout still paired, each with how to get it
+    /// back with git. Nothing here changes a repository.
+    pub(crate) async fn left_behind(&self) -> (Vec<String>, Vec<String>) {
+        let Some(store) = &self.store else { return (Vec::new(), Vec::new()) };
+        let get = |k: &'static str| async move { store.kv_get(k.into()).await.ok().flatten() };
+        let root = |project: &str| {
+            self.project_by_id(project)
+                .map_or_else(|| "the repository".to_owned(), |p| p.root.display().to_string())
+        };
+        let text = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or_default().to_owned();
+        let mut notes = Vec::new();
+        let archives = get("archive:list").await;
+        let archives = archives.as_ref().and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        if !archives.is_empty() {
+            let each: Vec<String> = archives
+                .iter()
+                .take(5)
+                .map(|e| {
+                    format!(
+                        "{}/{} (branch {}, snapshot {}, in {})",
+                        text(e, "project_slug"),
+                        text(e, "name"),
+                        text(e, "branch"),
+                        text(e, "snapshot"),
+                        root(&text(e, "project"))
+                    )
+                })
+                .collect();
+            let more = archives.len().saturating_sub(each.len());
+            notes.push(format!(
+                "{} worktree(s) archived before archives were removed (2026-11-17) are still in \
+                 their repositories, each a branch and a snapshot of its files: {}{}. To bring one \
+                 back: `git -C REPO worktree add DIR BRANCH`, then `git -C DIR checkout SNAPSHOT \
+                 -- .`; files git ignores that were kept with them are in {}",
+                archives.len(),
+                each.join("; "),
+                if more > 0 { format!(" and {more} more") } else { String::new() },
+                self.paths.data.join("archive-extras").display()
+            ));
+        }
+        let mut warnings = Vec::new();
+        let pairs = get("pairs").await;
+        for (project, c) in pairs.as_ref().and_then(|v| v.as_object()).into_iter().flatten() {
+            let orig = text(c, "orig");
+            let back = if c["orig_is_branch"].as_bool() == Some(true) {
+                format!("its branch {orig}")
+            } else {
+                format!("commit {}", &orig[..12.min(orig.len())])
+            };
+            let stash = c["stash"].as_str().map_or_else(String::new, |sha| {
+                format!(
+                    ", then `git -C {} stash apply {sha}` brings back the work it had (it is in \
+                     `git stash list`)",
+                    root(project)
+                )
+            });
+            let wt = text(c, "worktree");
+            let wt = self.worktree_by_id(&wt).map_or(wt, |w| w.qualified());
+            warnings.push(format!(
+                "the main checkout {} still shows {wt}: pair mode was removed (2026-11-17). Copy \
+                 any edits you made there to {wt} first; `git -C {} checkout --force {orig}` puts \
+                 it back on {back}{stash}",
+                root(project),
+                root(project)
+            ));
+        }
+        (notes, warnings)
     }
 
     /// Start `ptyro fake-agent --as <adapter>` through the adapter, give it one short turn, and
@@ -175,5 +247,53 @@ impl Daemon {
                 ),
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ptyro_core::config::Config;
+    use ptyro_core::paths::Paths;
+    use ptyro_store::{Registry, Store};
+
+    fn daemon(dir: &std::path::Path) -> (std::sync::Arc<super::Daemon>, Store) {
+        let home = dir.to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| home.clone())).unwrap();
+        let store = Store::open(&dir.join("ptyro.db")).unwrap();
+        let d =
+            super::Daemon::new(paths, Some(store.clone()), Config::default(), Registry::default());
+        (d, store)
+    }
+
+    /// An archive and a paired main checkout from before both were removed (2026-11-17): the
+    /// doctor is told where each is and how to get it back with git, and nothing else changes.
+    #[tokio::test]
+    async fn archives_and_a_pair_left_behind_are_told_with_their_way_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (d, store) = daemon(dir.path());
+        assert_eq!(d.left_behind().await, (Vec::new(), Vec::new()), "nothing left: nothing said");
+        let archive = serde_json::json!([{
+            "id": "a1", "project": "p1", "project_slug": "web", "name": "old",
+            "branch": "old", "snapshot": "refs/ptyro/archive/old", "path": "/w/old",
+            "archived_ms": 1,
+        }]);
+        store.kv_set("archive:list".into(), archive).await.unwrap();
+        let pair = serde_json::json!({ "p1": {
+            "worktree": "t1", "orig": "main", "orig_is_branch": true, "stash": "abc123",
+            "synced": "def", "copied": [], "preexisting": [],
+        }});
+        store.kv_set("pairs".into(), pair).await.unwrap();
+        let (notes, warnings) = d.left_behind().await;
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(
+            notes[0].contains("web/old (branch old, snapshot refs/ptyro/archive/old")
+                && notes[0].contains("git -C DIR checkout SNAPSHOT -- ."),
+            "{}",
+            notes[0]
+        );
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let w = &warnings[0];
+        assert!(w.contains("pair mode was removed") && w.contains("checkout --force main"), "{w}");
+        assert!(w.contains("stash apply abc123") && w.contains("its branch main"), "{w}");
     }
 }
