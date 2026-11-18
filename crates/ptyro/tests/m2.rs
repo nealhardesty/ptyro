@@ -446,8 +446,9 @@ async fn newcomer(c: &ptyro_client::Client, known: &[&str]) -> String {
     }
 }
 
-/// UX3.1: a split starts a clone of the pane's session beside it (a command's clone is a shell
-/// in its directory), with no picker; the layout comes back on reattach.
+/// UX3.1, UX3.8: a split asks what goes in the new pane, and ⏎ starts a clone of the pane's
+/// session beside it (a command's clone is a shell in its directory); the layout comes back on
+/// reattach.
 #[tokio::test]
 async fn tui_splits_and_restores_the_layout_on_reattach() {
     let d = TempDaemon::start(BIN).unwrap();
@@ -455,6 +456,8 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
     spawn(&c, "agent", &[BIN, "fake-agent"]).await;
     let r = run(tui(&d, &["attach", "agent"])
         .send(1.5, "\\x11v")
+        // The split's list: ⏎ takes its first choice, the clone.
+        .send(2.0, "\\r")
         .snapshot(3.2)
         .send(3.6, "\\x11d")
         .timeout(5.0))
@@ -512,6 +515,7 @@ async fn tui_closes_the_pane_of_a_removed_session() {
     spawn(&c, "alpha", &["sh", "-c", "echo I-am-alpha; exec cat"]).await;
     let ui = tokio::spawn(run(tui(&d, &["attach", "alpha"])
         .send(1.4, "\\x11v")
+        .send(1.8, "\\r")
         .snapshot(2.8)
         .snapshot(5.5)
         .send(6.0, "\\x11d")
