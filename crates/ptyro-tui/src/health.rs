@@ -85,12 +85,13 @@ pub fn suggested_cli(c: &Check) -> Option<Vec<String>> {
     let start = c.text.find("`ptyro ")? + 1;
     let end = start + c.text[start..].find('`')?;
     let profile = c.section.strip_prefix("profile ").map(str::trim);
-    let words: Vec<String> = c.text[start..end]
-        .split_whitespace()
+    // Quotes come off as a shell takes them (`'keys.C- '`), as `ptyro doctor --fix` reads it.
+    let words: Vec<String> = crate::keymap::shell_words(&c.text[start..end])
+        .into_iter()
         .skip(1)
-        .map(|w| match (w, profile) {
+        .map(|w| match (w.as_str(), profile) {
             ("<profile>", Some(p)) => p.to_owned(),
-            _ => w.to_owned(),
+            _ => w,
         })
         .collect();
     (!words.is_empty() && !words.iter().any(|w| w.starts_with('<'))).then_some(words)
@@ -706,5 +707,16 @@ mod tests {
         assert_eq!(backed_up(vec!["config".into(), "edit".into()]), ["config", "edit"]);
         // A placeholder it can't fill: no fix rather than a wrong one.
         assert!(suggested_cli(&check("x", "y", "warn", "run `ptyro thing <name>`")).is_none());
+        // Quotes come off as a shell takes them (a stale key with a space or a quote in it).
+        let keys = check(
+            "ptyro",
+            "config keys",
+            "warn",
+            "remove them, `ptyro config unset 'keys.C- ' \"keys.'\" keys.x`",
+        );
+        assert_eq!(
+            suggested_cli(&keys),
+            Some(["config", "unset", "keys.C- ", "keys.'", "keys.x"].map(String::from).to_vec())
+        );
     }
 }

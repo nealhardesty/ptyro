@@ -48,7 +48,9 @@ your `PATH` (the plan names them); your repositories, their branches, `.ptyro.to
 the lines ptyro added to `.git/info/exclude`, and, unless you say `--purge-refs`, the snapshots
 under `refs/ptyro/` in your repositories (checkpoints, and work an older ptyro archived or took
 over). They stay as ordinary git refs (`git for-each-ref refs/ptyro`), so the work can be
-recovered with git.
+recovered with git. So does what an older ptyro installed into Gemini CLI's and Antigravity's own
+folders (ptyro's Gemini extension, its entries in Antigravity's `hooks.json`; both removed
+2026-11-17): the plan lists each one found, with the command that takes it out.
 
 ### Confirmation
 

@@ -152,8 +152,14 @@ pub fn unknown(config: &Config, name: &str) -> String {
     } else {
         ""
     };
+    // Gemini CLI chats over ACP, whose flag ptyro added while it was built in.
+    let acp = if n == "gemini" {
+        " (to chat with it too: `protocol = \"acp\"` and its ACP flag in the command, `command = [\"gemini\", \"--acp\"]`)"
+    } else {
+        ""
+    };
     format!(
-        "{label} ({n}) is no longer built into ptyro (removed 2026-11-17): use claude, codex or opencode, or give [agents.{n}] a command to run it as an agent of your own{default}"
+        "{label} ({n}) is no longer built into ptyro (removed 2026-11-17): use claude, codex or opencode, or give [agents.{n}] a command to run it as an agent of your own{acp}{default}"
     )
 }
 

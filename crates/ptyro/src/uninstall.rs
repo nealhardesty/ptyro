@@ -581,6 +581,15 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
             kept.push(format!("your PATH's entries for those tools: {}", ours.join("; ")));
         }
     }
+    // What an older ptyro installed into Gemini CLI's and Antigravity's own folders (removed
+    // 2026-11-17): the person's files, outside ptyro's own (those go with the data directory).
+    if machine {
+        for (_, home, text) in crate::doctor::old_integrations_found(paths, &config) {
+            if opts.keep_data || !home.starts_with(&paths.data) {
+                kept.push(text);
+            }
+        }
+    }
     if cfg!(windows) {
         kept.push(
             "ptyro in WSL, with its daemon and sessions: `wsl -- ptyro uninstall` removes it there"

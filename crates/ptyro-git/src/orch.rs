@@ -1,8 +1,7 @@
-//! Git for orchestration (M7): checkpoints that never touch the user's index or create visible
-//! commits, refs under `refs/ptyro/`, restore, conflict prediction with `merge-tree`, throwaway
-//! worktrees for evidence, and patch application for pick-by-hunk.
+//! Git for checkpoints (M7): commits that never touch the user's index or create visible
+//! commits, refs under `refs/ptyro/`, what changed between them, and restore.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::{Git, GitError, Result};
 
@@ -47,8 +46,8 @@ impl Git {
     /// list, branches and files are untouched.
     pub fn checkpoint(&self, path: &Path, message: &str) -> Result<Snapshot> {
         let git_dir = self.git_dir(path)?;
-        // One private index per call: checkpoints of one repo run concurrently (turn ends, run
-        // refs, the radar), and a shared index file would make them clobber each other.
+        // One private index per call: checkpoints of one repo run concurrently (turn ends in
+        // several sessions), and a shared index file would make them clobber each other.
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let index = git_dir.join(format!("ptyro-ckpt-index-{}-{n}", std::process::id()));
@@ -143,46 +142,6 @@ impl Git {
         Ok(())
     }
 
-    /// [`Git::restore`] for putting an archived worktree back: refuses when its branch is no
-    /// longer where the snapshot was taken (it has moved on since: an integrate, a commit from
-    /// another checkout), because restoring would reset the branch backwards.
-    pub fn restore_onto_tip(&self, path: &Path, ckpt: &str) -> Result<()> {
-        let ckpt_rev = self
-            .rev(path, ckpt)
-            .ok_or_else(|| GitError::Invalid(format!("no checkpoint {ckpt}")))?;
-        if let (Some(parent), Some(head)) =
-            (self.rev(path, &format!("{ckpt_rev}^")), self.rev(path, "HEAD"))
-            && parent != head
-        {
-            return Err(GitError::Invalid(format!(
-                "its branch has moved since it was archived (now {}, archived at {}); restoring would reset it backwards",
-                &head[..head.len().min(8)],
-                &parent[..parent.len().min(8)]
-            )));
-        }
-        self.restore(path, ckpt)
-    }
-
-    /// Files `a` and `b` would conflict on if merged (`git merge-tree --write-tree`, git ≥ 2.38).
-    pub fn conflicts(&self, path: &Path, a: &str, b: &str) -> Result<Vec<String>> {
-        let out = self
-            .output(path, &["merge-tree", "--write-tree", "--name-only", "--no-messages", a, b])?;
-        match out.status.code() {
-            Some(0) => Ok(Vec::new()),
-            Some(1) => Ok(String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .skip(1)
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_owned)
-                .collect()),
-            _ => Err(GitError::Failed {
-                args: "merge-tree --write-tree".into(),
-                message: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-            }),
-        }
-    }
-
     /// Paths that differ between two commits (or a commit and the work tree, `b = None`).
     pub fn changed(&self, path: &Path, a: &str, b: Option<&str>) -> Result<Vec<String>> {
         let mut args = vec!["diff", "--name-only", "--no-renames", "--end-of-options", a];
@@ -206,47 +165,6 @@ impl Git {
         args.extend(["--end-of-options", a, b, "--"]);
         args.extend(paths.iter().map(String::as_str));
         self.run(path, &args)
-    }
-
-    /// Apply a patch to the work tree (`--3way` falls back to a merge when context moved).
-    pub fn apply(&self, path: &Path, patch: &str) -> Result<()> {
-        use std::io::Write;
-        let mut c = self.command(path, &["apply", "--3way", "--whitespace=nowarn", "-"]);
-        c.stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped());
-        let mut child = c.spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(patch.as_bytes())?;
-        }
-        let out = child.wait_with_output()?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(GitError::Failed {
-                args: "apply".into(),
-                message: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-            })
-        }
-    }
-
-    /// A detached throwaway worktree at `rev` (evidence runs); remove it with
-    /// [`drop_scratch`](Self::drop_scratch).
-    pub fn scratch(&self, root: &Path, dir: &Path, rev: &str) -> Result<PathBuf> {
-        if dir.exists() {
-            let _ = self.drop_scratch(root, dir);
-        }
-        self.run(root, &["worktree", "add", "-q", "--detach", &dir.to_string_lossy(), rev])?;
-        Ok(dir.to_path_buf())
-    }
-
-    pub fn drop_scratch(&self, root: &Path, dir: &Path) -> Result<()> {
-        let r = self.run(root, &["worktree", "remove", "--force", &dir.to_string_lossy()]);
-        if dir.exists() {
-            let _ = std::fs::remove_dir_all(dir);
-            let _ = self.run(root, &["worktree", "prune"]);
-        }
-        r.map(|_| ())
     }
 }
 
@@ -334,31 +252,6 @@ mod tests {
     }
 
     #[test]
-    fn an_archive_is_not_put_back_over_a_branch_that_moved() {
-        let d = repo();
-        let p = d.path();
-        let g = Git::new();
-        std::fs::write(p.join("b.txt"), "b\n").unwrap();
-        let snap = g.checkpoint(p, "snap").unwrap();
-        // At the snapshot's parent: fine.
-        g.restore_onto_tip(p, &snap.commit).unwrap();
-        // The branch moves on; restoring would reset it backwards.
-        std::fs::write(p.join("later.txt"), "x\n").unwrap();
-        git(p, &["add", "later.txt"]);
-        git(p, &["commit", "-q", "-m", "later"]);
-        let err = g.restore_onto_tip(p, &snap.commit).unwrap_err();
-        assert!(err.to_string().contains("has moved since it was archived"), "{err}");
-        assert!(p.join("later.txt").exists(), "nothing was reset");
-        // The ordinary restore (a checkpoint of a live session) still moves it and keeps the old tip.
-        let moved = g.rev(p, "HEAD").unwrap();
-        g.restore(p, &snap.commit).unwrap();
-        let kept = g
-            .run(p, &["for-each-ref", "--format=%(objectname)", "refs/ptyro/before-restore/"])
-            .unwrap();
-        assert!(kept.contains(&moved), "{kept}");
-    }
-
-    #[test]
     fn checkpoint_starts_from_the_real_index_but_captures_the_work_tree() {
         let d = repo();
         let p = d.path();
@@ -374,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_tree_predicts_conflicts() {
+    fn what_changed_between_two_commits_and_its_patch() {
         let d = repo();
         let p = d.path();
         let g = Git::new();
@@ -384,19 +277,8 @@ mod tests {
         git(p, &["checkout", "-q", "-b", "y", "main"]);
         std::fs::write(p.join("a.txt"), "1\nY\n3\n").unwrap();
         git(p, &["commit", "-qam", "y"]);
-        match g.conflicts(p, "x", "y") {
-            Ok(c) => assert_eq!(c, vec!["a.txt"]),
-            Err(e) => eprintln!("merge-tree unavailable (old git?): {e}"),
-        }
         assert_eq!(g.changed(p, "main", Some("x")).unwrap(), vec!["a.txt"]);
-        let patch = g.diff_between(p, "main", "x", false, &[]).unwrap();
-        git(p, &["checkout", "-q", "main"]);
-        g.apply(p, &patch).unwrap();
-        assert_eq!(std::fs::read_to_string(p.join("a.txt")).unwrap(), "1\nX\n3\n");
-        let scratch = p.join("../scratch-wt");
-        let w = g.scratch(p, &scratch, "y").unwrap();
-        assert_eq!(std::fs::read_to_string(w.join("a.txt")).unwrap(), "1\nY\n3\n");
-        g.drop_scratch(p, &w).unwrap();
-        assert!(!scratch.exists());
+        let patch = g.diff_between(p, "x", "y", false, &[]).unwrap();
+        assert!(patch.contains("-X") && patch.contains("+Y"), "{patch}");
     }
 }

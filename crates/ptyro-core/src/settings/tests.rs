@@ -982,3 +982,48 @@ fn a_repositorys_copies_are_kept_out_of_git() {
     let exclude = std::fs::read_to_string(dir.path().join(".git/info/exclude")).unwrap();
     assert!(exclude.contains("/.ptyro*.toml.bak-*"), "{exclude}");
 }
+
+/// A problem the file already has (a key bound to an action a release removed) doesn't block an
+/// unrelated change, or putting a change back; one the change makes still does.
+#[test]
+fn a_problem_already_in_the_file_blocks_only_itself() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let user = Layer::User(dir.path().join("config.toml"));
+    user.write("[keys]\nx = \"gone.action\"\n").unwrap();
+    let check = |t: &str| {
+        let bad: Vec<String> = t
+            .lines()
+            .filter(|l| l.contains("gone.") || l.contains("other."))
+            .map(|l| format!("bad: {l}"))
+            .collect();
+        if bad.is_empty() { Ok(()) } else { Err(bad.join("\n")) }
+    };
+    let d = apply(&user, &Op::Set { key: "ui.clock".into(), value: "no".into() }, &lk, &check)
+        .expect("the stale binding isn't this change's");
+    restore(&user, &d.before, Some(&d.after), &check).expect("nor the undo's");
+    let e =
+        apply(&user, &Op::Set { key: "keys.y".into(), value: "other.action".into() }, &lk, &check)
+            .unwrap_err();
+    assert!(e.contains("other.action") && !e.contains("gone.action"), "{e}");
+}
+
+/// In a linked worktree (`.git` is a file), `.ptyro.local.toml` is kept out of git through the
+/// main repository's `info/exclude`, which git reads for every worktree.
+#[test]
+fn a_linked_worktrees_local_file_is_excluded_in_the_main_repository() {
+    let lk = Lookups::default();
+    let dir = tempfile::tempdir().unwrap();
+    let main = dir.path().join("main/.git");
+    std::fs::create_dir_all(main.join("worktrees/wt")).unwrap();
+    std::fs::write(main.join("worktrees/wt/commondir"), "../..\n").unwrap();
+    let wt = dir.path().join("wt");
+    std::fs::create_dir_all(&wt).unwrap();
+    std::fs::write(wt.join(".git"), format!("gitdir: {}\n", main.join("worktrees/wt").display()))
+        .unwrap();
+    let local = Layer::Local(wt.clone());
+    apply(&local, &Op::Set { key: "scripts.setup".into(), value: "make deps".into() }, &lk, &none)
+        .unwrap();
+    let exclude = std::fs::read_to_string(main.join("info/exclude")).unwrap();
+    assert!(exclude.contains("/.ptyro.local.toml"), "{exclude}");
+}

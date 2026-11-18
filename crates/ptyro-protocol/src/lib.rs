@@ -137,10 +137,15 @@ pub struct Checkpoint {
     pub files: u32,
 }
 
+/// What a request this ptyro no longer has did (see [`RETIRED_REQUESTS`]): `the scratchpad`.
+pub fn retired_what(t: &str) -> Option<&'static str> {
+    RETIRED_REQUESTS.iter().find(|(name, _)| *name == t).map(|(_, what)| *what)
+}
+
 /// The answer to a request this ptyro no longer has (see [`RETIRED_REQUESTS`]); `None` for any
 /// other `t`.
 pub fn retired_request(t: &str) -> Option<Error> {
-    let (_, what) = RETIRED_REQUESTS.iter().find(|(name, _)| *name == t)?;
+    let what = retired_what(t)?;
     Some(Error::invalid(format!(
         "this ptyro no longer has {what} (removed 2026-11-17); the client that asked is older than the daemon: update it (`ptyro update`)"
     )))

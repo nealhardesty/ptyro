@@ -172,12 +172,10 @@ impl Layer {
 }
 
 /// `.ptyro.local.toml` (and a doctor's copies) are never committed by accident: `line` in
-/// `.git/info/exclude`, never `.gitignore`.
+/// `.git/info/exclude`, never `.gitignore`. In a linked worktree (`.git` is a file naming its
+/// git directory) that is the main repository's, which git reads for every worktree.
 fn exclude_from_git(root: &Path, line: &str) {
-    let git = root.join(".git");
-    if !git.is_dir() {
-        return;
-    }
+    let Some(git) = git_common_dir(root) else { return };
     let info = git.join("info");
     let _ = std::fs::create_dir_all(&info);
     let path = info.join("exclude");
@@ -192,6 +190,23 @@ fn exclude_from_git(root: &Path, line: &str) {
     new.push_str(line);
     new.push('\n');
     let _ = std::fs::write(path, new);
+}
+
+/// The git directory whose `info/exclude` applies to the checkout at `root`: `.git` itself, or,
+/// when `.git` is a file (`gitdir: …`, a linked worktree), the common directory its git
+/// directory names (`commondir`). `None` outside a git checkout.
+fn git_common_dir(root: &Path) -> Option<PathBuf> {
+    let dot = root.join(".git");
+    if dot.is_dir() {
+        return Some(dot);
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let gitdir = root.join(text.trim().strip_prefix("gitdir:")?.trim());
+    let common = match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(c) => gitdir.join(c.trim()),
+        Err(_) => gitdir,
+    };
+    common.is_dir().then_some(common)
 }
 
 /// How many copies of a file [`Layer::backup`] keeps.
@@ -310,8 +325,7 @@ fn compute(
     let scope = layer.scope();
     // The caller's own check judges the change, not what was already wrong: a config with one
     // bad key binding can still have its other settings changed.
-    let broken_before = extra(before).is_err();
-    let extra = |new: &str| if broken_before { Ok(()) } else { extra(new) };
+    let extra = only_new(extra, before);
     // The default agent goes with its agent: back to the default when it is removed, to the new
     // name when it is renamed (otherwise the config would name one that isn't there).
     let (moved, then) = match follow(scope, before, op)? {
@@ -354,6 +368,21 @@ fn compute(
         check_merged(shared, local)?;
     }
     Ok(after)
+}
+
+/// `extra`, judging a new file by what is wrong in it that wasn't in `before`: a problem the
+/// file already had (a key bound to an action a release removed) doesn't block an unrelated
+/// change, and one the change makes still does. A problem is one line of `extra`'s error.
+pub fn only_new<'a>(extra: Extra<'a>, before: &str) -> impl Fn(&str) -> Result<(), String> + 'a {
+    let was: Vec<String> = match extra(before) {
+        Ok(()) => Vec::new(),
+        Err(e) => e.lines().map(str::to_owned).collect(),
+    };
+    move |new: &str| {
+        let Err(e) = extra(new) else { return Ok(()) };
+        let fresh: Vec<&str> = e.lines().filter(|l| !was.iter().any(|w| w == l)).collect();
+        if fresh.is_empty() { Ok(()) } else { Err(fresh.join("\n")) }
+    }
 }
 
 /// Settings that name a member of a collection: (collection, setting, what it is, what is
@@ -521,7 +550,7 @@ pub fn restore(
         ));
     }
     super::check(layer.scope(), text)?;
-    extra(text)?;
+    only_new(extra, &layer.read()?)(text)?;
     layer.write(text)
 }
 

@@ -821,7 +821,7 @@ XTVERSION (`DCS > | ptyro <ver> ST`), `CSI 16 t`, XTGETTCAP.
 | BEL | attention hint (configurable) |
 | OSC 0/2 title | pane title |
 | OSC 7 cwd | session cwd without polling |
-| OSC 133 A/B/C/D (shell integration) | prompt marks → jump-to-prompt in scrollback, command exit status for shell sessions. **[built M2]** Marks are stored *inside the grid*: at 133;A the daemon splits the batch and injects an invisible OSC 8 hyperlink (`ptyro:prompt`) that it closes at B/C/D or at the next newline. alacritty keeps hyperlinks per cell through scrolling and reflow, so the mark travels with its line into history, where line numbers can't follow. Rows carry `prompt: true` in frames and scrollback documents. Caveat: a program's own hyperlink that is open at that moment ends there. **[built WIN1]** Shell sessions get the snippets with no setup (§8.7); `ptyro shell-init bash\|zsh\|fish\|pwsh` prints them for other shells; they do nothing outside ptyro. |
+| OSC 133 A/B/C/D (shell integration) | prompt marks → jump-to-prompt in scrollback, command exit status for shell sessions. **[built M2]** Marks are stored *inside the grid*: at 133;A the daemon splits the batch and injects an invisible OSC 8 hyperlink (`ptyro:prompt`) that it closes at B/C/D or at the next newline. alacritty keeps hyperlinks per cell through scrolling and reflow, so the mark travels with its line into history, where line numbers can't follow. Rows carry `prompt: true` in frames and scrollback documents. Caveat: a program's own hyperlink that is open at that moment ends there. **[built WIN1]** Shell sessions get the snippets with no setup (§8.7); they do nothing outside ptyro. (`ptyro shell-init`, hidden, is what the line `ptyro setup` adds to a shell's rc file runs, not a command to type.) |
 | OSC 9;*n* (ConEmu's numbered commands) | **[built WIN1]** OSC 9 is two things: `9;<text>` is a notification (iTerm2), and `9;<digits>[;…]` is one of ConEmu's commands. `9;4` is progress; `9;9;<path>` is the directory (Windows Terminal uses it too, so a prompt set up for Windows Terminal reports it in ptyro unchanged): a POSIX path as it is, and in WSL a Windows path mapped (`C:\src` → `/mnt/c/src` under `[automount] root` from `/etc/wsl.conf`, `\\wsl.localhost\<distro>\p` → `/p`); elsewhere a Windows path is ignored. `9;12` is a prompt start (clink, cmd.exe), like 133;A. Every other number (sleep, message box, run a program…) is dropped, never shown as a notification. Before WIN1, `9;9` raised a notification at every prompt. |
 | OSC 52 clipboard | forwarded to the controlling client if `clipboard.allow_write` (default on); writes over 1 MiB dropped by the emulator; reads always denied. The TUI writes it to its own terminal's clipboard only, never to its paste buffer (`]` pastes only your own yanks) |
 | OSC 8 hyperlinks | preserved per cell; clients render as links |
@@ -3040,18 +3040,17 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   workspace) say when the name is taken. While
   there's a problem ⏎ is refused and the text stays. Renaming a session to its own name does
   nothing.
-- **Name fields swap, they don't refuse** (`names::typed`, `names::branch_typed`): as a name is
+- **Name fields swap, they don't refuse** (`names::typed`): as a name is
   typed or pasted, uppercase is lowercased and any other character outside `[a-z0-9._-]` (a
   space, `/`, an accent) becomes `-`, as does the second `.` of `..`; a leading `.`, `-` or
   space is dropped (`My Feat/2` → `my-feat-2`; owner, 2026-11-09: `-`, not `_`, the same
   character as the suggestion and generated names, §2.3). The dialog says so. What no one
   character fixes (all digits, ending in `.` or `.lock`, over 64) is still flagged with its
-  reason, and Tab applies the suggested fix. A branch name keeps case and `/`, swaps
-  whitespace and `~ ^ : ? * [ \` for `-`, and drops them or a `-` at the start. It applies to
+  reason, and Tab applies the suggested fix. It applies to
   every interactive name field in the TUI and the web (`slug` on a form field): session rename,
   the task box's name, new session, shell and worktree, workspace new and rename, profile new
   and rename, a paired device's, config-panel members,
-  machine names, and the branch rename. The CLI
+  and machine names. The CLI
   and the daemon stay strict: a bad name given as an argument is an error, so a script never
   gets a name it didn't write.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
@@ -3397,7 +3396,7 @@ learning anything up front.
 - **Hints follow the selection** (UX1.16): with no message up, the status bar says what you'd
   do next with the selected row (the focused session in a pane), with the key as it works
   there: `C-q p answer it` (blocked), `R restart · x remove` (exited, in the sidebar), `⏎
-  resumes it` (dormant), adopting a hand-started Claude, `a who needs you`.
+  resumes it` (dormant), `a who needs you`.
 - **The palette finds everything** (UX1.18): besides actions, sessions and workspaces,
   the workspace's worktrees (going to one shows its first session) and projects (selected in the
   sidebar), and the context worktree's scripts, which join once the daemon answers. Every line
@@ -3847,6 +3846,11 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
 - **Setup and help:** `completions`, `init [--yes] [--dry-run]` (merged into `setup` on
   2026-11-17, §12.3), `doctor [--quick] [--json]`, `profile doctor [P] [--json]`, `tour`
   (removed 2026-11-17).
+- **Removed commands** (the pare-down, 2026-11-17): a top-level command that went (`cs`, `msg`,
+  `run`, `fanout`, `pr`, `review`, `verify`, `scratchpad`, `inbox`, `adopt`, `replay`, `export`,
+  … the table is `REMOVED_COMMANDS` in `main.rs`), under any name it answered to and whatever
+  follows it, says `` `ptyro X` was removed on 2026-11-17 (what it was): what to use instead ``
+  and exits 2. It is never read as a task, so nothing starts.
 - **More `--json`:** `config show|check`, `gc`, `profile env`,
   `project config [--explain]`. Every shape is documented in `docs/cli-json.md` and pinned by a
   snapshot.
@@ -3890,9 +3894,14 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
     status`, `gh auth status`), git identity, SSH key; then pins that contradict `match`;
   - settings that name a removed built-in agent (§8.6d), and `[keys]` bindings to actions the
     TUI no longer has (any id not in its `ACTIONS`): one warning, `config keys`, whose fix is
-    `ptyro config unset keys.X keys.Y` (`config unset` takes several keys in one change). The
-    TUI's "unknown action" message names `ptyro doctor`; its health view runs the fix, and the
-    web's Health page applies it (`settings.apply`).
+    `ptyro config unset keys.X keys.Y` (`config unset` takes several keys in one change; a key
+    the shell would split is quoted, and the TUI and `--fix` take the quotes off as a shell
+    does). The TUI's "unknown action" message names that key's own `ptyro config unset` and
+    `ptyro doctor`; its health view runs the fix, and the web's Health page applies it
+    (`settings.apply`). Such a binding blocks no other change: a config write (CLI, TUI, web,
+    another fix, an undo) is refused only for a problem it makes, not one the file already had.
+    An action renamed on 2026-11-17 (`chat.retitle`, `session.retitle`, `worktree.retitle` →
+    their `rename`) still runs under its old name, so it isn't reported.
 
   A `problem` exits 1. `--fix` then makes each config change the findings name, the file copied
   aside first (§13.8), and exits with the first failure's code (0 when all were made).
@@ -7130,7 +7139,8 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   hears of it. An answer never widens itself (§7.1). Answers from `read`-scope devices are refused
   as for sessions.
 - **What a chat may use, per agent** (every chat searches the web; one given folders also reads
-  them; `none` is only a chat made with no tools before 2026-11-17, when tool presets were removed)
+  them; a chat made before 2026-11-17, when tool presets were removed, with no tools or with a
+  preset of the person's own keeps none, so no chat gains web search on an upgrade)
   (CHAT0, 2026-10-29: every cell marked **[V]** was tried through
   the real agent, §20.8; **[S]** was read from the agent's own files or schema and **not** run, because
   a turn needs a login or a model that wasn't available):
@@ -7238,7 +7248,10 @@ from `session.updated` or `GET /session/:id` [V]; Codex sends no `thread/name/up
 name in an app-server thread, and Claude's stream and session file carry no title: both **[V]**, so
 for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot
 (default `claude -p --model haiku --output-format json --strict-mcp-config --tools ""`, run in
-`<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`; empty skips it),
+`<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`; empty skips it;
+while it is unset or empty, a retired `[summaries] command` still is the titler, as before
+2026-11-17, so chat text never goes to a provider the person didn't choose, and `ptyro doctor`
+moves it into `title_command` before `[summaries]` goes, or turns titles `off` when it was empty),
 fed the first user and assistant messages, redacted (`redact.rs`); else (3) the first line of the
 first message.
 A title the user typed (`title_src = user`) is never replaced; `chat.rename` with an empty box

@@ -151,7 +151,7 @@ function fixesFor(c) {
     if (unbind)
         fix(`Remove ${unbind.length === 1 ? "that key" : `those ${unbind.length} keys`}`, unbind.join(", "), { t: "bind", changes: unbind.map((k) => [k, null]) }, "Removed");
     if (c.data?.set)
-        fix(`Set ${c.data.set} to ${c.data.value}`, "ptyro no longer has the one it named", { t: "set", key: c.data.set, value: c.data.value }, `${c.data.set} is ${c.data.value}`);
+        fix(`Set ${c.data.set} to ${c.data.value}`, c.data.hint ?? "ptyro no longer has the one it named", { t: "set", key: c.data.set, value: c.data.value }, `${c.data.set} is ${c.data.value}`);
     if (c.data?.unset)
         fix(`Unset ${c.data.unset}`, "ptyro no longer has the one it named", { t: "unset", key: c.data.unset }, `${c.data.unset} unset`);
     if (c.data?.remove)

@@ -56,7 +56,7 @@ pub const RETIRED: &[Retired] = &[
     Retired {
         key: "verify",
         removed: "2026-11-17",
-        why: "verified-done (a check an agent's turn had to pass) was removed",
+        why: "verified-done (a check an agent's turn had to pass) was removed; a repository that set it asks once more to trust its scripts, which no longer include the check",
     },
     Retired {
         key: "scratchpad",
@@ -220,10 +220,66 @@ pub fn strip(text: &str) -> Option<(String, Vec<Found>)> {
     if found.is_empty() {
         return None;
     }
+    if let Some(out) = blank(text, &found) {
+        return Some((out, found));
+    }
     for f in &found {
         remove(&mut doc, &f.key);
     }
     Some((doc.to_string(), found))
+}
+
+/// `text` with the lines of every key in `found` blanked and each newline kept, so the parser's
+/// errors about the rest still name the file's own lines. `None` when one can't be blanked by
+/// whole lines (it is inside an inline table, `a = { … }`, which shares its line with keys that
+/// stay): the caller takes it out of the parsed file instead.
+fn blank(text: &str, found: &[Found]) -> Option<String> {
+    use std::ops::Range;
+    use toml_edit::{Item, Key, Table};
+    fn spans(k: &Key, item: &Item, out: &mut Vec<Range<usize>>) -> Option<()> {
+        let table = |t: &Table, out: &mut Vec<Range<usize>>| {
+            if !t.is_implicit() && !t.is_dotted() {
+                out.push(t.span()?);
+            }
+            for (name, _) in t.iter() {
+                let (k, i) = t.get_key_value(name)?;
+                spans(k, i, out)?;
+            }
+            Some(())
+        };
+        match item {
+            Item::Value(v) => out.push(k.span()?.start..v.span()?.end),
+            Item::Table(t) => table(t, out)?,
+            Item::ArrayOfTables(a) => {
+                for t in a.iter() {
+                    table(t, out)?;
+                }
+            }
+            Item::None => {}
+        }
+        Some(())
+    }
+    let doc = toml_edit::Document::parse(text).ok()?;
+    let mut ranges = Vec::new();
+    for f in found {
+        let segs: Vec<&str> = f.key.split('.').collect();
+        let (last, parents) = segs.split_last()?;
+        let mut t = doc.as_table();
+        for p in parents {
+            t = t.get(p)?.as_table()?;
+        }
+        let (k, item) = t.get_key_value(last)?;
+        spans(k, item, &mut ranges)?;
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    for r in ranges {
+        let start = text[..r.start].rfind('\n').map_or(0, |i| i + 1);
+        let end = text[r.end..].find('\n').map_or(text.len(), |i| r.end + i);
+        for b in bytes[start..end].iter_mut().filter(|b| **b != b'\n') {
+            *b = b' ';
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// The same for a table already parsed (a repository's files, which are merged as tables).
@@ -314,6 +370,15 @@ mod tests {
         let e = crate::config::Config::parse("[retired_for_tests]\nold = 1\n[ui]\nthemme = 1\n")
             .unwrap_err();
         assert!(e.contains("themme"), "a typo beside a retired key is still caught: {e}");
+        // Its line is the file's own: what was taken out leaves its lines, blank.
+        let e = crate::config::Config::parse(
+            "[retired_for_tests]\nold = [\n  1,\n]\n\n[ui]\nthemme = 1\n",
+        )
+        .unwrap_err();
+        assert!(e.contains("line 7"), "{e}");
+        let e = crate::config::Config::parse("retired_for_tests.old = 1\n[ui]\nthemme = 1\n")
+            .unwrap_err();
+        assert!(e.contains("line 3"), "{e}");
     }
 
     /// The orchestration settings (2026-11-17) load and are reported; the checkpoint switch
@@ -418,6 +483,18 @@ mod tests {
         assert_eq!(found(old).into_iter().map(|f| f.key).collect::<Vec<_>>(), ["summaries"]);
         assert!(find("summaries.command").is_some());
         assert_eq!(crate::config::Config::default().chat.title_command[..2], ["claude", "-p"]);
+        // The model it named still titles chats while `title_command` names none (unset, or
+        // empty, which before meant "the summaries' command"); a titler of its own wins.
+        assert_eq!(c.chat.title_command, ["my-llm"]);
+        let empty = "[summaries]\ncommand = [\"my-llm\"]\n[chat]\ntitle_command = []\n";
+        assert_eq!(crate::config::Config::parse(empty).unwrap().chat.title_command, ["my-llm"]);
+        let own = "[summaries]\ncommand = [\"my-llm\"]\n[chat]\ntitle_command = [\"mine\"]\n";
+        assert_eq!(crate::config::Config::parse(own).unwrap().chat.title_command, ["mine"]);
+        let off = "[summaries]\ncommand = []\n";
+        assert!(crate::config::Config::parse(off).unwrap().chat.title_command.is_empty());
+        // An empty titler, with no summaries, stays empty: chats aren't sent to Claude.
+        let none = "[chat]\ntitle_command = []\n";
+        assert!(crate::config::Config::parse(none).unwrap().chat.title_command.is_empty());
     }
 
     /// Gemini CLI and Antigravity (2026-11-17): a profile's Gemini directory is retired; an

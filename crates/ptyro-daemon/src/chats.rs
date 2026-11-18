@@ -991,7 +991,7 @@ impl Daemon {
                     return Err(Error::new(
                         ErrorCode::Unsupported,
                         format!(
-                            "{a} can't chat: it has no structured mode (an ACP agent: `protocol = \"acp\"` in [agents.{a}])"
+                            "{a} can't chat: it has no structured mode (an ACP agent: `protocol = \"acp\"` in [agents.{a}], with its own ACP flag in its command, like `command = [\"gemini\", \"--acp\"]`)"
                         ),
                     ));
                 }

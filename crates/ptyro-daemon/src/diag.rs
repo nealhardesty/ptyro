@@ -57,18 +57,42 @@ impl Daemon {
     /// What archived worktrees and pair mode (both removed 2026-11-17) left in ptyro's records,
     /// read as plain JSON: notes for each archive (its branch and snapshot stay in the
     /// repository) and a warning for each main checkout still paired, each with how to get it
-    /// back with git. Nothing here changes a repository.
+    /// back with git. An entry the repository has since resolved (the snapshot ref deleted, the
+    /// main checkout back on its branch or commit) is dropped from the record, so the note goes
+    /// with it. Nothing here changes a repository.
     pub(crate) async fn left_behind(&self) -> (Vec<String>, Vec<String>) {
         let Some(store) = &self.store else { return (Vec::new(), Vec::new()) };
         let get = |k: &'static str| async move { store.kv_get(k.into()).await.ok().flatten() };
+        let root_of = |project: &str| self.project_by_id(project).map(|p| p.root);
         let root = |project: &str| {
-            self.project_by_id(project)
-                .map_or_else(|| "the repository".to_owned(), |p| p.root.display().to_string())
+            root_of(project)
+                .map_or_else(|| "the repository".to_owned(), |r| r.display().to_string())
         };
         let text = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or_default().to_owned();
         let mut notes = Vec::new();
-        let archives = get("archive:list").await;
-        let archives = archives.as_ref().and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let listed = get("archive:list").await;
+        let listed = listed.as_ref().and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        // Still there: its snapshot ref resolves in a repository ptyro still has (one that
+        // can't be looked at now, a drive not mounted, counts as there).
+        let at: Vec<_> =
+            listed.iter().map(|e| (root_of(&text(e, "project")), text(e, "snapshot"))).collect();
+        let kept = crate::worktrees::blocking(move || {
+            let git = ptyro_git::Git::new();
+            at.into_iter()
+                .map(|(root, snap)| root.is_some_and(|r| !r.is_dir() || git.ref_exists(&r, &snap)))
+                .collect::<Vec<bool>>()
+        })
+        .await
+        .unwrap_or_default();
+        let archives: Vec<serde_json::Value> = listed
+            .iter()
+            .zip(kept.iter().chain(std::iter::repeat(&true)))
+            .filter(|(_, k)| **k)
+            .map(|(e, _)| e.clone())
+            .collect();
+        if archives.len() < listed.len() {
+            let _ = store.kv_set("archive:list".into(), serde_json::json!(archives)).await;
+        }
         if !archives.is_empty() {
             let each: Vec<String> = archives
                 .iter()
@@ -89,7 +113,8 @@ impl Daemon {
                 "{} worktree(s) archived before archives were removed (2026-11-17) are still in \
                  their repositories, each a branch and a snapshot of its files: {}{}. To bring one \
                  back: `git -C REPO worktree add DIR BRANCH`, then `git -C DIR checkout SNAPSHOT \
-                 -- .`; files git ignores that were kept with them are in {}",
+                 -- .`; files git ignores that were kept with them are in {}. One you don't need: \
+                 `git -C REPO update-ref -d SNAPSHOT`, and it leaves this list",
                 archives.len(),
                 each.join("; "),
                 if more > 0 { format!(" and {more} more") } else { String::new() },
@@ -98,7 +123,56 @@ impl Daemon {
         }
         let mut warnings = Vec::new();
         let pairs = get("pairs").await;
-        for (project, c) in pairs.as_ref().and_then(|v| v.as_object()).into_iter().flatten() {
+        let pairs = pairs.as_ref().and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        // Still paired: the main checkout isn't back on what it had (its branch, or its commit),
+        // with the files ptyro copied in from the worktree that are still there.
+        let at: Vec<_> = pairs
+            .iter()
+            .map(|(project, c)| {
+                let copied: Vec<String> = c["copied"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.as_str().map(str::to_owned))
+                    .collect();
+                (
+                    root_of(project),
+                    text(c, "orig"),
+                    c["orig_is_branch"].as_bool() == Some(true),
+                    copied,
+                )
+            })
+            .collect();
+        let state = crate::worktrees::blocking(move || {
+            let git = ptyro_git::Git::new();
+            at.into_iter()
+                .map(|(root, orig, is_branch, copied)| {
+                    let root = root?;
+                    if !root.is_dir() {
+                        return Some(Vec::new());
+                    }
+                    let back = if is_branch {
+                        git.run(&root, &["symbolic-ref", "-q", "HEAD"]).is_ok()
+                    } else {
+                        git.rev(&root, "HEAD").is_some_and(|h| h == orig)
+                    };
+                    (!back).then(|| copied.into_iter().filter(|f| root.join(f).exists()).collect())
+                })
+                .collect::<Vec<Option<Vec<String>>>>()
+        })
+        .await
+        .unwrap_or_default();
+        let paired: Vec<(&String, &serde_json::Value, Vec<String>)> = pairs
+            .iter()
+            .zip(state.into_iter().chain(std::iter::repeat_with(|| Some(Vec::new()))))
+            .filter_map(|((p, c), s)| Some((p, c, s?)))
+            .collect();
+        if paired.len() < pairs.len() {
+            let left: serde_json::Map<String, serde_json::Value> =
+                paired.iter().map(|(p, c, _)| ((*p).clone(), (*c).clone())).collect();
+            let _ = store.kv_set("pairs".into(), serde_json::Value::Object(left)).await;
+        }
+        for (project, c, copied) in paired {
             let orig = text(c, "orig");
             let back = if c["orig_is_branch"].as_bool() == Some(true) {
                 format!("its branch {orig}")
@@ -112,12 +186,21 @@ impl Daemon {
                     root(project)
                 )
             });
+            let copied = if copied.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; the files ptyro copied in from the worktree aren't the checkout's, so delete \
+                     them once your edits are safe: {}",
+                    copied.join(", ")
+                )
+            };
             let wt = text(c, "worktree");
             let wt = self.worktree_by_id(&wt).map_or(wt, |w| w.qualified());
             warnings.push(format!(
                 "the main checkout {} still shows {wt}: pair mode was removed (2026-11-17). Copy \
                  any edits you made there to {wt} first; `git -C {} checkout --force {orig}` puts \
-                 it back on {back}{stash}",
+                 it back on {back}{stash}{copied}",
                 root(project),
                 root(project)
             ));
@@ -264,10 +347,12 @@ mod tests {
         (d, store)
     }
 
-    /// An archive and a paired main checkout from before both were removed (2026-11-17): the
-    /// doctor is told where each is and how to get it back with git, and nothing else changes.
+    /// An archive and a paired main checkout from before both were removed (2026-11-17), of a
+    /// project ptyro no longer has: nothing to resolve them against, so they leave the record
+    /// and nothing is said. (What is said of one still in a repository, and how it goes once
+    /// the repository resolves it: `tests/cfg1.rs`.)
     #[tokio::test]
-    async fn archives_and_a_pair_left_behind_are_told_with_their_way_back() {
+    async fn what_was_left_in_a_project_ptyro_no_longer_has_goes() {
         let dir = tempfile::tempdir().unwrap();
         let (d, store) = daemon(dir.path());
         assert_eq!(d.left_behind().await, (Vec::new(), Vec::new()), "nothing left: nothing said");
@@ -282,17 +367,8 @@ mod tests {
             "synced": "def", "copied": [], "preexisting": [],
         }});
         store.kv_set("pairs".into(), pair).await.unwrap();
-        let (notes, warnings) = d.left_behind().await;
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(
-            notes[0].contains("web/old (branch old, snapshot refs/ptyro/archive/old")
-                && notes[0].contains("git -C DIR checkout SNAPSHOT -- ."),
-            "{}",
-            notes[0]
-        );
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        let w = &warnings[0];
-        assert!(w.contains("pair mode was removed") && w.contains("checkout --force main"), "{w}");
-        assert!(w.contains("stash apply abc123") && w.contains("its branch main"), "{w}");
+        assert_eq!(d.left_behind().await, (Vec::new(), Vec::new()));
+        assert_eq!(store.kv_get("archive:list".into()).await.unwrap(), Some(serde_json::json!([])));
+        assert_eq!(store.kv_get("pairs".into()).await.unwrap(), Some(serde_json::json!({})));
     }
 }

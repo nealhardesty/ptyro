@@ -293,18 +293,11 @@ export function confirmsKill(scope, entries) {
 /// What a project-name field says under itself (`names::SLUG_HINT`, word for word).
 export const SLUG_HINT = "A space or other odd character becomes - (a-z 0-9 -)";
 /// What a name can't hold becomes `-` as it is typed, and what it can't start with is dropped
-/// at the start (the same rule as `names::typed`, `names::slug_typed` and
-/// `names::branch_typed` in ptyro-core).
+/// at the start (the same rule as `names::typed` and `names::slug_typed` in ptyro-core).
 export function slugify(kind, raw) {
     let out = "";
     for (const c of raw) {
-        if (kind === "branch") {
-            const bad = /[\s\x00-\x1f\x7f~^:?*[\\]/.test(c);
-            if (out === "" && (bad || c === "-"))
-                continue;
-            out += bad ? "-" : c;
-        }
-        else if (kind === "project") {
+        if (kind === "project") {
             const l = c.toLowerCase();
             if (out === "" && !/^[a-z0-9]$/.test(l))
                 continue;
@@ -320,7 +313,7 @@ export function slugify(kind, raw) {
     }
     return out;
 }
-/// Keep `box` as a name (or branch) while it is typed into. The cursor stays after what was
+/// Keep `box` as a name while it is typed into. The cursor stays after what was
 /// before it: slugify never looks ahead, so the text before the cursor, slugified, is where the
 /// cursor goes (in UTF-16 units, as an emoji turned into one `-` shrinks).
 export function slugInput(box, kind) {

@@ -327,6 +327,10 @@ export function findAllChats() {
 export function newChat() {
     location.hash = `#/c/new${state.workspace ? `/${encodeURIComponent(state.workspace)}` : ""}`;
 }
+/// Whether a chat reads the folders it is given: every chat does, but one made before 2026-11-17
+/// with no tools or a preset of the person's own (`Chat::tools_for`, SPEC §22.5).
+const reads = (c) => c.tools === "chat" || c.tools === "read";
+const NOT_READ = "this chat was made without tools, so it reads no files: a new chat with the folder does";
 function update(c, change, ok) {
     // Another profile's agent asks first (the conversation goes to that account).
     return askAgreed({ t: "chat_update", chat: c.id, ...change }, ok);
@@ -417,7 +421,7 @@ function editFolders(c) {
         // Emptied, the box is left out of the values: no folders.
         const f = folderList(String(v.f ?? ""));
         await conn.request({ t: "chat_update", chat: c.id, folders: f });
-        ui.toast("Saved: the next message starts it with them");
+        ui.toast(f.length && !reads(c) ? `Saved, but ${NOT_READ}` : "Saved: the next message starts it with them");
     }, { intro: "On the computer the chat runs on. It reads them, and no other files." });
 }
 /// `chat.task` (SPEC §22.7): the project (the chat's workspace's, when it has one), the agent
@@ -686,7 +690,7 @@ function slash(id, text) {
                 return;
             }
             const next = none ? [] : [...new Set([...(c.folders ?? []), arg])];
-            void update(c, { folders: next }, none ? "No folders" : `It may read ${arg} from the next message on`);
+            void update(c, { folders: next }, none ? "No folders" : reads(c) ? `It may read ${arg} from the next message on` : `${arg} attached, but ${NOT_READ}`);
             return;
         }
         case "task":
@@ -872,7 +876,7 @@ function chatView(rest) {
     const pill = c
         ? [`${c.agent}@${c.profile}`,
             c.best_effort ? h("span", { class: "warn", title: "This agent can't keep the chat to its tools by itself: ptyro's answer to each permission request stands behind it" }, " · best effort") : "",
-            c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}`) : "",
+            c.folders?.length ? h("span", { title: c.folders.join("\n") }, ` · ${c.folders.length} folder${c.folders.length === 1 ? "" : "s"}${reads(c) ? "" : " (not read: made without tools)"}`) : "",
             c.status ? ` · ${statusWord(c.status)}` : "", c.cost_micro_usd ? ` · $${(c.cost_micro_usd / 1e6).toFixed(3)}` : "", ` · ${addr(c)}`]
         : [isNew ? "A new chat: it can search the web, and it is kept." : gone ? "" : "Loading the chat…"];
     const empty = isNew && !state.items.length

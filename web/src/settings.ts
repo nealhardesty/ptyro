@@ -147,7 +147,7 @@ function fixesFor(c: any): Item[] {
   const fix = (label: string, hint: string, change: Record<string, unknown>, done: string): void => { out.push({ label, hint, run: () => backedUp({ scope: "user" }, change, done) }); };
   const unbind = c.data?.unbind as string[] | undefined;
   if (unbind) fix(`Remove ${unbind.length === 1 ? "that key" : `those ${unbind.length} keys`}`, unbind.join(", "), { t: "bind", changes: unbind.map((k) => [k, null]) }, "Removed");
-  if (c.data?.set) fix(`Set ${c.data.set} to ${c.data.value}`, "ptyro no longer has the one it named", { t: "set", key: c.data.set, value: c.data.value }, `${c.data.set} is ${c.data.value}`);
+  if (c.data?.set) fix(`Set ${c.data.set} to ${c.data.value}`, c.data.hint ?? "ptyro no longer has the one it named", { t: "set", key: c.data.set, value: c.data.value }, `${c.data.set} is ${c.data.value}`);
   if (c.data?.unset) fix(`Unset ${c.data.unset}`, "ptyro no longer has the one it named", { t: "unset", key: c.data.unset }, `${c.data.unset} unset`);
   if (c.data?.remove) fix(`Remove [${c.data.remove}.${c.data.name}]`, "Or give it a command in the config, to run it as your own", { t: "remove", path: c.data.remove, name: c.data.name }, "Removed");
   if (c.section === "ptyro" && c.name.startsWith("config")) out.push({ label: "Edit the config", run: () => go("#/config") });

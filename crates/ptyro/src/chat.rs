@@ -1373,6 +1373,12 @@ async fn update_as(
     } else {
         eprintln!("{} · {}", info.addr(), info.label());
     }
+    // As the TUI and the web say: a chat made without tools before 2026-11-17 reads none.
+    if !info.folders.is_empty() && !ptyro_core::config::Chat::tools_for(&info.tools, true).read {
+        eprintln!(
+            "note: this chat was made without tools, so it reads no files: a new chat with the folder does (`ptyro chat new --folder DIR`)"
+        );
+    }
     Ok(0)
 }
 

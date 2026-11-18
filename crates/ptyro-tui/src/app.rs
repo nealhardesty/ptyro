@@ -263,7 +263,6 @@ pub enum PromptKind {
     WorkSource(Wizard),
     /// A word for a `ptyro …` command being put together (UX1.21); `true`: `k=v` variables.
     CliAsk(Box<crate::cli_actions::CliJob>),
-    /// A branch's new name, for this worktree (by id).
     /// A workspace's new name.
     RenameWorkspace(String),
     /// A worktree's new name (by id).
@@ -2119,7 +2118,7 @@ impl App {
                     }));
                     self.overlay = Some(Overlay::Picker {
                         palette: Palette::new(
-                            "Stale worktrees, biggest first   ⏎ remove (asks first; refuses if work would be lost)",
+                            "Stale worktrees, biggest first   ⏎ remove (asks first; refuses if work would be lost) · Esc keeps them; worktrees.stale_days says when one is stale",
                             items,
                         ),
                         purpose: Purpose::Gc,
@@ -2276,7 +2275,7 @@ impl App {
         let p = self.panes.entry(pane).or_default();
         if p.session != Some(id) {
             // (An empty pane keeps the way back it was given: the session before a split went.)
-            p.last = p.session.or(p.last);
+            p.last = p.session.or(p.last).filter(|l| *l != id);
             p.session = Some(id);
             p.copy = None;
         }

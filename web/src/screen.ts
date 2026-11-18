@@ -85,9 +85,7 @@ export interface Session {
   /// The chat it is the engine of (SPEC §22.2): hidden from the session list.
   chat?: string | null;
   profile?: string;
-  run?: string | null;
   command?: { text?: string | null; exit?: number | null; ended_ms?: number | null } | null;
-  ports?: number[];
   turns?: number;
 }
 export type Outcome = { t: "ok"; reply: any } | { t: "err"; error: { code: string; message: string; fix?: unknown } };
