@@ -782,7 +782,7 @@ pub const SETTINGS: &[Setting] = &[
     // ── Project scripts ──
     s("scripts.setup", "scripts", Kind::Script, "Runs once in each new worktree.").or("none"),
     s("scripts.run_mode", "scripts", pick(RUN_MODE), "Whether run scripts of different worktrees may run together."),
-    s("scripts.shell", "scripts", pick(SCRIPT_SHELL), "Which shell runs this project's scripts. Choosing one asks for the scripts' trust again: it changes what runs.").also("powershell pwsh bash git bash cmd sh windows interpreter"),
+    s("scripts.shell", "scripts", pick(SCRIPT_SHELL), "Which shell runs this project's scripts. Choosing one asks for the scripts' trust again: it changes what runs.").also("powershell pwsh bash sh interpreter"),
     s("scripts.run.*.command", "scripts", Kind::Script, "What it runs."),
     s("scripts.run.*.default", "scripts", Kind::Bool, "The one that starts when none is named."),
 ];

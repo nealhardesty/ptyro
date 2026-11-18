@@ -1111,6 +1111,14 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-18] Protocol 1.49** (a removal): the native Windows build (§16.2, §24.3). Setup
+loses its WSL/Windows sides: `Request::SetupPlan`/`SetupRun` lose `wsl_picks`; `Reply::SetupPlan`'s
+`Plan` loses `wsl`, its `Entry`, `LoginRow` and `checklist::Line` lose `side` (and `Line` loses
+`why`); `SetupProgress` and `SetupLogged` lose `side`. A newer client ignores the fields an older
+daemon still sends. An older client could need `Line.side` and `SetupLogged.side`, but only the web
+reads `SetupPlan`, and the daemon serves its own web; an older TUI reads `SetupProgress`, whose
+`side` had a default.
+
 **[built 2026-11-17] Protocol 1.48** (a removal): Gemini CLI and Antigravity as built-in agents
 (§8.5, §8.6b, §8.6d), `ptyro integrations`, the tour (§11.2h), `ptyro backup` (§14.5), and
 `ptyro init`, merged into `ptyro setup` (§12.3). No wire change: the web's host operations
@@ -1260,9 +1268,9 @@ older daemon sends no `latest` or `in_use` and refuses `Updates` (the TUI then o
 older client ignores them.
 
 **[built BOOT3] Protocol 1.34** (additive): the web's setup checklist (§24.6). `Reply::SetupPlan`
-adds `lines` (each entry's words, `checklist::Line`: `about`, `how`, `why`, `state`, as the TUI
-says them), `default_agent`, `running` (`SetupRunning{run, plan, events}`: the run going now
-and its latest 500 events, each `SetupLogged{seq, side, event}`), and `held_by` (who holds the
+adds `lines` (each entry's words, `checklist::Line`: `about`, `how`, `state`, as the TUI
+says them; 1.49 took out `why`), `default_agent`, `running` (`SetupRunning{run, plan, events}`: the run going now
+and its latest 500 events, each `SetupLogged{seq, event}`; 1.49 took out a `side`), and `held_by` (who holds the
 machine's setup lock when it isn't the daemon's run: a terminal's or the TUI's install); `DomainEvent::SetupProgress`
 adds `seq` (from 1 in its run). An older daemon sends none of them (no lines, nothing running,
 `seq` 0: every event counts); an older client ignores them.
@@ -7416,6 +7424,9 @@ no longer gets Gemini's ACP flags or tool policy (`--admin-policy`, `--policy`, 
 none`), and deleting a chat no longer removes Gemini's own copies; an agent of yours with
 `protocol = "acp"` still chats over the generic ACP path. `ptyro_drive::launch_args` lost its
 adapter parameter.
+
+**1.49 (2026-11-18, pare-down):** no chat wire change (the native Windows build went;
+setup's WSL/Windows sides left its replies: §6.4, Protocol 1.49).
 
 **Not built** (in the first draft; nothing needs them yet): `ChatNew.profile` (it is
 `agent@profile`); `ChatList.machine`, `cursor` and `next` (no paging: a list is metadata, and

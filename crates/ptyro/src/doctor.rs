@@ -1460,9 +1460,6 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
     }
 }
 
-/// `[keys]` lines that bind an action ptyro doesn't have (removed by a release, or misspelt):
-/// those keys do nothing and the TUI says "unknown action". One warning names them all, with
-/// the line that takes them out (the TUI runs it; the web takes `data.unbind` out itself).
 /// `client.default_remote = "wsl://…"`: what native Windows' ptyro reached WSL's daemon with,
 /// removed on 2026-11-18. Every command would refuse it; the fix takes it out (`doctor --fix`).
 fn wsl_remote(config: &Config, r: &mut Report) {
@@ -1480,6 +1477,9 @@ fn wsl_remote(config: &Config, r: &mut Report) {
     }
 }
 
+/// `[keys]` lines that bind an action ptyro doesn't have (removed by a release, or misspelt):
+/// those keys do nothing and the TUI says "unknown action". One warning names them all, with
+/// the line that takes them out (the TUI runs it; the web takes `data.unbind` out itself).
 fn stale_keys(config: &Config, r: &mut Report) {
     let stale = ptyro_tui::keymap::stale_bindings(config);
     if stale.is_empty() {

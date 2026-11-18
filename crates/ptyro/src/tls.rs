@@ -391,18 +391,12 @@ pub(crate) fn fingerprint(der: &[u8]) -> String {
 }
 
 fn write_private(path: &Path, text: &str) -> Result<(), Error> {
-    // Keys: 0600 from the first byte, replaced whole, never left half-written; on Windows
-    // (WIN11) narrowed to the user, SYSTEM and Administrators when the folder lets others read.
+    // Keys: 0600 from the first byte, replaced whole, never left half-written.
     crate::config::write_private(path, text)
 }
 
-/// This machine's name (`uname -n`; Windows' `COMPUTERNAME`, WIN11), without a domain.
+/// This machine's name (`uname -n`), without a domain.
 pub fn host_name() -> String {
-    if cfg!(windows)
-        && let Some(n) = std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty())
-    {
-        return n;
-    }
     std::process::Command::new("uname")
         .arg("-n")
         .output()
