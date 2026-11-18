@@ -71,13 +71,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"worktree_get","addr":a}), READ, true),
         s(json!({"t":"worktree_diff","addr":a,"against":"base"}), READ, true),
         s(json!({"t":"worktree_log","addr":a}), READ, true),
-        s(json!({"t":"run_list","active":false,"limit":5}), READ, true),
-        s(json!({"t":"run_get","id":a}), READ, true),
-        s(json!({"t":"run_events","id":a}), READ, true),
-        s(json!({"t":"gate_list","all":false}), READ, true),
-        s(json!({"t":"msg_list","run":null,"limit":5}), READ, true),
-        s(json!({"t":"lease_list"}), READ, true),
-        s(json!({"t":"radar","project":null}), READ, true),
         s(json!({"t":"checkpoint_list","addr":a}), READ, true),
         s(json!({"t":"chat_list","all":true}), READ, true),
         s(json!({"t":"chat_read","chat":a}), READ, true),
@@ -115,8 +108,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"review_list","addr":a}), READ, true),
         s(json!({"t":"review_queue"}), READ, true),
         s(json!({"t":"pr_get","addr":a,"refresh":false}), READ, true),
-        s(json!({"t":"recipe_list","project":null}), READ, true),
-        s(json!({"t":"recipe_show","name":a,"project":null}), READ, true),
         s(json!({"t":"load_view","name":a}), READ, true),
         s(json!({"t":"push_key"}), READ, true),
         s(
@@ -147,11 +138,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"answer","addr":a,"decision":"no","expect":null}), APPROVE, true),
         // "Always" writes a standing permission into the agent's settings: control.
         s(json!({"t":"answer","addr":a,"decision":"always","expect":null}), CONTROL, true),
-        s(
-            json!({"t":"gate_resolve","id":a,"choice":"yes","note":null,"key":null,"by":null}),
-            APPROVE,
-            false,
-        ),
         s(json!({"t":"clear_attention","addr":a}), APPROVE, true),
         s(
             json!({"t":"inbox_mark","ids":[999999],"all":false,"session":null,"read":true}),
@@ -173,20 +159,11 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"restart","addr":a}), CONTROL, true),
         s(json!({"t":"rename","addr":a,"name":"x"}), CONTROL, true),
         s(
-            json!({"t":"msg_post","from":null,"to":a,"kind":null,"body":"x","run":null,"in_reply_to":null,"priority":null,"ttl_ms":null,"key":null}),
-            CONTROL,
-            false,
-        ),
-        s(
             json!({"t":"review_add","addr":a,"path":"a","line":1,"code":null,"text":"x"}),
             CONTROL,
             true,
         ),
         s(json!({"t":"review_send","addr":a,"session":null,"note":null}), CONTROL, true),
-        s(json!({"t":"iterate","run":a,"candidate":null,"text":"x"}), CONTROL, true),
-        s(json!({"t":"run_cancel","id":a}), CONTROL, true),
-        s(json!({"t":"run_retry","id":a,"step":"x"}), CONTROL, true),
-        s(json!({"t":"compare","run":a,"refresh":false}), CONTROL, true),
         s(json!({"t":"convert","addr":a,"structured":false,"force":false}), CONTROL, true),
         s(json!({"t":"retitle","addr":a,"title":"x","worktree":false}), CONTROL, true),
         s(json!({"t":"summarize","addr":a}), CONTROL, true),
@@ -202,7 +179,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"adopt","addr":a}), CONTROL, true),
         // A configured agent (its command comes from the user's config) is control…
         s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude"}))}), CONTROL, false),
-        // …any other command line, a verify check or a lead (`ptyro mcp`) is full.
+        // …any other command line, or a verify check, is full.
         s(json!({"t":"spawn","spec":spawn_spec(json!({"argv":["true"]}))}), FULL, false),
         s(json!({"t":"spawn","spec":spawn_spec(json!({}))}), FULL, false),
         s(
@@ -215,7 +192,6 @@ fn table() -> Vec<Sample> {
             FULL,
             false,
         ),
-        s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude","lead":{}}))}), FULL, false),
         // ── full ──
         // SHELLS (SPEC §23.12): numbering, placing and watching act like starting one.
         s(json!({"t":"shell_move","addr":"%1","slot":2}), FULL, false),
@@ -332,31 +308,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"pr_reply","addr":a,"comment":null,"text":"x"}), FULL, false),
         s(json!({"t":"review_remove","addr":a,"id":null}), FULL, false),
         s(json!({"t":"review_done","addr":a}), FULL, false),
-        s(json!({"t":"run_fork","id":a,"from":"x","set":{}}), FULL, false),
-        s(
-            json!({"t":"recipe_run","name":a,"src":null,"vars":{},"project":null,"base":null,"trust":null}),
-            FULL,
-            false,
-        ),
-        s(json!({"t":"fanout","spec":{"agents":["claude"],"prompt":"x"}}), FULL, false),
-        s(
-            json!({"t":"pick","run":a,"candidate":"x","mode":"merge","into":null,"paths":[],"hunks":[]}),
-            FULL,
-            false,
-        ),
-        s(json!({"t":"discard","run":a,"candidate":null,"force":false}), FULL, false),
-        s(json!({"t":"msg_check","me":a,"since":null,"wait_ms":null}), FULL, false),
-        s(json!({"t":"msg_ack","me":a,"ids":[]}), FULL, false),
-        s(
-            json!({"t":"lease_claim","holder":a,"patterns":["x"],"exclusive":false,"ttl_ms":null,"reason":null}),
-            FULL,
-            false,
-        ),
-        s(json!({"t":"lease_release","holder":a,"patterns":["x"]}), FULL, false),
         s(json!({"t":"checkpoint_restore","addr":a,"n":null,"turn":null}), FULL, false),
         s(json!({"t":"set_verify","addr":a,"check":null,"max_bounces":null}), FULL, false),
-        s(json!({"t":"lead_start","addr":a,"policy":null}), FULL, false),
-        s(json!({"t":"lead","lead":a,"op":{"op":"list_sessions"}}), FULL, false),
     ]
 }
 

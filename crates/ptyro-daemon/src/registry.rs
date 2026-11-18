@@ -252,7 +252,7 @@ impl Daemon {
         self.is_trusted_as(project, SCRIPTS_SCOPE, fingerprint)
     }
 
-    /// Trust for one scope: `scripts`, or `recipe:<name>` for a repo's recipes (M7.4).
+    /// Trust for one scope (`scripts`).
     pub fn is_trusted_as(&self, project: &str, scope: &str, fingerprint: &str) -> bool {
         let reg = self.registry.locked();
         reg.trust

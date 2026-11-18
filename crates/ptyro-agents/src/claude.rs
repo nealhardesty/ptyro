@@ -74,9 +74,6 @@ impl Claude {
             let settings = json!({ "statusLine": { "type": "command", "command": format!("{} statusline-relay", hook_word(ctx.ptyro)) } });
             plan.argv.extend(["--settings".into(), settings.to_string()]);
         }
-        if let Some(m) = ctx.mcp {
-            plan.argv.extend(["--mcp-config".into(), m.into()]);
-        }
         // We implement DEC 2026 and OSC 8 (SPEC §8.2).
         plan.env.push(("CLAUDE_CODE_FORCE_SYNC_OUTPUT".into(), "1".into()));
         plan.env.push(("FORCE_HYPERLINK".into(), "1".into()));
@@ -476,7 +473,6 @@ mod tests {
             port: None,
             agent_home: None,
             project_root: None,
-            mcp: None,
         }
     }
 

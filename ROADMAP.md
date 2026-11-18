@@ -30,7 +30,7 @@ Conventions:
 | **M4** | Agent intelligence | Adapters for Claude/Codex/Gemini/OpenCode, status engine, attention, notifications, resume |
 | **M5** | Scriptable control plane | CLI/API parity, `--json`, `wait`/`send`/`events`, onboarding, doctor |
 | **M6** | Review & ship | Diff inspector, comments → agent, commit/PR/checks via `gh`, integrate |
-| **M7** | Orchestration | Fan-out & compare, recipes, gates, `ptyro mcp` for lead agents |
+| **M7** | Orchestration | Fan-out & compare, recipes, gates, `ptyro mcp` for lead agents (done; removed 2026-11-17 except checkpoints and verified-done) |
 | **M8** | Hardening | Live upgrade, recorder/replay, perf, fuzzing, crash safety |
 | **M9** | Remote | SSH remote TUI, WebSocket server, PWA/phone client, remote approvals |
 | **M10** | Structured sessions | ACP / stream-json / app-server sessions with a native chat view (done) |
@@ -767,6 +767,31 @@ divergence probe and cost (M7.10). `crates/ptyro/tests/m7.rs` (8 tests, every ag
 `make orchestrate-demo` runs a fan-out, a gated recipe and a lead with fake agents. **Needs you:**
 real agents. Watch Claude's Stop-hook bounce and the PreToolUse denial on 2.1.x, run Codex with
 `-c mcp_servers` as a lead, and try the messaging socket.
+
+**Removed (2026-11-17): orchestration, pare-down batch 2.** The owner went deep, not wide, and
+never used it (`docs/review-2026-11/pare-down.md`). Gone from every surface: `ptyro run`,
+`recipe`, `gate`, `fanout`, `compare`, `pick`, `discard`, `iterate`, `msg`, `lease` and `radar`;
+`new --lead`, `--max-workers` and `--lead-agent`; the TUI's runs view (`O`, now unbound) with its
+compare view and gates, and the actions `runs`, `recipe.list/show/run`, `run.fork`,
+`session.message`, `session.lead`, `leases` and `radar`, the status bar's gate count and the away
+digest; the web's Runs tab (`#/runs`, `#/recipes`, `g r`, now unbound), `#/leases`, `#/radar`,
+the session's Message… sheet and "Make it a lead". In the daemon: the run engine (`runs.rs`), the
+mailbox with its framing and heartbeats (`mail.rs`), evidence and the judge (`evidence.rs`), lead
+MCP injection at launch, the lead policy and `guard_caller`'s allow-list, recipe guards and file
+leases in PreToolUse, the radar's after-turn scan, gate notifications and the `gate`/`run`
+attention kinds. The `ptyro-run` crate is gone (its `Checkpoint` moved into `ptyro-protocol`).
+`ptyro mcp` serves only the chat history tools (a bare `ptyro mcp` included; `--chat` is still
+accepted). Protocol 1.42 retires the removed requests (an older client is told what went); store
+migration 7 drops `run`, `run_event`, `run_message` and `lease` and deletes recipe trust and the
+inbox's gate and run entries; `orchestration.lease_ttl`, `.radar` and `.message_ttl` are retired
+keys (SPEC §13.8), and `gate`/`run` in a notification list are ignored. `make orchestrate-demo`,
+its script, the `recipe` fuzz target and `tests/m7.rs`/`gates.rs` went too. Left on purpose,
+since they are the user's: worktrees, `refs/ptyro/runs/*`, run folders and recipe files. A daemon
+with runs in flight hands over to one without: step sessions stay plain sessions. Kept:
+checkpoints (`orchestration.checkpoints`, now shown under "Checkpoints"), verified-done (until
+batch 3), `broadcast` and the scripting verbs, remote approval of permission prompts. RESEARCH:
+R-ORC-02, -04, -05, -11, -25, -32, -33, -34 marked built and removed; R-ORC-06, -07, -27, -29,
+-30, -31, -39, -42, -45, -46, -48 and R-RUN-03 moot. SPEC §15 keeps one line per removed part.
 
 ---
 

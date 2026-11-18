@@ -36,7 +36,6 @@ const ACTIONS = {
   "session.summarize": "Summarize what the session is doing",
   "session.explain": "Why the session has the status it has",
   "session.mute": "Silence the session's notifications for a while",
-  "session.message": "Send the session a message through its mailbox",
   "session.verify": "Hold the session's turns until a check passes",
   "session.broadcast": "Type the same thing into several sessions",
   "session.scrollback": "The session's scrollback, searchable",
@@ -111,9 +110,7 @@ export function newTask(where?: string, task?: string): void {
   const verify = input(h("input", { placeholder: "e.g. cargo test, or a run script's name", autocapitalize: "off", spellcheck: "false" }));
   const args = input(h("input", { placeholder: "e.g. --model opus", autocapitalize: "off", spellcheck: "false" }));
   const box = () => input(h("input", { type: "checkbox" }));
-  const structured = box(), noSetup = box(), noFetch = box(), lead = box();
-  const maxWorkers = input(h("input", { type: "number", inputmode: "numeric", placeholder: "4" }));
-  const leadAgents = agents.map((a) => { const c = box(); c.value = a.name; return c; });
+  const structured = box(), noSetup = box(), noFetch = box();
   const check = (c: HTMLInputElement, label: string, hint: string) => h("label", { class: "field check" }, c, h("span", {}, label), h("small", {}, hint));
   const err = h("p", { class: "form-err" });
   const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
@@ -124,10 +121,7 @@ export function newTask(where?: string, task?: string): void {
   const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
   const verifyRow = h("label", { class: "field" }, h("span", {}, "Done when"), verify, h("small", {}, "Verified-done: a turn counts as done only once this passes; failures go back to the agent"));
   const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
-  const leadRows = h("div", { style: "display: grid; gap: 12px" },
-    h("label", { class: "field" }, h("span", {}, "Workers at once"), maxWorkers),
-    h("div", { class: "field", role: "group", "aria-label": "Agents it may start" }, h("span", {}, "Agents it may start"), ...leadAgents.map((c) => h("label", { class: "field check" }, c, h("span", {}, c.value))), h("small", {}, "None ticked: any")));
-  const agentOnly = [verifyRow, argsRow, check(structured, "Chat mode (full tool-call visibility)", "Drive the agent over its structured protocol and show a chat view"), check(lead, "Make it a lead", "It gets `ptyro mcp` to start and coordinate workers, within limits"), leadRows];
+  const agentOnly = [verifyRow, argsRow, check(structured, "Chat mode (full tool-call visibility)", "Drive the agent over its structured protocol and show a chat view")];
   const freshOnly = [baseRow, check(noSetup, "Skip setup scripts", "Don't run the project's setup script"), check(noFetch, "Don't fetch", "Don't fetch the base first")];
   const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"),
     h("div", { style: "display: grid; gap: 12px; padding-top: 10px" },
@@ -159,7 +153,6 @@ export function newTask(where?: string, task?: string): void {
     for (const r of agentOnly) r.hidden = !isAgent;
     // A new worktree's agent takes no extra arguments (`worktree_new` has none).
     argsRow.hidden = !isAgent || fresh;
-    leadRows.hidden = !isAgent || !lead.checked;
     name.placeholder = fresh ? "a friendly name is picked for you" : "the session's name; a friendly one is picked for you";
     loadProfiles();
   };
@@ -169,7 +162,6 @@ export function newTask(where?: string, task?: string): void {
   };
   for (const el of [agent, placeSel, source]) el.addEventListener("change", () => { sync(); if (source.value === "branch") loadBranches(); });
   base.addEventListener("focus", loadBranches);
-  lead.addEventListener("change", sync);
   sync();
   const go1 = h("button", { class: "primary" }, "Start");
   // Setup is a tap away (BOOT9): with no agent on the computer, said first.
@@ -199,16 +191,8 @@ export function newTask(where?: string, task?: string): void {
     const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
     const prof = profile.value || undefined;
     const label = title.value.trim() || text || undefined;
-    // For an agent: verified-done, chat mode and lead (`ptyro new --verify --structured --lead`).
-    const leadPolicy = () => {
-      if (!lead.checked) return undefined;
-      const p: any = {};
-      if (maxWorkers.value.trim()) p.max_sessions = Number(maxWorkers.value);
-      const may = leadAgents.filter((c) => c.checked).map((c) => c.value);
-      if (may.length) p.agents = may;
-      return p;
-    };
-    const agentBits = () => isAgent ? { verify: verify.value.trim() || undefined, structured: structured.checked, lead: leadPolicy() } : {};
+    // For an agent: verified-done and chat mode (`ptyro new --verify --structured`).
+    const agentBits = () => isAgent ? { verify: verify.value.trim() || undefined, structured: structured.checked } : {};
     try {
       if (kind === "w") {
         const w = data.worktrees.get(id)!;
@@ -262,16 +246,6 @@ export function renameSession(s: Session): void {
 export function retitleSession(s: Session): void {
   form("Title", [{ key: "title", label: "Title", value: s.title ?? "", hint: "What it's for, for people to read. Empty clears it." }], "Save", async (v) => {
     await conn.request({ t: "retitle", addr: addr(s), title: (v.title as string) || null, worktree: false });
-  });
-}
-
-export function messageSession(s: Session): void {
-  form(`Message ${s.name}`, [
-    { key: "body", label: "Message", type: "textarea", required: true, placeholder: "It reaches the agent through its mailbox" },
-    { key: "interrupt", label: "Interrupt it", type: "check", hint: "Deliver in the middle of a turn, where the agent allows it" },
-  ], "Send", async (v) => {
-    await conn.request({ t: "msg_post", from: null, to: addr(s), kind: "info", body: v.body, run: null, in_reply_to: null, priority: v.interrupt ? "interrupt" : null, ttl_ms: null, key: null });
-    ui.toast("Sent");
   });
 }
 
@@ -398,7 +372,6 @@ export function sessionMenu(s: Session): void {
     { title: tip("session.explain"), label: "Why this status?", run: () => explainSession(s) },
     live(s) && { title: tip("session.summarize"), label: "Summarize", run: () => void summarize(s) },
     agentLive && { title: tip("session.hibernate"), label: "Hibernate", hint: "Stop it, keep it resumable", run: async () => notice(await ask({ t: "hibernate", addr: addr(s) }), "Hibernated") },
-    s.kind === "agent" && { title: tip("session.message"), label: "Message…", hint: "Through its mailbox", run: () => messageSession(s) },
     agentLive && { title: tip("session.mute"), label: "Mute notifications…", run: () => muteSession(s) },
     agentLive && can("full") && { title: tip("session.verify"), label: "Verify when done…", hint: s.verify ? `Checking: ${s.verify.check}` : "Hold its turns until a check passes", run: () => verifySession(s) },
     w && { label: "Open its worktree", hint: `${w.project_slug}/${w.name}`, run: () => go(`#/wt/${enc(w.id)}`) },

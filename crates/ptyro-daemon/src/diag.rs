@@ -96,11 +96,9 @@ impl Daemon {
                         "--as".into(),
                         adapter.into(),
                     ]),
-                    mcp: false,
                     structured: false,
                     params: None,
                     fork: false,
-                    chat_tools: false,
                 }),
             })
             .await?;

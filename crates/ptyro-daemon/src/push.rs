@@ -138,7 +138,7 @@ pub struct Payload {
     pub body: String,
     /// The session to open on click.
     pub session: Option<String>,
-    /// `blocked`, `errored`, `done`, `idle`, `gate`, `test`…
+    /// `blocked`, `errored`, `done`, `idle`, `test`…
     pub kind: String,
     /// Notifications with the same tag replace each other.
     pub tag: String,
@@ -194,7 +194,7 @@ impl Daemon {
         }
         let Ok(vapid) = self.vapid() else { return vec!["push: no key".into()] };
         let body = serde_json::to_vec(&p.clone().bounded()).unwrap_or_default();
-        let urgent = matches!(p.kind.as_str(), "blocked" | "errored" | "gate");
+        let urgent = matches!(p.kind.as_str(), "blocked" | "errored");
         let state = self.paths.state.clone();
         let mut out = Vec::new();
         let mut gone = Vec::new();

@@ -22,7 +22,6 @@ ptyro-agents.workspace = true
 ptyro-client.workspace = true
 ptyro-core.workspace = true
 ptyro-protocol.workspace = true
-ptyro-run.workspace = true
 ratatui.workspace = true
 rustix.workspace = true
 tokio.workspace = true

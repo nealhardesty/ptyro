@@ -144,10 +144,6 @@ pub struct Meta {
     pub last_reply: Option<String>,
     /// Verified-done (M7.9).
     pub verify: Option<ptyro_core::session::Verify>,
-    /// `(run, step)` it works for (M7.1).
-    pub run: Option<(String, String)>,
-    /// Tripwires from its recipe step (M7.4): paths and commands PreToolUse denies.
-    pub guard: Option<crate::runs::Guard>,
     /// Its place in its workspace's SHELLS (SPEC §23), when it is loose. Left out when empty, so
     /// an image without SHELLS is byte for byte what it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -246,7 +242,7 @@ pub struct Session {
     pub last_output_ms: AtomicU64,
     pub output_bytes: AtomicU64,
     /// One typist at a time: a prompt (text, pause, Enter) is never interleaved with another
-    /// one (mail arriving while a script sends, M7.7).
+    /// one (two scripts sending at once, M7.7).
     typing: tokio::sync::Mutex<()>,
     /// OSC 7501 `done` means "turn over" for agents, "task complete" for tools.
     done_means_idle: bool,
@@ -392,8 +388,6 @@ fn new_meta(
         turn_started_ms: 0,
         last_reply: None,
         verify: None,
-        run: None,
-        guard: None,
         shelf: None,
     }
 }
@@ -622,7 +616,6 @@ impl Session {
             turns: meta.turns,
             last_output_ms: Some(self.last_output_ms.load(Ordering::Relaxed)).filter(|t| *t > 0),
             verify: meta.verify.clone(),
-            run: meta.run.as_ref().map(|(r, step)| format!("{r}/{step}")),
             held: false,
             structured: self.structured.as_ref().map(|s| s.protocol.clone()),
             task: meta.first_prompt.as_deref().map(|p| ptyro_core::session::brief(p, 200)),

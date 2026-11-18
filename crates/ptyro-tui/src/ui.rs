@@ -121,11 +121,6 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
         if let Some(id) = app.pad_popup {
             draw_pad_popup(app, f, area, id);
         }
-        if app.orch.is_some() {
-            let h =
-                if app.config.ui.status_bar { area.height.saturating_sub(1) } else { area.height };
-            crate::runs::draw(app, f, Rect { height: h, ..area });
-        }
         if app.config.ui.status_bar && area.height > 2 {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
@@ -272,7 +267,6 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
         &[
             ("inspector", "diff & ship"),
             ("review.queue", "to review"),
-            ("runs", "runs"),
             ("script.run", "run script"),
             ("worktree.open", "open in…"),
             ("worktree.gc", "clean up"),
@@ -1622,13 +1616,6 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
             format!("⚕ {} ", app.health.findings.len()),
             bar.fg(app.depth.fit(if bad { t.error } else { t.blocked }))
                 .add_modifier(Modifier::BOLD),
-        ));
-    }
-    let gates = app.open_gates();
-    if gates > 0 {
-        right.push(Span::styled(
-            format!("⏸ {gates} gate(s) "),
-            bar.fg(app.depth.fit(t.blocked)).add_modifier(Modifier::BOLD),
         ));
     }
     if app.pad_open > 0 {

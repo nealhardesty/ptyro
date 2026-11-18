@@ -294,22 +294,9 @@ async fn dispatch(
             issue,
             unqueued,
             verify,
-            lead,
-            max_workers,
-            lead_agents,
             structured,
             argv,
         }) => {
-            let lead = (lead || max_workers.is_some() || !lead_agents.is_empty()).then(|| {
-                let mut p = serde_json::json!({});
-                if let Some(n) = max_workers {
-                    p["max_sessions"] = n.into();
-                }
-                if !lead_agents.is_empty() {
-                    p["agents"] = lead_agents.clone().into();
-                }
-                p
-            });
             let prompt = match prompt_file {
                 Some(f) => Some(
                     std::fs::read_to_string(&f)
@@ -337,7 +324,6 @@ async fn dispatch(
                 issue,
                 unqueued,
                 verify,
-                lead,
                 structured,
                 welcome: false,
                 pad_item: None,
@@ -599,58 +585,11 @@ async fn dispatch(
             crate::ship::pr(&ctx, crate::ship::PrCmd::Watch { worktree, off }).await
         }
         Some(Cmd::Review { cmd }) => crate::ship::review(&ctx, cmd).await,
-        Some(Cmd::Run { cmd }) => crate::orch::run(&ctx, cmd).await,
-        Some(Cmd::Recipe { cmd }) => crate::orch::recipe(&ctx, cmd).await,
-        Some(Cmd::Fanout {
-            agents,
-            count,
-            prompt,
-            prompt_file,
-            project,
-            base,
-            prefix,
-            test,
-            verify,
-            judge,
-            timeout,
-            structured,
-            wait,
-            json,
-        }) => {
-            let spec = ptyro_run::wire::FanoutSpec {
-                agents,
-                prompt: String::new(),
-                project,
-                base,
-                name: prefix,
-                test,
-                verify,
-                judge,
-                timeout,
-                structured,
-            };
-            crate::orch::fanout(&ctx, spec, count, prompt, prompt_file, wait, json).await
-        }
-        Some(Cmd::Compare { run, refresh, json }) => {
-            crate::orch::compare(&ctx, run, refresh, json).await
-        }
-        Some(Cmd::Pick { run, candidate, cherry_pick, pr, apply, into, paths, hunks }) => {
-            crate::orch::pick(&ctx, run, candidate, cherry_pick, pr, apply, into, paths, hunks)
-                .await
-        }
-        Some(Cmd::Discard { run, candidate, force, yes }) => {
-            crate::orch::discard(&ctx, run, candidate, force, yes).await
-        }
-        Some(Cmd::Iterate { run, args }) => crate::orch::iterate(&ctx, run, args).await,
-        Some(Cmd::Gate { cmd }) => crate::orch::gate(&ctx, cmd).await,
-        Some(Cmd::Msg { cmd }) => crate::orch::msg(&ctx, cmd).await,
-        Some(Cmd::Lease { cmd }) => crate::orch::lease(&ctx, cmd).await,
-        Some(Cmd::Radar { project, json }) => crate::orch::radar(&ctx, project, json).await,
-        Some(Cmd::Checkpoint { cmd }) => crate::orch::checkpoint(&ctx, cmd).await,
+        Some(Cmd::Checkpoint { cmd }) => crate::checkpoint::checkpoint(&ctx, cmd).await,
         Some(Cmd::Verify { session, check, off, max_bounces }) => {
-            crate::orch::verify(&ctx, session, check, off, max_bounces).await
+            crate::checkpoint::verify(&ctx, session, check, off, max_bounces).await
         }
-        Some(Cmd::Mcp { chat }) => crate::mcp::serve(&ctx, chat).await,
+        Some(Cmd::Mcp { chat: _ }) => crate::mcp::serve(&ctx).await,
         Some(Cmd::Proxy) => crate::remote::proxy(&ctx).await,
         Some(Cmd::Convert { session, to, force }) => {
             let c = ctx.connect(false).await.map_err(no_daemon)?;
@@ -904,7 +843,6 @@ pub fn said(e: &Error) -> String {
         Again::Force => "--force".to_owned(),
         Again::StopSessions => "--stop-sessions".to_owned(),
         Again::Stop => "--stop".to_owned(),
-        Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
         Again::Release => "--release".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
@@ -913,14 +851,6 @@ pub fn said(e: &Error) -> String {
 /// The refusal's way through is `again` (SPEC §6.6).
 pub fn fixed_by(e: &Error, again: &ptyro_core::error::Again) -> bool {
     e.fix.as_ref().is_some_and(|f| f.again == *again)
-}
-
-/// The fingerprint a refusal asks you to trust, if it asks.
-pub fn trust_of(e: &Error) -> Option<String> {
-    match &e.fix.as_ref()?.again {
-        ptyro_core::error::Again::Trust { fingerprint } => Some(fingerprint.clone()),
-        _ => None,
-    }
 }
 
 pub fn no_daemon(e: Error) -> Error {
@@ -1071,8 +1001,6 @@ pub struct NewArgs {
     pub unqueued: bool,
     /// Verified-done check (M7.9).
     pub verify: Option<String>,
-    /// Lead policy (M7.6).
-    pub lead: Option<serde_json::Value>,
     /// Structured mode (M10).
     pub structured: bool,
     /// Started from the scratchpad item on this line (NOTE1.3).
@@ -1262,7 +1190,6 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         title: a.title,
         unqueued: a.unqueued,
         verify: a.verify,
-        lead: a.lead,
         structured: a.structured,
         again: a.again,
         ..SpawnSpec::default()

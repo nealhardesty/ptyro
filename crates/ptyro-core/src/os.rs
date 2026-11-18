@@ -244,8 +244,8 @@ pub fn looks_like_path(s: &str) -> bool {
             && matches!(b[2], b'\\' | b'/'))
 }
 
-/// A path as patterns (globs, leases, guards, profiles' `match.paths`) spell one: with `/`
-/// between its parts, also on Windows, where it comes with `\\` (WIN13: a lease on `src/api.rs`
+/// A path as patterns (globs, profiles' `match.paths`) spell one: with `/`
+/// between its parts, also on Windows, where it comes with `\\` (WIN13: a pattern `src/api.rs`
 /// never matched `src\\api.rs`). Unchanged elsewhere.
 pub fn slash_path(p: &str) -> String {
     if cfg!(windows) { p.replace('\\', "/") } else { p.to_owned() }

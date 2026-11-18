@@ -520,11 +520,9 @@ pub struct WorktreeSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub workspace: Option<String>,
-    /// For its agent: verified-done (M7.9) and lead (M7.6), as in [`crate::session::SpawnSpec`].
+    /// For its agent: verified-done (M7.9), as in [`crate::session::SpawnSpec`].
     #[serde(default)]
     pub verify: Option<String>,
-    #[serde(default)]
-    pub lead: Option<serde_json::Value>,
     /// Start the agent in structured mode (M10).
     #[serde(default)]
     pub structured: bool,

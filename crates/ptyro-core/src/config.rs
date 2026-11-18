@@ -370,7 +370,7 @@ impl Default for AttentionConfig {
     fn default() -> Self {
         Self {
             scope: AttentionScope::CurrentFirst,
-            breakthrough: vec!["blocked".into(), "gate".into()],
+            breakthrough: vec!["blocked".into()],
             stale_after: "5m".into(),
             min_work: "10s".into(),
             resume_on_focus: true,
@@ -488,7 +488,7 @@ impl Default for Notifications {
     fn default() -> Self {
         Self {
             channels: ["inbox", "osc", "bell"].map(String::from).into(),
-            on: ["blocked", "errored", "done", "idle", "gate", "run"].map(String::from).into(),
+            on: ["blocked", "errored", "done", "idle"].map(String::from).into(),
             quiet_hours: None,
             coalesce: "10s".into(),
             desktop_command: None,
@@ -1450,23 +1450,18 @@ pub fn parse_bytes(s: &str) -> Result<u64, String> {
     n.checked_mul(mult).ok_or_else(|| format!("size {s:?} is too large"))
 }
 
-/// Runs, checkpoints, the mailbox, leases and the collision radar (SPEC §15, M7).
+/// Checkpoints (SPEC §15.3). The table keeps its name from when it also held the orchestration
+/// settings (runs, mail, leases, the radar; removed 2026-11-17, see `retired.rs`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Orchestration {
     /// Checkpoint every agent turn that changed its worktree (`refs/ptyro/ckpt/…`).
     pub checkpoints: bool,
-    /// How long a file lease lasts unless renewed.
-    pub lease_ttl: String,
-    /// Watch live worktrees of a project for overlapping changes and tell both agents.
-    pub radar: bool,
-    /// Messages expire after this long undelivered.
-    pub message_ttl: String,
 }
 
 impl Default for Orchestration {
     fn default() -> Self {
-        Self { checkpoints: true, lease_ttl: "30m".into(), radar: true, message_ttl: "24h".into() }
+        Self { checkpoints: true }
     }
 }
 
@@ -1848,8 +1843,6 @@ impl Config {
             ("github.poll", &self.github.poll),
             ("github.escalate_after", &self.github.escalate_after),
             ("review.digest", &self.review.digest),
-            ("orchestration.lease_ttl", &self.orchestration.lease_ttl),
-            ("orchestration.message_ttl", &self.orchestration.message_ttl),
         ] {
             parse_duration(v).map_err(|e| format!("{k}: {e}"))?;
         }
@@ -1876,9 +1869,13 @@ impl Config {
             .chain(&self.attention.breakthrough)
             .chain(self.notifications.sinks.iter().flat_map(|s| s.on()));
         for k in kinds {
-            if crate::status::AttentionKind::parse(k).is_none() {
+            // `gate` and `run` went with runs (2026-11-17): a list that still names them is
+            // read as if it didn't.
+            if crate::status::AttentionKind::parse(k).is_none()
+                && !["gate", "run"].contains(&k.as_str())
+            {
                 return Err(format!(
-                    "notifications: unknown kind {k:?} (blocked, errored, done, idle, exited, notification, gate, run)"
+                    "notifications: unknown kind {k:?} (blocked, errored, done, idle, exited, notification)"
                 ));
             }
         }
@@ -3179,8 +3176,6 @@ mod hardening {
         assert!(parse_duration("99999999999999d").unwrap_err().contains("too long"));
         assert!(parse_duration("18446744073709551615s").is_err());
         for (bad, key) in [
-            ("[orchestration]\nlease_ttl = \"soon\"\n", "orchestration.lease_ttl"),
-            ("[orchestration]\nmessage_ttl = \"24 hours\"\n", "orchestration.message_ttl"),
             ("[scratchpad]\nkeep = 300000000000\n", "scratchpad.keep"),
             ("[ui]\nsidebar_width = 60000\n", "ui.sidebar_width"),
             ("[discover]\ndepth = 200\n", "discover.depth"),

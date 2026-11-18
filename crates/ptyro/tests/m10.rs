@@ -1,11 +1,10 @@
-//! M10 end-to-end tests: structured sessions. The Done-when (fan-out workers run as structured
-//! sessions with full tool-call visibility in the compare view, and any of them can be opened in
-//! its native TUI to take over by hand, and back), every protocol's turn, permission request and
+//! M10 end-to-end tests: structured sessions. One opened in its native TUI to take over by hand,
+//! and back; every protocol's turn, permission request and
 //! answer (Claude stream-json, Codex app-server, Gemini ACP, OpenCode's server), the chat stream
 //! and the line editor, a live upgrade in the middle of a structured turn, hibernate/resume,
 //! an agent that fails to start, and a phone reading a transcript. Every agent is the fake.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Output;
 use std::time::{Duration, Instant};
 
@@ -88,86 +87,15 @@ impl World {
     fn chat(&self, s: &str) -> Vec<Value> {
         self.json(&["read", s, "--chat", "--json"]).as_array().cloned().unwrap_or_default()
     }
-
-    fn git(&self, dir: &Path, args: &[&str]) -> String {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("HOME", self.home())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    }
-
-    fn project(&self, name: &str) -> PathBuf {
-        let h = self.home();
-        self.git(&h, &["init", "-q", "--bare", &format!("{name}.git")]);
-        self.git(&h, &["clone", "-q", &format!("{name}.git"), name]);
-        let root = h.join(name);
-        std::fs::write(root.join("f.txt"), "one\n").unwrap();
-        self.git(&root, &["add", "-A"]);
-        self.git(&root, &["commit", "-q", "-m", "init"]);
-        self.git(&root, &["push", "-q", "origin", "main"]);
-        self.ok(&["project", "add", root.to_str().unwrap()]);
-        root
-    }
 }
 
-/// The Done-when: a fan-out of structured workers; the compare view shows every candidate's tool
-/// calls; one is opened in its native TUI (same conversation) and taken over by hand, then
-/// switched back.
+/// A structured session is taken over by hand in the agent's native TUI (the same
+/// conversation), then switched back.
 #[test]
-fn done_when_structured_fanout_with_tool_visibility_and_takeover() {
+fn a_structured_session_is_taken_over_by_hand_and_back() {
     let w = World::new("");
-    w.project("app");
-    let out = w.ok(&[
-        "fanout",
-        "--agent",
-        "claude,codex,gemini",
-        "--structured",
-        "--prompt",
-        "sh echo $PTYRO_STEP_ID > answer.txt",
-        "--project",
-        "app",
-        "--test",
-        "grep -q claude answer.txt",
-        "--prefix",
-        "ans",
-    ]);
-    let run = out.lines().next().unwrap().trim().to_owned();
-    w.until("the fan-out", || {
-        let r = w.json(&["run", "show", &run, "--json"]);
-        assert_ne!(r["state"]["status"], "failed", "{r:#}");
-        r["state"]["status"] == "succeeded"
-    });
-    let sessions = w.json(&["ls", "--json"]);
-    for name in ["ans-claude", "ans-codex", "ans-gemini"] {
-        let s =
-            sessions.as_array().unwrap().iter().find(|s| s["name"] == name).unwrap_or_else(|| {
-                panic!("{name}: {sessions:#}\n{:#}", w.json(&["run", "show", &run, "--json"]))
-            });
-        assert!(s["structured"].is_string(), "{name} runs structured: {s:#}");
-    }
-    let doc = w.json(&["compare", &run, "--json"]);
-    let cands = doc["candidates"].as_array().unwrap();
-    assert_eq!(cands.len(), 3);
-    for c in cands {
-        let t = &c["tools"];
-        assert!(t["calls"].as_u64() >= Some(1), "{c:#}");
-        assert!(
-            t["commands"].as_array().unwrap().iter().any(|x| x.as_str().unwrap().contains("echo")),
-            "{c:#}"
-        );
-    }
-    let claude = cands.iter().find(|c| c["step"] == "claude").unwrap();
-    assert_eq!(claude["rank"], 1, "only claude's answer passes the test: {doc:#}");
-    assert_eq!(claude["tools"]["cost_micro_usd"], 1200, "Claude reports its cost");
-    assert_eq!(claude["last_message"], "ran: echo $PTYRO_STEP_ID > answer.txt");
-    let text = w.ok(&["compare", &run]);
-    assert!(text.contains("tools: 1 call (Bash 1)"), "{text}");
+    w.ok(&["new", "-d", "-n", "ans-claude", "--agent", "claude", "--structured"]);
+    w.ok(&["send", "ans-claude", "work 0.1 first", "--wait-ready", "--wait"]);
 
     // Take one over by hand: the same conversation, in the agent's own TUI.
     let conv = w.info("ans-claude")["conversation"].as_str().unwrap().to_owned();
@@ -196,10 +124,6 @@ fn done_when_structured_fanout_with_tool_visibility_and_takeover() {
             .iter()
             .any(|i| i["t"] == "assistant" && i["text"] == "you said: hello again")
     );
-    // Candidates are alternatives, also once the run is over: the radar doesn't warn them about
-    // each other (that mail would run as a turn ahead of the prompt above).
-    let mail = w.json(&["msg", "ls", "--json"]);
-    assert!(!mail.as_array().unwrap().iter().any(|m| m["kind"] == "collision"), "{mail:#}");
     // Converting needs the mode to differ.
     let again = w.cli(&["convert", "ans-claude", "--to", "structured"]);
     assert_eq!(again.status.code(), Some(5), "{}", String::from_utf8_lossy(&again.stderr));

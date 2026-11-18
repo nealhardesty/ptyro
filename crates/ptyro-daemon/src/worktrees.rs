@@ -552,7 +552,6 @@ impl Daemon {
                 confirmed: true,
                 prompt: spec.prompt.clone(),
                 verify: spec.verify.clone(),
-                lead: spec.lead.clone(),
                 structured: spec.structured,
                 ..SpawnSpec::default()
             };

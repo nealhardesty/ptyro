@@ -18,10 +18,6 @@ use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
 use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec, Watch};
 use ptyro_core::status::{AttentionKind, InboxEntry, Usage};
 use ptyro_core::{ClientId, Error, SessionId, TermSize};
-use ptyro_run::wire::{
-    Checkpoint, CompareDoc, FanoutSpec, GateInfo, LeadOp, Lease, Message, PickMode, Radar,
-    RecipeInfo, RunInfo,
-};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -40,11 +36,55 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 41 };
+pub const PROTO: Version = Version { major: 1, minor: 42 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
-pub const RETIRED_REQUESTS: &[(&str, &str)] = &[("cs", "change sets")];
+pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
+    ("cs", "change sets"),
+    ("run_list", "runs"),
+    ("run_get", "runs"),
+    ("run_events", "runs"),
+    ("run_cancel", "runs"),
+    ("run_retry", "runs"),
+    ("run_fork", "runs"),
+    ("recipe_list", "recipes"),
+    ("recipe_show", "recipes"),
+    ("recipe_run", "recipes"),
+    ("gate_list", "gates"),
+    ("gate_resolve", "gates"),
+    ("fanout", "fan-out"),
+    ("compare", "fan-out"),
+    ("pick", "fan-out"),
+    ("discard", "fan-out"),
+    ("iterate", "fan-out"),
+    ("msg_post", "agent mail"),
+    ("msg_check", "agent mail"),
+    ("msg_ack", "agent mail"),
+    ("msg_list", "agent mail"),
+    ("lease_claim", "file leases"),
+    ("lease_release", "file leases"),
+    ("lease_list", "file leases"),
+    ("radar", "the collision radar"),
+    ("lead_start", "lead agents"),
+    ("lead", "lead agents"),
+];
+
+/// A checkpoint of a session's worktree, taken after an agent turn (SPEC §15.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Checkpoint {
+    pub n: u32,
+    pub session: String,
+    pub at_ms: u64,
+    /// The agent turn it closed.
+    pub turn: u32,
+    /// The checkpoint commit (HEAD plus uncommitted work); `ref` names it.
+    pub sha: String,
+    #[serde(rename = "ref")]
+    pub refname: String,
+    pub head: String,
+    pub files: u32,
+}
 
 /// The answer to a request this ptyro no longer has (see [`RETIRED_REQUESTS`]); `None` for any
 /// other `t`.
@@ -107,7 +147,7 @@ pub struct ClientInfo {
 pub enum Scope {
     /// Watch: sessions, screens, status, the inbox, runs.
     Read,
-    /// Also answer permission prompts and gates, clear attention, mute.
+    /// Also answer permission prompts, clear attention, mute.
     Approve,
     /// Also type into sessions and stop, resume or start configured agents.
     Control,
@@ -1006,177 +1046,7 @@ pub enum Request {
     ReviewDone {
         addr: String,
     },
-    // ── orchestration (SPEC §15, M7) ──
-    RunList {
-        #[serde(default)]
-        active: bool,
-        #[serde(default)]
-        limit: Option<u32>,
-    },
-    RunGet {
-        id: String,
-    },
-    /// The run's event log, oldest first.
-    RunEvents {
-        id: String,
-    },
-    RunCancel {
-        id: String,
-    },
-    /// Put a finished, failed or held step back to pending (a fresh attempt).
-    RunRetry {
-        id: String,
-        step: String,
-    },
-    /// A new run that copies every step before `from` and runs from there (`--set` vars).
-    RunFork {
-        id: String,
-        from: String,
-        #[serde(default)]
-        set: BTreeMap<String, String>,
-    },
-    /// Recipes: built-ins, `~/.config/ptyro/recipes/`, and the project's `.ptyro/recipes/`.
-    RecipeList {
-        #[serde(default)]
-        project: Option<String>,
-    },
-    RecipeShow {
-        name: String,
-        #[serde(default)]
-        project: Option<String>,
-    },
-    /// Start a recipe by name, or from `src` (a file the CLI read).
-    RecipeRun {
-        #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        src: Option<String>,
-        #[serde(default)]
-        vars: BTreeMap<String, String>,
-        #[serde(default)]
-        project: Option<String>,
-        #[serde(default)]
-        base: Option<String>,
-        /// The fingerprint of a repo recipe the user just approved.
-        #[serde(default)]
-        trust: Option<String>,
-    },
-    Fanout {
-        spec: FanoutSpec,
-    },
-    GateList {
-        #[serde(default)]
-        all: bool,
-    },
-    /// Answer a gate. Idempotent per `key`: a second tap with the same answer is a no-op.
-    GateResolve {
-        id: String,
-        choice: String,
-        #[serde(default)]
-        note: Option<String>,
-        #[serde(default)]
-        key: Option<String>,
-        #[serde(default)]
-        by: Option<String>,
-    },
-    /// The compare view of a fanout (or any run with candidates); `refresh` re-runs evidence.
-    Compare {
-        run: String,
-        #[serde(default)]
-        refresh: bool,
-    },
-    /// Take a candidate: merge/cherry-pick into `into`, open a PR, or apply chosen paths/hunks.
-    Pick {
-        run: String,
-        candidate: String,
-        #[serde(default)]
-        mode: PickMode,
-        #[serde(default)]
-        into: Option<String>,
-        /// Only these files (apply mode).
-        #[serde(default)]
-        paths: Vec<String>,
-        /// Only these hunks, `FILE:N` (1-based, apply mode).
-        #[serde(default)]
-        hunks: Vec<String>,
-    },
-    /// Remove candidates' worktrees safely (every one not picked, without `candidate`).
-    Discard {
-        run: String,
-        #[serde(default)]
-        candidate: Option<String>,
-        #[serde(default)]
-        force: bool,
-    },
-    /// A follow-up for one candidate's agent (or all of them).
-    Iterate {
-        run: String,
-        #[serde(default)]
-        candidate: Option<String>,
-        text: String,
-    },
-    /// Post a message: `to` is a session, `@lead`, `@user`, `@all`, `@idle`, `@<agent>`,
-    /// `@run:<id>`; groups expand to one delivery per recipient now.
-    MsgPost {
-        #[serde(default)]
-        from: Option<String>,
-        to: String,
-        #[serde(default)]
-        kind: Option<String>,
-        body: String,
-        #[serde(default)]
-        run: Option<String>,
-        #[serde(default)]
-        in_reply_to: Option<String>,
-        /// `interrupt` delivers mid-turn where the agent allows it.
-        #[serde(default)]
-        priority: Option<String>,
-        #[serde(default)]
-        ttl_ms: Option<u64>,
-        #[serde(default)]
-        key: Option<String>,
-    },
-    /// Messages for `me` after `since` (a message id), waiting up to `wait_ms` for one.
-    MsgCheck {
-        me: String,
-        #[serde(default)]
-        since: Option<String>,
-        #[serde(default)]
-        wait_ms: Option<u64>,
-    },
-    MsgAck {
-        me: String,
-        ids: Vec<String>,
-    },
-    /// The ledger (of a run).
-    MsgList {
-        #[serde(default)]
-        run: Option<String>,
-        #[serde(default)]
-        limit: Option<u32>,
-    },
-    LeaseClaim {
-        holder: String,
-        patterns: Vec<String>,
-        #[serde(default)]
-        exclusive: bool,
-        #[serde(default)]
-        ttl_ms: Option<u64>,
-        #[serde(default)]
-        reason: Option<String>,
-    },
-    /// Release leases by id or pattern (all of the holder's, without either).
-    LeaseRelease {
-        holder: String,
-        #[serde(default)]
-        patterns: Vec<String>,
-    },
-    LeaseList,
-    /// Predicted collisions between the project's live worktrees.
-    Radar {
-        #[serde(default)]
-        project: Option<String>,
-    },
+    // ── checkpoints (SPEC §15.3) ──
     /// Checkpoints of a session (or of every session in a worktree).
     CheckpointList {
         addr: String,
@@ -1204,17 +1074,6 @@ pub enum Request {
         check: Option<String>,
         #[serde(default)]
         max_bounces: Option<u32>,
-    },
-    /// Make a session the lead of a new run (it may then use `ptyro mcp`).
-    LeadStart {
-        addr: String,
-        #[serde(default)]
-        policy: Option<ptyro_run::Policy>,
-    },
-    /// A lead agent's request through `ptyro mcp` (policy-checked).
-    Lead {
-        lead: String,
-        op: LeadOp,
     },
     // ── Chats (1.22, SPEC §22.14). A `chat` is an address: `7f3k`, `c:7f3k`, a title that
     // matches one chat, `@last`, or `laptop2:c:7f3k` for another machine's. ──
@@ -1687,7 +1546,6 @@ impl Request {
                 | Request::ProjectRemove { .. }
                 | Request::Shutdown { .. }
                 | Request::Convert { .. }
-                | Request::RecipeRun { .. }
         )
     }
 
@@ -1706,9 +1564,6 @@ impl Request {
             (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
             (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
                 *force = true
-            }
-            (Request::RecipeRun { trust, .. }, A::Trust { fingerprint }) => {
-                *trust = Some(fingerprint.clone())
             }
             _ => return None,
         }
@@ -1916,51 +1771,8 @@ pub enum Reply {
     SelfTest {
         result: SelfTestResult,
     },
-    Runs {
-        runs: Vec<RunInfo>,
-    },
-    Run {
-        run: RunInfo,
-    },
-    RunEvents {
-        events: Vec<(u64, u64, serde_json::Value)>,
-    },
-    Recipes {
-        recipes: Vec<RecipeInfo>,
-    },
-    Recipe {
-        info: RecipeInfo,
-        src: String,
-    },
-    Gates {
-        gates: Vec<GateInfo>,
-    },
-    Compare {
-        doc: CompareDoc,
-    },
-    Messages {
-        messages: Vec<Message>,
-    },
-    Posted {
-        ids: Vec<String>,
-        /// Recipients by name.
-        to: Vec<String>,
-    },
-    Leases {
-        leases: Vec<Lease>,
-        /// Patterns refused because another session holds them.
-        #[serde(default)]
-        refused: Vec<String>,
-    },
-    Radar {
-        radar: Radar,
-    },
     Checkpoints {
         checkpoints: Vec<Checkpoint>,
-    },
-    /// A lead op's answer (JSON, as `ptyro mcp` returns it).
-    LeadResult {
-        value: serde_json::Value,
     },
     /// What a hook should print for the agent (a Stop bounce, a PreToolUse denial).
     HookOutput {
@@ -2280,10 +2092,6 @@ pub enum DomainEvent {
     HostLoad {
         #[serde(default)]
         load: Option<HostLoad>,
-    },
-    /// A run changed (a step started or ended, a gate opened or closed).
-    RunUpdated {
-        run: RunInfo,
     },
     /// This client fell behind and missed `count` events (only it gets this): re-read state.
     EventsLost {

@@ -13,8 +13,7 @@ ptyro runs Claude Code, Codex, Gemini CLI and OpenCode side by side, each in its
 worktree, inside the terminal you already use. A background daemon owns every session, so you
 can detach, close the terminal or lose SSH, and the agents keep working. ptyro knows which agent
 is working, which is blocked on a permission prompt and which is done, and one key takes you to
-the one that needs you. When a task is too big for one agent, it can fan the work out, run
-recipes, or coordinate one change across several repositories.
+the one that needs you.
 
 ## What you get
 
@@ -27,8 +26,6 @@ recipes, or coordinate one change across several repositories.
 - **Work and personal, never crossed.** Profiles keep accounts, git author, SSH keys and secrets
   apart, per repository.
 - **Review and ship without leaving.** Diff, line comments for the agent, commit, PR, CI fixes.
-- **Many agents at once.** Fan one task out to several agents and pick the best, run recipe
-  workflows, or let a lead agent manage workers.
 - **Your phone.** A web app shows every agent and answers its permission prompts.
 - **Scriptable.** Every action is a command, most with `--json`.
 
@@ -647,25 +644,11 @@ ptyro wt integrate myrepo/brisk-rook       # rebase onto main and fast-forward i
 PRs need `gh`. `ptyro new --issue URL` starts from a GitHub issue, and `ptyro wt pair` shows an
 agent's work in your main checkout, for your IDE and dev server.
 
-### Orchestration: fan-out, recipes, leads
+### Verified-done and checkpoints
 
-Give one task to several agents, each in its own worktree, then compare them by evidence (tests,
-diff size, time) and take the best:
-
-```bash
-ptyro fanout -a claude,codex,gemini --prompt-file task.md --test
-ptyro compare @last                        # ranked candidates, with reasons
-ptyro pick @last claude                    # merge it; `ptyro discard @last` removes the rest
-ptyro recipe run implement-and-review --var task="add --json to ls"
-ptyro new --agent claude --lead --max-workers 3   # an agent that manages workers
-```
-
-**Recipes** are TOML workflows with gates that wait for you. Built-ins include
-`implement-and-review` (a writer and a reviewer from another vendor), `best-of-n`, `test-fixer`
-and `overnight`. **Verified-done** (`--verify "cargo test"`) means an agent's turn only counts as
-done when the check passes. Agents can message each other, claim files, and every turn leaves a
-checkpoint you can restore. `Ctrl-Q O` shows every run. Try it with fake agents:
-`make orchestrate-demo`.
+**Verified-done** (`--verify "cargo test"`) means an agent's turn only counts as done when the
+check passes. Every turn that changed the worktree leaves a checkpoint you can restore
+(`ptyro checkpoint ls`, `ptyro checkpoint restore`).
 
 ### Chats
 
@@ -775,7 +758,7 @@ The rest of the app: a tab for sessions (blocked ones
 on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
 scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
 an issue or your changes; finish it into a PR; archive it), the diff with line comments for the
-agent, commits and checks, the review queue, runs and fan-outs, and **More**:
+agent, commits and checks, the review queue, and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
 Allow / Deny where the platform shows actions.
@@ -858,7 +841,6 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `f` | sidebar filter: all → only running sessions → only active ones (working, waiting for you, running a command); or click `all` / `running` / `active` under the sidebar title |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `D` / `Q` | inspector / review queue |
-| `O` | runs |
 | `w` / `o` / `r` | switch workspace / open in an editor, the file manager, a terminal app or a shell / run the default run script |
 | `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
 | `m` / `g` | a new chat / the chat list |
@@ -1017,7 +999,6 @@ WSL works meanwhile.
 | `make doc` / `make clean` | API docs (warnings fail) / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
-| `make orchestrate-demo` (`ARGS=tui\|clean`) | fan-out, a gated recipe and a lead over MCP, with fake agents |
 | `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
@@ -1032,7 +1013,7 @@ WSL works meanwhile.
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
-| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recipes, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |
+| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of ten targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
 | `make compat` (`VTTEST=…`) | headless compatibility sweep → a table for `docs/compat.md` |
 | `make bench` / `make criterion` | emulator parse speed, daemon throughput, idle CPU, key latency (Linux) / micro-benchmarks (`target/criterion`) |

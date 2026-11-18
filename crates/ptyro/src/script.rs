@@ -706,7 +706,6 @@ mod tests {
             turns: 0,
             last_output_ms: None,
             verify: None,
-            run: None,
             held: false,
             structured: None,
             task: None,

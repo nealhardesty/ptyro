@@ -50,13 +50,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "recipe"
-path = "fuzz_targets/recipe.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "record"
 path = "fuzz_targets/record.rs"
 test = false

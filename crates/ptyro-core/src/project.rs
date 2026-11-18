@@ -57,7 +57,7 @@ pub struct VerifySection {
     /// A run script's name (`test`, for `[scripts.run.test]`).
     pub check: Option<String>,
     pub max_bounces: Option<u32>,
-    /// Verify every agent session in this project's worktrees, not only recipe steps.
+    /// Verify every agent session in this project's worktrees.
     pub auto: bool,
 }
 

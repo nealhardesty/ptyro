@@ -22,7 +22,6 @@ ptyro-drive.workspace = true
 ptyro-meaning.workspace = true
 ptyro-core.workspace = true
 ptyro-git.workspace = true
-ptyro-run.workspace = true
 ptyro-protocol.workspace = true
 ptyro-pty.workspace = true
 ptyro-store.workspace = true

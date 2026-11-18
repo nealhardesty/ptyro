@@ -15,7 +15,6 @@ pub const TARGETS: &[(&str, Target)] = &[
     ("emulator", emulator),
     ("protocol", protocol),
     ("input", input),
-    ("recipe", recipe),
     ("record", record),
     ("settings", settings),
     ("imports", imports),
@@ -154,20 +153,6 @@ pub fn input(data: &[u8]) {
     // A paste can never end the bracket early (SPEC §5.5).
     let inner = &pasted[6..pasted.len().saturating_sub(6)];
     assert!(!inner.windows(6).any(|w| w == b"\x1b[201~"), "paste injection");
-}
-
-/// Recipes, templates and conditions (the run engine's untrusted input).
-pub fn recipe(data: &[u8]) {
-    let text = String::from_utf8_lossy(data);
-    if let Ok(r) = ptyro_run::Recipe::parse(&text) {
-        let _ = r.graph("mermaid");
-        let _ = r.bind(&std::collections::BTreeMap::new());
-    }
-    if let Ok(e) = ptyro_run::expr::parse(&text) {
-        let _ = e.eval(&serde_json::json!({ "steps": { "a": { "status": "succeeded" } } }));
-    }
-    let _ = ptyro_run::template::references(&text);
-    let _ = ptyro_run::template::render(&text, &serde_json::json!({}));
 }
 
 /// Recording files (read back after crashes, so maybe torn).
@@ -334,7 +319,7 @@ pub fn parsers(data: &[u8]) {
     let _ = scratchpad::tag_worktree(a, line, b);
 }
 
-/// Seeds for the mutation runner: real escape sequences, protocol frames, recipes.
+/// Seeds for the mutation runner: real escape sequences, protocol frames, recordings.
 pub fn seeds(target: &str) -> Vec<Vec<u8>> {
     let mut v: Vec<Vec<u8>> = vec![Vec::new(), b"hello\r\n".to_vec()];
     match target {
@@ -359,20 +344,11 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
             for m in [
                 ClientMsg::Ping,
                 ClientMsg::Request { id: 1, req: Request::List },
-                ClientMsg::Request {
-                    id: 2,
-                    req: Request::RunList { active: true, limit: Some(5) },
-                },
+                ClientMsg::Request { id: 2, req: Request::Status },
             ] {
                 v.push(encode(&m, Encoding::MsgPack).map(|b| b.to_vec()).unwrap_or_default());
                 v.push(encode(&m, Encoding::Json).map(|b| b.to_vec()).unwrap_or_default());
             }
-        }
-        "recipe" => {
-            for (_, src) in ptyro_run::builtin::ALL {
-                v.push(src.as_bytes().to_vec());
-            }
-            v.push(b"steps.a.status == 'succeeded' && !(x.y < 3) || 'z' contains 'q'".to_vec());
         }
         "record" => {
             let mut r = vec![

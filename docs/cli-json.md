@@ -181,48 +181,12 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `ptyro review queue --json` → `[{worktree: Worktree, session?, score, reasons, last_message?, waiting_ms}]`,
   best first.
 
-## Orchestration (M7)
+## Checkpoints and verified-done (M7)
 
-Pinned by `crates/ptyro/tests/m7.rs` (`snapshots/m7__m7-cli-json.snap`).
-
-- `ptyro run ls --json` → `[RunInfo]`, newest first; `run show R --json`, `run wait R --json`,
-  `run fork … --json` → `RunInfo`:
-  - `RunInfo` is `{state: RunState, order: [step id], dir, children: [run id]}`;
-  - `RunState` is `{id, kind, name, recipe_sha, vars, project?, base?, status, created_ms,
-    ended_ms?, error?, steps: {id: StepState}, sessions, lead?, forked_from?: [run, step],
-    picked: [[step, mode]], discarded, seq}`. `kind` is `recipe`, `fanout` or `lead`; `status`
-    is `running`, `waiting`, `succeeded`, `failed` or `cancelled`;
-  - `StepState` is `{status, attempts: [Attempt], outputs: {…}, gate?: Gate, started_ms?,
-    ended_ms?, reason?, decided_by?}`. Its `status` is `pending`, `running`, `waiting`,
-    `succeeded`, `failed`, `crashed`, `skipped` or `cancelled`;
-  - `Attempt` is `{n, started_ms, ended_ms?, session?, conversation?, worktree?, start_ref?,
-    end_ref?, outcome?, error?, bounces}`;
-  - `Gate` is `{id, ask, options, opened_ms, deadline_ms?, choice?, note?, by?, resolved_ms?,
-    key?}`.
-- `ptyro run events R --json` → NDJSON `{seq, at_ms, event}`; `event.e` is the kind
-  (`created`, `attempt_started`, `bounced`, `gate_opened`, `gate_resolved`, `outputs`,
-  `attempt_ended`, `step_ended`, `intent`, `outcome`, `picked`, `ended`, …).
-- `ptyro compare R --json` → `{run, base?, base_tests?, candidates: [Candidate], top_difference?,
-  warnings}`. `Candidate` is `{step, agent?, worktree?, worktree_name?, session?, status, files,
-  added, removed, hunks, duration_ms, last_message?, tools?, tests?, broke_tests, repro?, cross?: [passed,
-  of], cluster, verified?, judge?, judge_note?, rank, reasons, picked, discarded}`, best first.
-  `tools` (structured steps, M10) is `{calls, by_tool: {name: n}, failed, files, commands,
-  cost_micro_usd?}`.
-- `ptyro gate ls --json` → `[{run, step, gate: Gate}]`, oldest first.
-- `ptyro recipe ls --json` → `[{name, description?, source, path?, vars, steps, untrusted?,
-  error?}]`. `source` is `builtin`, `user` or `repo:<project>`; `untrusted` is the fingerprint
-  to pass as `--trust`.
-- `ptyro msg ls --json` / `msg check --json` → `[{id, run?, at_ms, from, to, kind, body,
-  in_reply_to?, priority, state}]`, where `state` is `queued`, `delivered`, `seen` or `acked`.
-  `msg send --json` → `{ids, to}`.
-- `ptyro lease ls --json` → `[{id, holder, holder_name, pattern, exclusive, reason?,
-  expires_ms}]`.
-- `ptyro radar --json` → `{project, worktrees: [[worktree, [file]]], overlaps: [{a, b, files,
-  conflicts}]}`.
 - `ptyro checkpoint ls --json` → `[{n, session, at_ms, turn, sha, ref, head, files}]`.
 - `ptyro status S --json` sessions gain `verify` (`{check, max_bounces, bounces, state, last?:
   {command, exit_code, tail, tree?, at_ms, duration_ms}}`; `state` is `pending`, `checking`,
-  `passed`, `bounced` or `failed`) and `run` (`r-7f3a2c/impl`), when set.
+  `passed`, `bounced` or `failed`), when set.
 
 ## Remote (M9)
 

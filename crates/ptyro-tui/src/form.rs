@@ -24,8 +24,6 @@ pub enum Make {
     Profile(Option<Box<Form>>),
     /// `chat import`, asked first (SPEC §22.10): what to bring in.
     ChatImport,
-    /// A fan-out: the same task to several agents.
-    Fanout,
     /// A PR for this worktree (by id).
     PrCreate(String),
     /// A project, into the chosen workspace.
@@ -623,43 +621,6 @@ mod tests {
         tick(&mut f, "projects", &[false, true]);
         assert_eq!(f.cli_args(&base)[3..5], ["--projects".to_owned(), "b".to_owned()]);
     }
-
-    #[test]
-    fn a_fanout_cycles_the_ticked_agents_as_the_profile_asked_for() {
-        let mut f = Form::new(
-            "Fan out",
-            vec![
-                Field::required("prompt", "Task", "", ""),
-                Field::multi(
-                    "agents",
-                    "Agents",
-                    opts(["claude", "codex", "gemini"].map(|a| (a.to_owned(), a.to_owned()))),
-                    |a| a != "gemini",
-                    "",
-                ),
-                Field::text("n", "Candidates", "", ""),
-                Field::choice(
-                    "profile",
-                    "As profile",
-                    opts([("".into(), "own".into()), ("work".into(), "work".into())]),
-                    1,
-                    "",
-                ),
-                Field::yes_no("structured", "Structured", true, ""),
-            ],
-            Make::Fanout,
-        );
-        set(&mut f, "prompt", "fix it");
-        set(&mut f, "n", "3");
-        let spec = fanout_spec(&f).unwrap();
-        assert_eq!(spec.agents, ["claude@work", "codex@work", "claude@work"]);
-        assert!(spec.structured);
-        assert_eq!(spec.prompt, "fix it");
-        set(&mut f, "n", "lots");
-        assert_eq!(fanout_spec(&f).unwrap_err().0, "n");
-        tick(&mut f, "agents", &[false, false, false]);
-        assert_eq!(fanout_spec(&f).unwrap_err().0, "agents");
-    }
 }
 
 // ── what the TUI makes with it ──────────────────────────────────────────────────────────────
@@ -838,16 +799,6 @@ impl App {
     pub(crate) fn form_submit(&mut self, mut form: Box<Form>) {
         match form.make.clone() {
             Make::Cli(base) => return self.run_cli(&form.cli_args(&base)),
-            Make::Fanout => match fanout_spec(&form) {
-                Ok(spec) => {
-                    let done = format!(
-                        "fan-out started ({} O)",
-                        ptyro_core::config::key_label(&self.keymap.prefix)
-                    );
-                    return self.request(Pending::Done(done), Request::Fanout { spec });
-                }
-                Err((key, e)) => form.fail(key, e),
-            },
             Make::PrCreate(addr) => {
                 self.toast("pushing and opening a PR…");
                 let req = Request::PrCreate {
@@ -1053,15 +1004,6 @@ impl App {
         v
     }
 
-    fn project_options(&self) -> Vec<(String, String)> {
-        opts(
-            self.projects
-                .iter()
-                .filter(|p| p.machine.is_none())
-                .map(|p| (p.slug.clone(), p.slug.clone())),
-        )
-    }
-
     /// This machine's workspaces, `current` first.
     fn workspace_options(&self) -> Vec<(String, String)> {
         let mut v: Vec<(String, String)> = self
@@ -1085,41 +1027,8 @@ impl App {
             .collect()
     }
 
-    /// The project in context, for preselecting it.
-    fn context_project_slug(&self) -> Option<String> {
-        self.context().0.and_then(|p| self.project(&p).map(|p| p.slug.clone()))
-    }
-
     fn open(&mut self, form: Form) {
         self.overlay = Some(Overlay::Form(Box::new(form)));
-    }
-
-    /// `session.lead`: lead the selected session's fan-out of workers.
-    pub(crate) fn open_lead_form(&mut self, session: String) {
-        let fields = vec![
-            Field::text(
-                "max",
-                "Workers at once",
-                "(the config's)",
-                "How many workers it may run at the same time",
-            )
-            .arg(Arg::Flag("--max-workers")),
-            Field::multi(
-                "agents",
-                "Workers' agents",
-                self.agent_options(None),
-                |_| false,
-                "The agents it may start; none ticked: any",
-            )
-            .arg(Arg::Each("--agent")),
-        ];
-        let mut form = Form::new(
-            format!("Make {session} a lead"),
-            fields,
-            Make::Cli(vec!["run".into(), "lead".into(), session]),
-        );
-        form.verb = "start";
-        self.open(form);
     }
 
     /// `remote.pair`: a phone or browser, its name and what it may do.
@@ -1241,205 +1150,6 @@ impl App {
         ];
         let mut form = Form::new("Import your agents' histories", fields, Make::ChatImport);
         form.verb = "import";
-        self.open(form);
-    }
-
-    /// `recipe.run`, step one: which recipe (the daemon lists them).
-    pub(crate) fn ask_recipes(&mut self) {
-        let project = self.context().0;
-        self.request(Pending::RecipeForm, Request::RecipeList { project });
-    }
-
-    pub(crate) fn recipe_picker(&mut self, recipes: Vec<ptyro_run::wire::RecipeInfo>) {
-        if recipes.is_empty() {
-            return self.toast_err(
-                "no recipes (built-in, ~/.config/ptyro/recipes/ or the repo's .ptyro/recipes/)",
-            );
-        }
-        let items = recipes
-            .iter()
-            .map(|r| crate::palette::Item {
-                label: r.name.clone(),
-                detail: format!(
-                    "{} · {} step(s) · {}",
-                    r.description.clone().unwrap_or_default(),
-                    r.steps,
-                    r.source
-                ),
-                key: None,
-                target: crate::palette::Target::Path(r.name.clone().into()),
-            })
-            .collect();
-        self.overlay = Some(Overlay::Picker {
-            palette: crate::palette::Palette::new("Run which recipe?", items),
-            purpose: crate::app::Purpose::Recipe(recipes),
-        });
-    }
-
-    /// `recipe.run`, step two: its variables, one field each, and where.
-    pub(crate) fn open_recipe_form(&mut self, r: ptyro_run::wire::RecipeInfo) {
-        let mut fields = Vec::new();
-        for v in &r.vars {
-            // `name (required)` / `name = default`.
-            let (name, rest) = match v.split_once(" = ") {
-                Some((n, d)) => (n.trim().to_owned(), format!("default: {d}")),
-                None => (v.trim_end_matches("(required)").trim().to_owned(), String::new()),
-            };
-            let required = v.ends_with("(required)");
-            let mut f = if required {
-                Field::required(&format!("var_{name}"), &name, "", "Needed by the recipe")
-            } else {
-                Field::text(&format!("var_{name}"), &name, &rest, "A variable of the recipe")
-            };
-            f.arg = Arg::Pair("--var", format!("{name}="));
-            fields.push(f);
-        }
-        let here = self.context_project_slug();
-        let mut projects = vec![(String::new(), "(the one it names, or where you are)".to_owned())];
-        projects.extend(self.project_options());
-        let sel = projects.iter().position(|p| Some(&p.0) == here.as_ref()).unwrap_or(0);
-        fields.push(
-            Field::choice("project", "Project", projects, sel, "Where it runs")
-                .arg(Arg::Flag("--project")),
-        );
-        fields.push(
-            Field::text("base", "Base", "(the project's)", "Base for its new worktrees")
-                .arg(Arg::Flag("--base")),
-        );
-        if let Some(fp) = &r.untrusted {
-            fields.push(
-                Field::choice(
-                    "trust",
-                    "Trust it",
-                    vec![
-                        (String::new(), "no: show me first".into()),
-                        (fp.clone(), format!("yes ({fp})")),
-                    ],
-                    0,
-                    "A repository's recipe runs only once you trust it",
-                )
-                .arg(Arg::Flag("--trust")),
-            );
-        }
-        let mut form = Form::new(
-            format!("Run recipe {}", r.name),
-            fields,
-            Make::Cli(vec!["recipe".into(), "run".into(), r.name.clone()]),
-        );
-        form.verb = "run";
-        self.open(form);
-    }
-}
-
-/// The fan-out a form describes: each ticked agent (as the profile, when one is chosen), cycled
-/// to the number of candidates asked for.
-pub fn fanout_spec(form: &Form) -> Result<ptyro_run::wire::FanoutSpec, (&'static str, String)> {
-    let profile = form.opt("profile");
-    let ticked: Vec<String> = form
-        .get("agents")
-        .split(',')
-        .filter(|a| !a.is_empty())
-        .map(|a| match &profile {
-            Some(p) => format!("{a}@{p}"),
-            None => a.to_owned(),
-        })
-        .collect();
-    if ticked.is_empty() {
-        return Err(("agents", "tick at least one agent".into()));
-    }
-    let agents = match form.opt("n") {
-        None => ticked,
-        Some(n) => match n.parse::<usize>() {
-            Ok(n) if n > 0 => ticked.iter().cycle().take(n).cloned().collect(),
-            _ => return Err(("n", format!("{n}: a number of candidates, like 3"))),
-        },
-    };
-    Ok(ptyro_run::wire::FanoutSpec {
-        agents,
-        prompt: form.get("prompt").trim().to_owned(),
-        project: form.opt("project"),
-        base: form.opt("base"),
-        name: form.opt("name"),
-        test: form.opt("test"),
-        verify: form.opt("verify"),
-        judge: form.opt("judge"),
-        timeout: form.opt("timeout"),
-        structured: !form.get("structured").is_empty(),
-    })
-}
-
-impl App {
-    /// `F` in the runs view: a fan-out, every option of `ptyro fanout` on one screen.
-    pub(crate) fn open_fanout_form(&mut self, project: String) {
-        let default = ptyro_agents::default_agent(&self.config);
-        let agents: Vec<(String, String)> =
-            self.agent_options(None).into_iter().map(|(a, _)| (a.clone(), a)).collect();
-        let projects = self.project_options();
-        let sel = projects.iter().position(|p| p.0 == project).unwrap_or(0);
-        let fields = vec![
-            Field::required(
-                "prompt",
-                "Task",
-                "the same task for every candidate",
-                "What each agent should do",
-            ),
-            Field::multi(
-                "agents",
-                "Agents",
-                agents,
-                |a| a == default,
-                "One candidate each, in its own worktree",
-            ),
-            Field::text(
-                "n",
-                "Candidates",
-                "(one per ticked agent)",
-                "More than the agents ticked: they take turns",
-            ),
-            Field::choice(
-                "profile",
-                "As profile",
-                self.profile_options("each one's own (worktree, pin, workspace)"),
-                0,
-                "The account they all run as",
-            ),
-            Field::choice("project", "Project", projects, sel, "The repository they work in"),
-            Field::text("base", "Base", "(the project's)", "What their worktrees branch from"),
-            Field::name(
-                "name",
-                "Name prefix",
-                "(from the task)",
-                "Their worktrees' names start with it",
-            ),
-            Field::text(
-                "test",
-                "Rank by",
-                "(the project's test script)",
-                "The check run when each is done, to rank them",
-            ),
-            Field::text(
-                "verify",
-                "Verify",
-                "(none)",
-                "Verified-done: bounce a candidate until this passes",
-            ),
-            Field::choice(
-                "judge",
-                "Judge",
-                self.agent_options(Some("none")),
-                0,
-                "An agent that scores their diffs (0–10) in a clean context",
-            ),
-            Field::text("timeout", "Timeout", "(none)", "Per candidate: 45m"),
-            Field::yes_no(
-                "structured",
-                "Structured",
-                false,
-                "Their tool calls show in the comparison",
-            ),
-        ];
-        let mut form = Form::new("Fan out", fields, Make::Fanout);
-        form.verb = "start";
         self.open(form);
     }
 }

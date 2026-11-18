@@ -284,31 +284,6 @@ fn here_only(req: &Request) -> bool {
             | Doctor
             | SelfTest { .. }
             | ReviewQueue
-            | RunList { .. }
-            | RunGet { .. }
-            | RunEvents { .. }
-            | RunCancel { .. }
-            | RunRetry { .. }
-            | RunFork { .. }
-            | RecipeList { .. }
-            | RecipeShow { .. }
-            | RecipeRun { .. }
-            | Fanout { .. }
-            | GateList { .. }
-            | GateResolve { .. }
-            | Compare { .. }
-            | Pick { .. }
-            | Discard { .. }
-            | Iterate { .. }
-            | MsgPost { .. }
-            | MsgCheck { .. }
-            | MsgAck { .. }
-            | MsgList { .. }
-            | LeaseClaim { .. }
-            | LeaseRelease { .. }
-            | LeaseList
-            | Radar { .. }
-            | Lead { .. }
             | MachineList
             | MachineAdd { .. }
             | MachineRemove { .. }

@@ -26,7 +26,6 @@ pub mod paint;
 pub mod palette;
 mod quick;
 mod restart;
-mod runs;
 mod screens;
 pub mod settings;
 mod setup_list;

@@ -72,7 +72,7 @@ const tip = actions(ACTIONS);
 const LEVEL: Record<string, [string, string]> = { ok: ["✓", "ok"], note: ["·", ""], warn: ["!", "warn"], problem: ["✗", "bad"] };
 const SCOPES: [string, string, string][] = [
   ["read", "Read", "Watch sessions, screens and the inbox"],
-  ["approve", "Approve", "Also answer prompts and gates"],
+  ["approve", "Approve", "Also answer permission prompts"],
   ["control", "Control", "Also type into sessions and start configured agents"],
   ["full", "Full", "Everything: any command, the config, this page"],
 ];

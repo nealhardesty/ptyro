@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::daemon::Daemon;
-use crate::mail::Caller;
+use crate::guard::Caller;
 
 const KV_KEY: &str = "devices";
 
@@ -164,13 +164,6 @@ pub fn needed(req: &Request) -> Scope {
         | WorktreeGet { .. }
         | WorktreeDiff { .. }
         | WorktreeLog { .. }
-        | RunList { .. }
-        | RunGet { .. }
-        | RunEvents { .. }
-        | GateList { .. }
-        | MsgList { .. }
-        | LeaseList
-        | Radar { .. }
         | CheckpointList { .. }
         | CheckpointDiff { .. }
         | WorktreeArchives { .. }
@@ -186,8 +179,6 @@ pub fn needed(req: &Request) -> Scope {
         | ReviewList { .. }
         | ReviewQueue
         | PrGet { .. }
-        | RecipeList { .. }
-        | RecipeShow { .. }
         | LoadView { .. }
         | PushKey
         | PushSubscribe { .. }
@@ -208,7 +199,6 @@ pub fn needed(req: &Request) -> Scope {
         Updates { note: true } => Scope::Full,
         Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }
-        | GateResolve { .. }
         | ClearAttention { .. }
         | InboxMark { .. }
         | Mute { .. } => Scope::Approve,
@@ -220,15 +210,8 @@ pub fn needed(req: &Request) -> Scope {
         | Remove { .. }
         | Restart { .. }
         | Rename { .. }
-        | MsgPost { .. }
         | ReviewAdd { .. }
         | ReviewSend { .. }
-        | Iterate { .. }
-        | RunCancel { .. }
-        | RunRetry { .. }
-        // Gathering the evidence runs the recipe's checks in the candidates' worktrees and may
-        // start a judge agent: not a read.
-        | Compare { .. }
         | Convert { .. }
         | Retitle { .. }
         | Summarize { .. }
@@ -242,13 +225,12 @@ pub fn needed(req: &Request) -> Scope {
         QuickShell { create: false, .. } => Scope::Read,
         // A configured agent (its command comes from the user's config) is control; any other
         // command line is full.
-        // A verify check or a lead (`ptyro mcp`) is a command line of its own: full.
+        // A verify check is a command line of its own: full.
         Spawn { spec }
             if spec.agent.is_some()
                 && spec.argv.is_empty()
                 && spec.command.is_none()
-                && spec.verify.is_none()
-                && spec.lead.is_none() =>
+                && spec.verify.is_none() =>
         {
             Scope::Control
         }
@@ -267,7 +249,7 @@ pub fn needed(req: &Request) -> Scope {
         ChatImport { .. } => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
-        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | RunFork { .. } | RecipeRun { .. } | Fanout { .. } | Pick { .. } | Discard { .. } | MsgCheck { .. } | MsgAck { .. } | LeaseClaim { .. } | LeaseRelease { .. } | CheckpointRestore { .. } | SetVerify { .. } | LeadStart { .. } | Lead { .. } => Scope::Full,
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | ProjectLineEndings { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeLock { .. } | WorktreeRename { .. } | WorktreeRenameBranch { .. } | Gc | ProjectSuggest { .. } | WorktreeArchive { .. } | WorktreeRestore { .. } | WorktreeArchiveDelete { .. } | WorktreeFinish { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | Report { .. } | NotifyTest | Doctor | SelfTest { .. } | WorktreeCommit { .. } | WorktreeIntegrate { .. } | WorktreePair { .. } | PrCreate { .. } | PrFix { .. } | PrAutomerge { .. } | PrWatch { .. } | PrReply { .. } | ReviewRemove { .. } | ReviewDone { .. } | CheckpointRestore { .. } | SetVerify { .. } => Scope::Full,
     }
 }
 
@@ -807,8 +789,6 @@ mod tests {
         ] {
             assert!(url_ok(bad, &[]).is_err(), "{bad}");
         }
-        // Gathering a compare's evidence runs the project's checks: control's, not a read.
-        assert_eq!(needed(&Request::Compare { run: "r".into(), refresh: false }), Scope::Control);
         // "Always" is a standing permission; one allow or deny is approve's.
         let ans = |d: &str| Request::Answer { addr: "a".into(), decision: d.into(), expect: None };
         assert_eq!(needed(&ans("allow")), Scope::Approve);

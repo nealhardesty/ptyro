@@ -15,8 +15,6 @@ use tokio::sync::oneshot;
 
 pub mod chat;
 mod migrate;
-mod runs;
-pub use runs::{LeaseRow, MessageRow, RunRow};
 
 /// Schema history. Never edit a released migration; append a new one.
 const MIGRATIONS: &[M] = &[
@@ -194,6 +192,18 @@ const MIGRATIONS: &[M] = &[
     DELETE FROM run_message WHERE run_id IN (SELECT id FROM run WHERE kind = 'changeset');
     DELETE FROM run WHERE kind = 'changeset';
     DELETE FROM trust WHERE scope LIKE 'changeset:%';",
+    ),
+    // Orchestration was removed (2026-11-17): runs and their events, the mail between agents,
+    // file leases, repository recipes' trust, and the inbox entries gates and runs left. Step
+    // sessions stay as the sessions they are; worktrees, refs (`refs/ptyro/runs/*`) and run
+    // folders aren't ptyro's database: they stay.
+    M::up(
+        "DROP TABLE run_event;
+    DROP TABLE run_message;
+    DROP TABLE lease;
+    DROP TABLE run;
+    DELETE FROM trust WHERE scope LIKE 'recipe:%';
+    DELETE FROM inbox WHERE kind IN ('gate', 'run');",
     ),
 ];
 
@@ -1034,7 +1044,8 @@ mod tests {
             )
             .unwrap();
         }
-        if version >= 4 {
+        // v4 made the run tables and v7 dropped them (orchestration removed, 2026-11-17).
+        if (4..7).contains(&version) {
             c.execute_batch(
                 "INSERT INTO run (id, kind, name, status, state, created_at)
                  VALUES ('r1', 'recipe', 'ship', 'running', '{}', 1);
@@ -1092,12 +1103,8 @@ mod tests {
             if version >= 3 {
                 assert_eq!(count(&s, "inbox").await, 1, "from v{version}");
             }
-            if version >= 4 {
-                assert_eq!(
-                    (count(&s, "run").await, count(&s, "lease").await),
-                    (1, 1),
-                    "from v{version}"
-                );
+            for gone in ["run", "run_event", "run_message", "lease"] {
+                assert!(!has_table(&s, gone).await, "{gone} is dropped (from v{version})");
             }
             // And it works afterwards: a write after migrating reads back.
             s.save_session(record("new-1", "run-1"));
@@ -1106,13 +1113,53 @@ mod tests {
         }
     }
 
+    async fn has_table(s: &Store, table: &'static str) -> bool {
+        s.call(move |c| {
+            Ok(c.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |r| r.get::<_, i64>(0),
+            )? == 1)
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Removing orchestration drops its tables (runs, events, mail, leases), repository
+    /// recipes' trust and the inbox's gate and run entries, and nothing else.
+    #[tokio::test]
+    async fn orchestration_tables_recipe_trust_and_run_entries_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ptyro.db");
+        database_at(&path, MIGRATIONS.len() - 1);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "INSERT INTO run_event (run_id, seq, at, kind, payload) VALUES ('r1', 1, 1, 'note', '{}');
+                 INSERT INTO run_message (id, run_id, at, sender, recipient, address, kind, body) VALUES ('m-1', NULL, 1, '@user', 's', 'x', 'note', 'b');
+                 INSERT INTO trust (project_id, scope, fingerprint, approved_at) VALUES ('p1', 'recipe:ship', 'f', 1);
+                 INSERT INTO inbox (session_id, session_name, at, kind, title, body) VALUES ('s', 's', 2, 'gate', 'g', 'b');
+                 INSERT INTO inbox (session_id, session_name, at, kind, title, body) VALUES ('s', 's', 3, 'run', 'r', 'b');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        for gone in ["run", "run_event", "run_message", "lease"] {
+            assert!(!has_table(&s, gone).await, "{gone}");
+        }
+        let trust = s.load_registry().await.unwrap().trust;
+        assert_eq!(trust.iter().map(|t| t.scope.as_str()).collect::<Vec<_>>(), ["scripts"]);
+        assert_eq!(count(&s, "inbox").await, 1, "the done entry stays");
+        assert_eq!(s.history(10).await.unwrap().len(), 1, "sessions stay");
+    }
+
     /// Removing change sets takes their runs (with their events and mail) and their templates'
     /// trust out of the database, and nothing else.
     #[tokio::test]
     async fn change_set_runs_and_template_trust_are_dropped() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ptyro.db");
-        let before = MIGRATIONS.len() - 1;
+        let before = MIGRATIONS.len() - 2;
         database_at(&path, before);
         {
             let c = Connection::open(&path).unwrap();
@@ -1126,9 +1173,6 @@ mod tests {
             .unwrap();
         }
         let s = Store::open(&path).unwrap();
-        assert_eq!(count(&s, "run").await, 1, "the recipe run stays");
-        assert_eq!(count(&s, "run_event").await, 0);
-        assert_eq!(count(&s, "run_message").await, 1, "mail outside a change set stays");
         let trust = s.load_registry().await.unwrap().trust;
         assert_eq!(trust.iter().map(|t| t.scope.as_str()).collect::<Vec<_>>(), ["scripts"]);
     }
@@ -1278,35 +1322,6 @@ mod tests {
         let d = s.dormant().await.unwrap();
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].id, "sleeper");
-    }
-
-    /// A run event with a sequence number already stored is skipped, not a reason to lose the
-    /// projection that came with it.
-    #[tokio::test]
-    async fn a_repeated_run_event_does_not_abort_the_transaction() {
-        let s = Store::open_in_memory().unwrap();
-        let row = RunRow {
-            id: "r-dup".into(),
-            kind: "recipe".into(),
-            name: "n".into(),
-            recipe_src: None,
-            recipe_sha: None,
-            status: "running".into(),
-            state: serde_json::json!({}),
-            project: None,
-            lead: None,
-            forked_from: None,
-            fork_step: None,
-            created_ms: 1,
-            ended_ms: None,
-        };
-        let ev = |seq: u64| (seq, 1, "note".to_owned(), None, serde_json::json!({"e": "note"}));
-        s.run_append(row.clone(), vec![ev(1), ev(2)]);
-        let mut done = row;
-        done.status = "succeeded".into();
-        s.run_append(done, vec![ev(2), ev(3)]);
-        assert_eq!(s.run("r-dup".into()).await.unwrap().unwrap().status, "succeeded");
-        assert_eq!(s.run_events("r-dup".into()).await.unwrap().len(), 3);
     }
 
     #[tokio::test]

@@ -18,7 +18,6 @@ ptyro-core.workspace = true
 ptyro-daemon.workspace = true
 ptyro-protocol.workspace = true
 ptyro-pty.workspace = true
-ptyro-run.workspace = true
 ptyro-term.workspace = true
 rmp-serde.workspace = true
 rustix.workspace = true

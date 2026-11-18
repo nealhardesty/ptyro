@@ -13,12 +13,12 @@ Conventions:
   machine's daemon over ssh, or `--remote wsl://[distro]` for the daemon in a WSL distro (from
   Windows, or from another distro). Without either, `client.default_remote` is used if set.
 - Listing and query commands take `--json`; the shapes are in [`cli-json.md`](cli-json.md).
-- Aliases: `a` (attach), `ls` (list), `runs`, `recipes`, `gates`, `leases`,
+- Aliases: `a` (attach), `ls` (list),
   `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
 - Durations look like `30s`, `10m`, `2h`.
 - Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
   words): `chat rm`, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `discard`, `config rm`, `review rm --all`. `-y`/`--yes` doesn't ask; with no
+  `machine rm`, `config rm`, `review rm --all`. `-y`/`--yes` doesn't ask; with no
   terminal to ask and no `--yes`, the command refuses (exit 5) and changes nothing. They act on an
   exact address only: a chat's handle, id or `@last`, never words from its title.
 - A flag's value goes after a space or an `=`: `--project app` and `--project=app` are the same,
@@ -55,9 +55,8 @@ Everything else is long only: `--prompt`, `--all`, `--force`, `--session`, `--wt
 
 A long flag is a switch in every command or takes a value in every command, never one here and
 the other there (owner, 2026-11-10; `a_flag_is_a_switch_everywhere_or_takes_a_value_everywhere`).
-So `--pr N` is a PR number (`new`, `wt new`) and `pick --open-pr` opens one; `--lead` makes a
-lead (`new`); `--keep` keeps a chat; `--chat` reads a transcript and `chat search --in CHAT` narrows
-a search; `--timeout D` is how long to wait (`msg check` too). An optional value reads the same
+So `--pr N` is a PR number (`new`, `wt new`); `--keep` keeps a chat; `--chat` reads a transcript
+and `chat search --in CHAT` narrows a search; `--timeout D` is how long to wait. An optional value reads the same
 everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read` and `wait`
 (bare: the scrollback kept in memory; N can reach back into the recording).
 
@@ -81,11 +80,11 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
   `ptyro wait --for` the status ones (`working` to `error`).
 - **`W`** (a worktree) is `project/name` (`myrepo/@root` is the main checkout), a unique name, or
   a path. It defaults to the worktree you're in.
-- **A name you give** (a session, worktree, workspace, profile, `fanout --prefix`,
+- **A name you give** (a session, worktree, workspace, profile,
   machine or device) is `a-z 0-9 . _ -`, 1–64 characters. It is kept exactly as you wrote it
   (`ws new my_fix` makes `my_fix`). A bad one is refused, and the error offers the fix:
   `invalid name "My Feature": … try "my-feature"`.
-- **Everything else you name** (projects, workspaces, profiles, chats, runs, devices,
+- **Everything else you name** (projects, workspaces, profiles, chats, devices,
   archives, machines) resolves the same way: the exact name (a project's slug), then
   `project/name` where there is one, then the full id, then the end of the id, **at least 4
   characters** (`7f3k`, `c:7f3k`, `r-k3x9`). Case doesn't matter. When several match, ptyro lists
@@ -103,7 +102,6 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL \| --take-changes` | where: an existing worktree, a new one, one on a PR's branch, one for an issue, or one that takes the main checkout's uncommitted changes. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro new … --verify CHECK` · `--structured` · `--unqueued` | verified-done · drive it over its protocol (chat view) · skip the review queue's hold |
-| `ptyro new … --lead [--max-workers N] [--lead-agent A]` | a lead agent with `ptyro mcp` (default 4 workers) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
 | `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile, ports; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop, keeping them listed: an agent's turn is interrupted and it gets a moment to exit, then the process gets HUP, TERM and KILL |
@@ -223,25 +221,13 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro pr watch [W] [--off]` (also `ptyro watch-pr`) | new CI failures and review comments go to the agent |
 | `ptyro pr reply TEXT [--wt W] [--comment ID]` / `open PR` | reply on the PR or a review thread, marked "via ptyro" / back to a PR's session |
 
-## Orchestration
+## Checkpoints and verified-done
 
 | Command | Does |
 |---|---|
-| `ptyro fanout (-a A,B,C \| --count N) (--prompt P \| --prompt-file F) [--test [CHECK]] [--verify CHECK] [--judge A] [--timeout D] [--prefix PREFIX] [--base REF] [-p P] [--structured] [--wait] [--json]` | one task, several agents, one worktree each |
-| `ptyro compare R [--refresh] [--json]` | rank candidates by evidence: tests, diff, time |
-| `ptyro pick R C [--cherry-pick \| --open-pr \| --apply [--path F]… [--hunk F:N]…] [--into T]` | take a candidate (default: merge) |
-| `ptyro discard R [C] [--force] [-y]` / `iterate R [C] TEXT` | remove the others (asks unless `-y`) / a follow-up prompt |
-| `ptyro recipe ls\|show NAME\|validate FILE\|graph R [--format mermaid\|dot]` (each with `[-p P]`) | recipes: list, read, check, draw |
-| `ptyro recipe run R [--var k=v]… [-p P] [--base REF] [--trust FP] [--wait] [--json]` | start a recipe |
-| `ptyro run ls [--active] [--tree]` / `show R` / `events R` / `wait R [--gate] [--timeout D]` | runs and their steps (`wait`: exit 0 succeeded, 1 failed, 5 cancelled, 7 timeout) |
-| `ptyro run cancel R` / `retry R STEP` / `fork R --from STEP [--set k=v]` / `lead SESSION [--max-workers N] [--agent A]…` | control runs; make an existing agent a lead |
-| `ptyro gate ls [--all]` / `resolve ID CHOICE [--note N] [--key K]` | what runs wait on you for / answer |
-| `ptyro msg send TO TEXT [--kind K] [--interrupt] [--run R] [--reply-to ID] [--key K]` / `check [--me S] [--since ID] [--timeout D]` / `ls [--run R] [-l N]` / `ack [IDS] [--me S]` | the mailbox between agents and you (`TO`: `@lead`, `@user`, `@all`, `@idle`, `@<agent>`, a name) |
-| `ptyro lease claim PATTERN… [--exclusive] [--ttl D] [--reason TEXT] [--as S]` / `release [PATTERN…] [--as S]` / `ls` | file leases (`claim` exits 5 when refused) |
-| `ptyro radar [-p P]` | overlapping worktrees and predicted conflicts (exit 1 when it predicts one) |
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |
 | `ptyro verify SESSION [CHECK] [--max-bounces N]` / `--off` | verified-done for a session |
-| `ptyro mcp` | the MCP server a lead agent gets (started for it) |
+| `ptyro mcp` | the MCP server with the chat history tools a chat's agent gets (started for it) |
 
 ## Remote and phone
 
@@ -294,11 +280,11 @@ See [`remote.md`](remote.md).
 | Code | Meaning |
 |---|---|
 | `0` | ok (`wait`: got there) |
-| `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `run wait`: the run failed; `radar`: a predicted conflict; `daemon upgrade`: rolled back) |
+| `1` | error (`doctor`: found a problem; `pr checks`: a check fails; `daemon upgrade`: rolled back) |
 | `2` | invalid arguments |
 | `3` | not found |
 | `4` | ambiguous: a name, handle or selector matched several, or a removal was given words from a title instead of an address (the message lists the candidates) |
-| `5` | conflict: unsaved work, a question needing `--yes` (a removal, a profile) / `--override-pin`, (`wait`) the session exited first, (`run wait`) the run was cancelled, or (`lease claim`) refused |
+| `5` | conflict: unsaved work, a question needing `--yes` (a removal, a profile) / `--override-pin`, or (`wait`) the session exited first |
 | `6` | untrusted scripts |
 | `7` | timeout (`wait`, `send --wait-ready`), `--stall` saw no output, or (`pr checks`) checks still running |
 | `8` | no daemon |

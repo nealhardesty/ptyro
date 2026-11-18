@@ -73,7 +73,7 @@ pub trait Driver: Send {
     fn http_reply(&mut self, _tag: u32, _status: u16, _body: &str) -> Vec<Effect> {
         Vec::new()
     }
-    /// A prompt from a person (or a script, a recipe, the mailbox).
+    /// A prompt from a person (or a script).
     fn prompt(&mut self, text: &str) -> Vec<Effect>;
     /// Answer the open permission request; empty when there is none.
     fn answer(&mut self, d: Decision) -> Vec<Effect>;

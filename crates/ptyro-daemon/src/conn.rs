@@ -46,7 +46,7 @@ struct Conn {
     interest: Arc<Mutex<Interest>>,
     outer: Option<OuterTerm>,
     /// Who connected (the kernel says), for policy (M7.6).
-    caller: crate::mail::Caller,
+    caller: crate::guard::Caller,
     /// The session the caller runs in, worked out at its first keystroke (a process can't
     /// gain an ancestor later).
     placed: Option<Option<SessionId>>,
@@ -223,7 +223,7 @@ pub async fn serve(daemon: Arc<Daemon>, stream: crate::listen::Stream, pid: Opti
         sizes: HashMap::new(),
         interest,
         outer: client.outer,
-        caller: crate::mail::Caller { pid, kind: Some(client.kind), grant },
+        caller: crate::guard::Caller { pid, kind: Some(client.kind), grant },
         placed: None,
         link,
         upstreams: HashMap::new(),
@@ -289,7 +289,7 @@ pub async fn serve(daemon: Arc<Daemon>, stream: crate::listen::Stream, pid: Opti
     events.abort();
     drop(conn);
     drop(out);
-    // The writer ends once every sender is gone; a long request (a gate, a wait) still holds
+    // The writer ends once every sender is gone; a long request (a wait) still holds
     // one, so don't wait for it for ever: the client is gone.
     if tokio::time::timeout(std::time::Duration::from_secs(2), &mut writer).await.is_err() {
         writer.abort();
@@ -975,8 +975,7 @@ async fn forward_events(
             | DomainEvent::MachineRemoved { .. }
             | DomainEvent::ChatUpdated { .. }
             | DomainEvent::ChatRemoved { .. }
-            | DomainEvent::SetupProgress { .. }
-            | DomainEvent::RunUpdated { .. } => {
+            | DomainEvent::SetupProgress { .. } => {
                 let watching = interest.locked().watch_all;
                 if watching && out.send(ServerMsg::Event { event }).await.is_err() {
                     return;

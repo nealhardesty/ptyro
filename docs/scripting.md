@@ -173,36 +173,12 @@ Use these commands; they print JSON with `--json`:
 - `ptyro read NAME --scrollback 200`: read what it printed.
 - `ptyro send NAME "TEXT" --wait-ready --wait`: give it the next instruction and wait for the turn.
 - `ptyro report --state working --msg "what you're doing"`: tell the human what you're doing.
-- `ptyro msg send @lead "…"` / `ptyro msg send NAME "…"` / `ptyro msg check --timeout 5m`: talk to
-  the other agents (messages reach them when they're idle; `@user` reaches the human).
-- `ptyro lease claim 'src/api/**' --exclusive --reason "…"`: keep others out of files you're
-  changing; `ptyro lease release` when done. `ptyro radar` shows who else is changing what.
 - `ptyro checkpoint ls`: your worktree after each of your turns (the human can restore one).
 - `ptyro scratchpad add "…"`: note something for the human (a bug you found but didn't fix, a
   follow-up) in their scratchpad, `$PTYRO_SCRATCHPAD`, stamped with your name; `ptyro scratchpad
   todo` lists what they've noted. Add with the command; don't edit the file.
 
 Rules: never `ptyro stop`, `kill` or `rm` sessions, or `ptyro wt rm` worktrees, you didn't create; never answer
-another session's permission prompt (`ptyro answer`) or a gate; the human does that (ptyro
-refuses agents both). If you're a lead (started with `--lead`), use the `ptyro` MCP tools for
-workers; your policy limits how many and where.
-```
-
-## Runs from scripts (M7)
-
-Recipes and fan-outs are runs, which a script can start, wait for and read:
-
-```sh
-#!/bin/sh
-run=$(ptyro fanout -a claude,codex --prompt "Fix the flaky test in src/net" --test)
-ptyro run wait "$run" --timeout 1h || exit 1          # 0 succeeded, 1 failed, 5 cancelled, 7 timeout
-best=$(ptyro compare "$run" --json | jq -r '.candidates[0].step')
-ptyro pick "$run" "$best" --open-pr                   # push + PR from the winner
-ptyro discard "$run" --force -y
-```
-
-```sh
-run=$(ptyro recipe run test-fixer --var test=scripts.run.test)
-ptyro run wait "$run" --gate                          # returns when a gate needs you
-ptyro gate ls --json | jq -r '.[0].gate.id' | xargs -I{} ptyro gate resolve {} pr
+another session's permission prompt (`ptyro answer`); the human does that (ptyro refuses
+agents that).
 ```

@@ -216,43 +216,15 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `pr reply` | `pr.reply` | `pr.reply`: the Checks tab: Reply… |
 | `pr open` | `pr.open`: its worktree and session, or a new worktree on it | `pr.open`: ⎘ on the Review queue: its worktree and session, or a new worktree on it |
 
-## Orchestration
+## Checkpoints and verified-done
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `fanout` | `runs` (`O`): `F`: a form with the task, the agents (ticks), candidates, profile, project, base, name prefix, rank-by test, verify, judge, timeout and structured | `fanout`: ＋ on the Runs tab → A fan-out: the prompt, the agents (ticks), candidates, project, a test; More options: verify, judge (a pick), base, name prefix, time limit, chat mode |
-| `compare` | `runs` (`O`): `c` on a fan-out | `compare`: a run's Compare button |
-| `pick` | `runs` (`O`), compare: `m` merge, `C` cherry-pick, `p` PR | `pick`: Take on a candidate: merge, cherry-pick, a PR, or some of its files |
-| `discard` | `runs` (`O`), compare: `d` one, `X` the rest (asks first) | `discard`: a candidate's Discard, or Discard the rest |
-| `iterate` | `runs` (`O`), compare: `i` one, `I` all | `iterate`: Follow up on a candidate, or on all of them |
-| `run ls` | `runs` (`O`) | `runs`: the Runs tab, with the open gates on top |
-| `run show` | `runs` (`O`): `⏎` on a run | `run.show`: tap a run: its steps, why they ended, its forks |
-| `run events` | `runs` (`O`): `⏎` on a run shows its steps and why they ended | `run.events`: a run's Events |
-| `run wait` | waived: for scripts; gates and finished runs reach the inbox and notifications | waived: for scripts; gates and finished runs reach the inbox and notifications |
-| `run cancel` | `runs` (`O`): `x` | `run.cancel`: a run's Cancel |
-| `run retry` | `runs` (`O`): `r` on a step | `run.retry`: a step's menu → Run it again |
-| `run fork` | `run.fork` | `run.fork`: a step's menu → Fork the run from here |
-| `run lead` | `session.lead`: a form with workers at once and the agents it may start | `run.lead`: ＋ on the Runs tab → A lead |
-| `recipe ls` | `recipe.list` (full sized) | `recipe.list`: 📜 on the Runs tab |
-| `recipe show` | `recipe.show` | `recipe.show`: a recipe's menu |
-| `recipe run` | `recipe.run`: pick the recipe, then a form with a field per variable, the project, the base (and trust, for a repo's); then the runs view (`O`) | `recipe.run`: a recipe's menu: its variables, the project; More options: base; then the run |
-| `recipe validate` | waived: for recipe authors, in their editor or CI | waived: for recipe authors, in their editor or CI |
-| `recipe graph` | waived: draws a recipe as Mermaid text for documents | waived: draws a recipe as Mermaid text for documents |
-| `gate ls` | `runs` (`O`): open gates show on their run; the status bar counts them | `gate.list`: open gates sit on top of the Runs tab, and on their run |
-| `gate resolve` | `runs` (`O`): `1`–`9` answer, `n` with a note | `gate.resolve`: answer on the gate's card, with a note if you like |
-| `msg send` | `session.message` | `session.message`: ⋯ → Message |
-| `msg check` | waived: an agent's own mailbox; your messages reach the inbox | waived: an agent's own mailbox; your messages reach the inbox |
-| `msg ls` | `inbox` (`i`): messages to you | `inbox`: messages to you |
-| `msg ack` | waived: an agent acknowledging its own mail | waived: an agent acknowledging its own mail |
-| `lease claim` | waived: agents claim the files they edit | waived: agents claim the files they edit |
-| `lease release` | waived: agents release their own claims | waived: agents release their own claims |
-| `lease ls` | `leases` (full sized) | `leases`: Leases on the Projects tab |
-| `radar` | `radar` | `radar`: Radar on the Projects tab, or a project's ⋯ menu |
 | `checkpoint ls` | `checkpoint.list` | `checkpoint.list`: a worktree's Checkpoints tab |
 | `checkpoint diff` | `checkpoint.diff` | `checkpoint.diff`: a checkpoint's menu |
 | `checkpoint restore` | `checkpoint.restore` (it asks first, full sized) | `checkpoint.restore`: a checkpoint's menu (asks first; the state now is checkpointed) |
 | `verify` | `session.verify` | `session.verify`: ⋯ → Verify when done |
-| `mcp` | waived: the MCP server a lead agent talks to; ptyro starts it for the agent | waived: the MCP server a lead agent talks to; ptyro starts it for the agent |
+| `mcp` | waived: the chat history tools' MCP server; a chat's agent starts it for itself | waived: the chat history tools' MCP server; a chat's agent starts it for itself |
 
 ## Remote, phone and recordings
 

@@ -9,7 +9,6 @@
 //! - `{profile}`, `{agent}`: picked from a list;
 //! - `{choose:Label:a|b|c}`: picked from those;
 //! - `{ask:Label}`: typed; nothing typed leaves the word out (an optional argument);
-//! - `{vars}`: `k=v, k2=v2` typed, as `--var k=v --var k2=v2`;
 //! - `{where}`: on Windows, WSL, Windows or both (setup's sides, BOOT8): see [`where_runs`];
 //!   elsewhere nothing.
 
@@ -39,7 +38,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
             "{ask:The check its turns must pass (a run script or a command; empty: the project's)}",
         ],
     ),
-    ("session.message", &["msg", "send", "{session}", "{ask:Message}"]),
     ("checkpoint.list", &["checkpoint", "ls", "{session}"]),
     (
         "checkpoint.diff",
@@ -58,11 +56,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("profile.rename", &["profile", "rename", "{profile}", "{ask:New name}"]),
     ("profile.login", &["profile", "login", "{profile}", "{agent}"]),
     ("profile.sync", &["profile", "sync", "{profile}"]),
-    ("recipe.list", &["recipe", "ls"]),
-    ("recipe.show", &["recipe", "show", "{ask:Recipe's name (recipe.list lists them)}"]),
-    ("run.fork", &["run", "fork", "{ask:Run id (r-…)}", "--from", "{ask:From which step}"]),
-    ("leases", &["lease", "ls"]),
-    ("radar", &["radar", "--project", "{project}"]),
     ("remote.serve", &["serve"]),
     ("remote.web", &["web", "status"]),
     ("remote.web_on", &["web", "on"]),
@@ -149,17 +142,12 @@ impl App {
                     let items = opts.split('|').map(|o| (o.to_owned(), String::new())).collect();
                     return self.cli_pick(label, items, job);
                 }
-                t if t.starts_with("{ask:") || t == "{vars}" => {
-                    let label = if t == "{vars}" {
-                        "Variables, `k=v, k2=v2` (empty: none)".to_owned()
-                    } else {
-                        t.trim_start_matches("{ask:").trim_end_matches('}').to_owned()
-                    };
-                    let vars = t == "{vars}";
+                t if t.starts_with("{ask:") => {
+                    let label = t.trim_start_matches("{ask:").trim_end_matches('}');
                     self.overlay = Some(Overlay::Prompt {
                         title: format!("ptyro {} — {label}", job.done.join(" ")),
                         text: String::new(),
-                        kind: PromptKind::CliAsk(Box::new(job), vars),
+                        kind: PromptKind::CliAsk(Box::new(job)),
                     });
                     return;
                 }
@@ -237,9 +225,9 @@ impl App {
         });
     }
 
-    /// A typed answer: the word (none when empty), or `--var` pairs.
-    pub(crate) fn cli_answer(&mut self, mut job: CliJob, text: &str, vars: bool) {
-        add_answer(&mut job.done, text, vars);
+    /// A typed answer: the word (none when empty).
+    pub(crate) fn cli_answer(&mut self, mut job: CliJob, text: &str) {
+        add_answer(&mut job.done, text);
         self.cli_step(job);
     }
 }
@@ -294,17 +282,12 @@ pub fn where_runs(
     }
 }
 
-/// Put a typed answer on the command: the word, or `--var` pairs. An empty answer leaves the
-/// word out, and the flag that was to carry it (`-o`, `--from`) with it, so an optional
-/// argument skipped never leaves `-o` dangling.
-fn add_answer(done: &mut Vec<String>, text: &str, vars: bool) {
+/// Put a typed answer on the command: the word. An empty answer leaves the word out, and the
+/// flag that was to carry it (`-o`) with it, so an optional argument skipped never leaves `-o`
+/// dangling.
+fn add_answer(done: &mut Vec<String>, text: &str) {
     let t = text.trim();
-    if vars {
-        for kv in t.split(',').map(str::trim).filter(|kv| kv.contains('=')) {
-            done.push("--var".into());
-            done.push(kv.to_owned());
-        }
-    } else if !t.is_empty() {
+    if !t.is_empty() {
         done.push(t.to_owned());
     } else if done.last().is_some_and(|w| w.len() > 1 && w.starts_with('-')) {
         done.pop();
@@ -317,17 +300,14 @@ mod tests {
     fn a_skipped_answer_takes_its_flag_with_it() {
         let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         let mut done = words(&["export", "s", "--format", "text", "-o"]);
-        super::add_answer(&mut done, "  ", false);
+        super::add_answer(&mut done, "  ");
         assert_eq!(done, words(&["export", "s", "--format", "text"]));
-        super::add_answer(&mut done, "out.txt", false);
+        super::add_answer(&mut done, "out.txt");
         assert_eq!(done.last().map(String::as_str), Some("out.txt"));
         // A positional that is empty leaves nothing behind either.
         let mut done = words(&["ws", "new", "x"]);
-        super::add_answer(&mut done, "", false);
+        super::add_answer(&mut done, "");
         assert_eq!(done, words(&["ws", "new", "x"]));
-        let mut done = words(&["recipe", "run", "r"]);
-        super::add_answer(&mut done, "a=1, b=2", true);
-        assert_eq!(done, words(&["recipe", "run", "r", "--var", "a=1", "--var", "b=2"]));
     }
 
     #[test]
@@ -363,7 +343,6 @@ mod tests {
                                 | "{project}"
                                 | "{profile}"
                                 | "{agent}"
-                                | "{vars}"
                                 | "{where}"
                         ) || w.starts_with("{ask:")
                             || (w.starts_with("{choose:") && w.contains('|')),

@@ -518,7 +518,7 @@ impl Daemon {
     /// tool call) is that session's workspace's shell N: rewritten to `s:<id>%N`, which
     /// `resolve_slot` reads (SPEC §23.5). Others, and clients outside any session, are left as
     /// they are: there `%N` is the workspace the TUI shows.
-    pub(crate) fn scope_slots(&self, req: Request, caller: &crate::mail::Caller) -> Request {
+    pub(crate) fn scope_slots(&self, req: Request, caller: &crate::guard::Caller) -> Request {
         use ptyro_protocol::ClientKind as K;
         let Some(pid) =
             caller.pid.filter(|_| matches!(caller.kind, Some(K::Cli | K::Hook | K::Test)))
