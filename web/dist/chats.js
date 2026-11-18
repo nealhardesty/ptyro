@@ -15,7 +15,7 @@ const ACTIONS = {
     "chat.send": "Send the message; the answer streams in (Enter sends, Shift+Enter starts a new line)",
     "chat.answer": "Answer what the chat's agent asks: allow once, always, or deny",
     "chat.stop": "Stop the answer being written",
-    "chat.retitle": "Change the chat's title (empty clears it)",
+    "chat.rename": "Rename the chat: its title, what people read (empty clears it)",
     "chat.autotitle": "A new automatic title for the chat, made from the conversation",
     "chat.pin": "Pin the chat to the top, or unpin it",
     "chat.archive": "Archive the chat (Archived shows them; again brings it back)",
@@ -447,7 +447,7 @@ function chatMenu(c) {
         !c.incognito && { title: tip("chat.fork"), label: "Fork", hint: "a new chat from the end", run: () => forkAt(c, null) },
         !c.incognito && { title: tip("chat.side"), label: "Side chat", hint: "ask about it without changing it", run: () => void sideChat(c) },
         find,
-        { title: tip("chat.retitle"), label: "Rename", run: () => retitle(c) },
+        { title: tip("chat.rename"), label: "Rename", run: () => retitle(c) },
         { title: tip("chat.autotitle"), label: "New automatic title", hint: "made from the conversation", run: () => update(c, { title: "", auto_title: true }, "A new title is on its way") },
         { title: tip("chat.pin"), label: c.pinned ? "Unpin" : "Pin", run: () => update(c, { pinned: !c.pinned }, c.pinned ? "Unpinned" : "Pinned") },
         { title: tip("chat.agent"), label: "Switch agent", hint: `now ${c.agent}`, run: () => pickAgent(c) },
@@ -703,7 +703,7 @@ function pageFor(id) {
     incognito.checked = incognitoDefault;
     const folders = h("input", { type: "text", placeholder: "Folders it may read (optional), e.g. ~/notes", "aria-label": "Folders", title: tip("chat.folder"), autocapitalize: "off", spellcheck: "false" });
     // `chat new --title`, and the workspace it belongs to (`--workspace`; the list's, or the address's).
-    const title = h("input", { type: "text", placeholder: "Title (optional: one is made after the first answer)", "aria-label": "Title", title: tip("chat.retitle") });
+    const title = h("input", { type: "text", placeholder: "Title (optional: one is made after the first answer)", "aria-label": "Title", title: tip("chat.rename") });
     const ws = decodeURIComponent(id.split("/")[1] ?? "") || state.workspace;
     const workspace = h("select", { "aria-label": "Workspace", title: "The workspace the chat belongs to" }, h("option", { value: "" }, "main workspace"), ...[...data.workspaces.values()].filter((w) => w.name !== "main").map((w) => h("option", { value: w.name }, wsLabel(w.name))));
     workspace.value = ws === "main" ? "" : ws;

@@ -397,20 +397,11 @@ impl Daemon {
         std::mem::take(&mut m.turn_open)
     }
 
-    /// A turn finished: count it, then checkpoint (M7) and summarize (UX1.3).
+    /// A turn finished: count it, then checkpoint (M7).
     async fn turn_ended(self: &Arc<Self>, s: &Arc<Session>) {
         s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns += 1;
         if s.kind() == SessionKind::Agent {
             self.checkpoint_turn(s);
-        }
-        if s.kind() == SessionKind::Agent
-            || s.meta
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .inner_agent
-                .is_some()
-        {
-            self.summarize_after(s);
         }
     }
 
@@ -431,9 +422,6 @@ impl Daemon {
             {
                 self.turn_ended(s).await;
             }
-        }
-        if t.to.status == AgentStatus::Blocked && t.from != Some(AgentStatus::Blocked) {
-            self.summarize_after(s);
         }
         // Answered in the agent's own dialog: a held hook has nothing left to wait for.
         if t.from == Some(AgentStatus::Blocked) && t.to.status != AgentStatus::Blocked {
@@ -635,29 +623,6 @@ impl Daemon {
         {
             return Ok(reply);
         }
-        Ok(Reply::Done)
-    }
-
-    pub(crate) async fn report(
-        self: &Arc<Self>,
-        addr: &str,
-        state: &str,
-        kind: Option<String>,
-        msg: Option<String>,
-        progress: Option<u8>,
-    ) -> Result<Reply, Error> {
-        let s = self.resolve(addr)?;
-        let status = AgentStatus::parse(state).ok_or_else(|| {
-            Error::invalid(format!("unknown state {state:?} (working, blocked, idle, done, error)"))
-        })?;
-        let detail = msg.map(|m| m.chars().filter(|c| !c.is_control()).take(500).collect());
-        let signal =
-            Signal::Status { status, kind, detail, progress: progress.map(|p| p.min(100)) };
-        self.apply_queued(
-            &s,
-            vec![Sourced { signal, source: SignalSource::Report, confidence: Confidence::High }],
-        )
-        .await;
         Ok(Reply::Done)
     }
 
@@ -966,74 +931,6 @@ impl Daemon {
 
     /// Relaunch into its conversation, same id, name, place and profile (SPEC §7.4).
     pub async fn resume(self: &Arc<Self>, addr: &str) -> Result<Reply, Error> {
-        self.resume_as(addr, None).await
-    }
-
-    /// Switch an agent between structured mode and its terminal UI, in the same conversation
-    /// (M10.6): stop it as hibernation does, then resume it the other way.
-    pub(crate) async fn convert(
-        self: &Arc<Self>,
-        addr: &str,
-        structured: bool,
-        force: bool,
-    ) -> Result<Reply, Error> {
-        let s = self.resolve(addr)?;
-        if s.kind() != SessionKind::Agent {
-            return Err(Error::invalid("only agent sessions switch modes"));
-        }
-        let name = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).name.clone();
-        if s.structured.is_some() == structured {
-            return Err(Error::conflict(format!(
-                "{name} already runs {}",
-                if structured { "in structured mode" } else { "in its terminal UI" }
-            )));
-        }
-        let adapter = s.adapter().unwrap_or_else(|| "generic".into());
-        let def = ptyro_agents::def(
-            &self.config(),
-            &s.meta
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .place
-                .agent
-                .clone()
-                .unwrap_or_default(),
-        );
-        if structured && def.protocol.is_none() && ptyro_drive::protocol_for(&adapter).is_none() {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!("{adapter} has no structured mode"),
-            ));
-        }
-        if s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).conversation.is_none() {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!(
-                    "ptyro doesn't know {name}'s conversation id yet, so it can't carry it over"
-                ),
-            ));
-        }
-        if s.is_live() {
-            if s.status() == Some(AgentStatus::Working) && !force {
-                return Err(Error::conflict(format!(
-                    "{name} is in the middle of a turn: wait for it, or switch anyway to interrupt it"
-                ))
-                .with_fix(ptyro_core::error::Again::Force, "Switch anyway"));
-            }
-            s.hibernating.store(true, Ordering::Relaxed);
-            self.stop_session(&s).await;
-            let _ = tokio::time::timeout(Duration::from_secs(10), s.wait_exit()).await;
-        }
-        s.record_event("convert", serde_json::json!({ "structured": structured }));
-        self.resume_as(addr, Some(structured)).await
-    }
-
-    /// Resume a dormant agent, in the mode it had (or `mode`).
-    pub(crate) async fn resume_as(
-        self: &Arc<Self>,
-        addr: &str,
-        mode: Option<bool>,
-    ) -> Result<Reply, Error> {
         let s = self.resolve(addr)?;
         if s.is_live() {
             return Ok(Reply::Session { info: self.info(&s) });
@@ -1074,7 +971,10 @@ impl Daemon {
                     resume: Some(conv),
                     prompt: None,
                     command: None,
-                    structured: mode.unwrap_or(m.structured.is_some()),
+                    // Only a chat's engine runs structured: a session someone started
+                    // structured before that was removed (2026-11-17) comes back in its
+                    // agent's own terminal UI, in the same conversation.
+                    structured: m.structured.is_some() && m.place.chat.is_some(),
                     params: None,
                     fork: false,
                 }),
@@ -1273,90 +1173,6 @@ impl Daemon {
             let low = Sourced { signal, source: SignalSource::Screen, confidence: Confidence::Low };
             self.apply_queued(s, vec![low]).await;
         }
-    }
-
-    /// `Adopt` (UX1.4): the Claude started by hand in a shell session leaves (`/exit` at its
-    /// prompt) and comes back as a managed agent session in the same place, under the shell's
-    /// profile, resuming the conversation it was in (its newest transcript for that directory).
-    pub(crate) async fn adopt(self: &Arc<Self>, addr: &str) -> Result<Reply, Error> {
-        let s = self.resolve(addr)?;
-        let (inner, profile, workspace, name) = {
-            let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (
-                m.inner_agent.clone(),
-                m.place.profile.clone(),
-                m.place.workspace.clone(),
-                m.name.clone(),
-            )
-        };
-        let Some(agent) = inner else {
-            return Err(Error::invalid(format!(
-                "{name} has no agent in its foreground to adopt (start one with `claude` there first)"
-            )));
-        };
-        if agent != "claude" {
-            return Err(Error::new(
-                ErrorCode::Unsupported,
-                format!("adopting works for Claude so far; start a new {agent} session instead"),
-            ));
-        }
-        if s.status() == Some(AgentStatus::Working) {
-            return Err(Error::conflict(format!(
-                "{name}'s Claude is in the middle of a turn: adopt it once it's idle"
-            )));
-        }
-        let info = self.info(&s);
-        let cwd = info.live_cwd.clone().unwrap_or_else(|| info.cwd.clone());
-        let config = self.config();
-        let root = self.paths.data.join("profiles");
-        let plan =
-            ptyro_agents::profile::plan(&config, &profile, &root, &mut |_, _| Ok(String::new()))
-                .map_err(Error::invalid)?;
-        let dir = plan
-            .shown
-            .iter()
-            .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
-            .map(|(_, v)| std::path::PathBuf::from(v))
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".claude"))
-            })
-            .ok_or_else(|| Error::internal("no HOME"))?;
-        let conversation =
-            ptyro_agents::claude::latest_conversation(&dir, &cwd).ok_or_else(|| {
-                Error::new(
-                    ErrorCode::NotFound,
-                    format!("no Claude conversation was found for {}", cwd.display()),
-                )
-            })?;
-        // Leave it: clear the input line, then /exit, and wait for the shell to come back.
-        s.write_raw(b"\x15/exit\r");
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        loop {
-            let fg = s.foreground_pid().and_then(ptyro_pty::process_name);
-            if fg.as_deref().and_then(|p| ptyro_agents::adapter_for_program(&config, p)).is_none() {
-                break;
-            }
-            if std::time::Instant::now() > deadline {
-                return Err(Error::new(
-                    ErrorCode::Timeout,
-                    format!("{name}'s Claude didn't exit; type /exit there, then adopt again"),
-                ));
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        let spec = ptyro_core::session::SpawnSpec {
-            agent: Some(agent),
-            cwd,
-            profile: Some(profile),
-            workspace,
-            size: Some(info.size),
-            resume: Some(conversation),
-            confirmed: true,
-            ..Default::default()
-        };
-        let new = self.spawn(spec).await?;
-        s.record_event("adopted", serde_json::json!({ "into": new.id.full() }));
-        Ok(Reply::Session { info: self.info(&new) })
     }
 
     async fn hibernate_tick(self: &Arc<Self>) {

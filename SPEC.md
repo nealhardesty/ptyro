@@ -78,10 +78,9 @@ Status markers used below:
   sessions, splits, scrollback, copy, navigation. Not tmux's full command language.
 - Being a terminal emulator *application*. ptyro runs inside your terminal (Ghostty, kitty, WezTerm,
   Alacritty, iTerm2, foot, …), possibly inside tmux.
-- Being an agent. ptyro hosts agents; it never calls an LLM API itself. The one exception is
-  opt-in session summaries (**[built UX1.3]**, approved 2026-10-22, §11.2h). They run a small
-  model's CLI (Claude's Haiku by default) on the session's own profile account, and they are off
-  by default.
+- Being an agent. ptyro hosts agents; it never calls an LLM API itself. The one exception is a
+  chat's title (§22.8): a small model's CLI (Claude's Haiku by default) on the chat's own profile
+  account. (Session summaries, the other, were removed 2026-11-17.)
 - Built-in editor, task tracker (**back-burnered**; see ROADMAP Backlog).
 - ~~Windows native.~~ Reversed 2026-10-31 (owner): native Windows 11 and WSL2 are both Tier 1 targets (§3.4, ROADMAP WIN). Until WIN ships, WSL2 is expected to work like Linux.
 
@@ -133,7 +132,7 @@ Status markers used below:
 | **Project** | A registered git repository (its main checkout path). A project may appear in several workspaces. |
 | **Worktree** | An isolated `git worktree` checkout of a project on its own branch, created and tracked by ptyro. The project's main checkout is also represented as a (special, non-deletable) worktree named `@root`. |
 | **Session** | One process running in one ptyro-owned PTY, with its own terminal state — an agent (`claude`, `codex`, …) or a plain shell/command. Sessions are what you attach to. |
-| **Name / title** | **[built UX1.24]** Sessions and worktrees have both. The **name** is the address (`[a-z0-9._-]`, fixed at creation, changed only by `rename`): `ptyro send fix-flaky-test …`. The **title** is free text people read (the task, a PR's title) and changes freely (`retitle`). By default a name is made from the title or prompt (`fix-flaky-test`), else `<agent>-<corvid>` (`claude-rook`), else a friendly pair; the title is the prompt. |
+| **Name / title** | **[built UX1.24]** Sessions and worktrees have both. The **name** is the address (`[a-z0-9._-]`, fixed at creation, changed only by `rename`): `ptyro send fix-flaky-test …`. The **title** is free text people read (the task, a PR's title) and changes freely (`rename --title`). By default a name is made from the title or prompt (`fix-flaky-test`), else `<agent>-<corvid>` (`claude-rook`), else a friendly pair; the title is the prompt. |
 | **Agent** | A configured session kind backed by an adapter (`claude`, `codex`, `gemini`, `opencode`, `shell`, or a user-defined generic command). |
 | **Conversation** | The agent's own notion of a chat (Claude `session_id`, Codex `thread_id`, …). A ptyro session *has* zero or one current conversation id; resuming a dormant session reuses it. Never confuse the two ids. |
 | **Chat** | **[decided 2026-10-29, §22]** A general-purpose conversation with an agent: no repository, no worktree. A durable tree of nodes in `chat.db`, owned by one workspace on one machine, served by a replaceable *engine* (a hidden structured session). Not a session, and not the agent's *conversation* (a chat may use several over its life). |
@@ -172,8 +171,10 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
     checkout, is never renamed. A running process keeps the `PTYRO_WORKTREE_NAME` and
     `PTYRO_PROJECT` it started with (§10.6).
   - The **title** is free text for people to read: the task, a PR title. It may change at any
-    time (`retitle`), is never an address, and is shown in the sidebar and headers, not used in
-    commands. Without one, the name stands in. A summary (UX1.3) is its own line, not the title.
+    time (`rename --title`), is never an address, and is shown in the sidebar and headers, not
+    used in commands. Without one, the name stands in. One rename per noun changes both: `ptyro
+    rename S NEW`, `ptyro rename S --title "…"` (the same for `wt rename`; a chat's name is its
+    title, `chat rename`).
   - The friendly-name generator draws from a corvid-themed word list (`brisk-rook`,
     `quiet-jackdaw`, `sly-magpie`; `ptyro_core::names`).
 - **One name policy** (owner, 2026-11-09). Every name a person, an agent or a script gives
@@ -958,7 +959,8 @@ Push messages have no id.
 **[built M4] Protocol 1.3** (additive):
 - Requests:
   - from the relays: `Hook{adapter, event, payload}`, `StatusLine{session, payload}` and
-    `Report{session, state, kind, msg, progress}` (`ptyro report`);
+    `Report{session, state, kind, msg, progress}` (`ptyro report`; removed 2026-11-17, protocol
+    1.46);
   - `StatusExplain`, `Resume`, `Hibernate`, `ClearAttention`, `Answer{decision}`;
   - `Inbox{workspace, unread}`, `InboxMark`, `Mute{target, until}`, `Usage`, `NotifyTest`.
 - Replies: `Explain{lines: [ExplainLine{at_ms, source, signal, applied, reason}]}`, `Inbox`,
@@ -1066,7 +1068,8 @@ and lead requests below were removed on 2026-11-17 with orchestration, protocol 
   `ChatGet{addr}` → `Transcript{items}`; `ServerMsg::Chat{session, rev, reset, items, draft}`.
   `SessionInfo` gains `structured` (the protocol) and `held` (a permission prompt held for an
   exact answer). `SpawnSpec`, `WorktreeSpec`, `FanoutSpec` and recipe `spawn` gain
-  `structured`. Compare `Candidate` gains `tools`.
+  `structured`. Compare `Candidate` gains `tools`. (Starting and converting a session structured,
+  `ChatGet` and `ServerMsg::Chat` were removed 2026-11-17, protocol 1.46: chats run on it.)
 - **Errors** keep their shape: `{t: "err", error: {code, message}}` (and so does `ptyro serve`'s
   `POST /api/request`).
 
@@ -1093,16 +1096,18 @@ and lead requests below were removed on 2026-11-17 with orchestration, protocol 
   (`ShellCommand{text?, started_ms, ended_ms?, exit?}`: a shell's running or last command, from
   OSC 133 `C`/`D`). The TUI's sidebar rows show them (§11.2h).
 - `SessionInfo` gains `inner_agent`, `SpawnSpec` gains `resume`, and a new request, `Adopt{addr}`,
-  makes an agent started by hand in a shell a managed session (§8.7).
+  makes an agent started by hand in a shell a managed session (§8.7; `Adopt` and `resume` removed
+  2026-11-17, protocol 1.46).
 - Titles (§2.1): `SpawnSpec.title` and `WorktreeSpec.title`, `WorktreeInfo.title`, and
-  `Retitle{addr, title, worktree}`. `SessionInfo.title` now means the title people read (its own,
+  `Retitle{addr, title, worktree}` (what `rename --title` sends). `SessionInfo.title` now means the title people read (its own,
   else its first prompt, else the window title), and the window title is `window_title`.
 - `WorktreeArchive{addr, stop_sessions}`, `WorktreeRestore{addr}`, `WorktreeArchives{project}`,
   `WorktreeArchiveDelete{addr}` → `Notes`
   → `Archives{entries}`, and `WorktreeFinish{addr, integrate}` (§10.8; removed 2026-11-17:
   finishing in protocol 1.43, archives in 1.45).
 - `SessionInfo` gains `summary` (`Summary{text, turn, at_ms}`), and a new request,
-  `Summarize{addr}` (control scope), makes one now and replies `Session` (§11.2h).
+  `Summarize{addr}` (control scope), makes one now and replies `Session` (§11.2h; removed
+  2026-11-17, protocol 1.46).
 - `ProjectRemove` gains `release` (let the project's running sessions go instead of refusing),
   and a new event, `ProjectAutoAdded{info, workspace, notes}`, says a repository registered on
   its own (§10.1).
@@ -1121,7 +1126,8 @@ installed}], default}`; `Editors` → `Editors{names, default}`; `WorktreeOpen{a
 `ProjectConfig{addr}` → `Text{text}` (the merged config with where each value comes from);
 `Replay{addr}` → `Replay{replay:{size, duration_ms, steps:[{at_ms, keyframe, delta}], truncated}}`
 (a recording as screen frames, sampled to about 300 steps, at most about 6 MB; the web player
-applies them like a live screen); `Export{addr, format}` → `Text` (`asciicast` or `text`).
+applies them like a live screen); `Export{addr, format}` → `Text` (`asciicast` or `text`; both
+removed 2026-11-17, protocol 1.46).
 `Kill` and `Remove` (stopping what you started) are `control` scope, as the scope's description
 always said. A device with `full` scope may `DevicePair` and `DeviceRevoke` (a code is still only
 claimed by `ptyro serve`).
@@ -1164,6 +1170,18 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built 2026-11-17] Protocol 1.46** (a removal): the session extras are gone (§7.1, §7.6, §8.7,
+§11.2h): starting or converting a session structured (chats still run on structured sessions,
+§22.2), session summaries, adopting an agent started by hand, `ptyro report`, and replaying and
+exporting recordings. The requests `convert`, `chat_get`, `summarize`, `adopt`, `report`,
+`replay` and `export` are in `RETIRED_REQUESTS`; the replies `Replay` and `Transcript`, the types
+`ReplayDoc` and `ReplayStep`, `ServerMsg::Chat` (a session's transcript; a chat's is
+`ChatLive`), `SessionInfo.summary` with `Summary`, and `SpawnSpec.structured`, `.resume` and
+`WorktreeSpec.structured` were removed. `Retitle` stays: `rename --title` sends it. A handoff
+image whose sessions carry `summary`, `summarizing` or a non-chat `structured` still decodes: such a
+session keeps running as it is, and resumes or restarts in its agent's own terminal UI, as a
+dormant one from the store does.
 
 **[built 2026-11-17] Protocol 1.45** (a removal): the worktree and project extras are gone
 (§10.3–§10.8): archived worktrees, pair mode, locking and renaming a branch by hand, setup
@@ -1408,8 +1426,8 @@ the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
 second time: `force`, `stop_sessions`, `stop`, or `release` (`trust` went with recipes,
 2026-11-17). The daemon sets it exactly where that way applies (removing a running session: `stop`,
-"Stop and remove"; a busy worktree's remove: `stop_sessions`; unsaved work, a mid-turn
-convert, a daemon stop with sessions: `force`; forgetting a project with running sessions: `release`,
+"Stop and remove"; a busy worktree's remove: `stop_sessions`; unsaved work, a daemon stop
+with sessions: `force`; forgetting a project with running sessions: `release`,
 "Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
 it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
 and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
@@ -1434,10 +1452,12 @@ project trust` `` and the like).
 | `shell` | `$SHELL -l` (or configured) in a worktree/cwd. |
 | `command` | Arbitrary command (`nvim`, `lazygit`, `htop`, a dev server). |
 | `script` | ptyro-managed lifecycle script (setup/run) — read-only by default. |
-| `structured` | **[built M10]** an agent driven over its structured protocol (stream-json / app-server / ACP / OpenCode's server); rendered as a chat view. On the wire it is an `agent` session with `structured: <protocol>`. |
+| `structured` | **[built M10]** an agent driven over its structured protocol (stream-json / app-server / ACP / OpenCode's server): a chat's engine (§22.2). On the wire it is an `agent` session with `structured: <protocol>`. |
 
-**[built M10] Structured sessions.**
-- **Starting one.** `new --agent A --structured`, or `WorktreeSpec.structured`. The protocol comes from
+**[built M10] Structured sessions.** What chats run on (§22.2). A session of your own is no longer
+started structured or converted (`new --structured`, `convert`, the chat view of a session:
+removed 2026-11-17, to keep one way to run an agent in a session).
+- **Starting one.** A chat's engine, with `AgentStart.structured`. The protocol comes from
   `[agents.A] protocol`, else from the adapter:
 
   | Adapter | Protocol | Launch |
@@ -1447,8 +1467,7 @@ project trust` `` and the like).
   | gemini | acp | `gemini --acp` |
   | opencode | opencode | `opencode serve --port P --hostname 127.0.0.1` |
 
-  Other adapters have none, unless the agent sets `protocol = "acp"`. `--structured` needs an
-  agent.
+  Other adapters have none, unless the agent sets `protocol = "acp"`.
 - **The process.** The agent runs with pipes, in its own process group, with the profile's
   environment and no hook integration.
 - **The driver.** The `ptyro-drive` crate is pure protocol logic: lines in, effects out. The
@@ -1470,18 +1489,14 @@ project trust` `` and the like).
   "always" may fall back to one-time and "deny" to a standing reject.
 - **Readiness** comes only from the protocol's status.
 - **Stopping** interrupts a running turn, waits 3 s, then stops the process group.
-- **Clients.** A subscription to a structured session also streams `ServerMsg::Chat` (all items
-  on subscribe, then what changed, coalesced at 30 ms, plus the draft). `ChatGet` returns the
-  whole transcript (`read --chat`).
-- **Converting** (`Convert`, `ptyro convert S --to tui|structured`) needs the conversation id.
-  It refuses mid-turn without `force`, stops the agent as hibernation does, then resumes the
-  same conversation in the other mode: Claude `--resume`, Codex `thread/resume` / `codex
-  resume`, ACP `session/load`, OpenCode the same `ses_` id. The protocol is kept in `Meta` and
-  the stored launch, so resume, restart and dormant restore stay structured.
+- **Clients** see a chat's transcript through the chat (`ServerMsg::ChatLive`, §22.14).
+- **Resume.** The protocol is kept in `Meta` and the stored launch, so a chat's engine resumes and
+  restarts structured. A session someone started structured before the removal resumes, restarts
+  or comes back dormant in its agent's own terminal UI, in the same conversation (Claude
+  `--resume`, Codex `codex resume`, OpenCode the same `ses_` id); a live one carried by an upgrade
+  keeps running as it is until then.
 - **Live upgrade.** The driver parks between lines like a PTY reader. Its state (serde), unread
   bytes, transcript, draft and rendering state, plus the stdin/stdout/stderr fds, cross the exec.
-- **Not yet:** after a full daemon restart (not an upgrade) a dormant
-  structured session's transcript is gone; its recording and conversation remain.
 
 **[built M3]** `agent` sessions start `[agents.<name>] command` (a string or argv) plus `args`,
 else the built-in CLI of that name (`claude`, `codex`, `gemini`, `opencode`). `script` sessions
@@ -1613,9 +1628,11 @@ Without a recorder (M8) a dormant pane shows a "☾ dormant: ⏎ resumes" card, 
 
 - Raw PTY output is appended to `data/sessions/<id>/pty.log` in a simple framed format
   (`[u32 len][u64 µs-since-start][bytes]`), ring-truncated at `recorder.max_bytes` (default 16 MiB).
-- Uses: (1) scrollback for `Exited`/`Dormant` sessions after daemon restart; (2) `ptyro replay`
-  (time-faithful playback in a pane); (3) `ptyro export --format asciicast` (asciinema v2); (4) debugging
-  emulator bugs from real-world byte streams (attach the log to an issue).
+- Uses: (1) scrollback for `Exited`/`Dormant` sessions after daemon restart, and beyond memory;
+  (2) debugging emulator bugs from real-world byte streams (attach the log to an issue; `ptyro-headless
+  --from-recording DIR --record F` turns one into a `.ptylog` fixture, docs/fixtures.md).
+  `ptyro replay` and `ptyro export` (playback, asciicast and text) were removed 2026-11-17: the
+  recorder stays as internal storage.
 - Per-agent opt-out (`record = false`) and global `recorder.enabled`. Logs may contain secrets that
   scrolled through the terminal: files are `0600`, and `ptyro gc` prunes logs of removed sessions.
 - Per session, `SpawnSpec.unrecorded` (protocol 1.33, BOOT4): never recorded. Logins use it
@@ -1640,10 +1657,6 @@ Without a recorder (M8) a dormant pane shows a "☾ dormant: ⏎ resumes" card, 
     at the top asks for 1M lines and extends the document in place.
   - A dormant agent restored at daemon start shows its last screen, rebuilt from its
     recording.
-  - `ptyro replay S [--speed X] [--max-idle D] [--from D]` plays the recording in your
-    terminal, idle gaps capped.
-  - `ptyro export S --format asciicast|text|ptylog [-o F]` writes asciicast v2 (with resize
-    events as `"r"`), the final text of every line, or the raw bytes as a `.ptylog` fixture.
 - **Memory.** The in-memory scrollback default dropped to **5000 lines**: a full 10k-line,
   80-column session measured ≈ 19.5 MB RSS, over §18.3's 15 MB, and the recording now serves
   everything older.
@@ -2134,10 +2147,12 @@ runs), so a restart integrates afresh:
     command after a prompt, but only when no other DEBUG trap is set. Before WIN1, bash on a Mac
     never said `working`.
 
-  Every snippet guards on `PTYRO` and `__ptyro_integrated`, so a `shell-init` line in an rc file
-  and the automatic one never stack. When the files can't be written the shell starts as it is
-  (logged). Off (`[shell] integration = false`), the TUI's health check offers the rc line again,
-  and `ptyro doctor`'s "shell" section reports it as a note. That section also says which shell
+  Every snippet guards on `PTYRO` and `__ptyro_integrated`, so the rc file line `ptyro setup`
+  adds (§24.2: the internal, hidden `ptyro shell-init`, for the tools it installed) and the
+  automatic one never stack. (`shell-init` as a command to set up a shell ptyro didn't start was
+  removed 2026-11-17: ptyro's own shells need nothing.) When the files can't be written the shell
+  starts as it is (logged). Off (`[shell] integration = false`), the TUI's health check offers to
+  turn it back on, and `ptyro doctor`'s "shell" section reports it as a note. That section also says which shell
   new sessions run, whether integration reaches it, and that PowerShell is installed when it
   isn't the default.
   The rc file is `~/.bashrc`, `~/.zshrc`, `<config>/fish/config.fish` or (off Windows)
@@ -2158,8 +2173,8 @@ a built-in's program: `claude`, `codex`, `gemini`, `opencode`, `agy`). On Window
 without case or a runnable extension (`C:\Tools\MyAgent.EXE` is `myagent`), and an npm package's
 folder names its command (`claude-code`, as WIN7 names `node …\claude-code\cli.js`; WIN8). While
 one is in the foreground:
-- `SessionInfo.inner_agent` names its adapter, and the TUI reads `zsh › claude ◌`; the session
-  isn't renamed.
+- `SessionInfo.inner_agent` names its adapter, and the TUI reads `zsh › claude ◌`, with a detail
+  line `claude by hand, status off its screen`; the session isn't renamed.
 - What the shell said no longer holds (OSC 133 `C` was one long "working"): the engine forgets
   its sources and its status (`Engine::forget_sources`), and the shell's `C` marks set no status.
 - The status comes from that adapter's hook-free sources, at **low** confidence: its titles,
@@ -2170,13 +2185,8 @@ one is in the foreground:
   OSC 7501) still wins.
 - Once it exits, the engine forgets again, and the shell's own marks take over.
 
-**Adopt** (`Request::Adopt`, `ptyro adopt SESSION`, the TUI's `session.adopt`, `A` in the
-sidebar), Claude only so far: refused while it's working; else the daemon finds the
-conversation it's in (the newest transcript in `<config dir>/projects/<cwd, every
-non-alphanumeric a dash>/`, under the shell's profile's `CLAUDE_CONFIG_DIR`, §20.1), types
-`Ctrl-U /exit ⏎`, waits up to 10 s for the shell to come back, and spawns a managed agent session
-in the same directory and profile with `SpawnSpec.resume`, so it gets hooks and hibernation, in
-the same conversation.
+**Adopt** (`ptyro adopt`, the TUI's `A`) was removed 2026-11-17: the owner declined a shell
+wrapper that would manage a hand-started agent, so it keeps its screen-read status.
 
 ---
 
@@ -2233,8 +2243,8 @@ spinner-only redraws (rows whose text didn't change). Derives `active` / `quiet`
 ### 9.3b Turns **[built 2026-10-23]**
 
 A turn is what the agent did between a prompt and its answer. Its end runs the turn-end work:
-`turns` + 1, the checkpoint (§15.6) and the summary (UX1.3). (The `after_turn` script was
-removed 2026-11-17.)
+`turns` + 1 and the checkpoint (§15.6). (The `after_turn` script and the summary were removed
+2026-11-17.)
 - **Agents with a turn-end signal** (every built-in adapter whose hooks are on, and every
   structured session): the turn ends at the agent's own end, `Signal::TurnEnd` (Claude's and
   Codex's `Stop`, Codex's `notify`, Gemini's `AfterAgent`, OpenCode's `session.idle`, OSC 7501
@@ -2299,7 +2309,7 @@ workspace, else `main`.
 
 **Engine** (`ptyro-daemon/src/engine.rs`, one per session; all signals go through one feed task):
 - **Sources:** process (high), hook (high), sidecar (OpenCode SSE: high; Claude roster: medium),
-  OSC 7501 (high), `ptyro report` (high), title (medium), screen recognisers (medium), OSC
+  OSC 7501 (high), title (medium), screen recognisers (medium), OSC
   9/777/BEL (low), heuristic (low).
 - **High sources are peers: the newest wins.** A weaker high source that arrives within 250 ms
   of a stronger one is **deferred, not dropped**. It is applied 270 ms later unless a newer high
@@ -2330,8 +2340,9 @@ conformance`):
 - **Effective status** is the most urgent record (blocked > error > working > done > idle; the
   newest among equals). Child records become `+N` child rows.
 - OSC 21337 (iTerm2's foreign status) is accepted at low confidence. `AgentStatus::parse`
-  also maps tuios's and herdr's state names (`needs_input`, `errored`, `busy`, …), which is what
-  `ptyro report` (alias `report-agent`) accepts.
+  also maps tuios's and herdr's state names (`needs_input`, `errored`, `busy`, …). (`ptyro
+  report`, which took them from a program in a session, was removed 2026-11-17: a program speaks
+  OSC 7501.)
 
 **Attention** (§9.4) as specified, plus:
 - A session is *watched* only in a focused pane of a client whose outer terminal has focus.
@@ -3189,7 +3200,8 @@ learning anything up front.
   agent as configured (`claude`, `claude-work`) whatever its process is called (a wrapper
   script, a launcher).
 - **An agent started by hand in a shell** (UX1.4, §8.7) reads `zsh › claude` with the `◌`
-  of a guess, and a detail line offers adopting it (`A` in the sidebar).
+  of a guess, and a detail line says so: `claude by hand, status off its screen` (it offered
+  adopting, `A`, until that was removed 2026-11-17; `A` is unbound).
 - **Rows say what's going on** (UX1.2). Under a session's first line (now with how long it has
   been working or blocked) come up to a few lines, each only when it has something to say:
   - blocked: `wants` what (the permission's tool, the question), then the keys that answer it;
@@ -3197,7 +3209,7 @@ learning anything up front.
   - errored: why;
   - an agent: `task`, its first prompt, and once its turn ends, `last`, its reply;
   - a shell: `now` its running command and for how long, or `last` the one that finished, with
-    its exit (`✓`, `✗101`), duration and age. `ptyro shell-init` now sends the command line
+    its exit (`✓`, `✗101`), duration and age. The shell integration now sends the command line
     with OSC 133 `C` (`cmdline=`; kitty's `cmdline_url=` is read too): zsh, fish and PowerShell
     always, bash from 4.4 (`PS0`) and, since WIN1, older bash through a DEBUG trap;
   - exited: its exit and age, `⏎ restart`; dormant: `⏎ resumes it`.
@@ -3241,30 +3253,9 @@ learning anything up front.
   the open box, new lines kept where it takes several, and never on to the session behind it,
   which it used to. Names, titles and command lines stay single-line. The daemon types a
   multi-line prompt as one bracketed paste, so the agent gets one prompt.
-- **Summaries, opt-in** (UX1.3, `crates/ptyro-daemon/src/summary.rs`). With `[summaries] enabled
-  = true`, a one-line summary is made each time an agent's turn ends (an agent session, or one
-  started by hand in a shell) and each time a session newly blocks. It shows as `≈ …` on the
-  row. It replaces `last` while it describes the current turn, and is hidden while the session
-  works. `session.summarize` (the row menu, the palette) and `ptyro summarize SESSION` make one
-  now, enabled or not.
-  - **How:** `[summaries] command` (default `claude -p --model haiku --output-format json
-    --strict-mcp-config --tools ""`) reads the prompt on stdin and prints the summary, or
-    Claude's JSON, whose `result` is used. It runs 1.5 s after the turn ends, so the reply lands
-    first. It runs under the session's profile environment, so on that profile's account, in
-    `<data>/summaries` (no project files, no tools), with a 60 s limit. Only one runs at a time
-    per session; a turn that ended meanwhile gets its own afterwards.
-  - **What it's sent:** the session's kind, title, task, status and what it waits on, its last
-    reply (≤ 1500 characters), a shell's command, and the last 25 lines of its screen. The
-    profile's secret values become `<secret:NAME>`. Anything shaped like a credential (`KEY=…`
-    for token/secret/password keys, `Bearer …`, known token prefixes, long mixed runs of letters
-    and digits) becomes `<redacted>`.
-  - **Limits:** `daily_cap` (200) per profile per UTC day, counted in memory. On a failure (not
-    logged in, over the cap) the rule-based lines stay; the error shows only when you asked for
-    the summary directly.
-  - **Spike result (2026-10-23):** option A, a stateless call per turn, is what's built. One
-    summary costs $0.0006 and takes 1–2.5 s (§20.1). Option B, a resident per-profile
-    "concierge" session, is not built: at this price and speed it would only pay off for
-    answering questions across sessions, which stays open (§21, question 9).
+- **Summaries** (UX1.3: a `≈` line from a small model after each turn, `ptyro summarize`) were
+  removed 2026-11-17. Their redaction (`crates/ptyro-daemon/src/redact.rs`) stays for a chat's
+  titler and imported chats.
 - **`n` asks what to do** (UX1.9). One box, "What should it do?", with a preview under it:
   `→ fix-flaky-test · claude · new worktree in myrepo`. ⏎ starts the default agent on it in a
   new worktree named after it (here, with no project), the prompt also its title. Tab edits the
@@ -3276,14 +3267,16 @@ learning anything up front.
   one, else `workspace-2`). Rows and headers show the title: the session's `task` line and its
   header, a worktree's ` — title` when its name doesn't say it all. An agent named after its
   worktree shows as its program under it. `,` renames (the address); `C-t` there edits the title
-  instead (`session.retitle`); `worktree.retitle` titles a worktree.
+  instead, what people read; `worktree.rename` the same for a worktree, and on the main checkout
+  (always `@root`) it asks for the title only. (`session.retitle` and `worktree.retitle`, separate
+  actions, merged into rename 2026-11-17.)
 - **Messages offer the next step** (`toast.act`, `u` after the prefix or in the sidebar): a
   message may carry one follow-up, shown with its key (`registered myrepo in main · C-q u
   undo`), kept up 10 s. **Errors offer the fix** (UX1.17): no message the TUI writes names a
   command to type (a test reads the sources to keep it so). Instead: an unbound key offers the
   key list; untrusted scripts, trusting them; a project without scripts, its `.ptyro.toml` in
-  `$EDITOR` (`Then::Edit`); a hidden sidebar, showing it; "no session here", starting one; a
-  chat view on a terminal agent, switching it to structured mode; nothing marked for broadcast,
+  `$EDITOR` (`Then::Edit`); a hidden sidebar, showing it; "no session here", starting one; nothing
+  marked for broadcast,
   the sidebar. A daemon error that
   suggests a CLI command offers its TUI action when there is one (`app::SUGGESTED`).
 - **A repository registered on its own** (UX1.5, §10.1) says so with an undo; a profile pin its
@@ -3305,14 +3298,14 @@ learning anything up front.
   the deadline, not on its 250 ms tick.
 - **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
-  `session.convert`, `project.remove|untrust|pin|unpin|leave|mute`,
+  `project.remove|untrust|pin|unpin|leave|mute`,
   `workspace.rename|remove|profile|notify|mute`. The long tail is
   `crates/ptyro-tui/src/cli_actions.rs`: a table of `ptyro …` templates whose words come from the
-  selection (`{session}`, `{worktree}`, `{project}`), a pick (`{profile}`, `{agent}`,
-  `{choose:…}`) or a question (`{ask:…}`, optional when left empty), then
+  selection (`{session}`, `{worktree}`, `{project}`), a pick (`{profile}`, `{agent}`) or a
+  question (`{ask:…}`, optional when left empty), then
   run in a split: profiles (login included), checkpoints, a session's events,
   serving, pairing (its QR code in the split),
-  devices, replay and export, `config show`.
+  devices, `config show`.
 - **About** (UX2.1, `crates/ptyro/src/about.rs`, `crates/ptyro-tui/src/about.rs`,
   `aboutView` in `web/src/settings.ts`). `ptyro about [--json]` is one document: the version and
   protocol (`ptyro --version` prints the same version; **[UX3.5]** and every agent's known usage
@@ -3337,9 +3330,9 @@ learning anything up front.
   licence constants in `web/src/data.ts` (checked against `Cargo.toml` by `web/test/kit.mjs`) for
   a lower scope. The help overlay's footer and the web's More page show the version.
 - **The health badge** (UX1.20, `crates/ptyro-tui/src/health.rs`): `ptyro doctor --quick --json`
-  runs in the background 20 s after attaching and every 10 min; its warnings and problems, plus a
-  missing `ptyro shell-init` line in your shell's rc file (the TUI's own check, only with
-  `[shell] integration = false` since WIN1), show as `⚕ N` in
+  runs in the background 20 s after attaching and every 10 min; its warnings and problems, plus
+  `[shell] integration = false` with nothing else integrating your shell (the TUI's own check;
+  its fix opens the setting), show as `⚕ N` in
   the status bar (red with a problem), announced once when there are more. `health` (`M`)
   lists them, ⏎ fixes one: a tmux option set now and offered for `~/.tmux.conf`; `chmod 600`;
   a line appended to a file (asked first); or the `` `ptyro …` `` command the finding names
@@ -3428,9 +3421,9 @@ learning anything up front.
     to "look at the error in my terminal" can run `ptyro shell --read` from its worktree.
 - **A row's menu** (UX1.15, `row.menu`: `.` after the prefix or in the sidebar, or a
   right-click): every action that applies to that row now, with its key. A session's (peek,
-  resume or restart, adopt, title, rename, explain, events, hibernate, mute, its worktree's
-  editor and scripts, split, stop or kill), a worktree's (a task there, a shell, editor, scripts,
-  title, remove), a project's. Picked, it runs with that row
+  resume or restart, rename, explain, events, hibernate, mute, its worktree's editor and scripts,
+  split, stop or kill), a worktree's (a task there, a shell, editor, scripts, rename, remove), a
+  project's. Picked, it runs with that row
   selected, so it works on that row. In a pane, `.` is the focused session's.
 - **Hints follow the selection** (UX1.16): with no message up, the status bar says what you'd
   do next with the selected row (the focused session in a pane), with the key as it works
@@ -3587,7 +3580,8 @@ unbound.
 needs you most). In the sidebar, `a`/`i`/`p` work without the prefix, and `e` explains the
 selected session's status; `e` has no key after the prefix (palette: `session.explain`).
 
-**[built M10]** `t` toggles a structured session between the chat view and the terminal view.
+**[built M10]** `t` toggled a structured session between the chat view and the terminal view;
+removed 2026-11-17 with structured sessions as a user feature, so `t` is unbound.
 
 The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-sidebar).
 
@@ -3677,10 +3671,13 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 
 - `ptyro` with no args: attach the TUI (auto-start the daemon). **[built M1]** It attaches to the
   newest live session, else the newest one, else starts a shell session.
-- **[built UX1.9]** `ptyro "fix the flaky test"` (words, not a command): the default agent with
+- **[built UX1.9]** `ptyro "fix the flaky test"` (one quoted argument): the default agent with
   that as its first prompt, in a new worktree named after it in the repository you're in
   (registered on the way, §10.1), or right here outside one; then it attaches. One word alone is
-  refused as a likely mistyped command.
+  refused as a likely mistyped command, and so are several unquoted words (2026-11-17, review
+  finding U-11): `ptyro sessions list` is clap's "unrecognized subcommand" with its did-you-mean,
+  and a tip, "to give your agent a task, quote it: ptyro "sessions list"" (`main.rs`
+  `parse_cli`).
 - **[built M1]** Attaching from inside a ptyro session is refused unless `PTYRO_ALLOW_NESTED=1`
   (a nested TUI fights over the prefix key).
 - **[built] One CLI surface (owner, 2026-11-09):**
@@ -3702,8 +3699,12 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     starts detached and prints it. A command whose session isn't one you'd type into (`wt run`)
     attaches only when asked (`wt run --attach`).
   - A name you may leave out is `-n/--name`; a name a command needs is a positional word.
-  - `retitle X` with no title clears it, for a session, a worktree and a chat alike; a chat's
-    `--auto` (the TUI's and web's `chat.autotitle`) asks for a new automatic one.
+  - One rename per noun changes the name (the address) and, with `--title`, the title (what
+    people read): `rename S [NEW] [--title T]`, `wt rename W [NEW] [--title T]`, `chat rename C
+    TITLE…|--title T|--auto` (a chat's name is its title). `--title ""` clears a title, for a
+    session, a worktree and a chat alike; a chat's `--auto` (the TUI's and web's
+    `chat.autotitle`) asks for a new automatic one. (`retitle`, `wt retitle` and `chat retitle`
+    merged into rename 2026-11-17.)
 - All listing/query commands support `--json` (stable schemas, documented in `docs/cli-json.md`)
   and `--format` templates later.
 - Addresses per §2.3. Multi-target commands accept `@blocked`, `@all`, etc.
@@ -3749,8 +3750,9 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 
 ### 12.2 Command tree **[decided]**
 
-The proposal as written. Built syntax differs in places (`export --format asciicast|text|ptylog`,
-`wt new --no-setup`, `profile env P [--json]`);
+The proposal as written. Built syntax differs in places (`wt new --no-setup`, `profile env P
+[--json]`), and some of it was removed 2026-11-17 (`replay`, `export`, `shell-init`; `rename`
+also takes `--title`);
 [`docs/commands.md`](docs/commands.md) and `ptyro <command> --help` are the reference.
 
 ```text
@@ -3800,7 +3802,7 @@ ptyro mcp                              # internal; the chat history tools for a 
 including earlier daemon runs), `read S --scrollback [N]`, multi-target selectors for
 `kill`/`rm`/`restart`/`send`, `config path|check|show|edit` (`check` also validates key bindings,
 action names and the theme; `edit` starts from a commented template and re-opens on errors), and
-`shell-init bash|zsh|fish`.
+`shell-init bash|zsh|fish` (hidden since 2026-11-17: what `ptyro setup`'s rc file line runs).
 
 **[built M1]** `new [-d] [-n NAME] [-C DIR] [--size CxR] [--json] [-- CMD…]`, `attach [S] [--raw]`,
 `ls [--json]`, `kill S… [--signal N] [--keep]`, `rm S…`, `rename S NAME`, `read S [--ansi]`,
@@ -3836,7 +3838,8 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `usage [--json]`;
   - `notify test`;
   - `integrations ls|install|uninstall gemini|antigravity`;
-  - `report --state … [--kind] [--msg] [--progress]` (alias `report-agent`).
+  - `report --state … [--kind] [--msg] [--progress]` (alias `report-agent`; removed
+    2026-11-17).
 - **Hidden:** `hook` and `statusline-relay`. They run before any tokio runtime starts.
 - **`new`** gains `--prompt TEXT|@snippet` and `--prompt-file F`. The prompt is delivered once
   the agent is ready (§8.2), and `@name` comes from the project's `[prompts]`.
@@ -3954,7 +3957,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - **Uninstall** never stops a running daemon. Without systemd running it removes the link by
     hand and skips `daemon-reload`.
 - **Not built (later milestones):**
-  - `replay`/`export` (recorder, M8, now built: §7.6);
+  - `replay`/`export` (recorder, M8, built: §7.6; removed 2026-11-17);
   - `fanout`, `run`, `recipe`, `mcp` (M7, built, then removed 2026-11-17 except `mcp`'s chat
     tools);
   - `proxy` (M9);
@@ -4107,8 +4110,8 @@ change (debounced) and emits `ConfigReloaded`.
   reserved any more.
   `[clipboard] allow_write = true` (OSC 52 writes from programs reach the TUI's terminal;
   read by the TUI, so it follows that machine's config).
-  **[built M10]** `[agents.x] protocol` (`stream-json`, `app-server`, `acp`, `opencode`) makes
-  `--structured` speak that protocol to the agent.
+  **[built M10]** `[agents.x] protocol` (`stream-json`, `app-server`, `acp`, `opencode`) is the
+  protocol a chat with that agent speaks (§22.2).
 
 **[built M5]** `.ptyro.toml [project] import = false` turns off other tools' config (§10.5).
 `ptyro init` writes `ui.prefix`, `worktrees.location`, `notifications.channels`,
@@ -4150,11 +4153,6 @@ frame_interval_ms = 8
 [recorder]
 enabled = true
 max_bytes = "16MiB"
-
-[summaries]                       # opt-in one-line summaries from a small model (§11.2h)
-enabled = false
-daily_cap = 200                   # per profile, per UTC day
-command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]
 
 [notifications]
 channels = ["osc", "bell"]               # + "desktop", later "push"
@@ -4718,7 +4716,7 @@ are. `PTYRO_WSL` replaces `wsl.exe`. Variables cross both hops when listed in `W
   its named pipe), and the only way a Windows client starts one by itself; with no remote, a
   Windows client uses a native daemon already running but starts none. On
   Windows with none of them, the first command that needs a daemon (not `config`,
-  `completions`, `shell-init`, `init`, `uninstall`, `backup`, `daemon`, `proxy`) asks each
+  `completions`, `shell-init` (internal), `init`, `uninstall`, `backup`, `daemon`, `proxy`) asks each
   distro (WSL's order; `docker-desktop`, `rancher-desktop`, `podman-machine` left out) for
   `ptyro --version`. The first that answers is offered (on a terminal "Ubuntu (WSL) runs ptyro
   0.0.48. Use it? [Y/n]", kept in `client.default_remote`; without one it is used and a note says
@@ -4912,7 +4910,7 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   `ScreenCache`; `tests/m9.rs` checks its text equals `ptyro read` against live frames. Fit or
   1:1, at the session's own size.
 - **Input:** a reply box (`SendText`), keys, a permission card (with "exact" when the prompt is
-  held), and a chat view for structured sessions.
+  held).
 - **PWA:** a manifest, icons (rendered from `docs/logos/ptyro-icon.svg` by `make icons`, including a separate maskable one), and a service worker with an
   offline shell, push display, and Allow/Deny notification actions answered through
   `/api/request` with the token from IndexedDB. `serve` ends `/sw.js` with
@@ -5013,8 +5011,8 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
   TUI's and moves on by what it sees; "End the tour" runs `tour.end` there, which stops that
   daemon, deletes the directory and exits. Stale tours are swept at the next start. A tour listens
   on this computer only, so it is opened from a browser on it.
-- **Replay and scrollback:** `Replay` (above) feeds a canvas player (scrubber, 1–8×);
-  `ReadScrollback` renders as coloured, searchable text.
+- **Scrollback:** `ReadScrollback` renders as coloured, searchable text. (The replay player and
+  the Earlier sessions page, `#/history`, were removed 2026-11-17.)
 - **Diff and review:** `WorktreeDiff` renders per file and hunk; tapping a line adds a
   `ReviewComment` for the agent; the comments batch into one prompt (`ReviewSend`).
 
@@ -5275,7 +5273,7 @@ confine that.
 | Socket hijack by other local users | dir `0700`, socket `0600`, peer-uid check on accept. **[built WIN5]** Windows: a named pipe whose every instance admits only the user's SID (`D:P(A;;GA;;;<sid>)`) and rejects remote clients; pipe names are one namespace per computer, so the client refuses a pipe whose server process runs as anyone else (`ptyro_pty::pipe`) |
 | Cloned repo runs arbitrary code | scripts require fingerprinted trust; agent executables only from user config |
 | Code ptyro runs for a repository: scripts, git (security review M3) | trust pins a script's *text*, not the files it calls, and agents edit those files: trusting `cargo test` trusts the tests. Scripts run as the user, with the daemon's environment and network, outside any agent sandbox; this is documented, not sandboxed (§10.5, docs/config.md). Background git runs no repository code: `core.fsmonitor=false` always, `core.hooksPath=/dev/null` except for what the user asked for (a new worktree), diffs with `--no-ext-diff --no-textconv` (§10.9) |
-| Session content sent to a model provider by summaries (UX1.3) | off by default; on, only a trimmed view goes (§11.2h), through the session's own profile, so its own account and provider. The profile's secret values and anything shaped like a credential are replaced before sending; the summariser runs with no tools, no MCP servers and no project directory |
+| Chat content sent to a model provider by the titler (§22.8) | only the first message and answer, through the chat's own profile, so its own account and provider. The profile's secret values and anything shaped like a credential are replaced before sending; the titler runs with no tools, no MCP servers and no project directory. (Session summaries, which sent a session's view, were removed 2026-11-17) |
 | Agents' own permission prompts bypassed | ptyro never auto-answers permission prompts unless the user configured an explicit policy; "dangerous" agent args require `dangerous = true` and show a ⚠ badge |
 | Paste injection (`ESC[201~` in pasted text) | every ESC and C1 CSI is removed from bracketed-paste payloads, so nothing can close the bracket (a one-pass removal of `ESC[201~` was beatable by nesting) |
 | Malicious escape sequences from child output | emulator is the only consumer; clients render cells, not raw bytes; OSC 52 read denied; title length capped; OSC 7501 messages length-capped (4096); OSC 9/777/99 notifications stripped of controls and capped (1024); query replies never echo what the program sent (XTGETTCAP answers only hex names: echoing a non-hex request typed child output into the shell); sizes from the wire clamped (2×1 … 1000×500); combining marks capped per cell (16) both in what alacritty stores (a filter before its parser, escape-aware, split-UTF-8-safe) and in what frames report, frames budgeted (8 MiB), style tables bounded |
@@ -5592,7 +5590,8 @@ learn something the hard way.
   prints one JSON object with `is_error`, `result` (the text) and `total_cost_usd`. The alias
   resolved to `claude-haiku-5-5`. One summary cost $0.00065 (3.1k cache-creation tokens, most of
   them Claude Code's own system prompt) and took 1.1 s (`duration_ms`), or 2.4 s wall clock with
-  startup. This is the default `[summaries] command` (§11.2h).
+  startup. This is the default `[chat] title_command` (§22.8; it was the summaries' command, removed
+  2026-11-17).
 - **[verified in binary]** `idle_prompt` notifications are delayed by `messageIdleNotifThresholdMs`
   (default 60 000 ms) ⇒ use `Stop` for "turn ended", not `idle_prompt`.
 - **[docs]** `--resume` does not restore `--settings`, `--mcp-config`, `--plugin-dir`, `--add-dir`.
@@ -5690,7 +5689,7 @@ learn something the hard way.
     "allow","updatedInput":…}}}` (or `{behavior: deny, message}`).
 
   `control_request {subtype: interrupt}` ends a turn. `--resume <id>` works in both modes, so a
-  session converts between them. `--permission-prompts host|none` exists too.
+  session started structured before that was removed (2026-11-17) resumes in the TUI. `--permission-prompts host|none` exists too.
 - **[spike; unverified]** The messaging socket (RESEARCH §II.4) takes one NDJSON line
   `{"type":"user","message":{"role":"user","content":…}}`, without the optional auth line. ptyro
   sent `interrupt` mail through it until mail was removed (2026-11-17). Not tried against a real
@@ -5822,8 +5821,8 @@ learn something the hard way.
 - **[verified 2026-10-22, Claude Code 2.1.309]** Claude keeps each conversation's transcript at
   `<config dir>/projects/<cwd with every non-alphanumeric character a dash>/<conversation
   id>.jsonl` (`/Users/me/dev/easy_llm_wrapper` → `-Users-me-dev-easy-llm-wrapper`); the newest one
-  there is the conversation a Claude started in that directory is in. Adopting one (UX1.4)
-  resumes it.
+  there is the conversation a Claude started in that directory is in. (Adopting one, UX1.4,
+  resumed it; removed 2026-11-17.)
 - **[verified 2026-10-22, macOS 25.6, Claude Code 2.1.291–2.1.309]** Claude Code's native
   installer puts each release at `~/.local/share/claude/versions/<version>` and points
   `~/.local/bin/claude` at it, so the kernel names the process after the version (`ps` `ucomm`
@@ -6792,8 +6791,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
    them.
 9. **A resident summariser ("concierge")** — the UX1.3 spike's option B (owner's idea,
    2026-10-22): one long-lived, cheap structured session per profile, fed turn digests, that
-   could answer "what's going on?" across sessions. Per-turn
-   summaries don't need it (§11.2h, §20.1); revisit when cross-session questions are wanted.
+   could answer "what's going on?" across sessions. Per-turn summaries were removed 2026-11-17;
+   revisit when cross-session questions are wanted.
 10. **Chat sync and merge across machines (CHAT6)** — the owner wants it, 2026-10-29; needs a
     brainstorm of its own. §22.15 lists what the schema already guarantees and what is open.
 11. ~~**Chat meaning search (embeddings)**~~ — **built opt-in 2026-10-30** (CHAT5, §22.10 tier 3):
@@ -6821,7 +6820,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `--tools`/`--allowedTools`/`--strict-mcp-config`/`--safe-mode`/`--system-prompt`; Codex
   `thread/start` fields through the driver's new `Opts.params`, every `codex mcp list` server off;
   a Gemini `--policy` file; OpenCode's permission ruleset). Engines are hidden by the clients
-  (`SessionInfo.chat`), never restored as dormant, never summarized, never hibernated by
+  (`SessionInfo.chat`), never restored as dormant, never hibernated by
   `[agents]`: `[chat] hibernate_after` stops them. Native continue by conv; a conv whose resume
   produced no answer is ended and the message is re-sent seeded. Codex's driver ends a turn on
   `thread/status/changed → idle` (CHAT0). Attention follows `[chat] notify`.
@@ -7055,7 +7054,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   `workspace`, `all`); CHAT4 adds `chat.tools.*.{shell, mcp}`.
 - **Seeds:** the "N earlier messages left out" line is used (no summary paragraph yet). The seed
   notice sits on the branch between the message and its answer.
-- **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|retitle|pin|unpin|archive|
+- **Surfaces:** CLI `chat [new]|ask|ls|show|open|send|answer|stop|rename|pin|unpin|archive|
   unarchive|set|rm|export` (`set` is the draft's `update --agent/--tools`); TUI: the CHATS section
   per workspace, `C-q m`, `C-q g`, the chat panel over the panes, sidebar keys reusing `,` `x` `X`
   and `*`; web: a Chats tab, `#/chats`, `#/c/<id>`, `#/c/new`.
@@ -7090,7 +7089,7 @@ shown in every workspace, including those of linked machines (§16.4b).
   - engines are **hidden from the session tree** and from `ptyro ls` (`ls --chats` shows them);
   - a chat's row in the sidebar carries the engine's status glyph and its attention;
   - an engine lives in its own **scratch directory** `<data>/chat/<chat id>/`, empty, with no
-    project files, no `.ptyro.toml` and no hooks (the way summaries run, §11.2h).
+    project files, no `.ptyro.toml` and no hooks (the way the titler runs, §22.8).
 - It belongs to **one workspace** (the selected row's, else the focused pane's, as for `n`), runs
   under **that workspace's profile** (so its account), and lives on **the machine that owns the
   workspace**. A removed workspace's chats move to `main` of their machine.
@@ -7319,13 +7318,14 @@ The first exchange gets a title, once: (1) the agent's own when it sends one (AC
 **[S]** 2026-10-30; OpenCode writes its own title into the session, read
 from `session.updated` or `GET /session/:id` [V]; Codex sends no `thread/name/updated` and sets no
 name in an app-server thread, and Claude's stream and session file carry no title: both **[V]**, so
-for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot as for summaries
+for Claude and Codex this step never happens and (2) always runs); else (2) `[chat] title_command`, a no-tools, no-MCP one-shot
 (default `claude -p --model haiku --output-format json --strict-mcp-config --tools ""`, run in
-`<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`), fed the first user
-and assistant messages (redacted as summaries are); else (3) the first line of the first message.
-A title the user typed (`title_src = user`) is never replaced; `chat.retitle` with an empty box
-clears it (and none is made for it again), `chat.autotitle` (`chat retitle --auto`) makes a new
-one (owner, 2026-11-09: retitle clears, for every kind). `[chat] title = "off"` uses (3) only.
+`<data>/summaries` under the chat's profile, 60 s, counted against `daily_cap`; empty skips it),
+fed the first user and assistant messages, redacted (`redact.rs`); else (3) the first line of the
+first message.
+A title the user typed (`title_src = user`) is never replaced; `chat.rename` with an empty box
+clears it (and none is made for it again), `chat.autotitle` (`chat rename --auto`) makes a new
+one (owner, 2026-11-09: an empty title clears, for every kind). `[chat] title = "off"` uses (3) only.
 
 ### 22.9 Incognito
 
@@ -7520,7 +7520,7 @@ hides when `enabled`):
   checks and the user can rebind): `m` **new chat** in the current workspace (the composer opens at
   once, ⏎ sends; `C-o` picks agent, tools and folder; `Tab`/`C-i` incognito), `g` the **chat list**
   (searchable), `C-g` find across all chats, `Alt-←/→` branches. In the sidebar on a chat row (no
-  prefix): `⏎` open, `,` retitle, `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu; on
+  prefix): `⏎` open, `,` rename (its title), `*` pin, `x` archive, `X` delete (asks), `f` fork, `.` its menu; on
   the CHATS heading `⏎`/Space fold it as on a project (`h`/`l` close and open it), and a click on
   its `＋` starts a chat in that workspace. Opening a chat or the list gives it the keyboard; a
   slow reply (a fork, a side chat, `/find`) opens its chat only if what asked for it is still
@@ -7537,7 +7537,7 @@ hides when `enabled`):
 - **CLI** (an address may be `laptop2:…`). `--json` on a verb that asks (`new`, `ask`, `send`,
   `retry`, `edit`, `fork`, `find`, `compare`) waits for the answer, unless `--no-wait`, and prints
   `{"chat", "message", "answers": [{"agent", "node", "text"}]}` (`compare`'s also has `agents`);
-  on one that changes a chat (`set`, `retitle`, `keep`, `branch`, `pick`) it prints `{"chat"}`,
+  on one that changes a chat (`set`, `rename`, `keep`, `branch`, `pick`) it prints `{"chat"}`,
   and on `pin`/`unpin`/`archive`/`unarchive` `{"chats": […]}`; `ls`, `search`, `presets`,
   `task` and `import` print their lists and reports; `show` and `export` take `--format json`;
   `answer`, `stop`, `rm` and `open` print nothing to parse. A question whose first word names a
@@ -7554,7 +7554,7 @@ hides when `enabled`):
   ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]   # waits for the answer by default
   ptyro chat retry CHAT [NODE] · edit CHAT NODE TEXT · branch CHAT --to NODE
   ptyro chat fork CHAT [--at NODE] [--agent A] [--side] [--keep] [--yes] [PROMPT] [--no-wait] [--timeout S]
-  ptyro chat retitle CHAT [TITLE|--auto] · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
+  ptyro chat rename CHAT TITLE…|--title T|--auto · pin|unpin|archive|unarchive|rm CHAT… · keep CHAT
   ptyro chat search QUERY [filters]  ·  ptyro chat find QUESTION   # no match is exit 0
   ptyro chat answer CHAT allow|always|deny  ·  ptyro chat stop CHAT
   ptyro chat export CHAT [--format md|json] [-o FILE]
@@ -7591,7 +7591,7 @@ incognito = false         # next: new chats start incognito
 hibernate_after = "2m"    # next: an idle engine stops; the next message resumes or seeds
 seed_tokens = 30000       # next: the most a seed block carries (§22.6)
 title = "auto"            # auto | off
-title_command = []        # argv; [] = the summaries' default command (§22.8)
+title_command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]  # [] = no titler (§22.8)
 daily_cap = 200           # per profile per UTC day: titles and chat find, counted together
 history_tool = true       # the chat tools of §22.10 in every chat
 history_scope = "profile" # profile | workspace | all
@@ -7857,7 +7857,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
 
 - **It is a session** (§7.1) of kind `shell` or `command` (an `agent` too, when started there),
   with `loose = true` and a `slot`. Everything a session has works on it unchanged: `send`,
-  `read`, `wait`, rename and retitle, stop and kill, restart, copy mode, the recorder, splits
+  `read`, `wait`, rename (name and title), stop and kill, restart, copy mode, the recorder, splits
   (`v`/`s`: a copy of it, a shell in its directory, as a pane of its window, §23.17), broadcast (`b` to the rows
   marked with `Space`: tmux's `synchronize-panes`), peek, the filter, the finder.
 - **It belongs to its workspace, not to a worktree.** It has no `worktree` and no `project`, gets
@@ -8405,7 +8405,8 @@ leaves installed agents and tools alone"). In it: `node` (nodejs.org's build) an
 prefix used when npm's own global prefix isn't writable, as with a distro's Node.js: never `sudo
 npm`; on Windows npm's prefix is the user's `%APPDATA%\npm` already). `setup::path_dirs` names
 their program folders (`bin` under each, except on Windows):
-- **`ptyro shell-init`** prints `ptyro_core::shell::path_lines` first, for the folders that
+- **`ptyro shell-init`** (hidden since 2026-11-17: this line is all it is for now) prints
+  `ptyro_core::shell::path_lines` first, for the folders that
   exist, before the snippet's `PTYRO` guard, so every shell gets them, not only ptyro's: each
   added at the front of `PATH` once (bash/zsh `case ":$PATH:"`, fish `contains`, PowerShell
   `-notcontains`). A machine that never needed them prints nothing new.

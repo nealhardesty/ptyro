@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 45 };
+pub const PROTO: Version = Version { major: 1, minor: 46 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -106,6 +106,13 @@ pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
     ("project_suggest", "setup suggestions"),
     ("project_line_endings", "rewriting scripts' line endings"),
     ("last_launch", "quick new (`new --again`)"),
+    ("convert", "structured sessions (`convert`, `new --structured`)"),
+    ("chat_get", "structured sessions' chat view"),
+    ("summarize", "session summaries"),
+    ("adopt", "adopting an agent started by hand"),
+    ("report", "`ptyro report`"),
+    ("replay", "replaying recordings"),
+    ("export", "exporting recordings"),
 ];
 
 /// A checkpoint of a session's worktree, taken after an agent turn (SPEC §15.3).
@@ -359,14 +366,6 @@ pub enum Request {
     },
     /// Send a test notification to this device (or, locally, to every subscription).
     PushTest,
-    /// Switch an agent between its terminal UI and structured mode, continuing the same
-    /// conversation (M10.6). `force` interrupts a turn in progress.
-    Convert {
-        addr: String,
-        structured: bool,
-        #[serde(default)]
-        force: bool,
-    },
     /// Change what a session (`worktree`: a worktree) is titled, for people to read; `None`
     /// clears it (UX1.24). Its name, the address, stays.
     Retitle {
@@ -375,16 +374,6 @@ pub enum Request {
         title: Option<String>,
         #[serde(default)]
         worktree: bool,
-    },
-    /// A summary of what a session is doing, from `[summaries] command`, now (UX1.3); replies
-    /// `Session` with it in `summary`.
-    Summarize {
-        addr: String,
-    },
-    /// An agent started by hand in this shell session becomes a session of its own, managed like
-    /// `new --agent` (hooks, hibernation, mail), resuming the same conversation (UX1.4).
-    Adopt {
-        addr: String,
     },
     /// The quick terminal (UX1.25) of `worktree` (an address), else of the worktree `cwd` is in,
     /// else of `cwd`: one shell each, reused. With `create`, one starts when there's none
@@ -533,10 +522,6 @@ pub enum Request {
     /// its own on this daemon (it survives the daemon's live upgrade at its end). Refused for a
     /// binary an administrator or a package manager owns, and a build. Replies `Session`.
     SelfUpdate,
-    /// A structured session's whole transcript (M10).
-    ChatGet {
-        addr: String,
-    },
     /// Expand a selector (SPEC §2.3): names, handles, globs (`build-*`), the `@` selectors of
     /// `ptyro_core::selector::SELECTORS`; `,` joins several.
     Resolve {
@@ -728,18 +713,6 @@ pub enum Request {
         session: String,
         payload: serde_json::Value,
     },
-    /// A program reporting its own state (`ptyro report`, herdr-compatible; SPEC §9.2).
-    Report {
-        /// A session address; `PTYRO_SESSION_ID` from inside one.
-        addr: String,
-        state: String,
-        #[serde(default)]
-        kind: Option<String>,
-        #[serde(default)]
-        msg: Option<String>,
-        #[serde(default)]
-        progress: Option<u8>,
-    },
     /// The status engine's recent decisions for a session ("why is it blocked?").
     StatusExplain {
         addr: String,
@@ -791,15 +764,6 @@ pub enum Request {
     /// --explain`), as `Text`.
     ProjectConfig {
         addr: String,
-    },
-    /// A session's recording as screen frames, to play back (`ptyro replay`, for the web).
-    Replay {
-        addr: String,
-    },
-    /// A session's recording as `asciicast` or `text` (`ptyro export`, for the web).
-    Export {
-        addr: String,
-        format: String,
     },
     /// The web app's server, when the daemon runs it (`[remote] serve`, 1.16): `None` asks how
     /// it is; `Some(true)` or `Some(false)` turns the setting on or off (edits the config file)
@@ -1277,26 +1241,6 @@ pub struct AgentChoice {
     pub found: Option<String>,
 }
 
-/// One step of a replay: the screen at `at_ms` into the recording, as a keyframe or the changes
-/// since the step before.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReplayStep {
-    pub at_ms: u64,
-    pub keyframe: bool,
-    pub delta: ScreenDelta,
-}
-
-/// A recording to play back (`Request::Replay`), sampled to a few hundred steps.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReplayDoc {
-    pub size: TermSize,
-    pub duration_ms: u64,
-    pub steps: Vec<ReplayStep>,
-    /// The recording was longer than what fits in one reply: this is its start.
-    #[serde(default)]
-    pub truncated: bool,
-}
-
 /// What the daemon's watchdog measures (M8.5).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Metrics {
@@ -1325,7 +1269,6 @@ impl Request {
                 | Request::WorktreeRemove { .. }
                 | Request::ProjectRemove { .. }
                 | Request::Shutdown { .. }
-                | Request::Convert { .. }
         )
     }
 
@@ -1339,9 +1282,7 @@ impl Request {
             (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
             (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
             (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
-            (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
-                *force = true
-            }
+            (Request::Shutdown { force }, A::Force) => *force = true,
             _ => return None,
         }
         Some(r)
@@ -1463,9 +1404,6 @@ pub enum Reply {
         web: WebServe,
         notes: Vec<String>,
     },
-    Replay {
-        replay: ReplayDoc,
-    },
     Editors {
         names: Vec<String>,
         default: String,
@@ -1517,9 +1455,6 @@ pub enum Reply {
         /// The earlier device of the same name this claim replaced.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         replaced: Option<DeviceInfo>,
-    },
-    Transcript {
-        items: Vec<ptyro_core::chat::ChatItem>,
     },
     Chat {
         info: ChatInfo,
@@ -1907,17 +1842,6 @@ pub enum ServerMsg {
         reason: String,
     },
     Pong,
-    /// A structured session's transcript (M10): everything on subscribe (`reset`), then what
-    /// changed. `draft` is what's being typed into it.
-    Chat {
-        session: SessionId,
-        rev: u64,
-        #[serde(default)]
-        reset: bool,
-        items: Vec<ptyro_core::chat::ChatItem>,
-        #[serde(default)]
-        draft: String,
-    },
     /// A followed chat (1.22): its shown branch on subscribe and when the branch changes
     /// (`reset`), then the items that changed. Item ids are node ids.
     ChatLive {

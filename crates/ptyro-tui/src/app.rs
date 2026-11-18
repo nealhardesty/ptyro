@@ -151,13 +151,12 @@ pub struct Wizard {
     pub issue: Option<String>,
     pub branch: Option<String>,
     /// The rest of `ptyro new`'s options, from the form (SPEC §11.5a): the profile (`None`
-    /// resolves), a new worktree's base, whether it skips setup or fetching, structured mode, a
-    /// command line for `@command`, and a title apart from the prompt.
+    /// resolves), a new worktree's base, whether it skips setup or fetching, a command line for
+    /// `@command`, and a title apart from the prompt.
     pub profile: Option<String>,
     pub base: Option<String>,
     pub no_setup: bool,
     pub no_fetch: bool,
-    pub structured: bool,
     pub command: Option<String>,
     pub title: Option<String>,
 }
@@ -509,8 +508,6 @@ pub enum Pending {
     PreCreate(Box<WorktreeSpec>, Option<Dir>),
     Peek(SessionId),
     Explain(SessionId),
-    /// `session.summarize` (UX1.3): toast the summary.
-    Summarized,
     /// `app.quit`: the daemon is stopping.
     Quit,
     /// Older history for copy mode, from the recording (M8.2).
@@ -705,9 +702,6 @@ pub struct App {
     /// Whether our outer terminal window has focus (a watched session raises no attention).
     pub terminal_focused: bool,
     pub caches: HashMap<SessionId, ScreenCache>,
-    /// Structured sessions' transcripts (M10), and those shown as a terminal instead.
-    pub chats: HashMap<SessionId, crate::chat::ChatView>,
-    pub chat_terminal: HashSet<SessionId>,
     subscribed: HashSet<SessionId>,
     pub(crate) sizes: HashMap<SessionId, TermSize>,
     pub layout: Layout,
@@ -865,8 +859,6 @@ impl App {
             config,
             sessions: Vec::new(),
             caches: HashMap::new(),
-            chats: HashMap::new(),
-            chat_terminal: HashSet::new(),
             subscribed: HashSet::new(),
             sizes: HashMap::new(),
             layout: Layout::default(),
@@ -1526,9 +1518,6 @@ impl App {
                 self.on_event(event);
                 self.retry_reveal();
             }
-            ServerMsg::Chat { session, rev, reset, items, draft } => {
-                self.chats.entry(session).or_default().apply(rev, reset, items, draft);
-            }
             ServerMsg::ChatLive { chat, rev, reset, items, siblings } => {
                 self.chat_live(chat, rev, reset, items, siblings);
             }
@@ -1578,8 +1567,6 @@ impl App {
     fn forget_session(&mut self, id: SessionId) {
         self.stopping.remove(&id);
         self.marked.retain(|m| *m != id);
-        self.chats.remove(&id);
-        self.chat_terminal.remove(&id);
         self.controller.remove(&id);
         self.caches.remove(&id);
         self.sizes.remove(&id);
@@ -2112,16 +2099,6 @@ impl App {
                 self.quitting = false;
                 self.toast_err(format!("ptyro didn't stop: {}", e.message));
             }
-            (Pending::Summarized, Ok(Reply::Session { info })) => {
-                let text = info.summary.map(|s| s.text).unwrap_or_default();
-                let text = format!("≈ {}: {text}", info.name);
-                if self.config.summaries.enabled {
-                    self.toast(text);
-                } else {
-                    let every = "after every turn: [summaries] enabled = true";
-                    self.toast_offer(text, false, run_offer(every, "config.edit"));
-                }
-            }
             (Pending::Explain(id), Ok(Reply::Explain { lines })) => {
                 // Newest last: start at the bottom.
                 let scroll = lines.len().saturating_sub(self.overlay_body_h(2));
@@ -2555,24 +2532,6 @@ impl App {
             }
             return;
         }
-        // A chat view scrolls itself; every other key goes to the session's line editor.
-        if let Some(id) = self.focused_session().filter(|id| self.chat_shown(*id))
-            && let Some(view) = self.chats.get_mut(&id)
-        {
-            match key.code {
-                KeyCode::PageUp => {
-                    view.scroll = (view.scroll + 10).min(view.max_scroll.get());
-                    self.dirty = true;
-                    return;
-                }
-                KeyCode::PageDown => {
-                    view.scroll = view.scroll.saturating_sub(10);
-                    self.dirty = true;
-                    return;
-                }
-                _ => view.scroll = 0,
-            }
-        }
         self.forward(InputEvent::Key { key });
     }
 
@@ -2630,12 +2589,6 @@ impl App {
         self.forward(InputEvent::Focus { gained });
         self.terminal_focused = gained;
         self.sync();
-    }
-
-    /// The pane shows this structured session's chat view (not its terminal view).
-    pub fn chat_shown(&self, id: SessionId) -> bool {
-        self.session(id).is_some_and(|s| s.structured.is_some())
-            && !self.chat_terminal.contains(&id)
     }
 
     fn in_copy(&self) -> bool {
@@ -2708,8 +2661,7 @@ impl App {
                     Err(e) => self.toast_err(e),
                 }
             }
-            "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
-            | "session.adopt" | "session.summarize" => {
+            "session.resume" | "session.hibernate" | "session.explain" | "session.mute" => {
                 let target = if self.focus == Focus::Sidebar {
                     self.selected_row().and_then(|r| r.session())
                 } else {
@@ -2730,17 +2682,6 @@ impl App {
                     }
                     "session.hibernate" => self
                         .request(Pending::Done("hibernated".into()), Request::Hibernate { addr }),
-                    "session.adopt" => {
-                        self.toast("adopting: Claude exits here and comes back managed…");
-                        self.request(
-                            Pending::Spawned { split: None, spec: Box::default(), back: false },
-                            Request::Adopt { addr },
-                        )
-                    }
-                    "session.summarize" => {
-                        self.toast("summarizing (a small model, on its profile's account)…");
-                        self.request(Pending::Summarized, Request::Summarize { addr })
-                    }
                     "session.mute" => self.request(
                         Pending::Done("notifications muted for 1h".into()),
                         Request::Mute { target: addr, minutes: Some(60), unmute: false },
@@ -2830,10 +2771,6 @@ impl App {
                 };
                 self.toggle_quick_as(style, want, None, None);
             }
-            "worktree.retitle" => match self.context().1.filter(|w| self.worktree(w).is_some()) {
-                Some(w) => self.open_retitle_worktree(&w),
-                None => self.pick_project(Some(AfterAdd::Run("worktree.retitle"))),
-            },
             "worktree.remove" => match self.context().1.and_then(|w| self.worktree(&w).cloned()) {
                 Some(w) if w.is_root => self.toast("that's the main checkout; it can't be removed"),
                 Some(w) => self.confirm_remove(&w),
@@ -2864,7 +2801,6 @@ impl App {
             | "session.remove"
             | "session.restart"
             | "session.rename"
-            | "session.retitle"
             | "session.take_control" => {
                 // An offer names its session: it acts on that one, wherever the selection went.
                 if let Some(id) = cmd.arg.as_deref().and_then(|a| a.parse().ok()) {
@@ -2879,7 +2815,7 @@ impl App {
                 let chat_shown = self.focus == Focus::Pane && self.chat_panel.is_some();
                 if on_chat_row || chat_shown {
                     let a = match cmd.action {
-                        "session.rename" | "session.retitle" => "chat.retitle",
+                        "session.rename" => "chat.rename",
                         "session.stop" => "chat.archive",
                         "session.kill" => "chat.delete",
                         _ if !chat_shown => return,
@@ -3112,44 +3048,6 @@ impl App {
                     },
                 ),
             },
-            // The chat panel covers the session: the key is no news to the session under it.
-            "view.chat" if self.chat_panel.is_some() && self.focus == Focus::Pane => {
-                let back = self.keymap.key_for("session.last").unwrap_or_default();
-                self.toast(format!("this is a chat already ({back} shows the session under it)"));
-            }
-            "view.chat" => {
-                match self
-                    .focused_session()
-                    .filter(|id| self.session(*id).is_some_and(|s| s.structured.is_some()))
-                {
-                    Some(id) => {
-                        if !self.chat_terminal.remove(&id) {
-                            self.chat_terminal.insert(id);
-                        }
-                    }
-                    None => match self.focused_session().filter(|id| {
-                        self.session(*id).is_some_and(|s| s.kind == SessionKind::Agent)
-                    }) {
-                        // An agent in its own UI: offer to switch it, same conversation (M10.6).
-                        Some(id) => self.toast_offer(
-                            "only structured sessions have a chat view",
-                            false,
-                            Offer {
-                                label: "switch this one".into(),
-                                then: Then::Send(
-                                    Box::new(Request::Convert {
-                                        addr: id.full(),
-                                        structured: true,
-                                        force: false,
-                                    }),
-                                    "switching to structured mode (same conversation)…".into(),
-                                ),
-                            },
-                        ),
-                        None => self.toast("only an agent's structured session has a chat view"),
-                    },
-                }
-            }
             "view.redraw" => {
                 for id in self.subscribed.drain().collect::<Vec<_>>() {
                     self.send(ClientMsg::Unsubscribe { session: id });
@@ -3440,12 +3338,14 @@ impl App {
             ),
             "session.rename" => {
                 self.overlay = Some(Overlay::Prompt {
-                    title: format!("Rename {} (its address; C-t: its title)", info.name),
+                    title: format!(
+                        "Rename {}: its name, the address (C-t: its title, what people read)",
+                        info.name
+                    ),
                     text: bare(info.machine.as_deref(), &info.name).to_owned(),
                     kind: PromptKind::Rename(id),
                 });
             }
-            "session.retitle" => self.open_retitle(id),
             "session.take_control" => {
                 if let Some(size) = self.sizes.get(&id).copied() {
                     self.send(ClientMsg::Resize { session: id, size });
@@ -3464,7 +3364,7 @@ impl App {
     fn open_retitle_worktree(&mut self, id: &str) {
         let Some(w) = self.worktree(id).cloned() else { return };
         self.overlay = Some(Overlay::Prompt {
-            title: format!("Title of {} (what it's for; empty clears it)", w.qualified()),
+            title: format!("Title of {}: what people read (empty clears it)", w.qualified()),
             text: w.title.clone().unwrap_or_default(),
             kind: PromptKind::RetitleWorktree(w.id.clone()),
         });
@@ -3475,7 +3375,7 @@ impl App {
         let Some(info) = self.session(id) else { return };
         let current = info.title.clone().filter(|t| info.window_title.as_ref() != Some(t));
         self.overlay = Some(Overlay::Prompt {
-            title: format!("Title of {} (what people read; empty clears it)", info.name),
+            title: format!("Title of {}: what people read (empty clears it)", info.name),
             text: current.unwrap_or_default(),
             kind: PromptKind::Retitle(id),
         });
@@ -3689,9 +3589,6 @@ impl App {
                 if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
                     return with("peek", "answer it");
                 }
-                if s.inner_agent.as_deref() == Some("claude") {
-                    return with("session.adopt", "adopt it (hooks, resume)");
-                }
                 if self.attention_order(false).iter().any(|a| *a != id) {
                     return with("attention.next", "who needs you");
                 }
@@ -3751,30 +3648,8 @@ impl App {
             me.toast_offer("pick a worktree first", false, run_offer("make one", "worktree.new"))
         };
         match action {
-            "session.convert" => {
-                match self.focused_session().and_then(|id| self.session(id)).cloned() {
-                    Some(s) if s.kind == SessionKind::Agent => {
-                        let structured = s.structured.is_none();
-                        self.request(
-                            Pending::Spawned { split: None, spec: Box::default(), back: false },
-                            Request::Convert { addr: s.id.full(), structured, force: false },
-                        );
-                        self.toast(if structured {
-                            "to structured mode, same conversation…"
-                        } else {
-                            "to its own UI, same conversation…"
-                        });
-                    }
-                    _ => self.toast("only an agent session converts"),
-                }
-            }
-            "project.remove"
-            | "project.rename"
-            | "project.untrust"
-            | "project.pin"
-            | "project.unpin"
-            | "project.leave"
-            | "project.workspaces" => {
+            "project.remove" | "project.rename" | "project.untrust" | "project.pin"
+            | "project.unpin" | "project.leave" | "project.workspaces" => {
                 let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
                     self.pick_project(None);
                     return;
@@ -3839,13 +3714,12 @@ impl App {
                 }
             }
             "worktree.rename" => match worktree {
-                Some(w) if w.is_root => self.toast_err(
-                    "that's the main checkout: it's always @root (rename the project, or give it a title)",
-                ),
+                // The main checkout's name is always @root: only its title changes.
+                Some(w) if w.is_root => self.open_retitle_worktree(&w.id),
                 Some(w) => {
                     self.overlay = Some(Overlay::Prompt {
                         title: format!(
-                            "Rename {} (its address; its branch and directory stay; C-t: its title)",
+                            "Rename {}: its name, the address; branch and directory stay (C-t: its title, what people read)",
                             w.qualified()
                         ),
                         text: w.name.clone(),
@@ -3967,23 +3841,9 @@ impl App {
                 } else if !s.state.is_live() {
                     v.push("session.restart");
                 }
-                if s.inner_agent.as_deref() == Some("claude") {
-                    v.push("session.adopt");
-                }
-                v.extend([
-                    "session.retitle",
-                    "session.rename",
-                    "session.explain",
-                    "session.events",
-                ]);
-                if s.state.is_live() {
-                    v.push("session.summarize");
-                }
+                v.extend(["session.rename", "session.explain", "session.events"]);
                 if s.kind == SessionKind::Agent && s.state.is_live() {
                     v.extend(["session.hibernate", "session.mute"]);
-                    if s.structured.is_some() {
-                        v.push("view.chat");
-                    }
                 }
                 if s.worktree.is_some() {
                     v.extend(["worktree.open", "script.run", "script.pick"]);
@@ -4012,9 +3872,9 @@ impl App {
             Row::Worktree(w) => {
                 let root = self.worktree(w).is_some_and(|w| w.is_root);
                 let mut v = vec!["session.new", "shell.new", "shell.drawer", "shell.pane"];
-                v.extend(["worktree.open", "script.run", "script.pick", "worktree.retitle"]);
+                v.extend(["worktree.open", "script.run", "script.pick", "worktree.rename"]);
                 if !root {
-                    v.extend(["worktree.rename", "worktree.remove"]);
+                    v.push("worktree.remove");
                 }
                 v
             }
@@ -4036,9 +3896,6 @@ impl App {
                 let mut v = vec!["shell.drawer", "shell.pane", "shell.new"];
                 if s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked) {
                     v.push("peek");
-                }
-                if s.inner_agent.as_deref() == Some("claude") {
-                    v.push("session.adopt");
                 }
                 v.extend(["session.rename", "session.explain", "session.stop"]);
                 v
@@ -4343,7 +4200,6 @@ impl App {
                         title: w.title.clone().or_else(|| w.prompt.clone()),
                         name: w.name.clone().filter(|n| !n.is_empty()),
                         profile: w.profile.clone(),
-                        structured: w.structured,
                         ..SpawnSpec::default()
                     },
                     w.split,
@@ -6420,7 +6276,6 @@ pub(crate) fn worktree_spec(w: &Wizard, project: &str) -> WorktreeSpec {
         fetch: w.no_fetch.then_some(false),
         base: w.base.clone(),
         profile: w.profile.clone(),
-        structured: w.structured && agent.is_some(),
         // The prompt goes to the agent; with no agent it's still the title.
         prompt: w.prompt.clone().filter(|_| agent.is_some()),
         title: w.title.clone().or_else(|| w.prompt.clone()),
@@ -7169,32 +7024,7 @@ mod tests {
     }
 
     #[test]
-    fn a_summary_stands_in_for_its_turns_last_reply() {
-        let mut app = app();
-        let mut idle = session("done-one");
-        idle.kind = SessionKind::Agent;
-        idle.turns = 2;
-        idle.last_reply = Some("I changed 14 files and ran the suite twice.".into());
-        idle.summary = Some(ptyro_core::session::Summary {
-            text: "Fixed the login test; waiting for review".into(),
-            turn: 2,
-            at_ms: ptyro_core::now_ms(),
-        });
-        status(&mut idle, AgentStatus::Idle, None, None);
-        app.sessions = vec![idle];
-        assert!(rows_say(&app, "≈ Fixed the login test"), "{:#?}", sidebar(&app));
-        assert!(!rows_say(&app, "last I changed"), "the summary says it: {:#?}", sidebar(&app));
-        // From an earlier turn: both.
-        app.sessions[0].turns = 3;
-        assert!(rows_say(&app, "≈ Fixed") && rows_say(&app, "last I changed"));
-        // Working: what it does now instead.
-        status(&mut app.sessions[0], AgentStatus::Working, None, None);
-        assert!(!rows_say(&app, "≈ Fixed"));
-        assert!(app.row_actions(&Row::Session(app.sessions[0].id)).contains(&"session.summarize"));
-    }
-
-    #[test]
-    fn an_agent_started_in_a_shell_reads_shell_then_agent_and_offers_adopting() {
+    fn an_agent_started_in_a_shell_reads_shell_then_agent_and_says_its_status_is_a_guess() {
         let mut app = app();
         let mut sh = session("sh");
         sh.argv = vec!["/bin/zsh".into(), "-l".into()];
@@ -7205,7 +7035,8 @@ mod tests {
         app.sessions = vec![sh];
         let lines = sidebar(&app);
         assert!(lines.iter().any(|l| l.contains("◌ sh zsh › claude")), "{lines:#?}");
-        assert!(lines.iter().any(|l| l.contains("A adopts it")), "{lines:#?}");
+        assert!(lines.iter().any(|l| l.contains("◌ claude by hand, status")), "{lines:#?}");
+        assert!(!app.row_actions(&Row::Session(app.sessions[0].id)).contains(&"session.adopt"));
     }
 
     #[test]
@@ -8069,7 +7900,7 @@ mod tests {
         (other.id, other.name) = ("p1-other".into(), "other".into());
         app.worktrees.push(other);
         assert!(app.row_actions(&Row::Worktree(w.id.clone())).contains(&"worktree.rename"));
-        assert!(!app.row_actions(&Row::Worktree("p1-root".into())).contains(&"worktree.rename"));
+        assert!(!app.row_actions(&Row::Worktree("p1-root".into())).contains(&"worktree.remove"));
         assert!(app.row_actions(&Row::Project("p1".into())).contains(&"project.rename"));
         for a in ["worktree.rename", "project.rename"] {
             assert!(keymap::spec(a).is_some(), "{a} is in the palette");
@@ -8096,10 +7927,14 @@ mod tests {
         typed(&mut app, "\n");
         assert!(app.overlay.is_none(), "sent");
 
-        // The main checkout is always @root: it says so instead of asking.
+        // The main checkout is always @root: renaming it asks for its title only.
         select(&mut app, Row::Worktree("p1-root".into()));
         app.run(&Command { action: "worktree.rename", arg: None });
-        assert!(prompt_text(&app).is_none());
+        assert!(matches!(
+            &app.overlay,
+            Some(Overlay::Prompt { kind: PromptKind::RetitleWorktree(_), .. })
+        ));
+        app.overlay = None;
 
         select(&mut app, Row::Project("p1".into()));
         app.run(&Command { action: "project.rename", arg: None });
@@ -8814,7 +8649,7 @@ mod tests {
                 "not logged in (`ptyro profile login <profile> claude`)",
             ),
         ]);
-        let shell = usize::from(crate::health::shell_init_missing(&app.config).is_some());
+        let shell = usize::from(crate::health::shell_integration_off(&app.config));
         let n = 2 + shell;
         assert_eq!(app.health.findings.len(), n);
         assert!(screen(&app).contains(&format!("⚕ {n}")), "the badge");
@@ -8837,24 +8672,14 @@ mod tests {
             ),
         ]);
         assert!(app.toast.is_none());
-        // A file fix asks first, then appends.
-        let dir = tempfile::tempdir().unwrap();
-        let rc = dir.path().join(".zshrc");
-        app.health.findings.push(crate::health::Finding {
-            problem: false,
-            what: "shell integration".into(),
-            text: "missing".into(),
-            fix: Some(crate::health::Fix::Append { file: rc.clone(), line: "eval x".into() }),
-        });
-        let i = app.health.findings.len() - 1;
-        app.fix(i);
-        assert!(matches!(
-            app.overlay,
-            Some(Overlay::Confirm { action: Confirmed::Append(..), .. })
-        ));
-        key(&mut app, KeyCode::Char { c: 'y' }, Mods::NONE);
-        assert!(std::fs::read_to_string(&rc).unwrap().contains("eval x"));
-        assert_eq!(app.health.findings.len(), i, "fixed: off the list");
+        // Shell integration switched off: the fix opens its setting, nothing is written.
+        app.config.shell.integration = false;
+        app.config.shell.command = vec!["/bin/zsh".into()];
+        app.got_health(vec![check("terminal", "TERM", "ok", "xterm-256color")]);
+        let f = app.health.findings.iter().find(|f| f.what == "shell integration");
+        if let Some(f) = f {
+            assert_eq!(f.fix, Some(crate::health::Fix::Setting("shell.integration")));
+        }
     }
 
     #[test]
@@ -8875,17 +8700,13 @@ mod tests {
             app.last_cli.as_deref(),
             Some(&["profile", "login", "work", "claude"].map(String::from)[..])
         );
-        // The selected session, a choice, and a file.
+        // The selected session, and a word typed.
         let s = session("worker");
         app.panes.get_mut(&1).unwrap().session = Some(s.id);
         app.sessions = vec![s];
-        app.run(&Command { action: "session.export", arg: None });
-        typed(&mut app, "text\n");
-        typed(&mut app, "out.txt\n");
-        assert_eq!(
-            app.last_cli.clone().unwrap(),
-            ["export", "worker", "--format", "text", "-o", "out.txt"]
-        );
+        app.run(&Command { action: "checkpoint.diff", arg: None });
+        typed(&mut app, "3\n");
+        assert_eq!(app.last_cli.clone().unwrap(), ["checkpoint", "diff", "worker", "3"]);
         app.run(&Command { action: "session.events", arg: None });
         assert_eq!(app.last_cli.clone().unwrap(), ["events", "--session", "worker"]);
         // Nothing selected that it needs: it says what to pick.
@@ -9557,7 +9378,7 @@ mod tests {
         assert_eq!(spec.agent, s.agent, "the same agent");
         assert_eq!(spec.profile.as_deref(), Some(s.profile.as_str()));
         assert_eq!(spec.worktree, s.worktree, "in the same worktree");
-        assert!(spec.resume.is_none() && spec.prompt.is_none(), "a fresh conversation");
+        assert!(spec.prompt.is_none(), "a fresh conversation");
         assert!(app.overlay.is_none(), "no picker");
     }
 
@@ -10545,10 +10366,6 @@ mod tests {
         press(&mut app, 'x', M::NONE);
         assert!(app.overlay.is_none(), "no stop asked for");
         assert!(app.session(a).is_some());
-        press(&mut app, 'q', M::CONTROL);
-        press(&mut app, 't', M::NONE);
-        assert!(!app.chat_terminal.contains(&a), "the session's view untouched");
-        assert!(toast_text(&app).contains("chat"), "{}", toast_text(&app));
     }
 
     #[test]
@@ -10756,7 +10573,7 @@ mod tests {
         app.overlay = None;
         app.close_chat();
         // Nothing selected: the list is offered; chats off: switching them on is.
-        act(&mut app, "chat.retitle");
+        act(&mut app, "chat.rename");
         assert!(matches!(
             app.toast.as_ref().and_then(|t| t.offer.as_ref()).map(|o| &o.then),
             Some(Then::Run(Command { action: "chat.list", .. }))

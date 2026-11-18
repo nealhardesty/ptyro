@@ -14,7 +14,7 @@ Conventions:
   Windows, or from another distro). Without either, `client.default_remote` is used if set.
 - Listing and query commands take `--json`; the shapes are in [`cli-json.md`](cli-json.md).
 - Aliases: `a` (attach), `ls` (list),
-  `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`, `report-agent`.
+  `checkpoints` / `ckpt`, `projects`, `workspace`, `worktree`, `profiles`.
 - Durations look like `30s`, `10m`, `2h`.
 - Removing asks first, saying what goes and what stays (the TUI and the web ask in the same
   words): `chat rm`, `project rm`, `wt rm`, `ws rm`, `profile rm`, `devices revoke`,
@@ -95,22 +95,19 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | Command | Does |
 |---|---|
 | `ptyro` | attach to the most recent session (or start a shell session) |
-| `ptyro "TASK…"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach |
+| `ptyro "TASK"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach. Quote it: several words unquoted are an unknown command, with a did-you-mean |
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches in a terminal unless `-d` (`--json` prints it instead). No `--agent` means your shell, or `CMD` |
 | `ptyro new … -a A[@PROFILE] [--prompt TEXT \| --prompt-file F] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
 | `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL` | where: an existing worktree, a new one, one on a PR's branch, or one for an issue. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
-| `ptyro new … --structured` | drive it over its protocol (chat view) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
 | `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
 | `ptyro stop SESSIONS…` | stop, keeping them listed: an agent's turn is interrupted and it gets a moment to exit, then the process gets HUP, TERM and KILL |
 | `ptyro kill SESSIONS… [-s N]` | kill now (SIGKILL, no chance to clean up), keeping them listed; `-s N` sends signal N instead |
 | `ptyro rm SESSIONS… [--stop] [-y]` | forget ended sessions (they leave the list); a dormant agent asks first, its conversation forgotten (`-y` doesn't ask); a running one is refused, and `--stop` stops it first. Each is tried: a refusal is said, the rest go on, and the exit code is the first refusal's |
-| `ptyro restart SESSIONS…` / `rename SESSION NAME` | run exited sessions again / rename (the address) |
-| `ptyro retitle SESSION [TITLE…]` | change its title, what people read (none: clear it; `wt retitle` and `chat retitle` alike) |
+| `ptyro restart SESSIONS…` | run exited sessions again |
+| `ptyro rename SESSION [NAME] [--title T]` | its name, the address you type to find it, and/or its title, what people read (`--title ""` clears it; it then shows what its program titles its window) |
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
-| `ptyro convert SESSION [--to tui\|structured] [--force]` | switch an agent between its own TUI and structured mode, same conversation |
-| `ptyro summarize SESSION [--json]` | what it's doing, in a line, from a small model (`[summaries] command`, on its profile's account); works with summaries off |
 | `ptyro shell [WORKTREE] [--json] [--read [--scrollback [N]]]` | the worktree's quick terminal (one shell per worktree, or per directory outside one): attach with it in the TUI's drawer, print it as JSON, or print its screen (`--read`, which never starts one; an agent can read your terminal this way) |
 | `ptyro shells [ls] [-w WS] [--all] [--json]` | your workspace's SHELLS (SPEC §23): numbered terminals of any command that belong to the workspace, not a worktree, by number (`Alt-1…9` in the TUI); a window's later panes are listed under it (`└.2`) |
 | `ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--scratch] [-n NAME] [--title T] [-w WS] [-d] [--json]` | start one in SHELLS, here (or `-C DIR`), with the lowest free number or `--slot N`, and attach (unless `-d`); `--scratch`: in a new, empty directory that goes with it |
@@ -122,14 +119,13 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro shells loose S` | move a worktree's session into its workspace's SHELLS: it outlives its worktree |
 | `ptyro shells adopt S [WORKTREE]` | move a shell from SHELLS into a worktree (default: the one its directory is in; refused across profiles) |
 | `ptyro shells watch S [--done\|--activity\|--silence TIME\|--match PATTERN\|--off]` | tell you when its command ends, it prints, it goes quiet, or a line matches (`done` and `match` fire once) |
-| `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
 | `ptyro chat [new] [PROMPT…] [-a A[@P]] [--preset P] [--folder DIR]… [-w WS] [--title T] [--no-wait] [--json]` | a new chat with your agent (SPEC §22): the answer streams here and the chat is kept (the TUI's and web's CHATS show it). No prompt, at a terminal: the chat view. `-` or a pipe reads the prompt from standard input. `--folder` gives it a folder to read (with no `--preset`, the `read` preset) |
 | `ptyro chat ask [--keep] [--agent A] [--preset P] [--timeout S] QUESTION…` | one question, the answer on standard output; standard input is context (`git diff \| ptyro chat ask "review this"`); nothing is kept unless `--keep` |
 | `ptyro chat ls [-w WS] [--machine M] [--pinned] [--archived] [-l N] [--json]` | chats, pinned first then the newest; every linked machine's too (`laptop2:c:7f3k`), greyed while it is offline; `--machine here` for this one's |
 | `ptyro chat show CHAT [--all] [--format text\|md\|json]` / `open CHAT` | print a chat's shown branch (`--all`: every branch) / open it in the TUI's chat view. CHAT: `c:7f3k`, `7f3k`, a title's words, `@last` |
 | `ptyro chat send CHAT TEXT… [--no-wait] [--timeout S]` | a message; the answer streams here |
 | `ptyro chat answer CHAT allow\|always\|deny` / `stop CHAT` | answer its permission request / stop the answer being written |
-| `ptyro chat retitle CHAT [TITLE… \| --auto]` / `pin` / `unpin` / `archive` / `unarchive` / `rm CHATS… [-y]` | title it (none: clear it; `--auto`: a new automatic one) / keep at the top / put away / delete for good, with its side chats (by handle, id or `@last`, never a title; asks unless `-y`) |
+| `ptyro chat rename CHAT TITLE… \| --title T \| --auto` / `pin` / `unpin` / `archive` / `unarchive` / `rm CHATS… [-y]` | its title, what people read: a chat's name (it's found by its handle; `--title ""` clears it, `--auto` asks for a new automatic one) / keep at the top / put away / delete for good, with its side chats (by handle, id or `@last`, never a title; asks unless `-y`) |
 | `ptyro chat set CHAT [--agent A] [--preset P] [--folder DIR]… [--no-folders]` | switch its agent, its tools or the folders it reads; the next message carries the conversation over |
 | `ptyro chat presets [--json]` | the tool presets, each with what it lets a chat use (⚠ for a shell) |
 | `ptyro chat task CHAT [-p P] [-a A] [-n NAME] [-y] [-d] [--json]` | make it a task: an agent session in a new worktree whose first prompt is the chat's conversation and last answer, attached to in a terminal (unless `-d`) (not an incognito chat; asks first when the task's profile isn't the chat's, `--yes` agrees) |
@@ -153,13 +149,11 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro send SESSIONS… TEXT [--no-enter] [--raw] [--wait-ready[=D]] [--wait [--timeout D] [--stall D]] [--json]` | type into sessions. `--wait-ready` waits for the input box (2m, or D). `--wait` reports how the turn ended. `--raw` sends keys as written (`\e`, `\r`, `\t`, `\xHH`) |
 | `ptyro broadcast SESSIONS… TEXT [--no-enter] [--timeout D]` | one prompt to several, each once it's ready |
 | `ptyro wait SESSIONS… [--for working\|blocked\|idle\|done\|error\|exit\|any-attention] [--match RE [--scrollback [N]]] [--timeout D] [--any] [--stall D] [--json]` | block until they get there (exit 0), time out (7) or exit first (5). Default `--for idle` |
-| `ptyro read SESSION [--scrollback [N]] [--ansi] [--chat] [--json]` | the screen, scrollback, or a structured session's transcript |
+| `ptyro read SESSION [--scrollback [N]] [--ansi] [--json]` | the screen or its scrollback (beyond memory, from the recording) |
 | `ptyro events [-f] [--session S] [-l N] [--json]` | what happened; `--follow` streams every change as NDJSON |
 | `ptyro status [SESSION] [--explain] [--json]` | what every agent is doing; `--explain`: why ptyro thinks so |
 | `ptyro answer SESSION allow\|always\|deny` | answer a permission prompt without opening the session |
-| `ptyro report --state S [--kind K] [--msg M] [--progress N] [--session S]` | report your own program's state from inside a session |
 | `ptyro completions bash\|zsh\|fish\|elvish\|powershell` | the completion script (with live names) |
-| `ptyro shell-init bash\|zsh\|fish\|pwsh` | shell integration for a shell ptyro didn't start (its own get it automatically): prompt marks, status, live cwd |
 
 ## Attention and notifications
 
@@ -183,8 +177,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro wt ls [-p P]` / `status [W]` | list worktrees / repository status |
 | `ptyro wt run W [SCRIPT] [--attach]` / `open [W] [-e EDITOR]` | run a lifecycle script (`setup`, or a run script by name) / open in an editor |
 | `ptyro wt rm W [--force] [-y] [--stop-sessions] [--keep-branch]` | remove safely: refuses, listing what would be lost (commit and push it first, or `--force` to discard it). Its directory is deleted, and its branch too if it is merged or the same as its pushed copy, otherwise kept (`--keep-branch`: always kept). Asks unless `-y` (`--force` asks again, after saying what would be lost) |
-| `ptyro wt rename W NEW` | rename a worktree: its name, its address `project/NEW`, unique in its project. Its branch and its directory stay, so what runs in it carries on. The main checkout is always `@root` |
-| `ptyro wt retitle W [TITLE…]` | change a worktree's title (`wt new --title`, else its prompt, PR or issue) |
+| `ptyro wt rename W [NEW] [--title T]` | its name, its address `project/NEW`, unique in its project, and/or its title, what people read (`wt new --title`, else its prompt, PR or issue; `--title ""` clears it). Its branch and its directory stay, so what runs in it carries on. The main checkout is always `@root`: only its title changes |
 | `ptyro gc [--dry-run] [--json] [--scratch]` | stale worktrees (gone, merged, unused; one with sessions running is left alone), biggest on disk first; asks for each: `r` removes it (refusing to lose work, as `wt rm` does), ⏎ keeps it. Then scratch shells' directories left behind with files in them: `d` deletes one. `--json` lists the worktrees; `--scratch` only the scratch leftovers (`--scratch --json`: those as JSON) |
 | `ptyro ws ls\|new\|set\|rm\|rename\|add-project\|remove-project …` | workspaces: `new NAME [--profile P] [--notify all\|badge\|mute]`; `rm WS [-y]`: its sessions keep running and move to main, with its chats and the projects no other workspace has; `add-project WS PROJECT` / `remove-project WS PROJECT` put a project in one or take it out (it stays registered) |
 | `ptyro profile ls\|show\|new\|rm\|rename\|env\|login\|sync\|detect\|doctor …` | profiles; `detect [--apply]` finds your existing multi-account setups; edits keep your config's comments |
@@ -208,13 +201,6 @@ See [`remote.md`](remote.md).
 | `ptyro machine [ls \| add (ssh://HOST \| CODE) [-n NAME] \| rm M [-y] \| hide M WS \| unhide M WS \| retry M \| update [M…] [--all] [-y] \| pair]` | other machines whose workspaces show here beside yours (`laptop2:work`, `laptop2:fix-flaky-test`): add one over ssh or with the code `machine pair` printed on it; they must run the same version, and `update` has those named (none: every one behind this machine's version) update their own ptyro, each checking the release there and upgrading its daemon live, even while its link is down for its version |
 | `ptyro web [on\|off\|status] [--access localhost\|tailscale\|open] [--pair] [--json]` | have the daemon run the web app's server (`ptyro daemon start --serve` too): on, off, or where it is and what to do next |
 | `ptyro --remote HOST …` / `ptyro proxy` | any command against another machine's daemon / the bridge it runs there; `--remote wsl://[distro]` is the daemon in a WSL distro (what `ptyro.exe` on Windows uses; `client.default_remote` keeps one) |
-
-## Recordings
-
-| Command | Does |
-|---|---|
-| `ptyro replay SESSION [--speed X] [--max-idle D] [--from D]` | play a session's recording back in your terminal |
-| `ptyro export SESSION [--format asciicast\|text\|ptylog] [-o FILE]` | the recording as asciicast v2, plain text, or a test fixture |
 
 ## Setup, config and the daemon
 

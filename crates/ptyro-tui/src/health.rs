@@ -1,6 +1,6 @@
 //! The health badge (ROADMAP UX1.20): what `ptyro doctor` finds, run in the background, plus
 //! what the TUI can see itself (no shell integration), as a status-bar badge; `M` (mend) lists
-//! the findings, each with its fix where there is one: the shell-init line, tmux's options,
+//! the findings, each with its fix where there is one: a setting to open, tmux's options,
 //! `chmod 600`, or the `ptyro` command the doctor suggests, run in a split. Running `ptyro …`
 //! commands in a split is also how the TUI reaches the CLI's long tail (UX1.21).
 
@@ -33,8 +33,6 @@ pub struct Check {
 pub enum Fix {
     /// Run `ptyro <args>` in a split.
     Cli(Vec<String>),
-    /// Append `line` to `file` (asks first).
-    Append { file: PathBuf, line: String },
     /// `chmod 600` the file.
     Private(PathBuf),
     /// `tmux set -g <name> <value>`, now and in `~/.tmux.conf`.
@@ -207,19 +205,19 @@ pub(crate) fn agent_update(f: &Finding) -> bool {
     )
 }
 
-/// The shell's rc file and the line that sets up ptyro's integration in it, when it's missing:
-/// prompt marks (copy-mode jumps), the live directory and each command in the sidebar. Only when
-/// `shell.integration` is off: on (the default), ptyro adds it to the shells it starts.
-pub fn shell_init_missing(config: &ptyro_core::config::Config) -> Option<(PathBuf, String)> {
+/// `shell.integration` is off and nothing else gives ptyro's shells their integration (the line
+/// an older ptyro, or `ptyro setup`, put in the shell's rc file): no prompt marks (copy-mode
+/// jumps), live directory or commands in the sidebar. The fix turns the setting back on.
+pub fn shell_integration_off(config: &ptyro_core::config::Config) -> bool {
     if config.shell.integration {
-        return None;
+        return false;
     }
     let shell =
         config.shell.command.first().cloned().unwrap_or_else(ptyro_core::shell::default_shell);
-    let home = PathBuf::from(std::env::var_os("HOME")?);
-    let (rc, line) = ptyro_core::shell::ShellKind::of_program(&shell)?.rc_line(&home);
-    let text = std::fs::read_to_string(&rc).unwrap_or_default();
-    (!text.contains("ptyro shell-init")).then(|| (rc, line.to_owned()))
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return false };
+    let Some(kind) = ptyro_core::shell::ShellKind::of_program(&shell) else { return false };
+    let (rc, _) = kind.rc_line(&home);
+    !std::fs::read_to_string(&rc).unwrap_or_default().contains("ptyro shell-init")
 }
 
 impl App {
@@ -377,15 +375,12 @@ impl App {
             .filter_map(finding)
             .collect();
         findings.extend(self.health.updates.iter().cloned());
-        if let Some((rc, line)) = shell_init_missing(&self.config) {
+        if shell_integration_off(&self.config) {
             findings.push(Finding {
                 problem: false,
                 what: "shell integration".into(),
-                text: format!(
-                    "not set up in {}: copy mode's prompt jumps, the live directory and each shell's last command in the sidebar need it",
-                    rc.display()
-                ),
-                fix: Some(Fix::Append { file: rc, line }),
+                text: "off: copy mode's prompt jumps, the live directory and each shell's last command in the sidebar need it".into(),
+                fix: Some(Fix::Setting("shell.integration")),
             });
         }
         // SHELLS' Alt-1…9 typed as characters here (SPEC §23.6): how to turn Option into Meta,
@@ -441,9 +436,6 @@ impl App {
                     Some(Fix::Cli(args)) => {
                         format!("{} · ⏎ runs `ptyro {}`", f.text, args.join(" "))
                     }
-                    Some(Fix::Append { file, .. }) => {
-                        format!("{} · ⏎ adds the line to {}", f.text, file.display())
-                    }
                     Some(Fix::Private(_)) => format!("{} · ⏎ makes it private", f.text),
                     Some(Fix::Tmux { name, value }) => {
                         format!("{} · ⏎ sets {name} {value}", f.text)
@@ -490,15 +482,6 @@ impl App {
                 self.open_setup((!names.is_empty()).then_some(names), place)
             }
             Some(Fix::Update(names)) => self.update_agents(names),
-            Some(Fix::Append { file, line }) => {
-                self.overlay = Some(Overlay::Confirm {
-                    text: format!(
-                        "Add this to {}?\n\n  {line}\n\nNew shells pick it up. [y/N]",
-                        file.display()
-                    ),
-                    action: Confirmed::Append(file, line),
-                });
-            }
             Some(Fix::Private(path)) => {
                 // Only a file: 600 on a directory would shut its owner out of it.
                 if !path.is_file() {
@@ -547,12 +530,7 @@ impl App {
             .open(&file)
             .and_then(|mut f| writeln!(f, "\n# added by ptyro\n{line}"));
         match res {
-            Ok(()) => {
-                self.health.findings.retain(|f| {
-                    f.fix != Some(Fix::Append { file: file.clone(), line: line.clone() })
-                });
-                self.toast(format!("added to {}", file.display()));
-            }
+            Ok(()) => self.toast(format!("added to {}", file.display())),
             Err(e) => self.toast_err(format!("{}: {e}", file.display())),
         }
     }

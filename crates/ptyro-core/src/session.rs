@@ -192,9 +192,6 @@ pub struct SessionInfo {
     /// foreground (UX1.4): its status then comes from its screen, at low confidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inner_agent: Option<String>,
-    /// What it's doing, in a line, from a small model (`[summaries]`, UX1.3).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<Summary>,
     /// Its worktree's (or directory's) quick terminal (UX1.25): one shell, reused, and quiet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
@@ -324,15 +321,7 @@ impl Watch {
     }
 }
 
-/// A session's summary (UX1.3): `text` was made after turn `turn`, at `at_ms`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Summary {
-    pub text: String,
-    pub turn: u32,
-    pub at_ms: u64,
-}
-
-/// A shell's current or last command, from OSC 133 marks (`ptyro shell-init`).
+/// A shell's current or last command, from OSC 133 marks (ptyro's shell integration).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellCommand {
     /// The command line, when the shell sends it (`133;C;cmdline=…`).
@@ -482,12 +471,6 @@ pub struct SpawnSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub size: Option<TermSize>,
-    /// Drive the agent over its structured protocol instead of its terminal UI (M10).
-    #[serde(default)]
-    pub structured: bool,
-    /// Resume this conversation of the agent instead of starting one (UX1.4: adopting).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resume: Option<String>,
     /// Its title, for people to read (UX1.24); default: the prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,

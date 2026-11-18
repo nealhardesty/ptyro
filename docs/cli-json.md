@@ -40,7 +40,7 @@ Conventions:
 | `created_ms`, `ended_ms` | number, number? | |
 | `viewers` | number | clients showing it |
 | `controller` | string? | client id that sizes it |
-| `title` | string? | what people read: its own (`--title`, `retitle`), else its first prompt, else the window title |
+| `title` | string? | what people read: its own (`--title`, `rename --title`), else its first prompt, else the window title |
 | `window_title` | string? | the window title its program set |
 | `foreground` | string? | foreground process name (argv[0] when the kernel's name is a version, like Claude's) |
 | `profile` | string | fixed for its lifetime |
@@ -61,11 +61,10 @@ Conventions:
 | `turns` | number | completed turns: the agent's own turn ends, else working → idle/done (SPEC §9.3b) |
 | `last_output_ms` | number? | when its screen last changed |
 | `held` | bool, missing when false | its permission prompt is held for an exact answer from any client (M9.5) |
-| `structured` | string, missing when not structured | a structured session's protocol: `stream-json`, `app-server`, `acp` or `opencode` (M10) |
+| `structured` | string, missing when not structured | a chat's engine's protocol (`ls --chats`): `stream-json`, `app-server`, `acp` or `opencode` (M10) |
 | `task` | string? | the first prompt typed into it, trimmed to 200 characters |
 | `last_reply` | string? | the agent's last message once its turn ended, trimmed to 300 characters |
 | `command` | `{text?, started_ms, ended_ms?, exit?}`? | a shell's running (no `ended_ms`) or last command, from the shell integration |
-| `summary` | `{text, turn, at_ms}`? | a small model's line on it (`[summaries]`): made after turn `turn`, at `at_ms` |
 | `quick` | bool | its worktree's (or directory's) quick terminal (`ptyro shell`); only present when true |
 | `inner_agent` | string? | the adapter of an agent started by hand in this shell, while it's in the foreground (its status is then read off its screen) |
 
@@ -74,8 +73,8 @@ Conventions:
 - `kind` is missing when it has no value. For `blocked` it is `permission`, `question` or `auth`;
   for `error` it is `rate_limit`, `auth`, ….
 - `confidence` is `high`, `medium` or `low`.
-- `source` is `process`, `hook`, `sidecar`, `osc7501`, `report`, `title`, `screen`,
-  `notification`, `heuristic` or `protocol` (structured sessions, M10).
+- `source` is `process`, `hook`, `sidecar`, `osc7501`, `title`, `screen`, `notification`,
+  `heuristic` or `protocol` (a chat's engine, M10).
 
 `ExplainLine`: `{at_ms, source, signal, applied, reason}`.
 
@@ -87,24 +86,6 @@ Conventions:
 `{session, name, state, status?, turns, view, text}`.
 - `view` is `screen` or `scrollback`.
 - `state` is one word: the status, else `exited`, `dormant` or the process state.
-
-### `ptyro read S --chat` (M10) → NDJSON `ChatItem`; with `--json`, one array
-
-A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev, t, …}`, where
-`t` selects the rest:
-
-| `t` | Fields |
-|---|---|
-| `user` | `text` |
-| `assistant` | `text`, `streaming` |
-| `thinking` | `text` |
-| `tool` | `name`, `title`, `status` (`pending`, `running`, `done`, `failed`, `declined`), `output?`, `diff?`, `files?` |
-| `permission` | `request`, `tool`, `title`, `options: [{id, label, kind}]` (`kind`: `allow_once`, `allow_always`, `reject_once`, `reject_always`), `decided?` |
-| `plan` | `steps: [{text, status}]` |
-| `notice` | `level`, `text` |
-| `turn_end` | `stop`, `cost_micro_usd?`, `duration_ms?`, `input_tokens?`, `output_tokens?` |
-
-`rev` is the transcript revision that last changed the item (streamed text grows in place).
 
 ### `ptyro wait … --json` and `ptyro send … --wait --json` → `[Outcome]`
 

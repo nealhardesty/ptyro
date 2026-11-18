@@ -545,23 +545,19 @@ async fn generic_programs_shells_and_self_reports() {
     c.request(Request::Spawn { spec }).await.unwrap();
     let _ = wait_for(&c, "sh1", "a command", |s| s.last_command_exit == Some(3)).await;
     // (It's a command session running sh, not a `shell` kind: OSC 133 there doesn't set status.)
-    // Self report from inside (herdr-compatible) and via the CLI.
-    w.ok(&["report", "--session", "tool", "--state", "needs_input", "--msg", "pick a branch"]);
-    let s = wait_for(&c, "tool", "self-reported blocked", |s| is(s, AgentStatus::Blocked)).await;
-    assert_eq!(s.status.as_ref().unwrap().source, SignalSource::Report);
-    assert_eq!(s.attention.as_ref().unwrap().text, "has a question: pick a branch");
-    assert!(!w.cli(&["report", "--session", "tool", "--state", "sleepy"]).status.success());
     // Focusing a session clears its attention.
+    let s = get(&c, "tool").await;
     c.send(ClientMsg::Focus { session: s.id, terminal_focused: true }).unwrap();
     wait_for(&c, "tool", "attention cleared", |s| s.attention.is_none()).await;
     // …and while watched, nothing new is raised.
-    w.ok(&["report", "--session", "tool", "--state", "error", "--msg", "boom"]);
+    send(&c, "tool", "work 1.2").await;
+    wait_for(&c, "tool", "working again", |s| is(s, AgentStatus::Working)).await;
+    wait_for(&c, "tool", "done again", |s| is(s, AgentStatus::Done)).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(get(&c, "tool").await.attention.is_none(), "watched in a focused terminal");
     c.send(ClientMsg::Focus { session: s.id, terminal_focused: false }).unwrap();
-    // Let the message leave before blocking this (current-thread) runtime on the CLI.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    w.ok(&["report", "--session", "tool", "--state", "blocked", "--msg", "again"]);
+    send(&c, "tool", "work 1.2").await;
     wait_for(&c, "tool", "raised when unfocused", |s| s.attention.is_some()).await;
 }
 

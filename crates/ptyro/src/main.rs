@@ -20,7 +20,6 @@ mod own;
 mod parity;
 mod profiles;
 mod projects;
-mod record;
 mod relay;
 mod remote;
 mod script;
@@ -60,9 +59,51 @@ struct Cli {
     remote: Option<String>,
     #[command(subcommand)]
     cmd: Option<Cmd>,
-    /// A task for your default agent, in a new worktree of the repository you're in (UX1.9)
+    /// A task for your default agent, in quotes, in a new worktree of the repository you're in
+    /// (UX1.9)
     #[arg(value_name = "TASK", num_args = 0..)]
     task: Vec<String>,
+}
+
+/// The commands alone, without the task: what several unquoted words are parsed as instead, so
+/// the first one gets clap's own "unrecognized subcommand" and its did-you-mean (U-11).
+#[derive(Parser)]
+#[command(name = "ptyro", subcommand_required = true)]
+struct Commands {
+    #[arg(long, global = true, hide = true)]
+    json_wire: bool,
+    #[arg(long, global = true, value_name = "HOST")]
+    remote: Option<String>,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+/// The command line. A task is one argument, quoted: several words with no command are a
+/// mistyped command (`ptyro sessions list`), never a task an agent starts on.
+fn parse_cli<I, T>(argv: I) -> Result<Cli, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+    let argv: Vec<std::ffi::OsString> = argv.into_iter().map(Into::into).collect();
+    let cli = Cli::try_parse_from(&argv)?;
+    if cli.cmd.is_some() || cli.task.len() < 2 {
+        return Ok(cli);
+    }
+    let mut e = match Commands::try_parse_from(&argv) {
+        Err(e) => e,
+        Ok(_) => Cli::command().error(ErrorKind::InvalidSubcommand, "no such command"),
+    };
+    let mut tips = match e.get(ContextKind::Suggested) {
+        Some(ContextValue::StyledStrs(t)) => t.clone(),
+        _ => Vec::new(),
+    };
+    tips.push(
+        format!("to give your agent a task, quote it: ptyro \"{}\"", cli.task.join(" ")).into(),
+    );
+    e.insert(ContextKind::Suggested, ContextValue::StyledStrs(tips));
+    Err(e)
 }
 
 #[derive(Subcommand)]
@@ -122,10 +163,6 @@ enum Cmd {
         /// first prompt come from the issue
         #[arg(long, conflicts_with = "wt")]
         issue: Option<String>,
-        /// Drive the agent over its structured protocol (Claude stream-json, Codex app-server,
-        /// Gemini ACP, OpenCode's server) and show a chat view: every tool call visible
-        #[arg(long)]
-        structured: bool,
         /// The command to run (default: your $SHELL); with --agent, extra agent arguments
         #[arg(last = true)]
         argv: Vec<String>,
@@ -213,11 +250,18 @@ enum Cmd {
         #[arg(short, long)]
         yes: bool,
     },
-    /// Rename a session
+    /// Rename a session, or retitle it: its name is its address (what you type to find it), its
+    /// title is what people read (`--title`)
     Rename {
         #[arg(add = ArgValueCandidates::new(complete::sessions))]
         session: String,
-        name: String,
+        /// The new name
+        #[arg(required_unless_present = "title")]
+        name: Option<String>,
+        /// The new title, for people to read; `--title ""` clears it (it then shows what its
+        /// program titles its window)
+        #[arg(long)]
+        title: Option<String>,
     },
     /// Print a session's screen (or scrollback)
     Read {
@@ -239,10 +283,6 @@ enum Cmd {
         /// The text plus the session's status, as JSON
         #[arg(long)]
         json: bool,
-        /// A structured session's transcript: one JSON item per line (messages, tool calls,
-        /// permission requests, turn ends); with --json, one array
-        #[arg(long, conflicts_with_all = ["screen", "scrollback", "ansi"])]
-        chat: bool,
     },
     /// Type text into sessions: `ptyro send S… TEXT` (Enter is pressed afterwards unless
     /// --no-enter)
@@ -340,42 +380,6 @@ enum Cmd {
     },
     /// Bridge stdin/stdout to this machine's daemon (what `--remote` runs over ssh)
     Proxy,
-    /// Switch an agent between structured mode (chat view) and its own terminal UI, in the
-    /// same conversation: `--to tui` takes over by hand, `--to structured` goes back
-    Convert {
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        session: String,
-        /// `tui` (default) or `structured`
-        #[arg(long, default_value = "tui", value_parser = ["tui", "structured"])]
-        to: String,
-        /// Interrupt a turn in progress first
-        #[arg(long)]
-        force: bool,
-    },
-    /// Change a session's title, what people read; no title clears it. Its name, the address,
-    /// stays (`ptyro rename` changes that; `ptyro wt retitle` titles a worktree)
-    Retitle {
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        target: String,
-        /// The new title (several words are joined)
-        title: Vec<String>,
-    },
-    /// What a session is doing, in a line, from a small model (`[summaries] command`; it runs
-    /// on the session's profile's account, about $0.0007 a time with Haiku)
-    Summarize {
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        session: String,
-        /// Print the summary as JSON (`text`, `turn`, `at_ms`)
-        #[arg(long)]
-        json: bool,
-    },
-    /// Make the Claude you started by hand in a shell session a managed session (hooks,
-    /// hibernation, mail), resuming the same conversation
-    Adopt {
-        /// The shell session it runs in
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        session: String,
-    },
     /// Your workspace's SHELLS: numbered terminals (any command) that belong to no worktree,
     /// `Alt-1…9` in the TUI. `ptyro shells new -- htop`, `ptyro shells go 2`; every session
     /// command takes `%N` (`ptyro send %3 make`)
@@ -496,30 +500,6 @@ enum Cmd {
         url: String,
         #[arg(long)]
         fingerprint: Option<String>,
-    },
-    /// Play a session's recording back with its timing (also for sessions that ended)
-    Replay {
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        session: String,
-        /// 2 = twice as fast
-        #[arg(long, default_value_t = 1.0)]
-        speed: f64,
-        /// Cap every pause at this
-        #[arg(long, default_value = "2s")]
-        max_idle: String,
-        /// Fast-forward this far into it first
-        #[arg(long)]
-        from: Option<String>,
-    },
-    /// A session's recording as asciicast v2 (asciinema), plain text, or a `.ptylog` fixture
-    Export {
-        #[arg(add = ArgValueCandidates::new(complete::sessions))]
-        session: String,
-        #[arg(long, default_value = "asciicast", value_parser = ["asciicast", "text", "ptylog"])]
-        format: String,
-        /// Write here (default: stdout)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
     },
     /// Registered git repositories
     #[command(alias = "projects")]
@@ -775,7 +755,9 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Print shell integration (prompt marks, status, directory) for a shell ptyro did not start (ptyro adds it to its own)
+    /// Internal: what the line `ptyro setup` adds to a shell's rc file runs: the tools it
+    /// installed on PATH, and the shell integration ptyro's own shells get by themselves
+    #[command(hide = true)]
     ShellInit {
         #[arg(value_enum)]
         shell: cli::Shell,
@@ -837,22 +819,6 @@ enum Cmd {
     Integrations {
         #[command(subcommand)]
         cmd: agents::IntegrationsCmd,
-    },
-    /// Report your program's state to ptyro from inside a session (herdr-compatible)
-    #[command(alias = "report-agent")]
-    Report {
-        /// working, blocked, idle, done, error (also needs_input, errored…)
-        #[arg(long)]
-        state: String,
-        #[arg(long)]
-        kind: Option<String>,
-        #[arg(long)]
-        msg: Option<String>,
-        #[arg(long)]
-        progress: Option<u8>,
-        /// Default: this session ($PTYRO_SESSION_ID)
-        #[arg(long)]
-        session: Option<String>,
     },
     /// Internal: called by agent hooks (SPEC §8.3)
     #[command(hide = true)]
@@ -1212,7 +1178,7 @@ fn main() {
     }
     // A shell asking for completions: answer and exit before anything else happens.
     complete::handle(Cli::command);
-    let cli = Cli::parse();
+    let cli = parse_cli(std::env::args_os()).unwrap_or_else(|e| e.exit());
     // Windows: what an update renamed aside while it ran (`ptyro.exe.old`), once it doesn't
     // (BOOT6). Not on the hooks' path, which runs inside agents on every event.
     if cfg!(windows) && !matches!(cli.cmd, Some(Cmd::Hook { .. } | Cmd::StatuslineRelay)) {
@@ -1269,31 +1235,38 @@ mod tests {
     }
 
     #[test]
-    fn words_alone_are_a_task_and_commands_stay_commands() {
-        use clap::Parser;
+    fn a_quoted_task_is_a_task_and_unquoted_words_are_a_mistyped_command() {
         let parse = |argv: &'static [&'static str]| {
             std::thread::Builder::new()
                 .stack_size(32 << 20)
-                .spawn(move || {
-                    super::Cli::try_parse_from(argv).map(|c| (c.cmd.is_some(), c.task)).ok()
-                })
+                .spawn(move || super::parse_cli(argv).map(|c| (c.cmd.is_some(), c.task)))
                 .unwrap()
                 .join()
                 .unwrap()
         };
         assert_eq!(
-            parse(&["ptyro", "fix the flaky test"]),
+            parse(&["ptyro", "fix the flaky test"]).ok(),
             Some((false, vec!["fix the flaky test".to_owned()]))
         );
-        assert_eq!(
-            parse(&["ptyro", "fix", "it", "now"]).map(|(c, t)| (c, t.len())),
-            Some((false, 3))
-        );
-        assert_eq!(parse(&["ptyro", "ls"]), Some((true, vec![])));
+        assert_eq!(parse(&["ptyro", "ls"]).ok(), Some((true, vec![])));
         // Global flags still go before a command.
-        assert_eq!(parse(&["ptyro", "--json-wire", "ls", "--json"]), Some((true, vec![])));
-        assert_eq!(parse(&["ptyro", "--remote", "box", "ls"]), Some((true, vec![])));
-        assert_eq!(parse(&["ptyro"]), Some((false, vec![])));
+        assert_eq!(parse(&["ptyro", "--json-wire", "ls", "--json"]).ok(), Some((true, vec![])));
+        assert_eq!(parse(&["ptyro", "--remote", "box", "ls"]).ok(), Some((true, vec![])));
+        assert_eq!(parse(&["ptyro"]).ok(), Some((false, vec![])));
+        // Several words unquoted (U-11): clap's unknown command, its did-you-mean, and how to
+        // give a task instead.
+        let e = parse(&["ptyro", "sessions", "list"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::InvalidSubcommand);
+        let text = e.render().to_string();
+        assert!(text.contains("unrecognized subcommand 'sessions'"), "{text}");
+        let near = parse(&["ptyro", "staus", "now"]).unwrap_err().render().to_string();
+        assert!(near.contains("'status'"), "a did-you-mean: {near}");
+        assert!(
+            text.contains("to give your agent a task, quote it: ptyro \"sessions list\""),
+            "{text}"
+        );
+        let e = parse(&["ptyro", "fix", "it", "now"]).unwrap_err();
+        assert!(e.render().to_string().contains("ptyro \"fix it now\""));
     }
 
     /// `wait --scrollback [N]` reads as `read --scrollback [N]`: N lines above the screen, or

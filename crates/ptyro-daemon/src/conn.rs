@@ -25,8 +25,6 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Sub {
     task: JoinHandle<()>,
-    /// A structured session's transcript stream (M10).
-    chat: Option<JoinHandle<()>>,
     acks: watch::Sender<u64>,
 }
 
@@ -435,21 +433,14 @@ impl Conn {
         self.interest.locked().subscribed.insert(id);
         let (acks, acks_rx) = watch::channel(0u64);
         let interval = self.daemon.frame_interval();
-        let chat = session
-            .structured
-            .is_some()
-            .then(|| tokio::spawn(stream_chat(Arc::clone(&session), self.out.clone())));
         let task =
             tokio::spawn(stream_frames(Arc::clone(&session), self.out.clone(), acks_rx, interval));
-        self.subs.insert(id, Sub { task, chat, acks });
+        self.subs.insert(id, Sub { task, acks });
     }
 
     fn unsubscribe(&mut self, id: SessionId) {
         if let Some(sub) = self.subs.remove(&id) {
             sub.task.abort();
-            if let Some(c) = sub.chat {
-                c.abort();
-            }
             if let Some(s) = self.daemon.session(id) {
                 let mut meta = s.meta.locked();
                 meta.viewers = meta.viewers.saturating_sub(1);
@@ -754,39 +745,6 @@ async fn stream_frames(
     }
 }
 
-/// A structured session's transcript (M10): all of it first, then what changed (coalesced),
-/// and the draft being typed into it.
-async fn stream_chat(session: Arc<Session>, out: mpsc::Sender<ServerMsg>) {
-    let Some(st) = session.structured.clone() else { return };
-    let mut rx = st.chat_rev.subscribe();
-    let (mut seen, mut first, mut draft_sent) = (0u64, true, String::new());
-    loop {
-        rx.borrow_and_update();
-        if let Some((rev, items, draft)) = session.chat_since(if first { 0 } else { seen })
-            && (first || !items.is_empty() || draft != draft_sent)
-        {
-            let msg = ServerMsg::Chat {
-                session: session.id,
-                rev,
-                reset: first,
-                items,
-                draft: draft.clone(),
-            };
-            if out.send(msg).await.is_err() {
-                return;
-            }
-            first = false;
-            seen = rev;
-            draft_sent = draft;
-        }
-        if rx.changed().await.is_err() {
-            return;
-        }
-        // Streamed text arrives in many small pieces: send them a few at a time.
-        tokio::time::sleep(Duration::from_millis(30)).await;
-    }
-}
-
 /// A followed chat (SPEC §22.14): its shown branch, then what changed; the whole branch again
 /// when it is reloaded. A chat that can't be followed says why, as a notice.
 async fn stream_chat_live(daemon: Arc<Daemon>, chat: String, out: mpsc::Sender<ServerMsg>) {
@@ -906,7 +864,7 @@ async fn relay_upstream(
 ) {
     while let Some(msg) = pushes.recv().await {
         let pass = match &msg {
-            ServerMsg::Screen { .. } | ServerMsg::Chat { .. } | ServerMsg::ChatLive { .. } => true,
+            ServerMsg::Screen { .. } | ServerMsg::ChatLive { .. } => true,
             ServerMsg::Event { event: DomainEvent::Clipboard { .. } } => true,
             ServerMsg::Goodbye { .. } => return,
             _ => false,

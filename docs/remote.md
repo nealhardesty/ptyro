@@ -38,8 +38,8 @@ daemon's socket (starting it if needed). Frames are compressed (zstd) on this pa
   `client.default_remote`). A `PTYRO_REMOTE_BIN` with a space works with `cmd.exe`, the default.
 - **Another transport.** `PTYRO_SSH` replaces the ssh command, e.g. `PTYRO_SSH="tailscale ssh"`.
 - **Files stay local.** Commands that read files on *this* machine still read them here:
-  `replay`/`export` (recordings), `config`, `init`, and paths you pass to `project add`. Use them
-  on the remote machine (`ssh workbox ptyro replay …`).
+  `config`, `init`, and paths you pass to `project add`. Use them on the remote machine
+  (`ssh workbox ptyro config …`).
 
 ## Several machines: `ptyro machine`
 
@@ -268,7 +268,7 @@ device 'phone' (was approve, now full)". Until the new link is opened, the old o
 |---|---|
 | `read` | see sessions, screens, transcripts, status |
 | `approve` | also answer permission prompts, clear attention, mute |
-| `control` | also type into sessions, stop/resume/convert them, start *configured* agents |
+| `control` | also type into sessions, stop/resume/rename them, start *configured* agents |
 | `full` (default, with a warning) | everything a local client can (any command line, worktrees and shipping, the config, upgrades, pairing devices): what the whole web app needs |
 
 Pairing and revoking work from the machine itself, and from a device paired with `--scope full` (the web app's Devices page).
@@ -282,8 +282,6 @@ notifications there). Tap 🔔 to turn notifications on; a test notification arr
 - **A session.** Its live screen is drawn from the daemon's own frames, at the session's size:
   your phone never resizes it. There's a reply box (Enter sends), keys (Esc, Tab, arrows, ⏎,
   ^C), and the permission card with its context.
-- **Structured sessions** (`ptyro new --structured`) show their transcript as a chat: messages,
-  tool calls with output and diffs, permission cards. "Terminal" switches to the screen view.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
 - **"Offline: reconnecting…"** means the page (kept on the phone) can't reach `serve`. Opened
@@ -324,7 +322,7 @@ a device with less sees the pages and is told what it lacks.
 
 - **Sessions**: ＋ starts a task (the task, the agent, and where: a new worktree, from a PR, an
   issue or a branch; an existing one; a shell). A session's **⋯**: stop,
-  restart, rename, summarize, hibernate, scrollback, events, replay, save its recording. ☑ types one
+  restart, rename (its name and title), hibernate, scrollback, events. ☑ types one
   thing into several.
 - **Projects**: the sidebar's tree. A worktree's page has its sessions and status, its
   **Checkpoints** (what changed since each, and putting one back), remove.
@@ -351,7 +349,7 @@ reaches Claude as an exact decision, not keystrokes.
 Holding costs nothing at the terminal. Claude keeps showing its own permission dialog while
 the hook waits, and whoever answers first wins: answer in the dialog and Claude ignores the
 hook (verified on Claude Code 2.1.305). Other agents are answered with their dialog's keys, or
-through their protocol for structured sessions.
+through their protocol for a chat's agent.
 
 ## Threat model
 

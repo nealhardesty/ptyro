@@ -1,8 +1,6 @@
-//! The chat view of a structured session (M10.1): messages, thinking, tool calls with their
+//! A chat's view (SPEC §22, drawn by `chats.rs`): messages, thinking, tool calls with their
 //! output and diffs, permission requests as cards, plans and turn ends, with the draft being
-//! typed at the bottom. The transcript comes from the daemon (`ServerMsg::Chat`); keys still go
-//! to the daemon's line editor, so typing, Enter, and `a`/`A`/`d` on a permission card work the
-//! same here, in the web app, and in a plain `ptyro attach --raw`.
+//! typed at the bottom. The transcript comes from the daemon (`ServerMsg::ChatLive`).
 
 use ptyro_core::chat::{ChatBody, ChatItem, NoticeLevel, ToolStatus};
 use std::cell::{Cell, RefCell};
@@ -14,7 +12,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::theme::{Depth, Theme};
 
-/// One session's transcript as this client has it.
+/// One chat's transcript as this client has it.
 #[derive(Debug, Default)]
 pub struct ChatView {
     pub items: Vec<ChatItem>,

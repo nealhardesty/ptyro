@@ -29,29 +29,24 @@ its row: its TUI action and its web one, or `waived:` and why.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch), base, name, title, structured, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue or a branch), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch, chat mode (structured) |
-| `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k`; `--tab`/`--pane`: `session.tab`, `session.pane` (the palette and a session's row menu, when the terminal is tmux or Windows Terminal) | `session.open`: tap it in the list; its live screen, or its chat. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize`, `term.zoom` (pinch, a two-finger tap, Ctrl+wheel, Aa; this device's view only, so the TUI's is the terminal emulator's own font size); `--tab`: `session.tab`, a session's ⋯ → Open on the computer (a Windows Terminal tab there, when it is WSL) |
+| `new` | `session.new` (`n`): say what to do, ⏎; `C-o` opens the form with every option: the task, agent, shell or command, profile, where (a new worktree, an existing one, here), start from (base, PR, issue, branch), base, name, title, setup and fetch; `worktree.new` (`N`) opens it for a new worktree, a free name in it | `session.new` (＋ in the session list): the task, the agent, and where: a new worktree (from the main branch, a PR, an issue or a branch), an existing one, or a shell or command; More options: profile, title, base, skip setup, don't fetch |
+| `attach` | `session.find` (`/`), the sidebar (`Tab`, `⏎`), `1`–`9`, `j`/`k`; `--tab`/`--pane`: `session.tab`, `session.pane` (the palette and a session's row menu, when the terminal is tmux or Windows Terminal) | `session.open`: tap it in the list; its live screen. The screen is a terminal: `term.type` (tap it and type: every key goes to the session as it is pressed, with `term.keys` for Esc, Ctrl, Alt, arrows and F-keys), `term.mouse`, `term.resize`, `term.zoom` (pinch, a two-finger tap, Ctrl+wheel, Aa; this device's view only, so the TUI's is the terminal emulator's own font size); `--tab`: `session.tab`, a session's ⋯ → Open on the computer (a Windows Terminal tab there, when it is WSL) |
 | `list` | `focus.toggle`: the sidebar lists every session with its status; `session.find` (`/`) searches them; `--status running` / `active` is `sidebar.filter` (`f`, or click `running` / `active` under the sidebar title): only the live sessions, or only the busy ones, each machine, project and worktree with none hidden | `sessions`: every session with its status, who needs you first; `session.find` (`/`) filters them; `sidebar.filter`: the `all` / `running` / `active` chips |
 | `stop` | `session.stop` (`x`; asks first unless `[ui] confirm_kill = false`) | `session.stop`: the session's ⋯ menu → Stop (asks first unless `[ui] confirm_kill = false`) |
 | `kill` | `session.kill` (`X`; asks first unless `[ui] confirm_kill = false`) | `session.kill`: the session's ⋯ menu → Kill (asks the same way) |
 | `restart` | `session.restart` (`C-r`, or `⏎` on an exited pane) | `session.restart`: the session's ⋯ menu |
 | `rm` | `session.remove`: `x` on an ended session, the row menu, the palette; a dormant one asks first (`-y`); `--stop` is `session.remove` on a running one (Stop and remove, asking as stop does) | `session.remove`: the session's ⋯ menu → Remove (a dormant one asks first); `--stop` is Remove on a running one (Stop and remove, asking as stop does) |
-| `rename` | `session.rename` (`,`) | `session.rename`: the session's ⋯ menu |
-| `retitle` | `session.retitle` (`,` then `C-t`) | `session.retitle`: the session's ⋯ menu |
+| `rename` | `session.rename` (`,`): its name, the address; `C-t` there edits its title (`--title`), what people read | `session.rename`: the session's ⋯ → Rename…: the name and the title |
 | `resume` | `session.resume` (or `⏎` on a dormant pane) | `session.resume`: the session's ⋯ menu |
 | `hibernate` | `session.hibernate` | `session.hibernate`: the session's ⋯ menu |
-| `convert` | `session.convert` (the row menu, the palette) | `session.convert`: ⋯ → Show as a chat / the terminal UI |
-| `adopt` | `session.adopt` (`A` on a shell row running Claude) | `session.adopt`: ⋯ on a shell running Claude |
 | `shell` | `shell.drawer` (`C-t`): the worktree's quick terminal (one per worktree, only in a worktree) in a drawer under a pane of its project; `shell.pane` (`T`) full sized; `shell.here` (`⏎` on its `›_ quick shell` line) as `[ui] shell_style` says; again focuses it, then hides it (a panel goes back). `shell.new` (`!`) is another shell of its own, not the quick terminal. `--read` is `copy.enter` (`[`) in the drawer | `session.shell`: ⋯ → Its worktree's quick terminal (a terminal page, with keys and a reply box); `shell.here` and `shell.pane`: the Quick shell buttons on a project's and a worktree's page (the web has no split panes, so a shell is always its own page); `shell.new`: their New shell button |
-| `summarize` | `session.summarize` (the row menu, the palette); with `[summaries] enabled` the sidebar shows one (`≈`) after every turn | `session.summarize`: the session's ⋯ menu |
 | `status` | `session.explain` (`e` in the sidebar) says why; the sidebar and pane headers show the status | `sessions`: each card and the session's page say its status and why it waits |
 | `answer` | `peek` (`p`): `y` allow, `a` always, `n` deny | `answer`: Allow, Always or Deny on its card and its page (exact decisions for a held Claude prompt) |
-| `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen | `session.open`: the live screen, or the chat; `term.scroll` (wheel or drag: its history), `term.select` and `term.copy` (long-press and drag, double-click a word), `term.find` (Aa → Find in the history), `term.link`; `session.scrollback` (⋯ → Scrollback) is all of it as text, searchable |
-| `send` | `peek` (`p`): type a reply; or type into the pane | `session.reply`: Enter sends, Shift+Enter starts a new line; `term.type` types into the session key by key (`term.paste` pastes, `term.keys` for the keys a phone lacks); `session.keys` for a chat's keys |
+| `read` | `copy.enter` (`[`): the scrollback, searchable; the pane shows the screen | `session.open`: the live screen; `term.scroll` (wheel or drag: its history), `term.select` and `term.copy` (long-press and drag, double-click a word), `term.find` (Aa → Find in the history), `term.link`; `session.scrollback` (⋯ → Scrollback) is all of it as text, searchable |
+| `send` | `peek` (`p`): type a reply; or type into the pane | `session.reply`: Enter sends, Shift+Enter starts a new line; `term.type` types into the session key by key (`term.paste` pastes, `term.keys` for the keys a phone lacks) |
 | `broadcast` | `broadcast` (`b`): mark sessions with `Space` in the sidebar first | `session.broadcast`: ☑ in the session list, pick sessions, then type once |
 | `wait` | waived: for scripts; the TUI shows status changes as they happen and notifies you | waived: for scripts; the web app shows status changes as they happen and notifies you |
 | `events` | `session.events` (a session's row menu, `.`; the palette): its last events, in a split | `session.events`: ⋯ → Events |
-| `report` | waived: run by programs inside a session to report their own state | waived: run by programs inside a session to report their own state |
 
 
 ## Shells (SHELLS, SPEC §23)
@@ -84,7 +79,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat send` | `chat.open`: type in the view's composer, ⏎ | `chat.send`: the box under the chat, Send |
 | `chat answer` | `chat.open`: `a` allow, `A` always, `d` deny on the permission card | `chat.answer`: Allow, Always, Deny on the card |
 | `chat stop` | `chat.stop`: `Ctrl-C` in the view | `chat.stop`: Stop beside the box while it answers |
-| `chat retitle` | `chat.retitle` (`,` on a chat row or in the list; empty clears it), `chat.autotitle` (`--auto`) | `chat.retitle`: ⋯ → Rename (empty clears it), `chat.autotitle`: ⋯ → New automatic title |
+| `chat rename` | `chat.rename` (`,` on a chat row or in the list): its title, what people read (empty clears it); `chat.autotitle` (`--auto`) | `chat.rename`: ⋯ → Rename (empty clears it), `chat.autotitle`: ⋯ → New automatic title |
 | `chat pin` | `chat.pin` (`*` on a chat row or in the list) | `chat.pin`: ⋯ → Pin |
 | `chat unpin` | `chat.pin` (`*` again) | `chat.pin`: ⋯ → Unpin |
 | `chat archive` | `chat.archive` (`x` on a chat row or in the list) | `chat.archive`: ⋯ → Archive |
@@ -136,8 +131,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `wt status` | shown: the sidebar's and the pane header's `↑N`, `●`, `✓ pushed` and `+N −N` (while something is left) | `worktree.status`: a worktree's page, and its row on the Projects tab |
 | `wt run` | `script.run` (`r`), `script.pick` (`R`) | `worktree.run`: a worktree's ⋯ menu: pick a script; it opens its session |
 | `wt open` | `worktree.open` (`o`): the installed editors, the file manager, the terminal apps, and `shell` (`!`), a new shell in it | `worktree.open`: a worktree's ⋯ → Open in…: the editors installed on the computer (a terminal editor opens as a session), its file manager and terminal apps, and `shell` (`shell.new`) |
-| `wt rename` | `worktree.rename` (a worktree's row menu, `.`; the palette): the live check flags a taken or bad name as you type; `C-t` there edits its title | `worktree.rename`: a worktree's ⋯ → Rename… |
-| `wt retitle` | `worktree.retitle` | `worktree.retitle`: a worktree's ⋯ menu |
+| `wt rename` | `worktree.rename` (a worktree's row menu, `.`; the palette): the live check flags a taken or bad name as you type; `C-t` there edits its title (`--title`); on the main checkout, always `@root`, it asks for the title only | `worktree.rename`: a worktree's ⋯ → Rename…: the name and the title (the main checkout: Set title…) |
 | `gc` | `worktree.gc` (`G`, or ⏎ on the health finding): stale worktrees with their size, ⏎ removes one (asked; it refuses to lose work); scratch shells' directories left behind are listed after them, ⏎ deletes one (asked) | `worktree.gc`: 🧹 on the Projects tab (`🧹3` when some are stale): their size, remove or keep one; "Left behind by scratch shells" below them, Delete (asked) |
 | `ws ls` | `workspace.switch` (`w`) | `workspace.switch`: chips on the Projects tab; Workspaces lists them |
 | `ws new` | `workspace.switch` (`w`) → "+ new workspace": a form with its name, its profile (the one named like it chosen; `+ new profile…` makes one and comes back) and its notifications | `workspace.new`: ＋ on Workspaces: name, machine, profile (a pick; the one named like it chosen; `+ new profile…`), notifications |
@@ -191,8 +185,6 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `machine pair` | `machine.pair`: a form with the address it reaches this machine at, then the code, full sized | `machine.pair`: More → Machines → Make a code: the address (optional), then the code |
 | `proxy` | waived: the bridge `--remote` runs over ssh on the other machine | waived: the bridge `--remote` runs over ssh between two computers |
 | `open-url` (hidden) | waived: Windows runs it when a toast or a `ptyro:` link is clicked; the TUI opens sessions in tabs with `session.tab` | waived: Windows runs it when a toast is clicked; the web app opens a session on the computer with ⋯ → Open on the computer |
-| `replay` | `session.replay` (plays full sized) | `session.replay`: ⋯ → Replay: its recording as a player with a scrubber and speeds; `session.history` lists earlier sessions |
-| `export` | `session.export`: the format and the file | `session.export`: ⋯ → Save its recording (text or asciicast, as a download) |
 
 ## Setup, config and the daemon
 
@@ -219,7 +211,6 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `config rename` | `config.panel`: `R` on a member | `settings.rename`: Rename on a member's page |
 | `config schema` | waived: for programs that build forms of their own (the web app is one); people use the panel | waived: for programs that build forms of their own (the web app is one) |
 | `completions` | waived: shell setup, for typing commands in a shell | waived: shell setup on the computer, for typing commands there |
-| `shell-init` | `health` (`M`): with `shell.integration` off (Settings → Shells), a finding whose fix adds the line to your rc file; on (the default), every shell session ptyro starts has it already | waived: a line in the computer's shell rc file, for its shells; the setting is in More → Settings → Shells |
 | `daemon start` | waived: the TUI starts the daemon when it isn't running | waived: `serve` runs with the daemon; with no daemon there is no web app to ask |
 | `daemon stop` | `app.quit` (`C-d` after the prefix): asks, then stops every session and the daemon and exits | `daemon.stop`: More → Daemon → Stop (asks first; the app goes offline with it) |
 | `daemon restart` | `daemon.restart` (asks first, as the web does, then runs `daemon restart --force` full sized; this TUI reconnects) | `daemon.restart`: More → Daemon → Restart (asks first; the app reconnects) |

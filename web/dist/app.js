@@ -20,10 +20,8 @@ import { apply as showMachine, offlineText } from "./machine.js";
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
     "sessions": "Every session: what it's doing, and who needs you first",
-    "session.open": "A session's live screen, or its chat",
+    "session.open": "A session's live screen",
     "session.reply": "Type to the session; Enter sends, Shift+Enter starts a new line",
-    "session.keys": "Keys for the session: arrows, Esc, Tab, Enter, Ctrl-C",
-    "session.view": "Chat or terminal; the terminal fitted or 1:1",
     "answer": "Answer what it asks: allow once, always, or deny",
     "host.load": "The load average of the computer ptyro runs on, over 1, 5 and 15 minutes: amber once every CPU is busy, red at twice that ([ui] load)",
     "notifications": "Notifications on this device (a test is sent)",
@@ -111,9 +109,6 @@ let show = (() => { const v = store.get("ptyro.show"); return SHOWS.find((x) => 
 const app = {
     sessions: new Map(),
     screens: new Map(),
-    /// Structured sessions' transcripts (M10), and the ones shown as a terminal instead.
-    chats: new Map(),
-    termView: new Set(),
     /// Unsent replies, per session.
     drafts: new Map(),
     viewing: null,
@@ -254,7 +249,7 @@ function listView() {
     // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
     const aside = chatsShown() ? chatsAside() : null;
     const shells = can("full") || [...app.sessions.values()].some((s) => s.loose) ? shellsGroup(app.sessions.values(), sessionCard) : null;
-    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body), h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
+    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body), aside));
 }
 let shell = null;
 /// This device may type into the session: `control` scope or more, and it is running.
@@ -297,14 +292,10 @@ function sessionShell(id) {
         toast,
         changed: render,
     });
-    const chat = h("div", { class: "chat" });
-    requestAnimationFrame(() => { chat.scrollTop = chat.scrollHeight; });
     shell = {
-        id, reply, term, chat,
+        id, reply, term,
         el: h("div", { class: "session" }),
         replyRow: h("div", { class: "reply" }, reply, h("button", { class: "send", onclick: () => void send() }, "Send")),
-        chatEls: new Map(),
-        empty: h("p", { class: "empty" }, "Nothing yet."),
     };
     return shell;
 }
@@ -316,12 +307,9 @@ function sessionView(id) {
     const sh = sessionShell(id);
     sh.reply.placeholder = s.kind === "agent" ? `Reply to ${s.name}…` : "Type a line…";
     const blocked = s.status?.status === "blocked" && s.state.t === "running";
-    const chat = s.structured && !app.termView.has(id);
-    if (chat)
-        updateChat(id, sh);
     patch(sh.el, [
         header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
-        h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", statusWord(st), s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", !chat && app.screens.get(id)?.title ? ` · ${app.screens.get(id).title}` : "", s.machine ? " · " : "", machineChip(s.name)),
+        h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", statusWord(st), s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", app.screens.get(id)?.title ? ` · ${app.screens.get(id).title}` : "", s.machine ? " · " : "", machineChip(s.name)),
         // Its machine is down (MM1.B): this is how it was, and what to do.
         ...(machineOf(s.name) && machineOf(s.name).state !== "online" ? [h("p", { class: "banner warn" }, `${machineOf(s.name).name} isn't reachable: this is how it was. `, machineOf(s.name).fix ?? "")] : []),
         ...(blocked ? [h("section", { class: "prompt" }, h("div", {}, h("b", {}, s.status?.kind === "permission" ? "Wants permission" : "Waiting for you"), s.held ? h("span", { class: "tag", title: "answers go to the agent as a decision" }, "exact") : null), h("pre", {}, s.status?.detail ?? s.attention?.text ?? ""), h("div", { class: "actions", title: tip("answer") }, h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"), h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"), h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny")))] : []),
@@ -329,81 +317,12 @@ function sessionView(id) {
             : s.state.t !== "running" ? [h("section", { class: "revive" }, h("span", {}, s.state.t === "failed" ? "It failed to run." : s.state.code != null ? `Exited with ${s.state.code}.` : "Exited."), h("button", { class: "primary", title: tipOf("session.restart"), onclick: () => void conn.request({ t: "restart", addr: id }).then(() => toast("Restarted"), (e) => toast(e.message)) }, "Restart"))] : []),
         // A shell of SHELLS: its workspace's shells by number, tmux's status line (SPEC §23.14).
         s.loose ? shellStrip(app.sessions.values(), s) : null,
-        chat ? sh.chat : sh.term.el,
-        ...(chat ? [h("div", { class: "keys", title: tip("session.keys") }, ...[["Esc", { t: "esc" }], ["Tab", { t: "tab" }], ["↑", { t: "up" }], ["↓", { t: "down" }], ["←", { t: "left" }], ["→", { t: "right" }], ["⏎", { t: "enter" }]].map(([label, code]) => h("button", { onclick: () => sh.term.key({ code: code, mods: 0 }) }, label)), h("button", { onclick: () => sh.term.key({ code: { t: "char", c: "c" }, mods: 4 }) }, "^C"), h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id))
-                    app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal"))]
-            : [canType(id) ? sh.term.keybar : null,
-                h("div", { class: "keys term-more" }, s.structured ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id))
-                        app.termView.add(id); render(); } }, "Chat") : null, h("button", { title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa"), canType(id) ? null : h("span", { class: "sub" }, "Watching: this device may look, not type"))]),
+        sh.term.el,
+        canType(id) ? sh.term.keybar : null,
+        h("div", { class: "keys term-more" }, h("button", { title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa"), canType(id) ? null : h("span", { class: "sub" }, "Watching: this device may look, not type")),
         canType(id) ? sh.replyRow : null,
     ].filter((x) => !!x));
     return sh.el;
-}
-/// A structured session's transcript as cards (M10), updated in place: unchanged items keep
-/// their elements; it follows new output only when already scrolled to the bottom.
-function updateChat(id, sh) {
-    const box = sh.chat;
-    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 32;
-    const top = box.scrollTop;
-    const items = app.chats.get(id)?.items ?? [];
-    const els = new Map();
-    const kids = [];
-    for (const it of items) {
-        const key = JSON.stringify(it);
-        const old = sh.chatEls.get(it.id);
-        let el = old?.key === key ? old.el : chatItem(id, it);
-        if (!el)
-            continue;
-        if (old && old.el !== el && old.el instanceof HTMLDetailsElement && el instanceof HTMLDetailsElement)
-            el.open = old.el.open;
-        els.set(it.id, { key, el });
-        kids.push(el);
-    }
-    sh.chatEls = els;
-    patch(box, kids.length ? kids : [sh.empty]);
-    if (atBottom)
-        requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
-    else
-        box.scrollTop = top;
-}
-function chatItem(id, it) {
-    switch (it.t) {
-        case "user": return h("div", { class: "msg user" }, it.text);
-        case "assistant": return h("div", { class: "msg assistant" }, it.text, it.streaming ? h("span", { class: "caret" }, "▍") : null);
-        case "thinking": return h("div", { class: "msg thinking" }, "· ", it.text.split("\n")[0]);
-        case "tool": {
-            const status = it.status === "done" ? "done" : it.status === "failed" ? "failed" : it.status === "declined" ? "declined" : "running";
-            const det = h("details", { class: `tool ${status}` }, h("summary", {}, `${it.name} · ${it.title}`));
-            if (it.diff) {
-                const pre = h("pre", { class: "diff" });
-                for (const l of it.diff.split("\n")) {
-                    if (l.startsWith("---") || l.startsWith("+++"))
-                        continue;
-                    pre.append(h("span", { class: l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : "" }, l + "\n"));
-                }
-                det.append(pre);
-            }
-            if (it.output)
-                det.append(h("pre", {}, it.output));
-            return det;
-        }
-        case "permission":
-            if (it.decided)
-                return h("div", { class: "turn-end" }, `${it.title.split("\n")[0] || it.tool} → ${it.decided}`);
-            return h("section", { class: "prompt" }, h("b", {}, `Wants permission: ${it.tool}`), h("pre", {}, it.title), h("div", { class: "actions" }, h("button", { class: "allow", onclick: () => void answer(id, "allow") }, "Allow"), h("button", { class: "always", onclick: () => void answer(id, "always") }, "Always"), h("button", { class: "deny", onclick: () => void answer(id, "deny") }, "Deny")));
-        case "plan":
-            return h("div", { class: "tool" }, "☰ plan", ...it.steps.map((p) => h("div", {}, `${p.status === "completed" ? "✓" : p.status === "in_progress" ? "▸" : "○"} ${p.text}`)));
-        case "notice": return h("div", { class: `msg thinking ${it.level}` }, "! ", it.text);
-        case "turn_end": {
-            const parts = [it.stop];
-            if (it.cost_micro_usd != null)
-                parts.push(`$${(it.cost_micro_usd / 1e6).toFixed(4)}`);
-            if (it.duration_ms != null)
-                parts.push(`${(it.duration_ms / 1000).toFixed(1)}s`);
-            return h("div", { class: "turn-end" }, `── ${parts.join(" · ")} ──`);
-        }
-    }
-    return null;
 }
 function paint() {
     if (!shell || shell.id !== app.viewing || !shell.term.canvas.isConnected)
@@ -531,24 +450,6 @@ conn.listeners.add((msg) => {
         conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => { });
         return;
     }
-    if (msg.t === "chat") {
-        let c = app.chats.get(msg.session);
-        if (!c || msg.reset) {
-            c = { items: [], draft: "" };
-            app.chats.set(msg.session, c);
-        }
-        for (const it of msg.items) {
-            const i = c.items.findIndex((x) => x.id === it.id);
-            if (i >= 0)
-                c.items[i] = it;
-            else
-                c.items.push(it);
-        }
-        c.draft = msg.draft;
-        if (msg.session === app.viewing)
-            render();
-        return;
-    }
     if (msg.t === "screen") {
         const f = msg.frame;
         const s = app.screens.get(f.session);
@@ -587,7 +488,6 @@ conn.listeners.add((msg) => {
         }
         else if (e.t === "session_removed") {
             app.sessions.delete(e.id);
-            app.chats.delete(e.id);
             app.screens.delete(e.id);
             app.drafts.delete(e.id);
             render();

@@ -1076,6 +1076,28 @@ protocols):
 ride on hooks); a structured transcript surviving a full daemon restart (not an upgrade).
 **Needs you:** OpenCode against a real install, and a real Gemini/Codex turn when logged in.
 
+**Removed (2026-11-17): session extras, pare-down batch 5.** Deep, not wide
+(`docs/review-2026-11/pare-down.md`): a session is a terminal running its agent's own UI, named
+once and titled freely. Gone from every surface (CLI, TUI, web): structured sessions as a user
+feature (`new --structured`, `convert`, `read --chat`, `session.convert`, `view.chat` on `C-q t`,
+now unbound, the web's chat view of a session and the new-task sheet's "Chat mode"; M10.1's
+session half, M10.6), summaries (`summarize`, `[summaries]`, the sidebar's `≈` line,
+`session.summarize`; UX1.3), adopting a hand-started Claude (`adopt`, `session.adopt` on `A`, now
+unbound; UX1.4's adopt half: its screen-read status stays, and its sidebar line says "claude by
+hand, status off its screen"), `report` (herdr-compatible; a program speaks OSC 7501), `replay`
+and `export` with the web's replay player and Earlier sessions page (M8.2's playback: the recorder
+stays for deep scrollback and a stopped session's last screen; a `.ptylog` fixture comes from
+`ptyro-headless --from-recording`), and `shell-init` as a command (ptyro's own shells integrate by
+themselves; it stays hidden, as what `ptyro setup`'s rc file line runs). `retitle`, `wt retitle`
+and `chat retitle` merged into `rename` (`--title`; the TUI's `,` with `C-t`, the web's one Rename
+sheet with both fields). Several unquoted words after `ptyro` are an unknown command with a
+did-you-mean and a tip to quote a task (review finding U-11). **Chats keep the machinery:**
+`ptyro-drive` and `structured.rs` run every chat's engine; `m10.rs` now tests every protocol, a
+permission round trip and a live upgrade mid-answer through chats. A dormant session started
+structured before the upgrade resumes in its agent's own TUI, in the same conversation; a live
+one carried by `daemon upgrade` keeps running. Protocol 1.46; `summaries` is a retired key
+(accepted and reported, `chat.title_command` now defaults to the command it had).
+
 ---
 
 ## M11 — Change sets (multi-repo)

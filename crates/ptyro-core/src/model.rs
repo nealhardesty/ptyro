@@ -477,9 +477,6 @@ pub struct WorktreeSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub workspace: Option<String>,
-    /// Start the agent in structured mode (M10).
-    #[serde(default)]
-    pub structured: bool,
     /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,

@@ -1,5 +1,5 @@
 //! The recorder's file format (SPEC §7.6, M8.2): a session's raw PTY output with timing, so it
-//! can be replayed, exported (asciicast v2, text) and used as scrollback deeper than memory.
+//! can be read back as scrollback deeper than memory and a stopped session's last screen.
 //!
 //! ```text
 //! file    = "PTYROREC" 0x01 record*
@@ -285,14 +285,6 @@ pub fn read_dir(dir: &Path) -> io::Result<Vec<Timed>> {
     Ok(out)
 }
 
-/// The size a recording starts at.
-pub fn first_size(records: &[Timed]) -> Option<TermSize> {
-    records.iter().find_map(|r| match r.record {
-        Record::Start(s) | Record::Resize(s) => Some(s),
-        _ => None,
-    })
-}
-
 /// Feed a recording into an emulator (its replies are dropped: nobody asked).
 pub fn replay(records: &[Timed], emu: &mut dyn crate::Emulator) {
     let mut sink = crate::FeedOutput::default();
@@ -308,65 +300,6 @@ pub fn replay(records: &[Timed], emu: &mut dyn crate::Emulator) {
         sink.replies.clear();
         sink.events.clear();
     }
-}
-
-/// asciicast v2 (asciinema): a header line, then `[seconds, "o"|"r", data]` lines. Output split
-/// inside a UTF-8 character is carried to the next event.
-pub fn asciicast(records: &[Timed], title: &str) -> String {
-    let size = first_size(records).unwrap_or(TermSize::DEFAULT);
-    let start = records.first().map_or(0, |r| r.at_ms);
-    let mut out = format!(
-        "{{\"version\":2,\"width\":{},\"height\":{},\"timestamp\":{},\"title\":{},\"env\":{{\"TERM\":\"xterm-256color\"}}}}\n",
-        size.cols,
-        size.rows,
-        start / 1000,
-        json_str(title)
-    );
-    let mut carry: Vec<u8> = Vec::new();
-    let mut first = true;
-    for r in records {
-        let t = r.t_us as f64 / 1e6;
-        match &r.record {
-            Record::Output(b) | Record::Keyframe(b) => {
-                carry.extend_from_slice(b);
-                let valid = match std::str::from_utf8(&carry) {
-                    Ok(_) => carry.len(),
-                    Err(e) if e.error_len().is_none() => e.valid_up_to(),
-                    Err(_) => carry.len(),
-                };
-                let text = String::from_utf8_lossy(&carry[..valid]).into_owned();
-                carry.drain(..valid);
-                if !text.is_empty() {
-                    out.push_str(&format!("[{t:.6},\"o\",{}]\n", json_str(&text)));
-                }
-            }
-            Record::Resize(s) | Record::Start(s) => {
-                if !first || Some(*s) != Some(size) {
-                    out.push_str(&format!("[{t:.6},\"r\",\"{}x{}\"]\n", s.cols, s.rows));
-                }
-            }
-        }
-        first = false;
-    }
-    out
-}
-
-fn json_str(s: &str) -> String {
-    let mut o = String::with_capacity(s.len() + 2);
-    o.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => o.push_str("\\\""),
-            '\\' => o.push_str("\\\\"),
-            '\n' => o.push_str("\\n"),
-            '\r' => o.push_str("\\r"),
-            '\t' => o.push_str("\\t"),
-            c if (c as u32) < 0x20 || c == '\u{7f}' => o.push_str(&format!("\\u{:04x}", c as u32)),
-            c => o.push(c),
-        }
-    }
-    o.push('"');
-    o
 }
 
 /// Just the output bytes, as a `.ptylog` fixture (docs/fixtures.md).
@@ -414,9 +347,6 @@ mod tests {
         let mut row = Vec::new();
         back.line(4, &mut row);
         assert!(row.iter().map(|c| c.c).collect::<String>().starts_with("after resize"));
-        let cast = asciicast(&recs, "t");
-        assert!(cast.starts_with("{\"version\":2"));
-        assert!(cast.contains("\"r\",\"30x5\""));
         // Times never go backwards.
         let ts: Vec<u64> = recs.iter().map(|r| r.t_us).collect();
         assert!(ts.windows(2).all(|w| w[0] <= w[1]), "{:?}", &ts[..5]);
@@ -519,18 +449,6 @@ mod tests {
         let mut emu = AlacrittyEmulator::new(TermSize::new(10, 2), 10);
         replay(&out, &mut emu);
         assert_eq!(emu.size(), TermSize::MIN);
-    }
-
-    #[test]
-    fn asciicast_keeps_split_utf8_together() {
-        let recs = vec![
-            Timed { at_ms: 0, t_us: 0, record: Record::Start(TermSize::new(10, 2)) },
-            Timed { at_ms: 0, t_us: 10, record: Record::Output("漢".as_bytes()[..2].to_vec()) },
-            Timed { at_ms: 0, t_us: 20, record: Record::Output("漢".as_bytes()[2..].to_vec()) },
-        ];
-        let c = asciicast(&recs, "x");
-        assert!(c.contains("\"o\",\"漢\""), "{c}");
-        assert!(!c.contains('\u{fffd}'));
     }
 
     fn tempfile_dir() -> PathBuf {

@@ -65,7 +65,6 @@ export interface Session {
   task?: string | null;
   last_reply?: string | null;
   held?: boolean;
-  structured?: string | null;
   inner_agent?: string | null;
   quick?: boolean;
   /// SHELLS (SPEC §23): it belongs to its workspace, not a worktree, under a number.
@@ -87,7 +86,6 @@ export interface Session {
   chat?: string | null;
   profile?: string;
   run?: string | null;
-  summary?: { text: string; turn: number; at_ms: number } | null;
   command?: { text?: string | null; exit?: number | null; ended_ms?: number | null } | null;
   ports?: number[];
   turns?: number;

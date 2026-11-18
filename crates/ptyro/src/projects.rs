@@ -151,12 +151,6 @@ pub enum WsCmd {
 // Parsed once per command line: boxing `New` would buy nothing.
 #[allow(clippy::large_enum_variant)]
 pub enum WtCmd {
-    /// Change a worktree's title, what people read; no title clears it (its name stays)
-    Retitle {
-        worktree: String,
-        /// The new title (several words are joined)
-        title: Vec<String>,
-    },
     /// List worktrees
     Ls {
         /// Only this project's
@@ -268,13 +262,18 @@ pub enum WtCmd {
         #[arg(short, long, add = ArgValueCandidates::new(crate::complete::editors))]
         editor: Option<String>,
     },
-    /// Rename a worktree: its name, its address (`project/NEW`). Its branch stays and so does
-    /// its directory, so what runs in it carries on.
-    /// The main checkout is always `@root`
+    /// Rename a worktree, or retitle it: its name is its address (`project/NEW`), its title is
+    /// what people read (`--title`). Its branch stays and so does its directory, so what runs in
+    /// it carries on. The main checkout is always `@root`
     Rename {
         #[arg(add = ArgValueCandidates::new(crate::complete::worktrees))]
         worktree: String,
-        new: String,
+        /// The new name
+        #[arg(required_unless_present = "title")]
+        new: Option<String>,
+        /// The new title, for people to read; `--title ""` clears it
+        #[arg(long)]
+        title: Option<String>,
     },
 }
 
@@ -796,21 +795,6 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             }
             Ok(0)
         }
-        WtCmd::Retitle { worktree, title } => {
-            let title = (!title.is_empty()).then(|| title.join(" "));
-            let Reply::Worktree { info } = c
-                .request(Request::Retitle { addr: addr_here(worktree)?, title, worktree: true })
-                .await?
-            else {
-                return Err(Error::internal("unexpected reply"));
-            };
-            eprintln!(
-                "{}: {}",
-                info.qualified(),
-                info.title.unwrap_or_else(|| "title cleared".into())
-            );
-            Ok(0)
-        }
         WtCmd::New {
             name,
             name_arg,
@@ -980,12 +964,22 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             Ok(0)
         }
         WtCmd::Open { worktree, editor } => open(ctx, c, wt_addr(worktree)?, editor).await,
-        WtCmd::Rename { worktree, new } => {
-            let info = worktree_of(
-                c.request(Request::WorktreeRename { addr: addr_here(worktree)?, name: new })
-                    .await?,
-            )?;
-            eprintln!("renamed to {}", info.qualified());
+        WtCmd::Rename { worktree, new, title } => {
+            let mut addr = addr_here(worktree)?;
+            if let Some(name) = new {
+                let info = worktree_of(c.request(Request::WorktreeRename { addr, name }).await?)?;
+                eprintln!("renamed to {}", info.qualified());
+                addr = info.id;
+            }
+            if let Some(title) = title {
+                let req = Request::Retitle { addr, title: Some(title), worktree: true };
+                let info = worktree_of(c.request(req).await?)?;
+                eprintln!(
+                    "{}: {}",
+                    info.qualified(),
+                    info.title.unwrap_or_else(|| "title cleared".into())
+                );
+            }
             Ok(0)
         }
     }

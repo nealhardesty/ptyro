@@ -325,9 +325,9 @@ pub struct AgentDef {
     pub usage: Option<bool>,
     /// Record this agent's sessions (`[recorder]`; default true).
     pub record: Option<bool>,
-    /// The structured protocol it speaks with `ptyro new --structured` (M10): `stream-json`,
-    /// `app-server`, `acp` or `opencode`. Default from its adapter; `acp` makes any Agent Client
-    /// Protocol agent structured.
+    /// The structured protocol a chat speaks with it (M10, SPEC §22): `stream-json`,
+    /// `app-server`, `acp` or `opencode`. Default from its adapter; `acp` lets any Agent Client
+    /// Protocol agent chat.
     pub protocol: Option<String>,
 }
 
@@ -585,7 +585,6 @@ pub struct Config {
     pub remote: Remote,
     pub clipboard: Clipboard,
     pub shell: Shell,
-    pub summaries: Summaries,
     pub chat: Chat,
     pub client: Client,
     pub updates: Updates,
@@ -703,7 +702,8 @@ pub struct Chat {
     pub seed_tokens: u32,
     /// `auto`: a short title from a small model after the first answer; `off`: the first line.
     pub title: String,
-    /// The titler (reads the prompt on stdin); empty = `[summaries] command`.
+    /// The titler: reads the prompt on stdin, prints the title (or Claude's
+    /// `--output-format json`), under the chat's profile. Empty: titles are the first line.
     pub title_command: Vec<String>,
     /// The most titles made for each profile in a day.
     pub daily_cap: u32,
@@ -739,7 +739,19 @@ impl Default for Chat {
             hibernate_after: "2m".into(),
             seed_tokens: 30_000,
             title: "auto".into(),
-            title_command: Vec::new(),
+            title_command: [
+                "claude",
+                "-p",
+                "--model",
+                "haiku",
+                "--output-format",
+                "json",
+                "--strict-mcp-config",
+                "--tools",
+                "",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
             daily_cap: 200,
             index_tools: false,
             meaning: false,
@@ -1013,44 +1025,6 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), crate::Error>
     r
 }
 
-/// A one-line summary of what a session is doing, from a small, cheap model (UX1.3, SPEC
-/// §11.2h). Off unless you turn it on: it sends a trimmed, redacted view of the session to the
-/// model's provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Summaries {
-    /// Summarize each agent's turn when it ends or stops to ask (`ptyro summarize` works
-    /// either way).
-    pub enabled: bool,
-    /// At most this many summaries a day for each profile (each is about $0.0007 with Haiku).
-    pub daily_cap: u32,
-    /// The summarizer: reads the prompt on stdin, prints the summary (or Claude's
-    /// `--output-format json`). It runs under the session's profile, so on its account.
-    pub command: Vec<String>,
-}
-
-impl Default for Summaries {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            daily_cap: 200,
-            command: [
-                "claude",
-                "-p",
-                "--model",
-                "haiku",
-                "--output-format",
-                "json",
-                "--strict-mcp-config",
-                "--tools",
-                "",
-            ]
-            .map(str::to_owned)
-            .to_vec(),
-        }
-    }
-}
-
 /// OSC 52 from programs in sessions (SPEC §5.7, §17).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -1074,8 +1048,8 @@ pub struct Shell {
     /// (`$SHELL -l`).
     pub command: Vec<String>,
     /// Add ptyro's shell integration to the bash, zsh, fish and PowerShell sessions it starts:
-    /// prompt marks, working/idle, the last command and its exit code, the directory. Off, only a
-    /// `ptyro shell-init` line in an rc file gives them.
+    /// prompt marks, working/idle, the last command and its exit code, the directory. Off, they
+    /// have none (unless the rc file line `ptyro setup` adds gives them).
     pub integration: bool,
     /// Each workspace's SHELLS section in the sidebar (SPEC §23.6): always, only once it has a
     /// shell, or never (the keys still work).
@@ -1731,9 +1705,6 @@ impl Config {
         }
         if self.discover.depth > 32 {
             return Err("discover.depth: at most 32".into());
-        }
-        if self.summaries.command.is_empty() {
-            return Err("summaries.command: must not be empty".into());
         }
         if self.notifications.desktop_command.as_ref().is_some_and(Vec::is_empty) {
             return Err("notifications.desktop_command: must not be empty (leave it out)".into());
@@ -2987,7 +2958,6 @@ mod hardening {
         for (bad, key) in [
             ("[ui]\nsidebar_width = 60000\n", "ui.sidebar_width"),
             ("[discover]\ndepth = 200\n", "discover.depth"),
-            ("[summaries]\ncommand = []\n", "summaries.command"),
             ("[notifications]\ndesktop_command = []\n", "notifications.desktop_command"),
             ("[[notifications.sinks]]\ntype = \"command\"\ncommand = []\n", "command"),
         ] {

@@ -5,11 +5,11 @@
 //! Copy mode's prompt jumps, a shell session's working/idle and its last command, and the session's
 //! directory all come from it.
 //!
-//! `ptyro shell-init <shell>` prints a snippet for an rc file. Shells that ptyro starts itself get
-//! it with no setup ([`integrate`], `shell.integration`): ptyro starts the shell so that it reads
+//! Shells that ptyro starts itself get it with no setup ([`integrate`], `shell.integration`): ptyro starts the shell so that it reads
 //! the user's own startup files first and ptyro's snippet last. Every snippet does nothing outside
-//! ptyro (`PTYRO` unset) and nothing twice (`__ptyro_integrated`), so a line in an rc file and the
-//! automatic one never stack.
+//! ptyro (`PTYRO` unset) and nothing twice (`__ptyro_integrated`), so the rc file line `ptyro
+//! setup` adds (it runs the internal `ptyro shell-init <shell>`, for the tools it installed) and
+//! the automatic one never stack.
 
 use std::path::{Path, PathBuf};
 

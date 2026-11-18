@@ -69,9 +69,8 @@ impl Daemon {
         // the client's own Hello). What it sends is its own session's, though: a process placed
         // in one session can't report a status, a hook or a statusline for another, which would
         // forge what a notification or the sidebar believes.
-        if let Request::Hook { session: target, .. }
-        | Request::StatusLine { session: target, .. }
-        | Request::Report { addr: target, .. } = req
+        if let Request::Hook { session: target, .. } | Request::StatusLine { session: target, .. } =
+            req
         {
             if caller.grant.is_none()
                 && let Some(pid) = caller.pid

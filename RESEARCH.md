@@ -3262,7 +3262,7 @@ ship themselves, in order:
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-STA-01 | Audit OSC 7501 against the latest spec rev:<br>• ids/subtrees, LRU eviction at 256 records, base64 control-char rejection<br>• done/error survive OSC 133 A, RIS clears<br>• suppress OSC 9;4 → root mapping once 7501 is seen; rate-limit notifications<br>Accept OSC 21337 (low confidence) and herdr `report-agent`. Publish ptyro's precedence table with `applied:false` semantics and the tuios state-name mapping. Any 7501 emitter (e.g. Crush) gets confident status with no adapter. Conformance tests in the fake agent. | Rex, Ghostty, tuios, iTerm2, herdr, Crush | M4 | S | ★★★ | **built M4.20** (2026-10-20) |
+| R-STA-01 | Audit OSC 7501 against the latest spec rev:<br>• ids/subtrees, LRU eviction at 256 records, base64 control-char rejection<br>• done/error survive OSC 133 A, RIS clears<br>• suppress OSC 9;4 → root mapping once 7501 is seen; rate-limit notifications<br>Accept OSC 21337 (low confidence) and herdr `report-agent`. Publish ptyro's precedence table with `applied:false` semantics and the tuios state-name mapping. Any 7501 emitter (e.g. Crush) gets confident status with no adapter. Conformance tests in the fake agent. | Rex, Ghostty, tuios, iTerm2, herdr, Crush | M4 | S | ★★★ | **built M4.20** (2026-10-20); `report-agent` (`ptyro report`) built, removed 2026-11-17 (pare-down): a program speaks OSC 7501 |
 | R-STA-02 | `ptyro agent explain <session>`: which source (hook / OSC / fallback) set the state and why | herdr | M5 | S | ★★ | **built M4** as `ptyro status --explain` (2026-10-20) |
 | R-STA-03 | `send --wait` returns `stalled` (no activity in N s) or `blocked`; turn counter (`completion_seq`) in `events` | herdr, initech | M5 | S | ★★ | **built M5.2** (2026-10-20): `send --wait` reports idle/blocked/stalled/exited; `turns` in `--json` |
 | R-STA-04 | A **done-but-unseen** state, cleared only by focus | herdr, Claude agent view | M4 | S | ★★ | new |
@@ -3282,7 +3282,7 @@ ship themselves, in order:
 | R-AGT-06 | `ptyro hooks setup` + `doctor --repair`: detect agents on PATH, install idempotently, detect dropped or untrusted hooks (Codex hash-pinned trust), TUI banner | cmux, iTerm2, Codex | M5 | S | ★★ | partly built M5.6 (2026-10-20): `doctor` self-tests hooks and reports Codex hooks held for review; `--repair` and a TUI banner open |
 | R-AGT-07 | Claude `type:"http"` hooks to a daemon localhost endpoint, removing process spawns on hot events (spike vs §8.3 relay) | Claude Code | M8 (spike) | S | ★ | new |
 | R-AGT-08 | Cross-agent conversation handoff: export transcript, seed another agent | Kilo `/resume-claude` | Backlog | M | ★ | new |
-| R-AGT-09 | **Agent detected inside a shell session**: when a known agent is the PTY's foreground process, label the row `shell › agent` and use that adapter's hook-free status (titles, screen, OSC 7501) instead of OSC 133, which reports the whole run as working [V 2026-10-22, ptyro code]; offer to adopt it as a managed session (R-AGT-03) | herdr (foreground-process detection) | Backlog | M | ★★ | → UX1.4, built 2026-10-22 (adopt: Claude only) |
+| R-AGT-09 | **Agent detected inside a shell session**: when a known agent is the PTY's foreground process, label the row `shell › agent` and use that adapter's hook-free status (titles, screen, OSC 7501) instead of OSC 133, which reports the whole run as working [V 2026-10-22, ptyro code]; offer to adopt it as a managed session (R-AGT-03) | herdr (foreground-process detection) | Backlog | M | ★★ | → UX1.4, built 2026-10-22; adopt (Claude only) built, removed 2026-11-17 (pare-down): the screen-read status stays |
 
 #### Worktrees and projects (R-WT)
 
@@ -3302,7 +3302,7 @@ ship themselves, in order:
 
 | ID | Idea | Seen in | Fit | Size | Pri | Status |
 |---|---|---|---|---|---|---|
-| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9 and UX1.24, LLM summaries → **UX1.3 done** (opt-in, Haiku per turn, 2026-10-23); branch names and commit messages still new |
+| R-UX-01 | Derived names and summaries: deterministic slug from the prompt by default; optional cheap-model branch names, row summaries and commit messages using the session's own profile account | dmux, Claude agent view | M4+ | M | ★ | slugs → UX1.9 and UX1.24, LLM summaries → **UX1.3 done** (opt-in, Haiku per turn, 2026-10-23), built, removed 2026-11-17 (pare-down); branch names and commit messages still new |
 | R-UX-02 | **Actionable inbox**: peek the pending question, reply inline, numbered choice by digit, **snooze** until next transition, jump to newest unread, cycle unread without marking read | Claude agent view, tuios, iTerm2, cmux | M4 | M | ★★★ | partly built M4.5: peek, inline reply, y/a/n answers, newest-first inbox per workspace; snooze open (2026-10-20); the inbox built, removed 2026-11-17 (pare-down): "needs you" lives on session rows and in notifications; peek and inline reply stay |
 | R-UX-03 | Companion-shell key per task (same worktree and profile env); **scratch sessions** (no project, temp dir) | AoE | M3 | S | ★★ | companion shell → UX1.13, built 2026-10-22; scratch sessions → SH.7, built 2026-11-04 (scratch shells in SHELLS) |
 | R-UX-04 | `ptyro project scan ~/dev` bulk registration | ccmanager | M3 | S | ★ | new |
@@ -3460,7 +3460,7 @@ ship themselves, in order:
 |---|---|---|---|---|---|---|
 | R-OBS-01 | **Local OTLP/HTTP receiver** in the daemon; inject `OTEL_*` with `ptyro.session`/`ptyro.profile` resource attributes; chain to the user's endpoint; exact per-session tokens, cost and tool timeline | Claude Code OTel | M8 | M | ★★ | new |
 | R-OBS-02 | `ptyro stats --json` and local analytics: time blocked vs working, PRs opened/merged, **selection log** (which signal picked the winner; win rate by agent) | Factory, research §II.2 | M5 / M7 | S | ★★ | new |
-| R-OBS-03 | Exports: **asciicast v3** with status markers, `read --format html\|vt\|text`, per-line timestamps, `ptyro stream` in asciinema's live protocol | asciinema 3, zmx, tmux 3.8 | M8 | M | ★ | **partly built M8.2** (2026-10-21): `export --format asciicast` (v2) / `text` / `ptylog` and `replay`. Open: v3 with status markers, html/vt, `ptyro stream` |
+| R-OBS-03 | Exports: **asciicast v3** with status markers, `read --format html\|vt\|text`, per-line timestamps, `ptyro stream` in asciinema's live protocol | asciinema 3, zmx, tmux 3.8 | M8 | M | ★ | **partly built M8.2** (2026-10-21): `export --format asciicast` (v2) / `text` / `ptylog` and `replay`; built, removed 2026-11-17 (pare-down): the recorder stays internal, a `.ptylog` comes from `ptyro-headless --from-recording` |
 
 #### Extensibility (R-EXT), protocols (R-ACP) and resources (R-RES)
 

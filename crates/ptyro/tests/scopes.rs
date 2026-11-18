@@ -97,8 +97,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"agents"}), READ, true),
         s(json!({"t":"editors"}), READ, true),
         s(json!({"t":"project_config","addr":a}), READ, true),
-        s(json!({"t":"replay","addr":a}), READ, true),
-        s(json!({"t":"export","addr":a,"format":"text"}), READ, true),
         s(json!({"t":"web","on":null,"via":null}), READ, true),
         s(json!({"t":"load_view","name":a}), READ, true),
         s(json!({"t":"push_key"}), READ, true),
@@ -109,7 +107,6 @@ fn table() -> Vec<Sample> {
         ),
         s(json!({"t":"push_unsubscribe","endpoint":"https://push.invalid/x"}), READ, true),
         s(json!({"t":"push_test"}), READ, false),
-        s(json!({"t":"chat_get","addr":a}), READ, true),
         // Finding the shell reads; starting one is a shell.
         s(
             json!({"t":"quick_shell","worktree":null,"cwd":"/nonexistent-scopes-test","create":false,"env":{},"size":null,"workspace":null}),
@@ -136,11 +133,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"remove","addr":a}), CONTROL, true),
         s(json!({"t":"restart","addr":a}), CONTROL, true),
         s(json!({"t":"rename","addr":a,"name":"x"}), CONTROL, true),
-        s(json!({"t":"convert","addr":a,"structured":false,"force":false}), CONTROL, true),
         s(json!({"t":"retitle","addr":a,"title":"x","worktree":false}), CONTROL, true),
-        s(json!({"t":"summarize","addr":a}), CONTROL, true),
         s(json!({"t":"worktree_open","addr":a,"editor":null}), CONTROL, true),
-        s(json!({"t":"adopt","addr":a}), CONTROL, true),
         // A configured agent (its command comes from the user's config) is control…
         s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude"}))}), CONTROL, false),
         // …any other command line is full.
@@ -224,11 +218,6 @@ fn table() -> Vec<Sample> {
             false,
         ),
         s(json!({"t":"status_line","session":a,"payload":{}}), FULL, false),
-        s(
-            json!({"t":"report","addr":a,"state":"working","kind":null,"msg":null,"progress":null}),
-            FULL,
-            false,
-        ),
         s(json!({"t":"notify_test"}), FULL, false),
         s(json!({"t":"doctor"}), FULL, false),
         s(json!({"t":"self_test","adapter":a}), FULL, false),

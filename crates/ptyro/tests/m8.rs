@@ -210,8 +210,8 @@ fn a_refused_handoff_rolls_back() {
     }
 }
 
-/// The recorder: every byte a session printed, beyond the in-memory scrollback, exported as
-/// asciicast or text, replayed, and used to show a dormant session's last screen after a restart.
+/// The recorder: every byte a session printed, beyond the in-memory scrollback, and a dormant
+/// session's last screen after a restart.
 #[test]
 fn the_recorder_keeps_everything() {
     let w = World::new("[daemon]\nscrollback_lines = 200\n");
@@ -226,23 +226,6 @@ fn the_recorder_keeps_everything() {
         lines.contains(&"1") && lines.contains(&"1500") && lines.contains(&"3000"),
         "deep history"
     );
-
-    let text = w.ok(&["export", "s", "--format", "text"]);
-    assert!(
-        text.starts_with("1\n2\n3\n") && text.contains("3000\nall-done"),
-        "{}",
-        &text[..80.min(text.len())]
-    );
-    let cast = w.home().join("s.cast");
-    w.ok(&["export", "s", "-o", cast.to_str().unwrap()]);
-    let cast = std::fs::read_to_string(cast).unwrap();
-    let header: Value = serde_json::from_str(cast.lines().next().unwrap()).unwrap();
-    assert_eq!(header["version"], 2);
-    assert!(header["width"].as_u64() > Some(0));
-    let ev: Value = serde_json::from_str(cast.lines().nth(1).unwrap()).unwrap();
-    assert_eq!(ev[1], "o");
-    let replay = w.ok(&["replay", "s", "--speed", "1000", "--max-idle", "1s"]);
-    assert!(replay.contains("all-done"));
 
     // Recordings are private.
     #[cfg(unix)]
@@ -272,8 +255,11 @@ fn recording_can_be_turned_off() {
     let w = World::new("[recorder]\nenabled = false\n");
     w.ok(&["new", "-d", "-n", "q", "--", "sh", "-c", "echo quiet; sleep 600"]);
     w.wait_screen("q", "quiet");
-    let out = w.cli(&["export", "q", "--format", "text"]);
-    assert!(!out.status.success(), "nothing recorded, so nothing to export");
+    let sessions = w.d.paths.data.join("sessions");
+    let logs: Vec<_> = std::fs::read_dir(&sessions)
+        .map(|d| d.flatten().map(|e| e.path().join("pty.log")).filter(|l| l.exists()).collect())
+        .unwrap_or_default();
+    assert!(logs.is_empty(), "nothing recorded: {logs:?}");
 }
 
 /// zstd frames when the client asks (`PTYRO_COMPRESS=1`), and the daemon's health in status.

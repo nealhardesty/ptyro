@@ -67,7 +67,8 @@ pub struct Term {
 /// Serializable for live upgrades (M8.1): the handoff image carries it whole.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Meta {
-    /// A structured session's protocol (M10); kept so a resume or restart stays structured.
+    /// A structured session's protocol (M10): a chat's engine's, kept so a resume or restart
+    /// stays structured.
     #[serde(default)]
     pub structured: Option<String>,
     pub name: String,
@@ -110,10 +111,7 @@ pub struct Meta {
     /// The model its agent runs, as the agent names it (hooks, protocol); not stored.
     #[serde(default)]
     pub model: Option<String>,
-    /// Its latest summary (UX1.3), and whether one is being made.
-    pub summary: Option<ptyro_core::session::Summary>,
-    pub summarizing: bool,
-    /// Its title, for people to read (UX1.24): `--title`, `retitle`, else its first prompt.
+    /// Its title, for people to read (UX1.24): `--title`, `rename --title`, else its first prompt.
     #[serde(default)]
     pub title: Option<String>,
     /// Claude's messaging socket, from the hook environment (M4.18).
@@ -364,8 +362,6 @@ fn new_meta(
         command: None,
         inner_agent: None,
         model: None,
-        summary: None,
-        summarizing: false,
         title: None,
         messaging: None,
         prompt_pending: false,
@@ -606,7 +602,6 @@ impl Session {
             last_reply: meta.last_reply.as_deref().map(|r| ptyro_core::session::brief(r, 300)),
             command: meta.command.clone(),
             inner_agent: meta.inner_agent.clone(),
-            summary: meta.summary.clone(),
             quick: meta.place.quick,
             chat: meta.place.chat.clone(),
             loose: meta.shelf.is_some(),

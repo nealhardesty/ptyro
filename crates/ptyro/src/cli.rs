@@ -290,7 +290,6 @@ async fn dispatch(
             title,
             pr,
             issue,
-            structured,
             argv,
         }) => {
             let prompt = match prompt_file {
@@ -316,7 +315,6 @@ async fn dispatch(
                 title,
                 pr,
                 issue,
-                structured,
                 welcome: false,
             };
             let new_wt = new_wt.or_else(|| (a.pr.is_some() || a.issue.is_some()).then(String::new));
@@ -515,29 +513,25 @@ async fn dispatch(
             }
             Ok(code)
         }
-        Some(Cmd::Rename { session, name }) => {
+        Some(Cmd::Rename { session, name, title }) => {
             let client = ctx.connect(false).await.map_err(no_daemon)?;
-            let info = session_of(client.request(Request::Rename { addr: session, name }).await?)?;
-            eprintln!("renamed to {}", info.name);
+            let mut addr = session;
+            if let Some(name) = name {
+                let info = session_of(client.request(Request::Rename { addr, name }).await?)?;
+                eprintln!("renamed to {}", info.name);
+                addr = info.id.full();
+            }
+            if let Some(title) = title {
+                let req = Request::Retitle { addr, title: Some(title), worktree: false };
+                let info = session_of(client.request(req).await?)?;
+                match info.title {
+                    Some(t) => eprintln!("{}: {t}", info.name),
+                    None => eprintln!("{}: title cleared", info.name),
+                }
+            }
             Ok(0)
         }
-        Some(Cmd::Read { session, chat: true, json, .. }) => {
-            let c = ctx.connect(false).await.map_err(no_daemon)?;
-            match c.request(Request::ChatGet { addr: session }).await? {
-                Reply::Transcript { items } => {
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
-                    } else {
-                        for i in items {
-                            println!("{}", serde_json::to_string(&i).unwrap_or_default());
-                        }
-                    }
-                    Ok(0)
-                }
-                r => Err(unexpected(r)),
-            }
-        }
-        Some(Cmd::Read { session, screen: _, scrollback, ansi, plain: _, json, chat: false }) => {
+        Some(Cmd::Read { session, screen: _, scrollback, ansi, plain: _, json }) => {
             crate::script::read(&ctx, session, scrollback, ansi, json).await
         }
         Some(Cmd::Config { cmd }) => crate::config::run(&ctx, cmd).await,
@@ -572,72 +566,6 @@ async fn dispatch(
         Some(Cmd::Checkpoint { cmd }) => crate::checkpoint::checkpoint(&ctx, cmd).await,
         Some(Cmd::Mcp { chat: _ }) => crate::mcp::serve(&ctx).await,
         Some(Cmd::Proxy) => crate::remote::proxy(&ctx).await,
-        Some(Cmd::Convert { session, to, force }) => {
-            let c = ctx.connect(false).await.map_err(no_daemon)?;
-            let structured = to == "structured";
-            match c.request(Request::Convert { addr: session, structured, force }).await? {
-                Reply::Session { info } => {
-                    eprintln!(
-                        "{} now runs {} (same conversation) — attach with `ptyro attach {}`",
-                        info.name,
-                        if structured { "in structured mode" } else { "in its own terminal UI" },
-                        info.name
-                    );
-                    Ok(0)
-                }
-                r => Err(unexpected(r)),
-            }
-        }
-        Some(Cmd::Retitle { target, title }) => {
-            let c = ctx.connect(false).await.map_err(no_daemon)?;
-            let title = (!title.is_empty()).then(|| title.join(" "));
-            let cleared = title.is_none();
-            match c.request(Request::Retitle { addr: target, title, worktree: false }).await? {
-                Reply::Session { info } if cleared => eprintln!("{}: title cleared", info.name),
-                Reply::Session { info } => {
-                    eprintln!("{}: {}", info.name, info.title.unwrap_or_default())
-                }
-                Reply::Worktree { info } => eprintln!(
-                    "{}: {}",
-                    info.qualified(),
-                    info.title.unwrap_or_else(|| "title cleared".into())
-                ),
-                r => return Err(unexpected(r)),
-            }
-            Ok(0)
-        }
-        Some(Cmd::Summarize { session, json }) => {
-            let c = ctx.connect(false).await.map_err(no_daemon)?;
-            match c.request(Request::Summarize { addr: session }).await? {
-                Reply::Session { info } => {
-                    let summary = info.summary.unwrap_or_else(|| ptyro_core::session::Summary {
-                        text: String::new(),
-                        turn: info.turns,
-                        at_ms: 0,
-                    });
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
-                    } else {
-                        println!("{}: {}", info.name, summary.text);
-                    }
-                    Ok(0)
-                }
-                r => Err(unexpected(r)),
-            }
-        }
-        Some(Cmd::Adopt { session }) => {
-            let c = ctx.connect(false).await.map_err(no_daemon)?;
-            match c.request(Request::Adopt { addr: session }).await? {
-                Reply::Session { info } => {
-                    eprintln!(
-                        "{} runs Claude as a managed session now, same conversation — attach with `ptyro attach {}`",
-                        info.name, info.name
-                    );
-                    Ok(0)
-                }
-                r => Err(unexpected(r)),
-            }
-        }
         Some(Cmd::Chat { cmd, new }) => crate::chat::run(&ctx, cmd, new).await,
         Some(Cmd::Shells { cmd, ls }) => crate::shells::run(&ctx, cmd, ls).await,
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {
@@ -663,12 +591,6 @@ async fn dispatch(
         Some(Cmd::Machine { cmd }) => machine(&ctx, cmd).await,
         Some(Cmd::MachineBridge { url, fingerprint }) => {
             crate::machines::bridge(url, fingerprint).await
-        }
-        Some(Cmd::Replay { session, speed, max_idle, from }) => {
-            crate::record::replay(&ctx, session, speed, max_idle, from).await
-        }
-        Some(Cmd::Export { session, format, output }) => {
-            crate::record::export(&ctx, session, format, output).await
         }
         Some(Cmd::Ws { cmd }) => crate::projects::ws(&ctx, cmd).await,
         Some(Cmd::Wt { cmd }) => crate::projects::wt(&ctx, cmd).await,
@@ -697,15 +619,6 @@ async fn dispatch(
         Some(Cmd::Usage { json }) => crate::agents::usage(&ctx, json).await,
         Some(Cmd::Notify { cmd }) => crate::agents::notify(&ctx, cmd).await,
         Some(Cmd::Integrations { cmd }) => crate::agents::integrations(&ctx, cmd).await,
-        Some(Cmd::Report { state, kind, msg, progress, session }) => {
-            let addr = match session.or_else(|| std::env::var("PTYRO_SESSION_ID").ok()) {
-                Some(a) => a,
-                None => return Err(Error::invalid("not inside a ptyro session; pass --session")),
-            };
-            let c = ctx.connect(false).await.map_err(no_daemon)?;
-            c.request(Request::Report { addr, state, kind, msg, progress }).await?;
-            Ok(0)
-        }
         Some(Cmd::Hook { .. } | Cmd::StatuslineRelay | Cmd::OpenUrl { .. }) => {
             unreachable!("handled in main")
         }
@@ -935,8 +848,6 @@ pub struct NewArgs {
     pub welcome: bool,
     pub pr: Option<u32>,
     pub issue: Option<String>,
-    /// Structured mode (M10).
-    pub structured: bool,
 }
 
 /// The variables a session should see from this client (SSH agent, display).
@@ -1120,7 +1031,6 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         size,
         prompt: a.prompt,
         title: a.title,
-        structured: a.structured,
         ..SpawnSpec::default()
     };
     let reply = with_confirmation(&client, Request::Spawn { spec }, false, |r| {

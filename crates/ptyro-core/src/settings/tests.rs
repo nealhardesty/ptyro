@@ -219,7 +219,7 @@ fn lists_commands_and_sets_are_typed_naturally() {
     assert_eq!(go("discover.roots", "~/a, ~/b").discover.roots, ["~/a", "~/b"]);
     assert_eq!(go("discover.roots", "[\"~/x y\"]").discover.roots, ["~/x y"]);
     assert_eq!(
-        go("summaries.command", "claude -p --model \"my model\"").summaries.command,
+        go("chat.title_command", "claude -p --model \"my model\"").chat.title_command,
         ["claude", "-p", "--model", "my model"]
     );
     assert_eq!(go("notifications.on", "blocked, done").notifications.on, ["blocked", "done"]);

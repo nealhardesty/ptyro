@@ -33,8 +33,8 @@ the one that needs you.
 Pre-1.0 (version 0.0.x), public for early testing. Every
 feature milestone (M1–M10) is built and covered by tests, most of them against scripted fake
 agents. Day-to-day use so far is mainly Claude Code on Linux. Some features have not been run
-against the real thing yet: the phone app on a real phone, OpenCode, Gemini and Codex structured
-turns, and macOS by hand. [`docs/compat.md`](docs/compat.md) records what has
+against the real thing yet: the phone app on a real phone, OpenCode, Gemini and Codex chat
+answers, and macOS by hand. [`docs/compat.md`](docs/compat.md) records what has
 been tried, and [`ROADMAP.md`](ROADMAP.md) what's next. Bug reports are very welcome.
 
 ptyro is an independent project. It is not affiliated with or endorsed by Anthropic, OpenAI,
@@ -156,8 +156,8 @@ ptyro login --check                           # where each login stands, changin
 - **Prerequisites come along.** Ticking Gemini CLI ticks Node.js. When your package manager's
   Node.js is too old for it (Ubuntu 24.04's is 18), ptyro puts nodejs.org's build, checked
   against its published checksums, in a folder of its own (`~/.local/share/ptyro-tools`), with no
-  admin rights and no `sudo npm`. It then offers to add `ptyro shell-init`'s line to your shell's
-  rc file so new terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
+  admin rights and no `sudo npm`. It then offers to add a line to your shell's rc file so new
+  terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
   already. `ptyro uninstall` leaves that folder alone, and on PATH: the tools are yours.
 - **Admin rights only after asking, once.** apt, dnf and WinGet's machine-wide installers need
   them: sudo asks for your password once, in your terminal, before the first of them (on Windows
@@ -435,9 +435,9 @@ ptyro new -d --agent claude --new-wt --prompt "fix the flaky test in tests/api.r
 ```
 
 Every session and worktree has a **name** (its address: `ptyro send fix-flaky-test …`) and a
-**title** (what people read, the task by default). `ptyro retitle` and `ptyro wt retitle` change
-the title (no title clears it), `ptyro rename` and `ptyro wt rename` the name (a worktree keeps
-its branch and its directory), and `ptyro project rename` a project's.
+**title** (what people read, the task by default). `ptyro rename` and `ptyro wt rename` change
+the name (a worktree keeps its branch and its directory), and with `--title` the title
+(`--title ""` clears it); `ptyro project rename` renames a project.
 
 **4. See who needs you.** The sidebar shows each session's status. `⚑` means it wants you.
 
@@ -458,10 +458,7 @@ its branch and its directory), and `ptyro project rename` a project's.
 
 Each row says what that session is doing: what a blocked agent wants and the keys that answer
 it, the step an agent is on, its task and last reply, a shell's last command. `[ui]
-sidebar_detail = "compact"` keeps one line per row. Turn on `[summaries] enabled = true` and,
-after each turn, a small model (Claude's Haiku, on that session's own profile account, about
-$0.0007 each) writes a `≈` line saying what it did. `ptyro summarize SESSION`, or *summarize* in
-a row's menu (`.`), makes one at any time.
+sidebar_detail = "compact"` keeps one line per row.
 
 - `Ctrl-Q a` jumps to the next session that needs you (blocked first).
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
@@ -708,8 +705,8 @@ ptyro --remote me@workbox      # the TUI (or any command) on another machine, ov
 The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: tap it and type (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, pinch to zoom the text (a wide session opens readable on a phone), scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
 
 The rest of the app: a tab for sessions (blocked ones
-on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename, summarize,
-scrollback, replay…), one for projects and worktrees (start a task in a new worktree, from a PR,
+on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename,
+scrollback, events…), one for projects and worktrees (start a task in a new worktree, from a PR,
 an issue or a branch; its checkpoints; remove it), and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
 config editor, the daemon and its logs, first-run setup and a tour. Push notifications carry
@@ -740,22 +737,6 @@ warns you in plain words that it can run commands as you; `--scope approve` answ
 `--scope control` also types and stops. Pairing a name that exists replaces that device with the
 new scope, up or down. Links always carry their port. Setup and the threat model:
 [`docs/remote.md`](docs/remote.md).
-
-### Structured sessions
-
-Instead of the agent's terminal UI, ptyro can drive it over its own protocol (Claude stream-json,
-Codex app-server, Gemini ACP, OpenCode's server, or any ACP agent). You get a chat view, in the
-TUI and on the phone, with every tool call, its output and diff, permission cards, and each
-turn's cost.
-
-```bash
-ptyro new -n fixer --agent claude --structured
-ptyro read fixer --chat                    # the transcript, one JSON item per line
-ptyro convert fixer                        # take over in Claude's own TUI, same conversation
-ptyro convert fixer --to structured        # and back
-```
-
-`Ctrl-Q t` switches between the chat and terminal views.
 
 ### Scripting
 
@@ -855,8 +836,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   ptyro adds its shell integration after your own startup files: prompt jumps in copy mode
   (`[` / `]`), working and idle, each command and its exit code in the sidebar, and the live
   directory. Nothing goes in your rc file or `$PROFILE`; `[shell] integration = false` turns it
-  off. For a shell ptyro didn't start: `eval "$(ptyro shell-init zsh)"` (or `bash`; fish:
-  `ptyro shell-init fish | source`; PowerShell: `ptyro shell-init pwsh | Out-String | Invoke-Expression`).
+  off.
 - **PowerShell:** `ptyro new -- pwsh` starts a PowerShell session (any bare bash, zsh, fish or
   pwsh is a shell session), or make it the default with
   `ptyro config set shell.command "pwsh -Login"`. Your prompt (oh-my-posh, starship, your own)
@@ -877,8 +857,8 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
   config, data, logs and socket live, whether the daemon and web app run (and whether the daemon is
   an older ptyro), and a block to paste into a bug report: `c` copies it in the TUI, "Copy all"
   on the web, `ptyro about --json` for scripts.
-- **Recordings** of each session (for `ptyro replay` and `ptyro export`) can hold secrets that
-  scrolled past. Turn them off with `[recorder] enabled = false`.
+- **Recordings** of each session (deep scrollback, and a stopped session's last screen) can hold
+  secrets that scrolled past. Turn them off with `[recorder] enabled = false`.
 
 ## Documentation
 
@@ -951,7 +931,7 @@ WSL works meanwhile.
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
-| `make verify-structured` | check structured mode against the real agents here |
+| `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
 | `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks ptyro for Windows, x64 and ARM64, from Linux or macOS with cargo-xwin (no Windows machine): every crate with all its tests (what can't run on Windows is `cfg(unix)`, with its reason). Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
 | `make conpty` (`INTO=<dir>`, `ARCH=x86_64\|aarch64`) | fetches Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`; one pinned NuGet version, its SHA-256 checked) into `target/conpty/<arch>/`, and with `INTO` copies one architecture's pair beside a `ptyro.exe`. The Windows zips and `make test-windows` use it |
 | `make test-windows` | on Windows itself (the release check): `make test`, every test natively, native daemons in ConPTY with the packaged ConPTY beside the test binaries |

@@ -7,7 +7,6 @@
 //! - a literal goes as it is;
 //! - `{session}`, `{worktree}`, `{project}`: the selected one's name;
 //! - `{profile}`, `{agent}`: picked from a list;
-//! - `{choose:Label:a|b|c}`: picked from those;
 //! - `{ask:Label}`: typed; nothing typed leaves the word out (an optional argument);
 //! - `{where}`: on Windows, WSL, Windows or both (setup's sides, BOOT8): see [`where_runs`];
 //!   elsewhere nothing.
@@ -18,18 +17,6 @@ use crate::tree::Row;
 
 /// `(action, template)`. Each action is in `keymap::ACTIONS` too, so the palette lists it.
 pub const TEMPLATES: &[(&str, &[&str])] = &[
-    ("session.replay", &["replay", "{session}"]),
-    (
-        "session.export",
-        &[
-            "export",
-            "{session}",
-            "--format",
-            "{choose:Format:asciicast|text|ptylog}",
-            "-o",
-            "{ask:File to write (e.g. session.cast)}",
-        ],
-    ),
     ("session.events", &["events", "--session", "{session}"]),
     ("checkpoint.list", &["checkpoint", "ls", "{session}"]),
     (
@@ -128,12 +115,6 @@ impl App {
                     Some(wsl_daemon) => return self.where_pick(wsl_daemon, job),
                     None => continue,
                 },
-                t if t.starts_with("{choose:") => {
-                    let body = t.trim_start_matches("{choose:").trim_end_matches('}');
-                    let (label, opts) = body.split_once(':').unwrap_or((body, ""));
-                    let items = opts.split('|').map(|o| (o.to_owned(), String::new())).collect();
-                    return self.cli_pick(label, items, job);
-                }
                 t if t.starts_with("{ask:") => {
                     let label = t.trim_start_matches("{ask:").trim_end_matches('}');
                     self.overlay = Some(Overlay::Prompt {
@@ -336,8 +317,7 @@ mod tests {
                                 | "{profile}"
                                 | "{agent}"
                                 | "{where}"
-                        ) || w.starts_with("{ask:")
-                            || (w.starts_with("{choose:") && w.contains('|')),
+                        ) || w.starts_with("{ask:"),
                         "{action}: {w}"
                     );
                 }
