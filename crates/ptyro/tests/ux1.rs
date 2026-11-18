@@ -1336,7 +1336,7 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_merged_and_cleaned_up_pr() {
             .send_when("What should it do?", "fix the typo in greeting.txt")
             .send_when("fix-typo-greeting", "\\r")
             // 3. Blocked: its row says what it wants, and the keys; answered from peek.
-            .send_when("y/a/n answers", "\\x11p")
+            .send_when("p y/a/n", "\\x11p")
             .send_when("y allow", "y")
             // 4. Finish into a PR, from the sidebar.
             .send_when("Fixed the typo", "\\x11\\t")
