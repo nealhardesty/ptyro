@@ -84,8 +84,6 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("panel"),
     js!("cfgkit"),
     js!("term"),
-    js!("pad"),
-    js!("notes"),
     ("/sw.js", "text/javascript; charset=utf-8", include_bytes!("../../../web/dist/sw.js")),
     ("/style.css", "text/css; charset=utf-8", include_bytes!("../../../web/dist/style.css")),
     (
@@ -1358,10 +1356,9 @@ mod tests {
     }
 
     #[test]
-    fn a_browser_message_fits_a_whole_scratchpad_and_the_web_app_knows_the_limit() {
+    fn a_browser_message_has_a_limit_the_web_app_knows() {
         use ptyro_protocol::MAX_CLIENT_MESSAGE;
         const {
-            assert!(MAX_CLIENT_MESSAGE > ptyro_core::scratchpad::MAX_PAD_BYTES + 64 * 1024);
             assert!(
                 MAX_CLIENT_MESSAGE < ptyro_protocol::MAX_FRAME / 2,
                 "far below the frame limit"

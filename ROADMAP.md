@@ -39,7 +39,7 @@ Conventions:
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
-| **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done) |
+| **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done; removed 2026-11-17) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
 | **UX3** | Daily flow | Full-sized panels and splits only on request (a split is a clone), quick new (`C-n`, the worktree's agent), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
@@ -2116,6 +2116,26 @@ scratchpad add` from a worktree) surprises scripts. Left behind on purpose: a pr
 (`<repo>/.ptyro/scratchpad.md` and `.ptyro/scratchpad.history/`) and the `/.ptyro/scratchpad.*`
 line in a repository's `.git/info/exclude`; nothing reads them. The README says how to move the
 lines into the one pad.
+
+**Removed (2026-11-17): the scratchpad and the inbox, pare-down batch 6.** Deep, not wide
+(`docs/review-2026-11/pare-down.md`): notes belong in your own editor, and "needs you" lives on
+session rows and in notifications, with no separate history. Gone from every surface: `ptyro
+scratchpad`/`pad` (edit, path, cat, add, todo, done, start, log, restore), `$PTYRO_SCRATCHPAD`,
+`ptyro inbox`; the TUI's `scratchpad.toggle` (`;`), `.add` (`'`), `.items` (`"`), `.note`,
+`.history`, the pad's drawer, popup and pane, copy mode's `a`, the home screen's pad line, the
+status bar's `✎N` and `✉N`, `inbox` (`i`, now unbound) and its overlay; the web's Notes page
+(`#/notes`), the share target and its offline queue, `#/inbox`, the header's ✉ and `g i` (the 🔔
+that turns on push stays, as does More → Notifications); "start a worktree from this item"
+(`WorktreeSpec.pad_item`). In the daemon: `scratchpad.rs`, the file watcher, the inbox table and
+its fallback in memory; the notifier still delivers to every channel and announces each attention
+as an `Alert` event, which is how a linked machine's alerts still reach you (M4.5, M4.6, MM1.B).
+Protocol 1.44 retires 10 requests; store migration 9 drops `inbox`; `[scratchpad]` is a retired
+key and `inbox` in `notifications.channels` is accepted and ignored (SPEC §13.8). The notes file
+and its saved copies stay where they are (`ptyro doctor` says so; `ptyro uninstall` names them
+before it removes the data directory). Also: `make scratchpad-demo` and its script, `note1.rs`,
+`ptyro_core::scratchpad`, the TUI's `pad.rs`, `web/src/notes.ts` and `pad.ts`. `attention.next`
+(`a`), peek (`p`), every `[attention]` setting, mute, quiet hours, Web Push, sinks and signed
+links stay. RESEARCH: R-UX-02's inbox and the R-NOTE rows marked built and removed.
 
 ---
 

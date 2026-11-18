@@ -219,7 +219,7 @@ fn a_machine_install_loses_its_files_its_shell_lines_and_its_binary() {
         std::fs::create_dir_all(d.join("ptyro")).unwrap();
     }
     std::fs::write(config.join("ptyro/config.toml"), "[ui]\nmouse = false\n").unwrap();
-    std::fs::write(data.join("ptyro/scratchpad.md"), "# Scratchpad\n").unwrap();
+    std::fs::write(data.join("ptyro/notes.md"), "# Notes\n").unwrap();
     // A hand-installed copy of the binary, the one that runs.
     std::fs::create_dir_all(h.join(".local/bin")).unwrap();
     let exe = h.join(".local/bin/ptyro");
@@ -317,8 +317,8 @@ fn list(file: &Path) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()
 }
 
-/// A backup is a private tar.gz with a database that opens by itself, the config and the
-/// scratchpad; no agent logins; and it never replaces a file.
+/// A backup is a private tar.gz with a database that opens by itself and the config; no agent
+/// logins; and it never replaces a file.
 #[tokio::test]
 async fn a_backup_holds_the_state_not_the_logins_and_never_replaces_a_file() {
     let w = World::new();

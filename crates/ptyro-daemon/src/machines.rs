@@ -29,7 +29,7 @@ use ptyro_core::model::{
     WorktreeInfo, split_machine,
 };
 use ptyro_core::session::SessionInfo;
-use ptyro_core::status::{InboxEntry, Usage};
+use ptyro_core::status::{Alert, Usage};
 use ptyro_core::sync::MutexExt;
 use ptyro_core::{ClientId, Error, ErrorCode, SessionId, lookup, now_ms};
 use ptyro_protocol::{ClientKind, ClientMsg, DomainEvent, Reply, Request, ServerMsg};
@@ -45,8 +45,6 @@ const KV_KEY: &str = "machines";
 const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 /// The longest wait between tries of a link that is down.
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
-/// Inbox entries kept per mirror.
-const INBOX_KEEP: usize = 300;
 
 /// A machine as kept in the store (its token, if any, is a file of its own).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,8 +65,6 @@ pub(crate) struct Mirror {
     pub sessions: Vec<SessionInfo>,
     pub profiles: Vec<ProfileInfo>,
     pub usage: Vec<Usage>,
-    /// Newest first.
-    pub inbox: Vec<InboxEntry>,
     /// Its chats that aren't archived (SPEC §22.11): listed here while it is offline too.
     pub chats: Vec<ChatInfo>,
     /// Ids of its archived chats seen so far (not mirrored, but still routed there).
@@ -122,7 +118,7 @@ fn put_on(o: &mut serde_json::Map<String, Value>, key: &str, machine: &str) {
 }
 
 /// Put `machine` on everything of its in a reply or an event (as JSON): sessions, workspaces,
-/// projects, worktrees, profiles, inbox entries and usage get `machine` and their names the
+/// projects, worktrees, profiles, alerts and usage get `machine` and their names the
 /// prefix; client ids (a session's controller) are mapped.
 pub(crate) fn qualify_value(v: &mut Value, machine: &str, map: MapClient<'_>) {
     match v {
@@ -252,14 +248,6 @@ fn here_only(req: &Request) -> bool {
             | PushSubscribe { .. }
             | PushUnsubscribe { .. }
             | PushTest
-            | ScratchGet
-            | ScratchPut { .. }
-            | ScratchAdd { .. }
-            | ScratchTodo { .. }
-            | ScratchMark { .. }
-            | ScratchHistory
-            | ScratchRestore { .. }
-            | ScratchPane { .. }
             | SaveView { .. }
             | LoadView { .. }
             | ReloadConfig
@@ -274,7 +262,6 @@ fn here_only(req: &Request) -> bool {
             | Hook { .. }
             | StatusLine { .. }
             | Report { .. }
-            | Inbox { .. }
             | Mute { .. }
             | Usage
             | Agents
@@ -582,17 +569,6 @@ impl Daemon {
         if let Ok(Reply::Usage { usage }) = client.request(Request::Usage).await.map(q) {
             m.usage = usage;
         }
-        if let Ok(Reply::Inbox { entries }) = client
-            .request(Request::Inbox {
-                workspace: None,
-                unread_only: false,
-                limit: Some(INBOX_KEEP as u32),
-            })
-            .await
-            .map(q)
-        {
-            m.inbox = entries;
-        }
         // Chats off there, or an older answer: none, not a broken link.
         let chats = Request::ChatList {
             workspace: None,
@@ -751,11 +727,10 @@ impl Daemon {
                     m.usage.push(usage.clone());
                     true
                 }
-                DomainEvent::InboxAdded { entry } => {
-                    m.inbox.insert(0, entry.clone());
-                    m.inbox.truncate(INBOX_KEEP);
-                    relay = Some(entry.clone());
-                    true
+                // Delivered here (below), not passed on: clients see the session's attention.
+                DomainEvent::Alert { alert } => {
+                    relay = Some(alert.clone());
+                    false
                 }
                 DomainEvent::ChatUpdated { info } => {
                     if info.archived {
@@ -777,8 +752,8 @@ impl Daemon {
                 | DomainEvent::ControllerChanged { .. }
                 | DomainEvent::Bell { .. }
                 | DomainEvent::SessionResumed { .. } => true,
-                // The machine's own business: its config, runs, scratchpad, its terminal
-                // notifications (ours come from its inbox entries, below), its own links.
+                // The machine's own business: its config, its terminal notifications (ours
+                // come from its alerts, below), its own links.
                 _ => false,
             }
         };
@@ -802,9 +777,9 @@ impl Daemon {
         }
     }
 
-    /// Its alerts reach you through this daemon (SPEC §16.4b): an inbox entry the machine made is
+    /// Its alerts reach you through this daemon (SPEC §16.4b): an alert the machine raised is
     /// delivered by this daemon's channels, under this machine's notification settings.
-    async fn relay_alert(self: &Arc<Self>, entry: &InboxEntry) {
+    async fn relay_alert(self: &Arc<Self>, entry: &Alert) {
         let config = self.config();
         let n = &config.notifications;
         let kind = entry.kind;
@@ -1048,19 +1023,6 @@ impl Daemon {
             Reply::Usage { mut usage } => {
                 usage.extend(views.iter().flat_map(|m| m.usage.clone()));
                 Reply::Usage { usage }
-            }
-            Reply::Inbox { mut entries } => {
-                if let Request::Inbox { workspace, unread_only, limit } = req {
-                    entries.extend(views.iter().flat_map(|m| m.inbox.clone()).filter(|e| {
-                        (!unread_only || e.read_ms.is_none())
-                            && workspace.as_ref().is_none_or(|w| e.workspace.as_ref() == Some(w))
-                    }));
-                    entries.sort_by_key(|e| std::cmp::Reverse(e.at_ms));
-                    if let Some(n) = limit {
-                        entries.truncate(*n as usize);
-                    }
-                }
-                Reply::Inbox { entries }
             }
             other => other,
         }
@@ -1435,7 +1397,6 @@ pub(crate) fn filter_hidden(mut m: Mirror, hidden: &[String]) -> Mirror {
         !s.project.as_ref().is_some_and(|p| only_hidden.contains(p))
             && !(s.project.is_none() && s.workspace.as_deref().is_some_and(is_hidden))
     });
-    m.inbox.retain(|e| !e.workspace.as_deref().is_some_and(is_hidden));
     m.chats.retain(|c| !is_hidden(&c.workspace));
     m.workspaces = kept;
     m

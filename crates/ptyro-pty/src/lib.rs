@@ -49,8 +49,7 @@ pub fn alive(pid: u32) -> bool {
     }
 }
 pub use probe::{
-    cwd_of, exec_env_var, load_average, local_datetime, local_time_hm, local_time_hm_at,
-    parent_pid, process_name,
+    cwd_of, exec_env_var, load_average, local_time_hm, local_time_hm_at, parent_pid, process_name,
 };
 #[cfg(not(windows))]
 pub use probe::{others_in_group, session_leader};
@@ -106,7 +105,6 @@ pub const STRIP_ENV: &[&str] = &[
     "PTYRO_BRANCH",
     "PTYRO_PORT",
     "PTYRO_PORT_COUNT",
-    "PTYRO_SCRATCHPAD",
 ];
 
 /// Prefixes stripped the same way (`CLAUDE_CODE_IDE_*`). Not `CLAUDE_CODE_*`: a profile's own

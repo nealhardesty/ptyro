@@ -110,13 +110,6 @@ enabled = true                            # a `≈` line after each agent turn, 
                                           # any command: the prompt on stdin, the summary on stdout;
                                           # it runs on the session's profile account, with secrets redacted
 
-[scratchpad]
-# mode = "drawer"                         # how C-q ; shows it: drawer | popup | pane
-# editor = "nvim"                         # a command line; default: [editors], $VISUAL, $EDITOR, nvim/vim/nano/vi
-# path = "~/Sync/pad.md"                  # default: scratchpad.md in ptyro's data directory
-# keep = 30                               # days of saved copies (the newest 20 always stay)
-# tick_on_finish = false                  # leave an item open when its worktree is removed
-
 [recorder]
 enabled = true                            # record every session's output (per agent: record = false)
 max_bytes = "16MiB"                       # per session, as a ring
@@ -202,9 +195,9 @@ Other rules:
 
 ```toml
 [notifications]
-channels = ["inbox", "osc", "bell", "desktop", "sinks"]
+channels = ["osc", "bell", "desktop", "sinks"]
 on = ["blocked", "errored", "done", "idle"]   # the default
-quiet_hours = "22:00-07:00"          # inbox only, except [attention] breakthrough (blocked)
+quiet_hours = "22:00-07:00"          # nothing then, except [attention] breakthrough (blocked)
 # desktop_command = ["my-notifier", "--title", "{title}", "{body}"]   # instead of notify-send
 
 [[notifications.sinks]]
@@ -224,7 +217,8 @@ listen = "127.0.0.1:7591"            # or your tailnet address
   syntax.
 - Tokens and webhooks can be `{ command = ["pass", "ntfy"] }` instead of literals. If you do keep
   literals, the file stays private: ptyro writes it `0600`, and `ptyro doctor` warns when it isn't.
-- `ptyro ws set personal --notify badge` keeps a workspace to inbox and badges; `mute` silences it.
+- `ptyro ws set personal --notify badge` keeps a workspace to badges (its rows and the status
+  bar still show who wants you); `mute` silences it.
 - `ptyro notify test` sends a test through everything you configured.
 - Codex usage meters are opt-in: `[agents.codex] usage = true`.
 
@@ -284,7 +278,7 @@ ptyro follows the XDG directories:
 | Path | Holds |
 |---|---|
 | `~/.config/ptyro/` | `config.toml` |
-| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` |
+| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `chat.db` (your chats) |
 | `~/.local/state/ptyro/` | logs, `crashes/`, `versions.json` (the agents' newest versions, as last looked up) |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |
 

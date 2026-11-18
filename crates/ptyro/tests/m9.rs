@@ -914,7 +914,7 @@ async fn web_push_end_to_end() {
             .filter(|e| e.file_name().to_string_lossy().starts_with("daemon"))
             .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
             .collect::<String>();
-        panic!("pushes missing; inbox: {}\nlog:\n{logs}", w.ok(&["inbox", "--json"]));
+        panic!("pushes missing; sessions: {}\nlog:\n{logs}", w.ok(&["ls", "--json"]));
     };
     for h in [&h1, &h2] {
         let l = h.to_ascii_lowercase();
@@ -1207,34 +1207,6 @@ fn the_web_screen_model_matches_the_daemon() {
     let daemon = w.ok(&["read", "web1"]).trim_end().to_owned();
     assert_eq!(web, daemon, "the web client and the daemon disagree");
     assert!(web.contains("漢字") && web.contains("e\u{301}"), "{web}");
-}
-
-/// NOTE1.5: the web app's scratchpad logic (web/test/pad.mjs): the Markdown reader, the offline
-/// queue, and, through `ptyro serve`, add / merging put / tick / history for a device with
-/// control, while a read-only device can read and is refused every write. Skipped without Node.
-#[test]
-fn the_web_scratchpad_client_logic_works() {
-    if !node_available() {
-        return;
-    }
-    let w = World::new("", &[]);
-    let serve = w.serve();
-    let (_, control) = w.pair(&serve, "phone", "control");
-    let (_, read) = w.pair(&serve, "viewer", "read");
-    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/test/pad.mjs");
-    let out = std::process::Command::new("node")
-        .arg(script)
-        .arg(format!("ws://127.0.0.1:{}/ws", serve.port))
-        .arg(&control)
-        .arg(&read)
-        .output()
-        .unwrap();
-    assert!(
-        out.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
 }
 
 /// WEB1.7: `ptyro serve` speaks HTTPS by default, with a certificate from a CA it made, which a

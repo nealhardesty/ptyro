@@ -76,20 +76,6 @@ expression: "Value::Object(all)"
     "kind": "string",
     "session": "string"
   },
-  "inbox": [
-    {
-      "at_ms": "number",
-      "body": "string",
-      "id": "number",
-      "kind": "string",
-      "profile": "string",
-      "read_ms": null,
-      "session": "string",
-      "session_name": "string",
-      "title": "string",
-      "workspace": "string"
-    }
-  ],
   "integrations": [
     {
       "active": "bool",

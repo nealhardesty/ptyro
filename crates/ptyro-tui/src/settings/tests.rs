@@ -202,8 +202,8 @@ fn a_set_toggles_each_choice_and_saves_them_together() {
     let mut t = T::new("");
     t.go("notifications.channels");
     t.press("<Enter>");
-    // inbox, osc and bell are on by default; turn bell off and desktop on.
-    t.press("<Down><Space><Down><Down><Space><Enter>");
+    // osc and bell are on by default; turn bell off and desktop on.
+    t.press("<Space><Down><Down><Space><Enter>");
     let c = Config::parse(&t.file()).unwrap();
     assert!(
         c.notifications.channels.contains(&"desktop".to_owned())

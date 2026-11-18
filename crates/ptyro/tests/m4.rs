@@ -1,7 +1,7 @@
 //! M4 end-to-end tests: every adapter through the fake agent's adapter modes (hooks, notify,
-//! sidecars), the status engine, attention and the inbox, answering prompts, prompt delivery,
+//! sidecars), the status engine, attention, answering prompts, prompt delivery,
 //! dormant sessions and resume across daemon restarts, hibernation, usage meters, notifications
-//! with signed approve links, after_turn, self reports, and the TUI's `a` / `p` / `i`.
+//! with signed approve links, after_turn, self reports, and the TUI's `a` / `p`.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -163,17 +163,6 @@ async fn send(c: &Client, name: &str, text: &str) {
     .unwrap();
 }
 
-async fn inbox(c: &Client) -> Vec<ptyro_core::status::InboxEntry> {
-    match c
-        .request(Request::Inbox { workspace: None, unread_only: false, limit: None })
-        .await
-        .unwrap()
-    {
-        Reply::Inbox { entries } => entries,
-        other => panic!("{other:?}"),
-    }
-}
-
 #[tokio::test]
 async fn claude_adapter_status_attention_answer_and_usage() {
     let w = World::new("");
@@ -232,14 +221,6 @@ async fn claude_adapter_status_attention_answer_and_usage() {
         .await
         .unwrap_err();
     assert_eq!(e.code, ptyro_core::ErrorCode::Conflict);
-    // The inbox has the story, newest first, with context.
-    let entries = inbox(&c).await;
-    assert!(
-        entries.iter().any(|e| e.kind == AttentionKind::Blocked && e.body.contains("npm install")),
-        "{entries:?}"
-    );
-    assert!(entries.iter().any(|e| e.kind == AttentionKind::Idle));
-    assert!(w.ok(&["inbox"]).contains("wants permission"));
     // Denying via Esc returns to idle without a Stop hook.
     send(&c, "cl", "ask rm -rf /").await;
     wait_for(&c, "cl", "blocked", |s| is(s, AgentStatus::Blocked)).await;
@@ -250,9 +231,8 @@ async fn claude_adapter_status_attention_answer_and_usage() {
     send(&c, "cl", "team").await;
     let s = wait_for(&c, "cl", "children", |s| s.children.len() == 2).await;
     assert!(s.children.iter().all(|c| c.running));
-    let entries = inbox(&c).await;
     assert!(
-        !entries.iter().any(|e| e.body.contains("teammates")),
+        !s.attention.as_ref().is_some_and(|a| a.text.contains("teammates")),
         "not in a worktree: no shared-worktree warning"
     );
     // The statusline relay feeds usage meters, and chains to (no) user statusline.
@@ -583,14 +563,9 @@ async fn generic_programs_shells_and_self_reports() {
     assert_eq!(s.status.as_ref().unwrap().source, SignalSource::Report);
     assert_eq!(s.attention.as_ref().unwrap().text, "has a question: pick a branch");
     assert!(!w.cli(&["report", "--session", "tool", "--state", "sleepy"]).status.success());
-    // Focusing a session clears its attention (and marks its inbox entries read).
+    // Focusing a session clears its attention.
     c.send(ClientMsg::Focus { session: s.id, terminal_focused: true }).unwrap();
     wait_for(&c, "tool", "attention cleared", |s| s.attention.is_none()).await;
-    let entries = inbox(&c).await;
-    assert!(
-        entries.iter().filter(|e| e.session_name == "tool").all(|e| e.read_ms.is_some()),
-        "{entries:?}"
-    );
     // …and while watched, nothing new is raised.
     w.ok(&["report", "--session", "tool", "--state", "error", "--msg", "boom"]);
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -694,7 +669,7 @@ async fn notifications_sinks_mutes_and_signed_links() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("sink.jsonl");
     let cfg = format!(
-        "[notifications]\nchannels = [\"inbox\", \"sinks\"]\non = [\"blocked\", \"idle\", \"errored\"]\nsinks = [{{ type = \"command\", command = [\"sh\", \"-c\", \"cat >> {} && echo >> {}\"], on = [\"blocked\", \"idle\"] }}]\ncallback = {{ listen = \"127.0.0.1:{port}\" }}\n",
+        "[notifications]\nchannels = [\"sinks\"]\non = [\"blocked\", \"idle\", \"errored\"]\nsinks = [{{ type = \"command\", command = [\"sh\", \"-c\", \"cat >> {} && echo >> {}\"], on = [\"blocked\", \"idle\"] }}]\ncallback = {{ listen = \"127.0.0.1:{port}\" }}\n",
         ptyro_testkit::program::shell_path(&log.to_string_lossy()),
         ptyro_testkit::program::shell_path(&log.to_string_lossy())
     );
@@ -750,17 +725,18 @@ async fn notifications_sinks_mutes_and_signed_links() {
     assert_eq!(http("POST", &approve).0, 410, "single use");
     let tampered = format!("{}x", &approve[..approve.len() - 1]);
     assert_eq!(http("GET", &tampered).0, 410);
-    // Muted: the inbox still gets it, the sink doesn't.
+    // Muted: the sink doesn't get it; the session still shows it wants you.
     let before = std::fs::read_to_string(&log).unwrap().lines().count();
     w.ok(&["mute", "n1", "--for", "10m"]);
     send(&c, "n1", "ask second").await;
     wait_for(&c, "n1", "blocked", |s| is(s, AgentStatus::Blocked)).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), before, "muted");
-    assert!(inbox(&c).await.iter().any(|e| e.body.contains("second")), "the inbox still has it");
+    let a = get(&c, "n1").await.attention.expect("its row still says so");
+    assert!(a.kind == AttentionKind::Blocked && a.text.contains("second"), "{a:?}");
     // notify test reports per channel.
     let out = w.ok(&["notify", "test"]);
-    assert!(out.contains("inbox: added") && out.contains("command: ran"), "{out}");
+    assert!(out.contains("command: ran") && !out.contains("inbox"), "{out}");
 }
 
 /// The approve/deny links are plain HTTP: like `ptyro serve`, they listen only on loopback or
@@ -841,7 +817,7 @@ async fn run(s: Script) -> Report {
 }
 
 #[tokio::test]
-async fn tui_attention_peek_answer_and_inbox() {
+async fn tui_attention_peek_and_answer() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     agent(&c, "busy", "claude", None).await;
@@ -860,17 +836,14 @@ async fn tui_attention_peek_answer_and_inbox() {
         .snapshot(2.9)
         .send(3.1, "y")
         .snapshot(4.0)
-        .send(4.2, "\\x11i")
-        .snapshot(4.7)
-        .send(5.0, "\\e")
-        .send(5.3, "\\x11d"))
+        .send(4.3, "\\x11d"))
     .await;
     let start = r.at(1.4);
     assert!(
         start.contains("◉ asker") && start.contains("⚠ permission"),
         "the sidebar shows who's blocked: {start}"
     );
-    assert!(start.contains("✉ 1"), "unread inbox count: {start}");
+    assert!(start.contains("1 blocked"), "the status bar counts who's blocked: {start}");
     let jumped = r.at(2.1);
     assert!(
         jumped.contains("asker · fake-agent") || jumped.contains("◉ asker ·"),
@@ -880,11 +853,6 @@ async fn tui_attention_peek_answer_and_inbox() {
     assert!(peek.contains("Peek asker") && peek.contains("Do you want to proceed?"), "{peek}");
     assert!(peek.contains("y allow"), "{peek}");
     assert!(r.at(4.0).contains("answer: yes"), "answered from the peek: {}", r.at(4.0));
-    let inbox = r.at(4.7);
-    assert!(
-        inbox.contains("Inbox") && inbox.contains("wants permission: Bash: docker system prune"),
-        "{inbox}"
-    );
 }
 
 #[tokio::test]

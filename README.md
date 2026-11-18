@@ -22,7 +22,7 @@ the one that needs you.
 - **One worktree per task.** A new branch and checkout, `.env` copied, setup script run, ports
   allocated, agent started. Removing a worktree refuses to lose unpushed work.
 - **Real agent status.** Working, blocked, idle or done, from the agents' own hooks, not screen
-  scraping. An inbox and notifications tell you who needs you.
+  scraping. The sidebar and notifications tell you who needs you.
 - **Work and personal, never crossed.** Profiles keep accounts, git author, SSH keys and secrets
   apart, per repository.
 - **Your phone.** A web app shows every agent and answers its permission prompts.
@@ -453,7 +453,7 @@ its branch and its directory), and `ptyro project rename` a project's.
          C-q p y/a/n          │
      3 ● codex 2m             │
          now Bash: cargo test │
- ptyro                main [work] 3 live · 1 working · 1 blocked  ✉2  C-q ? help 14:02
+ ptyro                main [work] 3 live · 1 working · 1 blocked  C-q ? help 14:02
 ```
 
 Each row says what that session is doing: what a blocked agent wants and the keys that answer
@@ -466,7 +466,7 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q a` jumps to the next session that needs you (blocked first).
 - `Ctrl-Q p` peeks without switching: `y` allows a permission prompt, `n` denies, or type a
   reply.
-- `Ctrl-Q i` opens the inbox. From the shell: `ptyro status`.
+- From the shell: `ptyro status`.
 - `Ctrl-Q Ctrl-N` (`Ctrl-N` in the sidebar) is **quick new**: another of the agent this
   worktree last started (`claude`, `codex@work`…) right there, no questions (`ptyro new
   --again` from a shell). In a worktree that hasn't run one it starts the default agent, Claude
@@ -510,9 +510,8 @@ a row's menu (`.`), makes one at any time.
 - `Ctrl-Q Ctrl-T` opens the worktree's **quick terminal**: its one shell, in a drawer below a pane
   of the same project (`Ctrl-Q T` shows it full sized). Press it again to focus it, and once more
   to hide it; the shell keeps running, and its `›_ quick shell` line sits first under the worktree in the
-  sidebar, tinted while its drawer is open. The drawer is for quick actions: it (and the
-  scratchpad's drawer or popup) stays while you move between the panes already on screen, and closes
-  when another session shows.
+  sidebar, tinted while its drawer is open. The drawer is for quick actions: it stays while you move between
+  the panes already on screen, and closes when another session shows.
 - New things open **full sized**, never in a split: a split layout they replace is kept, and
   `` Ctrl-Q ` `` brings it back. Only `Ctrl-Q v` / `s` split, and they split with a clone of the
   pane's session (the same agent in the same worktree, a fresh conversation).
@@ -611,12 +610,12 @@ when the branch has no upstream yet), and a quiet `✓ pushed` when everything i
 on the remote. The `+N −M` line counts show only while something is left, so a worktree you have
 pushed stops looking like work in progress.
 
-Notifications always go to the inbox, and by default to your terminal and its bell. Add desktop
-notifications or a push service such as ntfy:
+Notifications go by default to your terminal and its bell; a session that wants you also stands
+out in the sidebar until you look at it. Add desktop notifications or a push service such as ntfy:
 
 ```toml
 [notifications]
-channels = ["inbox", "osc", "bell", "desktop", "sinks"]
+channels = ["osc", "bell", "desktop", "sinks"]
 
 [[notifications.sinks]]
 type = "ntfy"
@@ -700,29 +699,6 @@ yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box,
 a small model once (model2vec `potion-base-8M`, 31 MB, MIT) and reads every chat in the background,
 on this machine only. Searches then also find messages *about* what you typed, marked `≈`, merged
 with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how far it is.
-
-### The scratchpad
-
-One notes file for ideas and the bugs you're chasing, the same in every session and restart:
-
-```bash
-ptyro scratchpad                 # open it in your editor (Ctrl-Q ; in the TUI: a drawer you toggle)
-ptyro scratchpad add "login times out on safari"   # a stamped - [ ] item, from anywhere
-git diff --stat | ptyro scratchpad add -           # or from a pipe
-ptyro scratchpad todo            # the open items;  done 12  ticks one;  start 12  makes it a task
-echo $PTYRO_SCRATCHPAD           # every shell and agent can find the file (plain Markdown)
-```
-
-In the TUI, `C-q ;` shows the pad and `C-q '` adds a line without opening it; `C-q "` lists the
-open items, and `⏎` on one starts an agent on it in a new worktree, ticked once that is removed.
-The web app has a Notes view that saves as you type (and merges with whoever else is writing),
-and your phone's share sheet can send links and text to it. Old copies are kept
-(`ptyro scratchpad log`, `restore`). Settings: `[scratchpad]` in the config (`docs/config.md`).
-
-*Upgrading from 0.0.8 or 0.0.9:* those versions had a second, per-project pad. It is gone (one
-pad is simpler), and `ptyro scratchpad` always uses the one above. A project pad you wrote stays in
-its repository, untouched: read it with `cat <repo>/.ptyro/scratchpad.md` and move what you want
-into this pad with `ptyro scratchpad add -`.
 
 ### Your phone and other machines
 
@@ -817,7 +793,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `d` | detach (everything keeps running) |
 | `C-d` | quit ptyro: stop every session and the daemon (asks first; agents hibernate) |
 | `n` / `N` | new task (say what to do) / new worktree |
-| `a` / `p` / `i` | next session that needs you / peek and answer / inbox |
+| `a` / `p` | next session that needs you / peek and answer |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |
 | `v` / `s` | split side by side / stacked |
 | `h` `l` / `z` / `c` | move between panes / zoom / close pane |
@@ -827,7 +803,6 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `f` | sidebar filter: all → only running sessions → only active ones (working, waiting for you, running a command); or click `all` / `running` / `active` under the sidebar title |
 | `[` | copy mode: scroll back, search (`/`), select (`v`), copy (`y`) |
 | `w` / `o` / `r` | switch workspace / open in an editor, the file manager, a terminal app or a shell / run the default run script |
-| `;` / `'` / `"` | the scratchpad / add a line to it / its open items |
 | `m` / `g` | a new chat / the chat list |
 
 ## Configuration
@@ -984,7 +959,6 @@ WSL works meanwhile.
 | `make doc` / `make clean` | API docs (warnings fail) / remove build output |
 | `make sandbox` / `make sandbox-clean` | a throwaway ptyro (own daemon, store, worktrees) with a demo repo / delete it. It isolates ptyro's state, not a security sandbox: agents still run as you |
 | `make reset` | start ptyro over, to try the first run again: lists what it removes (sessions, worktrees with any uncommitted work flagged, the login service, integrations, config, data, state), then asks. `YES=1` skips the question unless uncommitted work would be lost (then you type `delete`). Your repositories and their branches stay. With `PTYRO_HOME` set it resets that home only. Run it from a plain terminal, not inside ptyro |
-| `make scratchpad-demo` (`ARGS=tui\|clean`) | the scratchpad in a throwaway ptyro: items added, listed, ticked, restored; `tui` opens it |
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode against the real agents here |

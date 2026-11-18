@@ -547,10 +547,6 @@ impl Daemon {
             store.save_project(p.clone());
         }
         let _ = self.events.send(DomainEvent::ProjectUpdated { info: p.clone() });
-        // The scratchpad's `[wt:project/name]` links follow.
-        self.pad_renamed(
-            &worktrees.iter().map(|(old, w)| (old.clone(), w.qualified())).collect::<Vec<_>>(),
-        );
         for (_, w) in worktrees {
             let _ = self.events.send(DomainEvent::WorktreeUpdated { info: w });
         }

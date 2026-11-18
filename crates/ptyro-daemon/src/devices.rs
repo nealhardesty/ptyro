@@ -153,7 +153,6 @@ pub fn needed(req: &Request) -> Scope {
         | Status
         | Resolve { .. }
         | StatusExplain { .. }
-        | Inbox { .. }
         | Events { .. }
         | Usage
         | History { .. }
@@ -180,12 +179,8 @@ pub fn needed(req: &Request) -> Scope {
         | PushUnsubscribe { .. }
         | PushTest
         | ChatGet { .. }
-        | ScratchGet
         | LastLaunch { .. }
         | MachineList
-        | ScratchTodo { .. }
-        | ScratchHistory
-        | ScratchPane { create: false, .. }
         // What's installed on the machine, and what installing would run (BOOT1).
         | SetupPlan { .. }
         // The agents out of date (BOOT5): only looks.
@@ -195,7 +190,6 @@ pub fn needed(req: &Request) -> Scope {
         Answer { decision, .. } if is_always(decision) => Scope::Control,
         Answer { .. }
         | ClearAttention { .. }
-        | InboxMark { .. }
         | Mute { .. } => Scope::Approve,
         SendText { .. }
         | SendBytes { .. }
@@ -209,10 +203,6 @@ pub fn needed(req: &Request) -> Scope {
         | Retitle { .. }
         | Summarize { .. }
         | WorktreeOpen { .. }
-        | ScratchPut { .. }
-        | ScratchAdd { .. }
-        | ScratchMark { .. }
-        | ScratchRestore { .. }
         | Adopt { .. } => Scope::Control,
         // Finding one reads; starting one is a shell: full.
         QuickShell { create: false, .. } => Scope::Read,
@@ -221,9 +211,9 @@ pub fn needed(req: &Request) -> Scope {
         Spawn { spec } if spec.agent.is_some() && spec.argv.is_empty() && spec.command.is_none() => {
             Scope::Control
         }
-        // The same requests when they start something: a shell, a command line of its own, a
-        // new pad pane, switching the web app's server on or off.
-        Spawn { .. } | QuickShell { .. } | ScratchPane { .. } | Web { .. } => Scope::Full,
+        // The same requests when they start something: a shell, a command line of its own,
+        // switching the web app's server on or off.
+        Spawn { .. } | QuickShell { .. } | Web { .. } => Scope::Full,
         // SHELLS (SPEC §23.12): numbering, placing and watching act like starting one; a split
         // starts one, and joining or arranging a window's panes acts like moving one (§23.17).
         ShellMove { .. } | ShellPlace { .. } | ShellWatch { .. } | ShellScratchRemove { .. } => {

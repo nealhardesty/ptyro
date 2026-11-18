@@ -124,13 +124,6 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro shells adopt S [WORKTREE]` | move a shell from SHELLS into a worktree (default: the one its directory is in; refused across profiles) |
 | `ptyro shells watch S [--done\|--activity\|--silence TIME\|--match PATTERN\|--off]` | tell you when its command ends, it prints, it goes quiet, or a line matches (`done` and `match` fire once) |
 | `ptyro adopt SESSION` | the Claude you started by hand in a shell session becomes a managed session (hooks, hibernation, mail), same conversation |
-| `ptyro scratchpad [edit] [--pane [--json]]` | the scratchpad (alias `pad`): one Markdown notes file for ideas and bugs, `$PTYRO_SCRATCHPAD` in every session. No subcommand: open it in your editor, here. `--pane`: the editor as a session of its own (what `C-q ;` shows), attached |
-| `ptyro scratchpad path\|cat [--tail N] [--json]` | where the file is / its text (`--json`: `{path, rev, text, open, done}`) |
-| `ptyro scratchpad add [--section HEADING] [--bullet] [--no-stamp] [--json] TEXT…` | add a line, stamped with the time and the worktree or directory you are in (and the agent's name); `-` or a pipe reads standard input; makes a `- [ ]` item unless `--bullet` |
-| `ptyro scratchpad todo [--all] [--json]` | the open `- [ ]` items with line numbers (`--all`: ticked ones too) |
-| `ptyro scratchpad done [--undo] ITEM` | tick (or untick) an item: its line number, or words from exactly one open item |
-| `ptyro scratchpad start [-a A] [--dry-run] ITEM` | start the item as a task in a new worktree (like `ptyro "…"`); the item is tagged with the worktree and ticked once the worktree is removed |
-| `ptyro scratchpad log [--json]` / `restore REV` | saved copies of the file, newest first / put one back (the current text is saved first) |
 | `ptyro chat [new] [PROMPT…] [-a A[@P]] [--preset P] [--folder DIR]… [-w WS] [--title T] [--no-wait] [--json]` | a new chat with your agent (SPEC §22): the answer streams here and the chat is kept (the TUI's and web's CHATS show it). No prompt, at a terminal: the chat view. `-` or a pipe reads the prompt from standard input. `--folder` gives it a folder to read (with no `--preset`, the `read` preset) |
 | `ptyro chat ask [--keep] [--agent A] [--preset P] [--timeout S] QUESTION…` | one question, the answer on standard output; standard input is context (`git diff \| ptyro chat ask "review this"`); nothing is kept unless `--keep` |
 | `ptyro chat ls [-w WS] [--machine M] [--pinned] [--archived] [-l N] [--json]` | chats, pinned first then the newest; every linked machine's too (`laptop2:c:7f3k`), greyed while it is offline; `--machine here` for this one's |
@@ -173,8 +166,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 
 | Command | Does |
 |---|---|
-| `ptyro inbox [-u] [-w WS] [--read] [--json]` | what wanted you, newest first; `--read` marks all read |
-| `ptyro mute SESSION\|project:P\|workspace:W [--for D] [--off]` | silence notifications (the inbox still gets them) |
+| `ptyro mute SESSION\|project:P\|workspace:W [--for D] [--off]` | silence notifications (its row still shows when it wants you) |
 | `ptyro notify test` | send a test through every channel and sink |
 | `ptyro usage [--json]` | rate limits per profile (Claude, Codex) |
 | `ptyro integrations ls\|install\|uninstall [gemini\|antigravity] [--profile P]` | the one-time agent integrations that need installing |
@@ -254,7 +246,7 @@ See [`remote.md`](remote.md).
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |
 | `ptyro daemon upgrade [--binary PATH] [--json]` | switch the running daemon to a new binary without stopping sessions; exits 1 if it rolled back |
 | `ptyro daemon install-service\|uninstall-service [--dry-run]` | start the daemon at login (systemd user unit / launchd agent) |
-| `ptyro backup [-o FILE] [--with-recordings] [--with-ca] [--json]` | a private `.tar.gz` of ptyro's own state (config, a consistent copy of the database, scratchpad); never replaces a file ([`docs/uninstall.md`](uninstall.md)) |
+| `ptyro backup [-o FILE] [--with-recordings] [--with-ca] [--json]` | a private `.tar.gz` of ptyro's own state (config, a consistent copy of the database, your chats); never replaces a file ([`docs/uninstall.md`](uninstall.md)) |
 | `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--backup FILE] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, integrations, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
 
 ## Exit codes

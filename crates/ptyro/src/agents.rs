@@ -1,4 +1,4 @@
-//! `ptyro status`, `resume`, `hibernate`, `inbox`, `mute`, `usage`, `notify`, `integrations`
+//! `ptyro status`, `resume`, `hibernate`, `mute`, `usage`, `notify`, `integrations`
 //! (SPEC §8, §9, M4).
 
 use std::path::PathBuf;
@@ -184,39 +184,6 @@ pub async fn each(
         }
     }
     Ok(code)
-}
-
-pub async fn inbox(
-    ctx: &Ctx,
-    workspace: Option<String>,
-    unread: bool,
-    read: bool,
-    json: bool,
-) -> Result<i32, Error> {
-    let c = ctx.connect(false).await.map_err(no_daemon)?;
-    if read {
-        c.request(Request::InboxMark { ids: Vec::new(), all: true, session: None, read: true })
-            .await?;
-        eprintln!("all read");
-        return Ok(0);
-    }
-    let Reply::Inbox { entries } =
-        c.request(Request::Inbox { workspace, unread_only: unread, limit: Some(200) }).await?
-    else {
-        return Err(Error::internal("unexpected reply"));
-    };
-    if json {
-        println!("{}", serde_json::to_string_pretty(&entries).unwrap_or_default());
-        return Ok(0);
-    }
-    if entries.is_empty() {
-        eprintln!("the inbox is empty");
-    }
-    for e in entries {
-        let mark = if e.read_ms.is_none() { "●" } else { " " };
-        println!("{mark} {:>4} {:<12} {} — {}", ago(e.at_ms), e.kind.label(), e.title, e.body);
-    }
-    Ok(0)
 }
 
 pub async fn mute(

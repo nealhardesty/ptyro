@@ -90,7 +90,7 @@ impl World {
         let hs = h.to_string_lossy().into_owned();
         let env = [("HOME", hs.as_str()), ("GIT_CONFIG_NOSYSTEM", "1"), ("SHELL", "/bin/sh")];
         let config = format!(
-            "[attention]\nmin_work = \"1s\"\n[notifications]\nchannels = [\"inbox\", \"sinks\"]\non = [\"blocked\"]\nsinks = [{{ type = \"ntfy\", url = \"{sink_url}\", token = \"{TOKEN}\", on = [\"blocked\"] }}]\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n"
+            "[attention]\nmin_work = \"1s\"\n[notifications]\nchannels = [\"sinks\"]\non = [\"blocked\"]\nsinks = [{{ type = \"ntfy\", url = \"{sink_url}\", token = \"{TOKEN}\", on = [\"blocked\"] }}]\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n"
         );
         let d = TempDaemon::start_with(BIN, &env, Some(&config)).unwrap();
         Self { home, d }
@@ -194,11 +194,8 @@ fn a_failing_sink(mode: Mode) {
     if mode == Mode::Http500 {
         assert!(out.contains("500"), "{out}");
     }
-    // The daemon is fine: it still answers, and the inbox still has the notification.
-    assert!(
-        w.json(&["inbox", "--json"]).as_array().is_some_and(|a| !a.is_empty()),
-        "the inbox channel is independent of the sink"
-    );
+    // The daemon is fine: it still answers.
+    assert!(w.json(&["ls", "--json"]).as_array().is_some(), "the daemon still answers");
 }
 
 #[test]

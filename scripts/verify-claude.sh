@@ -55,7 +55,6 @@ wait_for "idle" 60 && pass "back to idle after the turn" || fail "not idle: $(st
 # UX1.3: one real summary through the default `[summaries] command` (Haiku, about $0.0007).
 sum=$("$bin" summarize v 2>&1)
 echo "$sum" | grep -q '^v: ..*' && pass "summary: ${sum#v: }" || fail "no summary: $sum"
-"$bin" inbox | grep -q "wants permission" && pass "the inbox has the permission entry" || fail "inbox"
 conv=$("$bin" status v | sed -n 's/.*conversation //p')
 [ -n "$conv" ] && pass "the session has a conversation id ($conv)" || fail "no conversation id: the resume check would pass vacuously"
 "$bin" hibernate v >/dev/null && sleep 1 && "$bin" ls | grep -q "dormant" && pass "hibernated: dormant" || fail "hibernate"

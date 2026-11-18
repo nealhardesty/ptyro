@@ -22,7 +22,6 @@ pub mod paths;
 pub mod project;
 pub mod removal;
 pub mod retired;
-pub mod scratchpad;
 pub mod screen;
 pub mod secret;
 pub mod selector;

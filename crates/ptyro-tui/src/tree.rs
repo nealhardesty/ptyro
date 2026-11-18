@@ -245,7 +245,7 @@ impl Inputs<'_> {
             rows.extend(
                 self.sessions
                     .iter()
-                    .filter(|s| !s.pad && self.show.keeps(s))
+                    .filter(|s| self.show.keeps(s))
                     .map(|s| if s.quick { Row::Quick(s.id) } else { Row::Session(s.id) }),
             );
             return rows;
@@ -286,7 +286,7 @@ impl Inputs<'_> {
                 let (quick, sessions): (Vec<&SessionInfo>, Vec<&SessionInfo>) = self
                     .sessions
                     .iter()
-                    .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()) && !s.pad)
+                    .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()))
                     // In another workspace that has this project too: listed there.
                     .filter(|s| self.home(s) == ws.name)
                     .filter(|s| self.show.keeps(s))
@@ -317,7 +317,7 @@ impl Inputs<'_> {
         let others: Vec<&SessionInfo> = self
             .sessions
             .iter()
-            .filter(|s| !s.pad && self.show.keeps(s))
+            .filter(|s| self.show.keeps(s))
             .filter(|s| {
                 let under_project = s.project.as_ref().is_some_and(|p| shown.contains(&p.as_str()))
                     && s.worktree.as_ref().is_some_and(|w| {
@@ -523,7 +523,6 @@ mod tests {
             summary: None,
             window_title: None,
             quick: false,
-            pad: false,
             model: None,
             chat: None,
             loose: false,

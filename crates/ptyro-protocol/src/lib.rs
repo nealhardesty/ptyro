@@ -13,18 +13,17 @@ use ptyro_core::model::{
     DiffDoc, GcEntry, ProfileInfo, ProfileReason, ProjectInfo, RemoveOpts, ScriptsInfo,
     WorkspaceInfo, WorktreeInfo, WorktreeSpec,
 };
-use ptyro_core::scratchpad::{Item, Snapshot};
 use ptyro_core::screen::{ScreenDelta, ScrollbackDoc};
 use ptyro_core::session::{HistoryEntry, LastLaunch, SessionInfo, SpawnSpec, Watch};
-use ptyro_core::status::{AttentionKind, InboxEntry, Usage};
+use ptyro_core::status::{Alert, AttentionKind, Usage};
 use ptyro_core::{ClientId, Error, SessionId, TermSize};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub const MAX_FRAME: usize = 16 * 1024 * 1024;
 
-/// The largest message a browser may send `ptyro serve` (H2.7): the biggest thing it sends is a
-/// whole scratchpad (`MAX_PAD_BYTES`, 4 MiB), with room for the rest of the request. The limit
+/// The largest message a browser may send `ptyro serve` (H2.7): 4 MiB (a large paste or chat
+/// message), with room for the rest of the request. The limit
 /// applies before login too (the WebSocket library can't change it afterwards), so it is what an
 /// unauthenticated peer can make the server hold per pending login. Replies are not limited by it.
 pub const MAX_CLIENT_MESSAGE: usize = (4 << 20) + (256 << 10);
@@ -36,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 43 };
+pub const PROTO: Version = Version { major: 1, minor: 44 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -86,6 +85,16 @@ pub const RETIRED_REQUESTS: &[(&str, &str)] = &[
     ("review_queue", "the review queue"),
     ("review_done", "the review queue"),
     ("set_verify", "verified-done"),
+    ("scratch_get", "the scratchpad"),
+    ("scratch_put", "the scratchpad"),
+    ("scratch_add", "the scratchpad"),
+    ("scratch_todo", "the scratchpad"),
+    ("scratch_mark", "the scratchpad"),
+    ("scratch_history", "the scratchpad"),
+    ("scratch_restore", "the scratchpad"),
+    ("scratch_pane", "the scratchpad"),
+    ("inbox", "the inbox"),
+    ("inbox_mark", "the inbox"),
 ];
 
 /// A checkpoint of a session's worktree, taken after an agent turn (SPEC §15.3).
@@ -163,7 +172,7 @@ pub struct ClientInfo {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Scope {
-    /// Watch: sessions, screens, status, the inbox, runs.
+    /// Watch: sessions, screens, status, alerts.
     Read,
     /// Also answer permission prompts, clear attention, mute.
     Approve,
@@ -522,59 +531,6 @@ pub enum Request {
         #[serde(default)]
         worktree: Option<String>,
     },
-    /// The scratchpad (NOTE1): its text and revision. Replies `Scratch`.
-    ScratchGet,
-    /// Write `text`, edited from the revision `base`; if the file moved on meanwhile the two are
-    /// merged by lines (both kept between markers where they clash). Replies `ScratchPut`.
-    ScratchPut {
-        base: String,
-        text: String,
-    },
-    /// Add an entry (a stamped `- [ ]` item, or a note); `session` says who is adding, for the
-    /// stamp's worktree and agent. Replies `Scratch`.
-    ScratchAdd {
-        text: String,
-        #[serde(default)]
-        section: Option<String>,
-        #[serde(default)]
-        note: bool,
-        #[serde(default = "yes")]
-        stamp: bool,
-        /// The adding session (address), else `whence` is taken from this directory.
-        #[serde(default)]
-        session: Option<String>,
-        #[serde(default)]
-        cwd: Option<PathBuf>,
-    },
-    /// The checkbox items (the open ones, unless `all`). Replies `ScratchItems`.
-    ScratchTodo {
-        #[serde(default)]
-        all: bool,
-    },
-    /// Tick, untick or tag the item `sel` (a line number, or words in one open item). Replies
-    /// `ScratchItems` with that item.
-    ScratchMark {
-        sel: String,
-        mark: PadMark,
-    },
-    /// Saved copies of the pad, newest first. Replies `ScratchLog`.
-    ScratchHistory,
-    /// Put a saved copy back (the current text is saved first). Replies `Scratch`.
-    ScratchRestore {
-        rev: String,
-    },
-    /// The scratchpad's editor session: one, in a pane. With `create`, started when there is
-    /// none (spawned as `Spawn` would, `env` and `size` included). Replies `Session`.
-    ScratchPane {
-        #[serde(default)]
-        create: bool,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-        #[serde(default)]
-        size: Option<TermSize>,
-        #[serde(default)]
-        workspace: Option<String>,
-    },
     /// A structured session's whole transcript (M10).
     ChatGet {
         addr: String,
@@ -856,26 +812,7 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expect: Option<u64>,
     },
-    Inbox {
-        #[serde(default)]
-        workspace: Option<String>,
-        #[serde(default)]
-        unread_only: bool,
-        #[serde(default)]
-        limit: Option<u32>,
-    },
-    InboxMark {
-        #[serde(default)]
-        ids: Vec<i64>,
-        /// Every entry (of `session`, when given).
-        #[serde(default)]
-        all: bool,
-        #[serde(default)]
-        session: Option<String>,
-        #[serde(default = "yes")]
-        read: bool,
-    },
-    /// Silence notifications (never the inbox) for a session, `project:<slug>` or
+    /// Silence notifications for a session, `project:<slug>` or
     /// `workspace:<name>`, for `minutes` (default: until unmuted).
     Mute {
         target: String,
@@ -1492,25 +1429,6 @@ pub enum Reply {
     Sessions {
         sessions: Vec<SessionInfo>,
     },
-    /// The scratchpad (NOTE1).
-    Scratch {
-        doc: PadDoc,
-    },
-    /// After `ScratchPut`: what was written (the merge, when the file had moved on).
-    ScratchPut {
-        doc: PadDoc,
-        /// The text differs from what was put: another write was merged in.
-        merged: bool,
-        /// Regions kept both ways between `<<<<<<<` markers.
-        conflicts: u32,
-    },
-    ScratchItems {
-        rev: String,
-        items: Vec<Item>,
-    },
-    ScratchLog {
-        snapshots: Vec<Snapshot>,
-    },
     Screen {
         text: String,
     },
@@ -1602,9 +1520,6 @@ pub enum Reply {
     },
     Explain {
         lines: Vec<ExplainLine>,
-    },
-    Inbox {
-        entries: Vec<InboxEntry>,
     },
     Usage {
         usage: Vec<Usage>,
@@ -1941,17 +1856,10 @@ pub enum DomainEvent {
         worktree: String,
         step: String,
     },
-    InboxAdded {
-        entry: InboxEntry,
-    },
-    /// The scratchpad changed, from anywhere (a client, an agent, an editor).
-    ScratchChanged {
-        rev: String,
-        /// Open `- [ ]` items.
-        open: u32,
-        /// Who: a device, an agent's session, `editor` or `file` for a change made outside.
-        #[serde(default)]
-        by: Option<String>,
+    /// A session wants you (what the notifier was given, before mute, quiet hours or channels):
+    /// how a linked machine's alerts reach the daemon that mirrors it (SPEC §16.4b).
+    Alert {
+        alert: Alert,
     },
     /// Show this notification (TUIs: OSC 9/777 to the outer terminal, and a bell).
     Notify {
@@ -2014,46 +1922,6 @@ pub struct SetupLogged {
     pub seq: u64,
     pub side: ptyro_agents::setup::Side,
     pub event: ptyro_agents::setup::Event,
-}
-
-/// What to do to a scratchpad item (`ScratchMark`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PadMark {
-    /// Tick it, with the pull request that finished it.
-    Done {
-        #[serde(default)]
-        pr: Option<u64>,
-    },
-    /// Untick it.
-    Open,
-    /// Note the worktree it is being worked in.
-    Started { worktree: String },
-}
-
-/// The scratchpad as clients see it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PadDoc {
-    pub path: PathBuf,
-    pub rev: String,
-    pub text: String,
-    /// Open and ticked items.
-    pub open: u32,
-    pub done: u32,
-}
-
-impl PadDoc {
-    pub fn of(path: PathBuf, text: String) -> Self {
-        let items = ptyro_core::scratchpad::items(&text);
-        let done = items.iter().filter(|i| i.done).count();
-        Self {
-            path,
-            rev: ptyro_core::scratchpad::rev(&text),
-            open: u32::try_from(items.len() - done).unwrap_or(u32::MAX),
-            done: u32::try_from(done).unwrap_or(u32::MAX),
-            text,
-        }
-    }
 }
 
 fn yes() -> bool {
@@ -2219,42 +2087,6 @@ mod tests {
             assert_eq!(back, m);
             assert_eq!(got, enc);
         }
-    }
-
-    /// There is one scratchpad again (the per-project pads of 0.0.8/0.0.9 were dropped): a peer
-    /// that still sends a `pad` selector, or reads one, is understood and acts on the global pad.
-    #[test]
-    fn a_leftover_pad_selector_is_ignored_and_means_the_global_pad() {
-        let old = |json: &str| -> Request { serde_json::from_str(json).unwrap() };
-        assert!(matches!(
-            old(r#"{"t":"scratch_get","pad":{"project":"p1"}}"#),
-            Request::ScratchGet
-        ));
-        assert!(matches!(
-            old(r#"{"t":"scratch_history","pad":"global"}"#),
-            Request::ScratchHistory
-        ));
-        assert!(matches!(
-            old(r#"{"t":"scratch_add","pad":{"near":"/r"},"text":"x"}"#),
-            Request::ScratchAdd { stamp: true, .. }
-        ));
-        assert!(matches!(
-            old(r#"{"t":"scratch_todo","pad":"global"}"#),
-            Request::ScratchTodo { all: false }
-        ));
-        // A document and an event from a 0.0.8 daemon carry `pad` and `name`; a new one has neither.
-        let doc: PadDoc = serde_json::from_str(
-            r#"{"pad":{"project":"p"},"name":"p","path":"/p","rev":"r","text":"t","open":0,"done":0}"#,
-        )
-        .unwrap();
-        assert_eq!(doc.path, std::path::Path::new("/p"));
-        let ev: DomainEvent = serde_json::from_str(
-            r#"{"t":"scratch_changed","pad":{"project":"p"},"rev":"r","open":2}"#,
-        )
-        .unwrap();
-        assert!(matches!(ev, DomainEvent::ScratchChanged { open: 2, .. }));
-        let out = serde_json::to_value(&doc).unwrap();
-        assert!(out.get("pad").is_none() && out.get("name").is_none(), "{out}");
     }
 
     #[test]

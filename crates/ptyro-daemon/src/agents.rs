@@ -4,7 +4,7 @@
 //!
 //! Every source (OSC 7501, titles, OSC 133, hooks, sidecars, self reports, heuristics) arrives as
 //! a [`Feed`] on one channel and is processed in order by [`Daemon::run_feed`] (hooks and reports
-//! wait for theirs, [`Daemon::apply_queued`]), so status, the inbox and notifications can never
+//! wait for theirs, [`Daemon::apply_queued`]), so status, attention and notifications can never
 //! disagree: a Blocked transition and a Working one never interleave.
 
 use ptyro_core::sync::{MutexExt, RwLockExt};
@@ -480,7 +480,7 @@ impl Daemon {
         self.viewing.locked().values().any(|(sid, focused)| *sid == id && *focused)
     }
 
-    /// Set attention (unless watched) and send it to the inbox and notifier.
+    /// Set attention (unless watched) and send it to the notifier.
     pub(crate) async fn raise(
         self: &Arc<Self>,
         s: &Arc<Session>,
@@ -498,7 +498,7 @@ impl Daemon {
         let replaced = {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Keep the more urgent one on the session if it's still pending; the new one still
-            // reaches the inbox and the notifier below (a reviewer's question must not vanish
+            // reaches the notifier below (a reviewer's question must not vanish
             // because the agent's last turn is still unseen).
             let keep = m.attention.as_ref().is_some_and(|a| a.kind < kind)
                 && kind != AttentionKind::Exited;
@@ -523,12 +523,6 @@ impl Daemon {
             .is_some();
         if had {
             let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(s) });
-        }
-        if let Some(store) = self.store.clone() {
-            let id = s.id.full();
-            tokio::spawn(async move {
-                let _ = store.inbox_mark(Vec::new(), Some(id), true, true).await;
-            });
         }
     }
 

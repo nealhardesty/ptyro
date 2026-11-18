@@ -188,7 +188,7 @@ export function neighbour(sessions, s, dir) {
 }
 /// What a session's ⋯ menu offers about SHELLS.
 export function shellMenuItems(s) {
-    if (s.quick || s.pad || s.machine)
+    if (s.quick || s.machine)
         return [];
     if (!s.loose) {
         return s.state.t === "running" ? [{ title: tip("shells.loose"), label: "Move to SHELLS", hint: "A number of its own; it outlives its worktree", run: () => ask({ t: "shell_place", addr: s.id, loose: true, worktree: null }, `${s.name} is in SHELLS now`) }] : [];

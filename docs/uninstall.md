@@ -21,7 +21,6 @@ A private (mode 600) `.tar.gz` that never replaces a file that is already there.
 |---|---|
 | `config/config.toml` | your config, comments and all |
 | `data/ptyro.db` | a consistent copy of the database (SQLite `VACUUM INTO`, safe while the daemon runs): sessions' history, projects, worktree records, paired devices (as token hashes), saved views, trust |
-| `data/scratchpad.md`, `data/scratchpad.history/` | the scratchpad and its saved copies |
 | `README.txt`, `manifest.json` | what this is, what is in it and what was left out, and how to put it back |
 
 Left out, and said so when it is: the agents' login directories under ptyro-managed profiles (log
@@ -29,9 +28,8 @@ in again after a restore), the recordings (`--with-recordings`) and the certific
 (`--with-ca`).
 
 **Putting it back** is by hand, with ptyro stopped (`ptyro daemon stop`): unpack it somewhere and
-copy `config/config.toml` to where `ptyro config path` says, and `data/ptyro.db`,
-`data/scratchpad.md` and `data/scratchpad.history/` into ptyro's data directory (usually
-`~/.local/share/ptyro`). Worktrees are not in a backup: they are in your repositories, and
+copy `config/config.toml` to where `ptyro config path` says, and `data/ptyro.db` (and
+`data/chat.db`, your chats) into ptyro's data directory (usually `~/.local/share/ptyro`). Worktrees are not in a backup: they are in your repositories, and
 `ptyro wt restore` brings archived ones back from the snapshots there.
 
 ## `ptyro uninstall`
@@ -50,9 +48,10 @@ remove only what they installed (the binary, its completions, on Windows the Con
 
 It stops the daemon and every session, then removes:
 
-- **ptyro's directories**: config, data (history, scratchpad, managed profiles and the agent
-  logins in them), state, and the runtime directory, wherever `ptyro daemon status` says they
-  are (`PTYRO_HOME`, `XDG_*`), with their sizes;
+- **ptyro's directories**: config, data (history, chats, managed profiles and the agent
+  logins in them; notes left from the old scratchpad, `scratchpad.md`, are named in the
+  plan), state, and the runtime directory, wherever `ptyro daemon status` says they are
+  (`PTYRO_HOME`, `XDG_*`), with their sizes;
 - **its worktrees**, through `git worktree remove` so the repository forgets them (the branches
   stay). Each is checked with git, not the daemon's last look: uncommitted changes are listed and
   **will be lost**; commits not pushed anywhere are noted (they are on the branch, which stays);

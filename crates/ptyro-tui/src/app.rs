@@ -16,9 +16,9 @@ use ptyro_core::model::{
 use ptyro_core::paths::Paths;
 use ptyro_core::screen::ScrollbackDoc;
 use ptyro_core::session::{ProcessState, SessionInfo, SessionKind, Show, SpawnSpec};
-use ptyro_core::status::{AgentStatus, AttentionKind, InboxEntry, Usage};
+use ptyro_core::status::{AgentStatus, AttentionKind, Usage};
 use ptyro_core::{Error, ErrorCode, SessionId, TermSize};
-use ptyro_protocol::{ClientMsg, DomainEvent, PadDoc, Reply, Request, ServerMsg};
+use ptyro_protocol::{ClientMsg, DomainEvent, Reply, Request, ServerMsg};
 use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -79,11 +79,6 @@ pub enum Overlay {
     Help {
         filter: String,
         scroll: usize,
-    },
-    /// The inbox (SPEC §9.5): `tab` filters by workspace (`None` = all).
-    Inbox {
-        selected: usize,
-        tab: Option<String>,
     },
     /// A session's last screen and what it wants, with an inline reply (SPEC §11.3 `p`).
     Peek {
@@ -163,8 +158,6 @@ pub struct Wizard {
     pub issue: Option<String>,
     pub branch: Option<String>,
     pub take: bool,
-    /// Started from the scratchpad item on this line (NOTE1.3).
-    pub pad_item: Option<u32>,
     /// The rest of `ptyro new`'s options, from the form (SPEC §11.5a): the profile (`None`
     /// resolves), a new worktree's base, whether it skips setup or fetching, structured mode, a
     /// command line for `@command`, and a title apart from the prompt.
@@ -270,10 +263,6 @@ pub enum Purpose {
     Gc,
     /// The existing branch a new worktree checks out (UX1.10).
     Branch(Wizard),
-    /// The scratchpad's open items (NOTE1.3).
-    PadItems,
-    /// The scratchpad's saved copies.
-    PadHistory,
 }
 
 /// What asked for a project when there was none (UX1.6): done once the project is added.
@@ -292,8 +281,6 @@ pub enum PromptKind {
     Rename(SessionId),
     /// One prompt for these sessions (`b`).
     Broadcast(Vec<SessionId>),
-    /// A line for the scratchpad, about this session (NOTE1.2).
-    PadAdd(Option<SessionId>),
     /// A session's title (UX1.24): free text; empty clears it.
     Retitle(SessionId),
     /// A worktree's title (by id).
@@ -482,15 +469,6 @@ pub enum Pending {
     WorkspaceMade(String),
     /// A quick terminal to show in the drawer (UX1.25).
     Quick(ptyro_core::config::ShellStyle),
-    /// The scratchpad's editor to show (NOTE1.1).
-    Pad,
-    /// A line was added to the scratchpad.
-    PadAdded,
-    /// The scratchpad's text, for its open items; `refresh`: only to update a list already open.
-    PadItems {
-        refresh: bool,
-    },
-    PadHistory,
     List,
     Registry,
     Saved,
@@ -746,8 +724,6 @@ pub struct App {
     pub follow: Option<(String, PaneId)>,
     /// The wizard's profile line ("work — pinned by project").
     pub resolved: Option<String>,
-    /// The inbox (newest first), kept current by `InboxAdded` (SPEC §9.5).
-    pub inbox: Vec<InboxEntry>,
     /// Usage per (profile, agent) (M4.17).
     pub usage: HashMap<(String, String), Usage>,
     /// The short name of the machine the daemon runs on (a remote daemon's, not ours).
@@ -787,14 +763,6 @@ pub struct App {
     pub again: Option<(Option<String>, ptyro_core::session::LastLaunch)>,
     /// The worktree quick new's label was last asked about.
     pub(crate) again_for: Option<Option<String>>,
-    /// The scratchpad's open items, kept current by `ScratchChanged` (NOTE1.2).
-    pub pad_open: u32,
-    /// The scratchpad's editor, when it is shown as a popup (NOTE1.1).
-    pub pad_popup: Option<SessionId>,
-    /// The pad as the items list last read it, to start an item from.
-    pub(crate) pad_doc: Option<PadDoc>,
-    /// The items list shows ticked ones too.
-    pub(crate) pad_show_done: bool,
     /// The selected sidebar row, and its index when last set (the fallback once it's gone).
     sidebar_row: Option<Row>,
     sidebar_sel: usize,
@@ -902,7 +870,6 @@ impl App {
             chat_drafts: HashMap::new(),
             follow,
             resolved: None,
-            inbox: Vec::new(),
             usage: HashMap::new(),
             machine: None,
             host_load: None,
@@ -918,10 +885,6 @@ impl App {
             tool_back: HashSet::new(),
             again: None,
             again_for: None,
-            pad_open: 0,
-            pad_popup: None,
-            pad_doc: None,
-            pad_show_done: false,
             opts,
             connect,
             paths,
@@ -1042,17 +1005,6 @@ impl App {
         if let Ok(Reply::Machines { machines }) = client.request(Request::MachineList).await {
             self.machines = machines;
         }
-        if let Ok(Reply::Inbox { entries }) = client
-            .request(Request::Inbox { workspace: None, unread_only: false, limit: Some(500) })
-            .await
-        {
-            self.inbox = entries;
-        }
-        if let Ok(Reply::ScratchItems { items, .. }) =
-            client.request(Request::ScratchTodo { all: false }).await
-        {
-            self.pad_open = u32::try_from(items.len()).unwrap_or(u32::MAX);
-        }
         if let Ok(Reply::Status { status }) = client.request(Request::Status).await {
             self.machine = status.machine;
             self.host_load = status.load;
@@ -1122,11 +1074,6 @@ impl App {
 
     /// Load the current workspace's saved view.
     async fn load_view(&mut self) {
-        // The scratchpad's popup is a session of the daemon we were connected to: gone with it
-        // (it would swallow every key and click, showing nothing).
-        if let Some(id) = self.pad_popup.filter(|id| self.session(*id).is_none()) {
-            self.pad_gone(id);
-        }
         self.layout = Layout::default();
         self.panes = HashMap::from([(1, PaneState::default())]);
         self.focused = 1;
@@ -1153,7 +1100,7 @@ impl App {
         };
         if let Some(saved) = saved {
             let mut ordered_all = self.ordered();
-            ordered_all.extend(self.sessions.iter().filter(|s| s.quick || s.pad).map(|s| s.id));
+            ordered_all.extend(self.sessions.iter().filter(|s| s.quick).map(|s| s.id));
             self.layout = saved.layout.sanitize();
             self.panes = self
                 .layout
@@ -1227,7 +1174,6 @@ impl App {
                     | Pending::List
                     | Pending::Registry
                     | Pending::Resolved
-                    | Pending::PadItems { .. }
                     | Pending::Updates { .. }
             ) {
                 let why = "not connected: waiting for the daemon to come back";
@@ -1353,10 +1299,6 @@ impl App {
             if *pane == self.focused || !visible.contains_key(&id) {
                 visible.insert(id, size);
             }
-        }
-        if let Some(id) = self.pad_popup {
-            let r = self.inner_popup();
-            visible.insert(id, TermSize::new(r.width.max(2), r.height.max(1)));
         }
         let control = !self.opts.view_only;
         for id in self.subscribed.clone() {
@@ -1651,9 +1593,7 @@ impl App {
         if !gone.is_empty() && !self.opts.raw {
             let order = self.ordered();
             for id in &gone {
-                if self.is_pad(*id) {
-                    self.pad_gone(*id);
-                } else if self.drawer_session() == Some(*id) {
+                if self.drawer_session() == Some(*id) {
                     self.hide_drawer();
                 }
                 self.forget_kept(*id);
@@ -1763,11 +1703,8 @@ impl App {
                     self.sync();
                     return;
                 }
-                // `exit` in the quick terminal: its drawer closes (UX1.25); so does the scratchpad's
-                // editor's, in whatever showed it.
-                if self.is_pad(id) {
-                    self.pad_gone(id);
-                } else if self.drawer_session() == Some(id) {
+                // `exit` in the quick terminal: its drawer closes (UX1.25).
+                if self.drawer_session() == Some(id) {
                     self.hide_drawer();
                 }
                 // The order as it was, so "the next one" means the one after it in the sidebar.
@@ -1803,23 +1740,7 @@ impl App {
                     ));
                 }
             }
-            DomainEvent::Notification { .. } => {}
-            DomainEvent::ScratchChanged { open, .. } => self.pad_changed(open),
-            DomainEvent::InboxAdded { entry } => {
-                // An open inbox keeps the same entry selected (it's above it, in its tab).
-                let shown = |tab: Option<&str>| {
-                    tab.is_none_or(|t| entry.workspace.as_deref().unwrap_or(MAIN_WORKSPACE) == t)
-                };
-                if let Some(Overlay::Inbox { selected, tab }) = &self.overlay
-                    && shown(tab.as_deref())
-                    && !self.inbox_tab(tab.as_deref()).is_empty()
-                {
-                    let (selected, tab) = (*selected + 1, tab.clone());
-                    self.overlay = Some(Overlay::Inbox { selected, tab });
-                }
-                self.inbox.insert(0, entry);
-                self.inbox.truncate(500);
-            }
+            DomainEvent::Notification { .. } | DomainEvent::Alert { .. } => {}
             DomainEvent::Notify { session, title, body, bell, .. } => {
                 // Our outer terminal shows it (SPEC §9.5); not for what we're looking at.
                 if !(self.terminal_focused && self.focused_session() == Some(session)) {
@@ -2038,13 +1959,6 @@ impl App {
                 });
             }
             (Pending::Confirm(_, then), r) => self.handle_reply(*then, r),
-            (
-                p @ (Pending::Pad
-                | Pending::PadAdded
-                | Pending::PadItems { .. }
-                | Pending::PadHistory),
-                r,
-            ) => self.pad_reply(p, r),
             (Pending::List, Ok(Reply::Sessions { sessions })) => self.got_list(sessions),
             (Pending::Updates { note: noting }, Ok(Reply::Updates { offered, note })) => {
                 self.got_updates(offered, note, noting)
@@ -2699,9 +2613,6 @@ impl App {
             {
                 self.forward(InputEvent::Key { key });
             }
-            if self.overlay.is_none() && !self.prefix {
-                self.forward_popup(InputEvent::Key { key });
-            }
             return;
         }
         self.learn_alt(key);
@@ -2722,11 +2633,6 @@ impl App {
             // not turn the overlay's closing key into a command afterwards.
             self.prefix = false;
             self.overlay_key(key);
-            return;
-        }
-        // The scratchpad's popup has the keyboard; the prefix still reaches ptyro (NOTE1.1).
-        if self.pad_popup.is_some() && !self.prefix && !self.keymap.is_prefix(key) {
-            self.forward_popup(InputEvent::Key { key });
             return;
         }
         // The chat panel has the keyboard while the panes have focus (the sidebar keeps its own).
@@ -2855,10 +2761,6 @@ impl App {
                 self.chat_paste(&lines);
                 return;
             }
-            None if self.pad_popup.is_some() => {
-                self.forward_popup(InputEvent::Paste { text });
-                return;
-            }
             None if copying => {}
             None => {
                 self.forward(InputEvent::Paste { text });
@@ -2896,16 +2798,6 @@ impl App {
         }
     }
 
-    /// Send input to the scratchpad's popup editor.
-    fn forward_popup(&self, event: InputEvent) {
-        if let Some(id) = self.pad_popup
-            && !self.opts.view_only
-            && self.session(id).is_some_and(|s| s.state.is_live())
-        {
-            self.send(ClientMsg::Input { session: id, event });
-        }
-    }
-
     pub fn on_resize(&mut self, w: u16, h: u16) {
         self.area = Rect::new(0, 0, w, h);
         self.sync();
@@ -2930,10 +2822,6 @@ impl App {
             "session.new" => self.open_task(None),
             "session.again" => self.quick_new(),
             "attention.next" => self.next_attention(),
-            "inbox" => {
-                self.overlay =
-                    Some(Overlay::Inbox { selected: 0, tab: Some(self.workspace.clone()) })
-            }
             "peek" => {
                 let target = if self.focus == Focus::Sidebar {
                     self.selected_row().and_then(|r| r.session())
@@ -3105,11 +2993,6 @@ impl App {
                 };
                 self.toggle_quick_as(style, want, None, None);
             }
-            "scratchpad.toggle" => self.toggle_pad(),
-            "scratchpad.add" => self.open_pad_add(String::new(), None),
-            "scratchpad.note" => self.note_this(),
-            "scratchpad.items" => self.open_pad_items(),
-            "scratchpad.history" => self.open_pad_history(),
             "worktree.retitle" => match self.context().1.filter(|w| self.worktree(w).is_some()) {
                 Some(w) => self.open_retitle_worktree(&w),
                 None => self.pick_project(Some(AfterAdd::Run("worktree.retitle"))),
@@ -3949,7 +3832,6 @@ impl App {
     pub fn context_hint(&self) -> Option<String> {
         let row = match self.focus {
             Focus::Sidebar => self.selected_row()?,
-            Focus::Pane if self.focused_session().is_some_and(|s| self.is_pad(s)) => return None,
             Focus::Pane if self.in_drawer() => Row::Quick(self.focused_session()?),
             Focus::Pane => Row::Session(self.focused_session()?),
         };
@@ -4247,7 +4129,7 @@ impl App {
                 };
                 match target {
                     Some(target) => self.request(
-                        Pending::Done("muted for 1h (the inbox still gets them)".into()),
+                        Pending::Done("muted for 1h (rows still show what wants you)".into()),
                         Request::Mute { target, minutes: Some(60), unmute: false },
                     ),
                     None => self.pick_project(None),
@@ -4295,7 +4177,6 @@ impl App {
                     "session.explain",
                     "session.events",
                 ]);
-                v.push("scratchpad.note");
                 if s.state.is_live() {
                     v.push("session.summarize");
                 }
@@ -4316,7 +4197,7 @@ impl App {
                         v.push("shells.break");
                     }
                     v.push("shells.join");
-                } else if !s.quick && !s.pad && s.machine.is_none() {
+                } else if !s.quick && s.machine.is_none() {
                     v.push("shells.loose");
                 }
                 v.push("pane.split_right");
@@ -5002,8 +4883,7 @@ impl App {
 
     /// "Quit ptyro?", saying what stops: agents that can resume hibernate, the rest end.
     fn confirm_quit(&mut self) {
-        let live: Vec<&SessionInfo> =
-            self.sessions.iter().filter(|s| s.state.is_live() && !s.pad).collect();
+        let live: Vec<&SessionInfo> = self.sessions.iter().filter(|s| s.state.is_live()).collect();
         let (sleep, end): (Vec<&SessionInfo>, Vec<&SessionInfo>) =
             live.iter().partition(|s| s.kind == SessionKind::Agent && s.conversation.is_some());
         let names = |v: &[&SessionInfo]| {
@@ -5095,11 +4975,8 @@ impl App {
         let mut order: Vec<&SessionInfo> =
             self.ordered().iter().filter_map(|id| self.session(*id)).collect();
         // Sessions of other workspaces stay findable, after this one's.
-        let rest: Vec<&SessionInfo> = self
-            .sessions
-            .iter()
-            .filter(|s| !s.pad && !order.iter().any(|o| o.id == s.id))
-            .collect();
+        let rest: Vec<&SessionInfo> =
+            self.sessions.iter().filter(|s| !order.iter().any(|o| o.id == s.id)).collect();
         order.extend(rest);
         for s in order {
             let i = numbered.iter().position(|id| *id == s.id).unwrap_or(usize::MAX);
@@ -5215,7 +5092,6 @@ impl App {
     pub(crate) fn overlay_key(&mut self, key: KeyEvent) {
         let Some(overlay) = self.overlay.take() else { return };
         match overlay {
-            Overlay::Inbox { selected, tab } => self.inbox_key(key, selected, tab),
             Overlay::Peek { session, screen, reply } => self.peek_key(key, session, screen, reply),
             Overlay::About { doc, sel, scroll } => self.about_key(key, doc, sel, scroll),
             Overlay::Explain { session, lines, mut scroll } => {
@@ -5285,17 +5161,6 @@ impl App {
                 _ => self.overlay = Some(Overlay::Suggest { suggestions, spec, split }),
             },
             Overlay::Picker { mut palette, purpose } => {
-                // The scratchpad's list has control keys beside searching (NOTE1.3).
-                if matches!(purpose, Purpose::PadItems) {
-                    match self.pad_items_ctrl(&palette, key) {
-                        Some(true) => {
-                            self.overlay = Some(Overlay::Picker { palette, purpose });
-                            return;
-                        }
-                        Some(false) => return,
-                        None => {}
-                    }
-                }
                 // The clean-up list keeps the one selected with ^l: locked, gc leaves it be.
                 if matches!(purpose, Purpose::Gc)
                     && key.mods.has(Mods::CTRL)
@@ -5764,8 +5629,6 @@ impl App {
             (Target::AddProject, Purpose::Target(w)) => {
                 self.pick_project(Some(AfterAdd::Targets(Box::new(w))))
             }
-            (Target::PadItem(line), Purpose::PadItems) => self.start_pad_item(line),
-            (Target::PadRev(rev), Purpose::PadHistory) => self.restore_pad(rev),
             (target, Purpose::Home) => self.home_picked(target),
             (Target::Fix(i), Purpose::Health) => self.fix(i),
             (Target::Agent(a), Purpose::ChatAgent(id)) => self.chat_picked(a, true, id),
@@ -5982,11 +5845,6 @@ impl App {
                     Request::Retitle { addr: id.full(), title, worktree: false },
                 );
             }
-            PromptKind::PadAdd(about) => {
-                if !text.trim().is_empty() {
-                    self.pad_add(text, false, about);
-                }
-            }
             PromptKind::CliAsk(job) => self.cli_answer(*job, &text),
             PromptKind::RenameBranch(id) => {
                 let branch = Some(text.trim().to_owned()).filter(|b| !b.is_empty());
@@ -6143,10 +6001,6 @@ impl App {
                 }
             }
             CopyOutcome::Exit => self.exit_copy(),
-            CopyOutcome::Note(text) => {
-                self.pad_quote(&text);
-                self.exit_copy();
-            }
             CopyOutcome::Yank(text) => {
                 self.yank(text);
                 self.exit_copy();
@@ -6191,10 +6045,6 @@ impl App {
         use crossterm::event::MouseEventKind as K;
         self.dirty = true;
         let (x, y) = (m.column, m.row);
-        // The popup is modal: a click doesn't reach the panes behind it.
-        if self.pad_popup.is_some() && self.overlay.is_none() {
-            return;
-        }
         if let Some(Overlay::Settings(p)) = &mut self.overlay {
             let acts = p.mouse(m.kind, x, y);
             if acts.contains(&crate::settings::Action::Close) {
@@ -6657,7 +6507,7 @@ impl App {
         self.kept = None;
         let ordered = self.ordered();
         let quick: Vec<SessionId> =
-            self.sessions.iter().filter(|s| s.quick || s.pad).map(|s| s.id).collect();
+            self.sessions.iter().filter(|s| s.quick).map(|s| s.id).collect();
         if let Some(saved) = view.and_then(|v| serde_json::from_value::<SavedView>(v).ok()) {
             self.layout = saved.layout.sanitize();
             self.panes = self
@@ -6689,7 +6539,7 @@ impl App {
         self.sync();
     }
 
-    // ── attention, peek, inbox (SPEC §9.4–§9.6, M4.5) ───────────────────────
+    // ── attention, peek (SPEC §9.4–§9.6, M4.5) ──────────────────────────────
 
     /// Sessions wanting attention, most urgent first (blocked > errored > done > idle >
     /// exited, oldest first); only this workspace's unless `everywhere`.
@@ -6698,7 +6548,7 @@ impl App {
         let mut v: Vec<(&SessionInfo, AttentionKind, u64)> = self
             .sessions
             .iter()
-            .filter(|s| !s.pad && (everywhere || here.contains(&s.id)))
+            .filter(|s| everywhere || here.contains(&s.id))
             .filter_map(|s| s.attention.as_ref().map(|a| (s, a.kind, a.since_ms)))
             .collect();
         v.sort_by_key(|(_, k, t)| (*k, *t));
@@ -6743,10 +6593,6 @@ impl App {
             }
         }
         out
-    }
-
-    pub fn unread(&self) -> usize {
-        self.inbox.iter().filter(|e| e.read_ms.is_none()).count()
     }
 
     fn open_peek(&mut self, id: SessionId) {
@@ -6815,105 +6661,6 @@ impl App {
         self.overlay = Some(Overlay::Peek { session, screen, reply });
     }
 
-    /// Inbox entries for a tab (`None` = all).
-    pub fn inbox_tab(&self, tab: Option<&str>) -> Vec<&InboxEntry> {
-        self.inbox
-            .iter()
-            .filter(|e| {
-                tab.is_none_or(|t| {
-                    e.workspace.as_deref().unwrap_or(ptyro_core::model::MAIN_WORKSPACE) == t
-                })
-            })
-            .collect()
-    }
-
-    fn inbox_key(&mut self, key: KeyEvent, mut selected: usize, mut tab: Option<String>) {
-        let n = self.inbox_tab(tab.as_deref()).len();
-        let entry = self.inbox_tab(tab.as_deref()).get(selected).map(|e| (e.id, e.session.clone()));
-        match key.code {
-            KeyCode::Esc | KeyCode::Char { c: 'q' } => return,
-            // Note it for later (NOTE1.2): the entry's words and a link back to its session.
-            KeyCode::Char { c: 'n' } => {
-                if let Some(e) = self.inbox_tab(tab.as_deref()).get(selected) {
-                    let about = e.session.parse::<SessionId>().ok();
-                    let words = if e.body.trim().is_empty() { &e.title } else { &e.body };
-                    let text = format!(
-                        "{} (ptyro://session/{})",
-                        words.lines().next().unwrap_or("").trim(),
-                        e.session_name
-                    );
-                    self.open_pad_add(text, about);
-                }
-                return;
-            }
-            KeyCode::Down | KeyCode::Char { c: 'j' } => {
-                selected = (selected + 1).min(n.saturating_sub(1))
-            }
-            KeyCode::Up | KeyCode::Char { c: 'k' } => selected = selected.saturating_sub(1),
-            // Cycle tabs: this workspace, every other, All.
-            KeyCode::Tab => {
-                let mut tabs: Vec<Option<String>> = std::iter::once(Some(self.workspace.clone()))
-                    .chain(
-                        self.workspaces
-                            .iter()
-                            .filter(|w| w.name != self.workspace)
-                            .map(|w| Some(w.name.clone())),
-                    )
-                    .collect();
-                tabs.push(None);
-                let i = tabs.iter().position(|t| *t == tab).unwrap_or(0);
-                tab = tabs[(i + 1) % tabs.len()].clone();
-                selected = 0;
-            }
-            KeyCode::Enter => {
-                if let Some((id, sess)) = entry {
-                    self.request(
-                        Pending::Done(String::new()),
-                        Request::InboxMark { ids: vec![id], all: false, session: None, read: true },
-                    );
-                    if let Ok(sid) = sess.parse::<SessionId>()
-                        && self.session(sid).is_some()
-                    {
-                        self.show(sid, None);
-                        return;
-                    }
-                    self.toast("that session is gone");
-                }
-            }
-            KeyCode::Char { c: 'p' } => {
-                if let Some(sid) = entry
-                    .and_then(|(_, s)| s.parse::<SessionId>().ok())
-                    .filter(|id| self.session(*id).is_some())
-                {
-                    self.open_peek(sid);
-                    return;
-                }
-            }
-            KeyCode::Char { c: 'r' } => {
-                if let Some((id, _)) = entry {
-                    self.request(
-                        Pending::Done(String::new()),
-                        Request::InboxMark { ids: vec![id], all: false, session: None, read: true },
-                    );
-                    if let Some(e) = self.inbox.iter_mut().find(|e| e.id == id) {
-                        e.read_ms = Some(ptyro_core::now_ms());
-                    }
-                }
-            }
-            KeyCode::Char { c: 'R' } => {
-                self.request(
-                    Pending::Done("all read".into()),
-                    Request::InboxMark { ids: Vec::new(), all: true, session: None, read: true },
-                );
-                for e in &mut self.inbox {
-                    e.read_ms.get_or_insert(ptyro_core::now_ms());
-                }
-            }
-            _ => {}
-        }
-        self.overlay = Some(Overlay::Inbox { selected, tab });
-    }
-
     /// The focused session's profile usage, for the status bar.
     pub fn usage_for(&self, profile: &str) -> Vec<&Usage> {
         let mut v: Vec<&Usage> = self.usage.values().filter(|u| u.profile == profile).collect();
@@ -6923,7 +6670,7 @@ impl App {
 
     /// Status counts for the bar: (live, working, blocked).
     pub fn counts(&self) -> (usize, usize, usize) {
-        let live = self.sessions.iter().filter(|s| s.state.is_live() && !s.pad).count();
+        let live = self.sessions.iter().filter(|s| s.state.is_live()).count();
         let status = |want: AgentStatus| {
             self.sessions
                 .iter()
@@ -7017,8 +6764,6 @@ pub(crate) fn worktree_spec(w: &Wizard, project: &str) -> WorktreeSpec {
         existing: w.branch.is_some(),
         branch: w.branch.clone(),
         take_changes: w.take,
-        // Started from a scratchpad item (NOTE1.3).
-        pad_item: w.pad_item,
         ..WorktreeSpec::default()
     }
 }
@@ -9855,7 +9600,7 @@ mod tests {
     fn showing_another_session_tucks_the_drawer_and_the_popup_away_and_the_open_line_is_tinted() {
         let mut app = app();
         auto_shell(&mut app);
-        let (agent, other) = with_agents(&mut app);
+        let (_agent, other) = with_agents(&mut app);
         let shell = quick("myrepo.shell", Some("p1-root"));
         app.sessions.push(shell.clone());
         app.run(&Command { action: "shell.here", arg: None });
@@ -9891,19 +9636,10 @@ mod tests {
         assert_eq!(app.focused_session(), Some(other));
         assert_ne!(tint(&app), app.depth.fit(app.theme.bar_bg));
         assert!(app.sessions.iter().any(|s| s.id == shell.id));
-        // The scratchpad's popup too.
-        pad_shown(&mut app, "popup");
-        assert!(app.pad_popup.is_some());
-        app.focus = Focus::Sidebar;
-        let rows = app.rows();
-        let i = rows.iter().position(|r| *r == Row::Session(agent)).unwrap();
-        app.set_sel(&rows, i);
-        app.run(&Command { action: "nav.open", arg: None });
-        assert!(app.pad_popup.is_none(), "the popup tucked away");
     }
 
     #[test]
-    fn moving_focus_between_shown_panes_keeps_the_drawer_and_the_popup() {
+    fn moving_focus_between_shown_panes_keeps_the_drawer() {
         let mut app = app();
         auto_shell(&mut app);
         let (_agent, _other) = with_agents(&mut app);
@@ -9922,11 +9658,6 @@ mod tests {
         assert!(app.drawer.is_some(), "the drawer stays while its host is used");
         app.run(&Command { action: "pane.down", arg: None });
         assert!(app.drawer.is_some());
-        // The scratchpad's popup too.
-        pad_shown(&mut app, "popup");
-        assert!(app.pad_popup.is_some());
-        app.run(&Command { action: "pane.up", arg: None });
-        assert!(app.pad_popup.is_some(), "the popup stays");
     }
 
     /// The doctor's stale worktrees are the gc reminder: said once in so many words with the key
@@ -10071,152 +9802,6 @@ mod tests {
         assert_eq!(app.layout.panes().len(), 1);
     }
 
-    // ── the scratchpad (NOTE1) ───────────────────────────────────────────
-
-    fn pad_session(name: &str) -> SessionInfo {
-        let mut s = session(name);
-        s.pad = true;
-        s.argv = vec!["nvim".into(), "/data/scratchpad.md".into()];
-        s
-    }
-
-    fn pad_doc(text: &str) -> PadDoc {
-        PadDoc::of("/data/scratchpad.md".into(), text.into())
-    }
-
-    fn toggle_pad(app: &mut App) {
-        app.run(&Command { action: "scratchpad.toggle", arg: None });
-    }
-
-    fn pad_shown(app: &mut App, mode: &str) -> SessionInfo {
-        app.config = Config::parse(&format!("[scratchpad]\nmode = \"{mode}\"\n")).unwrap();
-        let pad = pad_session("scratchpad");
-        toggle_pad(app);
-        app.on_reply(AppMsg::Reply(Pending::Pad, Ok(Reply::Session { info: pad.clone() })));
-        pad
-    }
-
-    #[test]
-    fn the_scratchpad_key_shows_focuses_and_hides_one_editor_in_a_drawer() {
-        let mut app = app();
-        let (agent, _) = with_agents(&mut app);
-        let host = app.focused;
-        assert_eq!(app.keymap.key_for("scratchpad.toggle").as_deref(), Some("C-q ;"));
-        let pad = pad_shown(&mut app, "drawer");
-        let d = app.drawer.expect("a drawer");
-        assert_eq!((d.host, app.focused), (host, d.pane));
-        assert_eq!(shows(&app, d.pane), Some(pad.name.clone()));
-        assert!(screen(&app).contains("✎"), "its header says what it is");
-        toggle_pad(&mut app);
-        assert!(app.drawer.is_none(), "focused: hides it");
-        assert_eq!(app.focused, host);
-        toggle_pad(&mut app);
-        assert_eq!(app.drawer_session(), Some(pad.id), "the editor was kept, so no new request");
-        // Unfocused, the key focuses it.
-        app.focused = host;
-        toggle_pad(&mut app);
-        assert_eq!(app.focused, app.drawer.unwrap().pane);
-        // Shown in the drawer, it is in no list of sessions.
-        assert!(!app.ordered().contains(&pad.id) && app.ordered().contains(&agent));
-        assert!(!app.rows().iter().any(|r| r.session() == Some(pad.id)));
-        assert_eq!(app.counts().0, 2, "the editor isn't a live session of yours");
-        assert!(app.attention_order(true).is_empty());
-        // The editor exits: the drawer closes.
-        app.on_event(DomainEvent::SessionRemoved { id: pad.id });
-        assert!(app.drawer.is_none());
-    }
-
-    #[test]
-    fn the_quick_terminal_and_the_scratchpad_share_the_one_drawer() {
-        let mut app = app();
-        auto_shell(&mut app);
-        with_agents(&mut app);
-        let shell = quick("myrepo.shell", Some("p1-root"));
-        app.sessions.push(shell.clone());
-        app.run(&Command { action: "shell.here", arg: None });
-        app.on_reply(AppMsg::Reply(
-            Pending::Quick(app.config.ui.shell_style),
-            Ok(Reply::Session { info: shell.clone() }),
-        ));
-        assert_eq!(app.drawer_session(), Some(shell.id));
-        let pad = pad_shown(&mut app, "drawer");
-        assert_eq!(app.drawer_session(), Some(pad.id), "the pad replaced the shell");
-        assert_eq!(app.layout.panes().len(), 2, "the agent's pane and one drawer, not two");
-    }
-
-    #[test]
-    fn the_popup_takes_the_keyboard_but_not_the_prefix_and_draws_over_everything() {
-        let mut app = app();
-        with_agents(&mut app);
-        let pad = pad_shown(&mut app, "popup");
-        assert_eq!(app.pad_popup, Some(pad.id));
-        let shown = screen(&app);
-        assert!(shown.contains("✎ Scratchpad · "), "{shown}");
-        assert!(
-            shown.contains("scratchpad.md") || shown.contains("…"),
-            "the file is named: {shown}"
-        );
-        // Keys go to the editor: a letter isn't a sidebar key, and nothing opens.
-        let before = app.focused;
-        app.on_key(&crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('j'),
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert!(app.pad_popup.is_some() && app.overlay.is_none() && app.focused == before);
-        // Prefix, then the key: closes it.
-        let ctrl_q = crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char('q'),
-            crossterm::event::KeyModifiers::CONTROL,
-        );
-        app.on_key(&ctrl_q);
-        assert!(app.prefix);
-        app.on_key(&crossterm::event::KeyEvent::new(
-            crossterm::event::KeyCode::Char(';'),
-            crossterm::event::KeyModifiers::NONE,
-        ));
-        assert!(app.pad_popup.is_none());
-        assert!(!screen(&app).contains("✎ Scratchpad · "));
-        // It sizes the editor to the window, not to a pane.
-        toggle_pad(&mut app);
-        let r = app.inner_popup();
-        assert!(r.width < app.area.width && r.height < app.area.height && r.width > 40);
-    }
-
-    #[test]
-    fn the_pane_mode_splits_beside_and_the_key_closes_that_pane() {
-        let mut app = app();
-        with_agents(&mut app);
-        let panes = app.layout.panes().len();
-        let pad = pad_shown(&mut app, "pane");
-        assert_eq!(app.layout.panes().len(), panes + 1);
-        assert_eq!(app.focused_session(), Some(pad.id));
-        assert!(app.drawer.is_none() && app.pad_popup.is_none());
-        let p = app.focused;
-        let other = app.layout.panes().into_iter().find(|x| *x != p).unwrap();
-        app.focused = other;
-        toggle_pad(&mut app);
-        assert_eq!(app.focused, p, "shown elsewhere: focus it");
-        toggle_pad(&mut app);
-        assert_eq!(app.layout.panes().len(), panes, "focused: closes its pane");
-        assert_eq!(app.pad_session(), Some(pad.id), "closing the pane doesn't stop the editor");
-    }
-
-    #[test]
-    fn the_count_is_kept_from_events_and_shown_on_the_status_bar() {
-        let mut app = app();
-        app.config.ui.status_bar = true;
-        assert!(!screen(&app).contains("✎"));
-        app.on_event(DomainEvent::ScratchChanged { rev: "abc".into(), open: 7, by: None });
-        assert_eq!(app.pad_open, 7);
-        assert!(screen(&app).contains("✎ 7"), "{}", screen(&app));
-        app.on_event(DomainEvent::ScratchChanged {
-            rev: "abd".into(),
-            open: 0,
-            by: Some("file".into()),
-        });
-        assert!(!screen(&app).contains("✎"));
-    }
-
     #[test]
     fn the_load_average_is_on_the_status_bar_while_the_daemon_sends_it() {
         let mut app = app();
@@ -10229,138 +9814,6 @@ mod tests {
         app.config.ui.load = true;
         app.on_event(DomainEvent::HostLoad { load: None });
         assert!(!screen(&app).contains("0.52"), "off in the daemon: gone");
-    }
-
-    #[test]
-    fn add_opens_a_one_line_box_and_note_starts_from_what_the_session_is_for() {
-        let mut app = app();
-        let (agent, _) = with_agents(&mut app);
-        app.sessions.iter_mut().find(|s| s.id == agent).unwrap().task =
-            Some("fix the flaky test\nin tests/api.rs".into());
-        app.run(&Command { action: "scratchpad.add", arg: None });
-        assert_eq!(prompt_text(&app), Some(""));
-        assert!(screen(&app).contains("Add to the scratchpad"));
-        typed(&mut app, "login times out");
-        assert_eq!(prompt_text(&app), Some("login times out"));
-        typed(&mut app, "\n");
-        assert!(app.overlay.is_none(), "⏎ sends it");
-        // The reply toasts the count.
-        app.on_reply(AppMsg::Reply(
-            Pending::PadAdded,
-            Ok(Reply::Scratch { doc: pad_doc("- [ ] a\n- [ ] b\n") }),
-        ));
-        assert_eq!(app.pad_open, 2);
-        assert_eq!(
-            app.toast.as_ref().map(|t| t.text.as_str()),
-            Some("added to the scratchpad (2 open)")
-        );
-        // Note this, in the pane: the focused session's task, first line.
-        app.run(&Command { action: "scratchpad.note", arg: None });
-        assert_eq!(prompt_text(&app), Some("fix the flaky test"));
-        // It is a row-menu action for a session.
-        assert!(app.row_actions(&Row::Session(agent)).contains(&"scratchpad.note"));
-        // Esc cancels.
-        key(&mut app, KeyCode::Esc, Mods::NONE);
-        assert!(app.overlay.is_none());
-    }
-
-    #[test]
-    fn the_inbox_notes_an_entry_with_a_link_back() {
-        let mut app = app();
-        let (agent, _) = with_agents(&mut app);
-        let name = app.session(agent).unwrap().name.clone();
-        app.inbox.push(
-            serde_json::from_value(serde_json::json!({
-                "id": 1, "session": agent.full(), "session_name": name, "at_ms": 1,
-                "kind": "blocked", "title": "[work] claude", "body": "wants to run rm -rf build",
-                "workspace": "main",
-            }))
-            .unwrap(),
-        );
-        app.run(&Command { action: "inbox", arg: None });
-        key(&mut app, KeyCode::Char { c: 'n' }, Mods::NONE);
-        assert_eq!(
-            prompt_text(&app),
-            Some(format!("wants to run rm -rf build (ptyro://session/{name})").as_str())
-        );
-    }
-
-    #[test]
-    fn the_items_list_searches_ticks_and_starts_an_item_as_a_task() {
-        let mut app = app();
-        with_project(&mut app);
-        let text = "# Pad\n\n## Bugs\n- [ ] 2026-10-24 14:02 · by `claude-rook` · login times out\n- [x] fixed one (#4)\n- [ ] flaky test in api\n  see tests/api.rs\n";
-        app.run(&Command { action: "scratchpad.items", arg: None });
-        app.on_reply(AppMsg::Reply(
-            Pending::PadItems { refresh: false },
-            Ok(Reply::Scratch { doc: pad_doc(text) }),
-        ));
-        assert_eq!(app.pad_open, 2);
-        let shown = screen(&app);
-        assert!(shown.contains("Scratchpad · 2 open · /data/scratchpad.md"), "{shown}");
-        assert!(shown.contains("login times out") && shown.contains("by claude-rook"), "{shown}");
-        assert!(!shown.contains("fixed one"), "ticked ones are hidden");
-        // ^a shows them too; typing searches.
-        key(&mut app, KeyCode::Char { c: 'a' }, Mods(Mods::CTRL));
-        assert!(app.pad_show_done);
-        app.on_reply(AppMsg::Reply(
-            Pending::PadItems { refresh: true },
-            Ok(Reply::Scratch { doc: pad_doc(text) }),
-        ));
-        assert!(screen(&app).contains("✓ fixed one"));
-        typed(&mut app, "flaky");
-        let Some(Overlay::Picker { palette, .. }) = &app.overlay else {
-            panic!("the list is open")
-        };
-        assert_eq!(palette.filtered.len(), 1);
-        // A refresh keeps what was typed.
-        app.on_event(DomainEvent::ScratchChanged { rev: "x".into(), open: 2, by: None });
-        app.on_reply(AppMsg::Reply(
-            Pending::PadItems { refresh: true },
-            Ok(Reply::Scratch { doc: pad_doc(text) }),
-        ));
-        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!() };
-        assert_eq!((palette.query.as_str(), palette.filtered.len()), ("flaky", 1));
-        // ⏎ closes the list (the task box would have opened a worktree request).
-        key(&mut app, KeyCode::Enter, Mods::NONE);
-        assert!(app.overlay.is_none());
-        // What it starts: the item's words and following lines, tied to its line.
-        let w = Wizard { project: Some("p1".into()), pad_item: Some(6), ..Wizard::default() };
-        let spec = worktree_spec(
-            &Wizard { prompt: Some("x".into()), agent: Some("claude".into()), ..w },
-            "p1",
-        );
-        assert_eq!(spec.pad_item, Some(6));
-        let doc = pad_doc(text);
-        let item =
-            ptyro_core::scratchpad::items(&doc.text).into_iter().find(|i| i.line == 6).unwrap();
-        assert_eq!(
-            ptyro_core::scratchpad::body(&doc.text, &item),
-            "flaky test in api\nsee tests/api.rs"
-        );
-    }
-
-    #[test]
-    fn ctrl_e_in_the_list_opens_the_editor_and_history_asks_before_restoring() {
-        let mut app = app();
-        with_agents(&mut app);
-        app.config = Config::parse("[scratchpad]\nmode = \"popup\"\n").unwrap();
-        let pad = pad_session("scratchpad");
-        app.sessions.push(pad.clone());
-        app.show_pad_items(pad_doc("- [ ] one\n"), None);
-        key(&mut app, KeyCode::Char { c: 'e' }, Mods(Mods::CTRL));
-        assert!(app.overlay.is_none());
-        assert_eq!(app.pad_popup, Some(pad.id), "the editor, which was already running");
-        app.show_pad_history(vec![ptyro_core::scratchpad::Snapshot {
-            rev: "aabbccddeeff".into(),
-            at_ms: ptyro_core::now_ms(),
-            bytes: 10,
-            lines: 3,
-        }]);
-        assert!(screen(&app).contains("aabbccddeeff"));
-        key(&mut app, KeyCode::Enter, Mods::NONE);
-        let Some(Overlay::Confirm { text, .. }) = &app.overlay else { panic!("asks first") };
-        assert!(text.contains("aabbccddeeff"), "{text}");
     }
 
     // ── full-sized panels, splits on request, quick-new, reveal (UX3) ────────

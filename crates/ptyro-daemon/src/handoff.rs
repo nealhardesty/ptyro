@@ -839,6 +839,18 @@ mod tests {
         assert_eq!((img.sessions[0].meta.name.as_str(), img.sessions[0].meta.turns), ("build", 2));
     }
 
+    /// A daemon from before the scratchpad was removed (2026-11-17) hands over the pad's editor:
+    /// it comes across as the plain session it is (an editor in a terminal), one you can close.
+    #[test]
+    fn the_scratchpads_editor_from_an_older_daemon_comes_across_as_a_session() {
+        let mut v = as_value(&sample());
+        v["sessions"][0]["meta"]["place"]["pad"] = serde_json::json!(true);
+        let img = decode(&encode(&v)).expect("an image with the pad's editor decodes");
+        let meta = &img.sessions[0].meta;
+        assert_eq!(meta.name, "build");
+        assert!(!meta.place.quick, "a session of its own, not a quick terminal");
+    }
+
     #[test]
     fn fields_an_older_ptyro_never_wrote_take_their_defaults() {
         let mut v = as_value(&sample());

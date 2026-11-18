@@ -297,7 +297,7 @@ uses it, so the rules can't drift apart.
  │ ptyro daemon                                                             │
  │                                                                          │
  │  Supervisor (registry, addressing, commands)   Status engine (§9)        │
- │  Client hub (subscriptions, frame pacing)      Notifier (inbox, OSC 9…)  │
+ │  Client hub (subscriptions, frame pacing)      Notifier (OSC 9, push…)   │
  │  Session actors ×N:  PTY ⇄ Emulator ⇄ row-versioned screen  ⇄ recorder   │
  │  Adapter layer: claude | codex | gemini | opencode | shell | generic     │
  │  Git/worktree service (git CLI)   Script runner (setup/run/archive)      │
@@ -446,7 +446,7 @@ Everything is message passing over `tokio::sync::mpsc`; no shared mutable state 
 | **Session** | 1 per session | PTY master, child handle, `Emulator`, row-version table, recorder, adapter instance | reads PTY on a task; never blocks on clients |
 | **Client hub** | 1 | connections, subscriptions, per-client frame pacing & acks | one writer task per connection |
 | **Status engine** | 1 | signal fusion per session (§9) | pure reducer; easy to unit-test |
-| **Notifier** | 1 | inbox, desktop/OSC notifications, mute rules | |
+| **Notifier** | 1 | desktop/OSC/push notifications, sinks, mute rules | |
 | **Store** | 1 OS thread | the `rusqlite::Connection` (WAL, `busy_timeout`) | async callers send closures + oneshot |
 | **Git service** | pool (≤4) | `git` subprocess invocations | serialized per project to avoid lock contention |
 | **Script runner** | per script | setup/run/archive processes (each in its own PTY session, kind `script`) | |
@@ -678,7 +678,6 @@ owner chose this over restart-and-resume, WIN0.5 d). `ptyro daemon upgrade [--bi
   | `TERM_PROGRAM` / `TERM_PROGRAM_VERSION` | `ptyro` / crate version |
   | `PTYRO` | `1` |
   | `PTYRO_SESSION_ID` | session ULID |
-  | `PTYRO_SCRATCHPAD` | path of the scratchpad file (§13.6), in every session |
   | `PTYRO_PROFILE` | the session's profile name (§10.10) |
   | `PTYRO_SOCKET` | daemon socket path (for `ptyro hook` and nested `ptyro` CLI use) |
   | `PTYRO_PROJECT`, `PTYRO_WORKTREE_PATH`, `PTYRO_WORKTREE_NAME`, `PTYRO_BRANCH`, `PTYRO_PORT` | when in a worktree (§10.6) |
@@ -821,7 +820,7 @@ XTVERSION (`DCS > | ptyro <ver> ST`), `CSI 16 t`, XTGETTCAP.
 | Sequence | Use |
 |---|---|
 | OSC 7501 status reports | agent status (§9.2) |
-| OSC 9 / OSC 777 `notify` / OSC 99 (kitty) | notifications → inbox (§9.5) |
+| OSC 9 / OSC 777 `notify` / OSC 99 (kitty) | notifications (§9.5) |
 | BEL | attention hint (configurable) |
 | OSC 0/2 title | pane title; Gemini's dynamic title encodes Ready/Action Required/Working (§8.6) |
 | OSC 7 cwd | session cwd without polling |
@@ -1167,6 +1166,16 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-17] Protocol 1.44** (a removal): the scratchpad and the inbox are gone (§13.6,
+§9.5). The requests `scratch_get`, `scratch_put`, `scratch_add`, `scratch_todo`, `scratch_mark`,
+`scratch_history`, `scratch_restore`, `scratch_pane`, `inbox` and `inbox_mark`, the replies
+`Scratch`, `ScratchPut`, `ScratchItems`, `ScratchLog` and `Inbox`, `DomainEvent::ScratchChanged`,
+`PadDoc`, `PadMark`, `SessionInfo.pad`, `SpawnSpec.pad` and `WorktreeSpec.pad_item` were removed;
+each removed request is in `RETIRED_REQUESTS`. `DomainEvent::InboxAdded{entry}` became
+`Alert{alert}` (`InboxEntry` without `id` and `read_ms`): nothing keeps it, it is how a linked
+machine's alerts reach the daemon that mirrors it (§16.4b). A session that wants you shows on its
+row (`SessionInfo.attention`) and in notifications. The browser's message limit stays 4.25 MiB.
+
 **[built 2026-11-17] Protocol 1.43** (a removal): pull requests, review, the diff inspector,
 landing and verified-done are gone (§10.8, §10.9, §15.6). The requests `worktree_diff`,
 `worktree_log`, `worktree_commit`, `worktree_integrate`, `worktree_finish`, `pr_get`, `pr_create`,
@@ -1304,7 +1313,7 @@ leaves it alone. An older daemon ignores the field and starts a shell.
 `Some`: the agent that worktree last started (agent, profile, argv), else its project's
 `default_agent`, else `[agents] default` (claude). `workspace` is no longer read. The daemon
 remembers the last agent per worktree id in `kv` (`last_agent`), from `Spawn` and `WorktreeNew`,
-never a shell, a command line, a tool, a quick terminal or the scratchpad's editor, and forgets a
+never a shell, a command line, a tool or a quick terminal, and forgets a
 removed worktree's. `again` therefore always names an agent. An older client asking by workspace
 gets the default agent.
 
@@ -1769,7 +1778,7 @@ Verified against Claude Code **2.1.304** (§20).
   - `SubagentStart/Stop` → child rows;
   - `Notification` → a status only for `permission_prompt` (blocked, *no detail*: the message is
     the generic "Claude needs your permission", which would overwrite the real tool) and
-    `idle_prompt`. Other notifications go to the inbox.
+    `idle_prompt`. Other notifications raise a `notification` attention (§9.5).
 - **Statusline relay:** `ptyro statusline-relay` forwards Claude's statusline JSON to the daemon
   (usage meters, §9.7) and runs the user's own `statusLine` command from the profile's
   `settings.json`, printing its output, so the user's statusline is unchanged. It runs that
@@ -2239,10 +2248,12 @@ its first prompt.
 
 ### 9.5 Notifications
 
-- Every attention-raising transition and every OSC 9/777/99 message from a child creates an
-  **inbox entry** (session, kind, title, message, time, read/unread).
+- Every attention-raising transition and every OSC 9/777/99 message from a child sets the
+  session's **attention** (§9.4), which its row shows until you look, and goes to the notifier.
+  Nothing keeps a history of them: the inbox (a list of what wanted you) was removed on
+  2026-11-17, because "needs you" lives on session rows and in notifications.
 - Delivery channels (per category, configurable, with per-project and per-session mute and quiet
-  hours): TUI inbox badge (always), bell, OSC 9 / OSC 777 to the controlling client's outer terminal
+  hours): bell, OSC 9 / OSC 777 to the controlling client's outer terminal
   (wrapped in tmux DCS passthrough when the client runs inside tmux), native desktop notification
   (`notify-rust`, optional feature), and later push to paired phones (§16).
 - Messages carry real context: `brisk-rook (myrepo) wants permission: Bash(npm install)` rather than
@@ -2258,17 +2269,17 @@ workspace, else `main`.
 
 - Per workspace, `notify = "all" | "badge" | "mute"`, plus optional `quiet_hours`:
   - `all`: the channels of §9.5;
-  - `badge`: an inbox entry and a status-bar counter only; no bell, OSC, desktop or push,
+  - `badge`: the row and a status-bar counter only; no bell, OSC, desktop or push,
     except kinds listed in `breakthrough` (default `["blocked"]`, since a blocked agent is wasting
     time);
-  - `mute`: inbox only, no breakthrough.
+  - `mute`: the row only, no breakthrough.
 - `attention.next` (`a`) uses `attention.scope`:
   - `"current-first"` (default): exhaust the current workspace, then continue into others, switching
     workspace with a toast (`→ personal`);
   - `"current"`: never leave the current workspace;
   - `"global"`: §9.4 ordering across everything.
 - The status bar shows the current workspace's counts in full and every other workspace as a
-  compact badge (`me ⚠1`). The inbox has one tab per workspace plus `All`.
+  compact badge (`me ⚠1`).
 
 ### 9.7 What M4 built **[built M4]**
 
@@ -2313,17 +2324,17 @@ conformance`):
   Switching away from the terminal lets a blocked agent notify.
 - `Idle` raises attention only after a *reliable* `Working` (confidence above low) that lasted
   `min_work`, so a heuristic blip never pings.
-- Attention clears on focus (which also marks that session's inbox entries read), on `Working`,
+- Attention clears on focus, on `Working`,
   and on `ptyro answer`. `Working` clears only what is about the agent's own state (blocked,
   errored, done, idle, exited); a notification (a reviewer's question) stays until you look [fixed 2026-11-01: typing a review comment into the agent used to wipe
   the question raised in the same poll].
 - A new attention less urgent than one still pending leaves the session's attention as it is, but
-  still goes to the inbox and the notifier [fixed 2026-11-01: it used to be dropped].
+  still goes to the notifier [fixed 2026-11-01: it used to be dropped].
 - Prompt delivery that gave up raises a `notification` attention.
 
 **Notifier** (`notifier.rs`):
-- Every attention goes to the inbox (in memory and in the store). The other channels are gated
-  by `notifications.on`, mutes (`ptyro mute S|project:P|workspace:W [--for 2h] [--off]`), the
+- Every attention is announced as an `Alert` event (for linked machines, §16.4b). The channels
+  are gated by `notifications.on`, mutes (`ptyro mute S|project:P|workspace:W [--for 2h] [--off]`), the
   home workspace's `notify` mode with `attention.breakthrough`, quiet hours (wrapping midnight)
   and per-session coalescing (`coalesce = "10s"`; `Blocked` always passes).
 - **Channels:**
@@ -2359,7 +2370,7 @@ It runs as the user outside the agent's sandbox, and runs the files the agent ju
 (§10.5, "What trust covers").
 
 **Workspace scope** (§9.6) is implemented: `notify`, `breakthrough`, the `attention.scope`
-modes, other-workspace badges and the per-workspace inbox tabs.
+modes and other-workspace badges.
 
 ---
 
@@ -2995,7 +3006,7 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
 ### 11.1 Layout **[decided]**
 
 ```text
-┌ ptyro ─ main ───────────────────────────────────────────── 3 working · 1 blocked · ✉ 2 ┐
+┌ ptyro ─ main ───────────────────────────────────────────────── 3 working · 1 blocked ──┐
 │ WORKSPACE main            │ ● brisk-rook · claude · ptyro/brisk-rook · +42 −7 · :3001   │
 │ ▾ myrepo           +2 ⚠1  │┌───────────────────────────────────────────────────────────┐│
 │   ▾ @root (main)          ││                                                           ││
@@ -3007,15 +3018,13 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
 │     ◉ codex  ⚠ permission ││                                                           ││
 │ ▸ dotfiles                │└───────────────────────────────────────────────────────────┘│
 │                           │                                                             │
-│ INBOX (2)                 │                                                             │
-│ ◉ quiet-jackdaw: Bash(...)│                                                             │
 ├───────────────────────────┴─────────────────────────────────────────────────────────────┤
 │ C-q ? help · n new · a next attention · p peek · d detach        TERMINAL   12:41      │
 └──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Sidebar** (collapsible, resizable): workspace → project → worktree → session tree with status
-  glyphs, diffstat, ports, attention badges; inbox below.
+  glyphs, diffstat, ports, attention badges.
 - **Main area**: one or more panes (each showing one session), with a header line: status, agent,
   branch, diffstat, ports, controller/size badge.
 - **Status bar**: global counts, mode indicator, key hints, clock. **[built SH.14]** The load
@@ -3150,16 +3159,14 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
 - **Row badges:** `⚑` attention, `+N` child agents, `⚠` for `dangerous` agents. The header shows
   the current activity (`Bash: cargo test`) and a progress bar when one was reported.
 - **Status bar:** the focused profile's usage (`5h 42% · 7d 12%`, or `limited until 14:05`),
-  compact `⚑N` badges for other workspaces, and `✉N` unread.
+  compact `⚑N` badges for other workspaces (an inbox count, `✉N`, went with the inbox on
+  2026-11-17).
 - **`a`** jumps to the next attention. Order: blocked > errored > done > idle > exited >
   notification, oldest first, within `attention.scope`.
 - **`p` (peek)** pops up the screen and pending question of the session that needs you most
   (else the focused one; in the sidebar, the selected one) without switching: with nothing typed,
   `y`/`a`/`n` answer a permission; typing writes a reply that `⏎` sends; `⏎` with
   nothing typed opens the session.
-- **`i` (inbox):** one tab per workspace plus All (`Tab` switches), newest first, unread marked.
-  `j`/`k` move; `⏎` opens the session and marks the entry
-  read; `p` peeks, `r` marks one read, `R` all.
 - **`e`** (in the sidebar) explains the selected session's status (the engine's ring); elsewhere
   it is the palette's `session.explain`.
 - **Palette:** `session.resume`, `session.hibernate`, `session.mute`, `notify.test`.
@@ -3322,8 +3329,8 @@ learning anything up front.
   the empty sidebar names it.
 - **Which-key** (UX1.14): when no key follows the prefix within `[ui] which_key_delay` (400 ms;
   0: never), a menu of the next keys appears above the status bar, in five groups (start, go,
-  panes, work, this: including settings, broadcast, home, last session, shell here, the
-  scratchpad, `G` clean up and `f` the sidebar filter), as bound now; keys typed before it work as always. The event loop wakes at
+  panes, work, this: including settings, broadcast, home, last session, shell here,
+  `G` clean up and `f` the sidebar filter), as bound now; keys typed before it work as always. The event loop wakes at
   the deadline, not on its 250 ms tick.
 - **Everything the CLI does** (UX1.21): `docs/parity.md`'s TUI column has no gaps, and
   `make tui-parity` (part of `make test`) fails on any. The frequent and visual ones are native:
@@ -3430,7 +3437,7 @@ learning anything up front.
     and what runs in it (the command, else the foreground program, else the last command with
     `✓`/`✗`). It has no number, `j`/`k` skip it, and it never fills an empty pane. Its row menu
     shows or hides it, adopts, renames, explains and stops it.
-  - **Quick means brief:** the drawer (and the scratchpad's popup) go away when another session
+  - **Quick means brief:** the drawer goes away when another session
     or workspace shows: a pane that now shows a session it didn't (`App::tuck_away`, after every
     command and mouse event, compares what every pane shows); the shell and the editor keep
     running. **[changed 2026-10-30]** Moving focus between panes that were already showing
@@ -3504,7 +3511,7 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   - A split's pane whose session is removed closes; it never takes another session (UX1.23 still
     applies to a single pane). A restored view closes a split's empty panes and fills only a
     single one. Sessions that go are dropped from the kept layout, which goes when it is empty.
-  - Unchanged: the drawer (`C-t`) and the scratchpad's `mode = "pane"`, both asked for by name.
+  - Unchanged: the drawer (`C-t`), asked for by name.
 - **Quick new** (UX3.2, **[changed UX3.7]**; `session.again`: `C-n` after the prefix and in the
   sidebar, the row menus, which-key's `+ claude`): `SpawnSpec { again: true }` in the context's
   worktree (else here), full sized. It always starts an agent: the worktree's last one (with its
@@ -3531,7 +3538,7 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   `sidebar.show_all`, `sidebar.show_running` and `sidebar.show_active` set one (the palette); the
   click and `f` do the same. `Show` (`ptyro-core`, `session.rs`) is the one definition for the TUI,
   the CLI and the web:
-  - **running**: a real session (not a quick terminal, not the scratchpad's editor) whose process
+  - **running**: a real session (not a quick terminal) whose process
     is alive. Exited, failed and hibernated ones are out.
   - **active**: running and busy now: an agent that is `working`, `blocked` (it waits for you: you
     want to see it) or `starting`, or a shell with a command running (OSC 133). An agent between
@@ -3626,7 +3633,6 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `1`…`9` | focus session by sidebar index |
 | `a` | jump to next session needing attention |
 | `p` | **peek**: popup with the last screen + pending question of the session that needs you most (in the sidebar: the selected one); reply inline without switching |
-| `i` | inbox |
 | `/` | fuzzy find a session |
 | `Tab` | toggle focus sidebar ↔ pane |
 | prefix again (`C-q C-q`) | the same as `Tab` |
@@ -3661,7 +3667,7 @@ mouse), drag to select (copy mode), drag split borders.
 
 ### 11.5 Overlays and views
 
-- **Peek** (above), **Inbox**, **Command palette**, **Help**.
+- **Peek** (above), **Command palette**, **Help**.
 - **New session/worktree wizard** (fast path: `n`, `Enter`, `Enter` = the default agent in a new worktree of
   the current project with a random name).
 - **Events** (`session.events`): a session's persisted events in a split (`ptyro events
@@ -3860,7 +3866,6 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
   - `status [S] [--explain] [--json]`;
   - `answer S allow|always|deny`;
   - `resume S…` and `hibernate S…`;
-  - `inbox [--workspace W] [-u] [--read] [--json]`;
   - `mute TARGET [--for D] [--off]`;
   - `usage [--json]`;
   - `notify test`;
@@ -4131,7 +4136,8 @@ change (debounced) and emits `ConfigReloaded`.
   true), `usage`, `after_turn`.
 - `[attention]`: `scope`, `breakthrough`, `stale_after`, `min_work`, `resume_on_focus`.
 - `[notifications]`:
-  - `channels` (default `inbox, osc, bell`);
+  - `channels` (default `osc, bell`; `inbox`, a channel until 2026-11-17, is accepted and
+    ignored);
   - `on` (default `blocked, errored, done, idle`; `gate` and `run`, kinds runs had until
     2026-11-17, are accepted and ignored);
   - `quiet_hours = "22:00-07:00"`, `coalesce`, `desktop_command`;
@@ -4203,7 +4209,7 @@ daily_cap = 200                   # per profile, per UTC day
 command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]
 
 [notifications]
-channels = ["inbox", "osc", "bell"]      # + "desktop", later "push"
+channels = ["osc", "bell"]               # + "desktop", later "push"
 on = ["blocked", "errored", "done", "idle"]
 quiet_hours = "22:00-07:00"
 
@@ -4412,72 +4418,16 @@ unset. Change sets had no settings; orchestration's (2026-11-17) are `orchestrat
 `orchestration.radar` and `orchestration.message_ttl` (`orchestration.checkpoints` stays). Pull
 requests, review and verified-done (2026-11-17) retire whole tables, so an empty header left
 behind loads too: `github`, `review`, and a repository's `verify`; and `worktrees.archive_on_merge`,
-which only acted when a pull request merged. The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
+which only acted when a pull request merged. The scratchpad (2026-11-17) retires `scratchpad`,
+the whole table; its editor setting is gone too (`[editors]` stays, for worktrees), and a
+`notifications.channels` that still names `inbox` loads and ignores it. The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
 
-### 13.6 The scratchpad **[built NOTE1; NOTE1.7 tried and dropped]**
+### 13.6 The scratchpad **[built NOTE1, removed 2026-11-17]**
 
-One persistent notes file for ideas and bugs: plain Markdown, the same in every session and
-workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a file you can
-`cat`, `grep`, sync and back up.
-
-- **Where:** `<data>/scratchpad.md`, or `[scratchpad] path` (`~` expands; a symlink is written
-  through, so the real file in a synced folder is replaced in place). The daemon makes it, with a
-  short header, when it starts. `PTYRO_SCRATCHPAD` is set in the environment of every session
-  (`launch.rs`, after the profile and worktree variables, and listed in `ptyro_pty`'s strip list so
-  an enclosing ptyro's value never leaks into a nested one).
-- **Items.** A line `- [ ]` / `- [x]` (or `* [ ]`) is an item. `ptyro scratchpad add` writes
-  `- [ ] 2026-10-24 14:02 · `ptyro/bugs` · by `claude-rook` · the words`: the local time, the
-  worktree (else the directory) it was run in, and for an agent the session's name; further lines
-  are indented two spaces and belong to the item. Tags go at the end: `[wt:project/name]` (the
-  worktree started from it) and `(#42)` (the pull request that finished it). Under `## Heading`
-  with `--section`. `--no-stamp` leaves the stamp off, `--bullet` writes a plain bullet (it was `--note`, which takes a text everywhere else). An item is
-  selected by its line number or by words in exactly one open item.
-- **Writes.** `ptyro_core::scratchpad::Pad` is the only code that changes the file. An add is a
-  single append (`O_APPEND`), so an editor with the file open sees only added bytes; anything else
-  is a temp file and a rename. Every change first saves what was there to `<data>/scratchpad.history/
-  <ms>-<rev>.md` (`rev` is the first 12 hex digits of the text's SHA-256). Copies thin out: all of
-  them for an hour, one per ten minutes for a day, one per hour until `[scratchpad] keep` days
-  (30); the newest 20 and a cap of 400 always hold. A change seen from outside (an editor saving as
-  you type) is saved at most every 15 s.
-- **Merging.** `ScratchPut{base, text}` writes `text` that was edited from revision `base`. If the
-  file still is `base` it is written as is; otherwise the daemon three-way merges by lines
-  (`similar` Myers diff against the text of `base`, kept in a ring of the last 64 revisions, else
-  from the history): edits to different lines combine; two appends at the same place both stay (the
-  file's first); the same lines changed two ways are both kept between `<<<<<<< on disk`,
-  `=======` and `>>>>>>> your edit`. With no copy of `base` the whole of both is kept that way. The
-  reply says whether the text came back different (`merged`) and how many regions clashed.
-- **Watching.** The daemon looks at the file's mtime and size every 700 ms; a revision it hasn't
-  announced becomes `ScratchChanged{rev, open, by}` to every client watching events (`by` is
-  `file` for a change made outside the daemon). Polling, not inotify: it is the same on Linux and
-  macOS, works on network and synced folders, and a pad is a few KB.
-- **The pane.** `ScratchPane{create}` runs the editor as one session (`SessionInfo.pad`): `[scratchpad]
-  editor`, else the `[editors]` default when it runs inside a terminal, else `$VISUAL`/`$EDITOR`,
-  else the first of nvim, vim, nano, vi on `PATH`. vim and nvim start with `autoread` and a
-  `checktime` autocommand so an append from elsewhere shows without a prompt. The session is quiet
-  like a quick terminal (`Session::is_quick`) and forgotten when the editor exits; clients keep it
-  out of the sidebar, numbering and counts. `[scratchpad] mode` (`drawer`, `popup`, `pane`) is how
-  the TUI shows it.
-- **Items become work.** `ptyro scratchpad start` (TUI: ⏎ in the items picker) starts a task like
-  `ptyro "…"` with the item's text (and its indented lines) as the prompt, in a new worktree; the
-  new worktree's spec carries `pad_item` (the line), and the daemon tags the item `[wt:…]` when it
-  is created. When that worktree's PR is seen merged (the GitHub poller) or the worktree is
-  removed, the daemon ticks the item with the PR number (`[scratchpad] tick_on_finish`, default on).
-- **Agents.** Agents are not told about the pad by default; one that finds the variable can read
-  it and should add with `ptyro scratchpad add`.
-- **Scopes.** Reading (`ScratchGet`, `ScratchTodo`, `ScratchHistory`) needs `read`; writing
-  (`ScratchPut`, `ScratchAdd`, `ScratchMark`, `ScratchRestore`) needs `control`; starting the
-  editor session is `full`.
-
----
-- **One pad (NOTE1.7, dropped 2026-10-26).** v0.0.8 and v0.0.9 also had a pad per project
-  (`<repo>/.ptyro/scratchpad.md`, `$PTYRO_PROJECT_SCRATCHPAD`, a `pad` selector on the requests, a
-  switch key). The owner found several pads too confusing, and v0.0.10 removed it: there is exactly
-  one pad, the global one. Nothing in ptyro reads or writes a `.ptyro/scratchpad.*` file any more,
-  and the files that exist are left alone (and the `/.ptyro/scratchpad.*` lines already in a
-  repository's `.git/info/exclude` stay: they are harmless). The title of a new pad is `# Scratchpad`
-  again; a file that 0.0.8 titled `# Scratchpad — everywhere` still reads as one pad (that title is
-  not a section for the items). **Wire:** see §6.4, protocol 1.18.
-
+Removed on 2026-11-17 (the pare-down): one notes file for everything was wide, not deep, and
+your own editor and notes app already do it. Your `scratchpad.md` and its saved copies stay where
+they were, untouched; `ptyro doctor` says so, and `[scratchpad]` in a config is a retired key
+(§13.8).
 
 ## 14. Storage: files, directories, database
 
@@ -4487,7 +4437,7 @@ workspace, found by `$PTYRO_SCRATCHPAD`. ptyro never owns the only copy: it is a
 | Kind | Path | Contents |
 |---|---|---|
 | config | `~/.config/ptyro/` | `config.toml`, `themes/` |
-| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `scratchpad.md` + `scratchpad.history/` (§13.6), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
+| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `chat.db` (§22.4), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
 
@@ -4562,14 +4512,12 @@ CREATE TABLE session_event (id INTEGER PRIMARY KEY, session_id TEXT REFERENCES s
                             at INTEGER NOT NULL, kind TEXT NOT NULL,   -- status|process|hook|attention
                             status TEXT, confidence TEXT, source TEXT, detail JSON);
 CREATE INDEX session_event_by_session ON session_event(session_id, at);
-CREATE TABLE inbox (id INTEGER PRIMARY KEY, session_id TEXT, at INTEGER, kind TEXT, title TEXT,
-                    body TEXT, read_at INTEGER);
 CREATE TABLE trust (project_id TEXT REFERENCES project ON DELETE CASCADE, scope TEXT NOT NULL,
                     fingerprint TEXT NOT NULL, approved_at INTEGER, PRIMARY KEY (project_id, scope));
 CREATE TABLE kv (key TEXT PRIMARY KEY, value JSON);
 ```
 
-Retention: `session_event` pruned after 90 days; `inbox` read entries after 30 days.
+Retention: `session_event` pruned after 90 days.
 
 **[built M2] Store v1** (`ptyro-store`) ships the subset M2 needs, as migration 1 of `ptyro.db`:
 - `session (id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at)`;
@@ -4631,13 +4579,16 @@ copied aside before migrating, as always.
 `kv` rows `pr_watches`, `review_comments`, `reviewed` and `worktrees:integrated`. Pair mode's
 `pairs` stays. Branches, commits and worktrees are left as they are.
 
+**[built 2026-11-17] Store v9** (migration 9, the inbox removed): drops `inbox`. The scratchpad
+kept nothing in the database; its file is left as it is.
+
 ---
 
 ### 14.5 Backup and uninstall **[built H2.3]**
 
 `ptyro backup` writes a private (0600), never-overwriting `.tar.gz` of ptyro's own state: the
 config, a consistent copy of the database (`Store::backup_to`, SQLite `VACUUM INTO`, safe with the
-daemon running), the scratchpad and its saved copies, a `manifest.json` and a `README.txt` with
+daemon running), your chats (`chat.db`; `--no-chats` leaves them out), a `manifest.json` and a `README.txt` with
 the manual restore. It leaves out the agents' login directories, the recordings (`--with-recordings`)
 and the web app's CA private key (`--with-ca`). `ptyro uninstall` plans first (`--dry-run` stops
 there; read-only, never starts a daemon): the running sessions, every directory it keeps (from
@@ -4922,7 +4873,7 @@ is "the web is up when the daemon is".
   The first message must be a Hello. `serve` rewrites it to `kind: web`, `via: ws:<peer>`,
   `pid: 0`, and drops a requested zstd. A `Reject` counts as a failed login: 10 from one address in 10 min answer 429.
   Pings every 25 s. **[changed H2.7]** A browser's message is at most `MAX_CLIENT_MESSAGE`
-  (4.25 MiB: a whole scratchpad and room to spare), set at the handshake because the library
+  (4.25 MiB: a large paste or chat message and room to spare), set at the handshake because the library
   can't change it after login. The web app checks the same limit before it sends and says so in
   a toast. Messages to the browser stay up to `MAX_FRAME`.
 - **Host check (DNS rebinding):** a request whose `Host` isn't an IP address, `localhost`
@@ -5002,14 +4953,14 @@ is "the web is up when the daemon is".
 ### 16.4 Web client / PWA
 
 A small TypeScript client served by `ptyro serve` (assets embedded with `rust-embed`): session list
-with status, attention inbox, a terminal you type into (below) rendering `ScreenFrame`s to a canvas (no
+with status and attention, a terminal you type into (below) rendering `ScreenFrame`s to a canvas (no
 xterm.js needed, because the daemon already emulates), quick-reply box (`SendText`), approve/deny
 buttons for permission prompts, push notifications via Web Push. Installable on phones as a PWA.
 
 **[built M9]** The app is TypeScript (`web/src`) compiled by `tsc` 5.9.3 into `web/dist`, which is
 committed, so `cargo install` needs no Node; `make web-check` (CI) keeps it in sync. It is
 embedded with `include_bytes!`, with no dependencies or third-party requests.
-- **Screens:** session list (blocked first, Allow/Deny on the card), inbox, session view. The
+- **Screens:** session list (blocked first, Allow/Deny on the card), session view. The
   session view is a canvas drawn from `ScreenFrame`s by `web/src/screen.ts`, a port of
   `ScreenCache`; `tests/m9.rs` checks its text equals `ptyro read` against live frames. Fit or
   1:1, at the session's own size.
@@ -5293,10 +5244,10 @@ holding several machines) was not chosen.
 - **Same version** is checked against `Welcome.daemon_version`; a mismatch leaves the link down
   (retried every 5 minutes, or on `retry`) with `error` and `fix` naming the older side.
 - **The mirror** holds what the link heard, qualified on arrival: a JSON walk over replies and
-  events gives sessions, workspaces, projects, worktrees, profiles, inbox entries and usage the
+  events gives sessions, workspaces, projects, worktrees, profiles, alerts and usage the
   `machine` field and their names the prefix (sessions: `name`, `workspace`, `profile`; workspaces:
   `name`, `profile`; projects: `slug`, `pin`; worktrees: `project_slug`, `profile`; profiles:
-  `name`; inbox: `session_name`, `workspace`, `profile`; usage: `profile`). Ids stay as they are
+  `name`; alerts: `session_name`, `workspace`, `profile`; usage: `profile`). Ids stay as they are
   (unique everywhere). A client id there (a controller) becomes ours when it is our client's
   upstream, else one with the top bit set that matches no client here. The mirror is refreshed
   whole on (re)connect and on `EventsLost`; what went is announced as removed. Its events go out on
@@ -5307,15 +5258,15 @@ holding several machines) was not chosen.
   `name`, `workspace`, `project`, `worktree`, `session`, `target`, and those in its `spec`) carry
   `laptop2:` or the id of something of laptop2's is checked against this daemon's scopes, sent over
   the link with the prefix taken off its addresses only (never off text), and its reply qualified.
-  A list (`List`, `WorkspaceList`, `ProjectList`, `WorktreeList` of all, `ProfileList`, `Usage`,
-  `Inbox`) gains every mirror's shown part. A request this machine answers `not found` is retried
+  A list (`List`, `WorkspaceList`, `ProjectList`, `WorktreeList` of all, `ProfileList`, `Usage`)
+  gains every mirror's shown part. A request this machine answers `not found` is retried
   on the one mirror that has that bare name; two that have it: refused, naming both.
   A request naming a workspace of one machine and a worktree or project (by id) of another is
   refused (`…is on this machine, but the workspace is on laptop2: use a workspace here`), never
   sent to the wrong one. The TUI avoids it: a spawn, a profile check or a new worktree goes to
   the workspace that lists the worktree's project, whichever machine that is, not to the
   selected row's. Requests
-  about this machine itself are never routed (devices, push, the scratchpad, views, hooks and
+  about this machine itself are never routed (devices, push, views, hooks and
   status lines, profiles'
   own operations, doctor, the web server, `Agents`, `Editors`, machines).
 - **Screens and keys** (`conn.rs`): a client's `Subscribe`, `Unsubscribe`, `Ack`, `Input`,
@@ -5323,15 +5274,15 @@ holding several machines) was not chosen.
   to the machine (made on first use), so frames, acks, control and sizes work as they do here; it
   passes back only `Screen`, `Chat` and its own `Clipboard`. A device below `control` watches
   without typing or sizing, as here. Offline, these are dropped.
-- **Alerts:** an inbox entry from a mirror is delivered by this daemon's channels (`deliver`:
+- **Alerts:** a mirror's `Alert` event is delivered by this daemon's channels (`deliver`:
   terminal, desktop, sinks, web push) under this machine's `notifications.on` and quiet hours; push
   tags are `ptyro-<session id>` on every machine, so a phone paired with both shows one.
 - **The TUI** stacks every workspace (§11.2j); the web app labels workspaces and projects with
   their machine (`laptop2 / work`), gives other machines' sessions a chip in the machine's colour,
   asks which machine in the new-workspace form, and has More → Machines.
 - **Deviations from the decision:** an offline machine's *sessions* stay listed as they were,
-  but its screens are only what a client already had (none is kept by the daemon); marking a
-  mirrored inbox entry read isn't routed (it is read-only here); the wizard offers this machine's
+  but its screens are only what a client already had (none is kept by the daemon); the wizard
+  offers this machine's
   agents and editors in a remote workspace too.
 
 ### 16.5 E2E relay (much later)
@@ -5496,7 +5447,7 @@ are built on tags later. CI only ever calls make targets.
   - `hostjson`: arbitrary JSON as `Request`, `Reply`, `ClientMsg` and `ServerMsg` and the host
     API's parsing helpers;
   - `handoff`: arbitrary bytes as a live-upgrade image and as one session's compressed emulator;
-  - `parsers`: every config and project parser, `names`, and the scratchpad's merge, stamp and tick.
+  - `parsers`: every config and project parser, and `names`.
 
   They're shared by two front ends. `ptyro-fuzz`, a stable-Rust mutation runner with seeds,
   replay and saved crashes, runs 20 s per target in CI (`make fuzz-smoke`, about four minutes). `fuzz/` is a
@@ -6954,7 +6905,7 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
   over the client's own upstream and `ChatLive` comes back through it; an offline machine answers
   it with a `ChatLive` notice ("laptop2 is offline since 14:02; its chats open when it is back"),
   and every request with the link's offline message. Hiding a workspace hides its chats; removing a
-  machine removes them. Alerts already arrive as relayed inbox entries. Clients grey an offline
+  machine removes them. Alerts already arrive as relayed `Alert` events. Clients grey an offline
   machine's chats (`chat ls` says "(offline)"; `--machine M` filters).
 - **Branches and forks (CHAT2, 2026-10-29):** `put_node` moves `leaf` only when the new node
   extends the shown branch, so a retry or edit sets it explicitly. **Retry** (`ChatRetry{chat,
@@ -7290,8 +7241,8 @@ CREATE TABLE conv (                   -- an agent conversation that served a cha
   does for sessions. The agent of a chat can be changed at any time (§22.7).
 - **Permissions.** Tools the chat's preset allows are approved at launch where the agent can
   say so (below), otherwise by ptyro's answer `allow_once` to exactly those tools; a request for
-  any other tool shows as a normal permission card in the chat, the row says `⚠`, and the inbox gets
-  the entry. An answer never widens itself (§7.1). Answers from `read`-scope devices are refused
+  any other tool shows as a normal permission card in the chat, the row says `⚠`, and the notifier
+  hears of it. An answer never widens itself (§7.1). Answers from `read`-scope devices are refused
   as for sessions.
 - **What the presets mean per agent** (CHAT0, 2026-10-29: every cell marked **[V]** was tried through
   the real agent, §20.8; **[S]** was read from the agent's own files or schema and **not** run, because
@@ -7574,7 +7525,7 @@ The owner's rule: chats show in the workspaces of connected machines. They follo
   `read` (a lost `read` token is a leak of chats, exactly as it is of screens); sending, creating,
   forking, branching, retitling, pinning, archiving and answering a card need `control`; deleting
   needs `control`; the `[chat]` settings need `full`. Links between machines are `full`.
-- **Alerts.** A chat is not an inbox generator by default: only a **permission request** or an
+- **Alerts.** A chat doesn't notify for everything by default: only a **permission request** or an
   **error** raise attention (`[chat] notify = "blocked"`; `"all"` adds a finished reply while no
   client shows the chat; `"off"`). A mirror's alert is delivered by the local daemon's channels
   with the same push `tag` as sessions, so a phone paired with both hears one. A reply that arrives
@@ -7960,7 +7911,7 @@ its CHATS. A shell there is an ordinary session (any command, not only a shell) 
   with `loose = true` and a `slot`. Everything a session has works on it unchanged: `send`,
   `read`, `wait`, rename and retitle, stop and kill, restart, copy mode, the recorder, splits
   (`v`/`s`: a copy of it, a shell in its directory, as a pane of its window, §23.17), broadcast (`b` to the rows
-  marked with `Space`: tmux's `synchronize-panes`), peek, the inbox, the filter, the finder.
+  marked with `Space`: tmux's `synchronize-panes`), peek, the filter, the finder.
 - **It belongs to its workspace, not to a worktree.** It has no `worktree` and no `project`, gets
   no worktree environment and no ports (§10.6, §10.7), and runs no lifecycle scripts. It runs under
   **the workspace's profile** (§10.10), so `git` and `gh` in it act as the workspace's identity.
@@ -8163,7 +8114,7 @@ Two additions, built on the OSC 133 marks shell integration already supplies:
 - **Long commands** (`[shell] notify_after`, default `30s`): a command in a loose shell that ran at
   least this long and ends while the shell isn't shown on any client raises attention:
   `done ✓ make test (4m12s)`, or `error ✗2 make test`. It goes through the notifier like any
-  attention (§9.5: mutes, quiet hours, the inbox). `off` turns it off. This is what tmux users get
+  attention (§9.5: mutes, quiet hours). `off` turns it off. This is what tmux users get
   from `monitor-activity` and `monitor-silence` (both off by default, §20.14), told by the exit
   code instead of guessed from output.
 - **Watch** (per shell; `w` in the shells menu, the row menu, `shells watch`, the web's ⋯): one of

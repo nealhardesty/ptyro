@@ -1,5 +1,5 @@
 //! The agent status model (SPEC §9): what an agent is doing, how sure ptyro is, where it heard
-//! it, and the attention and inbox entries it raises. Plain data; the reducer lives in the daemon.
+//! it, and the attention and alerts it raises. Plain data; the reducer lives in the daemon.
 
 use serde::{Deserialize, Serialize};
 
@@ -161,7 +161,7 @@ pub enum Signal {
     Conversation { id: String },
     /// The model the agent runs, as it names it (`claude-opus-5-5`, `gpt-5.6-sol`).
     Model { id: String },
-    /// The first prompt the user typed (branch names, inbox context).
+    /// The first prompt the user typed (branch names, notification context).
     Prompt { text: String },
     /// A turn ended normally (Stop, `agent-turn-complete`, 7501 `done`).
     TurnEnd,
@@ -251,10 +251,10 @@ pub struct Attention {
     pub text: String,
 }
 
-/// An inbox entry (SPEC §9.5).
+/// An alert: a session that wants you, as the notifier delivers it (SPEC §9.5). Nothing keeps
+/// it; a linked machine's reach you through this daemon's channels (§16.4b).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InboxEntry {
-    pub id: i64,
+pub struct Alert {
     /// The machine it lives on, when that is another one this daemon mirrors (MM1.B, SPEC
     /// §16.4b); `None`: here. Its names then carry the machine (`laptop2:work`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,8 +266,6 @@ pub struct InboxEntry {
     /// "\[work\] brisk-rook (myrepo)".
     pub title: String,
     pub body: String,
-    #[serde(default)]
-    pub read_ms: Option<u64>,
     #[serde(default)]
     pub workspace: Option<String>,
     #[serde(default)]

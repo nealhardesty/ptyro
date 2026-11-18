@@ -145,6 +145,10 @@ pub struct Plan {
     /// The size of `chat.db`, your chats' text, which goes with the data directory (SPEC §22.4).
     #[serde(default)]
     pub chats: Option<u64>,
+    /// The size of `scratchpad.md` and its saved copies: notes from when ptyro had a scratchpad
+    /// (removed 2026-11-17), the person's own, which go with the data directory.
+    #[serde(default)]
+    pub notes: Option<u64>,
     pub worktrees: Vec<Worktree>,
     pub uncommitted_total: usize,
     pub service: Option<PathBuf>,
@@ -529,6 +533,9 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     let chats = std::fs::metadata(paths.data.join("chat.db")).ok().map(|m| {
         m.len() + std::fs::metadata(paths.data.join("chat.db-wal")).map_or(0, |w| w.len())
     });
+    let notes = std::fs::metadata(paths.data.join("scratchpad.md"))
+        .ok()
+        .map(|m| m.len() + dir_size(&paths.data.join("scratchpad.history")));
 
     // Worktrees and snapshot refs: asked of git, off the async threads.
     let wts_in: Vec<_> = if opts.keep_data { Vec::new() } else { k.worktrees.clone() };
@@ -624,6 +631,7 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         dirs,
         logins,
         chats,
+        notes,
         worktrees,
         uncommitted_total,
         service,
@@ -673,6 +681,15 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         plan.chats.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
     {
         let _ = writeln!(s, "  chats         every chat you kept, chat.db ({})", human(bytes));
+    }
+    if let Some(bytes) =
+        plan.notes.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
+    {
+        let _ = writeln!(
+            s,
+            "  notes         your scratchpad notes, scratchpad.md ({}): copy them out first, or --keep-data",
+            human(bytes)
+        );
     }
     if plan.logins && !plan.dirs.iter().any(|d| d.name == "data" && d.keep) {
         s.push_str(

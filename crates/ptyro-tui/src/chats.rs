@@ -2679,11 +2679,8 @@ fn draw_view(app: &App, f: &mut Frame<'_>, area: Rect, v: &ChatViewState) {
     f.render_widget(Paragraph::new(Line::from(head)), Rect { height: 1, ..area });
     let body = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
     // The cursor only where the keys go: the chat has them, nothing is drawn over it.
-    let focused = app.overlay.is_none()
-        && !app.prefix
-        && app.focus == Focus::Pane
-        && app.pad_popup.is_none()
-        && !app.sidebar_zoom;
+    let focused =
+        app.overlay.is_none() && !app.prefix && app.focus == Focus::Pane && !app.sidebar_zoom;
     if v.id.is_none() && v.view.items.is_empty() && v.draft.is_empty() {
         // What this chat will be: its tools as its preset says, and whether it is kept.
         let mut can = Vec::new();

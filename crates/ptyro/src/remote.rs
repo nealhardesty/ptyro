@@ -467,8 +467,7 @@ pub async fn pair(
         match scope {
             _ if warning.is_some() =>
                 "do everything the web app does, and anything you can on this machine (see the warning above)",
-            Scope::Read =>
-                "watch: sessions, screens and the inbox. `--scope approve` also answers prompts",
+            Scope::Read => "watch: sessions and screens. `--scope approve` also answers prompts",
             Scope::Approve =>
                 "watch and answer prompts. `--scope control` also types into sessions, \
                 and starts configured agents; `--scope full` is the whole web app: tasks and \

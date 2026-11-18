@@ -191,8 +191,8 @@ pub fn tidy(raw: &str) -> Option<String> {
     (out != raw && problem(&out).is_none()).then_some(out)
 }
 
-/// A name made from text that isn't a name (a title, a directory, what a machine calls itself,
-/// the scratchpad's editor), always valid: itself when it already is one (`Laptop 2` → `laptop-2`,
+/// A name made from text that isn't a name (a title, a directory, what a machine calls itself),
+/// always valid: itself when it already is one (`Laptop 2` → `laptop-2`,
 /// `laptop2` → `laptop2`), else [`fold`]ed, or `None` when nothing valid is left. Tidying it
 /// silently is fine, since it isn't anyone's input.
 pub fn derive(raw: &str) -> Option<String> {

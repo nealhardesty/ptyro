@@ -967,10 +967,9 @@ async fn forward_events(
             | DomainEvent::WorktreeUpdated { .. }
             | DomainEvent::WorktreeRemoved { .. }
             | DomainEvent::WorktreeProgress { .. }
-            | DomainEvent::InboxAdded { .. }
+            | DomainEvent::Alert { .. }
             | DomainEvent::UsageUpdated { .. }
             | DomainEvent::HostLoad { .. }
-            | DomainEvent::ScratchChanged { .. }
             | DomainEvent::MachineUpdated { .. }
             | DomainEvent::MachineRemoved { .. }
             | DomainEvent::ChatUpdated { .. }
