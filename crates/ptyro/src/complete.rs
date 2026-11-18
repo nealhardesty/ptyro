@@ -112,7 +112,7 @@ fn config() -> Config {
     Paths::from_env().ok().and_then(|p| Config::load(&Config::path(&p)).ok()).unwrap_or_default()
 }
 
-/// Settings: the fixed keys of both files, and the members of the user's agents, themes…
+/// Settings: the fixed keys of both files, and the members of the user's agents, editors…
 pub fn settings() -> Vec<CompletionCandidate> {
     use ptyro_core::settings::{self, Layer, Scope};
     let layer = Paths::from_env().ok().map(|p| Layer::User(Config::path(&p)));

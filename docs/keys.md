@@ -50,7 +50,7 @@ action by name.
 | `j` / `k` (or `Down` / `Up`) | show the next / previous session of the workspace here, in sidebar order, across projects (quick terminals are skipped) |
 | `1` … `9` | show the session numbered N in the sidebar here |
 | `/` | find a session (fuzzy) |
-| `` ` `` | back and forth: from a chat to the session under it and back to the chat (as you left it, draft and all); else the split layout a full-sized panel replaced (whole, as it was), else the previously shown session |
+| `` ` `` | back and forth: from a chat to the session under it and back to the chat (as you left it, draft and all); else the session this pane showed before |
 | `v` / `s` | split: a clone of this pane's session beside / below it (the same agent and profile in the same worktree, a fresh conversation; a shell gets a shell in its directory). Only a split puts anything in a split |
 | `h` / `l` | previous / next pane |
 | `Shift`+arrows | the pane in that direction |
@@ -108,10 +108,9 @@ In a pane whose session has exited, `⏎` runs it again; in a dormant one, `⏎`
 **Full-sized panels, splits only on request.** Only `v` / `s` put something in a split, and what
 they put there is a clone of the session they split. Everything else opens full sized: a new
 session (`n`, `!`, the wizard), the quick terminal's panel, a tool (an editor, a command's
-output, `config edit`), and a session you pick that isn't on screen. A split layout it replaces is
-kept whole: `` Ctrl-Q ` `` brings it back as it was, and so does picking one of its sessions in the
-sidebar. An editor you opened from ptyro gives its screen back on its own when you quit it. A
-session you pick that is already on screen is focused where it is.
+output, `config edit`), and a session you pick that isn't on screen; `` Ctrl-Q ` `` goes back to
+the session that had focus. An editor you opened from ptyro gives its screen back on its own when
+you quit it. A session you pick that is already on screen is focused where it is.
 
 ## In the sidebar
 
@@ -250,7 +249,7 @@ key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `notify.test`,
-`theme.next`, `config.edit`.
+`config.edit`.
 
 ## Other overlays
 

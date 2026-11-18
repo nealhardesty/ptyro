@@ -449,7 +449,9 @@ enum Cmd {
         #[command(flatten)]
         new: chat::NewArgs,
     },
-    /// Serve the web app and the protocol over WebSocket for paired devices (phones)
+    /// Internal: the web app's server itself, which `ptyro web on` has the daemon run (and a
+    /// machine's link reaches). Run by hand, it serves until Ctrl-C
+    #[command(hide = true)]
     Serve {
         /// Who can reach it: localhost (this computer only), tailscale (also your tailnet) or
         /// open (every network interface). Default `[remote] access`. Always HTTPS
@@ -477,9 +479,10 @@ enum Cmd {
     Web {
         #[arg(default_value = "status", value_parser = ["on", "off", "status"])]
         action: String,
-        /// Who can reach it when turning it on: localhost (this computer only), tailscale (also
-        /// your tailnet) or open (every network interface). Default: what the config says, else
-        /// tailscale if it is up, else open. (`--via` is the old name; here = localhost, lan = open)
+        /// Who can reach it when turning it on: tailscale (this computer and your tailnet),
+        /// localhost (this computer only) or open (every network interface). Default: what the
+        /// config says, else tailscale if it is up, else localhost. (`--via` is the old name;
+        /// here = localhost, lan = open)
         #[arg(long, visible_alias = "via", value_parser = parse_access)]
         access: Option<ptyro_core::config::Access>,
         /// With `on`: then show the pairing QR code for a phone
@@ -928,9 +931,9 @@ enum ConfigCmd {
         #[arg(long, requires = "project")]
         shared: bool,
     },
-    /// Add an agent, theme, editor, key binding, notification sink, run script or prompt
+    /// Add an agent, editor, key binding, notification sink, run script or prompt
     Add {
-        /// agents, themes, editors, keys, notifications.sinks (project: scripts.run, prompts)
+        /// agents, editors, keys, notifications.sinks (project: scripts.run, prompts)
         #[arg(add = ArgValueCandidates::new(complete::collections))]
         collection: String,
         /// Its name (a key binding's key; a sink has none)
@@ -1079,9 +1082,8 @@ enum DaemonCmd {
         /// Internal: started by a client; detach from its terminal
         #[arg(long, hide = true)]
         spawned: bool,
-        /// Also turn on the web app's server (`[remote] serve`), which the daemon runs and
-        /// restarts: the same as `ptyro web on`
-        #[arg(long)]
+        /// Removed on 2026-11-17: `ptyro web on` (it says so)
+        #[arg(long, hide = true)]
         serve: bool,
     },
     /// Stop the daemon
@@ -1174,9 +1176,15 @@ fn main() {
         ptyro_agents::own::sweep(&ptyro_agents::own::binary());
     }
     let code = match cli.cmd {
-        Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, serve } }) => {
+        Some(Cmd::Daemon { cmd: DaemonCmd::Start { serve: true, .. } }) => {
+            eprintln!(
+                "ptyro: `ptyro daemon start --serve` was removed on 2026-11-17: `ptyro web on` starts the daemon with the web app"
+            );
+            ptyro_core::ErrorCode::Invalid.exit_code()
+        }
+        Some(Cmd::Daemon { cmd: DaemonCmd::Start { foreground, spawned, .. } }) => {
             winclient::start_in_wsl(cli.remote.as_deref())
-                .unwrap_or_else(|| cli::daemon_start(foreground, spawned, serve))
+                .unwrap_or_else(|| cli::daemon_start(foreground, spawned))
         }
         Some(Cmd::FakeAgent { args }) => ptyro_testkit::fake_agent::main(&args),
         #[cfg(debug_assertions)]

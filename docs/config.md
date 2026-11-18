@@ -21,7 +21,7 @@ a daemon restart (which the panel offers). A new option isn't done until it has 
 
 **With a daemon on another computer** (`ptyro.exe` on Windows and the daemon in WSL, or
 `--remote` over ssh) there are two files: this computer's holds what the screen reads (`ui`,
-`keys`, `themes`, `clipboard`, `client`), and the daemon's computer holds everything else. The
+`keys`, `clipboard`, `client`), and the daemon's computer holds everything else. The
 settings panel tags those "daemon's" and opens the daemon's own file to change one; `ptyro config
 set` of one says so and names the command that changes it there.
 
@@ -44,7 +44,7 @@ most; `ptyro config show` lists every key with the value in effect.
 ```toml
 [ui]
 prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
-theme = "ptyro-light"     # ptyro-dark (default), ptyro-light, high-contrast, or your own (Settings → Themes picks it; a new one starts as a copy of one you choose)
+theme = "ptyro-light"     # ptyro-dark (default), ptyro-light or high-contrast (Settings → Interface); NO_COLOR turns colour off
 tint_borders = true       # colour pane dividers with the session's profile
 # shell_exit = "keep"     # an exited shell stays in the sidebar as exited (default: it disappears)
 # on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)

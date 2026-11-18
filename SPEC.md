@@ -1138,7 +1138,8 @@ claimed by `ptyro serve`).
 (`ptyro_core::config::set_serve`, comments and the rest kept), reloads it, starts or stops the
 server at once and waits up to 12 s for it to say where it listens. `via` (`localhost`,
 `tailscale`, `open`; `here` and `lan` are the old words) says who can reach it, else the config's
-own choice stands, else Tailscale when it is running on this machine, else `open`.
+own choice stands, else Tailscale when it is running on this machine, else this computer only
+(**[changed 2026-11-17]**, was `open`).
 `DaemonStatus.web` carries the same `WebServe{wanted, up, pid, url, listen, access, port,
 ca_fingerprint, since_ms, restarts, last_exit, by_hand, log}` (`access` and `port` are ACC1's).
 
@@ -3032,8 +3033,8 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   the panes showing it (its sibling takes the space); the last pane is refilled from an unshown
   session instead. An exited session keeps its pane.
 - **Overlays:** help (generated from the live key map, filterable, also showing the terminal's
-  kitty-keyboard and colour support), the command palette (actions with their keys, sessions,
-  themes), the session finder, a text prompt (new session: run through `$SHELL -c` so pipes and
+  kitty-keyboard and colour support), the command palette (actions with their keys, sessions),
+  the session finder, a text prompt (new session: run through `$SHELL -c` so pipes and
   quotes work; rename), and a confirmation for stop. A prompt is **checked as it's typed**,
   mirroring the daemon's rules from what the TUI knows: name prompts (rename, new worktree, new
   workspace) say when the name is taken. While
@@ -3063,8 +3064,11 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   sidebar or enters copy mode, drag a divider to resize, drag in a pane to select (copied on
   release). Mouse events pass through to programs that enabled mouse reporting. Shift-drag
   keeps the outer terminal's own selection in most terminals.
-- **Themes** `ptyro-dark`, `ptyro-light`, `high-contrast`, plus `[themes.<name>]` (any subset of
-  16 tokens on a `base`). `NO_COLOR` makes chrome monochrome, with emphasis by attributes. Every
+- **Themes** `ptyro-dark`, `ptyro-light`, `high-contrast` (`ui.theme`, a pick of the three; one
+  it doesn't know, such as a theme of your own, is `ptyro-dark`, and `ptyro doctor` sets it).
+  Themes of your own (`[themes.<name>]`), `theme.next`, the palette's theme lines and the
+  settings panel's live preview were removed on 2026-11-17 (pare-down): three built-ins cover
+  dark, light and contrast. `NO_COLOR` makes chrome monochrome, with emphasis by attributes. Every
   colour, chrome and session content alike, is **downsampled** to what the outer terminal shows
   (truecolor / 256 / 16, detected from `COLORTERM`, `TERM` and `TERM_PROGRAM`).
 - **Reconnect:** if the daemon goes away, the TUI shows RECONNECTING, retries every 250 ms for
@@ -3394,7 +3398,7 @@ learning anything up front.
   do next with the selected row (the focused session in a pane), with the key as it works
   there: `C-q p answer it` (blocked), `R restart · x remove` (exited, in the sidebar), `⏎
   resumes it` (dormant), adopting a hand-started Claude, `a who needs you`.
-- **The palette finds everything** (UX1.18): besides actions, sessions, workspaces and themes,
+- **The palette finds everything** (UX1.18): besides actions, sessions and workspaces,
   the workspace's worktrees (going to one shows its first session) and projects (selected in the
   sidebar), and the context worktree's scripts, which join once the daemon answers. Every line
   shows its key.
@@ -3418,16 +3422,19 @@ learning anything up front.
 The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/screens.rs`.
 
 - **Full-sized panels; only a split command fills a split** (UX3.1). `show(id, None)` places a
-  session without a split (`place`): where it already shows (focused there); else in the kept
-  layout that shows it (swapped back); else, in a single pane (a drawer aside), in that pane
-  (`PaneState.last` remembers what it replaced); else full sized in a fresh one-pane layout, the
-  split layout kept whole in `App.kept` (a `Screen`: layout, panes, focus, zoom, drawer; saved as
-  `SavedView.kept`). `` ` `` (`session.last`) goes back and forth: from a chat (or the chat list)
-  to the session under it, the chat put aside as it is (`App.chat_aside`: draft, scroll, a new
-  chat's choices) and brought back by `` ` `` again; a session shown from a chat puts the chat
-  aside the same way, one shown from the panes ends that. With no chat to go back to it swaps the
-  kept layout and the screen, else shows the pane's previous session. Everything goes through it: new sessions and worktrees, the quick
-  terminal's panel, ⏎ in the sidebar, `j`/`k`, `1`–`9`, the finder, attention.
+  session without a split (`place`): where it already shows (focused there); else, in a single
+  pane (a drawer aside), in that pane (`PaneState.last` remembers what it replaced); else full
+  sized in a fresh one-pane layout, whose `last` is the session that had focus in the split (a
+  SHELLS window shown in place of the screen keeps that way back too). `` ` `` (`session.last`)
+  goes back and forth: from a chat (or the chat list) to the session under it, the chat put aside
+  as it is (`App.chat_aside`: draft, scroll, a new chat's choices) and brought back by `` ` ``
+  again; a session shown from a chat puts the chat aside the same way, one shown from the panes
+  ends that. With no chat to go back to it shows the pane's previous session. **The kept split**
+  (`App.kept`, `SavedView.kept`: a split layout a full-sized panel replaced, swapped back whole by
+  `` ` ``) was removed on 2026-11-17 (pare-down): one way back, to a session, is easier to
+  predict; the layout per workspace is still saved and restored (`SaveView`/`LoadView`), and a
+  saved view's old `kept` is ignored. Everything goes through it: new sessions and worktrees, the
+  quick terminal's panel, ⏎ in the sidebar, `j`/`k`, `1`–`9`, the finder, attention.
   - Tools open full sized (`spawn_tool`, `SpawnSpec.tool`): `$EDITOR` on a file and
     `config edit` give the screen back when they exit (`App.tool_back`); `run_cli` (the CLI's long
     tail, health fixes) keeps its output until `` ` ``.
@@ -3439,7 +3446,7 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
     the copy is a pane of its window, never a session placed in the worktree it stands in.
   - A split's pane whose session is removed closes; it never takes another session (UX1.23 still
     applies to a single pane). A restored view closes a split's empty panes and fills only a
-    single one. Sessions that go are dropped from the kept layout, which goes when it is empty.
+    single one.
   - Unchanged: the drawer (`C-t`), asked for by name.
 - **Quick new** (UX3.2, UX3.7; `session.again`): removed 2026-11-17, with the web's "+ claude"
   and "Another …"; `n` starts an agent with every option shown. `C-n`, after the prefix and in the
@@ -3591,7 +3598,7 @@ mouse), drag to select (copy mode), drag split borders.
 - Wide chars/graphemes: the cache stores clusters; the painter uses `unicode-width` consistent with
   the daemon's emulator to avoid drift.
 - Colours: truecolor passthrough; downsampled to 256/16 when the outer terminal lacks support.
-- Themes: built-in `ptyro-dark`, `ptyro-light`, `high-contrast`; user themes in config.
+- Themes: built-in `ptyro-dark`, `ptyro-light`, `high-contrast` (§11.2).
 
 ### 11.5 Overlays and views
 
@@ -4036,7 +4043,8 @@ executables for agents (prevents a cloned repo from silently running arbitrary b
 Config is validated on load with precise errors (`ptyro config check`); the daemon hot-reloads on
 change (debounced) and emits `ConfigReloaded`.
 
-**[built M2]** The schema has `[ui]`, `[daemon]`, `[keys]` and `[themes.*]`.
+**[built M2]** The schema has `[ui]`, `[daemon]` and `[keys]` (`[themes.*]` was retired on
+2026-11-17, §13.8).
 - Unknown keys inside them are errors with line and column (`deny_unknown_fields`).
 - Sections for later milestones (`[agents]`, `[profiles]`, `[worktrees]`,
   `[discover]`, `[notifications]`, `[attention]`, `[recorder]`, `[editors]`, `[remote]`) are
@@ -4195,7 +4203,7 @@ zed = { command = ["zed", "{path}"] }
 "global:M-1" = "session.focus 1"
 
 [remote]
-serve = false                              # the daemon runs `ptyro serve` itself
+serve = false                              # the web app is on: what `ptyro web on|off` switches
 ```
 
 **Open in** (`wt open`, `worktree.open`). Only what is installed is offered, checked where it
@@ -4252,13 +4260,13 @@ review = "Review the diff against origin/main and list risks."
 
 Every configuration key has one description, in `ptyro-core` (`settings.rs`): its **section**
 (the panel's groups), its **kind** (bool, number with a range, text, path, one of a fixed few,
-one of what exists (themes, agents, editors, actions), several of a fixed few, a list, a command,
+one of what exists (agents, editors, actions), several of a fixed few, a list, a command,
 a duration, a size, a time window, a colour, an address, a secret, or a table the panel leaves to
 the file), one line of **help**, when a change **applies** (`live`: the daemon and every open
 screen reload the file; `next`: sessions started from then on; `restart`: when the daemon
 starts), whether it is **advanced**, and, for a notification service, which `type` it is for.
 Defaults are not repeated: they come from `Config::default()`. Named things (agents, profiles,
-themes, editors, key bindings, notification services, and a repository's run scripts and
+editors, key bindings, notification services, and a repository's run scripts and
 prompts) are **collections**: their fields are the entries whose key reads `agents.*.command`.
 
 - **A test fails when a field has no entry** (and when an entry has no field), so an option
@@ -4266,19 +4274,17 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
 - **Edits are text to text** with `toml_edit` (`settings::set|unset|add|remove|rename`): the
   file's comments, order and spelling stay, a value replaces in place keeping the comment on its
   line, and nothing is written unless the whole new file passes the parser the daemon loads with
-  (plus, for your config, the TUI's own check of key bindings and themes). The refusal names the
+  (plus, for your config, the TUI's own check of key bindings and the theme). The refusal names the
   setting and why. `settings::preview` does the same without writing, for forms that check as
   you type; `settings::restore` puts a file back (undo).
 - **Plain words, everywhere.** A setting may carry a `unit` (`columns`, `days`: shown after a
   number as `30 columns`; `config get` still prints the bare number) and `also` words a search
   finds ("notify", "sound", "shortcut"; every colour setting also answers to "color"). A
   collection has a `title` and an `empty` sentence (what it is for and what already works
-  without one), shown by the TUI and the web alike. A theme just made becomes `ui.theme` so
-  editing its colours shows at once; removing or renaming the theme in use moves `ui.theme` with
-  it (`settings::apply` does this, so the CLI agrees). A new agent asks which program it runs
-  (empty: its own name). `ui.theme` lives in Themes and `clipboard.allow_write` in Interface.
-  A new theme first asks which built-in theme to copy (its `base`; the TUI picker, the web's
-  "Start from" box). The `?` help ends with where to change any key (Settings → Key bindings).
+  without one), shown by the TUI and the web alike. Removing or renaming the default agent moves
+  `agents.default` with it (`settings::apply` does this, so the CLI agrees). A new agent asks
+  which program it runs (empty: its own name). `ui.theme` (a pick of the three built-in themes)
+  and `clipboard.allow_write` live in Interface. The `?` help ends with where to change any key (Settings → Key bindings).
 - **Key bindings list every key, defaults too.** The TUI key map owns the defaults
   (`ptyro_tui::keymap::default_keys()`, named as `[keys]` names them: `d`, `nav:j`); a caller
   passes them in `Lookups.keys`, and `settings::bindings` merges them with `[keys]` into
@@ -4341,7 +4347,13 @@ extras (2026-11-17) retire `worktrees.archive_purge_days`, `worktrees.auto_renam
 (2026-11-17) retire `chat.preset`, `chat.import` and `chat.tools` (the whole table of tool
 presets): every chat now searches the web and reads the folders it was given. Removing Gemini CLI
 and Antigravity (2026-11-17, §8.6d) retires `profiles.*.gemini`: its directory stays where it is,
-and an agent of your own sets its variables with `[agents.NAME] env`. A `*` in a retired
+and an agent of your own sets its variables with `[agents.NAME] env`. Themes of your own
+(2026-11-17, §11.2) retire `themes`, the whole table; a `ui.theme` that still names one loads (the
+TUI shows `ptyro-dark`), `ptyro config check` refuses it with the fix, and `ptyro doctor` warns
+(`ptyro`, `theme`, `data: {set: "ui.theme", value: "ptyro-dark"}`) with
+`ptyro config set ui.theme ptyro-dark`, which the TUI's health list runs and the web's Health page
+makes. A `[keys]` line bound to `theme.next` or `remote.serve` is a stale binding (§11.2,
+`ptyro config unset keys…`). A `*` in a retired
 key stands for any one name (`agents.*.after_turn` matches `agents.claude.after_turn`). The tests retire a key of their own (`PTYRO_TEST_RETIRED`, read only by a debug build).
 
 ### 13.6 The scratchpad **[built NOTE1, removed 2026-11-17]**
@@ -4358,7 +4370,7 @@ they were, untouched; `ptyro doctor` says so, and `[scratchpad]` in a config is 
 
 | Kind | Path | Contents |
 |---|---|---|
-| config | `~/.config/ptyro/` | `config.toml`, `themes/` |
+| config | `~/.config/ptyro/` | `config.toml` |
 | data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `chat.db` (§22.4), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
@@ -4373,7 +4385,7 @@ the runtime folder, so one per user and per `PTYRO_HOME`. `PTYRO_SOCKET` must na
 inherited access list already keeps them to the user (`ptyro_core::os`). That config holds this
 client's own settings (`client.default_remote`, the TUI's look and keys); the daemon's is in WSL,
 as for any `--remote` client. Which is whose is `settings::read_by_client` (the client reads `ui.*`
-but `ui.shell_exit`, `keys`, `themes`, `clipboard` and `client`; the daemon everything else). With a
+but `ui.shell_exit`, `keys`, `clipboard` and `client`; the daemon everything else). With a
 remote daemon the TUI's settings panel tags the daemon's settings "daemon's", and a key that would
 change one opens the daemon's own file there instead (`ptyro config edit <key>` in a tool session,
 which runs on the daemon's computer); `ptyro config set`/`unset` of one says the daemon reads its own
@@ -4732,10 +4744,19 @@ it stays a supervised child process, not code inside the daemon. The daemon owns
 is local-socket-only by design; the network-facing HTTP/TLS code belongs in a process that can
 crash, restart and be killed for a live upgrade without touching a session. What the person sees
 is "the web is up when the daemon is".
-- **One switch, five doors.** `ptyro web on|off|status [--via tailscale|lan|here] [--pair]`;
-  `ptyro daemon start --serve`; the question in `ptyro setup`; the TUI's `remote.web`,
-  `remote.web_on`, `remote.web_off`; and the web app's More → Web app. All of them are
-  `Request::Web` (§6.4) or the same `set_serve` on the config file, so they cannot disagree.
+- **One way in** (pare-down, 2026-11-17). `ptyro web on|off|status [--access
+  tailscale|localhost|open] [--pair]` is the one user-facing command; the question in
+  `ptyro setup`, the TUI's `remote.web`, `remote.web_on`, `remote.web_off`, and the web app's
+  More → Web app are its doors. All of them are `Request::Web` (§6.4) or the same `set_serve` on
+  the config file, so they cannot disagree. `[remote] serve` stays: it is the switch's state,
+  which the daemon reads (Settings → remote shows it, saying `ptyro web on|off` switches it).
+  `ptyro serve` is hidden (what the daemon runs, `--managed`; the tests; a machine's link
+  reaches it); `ptyro daemon start --serve` and the TUI's `remote.serve` (which ran `ptyro serve`
+  in a pane) were removed: the flag says to use `ptyro web on`, and a `[keys]` binding to
+  `remote.serve` is a stale binding doctor removes. **Tailscale first**: with no `--access` and no
+  `[remote] access`, `on` picks `tailscale` when Tailscale is running here, else this computer
+  only (the default, left unwritten so a Tailscale set up later is taken next time); every
+  interface (`open`) only when asked for.
 - **It reacts at once.** The supervisor waits on a wake-up, not only its 3 s look, so a config
   reload (the file edited by hand, `ReloadConfig`) or the switch starts or stops the server
   immediately and resets the backoff.
@@ -4750,8 +4771,9 @@ is "the web is up when the daemon is".
   e.g. "another program holds 127.0.0.1:7091: pick another port"), and More → Web app, which
   also turns it on or off and pairs a device.
 - **Reaching it.** On with nothing chosen, `set_serve` keeps the file's `[remote] access`, else
-  picks `tailscale` when `tailscale status` says Running, else `open` (a phone is the point, so
-  the default is one that works at once; the note and `ptyro doctor` say what `open` means).
+  picks `tailscale` when `tailscale status` says Running, else leaves `localhost`, this computer
+  only (**[changed 2026-11-17]**: it was `open`, every interface; Tailscale first, and the Wi-Fi
+  only when asked for; the note says how to reach a phone).
   `ptyro web on --access localhost|tailscale|open` (or the words `here` and `lan`, the old
   `--via`, which still work) sets it; so do `ptyro config set remote.access …`, the settings
   panel's dropdown (`remote.access`, with `remote.port` beside it), and the web app's More → Web

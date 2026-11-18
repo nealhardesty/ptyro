@@ -30,8 +30,6 @@ pub enum Action {
     Reload,
     Toast(String),
     ToastErr(String),
-    /// Show this theme for now (`None`: back to the one in use).
-    Theme(Option<String>),
     /// Run a TUI action (`daemon.restart`, `profile.new`).
     Run(&'static str),
     /// Open a file in the editor at a line.
@@ -421,20 +419,15 @@ pub struct Panel {
     pub remote: Option<String>,
 }
 
-/// The checks only the TUI can make of a whole user config: key bindings and themes.
+/// The checks only the TUI can make of a whole user config: key bindings and the theme.
 fn semantic(text: &str) -> Result<(), String> {
     let config = Config::parse(text)?;
     let problems = keymap::validate(&config);
     if !problems.is_empty() {
         return Err(problems.join("\n"));
     }
-    if !crate::theme::exists(&config, &config.ui.theme) {
-        return Err(format!(
-            "unknown theme {:?} (built in: {}; or define [themes.{}])",
-            config.ui.theme,
-            crate::theme::BUILTIN.join(", "),
-            config.ui.theme
-        ));
+    if !crate::theme::exists(&config.ui.theme) {
+        return Err(crate::theme::unknown(&config.ui.theme));
     }
     Ok(())
 }
@@ -445,7 +438,6 @@ fn no_extra(_: &str) -> Result<(), String> {
 
 fn lookups() -> Lookups {
     Lookups {
-        themes: crate::theme::BUILTIN.iter().map(|s| (*s).to_owned()).collect(),
         actions: keymap::ACTIONS.iter().map(|a| (a.id.to_owned(), a.desc.to_owned())).collect(),
         keys: keymap::default_keys(),
     }
@@ -1447,7 +1439,6 @@ impl Panel {
         let names =
             |key: &str| self.find_entry(key).is_some_and(|e| e.value.as_str() == Some(name));
         let note = match path {
-            "themes" if names("ui.theme") => " It is the theme in use: the default comes back.",
             "agents" if names("agents.default") => " It is the default agent: claude comes back.",
             _ => "",
         };
@@ -1604,10 +1595,6 @@ impl Panel {
                     on: None,
                     then: PickThen::Set(e.key.clone()),
                 }));
-                // The theme shows as you move over it.
-                if st.key == "ui.theme" {
-                    return self.preview();
-                }
                 vec![]
             }
             Kind::Set { .. } => {
@@ -1704,16 +1691,6 @@ impl Panel {
         if let Some(Modal::Input { check, .. }) = &mut self.modal {
             *check = verdict.err();
         }
-    }
-
-    fn preview(&self) -> Vec<Action> {
-        if let Some(Modal::Pick(p)) = &self.modal
-            && matches!(&p.then, PickThen::Set(k) if k == "ui.theme")
-            && let Some((v, _)) = p.current()
-        {
-            return vec![Action::Theme(Some(v.clone()))];
-        }
-        vec![]
     }
 
     fn add(&mut self, col: &'static Collection) -> Vec<Action> {
@@ -1822,26 +1799,11 @@ impl Panel {
                 .collect();
         }
         let label = format!("added {} {}", col.noun, name);
-        let mut acts = self.change(
+        let acts = self.change(
             layer,
             Op::Add { path: col.path.to_owned(), name: name.clone(), fields },
             &label,
         );
-        // A theme just made is the one in use, so editing its colours shows at once.
-        if col.path == "themes"
-            && self.note.as_ref().is_some_and(|(_, err)| !*err)
-            && let Some(e) = self.find_entry("ui.theme")
-        {
-            acts.extend(self.set(&e, &name));
-            if self.note.as_ref().is_some_and(|(_, err)| !*err) {
-                self.note = Some((
-                    format!(
-                        "added theme {name}, now in use: change its colours and watch them change"
-                    ),
-                    false,
-                ));
-            }
-        }
         if self.note.as_ref().is_some_and(|(_, err)| !*err)
             && !matches!(col.layout, Layout::Map(_) | Layout::Array)
         {
@@ -1879,13 +1841,7 @@ impl Panel {
             Modal::Pick(mut p) => {
                 let n = p.shown().len();
                 match key.code {
-                    KeyCode::Esc => {
-                        return if matches!(&p.then, PickThen::Set(k) if k == "ui.theme") {
-                            vec![Action::Theme(None)]
-                        } else {
-                            vec![]
-                        };
-                    }
+                    KeyCode::Esc => return vec![],
                     KeyCode::Up | KeyCode::Char { c: 'k' }
                         if !p.search || key.code == KeyCode::Up =>
                     {
@@ -1918,7 +1874,7 @@ impl Panel {
                     _ => {}
                 }
                 self.modal = Some(Modal::Pick(p));
-                self.preview()
+                vec![]
             }
             Modal::Capture { title, mut keys, then } => {
                 match key.code {
@@ -2012,22 +1968,6 @@ impl Panel {
                             (_, "agents") => vec!["command"],
                             _ => settings::required(make.path, "").to_vec(),
                         };
-                        // A theme starts as a copy of one that exists: pick which, first.
-                        if make.path == "themes" {
-                            self.modal = Some(Modal::Pick(Pick {
-                                title: format!("Start {} from which theme?", make.name),
-                                items: crate::theme::BUILTIN
-                                    .iter()
-                                    .map(|t| ((*t).to_owned(), "built in".to_owned()))
-                                    .collect(),
-                                query: String::new(),
-                                search: false,
-                                sel: 0,
-                                on: None,
-                                then: PickThen::Make(make),
-                            }));
-                            return vec![];
-                        }
                     }
                     Some(field) => {
                         let f = if field == "text" { "text" } else { field };
@@ -2059,26 +1999,16 @@ impl Panel {
                         .join(","),
                     None => match p.current() {
                         Some((v, _)) => v.clone(),
-                        None if key == "ui.theme" => return vec![Action::Theme(None)],
                         None => return vec![],
                     },
                 };
                 // Nothing chosen from a set is an empty list.
                 let value =
                     if p.on.is_some() && value.is_empty() { "[]".to_owned() } else { value };
-                let mut acts = self.set(&e, &value);
-                // A theme tried on screen goes back when the change wasn't made.
-                if key == "ui.theme" && acts.is_empty() {
-                    acts.push(Action::Theme(None));
-                }
-                acts
+                self.set(&e, &value)
             }
             PickThen::Make(mut make) => {
                 let Some((kind, _)) = p.current().cloned() else { return vec![] };
-                if make.path == "themes" {
-                    make.fields.push(("base".into(), kind));
-                    return self.make_next(make);
-                }
                 make.fields.push(("type".into(), kind.clone()));
                 make.todo = settings::required(make.path, &kind).to_vec();
                 self.make_next(make)
@@ -2281,8 +2211,6 @@ fn summarize(col: &Collection, name: &str, fields: &[&Entry]) -> String {
         "agents" => some(get("command"))
             .or_else(|| some(get("adapter")))
             .unwrap_or_else(|| "runs as its name".into()),
-        "themes" => some(get("base"))
-            .map_or_else(|| "colours of your own".into(), |b| format!("based on {b}")),
         "editors" => some(get("command")).unwrap_or_default(),
         "scripts.run" => some(get("command")).unwrap_or_default(),
         "profiles" => some(get("label")).or_else(|| some(get("git.email"))).unwrap_or_default(),

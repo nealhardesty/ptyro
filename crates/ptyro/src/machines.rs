@@ -449,7 +449,7 @@ async fn open(url: &str, fingerprint: Option<&str>) -> Result<(Box<dyn Io>, Stri
     // Tailscale (which encrypts), whatever the name resolves to.
     if !tls && (addrs.is_empty() || !addrs.iter().all(|a| plain_ok(a.ip()))) {
         return Err(Error::invalid(format!(
-            "{url} is plain HTTP, which ptyro uses only to this computer or over Tailscale (it would carry the token unencrypted): pair again with `ptyro machine pair` there while `ptyro serve` uses HTTPS, or add it over ssh"
+            "{url} is plain HTTP, which ptyro uses only to this computer or over Tailscale (it would carry the token unencrypted): pair again with `ptyro machine pair` there while its web app is on (HTTPS), or add it over ssh"
         )));
     }
     let tcp = tokio::net::TcpStream::connect(addrs.as_slice()).await.map_err(unreachable)?;
@@ -459,7 +459,7 @@ async fn open(url: &str, fingerprint: Option<&str>) -> Result<(Box<dyn Io>, Stri
     }
     if fingerprint.is_none() && !is_tailnet_name(&host) {
         return Err(Error::invalid(format!(
-            "{url} is HTTPS with a certificate this machine can't check (the code carried none): pair again with `ptyro machine pair` there while `ptyro serve` uses its own HTTPS, or add it over ssh"
+            "{url} is HTTPS with a certificate this machine can't check (the code carried none): pair again with `ptyro machine pair` there while its web app uses its own HTTPS, or add it over ssh"
         )));
     }
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -489,7 +489,7 @@ pub async fn claim(code: &Code, me: Option<&str>) -> Result<(String, Option<Stri
         Error::new(
             e.code,
             format!(
-                "{}, so the code wasn't used: on {there}, check that ptyro's web app server is on (`ptyro serve`, or `ptyro web on`), then try again within 10 minutes of making the code",
+                "{}, so the code wasn't used: on {there}, check that ptyro's web app is on (`ptyro web on`), then try again within 10 minutes of making the code",
                 e.message
             ),
         )
@@ -535,7 +535,7 @@ fn refused(code: &Code, status: u16, why: &str) -> Error {
             code.base
         ),
         0 => format!(
-            "{} didn't answer the code (is it `ptyro serve`?). Try again; if it still fails, {fresh}",
+            "{} didn't answer the code (is it ptyro's web app?). Try again; if it still fails, {fresh}",
             code.base
         ),
         _ => format!(
@@ -565,7 +565,7 @@ pub async fn bridge(url: String, fingerprint: Option<String>) -> Result<i32, Err
     {
         Ok((ws, _)) => ws,
         Err(e) => {
-            eprintln!("{url}: no WebSocket ({e}): is it ptyro serve?");
+            eprintln!("{url}: no WebSocket ({e}): is it ptyro's web app?");
             return Ok(2);
         }
     };

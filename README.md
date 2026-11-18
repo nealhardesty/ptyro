@@ -341,7 +341,7 @@ Terminal tab or pane (`ptyro attach S --tab`, `--pane`; the TUI's `session.tab`)
 run `ptyro new` in becomes the distro's (`C:\src` is `/mnt/c/src`). "Open in" an editor or the
 file manager opens it from WSL, on this computer (VS Code through Remote-WSL, the folder in
 Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works without any setup.
-Settings: the screen's own (the look, keys, themes, the clipboard) are `ptyro.exe`'s; everything
+Settings: the screen's own (the look, keys, the clipboard) are `ptyro.exe`'s; everything
 else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
 daemon's file to change them (`ptyro config set` of one says where it lives).
 
@@ -376,7 +376,7 @@ tools' imported scripts) in Git Bash, the rest in PowerShell; `[scripts] shell` 
 `.ptyro.toml` (or the settings panel) picks one for the whole project. A bash script checked out
 with Windows line endings is a `doctor` finding, which says how to fix it. The daemon listens on a named pipe only
 you can open. `ptyro daemon install-service` then starts this native daemon at logon instead of
-WSL's, and `ptyro serve` (the web app, with its own certificate, pairing and Tailscale's) runs
+WSL's, and the web app (`ptyro web on`, with its own certificate, pairing and Tailscale's) runs
 here too. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
 can be resumed) and the foreground program's name and directory.
 
@@ -500,9 +500,9 @@ sidebar_detail = "compact"` keeps one line per row.
   to hide it; the shell keeps running, and its `›_ quick shell` line sits first under the worktree in the
   sidebar, tinted while its drawer is open. The drawer is for quick actions: it stays while you move between
   the panes already on screen, and closes when another session shows.
-- New things open **full sized**, never in a split: a split layout they replace is kept, and
-  `` Ctrl-Q ` `` brings it back. Only `Ctrl-Q v` / `s` split, and they split with a clone of the
-  pane's session (the same agent in the same worktree, a fresh conversation).
+- New things open **full sized**, never in a split, and `` Ctrl-Q ` `` goes back to the session
+  you were on. Only `Ctrl-Q v` / `s` split, and they split with a clone of the pane's session (the
+  same agent in the same worktree, a fresh conversation).
   `ptyro shell` opens it from outside, and `ptyro shell --read` prints its screen, so you can
   tell an agent to "look at the error in my terminal".
 
@@ -664,7 +664,7 @@ with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` sh
 
 ```bash
 ptyro web on                   # the daemon runs the web app's server (HTTPS, port 7091), and keeps it up;
-                               # Tailscale network if it is running, else every network; `ptyro web` says how it is
+                               # Tailscale network if it is running, else this computer only; `ptyro web` says how it is
 ptyro config set remote.access tailscale   # who can reach it: localhost, tailscale or open (Settings → remote)
 ptyro pair -n phone            # a one-time QR code (10 min; full control, it warns you): scan it and the phone is signed in;
                                # over Tailscale it uses Tailscale's certificate when your tailnet has HTTPS
@@ -698,11 +698,10 @@ Each page names its machine, to tell several apart: the tab title is `studio · 
 dot on the icon and a thin bar in the header, and the TUI's sidebar and terminal title say it too.
 It is the computer's short name; `[daemon] machine_name` (Settings) changes it.
 
-`ptyro setup` asks whether to run it, `ptyro daemon start --serve` turns it on with the daemon,
-`ptyro web off` stops it, and in the TUI and the web app it is **More → Web app**. It is a
-supervised `ptyro serve`, so a daemon restart or live upgrade brings it back, and `ptyro doctor`
-says why when it won't start (a port taken by something else, say). `ptyro serve` by hand still
-works for trying it out.
+`ptyro web on|off|status` is the one switch: `ptyro setup` asks whether to turn it on, the web
+app has it under **More → Web app** and the TUI's palette as `remote.web`, `remote.web_on` and
+`remote.web_off`. The daemon runs the server, so a daemon restart or live upgrade brings it back,
+and `ptyro doctor` says why when it won't start (a port taken by something else, say).
 
 Each device gets a scope (`read`, `approve`, `control` or `full`). `ptyro pair` gives
 `full` by default, the whole app (it changes your machine: worktrees, the config, devices), and

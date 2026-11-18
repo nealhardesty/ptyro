@@ -139,8 +139,8 @@ impl App {
     fn show_quick_existing(&mut self, style: ShellStyle, id: SessionId) {
         if let Some(pane) = self.quick_panel(id) {
             if self.focus == Focus::Pane && self.focused == pane {
-                // Pressed again in its own panel: back to what it replaced (UX3.1: the kept
-                // layout, else the pane's previous session).
+                // Pressed again in its own panel: back to what it replaced (UX3.1: the pane's
+                // previous session).
                 if !self.go_back() {
                     if let Some(p) = self.panes.get_mut(&pane) {
                         p.session = None;

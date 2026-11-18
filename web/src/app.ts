@@ -193,6 +193,10 @@ function setHostLoad(l: HostLoad | null): void {
   }
 }
 
+/// Notifications aren't on for this device yet: a top-level page offers them (More → This device
+/// always has them, and their test).
+const pushOffered = (): boolean => !("Notification" in window) || Notification.permission !== "granted";
+
 /// `back`: true goes to the session list; a string is where it goes instead.
 function header(title: string, back: boolean | string, ...extra: Child[]): HTMLElement {
   const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
@@ -202,7 +206,7 @@ function header(title: string, back: boolean | string, ...extra: Child[]): HTMLE
     ...extra,
     conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null,
     dot,
-    h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"),
+    !back && pushOffered() ? h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔") : null,
   );
 }
 

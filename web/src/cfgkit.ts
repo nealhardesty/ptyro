@@ -23,7 +23,7 @@ export interface Setting {
   also: string;
 }
 export interface Section { id: string; title: string; blurb: string; scope: "user" | "project" }
-export interface Collection { path: string; section: string; noun: string; layout: "tables" | "array" | { map: Kind }; reserved: string[]; starter: [string, string][]; title: string; empty: string }
+export interface Collection { path: string; section: string; noun: string; layout: "tables" | "array" | { map: Kind }; reserved: string[]; title: string; empty: string }
 export interface Schema { sections: Section[]; settings: Setting[]; collections: Collection[] }
 
 export interface Entry {
@@ -149,7 +149,6 @@ export function summary(path: string, name: string, fields: Entry[]): string {
   };
   switch (path) {
     case "agents": return get("command") ?? get("adapter") ?? "runs as its name";
-    case "themes": return get("base") ? `based on ${get("base")}` : "colours of your own";
     case "editors": case "scripts.run": return get("command") ?? "";
     case "profiles": return get("label") ?? get("git.email") ?? "";
     case "notifications.sinks": return `${get("type") ?? ""} ${get("url") ?? get("chat_id") ?? get("command") ?? ""}`.trim();

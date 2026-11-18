@@ -35,7 +35,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("profile.rename", &["profile", "rename", "{profile}", "{ask:New name}"]),
     ("profile.login", &["profile", "login", "{profile}", "{agent}"]),
     ("profile.sync", &["profile", "sync", "{profile}"]),
-    ("remote.serve", &["serve"]),
     ("remote.web", &["web", "status"]),
     ("remote.web_on", &["web", "on"]),
     ("remote.web_off", &["web", "off"]),

@@ -319,8 +319,25 @@ fn cli_selectors_restart_scrollback_config_and_shell_init() {
     let bad = run(&["config", "check"]);
     assert_eq!(bad.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&bad.stderr).contains("no.such.action"));
-    d.write_config("[ui]\ntheme = \"no-such-theme\"\n").unwrap();
-    assert_eq!(run(&["config", "check"]).status.code(), Some(2));
+    // A theme of your own (removed 2026-11-17): its table loads, and the theme it names is
+    // refused with the fix, which `ptyro doctor` offers too.
+    d.write_config("[ui]\ntheme = \"mine\"\n\n[themes.mine]\naccent = \"#ff0000\"\n").unwrap();
+    let bad = run(&["config", "check"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("`ptyro config set ui.theme ptyro-dark`"),
+        "{}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
+    let doc = String::from_utf8_lossy(&run(&["doctor", "--quick", "--json"]).stdout).into_owned();
+    assert!(
+        doc.contains("ui.theme is \\\"mine\\\"") && doc.contains("themes is no longer used"),
+        "{doc}"
+    );
+    // `daemon start --serve` (removed 2026-11-17) says what to use instead.
+    let old = run(&["daemon", "start", "--serve"]);
+    assert_eq!(old.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&old.stderr).contains("`ptyro web on`"));
 
     for shell in ["bash", "zsh", "fish"] {
         let snippet = ok(&["shell-init", shell]);

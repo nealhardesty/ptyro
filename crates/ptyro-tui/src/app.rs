@@ -50,9 +50,6 @@ pub struct SavedView {
     pub drawer: Option<Drawer>,
     #[serde(default = "drawer_share")]
     pub drawer_share: f32,
-    /// The split layout a full-sized panel replaced (UX3.1).
-    #[serde(default)]
-    pub kept: Option<crate::screens::Screen>,
 }
 
 fn drawer_share() -> f32 {
@@ -700,8 +697,6 @@ pub struct App {
     /// The quick terminal's drawer, when open, and the share of its host it takes (UX1.25).
     pub drawer: Option<Drawer>,
     pub drawer_share: f32,
-    /// The split layout a full-sized panel replaced, kept whole for `` ` `` (UX3.1).
-    pub kept: Option<Box<crate::screens::Screen>>,
     /// A session whose row is to be selected once the tree can place it (UX3.3).
     pub(crate) revealing: Option<(SessionId, Instant)>,
     /// Tools (an editor) whose screen goes back to what it replaced when they exit (UX3.1).
@@ -787,7 +782,7 @@ impl App {
     ) -> Self {
         let (keymap, _) = Keymap::new(&config);
         let theme_name = config.ui.theme.clone();
-        let theme = Theme::resolve(&config, &theme_name, no_color());
+        let theme = Theme::resolve(&theme_name, no_color());
         let (tx, rx) = mpsc::unbounded_channel();
         let mut panes = HashMap::new();
         panes.insert(1, PaneState::default());
@@ -820,7 +815,6 @@ impl App {
             show: Default::default(),
             drawer: None,
             drawer_share: crate::quick::DRAWER_SHARE,
-            kept: None,
             revealing: None,
             tool_back: HashSet::new(),
             opts,
@@ -1013,7 +1007,6 @@ impl App {
         self.focused = 1;
         self.zoom = false;
         self.drawer = None;
-        self.kept = None;
         let saved = match &self.client {
             Some(client) if !self.opts.raw => {
                 let load = |name: String| async move {
@@ -1058,7 +1051,6 @@ impl App {
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.show = saved.show;
             self.restore_drawer(saved.drawer, saved.drawer_share);
-            self.restore_kept(saved.kept, &ordered_all);
         }
         let ordered = self.ordered();
         // `ptyro shell` asks for a quick terminal: it opens in the drawer (UX1.25).
@@ -1373,7 +1365,6 @@ impl App {
             show: self.show,
             drawer: self.drawer,
             drawer_share: self.drawer_share,
-            kept: self.kept.as_deref().cloned(),
         };
         let view = serde_json::to_value(saved).ok()?;
         let last = serde_json::json!({ "workspace": self.workspace });
@@ -1517,7 +1508,6 @@ impl App {
                 if self.drawer_session() == Some(*id) {
                     self.hide_drawer();
                 }
-                self.forget_kept(*id);
                 self.move_on(*id, &order, true);
             }
         }
@@ -1628,7 +1618,6 @@ impl App {
                 }
                 // The order as it was, so "the next one" means the one after it in the sidebar.
                 let order = self.ordered();
-                self.forget_kept(id);
                 self.tool_back.remove(&id);
                 self.move_on(id, &order, true);
                 self.sessions.retain(|s| s.id != id);
@@ -1758,7 +1747,7 @@ impl App {
                 let (keymap, errors) = Keymap::new(&config);
                 self.keymap = keymap;
                 self.theme_name = config.ui.theme.clone();
-                self.theme = Theme::resolve(&config, &self.theme_name, no_color());
+                self.theme = Theme::resolve(&self.theme_name, no_color());
                 let old = std::mem::replace(&mut self.config, config);
                 // What a change to the file does at once, beyond what is read each time it is
                 // used: the sidebar's visibility and width follow the file when the file moved.
@@ -2252,7 +2241,7 @@ impl App {
     // ── showing sessions ────────────────────────────────────────────────────
 
     /// Show `id`: in a new split when one is asked for, else without a split (UX3.1, `place`):
-    /// where it shows already, in the kept layout that has it, or full sized.
+    /// where it shows already, or full sized.
     pub fn show(&mut self, id: SessionId, split: Option<Dir>) {
         // A session shown takes the place of the chat panel, which `session.last` brings back;
         // shown from the panes, it ends a way back to a chat.
@@ -2286,7 +2275,8 @@ impl App {
         };
         let p = self.panes.entry(pane).or_default();
         if p.session != Some(id) {
-            p.last = p.session;
+            // (An empty pane keeps the way back it was given: the session before a split went.)
+            p.last = p.session.or(p.last);
             p.session = Some(id);
             p.copy = None;
         }
@@ -2984,14 +2974,6 @@ impl App {
                 }
                 self.sync();
             }
-            "theme.next" => {
-                let names = crate::theme::names(&self.config);
-                let i = names
-                    .iter()
-                    .position(|n| *n == self.theme_name)
-                    .map_or(0, |i| (i + 1) % names.len());
-                self.set_theme(names[i].clone());
-            }
             "config.panel" => self.open_settings(cmd.arg.as_deref()),
             "config.edit" => {
                 let argv = vec![self.daemon_ptyro(), "config".into(), "edit".into()];
@@ -3191,16 +3173,6 @@ impl App {
         self.focused = p;
         self.focus = Focus::Pane;
         self.view_changed();
-    }
-
-    pub fn set_theme(&mut self, name: String) {
-        self.theme = Theme::resolve(&self.config, &name, no_color());
-        self.toast_offer(
-            format!("theme {name} (set ui.theme to keep it)"),
-            false,
-            run_offer("keep it in Settings", "config.panel"),
-        );
-        self.theme_name = name;
     }
 
     /// Stop, kill, or stop and remove a running session: `ui.confirm_kill` asks first, in the
@@ -4566,18 +4538,6 @@ impl App {
                 });
             }
         }
-        for t in crate::theme::names(&self.config) {
-            items.push(Item {
-                label: format!("theme {t}"),
-                detail: if t == self.theme_name {
-                    "current theme".into()
-                } else {
-                    "switch theme".into()
-                },
-                key: None,
-                target: Target::Theme(t),
-            });
-        }
         // Every setting, to find it by what it does (CFG1.1).
         for s in ptyro_core::settings::settings(ptyro_core::settings::Scope::User)
             .filter(|s| !s.key.contains('*'))
@@ -4784,18 +4744,10 @@ impl App {
         use crate::settings::Action as A;
         for a in acts {
             match a {
-                A::Close => {
-                    // (A theme being tried goes back to the one in use.)
-                    self.theme = Theme::resolve(&self.config, &self.theme_name.clone(), no_color());
-                    self.overlay = None;
-                }
+                A::Close => self.overlay = None,
                 A::Reload => self.reload_config_with(false),
                 A::Toast(s) => self.toast(s),
                 A::ToastErr(s) => self.toast_err(s),
-                A::Theme(Some(n)) => self.theme = Theme::resolve(&self.config, &n, no_color()),
-                A::Theme(None) => {
-                    self.theme = Theme::resolve(&self.config, &self.theme_name.clone(), no_color());
-                }
                 A::Run(id) => {
                     self.overlay = None;
                     self.run(&Command { action: id, arg: None });
@@ -5101,7 +5053,6 @@ impl App {
             }
             (Target::RunScript(wt, name), _) => self.run_script(wt, Some(name)),
             (Target::Session(id), _) => self.show(id, None),
-            (Target::Theme(name), _) => self.set_theme(name),
             (Target::Setting(key), _) => self.open_settings(Some(&key)),
             (Target::NewShell, _) => self.spawn(Vec::new(), None, None),
             _ => {}
@@ -5909,7 +5860,6 @@ impl App {
         self.focused = 1;
         self.zoom = false;
         self.drawer = None;
-        self.kept = None;
         let ordered = self.ordered();
         let quick: Vec<SessionId> =
             self.sessions.iter().filter(|s| s.quick).map(|s| s.id).collect();
@@ -5937,8 +5887,6 @@ impl App {
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.show = saved.show;
             self.restore_drawer(saved.drawer, saved.drawer_share);
-            let known: Vec<SessionId> = ordered.iter().chain(&quick).copied().collect();
-            self.restore_kept(saved.kept, &known);
         }
         self.settle_empty_panes(&ordered);
         self.sync();
@@ -9120,30 +9068,25 @@ mod tests {
         ));
     }
 
+    /// A session opened over a split takes the screen (2026-11-17: the split is no longer kept
+    /// to swap back; a saved view keeps a layout); ` goes back to the session that had focus.
     #[test]
-    fn a_new_session_opens_full_sized_and_back_brings_the_split_whole() {
+    fn a_new_session_opens_full_sized_and_back_is_the_session_that_had_focus() {
         let mut app = app();
         let (a, b, _) = split_two(&mut app);
+        // Picking one already on screen focuses it where it is: nothing moves.
+        app.show(a, None);
+        assert_eq!(app.layout.panes().len(), 2);
+        assert_eq!(app.focused_session(), Some(a));
+        app.show(b, None);
         let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         assert_eq!(app.layout.panes().len(), 1, "full sized, not in a split");
         assert_eq!(app.focused_session(), Some(fresh.id));
-        assert!(app.kept.is_some(), "the split is kept");
-        // ` swaps: the split is back as it was, and ` again shows the panel.
         act(&mut app, "session.last");
-        assert_eq!(app.layout.panes().len(), 2);
-        let shown: HashSet<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
-        assert_eq!(shown, HashSet::from([a, b]));
+        assert_eq!((app.layout.panes().len(), app.focused_session()), (1, Some(b)));
         act(&mut app, "session.last");
         assert_eq!(app.focused_session(), Some(fresh.id));
-        // Picking a session of the kept split brings the split back, focused on it.
-        app.show(a, None);
-        assert_eq!(app.layout.panes().len(), 2);
-        assert_eq!(app.focused_session(), Some(a));
-        // Picking one already on screen focuses it where it is: nothing moves.
-        app.show(b, None);
-        assert_eq!(app.layout.panes().len(), 2);
-        assert_eq!(app.focused_session(), Some(b));
     }
 
     #[test]
@@ -9153,37 +9096,7 @@ mod tests {
         let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
         spawned(&mut app, &fresh, false);
         assert_eq!(app.layout.panes().len(), 1);
-        assert!(app.kept.is_none());
         act(&mut app, "session.last");
-        assert_eq!(app.focused_session(), Some(a));
-    }
-
-    #[test]
-    fn the_kept_split_comes_back_with_the_view_and_forgets_gone_sessions() {
-        let mut app = app();
-        let (a, b, _) = split_two(&mut app);
-        let fresh = placed("zephyr", Some("p1"), Some("p1-root"));
-        spawned(&mut app, &fresh, false);
-        let saved = serde_json::to_value(SavedView {
-            v: 1,
-            layout: app.layout.clone(),
-            panes: app.panes.iter().map(|(k, p)| (*k, p.session.map(|s| s.full()))).collect(),
-            focus: app.focused,
-            zoom: false,
-            sidebar: true,
-            sidebar_width: 30,
-            show: Default::default(),
-            drawer: None,
-            drawer_share: crate::quick::DRAWER_SHARE,
-            kept: app.kept.as_deref().cloned(),
-        })
-        .unwrap();
-        app.apply_view(Some(saved));
-        assert!(app.kept.as_ref().is_some_and(|k| k.shows(a).is_some() && k.shows(b).is_some()));
-        // `b` goes: the kept split loses its pane; back shows `a` alone.
-        app.on_event(DomainEvent::SessionRemoved { id: b });
-        act(&mut app, "session.last");
-        assert_eq!(app.layout.panes().len(), 1);
         assert_eq!(app.focused_session(), Some(a));
     }
 
@@ -9214,16 +9127,14 @@ mod tests {
     #[test]
     fn an_editor_opens_full_sized_and_gives_the_screen_back_when_it_exits() {
         let mut app = app();
-        let (a, b, _) = split_two(&mut app);
+        let (_, b, _) = split_two(&mut app);
         let mut editor = placed("vim", Some("p1"), Some("p1-root"));
         editor.kind = SessionKind::Command;
         spawned(&mut app, &editor, true);
         assert_eq!(app.layout.panes().len(), 1);
         editor.state = ProcessState::Exited { code: Some(0), signal: None };
         app.on_event(DomainEvent::SessionExited { info: editor });
-        assert_eq!(app.layout.panes().len(), 2, "the split is back");
-        let shown: HashSet<SessionId> = app.panes.values().filter_map(|p| p.session).collect();
-        assert_eq!(shown, HashSet::from([a, b]));
+        assert_eq!(app.focused_session(), Some(b), "back to the session that had focus");
     }
 
     #[test]
@@ -10533,7 +10444,7 @@ mod tests {
     }
 
     #[test]
-    fn showing_a_window_shows_its_whole_layout_and_keeps_the_screen_it_replaces() {
+    fn showing_a_window_shows_its_whole_layout_and_back_is_the_session_before() {
         let mut app = app();
         let (agent, _) = with_agents(&mut app);
         let (a, b) = window_of_two(&mut app);
@@ -10547,7 +10458,7 @@ mod tests {
         let left = rects.iter().find(|(p, _)| app.panes[p].session == Some(a.id)).unwrap().1;
         let right = rects.iter().find(|(p, _)| app.panes[p].session == Some(b.id)).unwrap().1;
         assert!(left.width < right.width, "30/70: {left:?} {right:?}");
-        // The agent's screen is kept: ` brings it back.
+        // ` goes back to the agent.
         app.run(&Command { action: "session.last", arg: None });
         assert_eq!(app.focused_session(), Some(agent));
         // A click on the window's first pane shows the window, that pane focused.
@@ -10613,14 +10524,12 @@ mod tests {
     }
 
     #[test]
-    fn news_about_a_window_keeps_the_quick_terminal_s_drawer_and_the_kept_screen() {
+    fn news_about_a_window_keeps_the_quick_terminal_s_drawer() {
         let mut app = app();
         let (agent, _) = with_agents(&mut app);
         app.show(agent, None);
         let (a, _) = window_of_two(&mut app);
         app.show(a.id, None);
-        let kept = app.kept.clone();
-        assert!(kept.is_some(), "the agent's screen is kept");
         // The quick terminal's drawer under pane 1.
         let host = app.focused;
         let quick = quick("dl.shell", None);
@@ -10641,7 +10550,6 @@ mod tests {
         let d = app.drawer.expect("the drawer stays open");
         assert_eq!(app.panes[&d.pane].session, Some(quick.id));
         assert_eq!(app.panes[&d.host].session, Some(a.id), "under the same pane");
-        assert_eq!(app.kept, kept, "the kept screen is still the agent's");
     }
 
     #[test]

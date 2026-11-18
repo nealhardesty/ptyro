@@ -205,11 +205,7 @@ pub fn settings(data: &[u8]) {
     } else {
         key
     };
-    let lk = Lookups {
-        themes: vec!["dark".into()],
-        actions: vec![("a".into(), "an action".into())],
-        keys: Vec::new(),
-    };
+    let lk = Lookups { actions: vec![("a".into(), "an action".into())], keys: Vec::new() };
     let ok = |_: &str| Ok(());
     let file = if head & 4 == 0 { file.to_owned() } else { settings::starter() };
     let verify = |r: Result<String, String>| {

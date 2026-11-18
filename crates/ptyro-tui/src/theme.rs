@@ -1,8 +1,6 @@
-//! Chrome colours (SPEC §11.4, M2.14): three built-in themes, user themes from `[themes.*]`,
-//! `NO_COLOR`, and downsampling of every colour (chrome *and* session content) to what the outer
+//! Chrome colours (SPEC §11.4, M2.14): three built-in themes, `NO_COLOR`, and downsampling of every colour (chrome *and* session content) to what the outer
 //! terminal can show.
 
-use ptyro_core::config::{Config, ConfigColor, ThemeDef, parse_color};
 use ratatui::style::Color;
 
 pub const BUILTIN: &[&str] = &["ptyro-dark", "ptyro-light", "high-contrast"];
@@ -131,58 +129,27 @@ impl Theme {
         }
     }
 
-    /// The theme named `name`: built in, or `[themes.<name>]` layered on its `base`.
-    pub fn resolve(config: &Config, name: &str, no_color: bool) -> Self {
+    /// The theme named `name`; one ptyro doesn't have (a theme of your own, which were removed
+    /// on 2026-11-17, or a typo) is the default, and `ptyro doctor` offers the fix.
+    pub fn resolve(name: &str, no_color: bool) -> Self {
         if no_color {
             return Self::monochrome();
         }
-        if let Some(t) = Self::builtin(name) {
-            return t;
-        }
-        let Some(def) = config.themes.get(name) else { return Self::dark() };
-        let base = def.base.as_deref().and_then(Self::builtin).unwrap_or_else(Self::dark);
-        apply(base, def)
+        Self::builtin(name).unwrap_or_else(Self::dark)
     }
 }
 
-fn apply(mut t: Theme, def: &ThemeDef) -> Theme {
-    let slots: [(&mut Color, &Option<String>); 16] = [
-        (&mut t.accent, &def.accent),
-        (&mut t.text, &def.text),
-        (&mut t.dim, &def.dim),
-        (&mut t.border, &def.border),
-        (&mut t.border_focus, &def.border_focus),
-        (&mut t.bar_fg, &def.bar_fg),
-        (&mut t.bar_bg, &def.bar_bg),
-        (&mut t.selection_fg, &def.selection_fg),
-        (&mut t.selection_bg, &def.selection_bg),
-        (&mut t.search, &def.search),
-        (&mut t.working, &def.working),
-        (&mut t.blocked, &def.blocked),
-        (&mut t.idle, &def.idle),
-        (&mut t.done, &def.done),
-        (&mut t.error, &def.error),
-        (&mut t.exited, &def.exited),
-    ];
-    for (slot, value) in slots {
-        if let Some(c) = value.as_deref().and_then(|v| parse_color(v).ok()) {
-            *slot = match c {
-                ConfigColor::Default => Color::Reset,
-                ConfigColor::Indexed(i) => Color::Indexed(i),
-                ConfigColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
-            };
-        }
-    }
-    t
+/// One of the built-in themes.
+pub fn exists(name: &str) -> bool {
+    BUILTIN.contains(&name)
 }
 
-pub fn exists(config: &Config, name: &str) -> bool {
-    BUILTIN.contains(&name) || config.themes.contains_key(name)
-}
-
-/// All theme names: built-ins, then user themes.
-pub fn names(config: &Config) -> Vec<String> {
-    BUILTIN.iter().map(|s| (*s).to_owned()).chain(config.themes.keys().cloned()).collect()
+/// Why `name` isn't a theme, with the fix (`ptyro doctor` applies it).
+pub fn unknown(name: &str) -> String {
+    format!(
+        "unknown theme {name:?}: ptyro has {} (themes of your own were removed on 2026-11-17); `ptyro config set ui.theme ptyro-dark`",
+        BUILTIN.join(", ")
+    )
 }
 
 /// How many colours the outer terminal shows (SPEC §11.4).
@@ -285,15 +252,14 @@ fn nearest_16(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::*;
 
+    /// A theme ptyro doesn't have (one of your own, from before they were removed) is the
+    /// default, never a crash; NO_COLOR wins over any.
     #[test]
-    fn user_theme_layers_on_its_base() {
-        let c =
-            Config::parse("[themes.mine]\nbase = \"ptyro-light\"\naccent = \"#ff0000\"\n").unwrap();
-        let t = Theme::resolve(&c, "mine", false);
-        assert_eq!(t.accent, Color::Rgb(255, 0, 0));
-        assert_eq!(t.bar_bg, Theme::light().bar_bg);
-        assert!(Theme::resolve(&c, "mine", true).monochrome);
-        assert!(exists(&c, "mine") && exists(&c, "high-contrast") && !exists(&c, "nope"));
+    fn an_unknown_theme_is_the_default() {
+        assert_eq!(Theme::resolve("ptyro-light", false), Theme::light());
+        assert_eq!(Theme::resolve("mine", false), Theme::dark());
+        assert!(Theme::resolve("high-contrast", true).monochrome);
+        assert!(exists("high-contrast") && !exists("mine"));
     }
 
     #[test]

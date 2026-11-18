@@ -20,7 +20,7 @@ button:active { transform: translateY(1px); }
 code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
 header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  padding: 10px 16px; background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
   border-top: 3px solid var(--machine, transparent); }
 header .machine { font-size: 12px; color: var(--muted); max-width: 30vw; overflow: hidden; text-overflow: ellipsis;
@@ -35,7 +35,7 @@ header .icon { padding: 4px 8px; background: none; border: none; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 .dot.open { background: var(--ok); } .dot.connecting { background: var(--warn); } .dot.rejected { background: var(--bad); }
 
-main.list { padding: 8px; display: grid; gap: 8px; }
+main.list { padding: 8px 16px; display: grid; gap: 8px; }
 main.center { padding: 40px 24px; display: grid; gap: 14px; justify-items: center; text-align: center; }
 .pair input { width: 100%; max-width: 420px; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--panel); color: var(--text); font: inherit; }
@@ -127,7 +127,9 @@ button.icon.plus { font-size: 22px; line-height: 1; color: var(--accent); }
   backdrop-filter: blur(8px); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); }
 .tabs a { flex: 1; text-align: center; padding: 12px 4px; font-size: 13px; color: var(--muted); }
 .tabs a.on { color: var(--accent); font-weight: 600; box-shadow: inset 0 2px 0 var(--accent); }
-main.stack { padding: 10px; display: grid; gap: 10px; align-content: start; }
+main.stack { padding: 10px 16px; display: grid; gap: 10px; align-content: start; }
+/* A long line that doesn't wrap (a row's ellipsis) mustn't widen the page past a phone. */
+main.stack > *, .block-sec > *, .rows > * { min-width: 0; }
 .rows { display: grid; gap: 6px; }
 .row { display: flex; gap: 10px; align-items: center; padding: 11px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 .row.tap { cursor: pointer; } .row.tap:active { transform: translateY(1px); }
@@ -192,7 +194,7 @@ pre.block { margin: 0; padding: 10px; background: var(--panel); border: 1px soli
 .tl time { color: var(--muted); } .tl span { color: var(--muted); word-break: break-word; }
 
 /* projects, worktrees */
-.chips { display: flex; gap: 6px; padding: 8px 10px 0; overflow-x: auto; }
+.chips { display: flex; gap: 6px; padding: 8px 16px 0; overflow-x: auto; }
 .chips button { padding: 5px 12px; border-radius: 16px; font-size: 13px; white-space: nowrap; }
 .chips button.on { background: var(--accent); color: #fff; border-color: transparent; }
 .chips.filter { padding-bottom: 2px; }
@@ -318,7 +320,12 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 @media (hover: none) { .set input, .set select, .set textarea, input.search { font-size: 16px; } }
 
 /* About (UX2.1) */
-.more-version { text-align: center; margin-top: 1.25rem; }
+.rows.joined { gap: 0; }
+.rows.joined > .row { border-radius: 0; }
+.rows.joined > .row + .row { border-top: none; }
+.rows.joined > .row:first-child { border-radius: 10px 10px 0 0; }
+.rows.joined > .row:last-child { border-radius: 0 0 10px 10px; }
+.rows.joined > .row:only-child { border-radius: 10px; }
 .about-v { word-break: break-all; }
 /* Another machine's things (MM1.B): its name in its colour. */
 .machine-chip { white-space: nowrap; font-size: 12px; color: var(--muted); font-weight: normal; }

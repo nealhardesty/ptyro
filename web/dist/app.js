@@ -191,10 +191,13 @@ function setHostLoad(l) {
         chip.querySelector(".load")?.replaceWith(loadSpan() ?? "");
     }
 }
+/// Notifications aren't on for this device yet: a top-level page offers them (More → This device
+/// always has them, and their test).
+const pushOffered = () => !("Notification" in window) || Notification.permission !== "granted";
 /// `back`: true goes to the session list; a string is where it goes instead.
 function header(title, back, ...extra) {
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, dot, h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"));
+    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, dot, !back && pushOffered() ? h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔") : null);
 }
 function sessionCard(s) {
     const st = statusOf(s);
