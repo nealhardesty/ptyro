@@ -453,11 +453,10 @@ its branch and its directory), and `ptyro project rename` a project's.
          last cargo test ✓ 41s│
    ▾ brisk-rook +42 −7 ↑1 ● 3 │
      2 ◉ claude ⚠ permission 3m
-         wants Bash: npm i…   │
-         C-q p y/a/n answers  │
+         wants Bash: npm i    │
+         C-q p y/a/n          │
      3 ● codex 2m             │
          now Bash: cargo test │
-         task fix the flaky … │
  ptyro                main [work] 3 live · 1 working · 1 blocked  ✉2  C-q ? help 14:02
 ```
 

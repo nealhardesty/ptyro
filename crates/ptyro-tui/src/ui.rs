@@ -874,12 +874,12 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     spans.push(b);
                 }
                 // In focus, or wanting you: always opened up, with room to wrap.
-                near = Some(s.id) == focused
-                    || (app.focus == Focus::Sidebar && i == sel)
+                let here = Some(s.id) == focused || (app.focus == Focus::Sidebar && i == sel);
+                near = here
                     || s.attention.is_some()
                     || s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Blocked);
                 let lead = indent.len() + 4;
-                detail = session_details(app, s, lead, width, near || app.sidebar_zoom);
+                detail = session_details(app, s, lead, width, near || app.sidebar_zoom, here);
                 Line::from(spans)
             }
             // A quick terminal (UX1.25): one quiet line, first under its worktree, saying what
@@ -1073,6 +1073,7 @@ fn session_details(
     lead: usize,
     width: usize,
     wide: bool,
+    here: bool,
 ) -> Vec<Line<'static>> {
     use ptyro_core::session::ProcessState;
     let t = &app.theme;
@@ -1098,10 +1099,20 @@ fn session_details(
                     .or_else(|| s.attention.as_ref().map(|a| a.text.clone()))
                     .or_else(|| r.kind.clone())
                     .unwrap_or_else(|| "you".into());
-                items.push(("wants", want, t.blocked));
+                // What it wants and the key that answers it, on one line when they fit; else
+                // the key only on the row you're on, where you'd answer it.
                 let answer =
-                    if r.kind.as_deref() == Some("permission") { "y/a/n answers" } else { "reply" };
-                items.push(("", format!("{} {answer} · ⏎ open", key("peek")), t.dim));
+                    if r.kind.as_deref() == Some("permission") { "y/a/n" } else { "reply" };
+                let hint = format!("{} {answer}", key("peek"));
+                let w = |s: &str| unicode_width::UnicodeWidthStr::width(s);
+                if w(&want) + w(" · ") + w(&hint) <= width.saturating_sub(lead + w("wants ")) {
+                    items.push(("wants", format!("{want} · {hint}"), t.blocked));
+                } else {
+                    items.push(("wants", want, t.blocked));
+                    if here {
+                        items.push(("", hint, t.dim));
+                    }
+                }
             }
             AgentStatus::Errored => {
                 let why = r.detail.clone().or_else(|| r.kind.clone()).unwrap_or_default();
@@ -1120,10 +1131,7 @@ fn session_details(
     } else if let Some(a) = &s.inner_agent {
         items.push(("◌", format!("{a} by hand, status off its screen"), t.dim));
     }
-    // Its title (`--title`, `retitle`, else the first prompt), not a window title (UX1.24).
-    if let Some(task) = session_title(s).or(s.task.as_deref()) {
-        items.push(("task", task.to_owned(), t.text));
-    }
+    // No line for its title: the pane's header says it, and the sidebar stays compact.
     let working = s.status.as_ref().is_some_and(|r| r.status == AgentStatus::Working);
     // A small model's line on it (UX1.3): this turn's says what its last reply would.
     let summary = s.summary.as_ref().filter(|_| !working && live);
@@ -1160,6 +1168,8 @@ fn session_details(
         let label = if label.is_empty() { String::new() } else { format!("{label} ") };
         let room = width.saturating_sub(lead + label.chars().count()).max(4);
         let mut rest = text;
+        // What it last said or ran is a reminder: one line, even when there is room for two.
+        let wide = wide && label != "last ";
         for n in 0..if wide { 2 } else { 1 } {
             let mut part = rest.clone();
             truncate_width(&mut part, room);

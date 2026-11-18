@@ -8203,16 +8203,16 @@ mod tests {
         let has = |w: &str| lines.iter().any(|l| l.contains(w));
         assert!(has("fixer claude 2m"), "line 1: the program, and how long: {lines:#?}");
         assert!(has("now Bash: cargo test"), "{lines:#?}");
-        assert!(has("task fix the flaky"), "{lines:#?}");
+        assert!(!has("fix the flaky"), "no title line: the pane's header says it: {lines:#?}");
         assert!(has("wants Bash: npm i"), "{lines:#?}");
-        assert!(has("y/a/n answers"), "{lines:#?}");
+        assert!(!has("y/a/n") && !has("⏎ open"), "the key only on the row you're on: {lines:#?}");
         assert!(has("last All tests pass."), "{lines:#?}");
         assert!(has("last cargo test ✗101"), "{lines:#?}");
         assert!(!lines.iter().any(|l| l.contains("2.1.")), "never a version");
 
         // Compact: one line each.
         app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Compact;
-        assert!(!rows_say(&app, "task fix") && !rows_say(&app, "wants"));
+        assert!(!rows_say(&app, "now Bash") && !rows_say(&app, "wants"));
         assert!(rows_say(&app, "fixer"));
     }
 
@@ -8262,7 +8262,7 @@ mod tests {
         let mut many: Vec<SessionInfo> = (0..14)
             .map(|n| {
                 let mut s = session(&format!("s{n:02}"));
-                s.task = Some(format!("task number {n}"));
+                s.last_reply = Some(format!("reply number {n}"));
                 s
             })
             .collect();
@@ -8270,22 +8270,57 @@ mod tests {
         app.panes.get_mut(&1).unwrap().session = Some(many[3].id);
         app.sessions = many;
         // 14 rows and 16 detail lines don't fit in 27: the focused and blocked rows open.
-        assert!(rows_say(&app, "task number 3"), "the focused one");
+        assert!(rows_say(&app, "last reply number 3"), "the focused one");
         assert!(rows_say(&app, "wants which db?"), "the blocked one");
-        assert!(!rows_say(&app, "task number 5"), "the rest stay one line");
+        assert!(!rows_say(&app, "reply number 5"), "the rest stay one line");
         app.config.ui.sidebar_detail = ptyro_core::config::SidebarDetail::Full;
-        assert!(rows_say(&app, "task number 0"));
+        assert!(rows_say(&app, "last reply number 0"));
+    }
+
+    #[test]
+    fn what_a_session_last_said_takes_one_line_even_in_focus() {
+        let mut app = app();
+        let mut s = session("talker");
+        s.last_reply = Some(format!("{} END", "word ".repeat(60)));
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        app.sessions = vec![s];
+        let lines = sidebar(&app);
+        let at = lines.iter().position(|l| l.contains("last word")).expect("the line");
+        assert!(lines[at].trim_end().ends_with('…'), "cut, not wrapped: {lines:#?}");
+        assert!(!lines.iter().any(|l| l.contains("END")), "{lines:#?}");
+        assert!(!lines.get(at + 1).is_some_and(|l| l.contains("word")), "{lines:#?}");
+    }
+
+    #[test]
+    fn a_blocked_row_takes_one_line_and_offers_its_key_where_you_are() {
+        let mut app = app();
+        let mut s = session("asker");
+        s.kind = SessionKind::Agent;
+        status(&mut s, AgentStatus::Blocked, Some("permission"), Some("Bash: npm i"));
+        app.sessions = vec![s.clone()];
+        let lines = sidebar(&app);
+        let at = lines.iter().position(|l| l.contains("wants Bash: npm i")).expect("the line");
+        assert!(!lines.get(at + 1).is_some_and(|l| l.contains("y/a/n")), "{lines:#?}");
+        // The row you're on: the key that answers it, under it.
+        app.panes.get_mut(&1).unwrap().session = Some(s.id);
+        let lines = sidebar(&app);
+        let at = lines.iter().position(|l| l.contains("wants Bash: npm i")).expect("the line");
+        assert!(lines[at + 1].contains("C-q p y/a/n"), "{lines:#?}");
+        // Room for both: one line.
+        app.sidebar_width = 60;
+        let shown = screen(&app);
+        assert!(shown.contains("wants Bash: npm i · C-q p y/a/n"), "{shown}");
     }
 
     #[test]
     fn a_click_on_a_detail_line_picks_its_session() {
         let mut app = app();
         let mut a = session("alpha");
-        a.task = Some("first task".into());
+        a.last_reply = Some("first reply".into());
         let b = session("beta");
         app.sessions = vec![a.clone(), b.clone()];
         let lines = sidebar(&app);
-        let y = lines.iter().position(|l| l.contains("first task")).unwrap() as u16;
+        let y = lines.iter().position(|l| l.contains("first reply")).unwrap() as u16;
         let beta = lines.iter().position(|l| l.contains("beta")).unwrap() as u16;
         let click = |row: u16| crossterm::event::MouseEvent {
             kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
@@ -8305,7 +8340,7 @@ mod tests {
         let sessions: Vec<SessionInfo> = (0..14)
             .map(|n| {
                 let mut s = session(&format!("s{n:02}"));
-                s.task = Some(format!("the task of session number {n}, which is long"));
+                s.last_reply = Some(format!("the reply of session number {n}, which is long"));
                 s
             })
             .collect();
@@ -8315,7 +8350,7 @@ mod tests {
         app.run(&Command { action: "sidebar.zoom", arg: None });
         assert_eq!(app.main_area(), main, "the panes keep their size");
         let shown = screen(&app);
-        assert!(shown.contains("the task of session number 9, which is long"), "{shown}");
+        assert!(shown.contains("the reply of session number 9, which is long"), "{shown}");
         assert!(shown.contains("everything at once"), "{shown}");
         // ⏎ on a row opens it and goes back.
         app.nav_move(4);
@@ -8749,7 +8784,7 @@ mod tests {
         app.panes.get_mut(&1).unwrap().session = Some(s.id);
         app.sessions = vec![s.clone()];
         let shown = screen(&app);
-        assert!(shown.contains("task Fix the flaky"), "the row: {shown}");
+        assert!(!shown.contains("task Fix the flaky"), "no title line in the row: {shown}");
         assert!(shown.contains("· Fix the flaky test in tests/api.rs"), "the header: {shown}");
         // A window title alone isn't a title.
         let mut w = session("plain");
