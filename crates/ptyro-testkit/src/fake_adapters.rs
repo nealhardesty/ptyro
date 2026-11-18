@@ -1,12 +1,10 @@
-//! `ptyro fake-agent --as <adapter>`: the fake agent behaving like Claude Code, Codex, Gemini,
-//! OpenCode or Antigravity towards ptyro (M4.15), so CI covers every adapter without real agents.
+//! `ptyro fake-agent --as <adapter>`: the fake agent behaving like Claude Code, Codex or OpenCode
+//! towards ptyro (M4.15), so CI covers every adapter without real agents.
 //!
 //! It reads the integration ptyro generated for it, exactly as the real agent would:
 //! - **claude**: the `--plugin-dir`'s `hooks/hooks.json`, the `--settings` statusLine command,
 //!   `--session-id` / `--resume`;
 //! - **codex**: `-c hooks.<Event>=[…]` and `-c notify=[…]`, `resume <id>`;
-//! - **gemini** and **antigravity**: an installed extension is simulated by calling
-//!   `$PTYRO_BIN hook <adapter> <Event>` directly;
 //! - **opencode**: serves `GET /event` (SSE, basic auth with `OPENCODE_SERVER_PASSWORD`) on
 //!   `--port`, and the permissions API.
 //!
@@ -26,8 +24,8 @@
 //!
 //! With `PTYRO_FAKE_TURNS=1` it treats prose like a real agent: a line `Label: <command>` runs
 //! the command, and any other line is a short turn (prompts and follow-ups).
-//! With `PTYRO_FAKE_TOUR=1` (`ptyro tour`) any prose is a task: it asks before running a command,
-//! then fixes the typo in `greeting.txt` (or, told no, leaves it).
+//! With `PTYRO_FAKE_TASK=1` any prose is a task: it asks before running a command, then fixes the
+//! typo in `greeting.txt` (or, told no, leaves it).
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
 //! | `exit` | SessionEnd, exit 0 |
@@ -98,7 +96,7 @@ impl Fake {
             hooks: BTreeMap::new(),
             notify: Vec::new(),
             statusline: None,
-            psp: adapter == "claude" || adapter == "opencode" || adapter == "antigravity",
+            psp: adapter == "claude" || adapter == "opencode",
             oc: None,
             late_start: std::cell::Cell::new(
                 std::env::var_os("PTYRO_FAKE_LATE_SESSION_START").is_some(),
@@ -181,13 +179,6 @@ impl Fake {
                     None => f.session = uuidish(),
                 }
             }
-            "gemini" => match arg_value(args, "--resume") {
-                Some(id) => {
-                    f.session = id;
-                    f.resumed = true;
-                }
-                None => f.session = arg_value(args, "--session-id").unwrap_or_else(uuidish),
-            },
             "opencode" => {
                 match arg_value(args, "--session") {
                     Some(id) => {
@@ -215,7 +206,7 @@ impl Fake {
     }
 
     /// Run the hook for `event` with `payload`, as the agent would (command hooks get JSON on
-    /// stdin; gemini/antigravity simulate an installed extension). Returns what a hook printed
+    /// stdin). Returns what a hook printed
     /// as JSON (a decision), if anything.
     fn hook(&self, event: &str, payload: Value) {
         let _ = self.hook_out(event, payload);
@@ -233,19 +224,9 @@ impl Fake {
             json!(std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default());
         let cmds: Vec<String> = match self.adapter.as_str() {
             "claude" | "codex" => self.hooks.get(event).cloned().unwrap_or_default(),
-            "gemini" | "antigravity" => {
-                let bin = std::env::var("PTYRO_BIN").unwrap_or_else(|_| "ptyro".into());
-                // Forward slashes, as ptyro writes a hook's path (Git Bash drops backslashes).
-                let bin = crate::program::shell_path(&bin);
-                vec![format!("{bin} hook {} {event}", self.adapter)]
-            }
             _ => Vec::new(),
         };
-        if self.adapter == "antigravity" {
-            payload["conversationId"] = json!(self.session);
-        } else {
-            payload["session_id"] = json!(self.session);
-        }
+        payload["session_id"] = json!(self.session);
         (cmds, payload)
     }
 
@@ -271,12 +252,11 @@ impl Fake {
         work: impl FnOnce() -> String,
     ) -> Result<String, String> {
         let tool = json!({ "tool_name": name, "tool_input": input });
-        let pre = if self.adapter == "gemini" { "BeforeTool" } else { "PreToolUse" };
-        if let Some(why) = Self::denied(self.hook_out(pre, tool.clone()).as_ref()) {
+        if let Some(why) = Self::denied(self.hook_out("PreToolUse", tool.clone()).as_ref()) {
             return Err(why);
         }
         let out = work();
-        self.hook(if self.adapter == "gemini" { "AfterTool" } else { "PostToolUse" }, tool);
+        self.hook("PostToolUse", tool);
         Ok(out)
     }
 
@@ -290,11 +270,7 @@ impl Fake {
     ) {
         let p = json!({ "prompt": prompt });
         self.late_session_start(out);
-        match self.adapter.as_str() {
-            "gemini" => self.hook("BeforeAgent", p),
-            "antigravity" => self.hook("PreInvocation", p),
-            _ => self.hook("UserPromptSubmit", p),
-        };
+        self.hook("UserPromptSubmit", p);
         self.oc(json!({ "type": "session.status", "properties": { "sessionID": self.session, "status": { "type": "busy" } } }));
         self.report(out, "state=working:msg=d29ya2luZw");
         let msg = body(out);
@@ -325,9 +301,9 @@ impl Fake {
         }
     }
 
-    /// The tour's task (`PTYRO_FAKE_TOUR=1`): look around, ask before running a command, then
-    /// fix the typo in `greeting.txt` and say so. Told no, it leaves the file alone.
-    fn tour_turn(&self, out: &mut std::io::Stdout, prompt: &str) {
+    /// The task (`PTYRO_FAKE_TASK=1`): look around, ask before running a command, then fix the
+    /// typo in `greeting.txt` and say so. Told no, it leaves the file alone.
+    fn task_turn(&self, out: &mut std::io::Stdout, prompt: &str) {
         self.turn(out, prompt, |out| {
             let _ = writeln!(out, "Looking at greeting.txt…");
             std::thread::sleep(Duration::from_millis(800));
@@ -375,7 +351,6 @@ impl Fake {
         // Claude's PermissionRequest runs alongside its dialog (and may answer it).
         let (decided_tx, decided) = std::sync::mpsc::channel();
         match f.adapter.as_str() {
-                    "gemini" => f.hook("Notification", json!({ "notification_type": "ToolPermission", "message": format!("Allow Bash: {rest}") })),
                     "opencode" => f.oc(json!({ "type": "permission.asked", "properties": { "sessionID": f.session, "id": "per_1", "title": format!("Bash: {rest}") } })),
                     "claude" => {
                         let (cmds, payload) = f.hook_prep("PermissionRequest", tool.clone());
@@ -417,8 +392,6 @@ impl Fake {
                     let _ = std::process::Command::new(prog).args(args).arg(j.to_string()).status();
                 }
             }
-            "gemini" => self.hook("AfterAgent", json!({})),
-            "antigravity" => self.hook("Stop", json!({ "fullyIdle": true })),
             "opencode" => {
                 self.oc(json!({ "type": "session.status", "properties": { "sessionID": self.session, "status": { "type": "idle" } } }));
                 self.oc(
@@ -551,7 +524,7 @@ fn run_hooks(cmds: &[String], payload: &Value, limit: Duration) -> Option<Value>
     let mut answer = None;
     // `PTYRO_FAKE_HOOK_DELAY_MS=N`: each hook takes N ms to start, as on a loaded machine (a
     // macOS runner took over 500 ms), so what ptyro does before a hook arrives is testable.
-    // A test knob: a release build (whose `ptyro tour` runs this fake) never reads it.
+    // A test knob: a release build never reads it.
     let delay = ptyro_core::test_knob("PTYRO_FAKE_HOOK_DELAY_MS").and_then(|v| v.parse().ok());
     for c in cmds {
         if let Some(ms) = delay {
@@ -759,20 +732,13 @@ pub fn main(args: &[String]) -> i32 {
                 let secs: f64 = secs.parse().unwrap_or(1.0);
                 let prompt = json!({ "prompt": format!("work {rest}") });
                 f.late_session_start(&mut out);
-                match f.adapter.as_str() {
-                    "gemini" => f.hook("BeforeAgent", prompt),
-                    "antigravity" => f.hook("PreInvocation", prompt),
-                    _ => f.hook("UserPromptSubmit", prompt),
-                }
+                f.hook("UserPromptSubmit", prompt);
                 f.oc(json!({ "type": "session.status", "properties": { "sessionID": f.session, "status": { "type": "busy" } } }));
                 f.report(&mut out, "state=working:msg=d29ya2luZw");
                 let tool = json!({ "tool_name": "Bash", "tool_input": { "command": format!("sleep {secs}") } });
-                f.hook(
-                    if f.adapter == "gemini" { "BeforeTool" } else { "PreToolUse" },
-                    tool.clone(),
-                );
+                f.hook("PreToolUse", tool.clone());
                 std::thread::sleep(Duration::from_secs_f64(secs));
-                f.hook(if f.adapter == "gemini" { "AfterTool" } else { "PostToolUse" }, tool);
+                f.hook("PostToolUse", tool);
                 let _ = writeln!(out, "worked: {text}");
                 f.report(&mut out, "state=done");
                 f.turn_complete(text, &mut out);
@@ -884,11 +850,11 @@ pub fn main(args: &[String]) -> i32 {
             }
             "/exit" | "/quit" => return 0,
             "" => {}
-            // `PTYRO_FAKE_TOUR=1` (`ptyro tour`): any prose is a task, done like an agent would.
-            _ if std::env::var("PTYRO_FAKE_TOUR").is_ok()
+            // `PTYRO_FAKE_TASK=1`: any prose is a task, done like an agent would.
+            _ if std::env::var("PTYRO_FAKE_TASK").is_ok()
                 && !line.starts_with("<ptyro-message") =>
             {
-                f.tour_turn(&mut out, &line);
+                f.task_turn(&mut out, &line);
             }
             _ if line.starts_with("<ptyro-message") || prose => {
                 let _ = writeln!(out, "you said: {line}");

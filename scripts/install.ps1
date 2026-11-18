@@ -13,7 +13,7 @@
 #   $env:PTYRO_UNINSTALL = '1'; irm .../install.ps1 | iex
 #   & ([scriptblock]::Create((irm .../install.ps1))) -Uninstall --dry-run   # what it would remove
 #   powershell -ExecutionPolicy Bypass -File install.ps1 -Uninstall
-# Arguments after -Uninstall go to `ptyro uninstall` (--dry-run, --yes, --backup FILE…). If
+# Arguments after -Uninstall go to `ptyro uninstall` (--dry-run, --yes…). If
 # ptyro.exe won't run, only what this script installed is removed, and its PATH entry.
 #
 # Environment (the same names as install.sh):

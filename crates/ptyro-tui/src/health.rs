@@ -583,7 +583,7 @@ mod tests {
             ),
             s(&["claude"])
         );
-        assert_eq!(fix("agents", "antigravity", "problem", "agy not found"), s(&["agy"]));
+        assert_eq!(fix("agents", "opencode", "problem", "opencode not found"), s(&["opencode"]));
         assert_eq!(
             fix(
                 "git",
@@ -599,8 +599,8 @@ mod tests {
         );
         assert_eq!(fix("agents", "agents", "warn", &ptyro_agents::locate::no_agent()), s(&[]));
         assert_eq!(
-            fix("agents", "x", "warn", "run `ptyro install agy gh` to add them"),
-            s(&["agy", "gh"])
+            fix("agents", "x", "warn", "run `ptyro install opencode gh` to add them"),
+            s(&["opencode", "gh"])
         );
         assert_eq!(fix("agents", "x", "warn", "`ptyro setup` installs them"), s(&[]));
         // The side a line names is kept; a flag's value is never a name.

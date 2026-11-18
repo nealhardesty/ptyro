@@ -1,5 +1,5 @@
 //! What the web app asks of the machine ptyro runs on (ROADMAP WEB1.6): the config file, the
-//! doctor's checks, profiles, agent integrations, the login service, the daemon's log and its
+//! doctor's checks, profiles, the login service, the daemon's log and its
 //! restart. The CLI does these with files and subprocesses of its own; a browser can't, so
 //! `ptyro serve` does them for it at `POST /api/host`, for a device with `full` scope only (they
 //! change the machine). The work is the CLI's own, shared, not copied.
@@ -286,35 +286,6 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "session": info.id.full() }))
         }
 
-        // ── agent integrations, the login service ──
-        "integrations.ls" => {
-            let r = cli(&["integrations", "ls", "--json"]).await?;
-            Ok(
-                json!({ "integrations": serde_json::from_str::<Value>(r["out"].as_str().unwrap_or("[]")).unwrap_or(json!([])) }),
-            )
-        }
-        "integrations.install" | "integrations.uninstall" => {
-            let verb = if op.ends_with("uninstall") { "uninstall" } else { "install" };
-            let agent = str_of(a, "agent")?.to_owned();
-            let mut args = vec!["integrations", verb, &agent];
-            let profile = opt(a, "profile");
-            if let Some(p) = &profile {
-                args.extend(["--profile", p]);
-            }
-            let r = cli(&args).await?;
-            if r["ok"] == json!(false) {
-                return Err(Error::invalid(
-                    format!(
-                        "{} {}",
-                        r["err"].as_str().unwrap_or(""),
-                        r["out"].as_str().unwrap_or("")
-                    )
-                    .trim()
-                    .to_owned(),
-                ));
-            }
-            Ok(json!({ "notes": notes(&r) }))
-        }
         // `ptyro pair --open`: the computer's own browser (inside WSL, Windows') gets a paired
         // web app. `--json` returns at once instead of waiting for the browser.
         // A session in a new tab of a terminal on the computer (WIN3). The server has no terminal
@@ -389,7 +360,7 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "path": path, "text": tail(&path, lines) }))
         }
         // These end the connection that asked: they go on by themselves, and the app reconnects.
-        // ── leaving: what an uninstall would remove (read-only), and a backup of ptyro's state ──
+        // ── leaving: what an uninstall would remove (read-only) ──
         "uninstall.plan" => {
             let env = crate::uninstall::Env::current();
             let plan =
@@ -397,16 +368,6 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(
                 json!({ "plan": plan, "text": crate::uninstall::render(&plan, &env), "command": plan.command }),
             )
-        }
-        "backup.create" => {
-            let opts = crate::backup::Opts {
-                output: opt(a, "output").map(std::path::PathBuf::from),
-                with_recordings: a["with_recordings"].as_bool().unwrap_or(false),
-                with_ca: false,
-                no_chats: a["no_chats"].as_bool().unwrap_or(false),
-            };
-            let made = crate::backup::create(ctx, &opts).await?;
-            Ok(json!(made))
         }
         "daemon.restart" => {
             detached(&["daemon", "restart", "--force"])?;
@@ -417,7 +378,6 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             Ok(json!({ "started": true }))
         }
 
-        // ── the tour ──
         // ── other machines (MM1.B): claiming a code is an HTTPS request from this machine ──
         "machine.add" => {
             let mut args = vec!["machine", "add", str_of(a, "target")?, "--json"];
@@ -446,8 +406,18 @@ pub async fn run(ctx: &Ctx, op: &str, a: &Value) -> Result<Value, Error> {
             }
             Ok(serde_json::from_str(r["out"].as_str().unwrap_or("{}")).unwrap_or(r))
         }
-        "tour.start" => crate::tour::web_start(ctx).await,
-        "tour.end" => crate::tour::web_end().await,
+        // Removed (2026-11-17, the pare-down): an older page that still asks is told so.
+        "integrations.ls"
+        | "integrations.install"
+        | "integrations.uninstall"
+        | "backup.create"
+        | "tour.start"
+        | "tour.end" => Err(Error::new(
+            ErrorCode::Unsupported,
+            format!(
+                "{op} was removed from ptyro on 2026-11-17: reload this page for the current web app"
+            ),
+        )),
 
         other => Err(Error::invalid(format!("no such operation: {other}"))),
     }

@@ -244,7 +244,7 @@ pub fn how(e: &Entry) -> String {
 /// `PATH` (for the method an unticked row would use).
 pub fn about(plan: &Plan, e: &Entry, programs: &dyn Fn(&str) -> bool, two: bool) -> String {
     let Some(item) = catalog::item(&e.id) else { return String::new() };
-    // A label (Gemini CLI's "for Gemini API-key and enterprise accounts…") says more than what
+    // A label ("for API-key accounts") says more than what
     // it is, so it takes that place.
     let mut parts: Vec<String> = vec![e.label.clone().unwrap_or_else(|| item.about.clone())];
     let platform = plan.platform;
@@ -321,7 +321,7 @@ pub fn why(plan: &Plan, e: &Entry) -> Vec<String> {
     out
 }
 
-/// Item ids as their names: `Codex, Gemini CLI`.
+/// Item ids as their names: `Codex, OpenCode`.
 fn names(plan: &Plan, ids: &[String]) -> String {
     let by: Vec<&str> =
         ids.iter().map(|id| plan.entry(id).map_or(id.as_str(), |x| x.name.as_str())).collect();

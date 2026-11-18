@@ -26,7 +26,7 @@ struct World {
 /// Every adapter's agent is the fake agent in that adapter's mode.
 fn agents_config(extra: &str) -> String {
     let mut c = String::from("[attention]\nmin_work = \"1s\"\n");
-    for a in ["claude", "codex", "gemini", "opencode", "antigravity"] {
+    for a in ["claude", "codex", "opencode"] {
         c.push_str(&format!(
             "[agents.{a}]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"{a}\"]\n"
         ));
@@ -374,7 +374,7 @@ async fn a_wrapped_claude_prompt_left_in_its_box_is_reported() {
 }
 
 #[tokio::test]
-async fn codex_gemini_antigravity_and_opencode_adapters() {
+async fn codex_and_opencode_adapters() {
     let w = World::new("");
     // The user's own Codex notify keeps working (chained).
     let codex_home = w.home().join(".codex");
@@ -389,9 +389,7 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
     )
     .unwrap();
     let c = w.d.client().await.unwrap();
-    for (name, adapter) in
-        [("cx", "codex"), ("gm", "gemini"), ("ag", "antigravity"), ("oc", "opencode")]
-    {
+    for (name, adapter) in [("cx", "codex"), ("oc", "opencode")] {
         let s = agent(&c, name, adapter, None).await;
         w.d.wait_for_text(&c, name, &format!("fake {adapter}"), WAIT).await.unwrap();
         // Its first reliable word (a hook, OSC 7501 or the sidecar) before the prompt: until it
@@ -401,7 +399,7 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
             s.status.as_ref().is_some_and(|r| r.confidence == Confidence::High)
         })
         .await;
-        // Codex and Antigravity learn their conversation id at start; OpenCode with its first event.
+        // Codex learns its conversation id at start; OpenCode with its first event.
         if adapter != "opencode" {
             wait_for(&c, name, "conversation", |s| s.conversation.is_some()).await;
         }
@@ -499,8 +497,8 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
         c.request(hook(event, payload)).await.unwrap();
     }
     assert_eq!(get(&c, "cx").await.turns, before.turns + 1, "one turn, ended twice");
-    // Permission prompts: keys for codex and gemini, the API for OpenCode.
-    for name in ["cx", "gm", "oc"] {
+    // Permission prompts: keys for codex, the API for OpenCode.
+    for name in ["cx", "oc"] {
         send(&c, name, "ask make deploy").await;
         let s = wait_for(&c, name, "blocked", |s| is(s, AgentStatus::Blocked)).await;
         assert_eq!(s.status.as_ref().unwrap().kind.as_deref(), Some("permission"), "{name}");
@@ -509,10 +507,34 @@ async fn codex_gemini_antigravity_and_opencode_adapters() {
             .unwrap();
         w.d.wait_for_text(&c, name, "answer: yes", WAIT).await.unwrap();
     }
-    // Antigravity has no permission hook: OSC 7501 says blocked.
-    send(&c, "ag", "ask x").await;
-    let s = wait_for(&c, "ag", "blocked", |s| is(s, AgentStatus::Blocked)).await;
-    assert_eq!(s.status.as_ref().unwrap().source, SignalSource::Osc);
+}
+
+/// Gemini CLI and Antigravity are no longer built in (2026-11-17): a session one of them ran
+/// still lists, and resuming it says why it can't, and what to do, instead of failing blindly.
+#[tokio::test]
+async fn a_session_of_a_removed_agent_lists_and_says_why_it_cant_resume() {
+    let mine = format!(
+        "[agents.gemini]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\nadapter = \"claude\"\n"
+    );
+    let w = World::new(&mine);
+    let c = w.d.client().await.unwrap();
+    agent(&c, "gm", "gemini", None).await;
+    w.d.wait_for_text(&c, "gm", "resumed=false", WAIT).await.unwrap();
+    w.ok(&["hibernate", "gm"]);
+    wait_for(&c, "gm", "dormant", |s| s.state == ProcessState::Dormant).await;
+    // The upgrade: no `[agents.gemini]` of the user's, so `gemini` is the removed built-in.
+    w.d.write_config(&agents_config("")).unwrap();
+    c.request(Request::ReloadConfig).await.unwrap();
+    assert!(w.ok(&["ls", "--all"]).contains("gm"), "it still lists");
+    let out = w.d.cmd().args(["resume", "gm"]).output().unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("Gemini CLI (gemini) is no longer built into ptyro")
+            && err.contains("[agents.gemini] a command"),
+        "{err}"
+    );
+    assert_eq!(get(&c, "gm").await.state, ProcessState::Dormant, "and stays as it was");
 }
 
 #[tokio::test]

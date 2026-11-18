@@ -395,12 +395,11 @@ function retitle(c) {
     });
 }
 function agentNames() {
-    const names = ["claude", "codex", "gemini", "opencode"];
+    const names = ["claude", "codex", "opencode"];
     for (const a of data.agents)
         if (!names.includes(a.name))
             names.push(a.name);
-    // Antigravity has no structured mode, so it can't chat (SPEC §22.5).
-    return names.filter((n) => n !== "antigravity" && (data.agents.length === 0 || data.agents.some((a) => a.name === n && a.installed)));
+    return names.filter((n) => data.agents.length === 0 || data.agents.some((a) => a.name === n && a.installed));
 }
 function pickAgent(c) {
     // Each with where ptyro found it (an npx cache, nvm…), so a surprising copy is visible.

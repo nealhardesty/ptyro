@@ -6,12 +6,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// Variables that select an account, and the agent each belongs to.
-const VARS: &[(&str, &str)] = &[
-    ("CLAUDE_CONFIG_DIR", "claude"),
-    ("CODEX_HOME", "codex"),
-    ("GEMINI_CLI_HOME", "gemini"),
-    ("GH_CONFIG_DIR", "gh"),
-];
+const VARS: &[(&str, &str)] =
+    &[("CLAUDE_CONFIG_DIR", "claude"), ("CODEX_HOME", "codex"), ("GH_CONFIG_DIR", "gh")];
 
 const RC_FILES: &[&str] =
     &[".zshrc", ".zshenv", ".zprofile", ".bashrc", ".bash_profile", ".bash_aliases", ".profile"];
@@ -264,9 +260,7 @@ pub fn detect(home: &Path, config: &Path) -> Vec<Suggestion> {
             .collect();
         names.sort();
         for name in names {
-            for (prefix, agent) in
-                [(".claude-", "claude"), (".codex-", "codex"), (".gemini-", "gemini")]
-            {
+            for (prefix, agent) in [(".claude-", "claude"), (".codex-", "codex")] {
                 let Some(suffix) = name.strip_prefix(prefix) else { continue };
                 let dir = format!("~/{name}");
                 if seen_dirs.iter().any(|d| d == &dir || d.ends_with(&name))

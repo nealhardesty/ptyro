@@ -104,7 +104,7 @@ pub async fn login(ctx: &Ctx, a: LoginArgs) -> Result<i32, Error> {
     Ok(if ok { 0 } else { 1 })
 }
 
-/// The commands `ptyro login` knows (`claude`, `agy`, `gh`…).
+/// The commands `ptyro login` knows (`claude`, `opencode`, `gh`…).
 fn programs() -> Vec<String> {
     catalog::items().iter().filter(|i| i.login.is_some()).map(|i| i.program.clone()).collect()
 }
@@ -158,7 +158,7 @@ fn fine(r: &LoginRow, named: bool) -> bool {
     }
 }
 
-/// The name `ptyro install` and `ptyro login` take for it (`agy`, `gh`).
+/// The name `ptyro install` and `ptyro login` take for it (`opencode`, `gh`).
 fn program(id: &str) -> String {
     catalog::item(id).map_or_else(|| id.to_owned(), |i| i.program.clone())
 }

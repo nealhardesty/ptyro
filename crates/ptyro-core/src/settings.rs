@@ -418,7 +418,7 @@ pub const COLLECTIONS: &[Collection] = &[
         reserved: &["default"],
         starter: &[],
         title: "Your agents",
-        empty: "None added. claude, codex, gemini and opencode work as they are: add one only to change how an agent starts, or to run another program.",
+        empty: "None added. claude, codex and opencode work as they are: add one only to change how an agent starts, or to run another program.",
     },
     Collection {
         path: "profiles",
@@ -564,9 +564,7 @@ const START_AGENTS: &[Choice] = &[
 const ADAPTERS: &[Choice] = &[
     c("claude", "Claude Code"),
     c("codex", "Codex"),
-    c("gemini", "Gemini CLI"),
     c("opencode", "OpenCode"),
-    c("antigravity", "Antigravity"),
     c("generic", "any other program"),
 ];
 const PROTOCOLS: &[Choice] = &[
@@ -711,7 +709,7 @@ pub const SETTINGS: &[Setting] = &[
     // ── Chat ──
     s("chat.enabled", "chat", Kind::Bool, "Chats with your agents: a CHATS section under each workspace, `ptyro chat`, and the web's Chats page. Off hides them all; your chats stay saved.").also("ai assistant conversation history"),
     s("chat.recent", "chat", int(1, 100), "How many chats show under CHATS in the sidebar, after the pinned ones.").unit("chats"),
-    s("chat.agent", "chat", dynamic(Source::Agents), "The agent new chats talk to; `agent@profile` picks its account too.").or("the workspace's default agent, else the first installed of claude, codex, gemini and opencode").new_only(),
+    s("chat.agent", "chat", dynamic(Source::Agents), "The agent new chats talk to; `agent@profile` picks its account too.").or("the workspace's default agent, else the first installed of claude, codex and opencode").new_only(),
     s("chat.incognito", "chat", Kind::Bool, "New chats start incognito: nothing of them is kept or searchable, and they end when their agent stops (C-i in a new chat flips it).").new_only().also("private"),
     s("chat.history_tool", "chat", Kind::Bool, "Chats can look up your other chats (\"as we said last week…\"): search, read and list them.").new_only().also("memory search"),
     s("chat.history_scope", "chat", pick(CHAT_SCOPE), "Which chats a chat can look up (and `chat find` searches).").new_only().also("privacy"),
@@ -756,9 +754,9 @@ pub const SETTINGS: &[Setting] = &[
     s("remote.push_hosts", "remote", Kind::List, "More push services a device may use besides the browsers' own, like a self-hosted ntfy.").adv().or("none"),
     s("remote.approval_wait", "remote", Kind::Duration, "How long a Claude permission prompt waits for a phone's answer."),
     // ── Agents ──
-    s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice.").or("claude").also("default agent claude codex gemini opencode"),
+    s("agents.default", "agents", dynamic(Source::Agents), "The agent new sessions start when nothing else says: `n`'s first choice.").or("claude").also("default agent claude codex opencode"),
     // ── Updates ──
-    s("updates.check", "updates", pick(UPDATE_CHECK), "Look for newer versions of your agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) and of ptyro itself once a day. A newer one is offered with its one-step update at start-up, in the health badge (M), on the web's Health page and in `ptyro doctor`; nothing is downloaded or updated without you (ptyro's own update checks the release against its SHA256SUMS, then upgrades the daemon live). Offline, it stays quiet and looks again the next day.").also("update upgrade new version out of date outdated newer check latest self-update release"),
+    s("updates.check", "updates", pick(UPDATE_CHECK), "Look for newer versions of your agents (Claude Code, Codex, OpenCode) and of ptyro itself once a day. A newer one is offered with its one-step update at start-up, in the health badge (M), on the web's Health page and in `ptyro doctor`; nothing is downloaded or updated without you (ptyro's own update checks the release against its SHA256SUMS, then upgrades the daemon live). Offline, it stays quiet and looks again the next day.").also("update upgrade new version out of date outdated newer check latest self-update release"),
     s("updates.notify", "updates", Kind::Bool, "A desktop notification when a new ptyro release is out, once per release and outside quiet hours, saying how to update (the TUI's `C-q ^`, the web's Health page, or `ptyro update ptyro`). It is sent even when `notifications.channels` leaves the desktop out (that is for your sessions' alerts); turn this off to keep releases off the desktop. Either way the release is offered in the TUI, the web and `ptyro doctor`.").also("notify notification desktop alert release new version update self-update announce"),
     s("updates.ignore", "updates", Kind::List, "Updates not to offer: an agent's name (or `ptyro`) to skip all of its updates (`codex`), or a name and version to skip just that one (`codex@0.170.0`, `ptyro@0.0.70`).").also("skip mute dismiss update version outdated self-update").or("none").eg("codex@0.170.0"),
     s("updates.keep_installer", "updates", Kind::List, "Agents to keep the way you installed them (`codex`): ptyro stops offering to move them to the vendor's recommended installer (from npm, Homebrew or WinGet), and updates them the way they are installed. The setup checklist's Keep, and the CLI's `k` when it asks, add one here.").also("move installer npm homebrew brew winget keep dismiss migrate native vendor recommended").or("none").eg("codex"),
@@ -797,7 +795,6 @@ pub const SETTINGS: &[Setting] = &[
     s("profiles.*.color", "profiles", Kind::Color, "Its colour on borders and badges.").new_only(),
     s("profiles.*.claude", "profiles", Kind::Path, "Claude's config directory for this profile (an account with credentials is edited in the file).").new_only(),
     s("profiles.*.codex", "profiles", Kind::Path, "Codex's directory for this profile.").new_only(),
-    s("profiles.*.gemini", "profiles", Kind::Path, "Gemini's directory for this profile.").new_only(),
     s("profiles.*.opencode", "profiles", Kind::Path, "OpenCode's directory for this profile.").new_only(),
     s("profiles.*.gh", "profiles", Kind::Path, "`gh`'s directory for this profile.").new_only(),
     s("profiles.*.git.name", "profiles", Kind::Text, "The name on its commits.").new_only(),
@@ -935,7 +932,7 @@ pub fn options(source: Source, config: &Config, lk: &Lookups) -> Vec<(String, St
         }
         Source::Agents => {
             let mut names: BTreeSet<String> =
-                ["claude", "codex", "gemini", "opencode"].map(String::from).into();
+                ["claude", "codex", "opencode"].map(String::from).into();
             names.extend(config.agents.keys().cloned());
             named(names.into_iter().collect(), "agent")
         }

@@ -35,8 +35,7 @@ become one: `target/debug/ptyro-headless --from-recording <data dir>/sessions/<s
 (`make build` builds it; `ptyro ls --all --json` gives a session's id) writes its output bytes (the recording itself, `pty.log` in the session's data directory, also
 keeps timing and resizes; SPEC §7.6). **Review a capture before committing it.** Agent
 screens show account names, plan names, paths and prompt text, so record in a scratch directory
-with a throwaway prompt. Gemini's API-key dialog pre-fills the key in clear text (SPEC §8.5),
-so never record that screen. Sanitize paths with **same-length** replacements, or the layout
+with a throwaway prompt. Sanitize paths with **same-length** replacements, or the layout
 will change; replace path components one by one, because agents wrap long paths across lines.
 
 ## 2. Hook payloads (JSON)

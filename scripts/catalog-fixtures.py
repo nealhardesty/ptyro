@@ -3,8 +3,7 @@
 
 Reads crates/ptyro-agents/src/catalog.toml, fetches each item's `latest` source once, trims the
 reply to the fields the parser reads (a GitHub release's assets, Node's older releases), and
-writes it to crates/ptyro-agents/tests/fixtures/catalog/<id>-latest.<ext>. Antigravity's
-manifest is recorded for two platforms. Prints the newest version of each, so a run is also a
+writes it to crates/ptyro-agents/tests/fixtures/catalog/<id>-latest.<ext>. Prints the newest version of each, so a run is also a
 live check that every source still answers. The tests never fetch: review the diff, then update
 the versions the tests expect (`newest_versions_from_recorded_replies`).
 
@@ -19,7 +18,6 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TABLE = ROOT / "crates/ptyro-agents/src/catalog.toml"
 OUT = ROOT / "crates/ptyro-agents/tests/fixtures/catalog"
-AGY_PLATFORMS = ["linux_amd64", "windows_arm64"]
 
 
 def fetch(url: str) -> str:
@@ -42,8 +40,6 @@ def trim(source: str, body: str):
         keep = {k: d[k] for k in ("tag_name", "name", "draft", "prerelease", "published_at", "html_url") if k in d}
         keep["assets"] = [{k: a[k] for k in ("name", "browser_download_url") if k in a} for a in d.get("assets", [])[:2]]
         return keep, d["tag_name"]
-    if source == "agy-manifest":
-        return d, d["version"]
     if source == "node-dist":
         # Down to the newest LTS, so the fixture keeps any newer non-LTS release above it.
         n = next(i for i, r in enumerate(d) if r.get("lts") is not False)
@@ -59,17 +55,15 @@ def main() -> int:
         if not latest:
             continue
         url, source = latest["url"], latest["source"]
-        targets = [(p, url.replace("{platform}", p), f"-{p}") for p in AGY_PLATFORMS] if "{platform}" in url else [(None, url, "")]
-        for _, u, suffix in targets:
-            try:
-                kept, version = trim(source, fetch(u))
-            except Exception as e:  # one dead source shouldn't stop the others
-                print(f"{item['id']}{suffix}: {u}: {e}", file=sys.stderr)
-                continue
-            ext = "txt" if source == "plain-text" else "json"
-            path = OUT / f"{item['id']}-latest{suffix}.{ext}"
-            path.write_text(kept if isinstance(kept, str) else json.dumps(kept, indent=1) + "\n")
-            print(f"{item['id']}{suffix}: {version}  ({path.relative_to(ROOT)})")
+        try:
+            kept, version = trim(source, fetch(url))
+        except Exception as e:  # one dead source shouldn't stop the others
+            print(f"{item['id']}: {url}: {e}", file=sys.stderr)
+            continue
+        ext = "txt" if source == "plain-text" else "json"
+        path = OUT / f"{item['id']}-latest.{ext}"
+        path.write_text(kept if isinstance(kept, str) else json.dumps(kept, indent=1) + "\n")
+        print(f"{item['id']}: {version}  ({path.relative_to(ROOT)})")
     return 0
 
 

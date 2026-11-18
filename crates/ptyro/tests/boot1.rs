@@ -146,9 +146,9 @@ fn a_failure_offers_its_fix_and_the_rest_installs() {
 
 #[test]
 fn output_streams_live_as_json_lines() {
-    let m = Machine::new(fresh_linux(json!({ "outcomes": { "antigravity": "slow" } })));
+    let m = Machine::new(fresh_linux(json!({ "outcomes": { "opencode": "slow" } })));
     let mut child = m
-        .cmd(&["install", "agy", "--yes", "--json"])
+        .cmd(&["install", "opencode", "--yes", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -171,7 +171,7 @@ fn output_streams_live_as_json_lines() {
     let kinds: Vec<&str> = events.iter().map(|e| e["event"].as_str().unwrap()).collect();
     assert_eq!(kinds.first(), Some(&"started"));
     assert_eq!(kinds.last(), Some(&"finished"));
-    assert!(events.iter().any(|e| e["event"] == "done" && e["id"] == "antigravity"));
+    assert!(events.iter().any(|e| e["event"] == "done" && e["id"] == "opencode"));
 }
 
 #[test]
@@ -212,18 +212,18 @@ fn admin_steps_ask_once_in_a_terminal_and_never_with_yes() {
 #[test]
 fn the_checklist_ticks_by_number_and_quits_cleanly() {
     let m = Machine::new(fresh_linux(json!({ "installed": { "git": "2.43.0" } })));
-    // 3 is Antigravity; 1 unticks Claude Code; Enter installs.
+    // 3 is OpenCode; 1 unticks Claude Code; Enter installs.
     let o = m.run(&["setup"], "3 1\n\n");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
     assert!(t.contains("   1 [x] Claude Code"), "{t}");
-    assert!(t.contains("   3 [x] Antigravity"), "{t}");
+    assert!(t.contains("   3 [x] OpenCode"), "{t}");
     assert!(t.contains("✓ git: installed 2.43.0"), "{t}");
-    let installed: Vec<&str> = ["claude", "codex", "antigravity", "gh"]
+    let installed: Vec<&str> = ["claude", "codex", "opencode", "gh"]
         .into_iter()
         .filter(|i| m.installed(i).is_some())
         .collect();
-    assert_eq!(installed, ["codex", "antigravity", "gh"]);
+    assert_eq!(installed, ["codex", "opencode", "gh"]);
     // q installs nothing.
     let m = Machine::new(fresh_linux(json!({})));
     let o = m.run(&["setup"], "q\n");
@@ -231,30 +231,25 @@ fn the_checklist_ticks_by_number_and_quits_cleanly() {
     assert!(text(&o).contains("Nothing installed."));
     assert!(m.calls().is_empty());
     // install asks too: end of input is no.
-    let o = m.run(&["install", "agy"], "");
+    let o = m.run(&["install", "opencode"], "");
     assert!(text(&o).contains("Install? [Y/n]"), "{}", text(&o));
     assert!(m.calls().is_empty());
 }
 
 #[test]
-fn node_from_nodejs_org_when_apts_is_too_old_and_its_folder_goes_on_path() {
-    let m = Machine::new(fresh_linux(json!({ "candidates": { "apt": "18.19.1" } })));
-    // The plan first, as JSON: Node.js ticked for Gemini CLI, from nodejs.org, no admin.
-    let o = m.run(&["install", "gemini", "--dry-run", "--json"], "");
+fn node_from_nodejs_org_without_a_package_manager_and_its_folder_goes_on_path() {
+    // A Linux with neither apt nor dnf: nodejs.org's build, no admin.
+    let m = Machine::new(json!({ "platform": "linux", "programs": ["curl"] }));
+    let o = m.run(&["install", "node", "--dry-run", "--json"], "");
     assert!(o.status.success(), "{}", text(&o));
     let plan: Value = serde_json::from_slice(&o.stdout).unwrap();
     let node = plan["entries"].as_array().unwrap().iter().find(|e| e["id"] == "node").unwrap();
-    assert_eq!((node["ticked"].as_bool(), node["picked"].as_bool()), (Some(true), Some(false)));
-    assert_eq!(node["needed_by"], json!(["gemini"]));
     assert_eq!(node["action"]["via"], "node-dist");
     assert_eq!(node["action"]["admin"], false);
-    let o = m.run(&["install", "gemini", "--yes"], "");
+    let o = m.run(&["install", "node", "--yes"], "");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
-    assert_eq!(
-        m.calls(),
-        ["install node via node-dist admin=false", "install gemini via npm admin=false"]
-    );
+    assert_eq!(m.calls(), ["install node via node-dist admin=false"]);
     assert!(t.contains("went into ptyro's tools folder"), "{t}");
     // --yes leaves the rc file (Windows: the user's PATH) alone and says what to add.
     let says = if cfg!(windows) { "add these to your PATH" } else { "add this line to" };
@@ -279,7 +274,8 @@ fn names_and_lists_are_checked() {
     let o = m.run(&["install", "vim", "--yes"], "");
     assert_eq!(o.status.code(), Some(3));
     assert!(
-        text(&o).contains("\"vim\" isn't something ptyro installs (it knows claude, codex, agy"),
+        text(&o)
+            .contains("\"vim\" isn't something ptyro installs (it knows claude, codex, opencode"),
         "{}",
         text(&o)
     );
@@ -316,7 +312,7 @@ async fn the_daemon_plans_and_installs_without_admin() {
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
         .request(Request::SetupRun {
-            picks: vec!["agy".into(), "git".into()],
+            picks: vec!["opencode".into(), "git".into()],
             wsl_picks: None,
             moves: vec![],
         })
@@ -340,7 +336,7 @@ async fn the_daemon_plans_and_installs_without_admin() {
         }
         seen.push(event);
     };
-    assert_eq!(report.done, ["antigravity"]);
+    assert_eq!(report.done, ["opencode"]);
     assert_eq!(report.skipped, ["git"]);
     let fix = seen.iter().find_map(|e| match e {
         ptyro_agents::setup::Event::Skipped { fix, .. } => Some(fix.clone()),
@@ -348,7 +344,7 @@ async fn the_daemon_plans_and_installs_without_admin() {
     });
     assert!(fix.unwrap().contains("on the computer itself: `ptyro install git`"));
     assert!(!m.calls().iter().any(|c| c == "elevate" || c.contains(" git ")), "{:?}", m.calls());
-    assert!(m.installed("antigravity").is_some());
+    assert!(m.installed("opencode").is_some());
 }
 
 /// The web's checklist (BOOT3, protocol 1.34): the plan comes with each row's line in the TUI's
@@ -356,7 +352,7 @@ async fn the_daemon_plans_and_installs_without_admin() {
 /// far, numbered as the live ones are, and a second run is refused; once it ends, it's gone.
 #[tokio::test]
 async fn the_daemon_says_a_run_is_going_with_its_progress() {
-    let m = Machine::new(fresh_linux(json!({ "outcomes": { "antigravity": "wait" } })));
+    let m = Machine::new(fresh_linux(json!({ "outcomes": { "opencode": "wait" } })));
     let fake = m.fake().display().to_string();
     let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
     let mut c = d.client().await.unwrap();
@@ -380,7 +376,11 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     let mut pushes = c.pushes();
     c.send(ClientMsg::WatchEvents).unwrap();
     let Reply::SetupStarted { run, .. } = c
-        .request(Request::SetupRun { picks: vec!["agy".into()], wsl_picks: None, moves: vec![] })
+        .request(Request::SetupRun {
+            picks: vec!["opencode".into()],
+            wsl_picks: None,
+            moves: vec![],
+        })
         .await
         .unwrap()
     else {
@@ -405,16 +405,12 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
         panic!("no run going");
     };
     assert_eq!(going.run, run);
-    assert!(going.plan.entry("antigravity").unwrap().will_run());
+    assert!(going.plan.entry("opencode").unwrap().will_run());
     let kept: Vec<(u64, Value)> =
         going.events.iter().map(|l| (l.seq, serde_json::to_value(&l.event).unwrap())).collect();
     assert_eq!(kept, live, "the events so far, as they were sent");
     let again = c
-        .request(Request::SetupRun {
-            picks: vec!["opencode".into()],
-            wsl_picks: None,
-            moves: vec![],
-        })
+        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
         .await;
     assert!(
         format!("{again:?}").contains("setup is already running (from the web app"),
@@ -424,7 +420,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
     // saying where the run came from, and installs nothing.
     let o = d
         .cmd()
-        .args(["install", "opencode", "--yes"])
+        .args(["install", "codex", "--yes"])
         .env("PTYRO_TEST_SETUP", &fake)
         .env("PTYRO_WSL", m.dir.path().join("no-wsl"))
         .output()
@@ -448,7 +444,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
                 },
         })) = tokio::time::timeout(Duration::from_millis(500), pushes.recv()).await
         {
-            assert_eq!(report.done, ["antigravity"]);
+            assert_eq!(report.done, ["opencode"]);
             break;
         }
     }
@@ -464,7 +460,7 @@ async fn the_daemon_says_a_run_is_going_with_its_progress() {
         assert!(Instant::now() < deadline, "still going");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(m.calls().iter().all(|c| !c.contains("opencode")), "{:?}", m.calls());
+    assert!(m.calls().iter().all(|c| !c.contains("codex")), "{:?}", m.calls());
 }
 
 /// The final review's I1: a daemon that was running before setup installed an agent starts it
@@ -545,20 +541,20 @@ async fn an_agent_setup_installed_starts_without_a_daemon_restart() {
 /// carries on, and afterwards the lock is free again.
 #[test]
 fn two_installs_at_once_the_second_is_refused() {
-    let m = Machine::new(fresh_linux(json!({ "outcomes": { "antigravity": "wait" } })));
+    let m = Machine::new(fresh_linux(json!({ "outcomes": { "opencode": "wait" } })));
     let first = m
-        .cmd(&["install", "agy", "--yes"])
+        .cmd(&["install", "opencode", "--yes"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !m.calls().iter().any(|c| c.starts_with("install antigravity")) {
+    while !m.calls().iter().any(|c| c.starts_with("install opencode")) {
         assert!(Instant::now() < deadline, "the first never started: {:?}", m.calls());
         std::thread::sleep(Duration::from_millis(50));
     }
-    let second = m.run(&["install", "opencode", "--yes"], "");
+    let second = m.run(&["install", "codex", "--yes"], "");
     let said = text(&second);
     // Asked up front, before the checklist or a question.
     let checklist = m.run(&["setup"], "");
@@ -572,10 +568,10 @@ fn two_installs_at_once_the_second_is_refused() {
     assert!(!shown.contains("Agents"), "no checklist walked: {shown}");
     let first = first.wait_with_output().unwrap();
     assert!(first.status.success(), "{}", text(&first));
-    assert!(m.installed("antigravity").is_some());
-    assert!(m.installed("opencode").is_none());
-    assert!(!m.calls().iter().any(|c| c.contains("opencode")), "{:?}", m.calls());
-    let again = m.run(&["install", "opencode", "--yes"], "");
+    assert!(m.installed("opencode").is_some());
+    assert!(m.installed("codex").is_none());
+    assert!(!m.calls().iter().any(|c| c.contains("codex")), "{:?}", m.calls());
+    let again = m.run(&["install", "codex", "--yes"], "");
     assert!(again.status.success(), "free again: {}", text(&again));
 }
 
@@ -584,12 +580,12 @@ fn two_installs_at_once_the_second_is_refused() {
 /// once that install ends, both are free again.
 #[tokio::test]
 async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
-    let m = Machine::new(fresh_linux(json!({ "outcomes": { "antigravity": "wait" } })));
+    let m = Machine::new(fresh_linux(json!({ "outcomes": { "opencode": "wait" } })));
     let fake = m.fake().display().to_string();
     let d = TempDaemon::start_with_env(BIN, &[("PTYRO_TEST_SETUP", fake.as_str())]).unwrap();
     let first = d
         .cmd()
-        .args(["install", "agy", "--yes"])
+        .args(["install", "opencode", "--yes"])
         .env("PTYRO_TEST_SETUP", &fake)
         .env("PTYRO_WSL", m.dir.path().join("no-wsl"))
         .stdin(Stdio::null())
@@ -598,7 +594,7 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
         .spawn()
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
-    while !m.calls().iter().any(|c| c.starts_with("install antigravity")) {
+    while !m.calls().iter().any(|c| c.starts_with("install opencode")) {
         assert!(Instant::now() < deadline, "the install never started: {:?}", m.calls());
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -611,29 +607,21 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
     let by = held_by.expect("who holds it");
     assert!(by.starts_with("`ptyro install` (process "), "{by}");
     let r = c
-        .request(Request::SetupRun {
-            picks: vec!["opencode".into()],
-            wsl_picks: None,
-            moves: vec![],
-        })
+        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
         .await;
     std::fs::write(m.fake().join("go"), "").unwrap();
     let said = format!("{r:?}");
     assert!(said.contains("setup is already running (from `ptyro install` (process "), "{said}");
     let first = first.wait_with_output().unwrap();
     assert!(first.status.success(), "{}", text(&first));
-    assert!(!m.calls().iter().any(|c| c.contains("opencode")), "{:?}", m.calls());
+    assert!(!m.calls().iter().any(|c| c.contains("codex")), "{:?}", m.calls());
     let Reply::SetupPlan { held_by, .. } = c.request(plan_req()).await.unwrap() else {
         panic!("not a plan");
     };
     assert!(held_by.is_none(), "free again");
     // A refused run doesn't keep the daemon's own flag: the next one starts.
     let Reply::SetupStarted { .. } = c
-        .request(Request::SetupRun {
-            picks: vec!["opencode".into()],
-            wsl_picks: None,
-            moves: vec![],
-        })
+        .request(Request::SetupRun { picks: vec!["codex".into()], wsl_picks: None, moves: vec![] })
         .await
         .unwrap()
     else {
@@ -646,9 +634,9 @@ async fn the_daemon_says_and_refuses_while_a_terminal_installs() {
 #[cfg(unix)]
 #[test]
 fn the_rc_line_is_offered_and_puts_the_tools_on_path() {
-    let m = Machine::new(fresh_linux(json!({ "candidates": { "apt": "18.19.1" } })));
+    let m = Machine::new(json!({ "platform": "linux", "programs": ["curl"] }));
     // Install? yes. Add the line? yes.
-    let o = m.run(&["install", "gemini"], "\n\n");
+    let o = m.run(&["install", "node"], "\n\n");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
     let rc = std::fs::read_to_string(m.home().join(".bashrc")).unwrap();
@@ -665,30 +653,30 @@ fn the_rc_line_is_offered_and_puts_the_tools_on_path() {
     assert_eq!(std::fs::read_to_string(m.home().join(".bashrc")).unwrap(), rc);
 }
 
-/// Windows: WinGet's Node.js adds its folder only to the stored Path; the next step (Gemini
-/// CLI's `npm install -g`) still finds it, because the PATH is refreshed after each step.
+/// Windows: WinGet's Node.js adds its folder only to the stored Path; the next step (OpenCode's
+/// `npm install -g`) still finds it, because the PATH is refreshed after each step.
 #[test]
 fn a_folder_an_installer_stored_is_on_path_for_the_next_step() {
     let m = Machine::new(json!({
         "platform": "windows-x64",
         "programs": ["winget"],
         "path_adds": { "node": "Program Files/nodejs" },
-        "path_needs": { "gemini": "Program Files/nodejs" },
+        "path_needs": { "opencode": "Program Files/nodejs" },
     }));
-    let o = m.run(&["install", "gemini", "--yes"], "");
+    let o = m.run(&["install", "opencode", "--yes"], "");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
     assert_eq!(
         m.calls(),
-        ["install node via winget admin=true", "install gemini via npm admin=false"]
+        ["install node via winget admin=true", "install opencode via npm admin=false"]
     );
     // Without the folder, the fake's npm isn't found: the check is real.
     let m = Machine::new(json!({
         "platform": "windows-x64",
         "programs": ["winget"],
-        "path_needs": { "gemini": "Program Files/nodejs" },
+        "path_needs": { "opencode": "Program Files/nodejs" },
     }));
-    let o = m.run(&["install", "gemini", "--yes"], "");
+    let o = m.run(&["install", "opencode", "--yes"], "");
     assert_eq!(o.status.code(), Some(1));
     assert!(text(&o).contains("npm: command not found"), "{}", text(&o));
 }

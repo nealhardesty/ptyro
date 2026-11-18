@@ -285,7 +285,7 @@ pub async fn run(
     let config = Config::load(&Config::path(&ctx.paths)).unwrap_or_default();
     let access = access.unwrap_or(config.remote.access);
     let port = port.unwrap_or(config.remote.port);
-    // Plain HTTP exists for the tour and the tests, which open a page on this computer only
+    // Plain HTTP exists for the tests, which open a page on this computer only
     // (a browser counts loopback as secure); it is not a setting, and nothing else gets it.
     if plain && access != Access::Localhost {
         return Err(Error::invalid(

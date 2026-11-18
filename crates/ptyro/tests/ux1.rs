@@ -859,42 +859,6 @@ async fn quitting_from_the_tui_stops_the_daemon() {
     assert!(d.client().await.is_err(), "the daemon is gone");
 }
 
-/// UX1.22: `ptyro tour` is the daily loop for real: a task, its permission prompt answered from
-/// peek, cleaned up, a shell of your own. Each key goes in once the coach asks for it. The tour runs in a ptyro of its own and deletes it afterwards.
-// Unix: on Windows the tour runs in WSL (`wsl -- ptyro tour`), not natively.
-#[cfg(unix)]
-#[tokio::test]
-async fn the_tour_walks_the_loop_for_real_and_cleans_up() {
-    let home = tempfile::tempdir().unwrap();
-    std::fs::write(home.path().join(".gitconfig"), "[init]\n\tdefaultBranch = main\n").unwrap();
-    let script = ptyro_testkit::headless::Script::new(vec![BIN.to_owned(), "tour".into()])
-        .size(120, 32)
-        .timeout(90.0)
-        .env("HOME", &home.path().to_string_lossy())
-        .env("GIT_CONFIG_NOSYSTEM", "1");
-    let r = ptyro_testkit::headless::run(
-        script
-            .send_when("Tour 1/4: start a task", "\\x11n")
-            .send_when("What should it do?", "fix the typo in greeting.txt")
-            .send_when("fix-typo-greeting", "\\r")
-            .send_when("to peek, then y", "\\x11p")
-            .send_when("y allow", "y")
-            .send_when("Tour 3/4", "\\x11:")
-            .send_when("Command palette", "worktree.remove")
-            .send_when("worktree.remove", "\\r")
-            .send_when("[y/N]", "y")
-            .send_when("y: remove it anyway", "y")
-            // Alt-1 (ESC 1): shell 1 of SHELLS, the last stop.
-            .send_when("Tour 4/4", "\\x1b1")
-            .send_when("that's the loop", "\\x11d")
-            .until("the tour is over"),
-    )
-    .await
-    .expect("headless run");
-    // Its last words come after its daemon stopped and its directory was deleted.
-    assert!(r.screen.contains("the tour is over"), "{}", r.screen);
-}
-
 /// UX1's "Done when" (less its pull request, removed 2026-11-17): on a fresh machine with only
 /// `claude` installed and no config, `cd myrepo && ptyro` registers the repo; `Ctrl-Q n`, a
 /// task, `⏎` puts Claude to work in a new worktree named after it; its row shows the task and,
@@ -917,10 +881,10 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_cleaned_up_task() {
         "claude",
         BIN,
         &format!(
-            "PTYRO_FAKE_TOUR=1 PTYRO_FAKE_PASTE=1 exec \"{BIN}\" fake-agent --as claude \"$@\""
+            "PTYRO_FAKE_TASK=1 PTYRO_FAKE_PASTE=1 exec \"{BIN}\" fake-agent --as claude \"$@\""
         ),
         &[BIN, "fake-agent", "--as", "claude"],
-        &[("PTYRO_FAKE_TOUR", "1"), ("PTYRO_FAKE_PASTE", "1")],
+        &[("PTYRO_FAKE_TASK", "1"), ("PTYRO_FAKE_PASTE", "1")],
     );
     // myrepo, cloned from a "remote".
     let git = |dir: &Path, args: &[&str]| {

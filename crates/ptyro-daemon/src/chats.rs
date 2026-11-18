@@ -985,13 +985,7 @@ impl Daemon {
             Some(w) => {
                 let (a, p) = ptyro_agents::split_agent(&w);
                 if ptyro_agents::command(&config, a).is_none() {
-                    return Err(Error::new(
-                        ErrorCode::NotFound,
-                        format!(
-                            "no agent named {a:?} (known: {})",
-                            ptyro_agents::names(&config).join(", ")
-                        ),
-                    ));
+                    return Err(Error::new(ErrorCode::NotFound, ptyro_agents::unknown(&config, a)));
                 }
                 if !structured(a) {
                     return Err(Error::new(
@@ -1012,7 +1006,7 @@ impl Daemon {
             None => {
                 let installed = |n: &str| agents.iter().any(|c| c.name == n && c.installed);
                 let pick = std::iter::once(default.as_str())
-                    .chain(["claude", "codex", "gemini", "opencode"])
+                    .chain(["claude", "codex", "opencode"])
                     .find(|n| installed(n) && structured(n))
                     .ok_or_else(|| {
                         Error::new(ErrorCode::NotFound, ptyro_agents::locate::no_chat_agent())
@@ -1773,7 +1767,6 @@ impl Daemon {
             history,
             system: (info.tools == FIND_TOOLS).then_some(FIND_PROMPT),
             folders: info.folders.clone(),
-            adapter: adapter.clone(),
         };
         let (args, params) =
             tools_launch(&protocol, &tools, &dir, mcp.unwrap_or_default(), &readable, &extra);
@@ -1807,16 +1800,9 @@ impl Daemon {
             })
             .await?;
         if info.incognito && adapter != "claude" && adapter != "codex" {
-            // Gemini's copy is in a folder named for the scratch folder: ptyro removes it
-            // when the chat ends (`remove_chat_dirs`). Others' it can't find.
-            let what = if adapter == "gemini" {
-                format!(
-                    "incognito: ptyro keeps nothing, and removes {}'s own copy when the chat ends",
-                    info.agent
-                )
-            } else {
-                format!("incognito: ptyro keeps nothing; {} may keep its own copy", info.agent)
-            };
+            // Others' own copies ptyro can't find.
+            let what =
+                format!("incognito: ptyro keeps nothing; {} may keep its own copy", info.agent);
             self.chat_notice(live, &info.id, NoticeLevel::Warn, &what).await;
         }
         if let (Some(how), false) = (how, info.incognito) {
@@ -2218,13 +2204,13 @@ impl Daemon {
     }
 
     /// A deleted chat's scratch directory, and the project folder it made in Claude's own
-    /// history (so `claude --resume` doesn't list dead chats; CHAT0), or Gemini's.
+    /// history (so `claude --resume` doesn't list dead chats; CHAT0).
     async fn remove_chat_files(self: &Arc<Self>, info: &ChatInfo) {
         self.remove_chat_dirs(&info.id, Some((&info.agent, &info.profile))).await;
     }
 
     /// The same by id (`who`: its agent and profile, when known; else only the scratch
-    /// directory and the default profile's Claude and Gemini folders). Every agent that served
+    /// directory and the default profile's Claude folder). Every agent that served
     /// it (its convs) has its copy removed too: Codex's rollouts, by their thread ids.
     async fn remove_chat_dirs(self: &Arc<Self>, id: &str, who: Option<(&str, &str)>) {
         let dir = scratch(self, id);
@@ -2239,8 +2225,7 @@ impl Daemon {
                 agents.push((c.agent.clone(), c.profile.clone()));
             }
         }
-        let guess = agents.is_empty();
-        if guess {
+        if agents.is_empty() {
             agents.push(("claude".into(), ptyro_core::model::DEFAULT_PROFILE.into()));
         }
         for (agent, profile) in &agents {
@@ -2249,13 +2234,12 @@ impl Daemon {
                 .filter(|c| c.agent == *agent && c.profile == *profile)
                 .filter_map(|c| c.conversation_id.clone())
                 .collect();
-            self.remove_agent_copy(id, &dir, agent, profile, &threads, guess).await;
+            self.remove_agent_copy(id, &dir, agent, profile, &threads).await;
         }
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// One agent's own copy of a chat whose scratch directory is `dir`, under `profile`
-    /// (`guess`: the agent isn't known, so Gemini's is looked for too).
+    /// One agent's own copy of a chat whose scratch directory is `dir`, under `profile`.
     async fn remove_agent_copy(
         self: &Arc<Self>,
         id: &str,
@@ -2263,7 +2247,6 @@ impl Daemon {
         agent: &str,
         profile: &str,
         threads: &[String],
-        guess: bool,
     ) {
         let config = self.config();
         let adapter = ptyro_agents::adapter_name(&config, agent);
@@ -2272,18 +2255,8 @@ impl Daemon {
             plan.as_ref()
                 .and_then(|p| p.set.iter().find(|(v, _)| v == k).map(|(_, h)| PathBuf::from(h)))
         };
-        // Gemini keeps a session under `<home>/.gemini/{tmp,history}/<slug>/`, each folder
-        // marked with the directory it is for (`.project_root`, read from its source, 0.66.0).
-        if adapter == "gemini" || guess {
-            let home = set("GEMINI_CLI_HOME")
-                .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-                .map(|h| h.join(".gemini"));
-            if let Some(home) = home {
-                remove_gemini_copies(&home, dir);
-            }
-        }
         if adapter == "claude" && plan.is_some() {
-            let home = ptyro_agents::home_var("claude")
+            let home = ptyro_agents::dir_var("claude")
                 .and_then(set)
                 .or_else(|| ptyro_agents::default_dir("claude"));
             if let Some(home) = home {
@@ -2301,7 +2274,7 @@ impl Daemon {
         // Codex keeps each thread as `<CODEX_HOME>/sessions/YYYY/MM/DD/rollout-<time>-<thread
         // id>.jsonl` (or in `archived_sessions/`, §20.8).
         if adapter == "codex" && !threads.is_empty() {
-            let home = ptyro_agents::home_var("codex")
+            let home = ptyro_agents::dir_var("codex")
                 .and_then(set)
                 .or_else(|| ptyro_agents::default_dir("codex"));
             if let Some(home) = home {
@@ -2639,22 +2612,6 @@ fn with_seed(unseen: &[ChatNode], text: &str, tokens: u32) -> String {
     }
 }
 
-/// Gemini's own folders for the chat directory `dir`: the ones under `<gemini dir>/tmp` and
-/// `history` whose `.project_root` names it (its session files are in them).
-fn remove_gemini_copies(gemini: &std::path::Path, dir: &std::path::Path) {
-    let want = [Some(dir.to_path_buf()), ptyro_core::os::canonicalize(dir).ok()];
-    for base in ["tmp", "history"] {
-        let Ok(rd) = std::fs::read_dir(gemini.join(base)) else { continue };
-        for e in rd.flatten() {
-            let owner = std::fs::read_to_string(e.path().join(".project_root")).unwrap_or_default();
-            let owner = PathBuf::from(owner.trim());
-            if !owner.as_os_str().is_empty() && want.iter().flatten().any(|w| *w == owner) {
-                let _ = std::fs::remove_dir_all(e.path());
-            }
-        }
-    }
-}
-
 /// Codex's rollouts of `threads` under `home` (its `CODEX_HOME`): the files named for each
 /// thread whose first line (its `session_meta`) is the chat's (its scratch folder has `chat`'s
 /// id), so no other conversation of the person's is ever touched.
@@ -2759,8 +2716,6 @@ struct ChatLaunch {
     system: Option<&'static str>,
     /// The chat's own folders (CHAT4).
     folders: Vec<String>,
-    /// The agent's adapter (`gemini`: the policy flags; another ACP agent gets none).
-    adapter: String,
 }
 
 /// The chat history tools, by their names in Claude.
@@ -2782,8 +2737,8 @@ fn best_effort(adapter: &str, p: &ChatTools) -> bool {
         "claude" => false,
         // Files outside $HOME stay readable to a folder-limited Codex (CHAT0).
         "codex" => p.read,
-        // Gemini's policy and OpenCode's ruleset are read from their source, not yet run (a
-        // turn needs a login); any other agent is told nothing at all.
+        // OpenCode's ruleset is read from its source, not yet run (a turn needs a login); any
+        // other agent is told nothing at all.
         _ => true,
     }
 }
@@ -2980,61 +2935,7 @@ fn tools_launch(
             let servers: Vec<serde_json::Value> =
                 extra.history.iter().map(|h| acp_server("ptyro", h)).collect();
             let params = (!servers.is_empty()).then(|| json!({ "mcpServers": servers }));
-            if extra.adapter != "gemini" {
-                return (Vec::new(), params);
-            }
-            // Gemini's policy engine (read from its source, 0.66.0): deny everything, then allow
-            // what the chat may use. Loaded as an admin policy, the tier above the user's own
-            // rules and "always allow" answers, so nothing of theirs widens a chat; and as the
-            // user policy too, which replaces theirs, for when a system policy makes Gemini
-            // ignore `--admin-policy`.
-            let mut rules =
-                String::from("[[rule]]\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 900\n");
-            let mut allow: Vec<String> = Vec::new();
-            if p.web {
-                allow.extend(["google_web_search".into(), "web_fetch".into()]);
-            }
-            if p.read {
-                // Its file tools read only its workspace: the scratch folder and the
-                // `--include-directories` below.
-                allow.extend(
-                    ["read_file", "read_many_files", "glob", "grep_search", "list_directory"]
-                        .map(str::to_owned),
-                );
-            }
-            // MCP tools are `mcp_<server>_<tool>`.
-            let mut names: Vec<String> = Vec::new();
-            if extra.history.is_some() {
-                names.push("ptyro".into());
-            }
-            allow.extend(names.iter().map(|n| format!("mcp_{n}_*")));
-            for a in allow {
-                rules.push_str(&format!(
-                    "\n[[rule]]\ntoolName = {}\ndecision = \"allow\"\npriority = 950\n",
-                    serde_json::Value::String(a)
-                ));
-            }
-            let file = dir.join("policy.toml");
-            let _ = std::fs::write(&file, rules);
-            let file = file.to_string_lossy().into_owned();
-            let mut v = vec![
-                "--admin-policy".into(),
-                file.clone(),
-                "--policy".into(),
-                file,
-                // No extension of the user's, and only the MCP servers named here (an empty
-                // name is Gemini's "none").
-                "--extensions".into(),
-                "none".into(),
-                "--allowed-mcp-server-names".into(),
-                names.join(","),
-            ];
-            if p.read {
-                for d in dirs {
-                    v.extend(["--include-directories".into(), d.clone()]);
-                }
-            }
-            (v, params)
+            (Vec::new(), params)
         }
         "opencode" => {
             let mut rules = vec![json!({ "permission": "*", "pattern": "*", "action": "deny" })];
@@ -3193,7 +3094,6 @@ mod tests {
         let claude = ChatLaunch {
             folders: vec!["/notes".into()],
             history: Some(history.clone()),
-            adapter: "claude".into(),
             ..ChatLaunch::default()
         };
         let (a, _) = tools_launch("stream-json", &read, dir, vec![], &[], &claude);
@@ -3206,44 +3106,21 @@ mod tests {
         if let Some(mode) = ptyro_core::os::mode(&std::fs::metadata(cfg).unwrap()) {
             assert_eq!(mode & 0o777, 0o600);
         }
-        // Gemini: an admin policy (and the user one), no extensions, only the history server,
-        // the folders as its workspace, the history server in `session/new`.
-        let gem = ChatLaunch {
-            folders: vec!["/notes".into()],
-            adapter: "gemini".into(),
-            history: Some(history),
-            ..ChatLaunch::default()
-        };
-        let (a, p) = tools_launch("acp", &read, dir, vec![], &[], &gem);
-        let policy = dir.join("policy.toml").to_string_lossy().into_owned();
-        assert!(a.windows(2).any(|w| w == ["--admin-policy".to_owned(), policy.clone()]));
-        assert!(a.windows(2).any(|w| w == ["--policy".to_owned(), policy.clone()]));
-        assert!(a.windows(2).any(|w| w == ["--extensions", "none"]));
-        assert!(a.windows(2).any(|w| w == ["--allowed-mcp-server-names", "ptyro"]));
-        assert!(a.windows(2).any(|w| w == ["--include-directories", "/notes"]));
-        let rules = std::fs::read_to_string(&policy).unwrap();
-        for tool in ["read_file", "google_web_search", "mcp_ptyro_*"] {
-            assert!(rules.contains(&format!("toolName = \"{tool}\"")), "{tool}: {rules}");
-        }
-        assert!(!rules.contains("run_shell_command"));
+        // The history server goes in `session/new` for an ACP agent.
+        let acp = ChatLaunch { history: Some(history), ..ChatLaunch::default() };
+        let (a, p) = tools_launch("acp", &read, dir, vec![], &[], &acp);
+        assert!(a.is_empty());
         let p = p.unwrap();
         assert_eq!(p["mcpServers"][0]["name"], "ptyro");
         assert_eq!(
             p["mcpServers"][0]["env"][0],
             serde_json::json!({ "name": "PTYRO_CHAT_ID", "value": "c1" })
         );
-        // The default chat on Gemini: web only, and not one MCP server (Gemini's "none").
         let chat = Chat::tools_for("chat", false);
-        let plain = ChatLaunch { adapter: "gemini".into(), ..ChatLaunch::default() };
-        let (a, p) = tools_launch("acp", &chat, dir, vec![], &[], &plain);
-        assert!(a.windows(2).any(|w| w == ["--allowed-mcp-server-names", ""]) && p.is_none());
-        assert!(!a.contains(&"--include-directories".into()));
-        let rules = std::fs::read_to_string(&policy).unwrap();
-        assert!(!rules.contains("read_file") && rules.contains("google_web_search"));
         // Another ACP agent: told nothing it wouldn't understand.
-        let other = ChatLaunch { adapter: "generic".into(), ..ChatLaunch::default() };
+        let other = ChatLaunch::default();
         assert!(tools_launch("acp", &read, dir, vec![], &[], &other).0.is_empty());
-        assert!(best_effort("gemini", &chat) && !best_effort("claude", &read));
+        assert!(best_effort("opencode", &chat) && !best_effort("claude", &read));
         assert!(best_effort("codex", &read) && !best_effort("codex", &chat));
     }
 

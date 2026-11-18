@@ -185,40 +185,6 @@ mark = "S"
 note = "the install command is in the README; the update and uninstall forms are Homebrew's own"
 
 [[item]]
-id = "antigravity"
-name = "Antigravity"
-kind = "agent"
-about = "Google's coding agent"
-program = "agy"
-doc = "https://antigravity.google/docs/getting-started?tab=cli"
-checked = "2026-11-06"
-version = ["agy", "--version"]
-note = "Google's agent for consumer Google accounts since 2026-06-18 (it replaced Gemini CLI for them). It updates itself in the background (AGY_CLI_DISABLE_AUTO_UPDATE=true stops that)."
-login = { start = ["agy"], mark = "U", note = "sign-in happens when `agy` starts (browser, or a code to paste over SSH); the docs name no status command, so a login can't be confirmed except by running it" }
-latest = { source = "agy-manifest", url = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json", mark = "S", note = "the manifest the vendor's install.sh and install.ps1 read; {platform} is linux_amd64, darwin_arm64, windows_arm64…; musl builds (linux_amd64_musl) are not chosen here" }
-
-[[item.methods]]
-platforms = ["linux", "macos", "wsl"]
-via = "vendor"
-shell = "sh"
-install = "curl -fsSL https://antigravity.google/cli/install.sh | bash"
-update = "agy update"
-auto_update = true
-mark = "V"
-note = "install [V docs]; `agy update` [S: third-party guides, not in the docs]; the background updater [V docs]"
-
-[[item.methods]]
-platforms = ["windows-x64", "windows-arm64"]
-via = "vendor"
-shell = "powershell"
-install = "irm https://antigravity.google/cli/install.ps1 | iex"
-update = "agy update"
-auto_update = true
-bin = ["%LOCALAPPDATA%/agy/bin"]   # [S 2026-11-07: install.ps1 puts `agy.exe` here]
-mark = "V"
-note = "install [V docs]; `agy update` [S: third-party guides, not in the docs]; installs into %LOCALAPPDATA%\\agy\\bin"
-
-[[item]]
 id = "opencode"
 name = "OpenCode"
 kind = "agent"
@@ -276,55 +242,6 @@ update = "opencode upgrade"
 uninstall = "npm uninstall -g opencode-ai"
 mark = "V"
 note = "install and update [V docs]; the uninstall form is npm's own [S]"
-
-[[item]]
-id = "gemini"
-name = "Gemini CLI"
-kind = "agent"
-about = "Google's Gemini coding agent"
-program = "gemini"
-label = "for Gemini API-key and enterprise accounts (others: Antigravity)"
-doc = "https://geminicli.com/docs/get-started/installation/"
-checked = "2026-11-06"
-version = ["gemini", "--version"]          # `0.33.0`
-keeps = ["~/.gemini"]                      # [S 2026-11-07: its settings.json there (RESEARCH H), GEMINI_CLI_HOME's default]
-note = "Replaced by Antigravity for unpaid and Google One accounts on 2026-06-18; Google's pages disagree on exactly who kept it. Requirements: macOS 15+, Windows 11 24H2+, Ubuntu 20.04+."
-login = { start = ["gemini"], mark = "U", note = "run `gemini` and choose Sign in with Google, a Gemini API key (GEMINI_API_KEY) or Vertex AI [V]; the docs name no status command" }
-latest = { source = "npm", url = "https://registry.npmjs.org/@google%2fgemini-cli/latest", mark = "V" }
-prereqs = [
-  { item = "node", min = "20.0.0", required = true, why = "Gemini CLI needs Node.js 20 or later" },
-]
-
-[[item.methods]]
-platforms = ["linux", "macos", "wsl"]
-via = "npm"
-shell = "sh"
-needs = "npm"
-install = "npm install -g @google/gemini-cli"
-update = "npm install -g @google/gemini-cli@latest"
-mark = "V"
-note = "into a user-owned npm prefix, never `sudo npm`"
-
-[[item.methods]]
-platforms = ["windows-x64", "windows-arm64"]
-via = "npm"
-shell = "powershell"
-needs = "npm"
-install = "npm install -g @google/gemini-cli"
-update = "npm install -g @google/gemini-cli@latest"
-mark = "V"
-note = "into a user-owned npm prefix, never `sudo npm`"
-
-[[item.others]]
-platforms = ["macos", "linux"]
-via = "brew"
-shell = "sh"
-needs = "brew"
-install = "brew install gemini-cli"
-update = "brew upgrade gemini-cli"
-uninstall = "brew uninstall gemini-cli"
-mark = "S"
-note = "the install command is in the docs; the update and uninstall forms are Homebrew's own"
 
 [[item]]
 id = "git"
@@ -460,7 +377,7 @@ program = "node"
 doc = "https://nodejs.org/en/download"
 checked = "2026-11-06"
 version = ["node", "--version"]            # `v24.13.0`
-note = "Needed by the npm agents (Gemini CLI everywhere, OpenCode on Windows). A distro's own package can be too old (Ubuntu 24.04's is 18.x): then the nodejs.org build goes into a folder ptyro owns. Updated by its own package manager; ptyro doesn't check it for new versions."
+note = "Needed by the npm agents (OpenCode on Windows). A distro's own package can be too old (Ubuntu 24.04's is 18.x): then the nodejs.org build goes into a folder ptyro owns. Updated by its own package manager; ptyro doesn't check it for new versions."
 latest = { source = "node-dist", url = "https://nodejs.org/dist/index.json", mark = "V", note = "the newest release whose `lts` isn't false" }
 
 [[item.methods]]

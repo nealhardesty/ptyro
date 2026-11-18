@@ -1,7 +1,7 @@
 //! The web app's server as a setting (ROADMAP WEB1.9): `ptyro web [on|off|status]`. The daemon
 //! supervises `ptyro serve --managed` (SPEC §16.3); this turns `[remote] serve` on or off and says
 //! how it is, in words that tell a new user what changes and what to do next. The doctor, `daemon
-//! status`, `ptyro init` and the web app's settings share these lines.
+//! status`, `ptyro setup` and the web app's settings share these lines.
 
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request, WebServe};

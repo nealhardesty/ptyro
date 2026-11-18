@@ -16,7 +16,6 @@ use ptyro_core::model::{DEFAULT_PROFILE, ProfileInfo, ProfileReason};
 pub const MANAGED_VARS: &[&str] = &[
     "CLAUDE_CONFIG_DIR",
     "CODEX_HOME",
-    "GEMINI_CLI_HOME",
     "OPENCODE_CONFIG_DIR",
     "GH_CONFIG_DIR",
     "GIT_CONFIG_GLOBAL",
@@ -75,7 +74,7 @@ pub const CREDENTIAL_EXTRA: &[&str] =
     &["GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_CONFIG_SYSTEM", "NETRC"];
 
 /// Agents (and `gh`) whose config dir a profile sets, in a stable order.
-const ACCOUNTS: &[&str] = &["claude", "codex", "gemini", "opencode", "gh"];
+const ACCOUNTS: &[&str] = &["claude", "codex", "opencode", "gh"];
 
 /// The profile's definition, if any. `default` may be implicit.
 pub fn def<'a>(config: &'a Config, name: &str) -> Option<&'a ProfileDef> {
@@ -276,7 +275,6 @@ pub fn plan(
         let keys: &[&str] = match *agent {
             "claude" => &["ANTHROPIC_API_KEY"],
             "codex" => &["OPENAI_API_KEY", "CODEX_API_KEY"],
-            "gemini" => &["GEMINI_API_KEY"],
             _ => &[],
         };
         if let Some(s) = &def.api_key {

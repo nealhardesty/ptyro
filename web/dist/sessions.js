@@ -148,7 +148,7 @@ export function newTask(where, task) {
         ? h("a", { href: "#/setup", title: tipOf("setup.offer"), onclick: () => s.close() }, none ? "Set up agents and tools" : "Install another agent")
         : h("span", {}, "run ", h("code", {}, "ptyro setup"), " on the computer");
     const agentHint = none
-        ? h("p", { class: "form-err" }, "No coding agent is installed on the computer yet: ", setupLink, " (Claude Code, Codex, or Antigravity for a Google account).")
+        ? h("p", { class: "form-err" }, "No coding agent is installed on the computer yet: ", setupLink, " (Claude Code, Codex or OpenCode).")
         : full ? h("small", { class: "sub" }, setupLink) : null;
     const s = sheet("New task", [
         h("label", { class: "field" }, h("span", {}, "Task"), prompt),

@@ -97,7 +97,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro` | attach to the most recent session (or start a shell session) |
 | `ptyro "TASK"` | the default agent on that task, in a new worktree named after it (here, outside a repository); then attach. Quote it: several words unquoted are an unknown command, with a did-you-mean |
 | `ptyro new [-d] [-n NAME] [-C DIR] [--size COLSxROWS] [--json] [-- CMD…]` | start a session; attaches in a terminal unless `-d` (`--json` prints it instead). No `--agent` means your shell, or `CMD` |
-| `ptyro new … -a A[@PROFILE] [--prompt TEXT \| --prompt-file F] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `gemini`, `opencode`, or one from `[agents]` |
+| `ptyro new … -a A[@PROFILE] [--prompt TEXT \| --prompt-file F] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `opencode`, or one from `[agents]` |
 | `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL` | where: an existing worktree, a new one, one on a PR's branch, or one for an issue. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
@@ -154,7 +154,6 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro mute SESSION\|project:P\|workspace:W [--for D] [--off]` | silence notifications (its row still shows when it wants you) |
 | `ptyro notify test` | send a test through every channel and sink |
 | `ptyro usage [--json]` | rate limits per profile (Claude, Codex) |
-| `ptyro integrations ls\|install\|uninstall [gemini\|antigravity] [--profile P]` | the one-time agent integrations that need installing |
 
 ## Projects, worktrees, workspaces, profiles
 
@@ -198,14 +197,12 @@ See [`remote.md`](remote.md).
 
 | Command | Does |
 |---|---|
-| `ptyro init [-y] [--dry-run]` | detect agents, accounts and repositories, then write your config |
-| `ptyro setup [-y] [--agents A,B] [--tools T,U] [--where wsl\|windows\|both] [--dry-run] [--json]` | the setup checklist: install coding agents (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI) and tools (git, GitHub CLI, Node.js) with what they need first; `-y` asks nothing (the defaults, or what `--agents`/`--tools` name) and reports admin steps it can't do without a prompt; on Windows `--where` picks WSL's distro, Windows, or both (default: the side your daemon runs on) |
-| `ptyro install NAME… [-y] [--where wsl\|windows\|both] [--dry-run] [--json]` | install agents or tools by name (`agy`, `gemini gh`), with their prerequisites; on Windows into WSL, onto Windows, or both |
+| `ptyro setup [-y] [--agents A,B] [--tools T,U] [--where wsl\|windows\|both] [--dry-run] [--json]` | set ptyro up: the checklist to install coding agents (Claude Code, Codex, OpenCode) and tools (git, GitHub CLI, Node.js) with what they need first, their logins, then (at a terminal) your accounts, preferences and repositories, with only what your config lacks written; `-y` asks nothing (the defaults, or what `--agents`/`--tools` name) and reports admin steps it can't do without a prompt; on Windows `--where` picks WSL's distro, Windows, or both (default: the side your daemon runs on) |
+| `ptyro install NAME… [-y] [--where wsl\|windows\|both] [--dry-run] [--json]` | install agents or tools by name (`codex`, `opencode gh`), with their prerequisites; on Windows into WSL, onto Windows, or both |
 | `ptyro update [NAME…] [--check] [-y] [--json] [--here]` | update the agents that have a newer version out (or those named), each the way it was installed (`claude update`, `npm install -g …@latest`), after showing the commands and asking; sessions running an updated agent keep the old version until they restart, and are named. `--check` looks for newer versions now and says what's out of date (`--json`: as JSON). ptyro also looks once a day by itself (`updates.check`; skip one with `updates.ignore`) and offers each at start-up, in the health badge, on the web's Health page and in `ptyro doctor` (a new ptyro also once as a desktop notification, `updates.notify`). Updating ptyro upgrades the daemon live, every open TUI restarts into the new ptyro with its view kept, and the machines linked here on an older ptyro are offered too, each updating itself (`--here`: this machine only) |
 | `ptyro login [NAME…] [--check] [--json] [--where wsl\|windows\|both]` | log in to the agents and the GitHub CLI, one account each: each not logged in yet runs its own sign-in here (a browser page, or a link and a code), confirmed by its own status command; ptyro never sees a credential. `--check` only says where each stands (exit 1 when one is logged out), `--json` as JSON. Setup ends with these logins. More accounts: `ptyro profile login` |
 | `ptyro about [--json]` | which ptyro this is: version and protocol, the repository, licence, build, where config, data, logs and the socket live, the daemon and web app, the tools found, and a block to paste into a bug report |
-| `ptyro doctor [--quick] [--json]` | diagnose agents, logins, integrations, terminal, tmux, daemon, git |
-| `ptyro tour` | the daily loop for real (task, answer, clean up, a shell of your own) with a pretend agent in a ptyro of its own, deleted afterwards |
+| `ptyro doctor [--quick] [--json]` | diagnose agents, logins, hooks, terminal, tmux, daemon, git, and settings ptyro no longer reads (retired keys, keys bound to actions it no longer has, a default agent it no longer has), each with its fix |
 | `ptyro config path\|check\|show\|edit [KEY]` | your config; `edit` opens `$EDITOR` (at that setting) and validates |
 | `ptyro config list [SECTION] [--changed] [-p P] [--json]` | every setting with its value and where it comes from (default, your config, `.ptyro.toml`, `.ptyro.local.toml`); `SECTION` is `ui`, `remote`… or a key prefix |
 | `ptyro config get KEY [--explain] [-p P] [--json]` | one value, bare for scripts; `--explain`: what it does, its default, where it is set, when a change applies |
@@ -217,8 +214,7 @@ See [`remote.md`](remote.md).
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |
 | `ptyro daemon upgrade [--binary PATH] [--json]` | switch the running daemon to a new binary without stopping sessions; exits 1 if it rolled back |
 | `ptyro daemon install-service\|uninstall-service [--dry-run]` | start the daemon at login (systemd user unit / launchd agent) |
-| `ptyro backup [-o FILE] [--with-recordings] [--with-ca] [--json]` | a private `.tar.gz` of ptyro's own state (config, a consistent copy of the database, your chats); never replaces a file ([`docs/uninstall.md`](uninstall.md)) |
-| `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--backup FILE] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, integrations, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
+| `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
 
 ## Exit codes
 

@@ -76,14 +76,6 @@ expression: "Value::Object(all)"
     "kind": "string",
     "session": "string"
   },
-  "integrations": [
-    {
-      "active": "bool",
-      "agent": "string",
-      "detail": "string",
-      "needs_install": "bool"
-    }
-  ],
   "ls": [
     {
       "activity": null,
@@ -156,7 +148,6 @@ expression: "Value::Object(all)"
       "dirs": {
         "claude": "string",
         "codex": "string",
-        "gemini": "string",
         "gh": "string",
         "opencode": "string"
       },

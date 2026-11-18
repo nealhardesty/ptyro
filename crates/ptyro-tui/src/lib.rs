@@ -29,7 +29,6 @@ pub mod settings;
 mod setup_list;
 mod shells;
 pub mod theme;
-pub mod tour;
 pub mod tree;
 mod ui;
 mod windows;
@@ -68,9 +67,6 @@ pub enum AttachEnd {
     Lost(String),
     /// The user quit ptyro (`app.quit`): the daemon and its sessions stopped.
     Stopped,
-    /// The user asked for the tour (`help.tour`): it runs in a ptyro of its own, then this TUI
-    /// comes back.
-    Tour,
     /// An update replaced this TUI's binary and upgraded the daemon (`from` → `to`): the CLI
     /// starts the new binary in its place, attached to the same workspace (`session`: raw mode's
     /// one session), never the command that first started this one (SPEC §24.8a).
@@ -89,8 +85,6 @@ pub struct Options {
     pub workspace: Option<String>,
     /// Show the agent that starts in this worktree (after its setup script) as soon as it does.
     pub follow_worktree: Option<String>,
-    /// Start the guided tour (`ptyro tour`).
-    pub tour: bool,
     /// `ptyro` started the first session itself: the first run (no config yet) or home (UX1.19).
     pub welcome: bool,
     /// Open this chat's view (`ptyro chat open`).

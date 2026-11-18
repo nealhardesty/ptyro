@@ -172,7 +172,7 @@ pub const ACTIONS: &[ActionSpec] = &[
         "About ptyro: version, repository, where its files live, the daemon and web app, a bug report to copy",
     ),
     a("health", "Mend: what the doctor found (the status bar's ⚕), each with its fix"),
-    a("doctor", "Run the full doctor (agents, logins, integrations' self-tests) in a split"),
+    a("doctor", "Run the full doctor (agents, logins, the hooks' self-tests) in a split"),
     a("daemon.logs", "Follow the daemon's log in a split"),
     a("daemon.status", "The daemon's status and health, in a split"),
     a(
@@ -180,10 +180,6 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
     ),
     a("daemon.upgrade", "Switch the daemon to the installed binary, live (sessions keep running)"),
-    a(
-        "app.backup",
-        "Back up ptyro's own state (config, database, chats) to a private .tar.gz, in a split",
-    ),
     a(
         "app.uninstall",
         "Uninstall ptyro: shows what goes and what stays, then asks (in a split; it ends this TUI and the daemon)",
@@ -193,16 +189,13 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Start the daemon at login (a systemd user unit, a launchd agent, or a Windows logon task)",
     ),
     a("daemon.unservice", "Stop starting the daemon at login"),
-    a("integrations", "The agent integrations: what's installed and what each launch gets"),
-    a("integrations.install", "Install an agent's opt-in integration (Gemini, Antigravity)"),
-    a("integrations.uninstall", "Remove an agent's opt-in integration"),
     a(
         "first.run",
-        "The first-run screen again: agents and tools to install, accounts and repositories found",
+        "Set ptyro up, all of it: agents and tools to install, accounts and repositories found",
     ),
     a(
         "app.setup",
-        "Set up agents and tools: the checklist (Claude Code, Codex, Antigravity, OpenCode, Gemini CLI, git, GitHub CLI, Node.js); ⏎ installs in a split, then the logins",
+        "Set up agents and tools: the checklist (Claude Code, Codex, OpenCode, git, GitHub CLI, Node.js); ⏎ installs in a split, then the logins",
     ),
     a("app.install", "Install an agent or tool by name, with what it needs first, in a split"),
     a(
@@ -258,10 +251,6 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Sidebar: mark the selected session for broadcast, or fold/unfold the selected row",
     ),
     a("broadcast", "Type one prompt into every marked session (each once it's ready)"),
-    a(
-        "help.tour",
-        "The tour: start a task, answer it, clean up, and keep a shell, with a pretend agent",
-    ),
     a(
         "chat.new",
         "New chat with your agent, in this workspace: type, ⏎ sends (C-o picks the agent and a folder)",
@@ -683,7 +672,7 @@ impl Keymap {
                     map.bindings.insert(slot(table, &k), (k, Command { action: s.id, arg }));
                 }
                 None => errors.push(format!(
-                    "keys.{spec_key:?}: unknown action {name:?} (see `{} ?` or the palette for the list)",
+                    "keys.{spec_key:?}: unknown action {name:?}: ptyro no longer has it, or it is misspelt (`ptyro doctor` finds every such key and the line that removes them; `{} ?` or the palette lists the actions)",
                     key_label(&map.prefix)
                 )),
             }
@@ -774,6 +763,19 @@ pub fn validate(config: &Config) -> Vec<String> {
     Keymap::new(config).1
 }
 
+/// The `[keys]` lines that bind an action ptyro doesn't have (one a release removed, or a
+/// misspelling): each key as the file names it, with that action. `ptyro doctor` reports them.
+pub fn stale_bindings(config: &Config) -> Vec<(String, String)> {
+    config
+        .keys
+        .iter()
+        .filter_map(|(k, v)| {
+            let name = v.split_whitespace().next()?;
+            (name != "none" && spec(name).is_none()).then(|| (k.clone(), name.to_owned()))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,6 +786,25 @@ mod tests {
     }
 
     /// `docs/keys.md` is the page people read for keys: every default key after the prefix is in it.
+    /// `[keys]` lines bound to actions the TUI doesn't have (a release removed them, or a typo)
+    /// are found for `ptyro doctor`, and the TUI's message names it.
+    #[test]
+    fn keys_bound_to_actions_that_are_gone_are_found() {
+        let c = Config::parse(
+            "[keys]\n\"S\" = \"sets\"\n\"nav:j\" = \"nav.down\"\n\"x\" = \"none\"\n\"T\" = \"help.tour\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            stale_bindings(&c),
+            [("S".to_owned(), "sets".to_owned()), ("T".to_owned(), "help.tour".to_owned())]
+        );
+        let errors = validate(&c);
+        assert!(
+            errors.iter().all(|e| e.contains("`ptyro doctor` finds every such key")),
+            "{errors:?}"
+        );
+    }
+
     #[test]
     fn the_keys_page_lists_every_default_key() {
         const DOC: &str = include_str!("../../../docs/keys.md");

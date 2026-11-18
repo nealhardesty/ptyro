@@ -51,7 +51,7 @@ impl Machine {
     }
 
     /// The registry's reply for `id` (BOOT0's shapes: Claude's is plain text, Codex's a GitHub
-    /// release, the others npm's or Antigravity's `{"version"}`).
+    /// release, the others npm's `{"version"}`).
     fn publish(&self, id: &str, version: &str) {
         let body = match id {
             "claude" => version.to_owned(),
@@ -176,7 +176,7 @@ fn doctor_looks_afresh_and_the_quick_one_reads_whats_remembered() {
     let lookup = checks.iter().find(|c| c["name"] == "lookup").unwrap();
     assert_eq!(lookup["level"], "note");
     let asked = m.asked();
-    assert_eq!(asked.len(), 5, "every agent's source, once: {asked:?}");
+    assert_eq!(asked.len(), 3, "every agent's source, once: {asked:?}");
     // Remembered.
     let v = m.versions();
     assert_eq!(v["checked"], NOW);
@@ -184,13 +184,13 @@ fn doctor_looks_afresh_and_the_quick_one_reads_whats_remembered() {
     // The badge's quick doctor reads what was remembered: the same finding, nothing fetched.
     let quick = m.doctor(true);
     assert_eq!(quick.iter().find(|c| c["name"] == "claude").unwrap()["text"], claude["text"]);
-    assert_eq!(m.asked().len(), 5);
+    assert_eq!(m.asked().len(), 3);
     // `update --check` looks afresh, and says so in JSON too.
     let o = m.run(&["update", "--check", "--json"], "");
     let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(doc["outdated"][0]["id"], "claude");
     assert_eq!(doc["outdated"][0]["command"], "claude update");
-    assert_eq!(m.asked().len(), 10);
+    assert_eq!(m.asked().len(), 6);
 }
 
 #[test]
@@ -342,14 +342,14 @@ async fn the_daemon_looks_once_a_day_and_the_webs_update_runs_through_it() {
             .unwrap_or(Value::Null)
     };
     wait_for("the first look", || versions()["checked"] == NOW);
-    assert_eq!(m.asked().len(), 5);
+    assert_eq!(m.asked().len(), 3);
     // An hour on: it asks the installed versions again (`surveyed` moves), and looks nothing up.
     std::fs::write(m.clock(), (NOW + HOUR).to_string()).unwrap();
     wait_for("an hour's refresh", || versions()["surveyed"] == NOW + HOUR);
-    assert_eq!(m.asked().len(), 5, "at most once a day");
+    assert_eq!(m.asked().len(), 3, "at most once a day");
     // A day on: it looks again.
     std::fs::write(m.clock(), (NOW + 25 * HOUR).to_string()).unwrap();
-    wait_for("the next day's look", || m.asked().len() == 10);
+    wait_for("the next day's look", || m.asked().len() == 6);
     // The web's checklist plans with what was remembered: Claude Code is out of date there.
     let mut c = d.client().await.unwrap();
     let Reply::SetupPlan { plan, .. } = c

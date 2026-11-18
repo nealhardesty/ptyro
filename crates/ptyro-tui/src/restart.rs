@@ -64,14 +64,13 @@ impl App {
     }
 
     /// Nothing of the TUI's own would be lost: no dialog, form, picker or menu open, no chat
-    /// draft, no key sequence waiting for its next key, no tour. What a session holds is the
+    /// draft, no key sequence waiting for its next key. What a session holds is the
     /// daemon's and stays.
     pub(crate) fn idle_for_restart(&self) -> bool {
         self.last_input.elapsed() >= QUIET_FOR
             && self.overlay.is_none()
             && self.first_run.is_none()
             && self.panes.values().all(|p| p.copy.is_none())
-            && self.tour.is_none()
             && !self.prefix
             && self.chat_drafts.values().all(|d| d.trim().is_empty())
             && !matches!(&self.chat_panel, Some(crate::chats::ChatPanel::View(v)) if !v.draft.trim().is_empty())

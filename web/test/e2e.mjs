@@ -224,7 +224,7 @@ const scenarios = {
     const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
     await tab.waitFor("the banner", text("No coding agent is installed on this computer yet"), 30_000);
     await tab.eval(`[...document.querySelectorAll(".setup-banner a")].find(a => a.textContent === "Set up agents and tools").click()`);
-    await tab.waitFor("the checklist", `location.hash === "#/setup" && document.body.innerText.includes("Antigravity")`, 30_000);
+    await tab.waitFor("the checklist", `location.hash === "#/setup" && document.body.innerText.includes("OpenCode")`, 30_000);
   },
 
   // Settings → Agents and tools: the daemon's checklist (a fake machine) in the TUI's shape,
@@ -236,7 +236,7 @@ const scenarios = {
     const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
     await tab.waitFor("the Settings entry", `!!document.querySelector('a[href="#/setup/settings"]')`, 30_000);
     await tab.eval(`document.querySelector('a.setup-link').click()`);
-    await tab.waitFor("the checklist", text("Antigravity"), 30_000);
+    await tab.waitFor("the checklist", text("OpenCode"), 30_000);
     for (const t of ["AGENTS", "TOOLS", "Anthropic", "then log in", "asks for admin"]) await tab.waitFor(t, `document.body.innerText.toUpperCase().includes(${JSON.stringify(t.toUpperCase())})`);
     await tab.waitFor("the admin note", text("Administrator rights are asked for only on the computer itself"));
     await tab.waitFor("the admin command", `[...document.querySelectorAll(".setup-admin code")].some(c => c.textContent === "ptyro install git gh")`);
@@ -249,14 +249,14 @@ const scenarios = {
     await tab.waitFor("Already here", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Claude Code") && e.innerText.includes("your default agent"))`, 30_000);
   },
 
-  // One setup at a time, on the web too (BOOT3): a run started here (Antigravity, whose fake
+  // One setup at a time, on the web too (BOOT3): a run started here (OpenCode, whose fake
   // installer waits) is still going when the page opens again; the new page says so, shows its
   // lines and offers no second Install; once it ends, the report shows there.
   async setupRunning() {
     const world = join(E.fake, "world.json");
     const go = join(E.fake, "go");
     rmSync(go, { force: true });
-    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], outcomes: { antigravity: "wait", opencode: "wait" } }));
+    writeFileSync(world, JSON.stringify({ platform: "linux", programs: ["apt-get", "sudo"], outcomes: { opencode: "wait" } }));
     const text = (t) => `document.body.innerText.includes(${JSON.stringify(t)})`;
     const install = async (name) => {
       await tab.waitFor("the checklist", `!!document.querySelector('input[aria-label=${JSON.stringify(name)}]')`, 30_000);
@@ -267,7 +267,7 @@ const scenarios = {
     };
     try {
       await fresh("#/setup");
-      await install("Antigravity");
+      await install("OpenCode");
       // A page that didn't start it (this one, opened again).
       await fresh("#/setup");
       await tab.waitFor("the run going already", text("Setup is already running on the computer"), 30_000);
@@ -275,7 +275,9 @@ const scenarios = {
       await tab.waitFor("no second install", `[...document.querySelectorAll("button")].some(b => b.textContent === "Installing…" && b.disabled)`);
       writeFileSync(go, "");
       await tab.waitFor("its report", text("1 installed. git and GitHub CLI are left for the computer"), 30_000);
-      await tab.waitFor("the checklist after it", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("Antigravity"))`, 30_000);
+      await tab.waitFor("the checklist after it", `[...document.querySelectorAll(".setup-here")].some(e => e.innerText.includes("OpenCode"))`, 30_000);
+      // (The fake machine forgets it, for the next step.)
+      rmSync(join(E.fake, "installed", "opencode"), { force: true });
 
       // Setup running from a terminal (the machine's lock, not the daemon's run): the page says
       // who instead of offering Install, and offers it again on its own once that ends.

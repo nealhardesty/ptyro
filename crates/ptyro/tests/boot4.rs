@@ -115,13 +115,13 @@ fn setup_walks_through_the_logins_of_what_it_installed_then_names_profiles() {
 #[test]
 fn unattended_setup_says_where_each_login_stands_and_runs_none() {
     let m = Machine::new(json!({ "installed": { "gh": "2.57.0" }, "logged_in": ["gh"] }));
-    let o = m.run(&["setup", "--yes", "--agents", "claude,agy", "--tools", "gh"], "");
+    let o = m.run(&["setup", "--yes", "--agents", "claude,opencode", "--tools", "gh"], "");
     let t = text(&o);
     assert!(o.status.success(), "the exit code is the installs': {t}");
     assert!(m.ran().is_empty(), "{:?}", m.logins());
     assert!(t.contains("✗ Claude Code: not logged in: `ptyro login claude`"), "{t}");
     assert!(t.contains("✓ GitHub CLI: logged in"), "{t}");
-    assert!(t.contains("? Antigravity: can't be checked"), "{t}");
+    assert!(t.contains("? OpenCode: can't be checked"), "{t}");
     assert!(t.contains("`ptyro login` logs them in, in a terminal."), "{t}");
     assert!(t.contains(HINT), "{t}");
     // --json: the logins' turn is an event; nothing is walked or said.
@@ -135,14 +135,14 @@ fn unattended_setup_says_where_each_login_stands_and_runs_none() {
 #[test]
 fn ptyro_login_logs_in_each_one_that_isnt_and_a_failure_offers_its_fix() {
     let m = Machine::new(json!({
-        "installed": { "claude": "2.1.319", "codex": "0.162.1", "gh": "2.57.0", "antigravity": "1.0.0" },
+        "installed": { "claude": "2.1.319", "codex": "0.162.1", "gh": "2.57.0", "opencode": "1.0.0" },
         "logged_in": ["codex"],
         "logins": { "claude": "fail", "gh": "nothing" },
     }));
     let o = m.run(&["login"], "");
     let t = text(&o);
     assert_eq!(o.status.code(), Some(1), "{t}");
-    // Codex is logged in; Antigravity can't be checked, so it isn't started unasked.
+    // Codex is logged in; OpenCode can't be checked, so it isn't started unasked.
     assert_eq!(m.ran(), ["login claude", "login gh"]);
     assert!(t.contains("✓ Codex: logged in"), "{t}");
     assert!(t.contains("✗ Claude Code: not logged in: it exited with 1"), "{t}");
@@ -151,18 +151,18 @@ fn ptyro_login_logs_in_each_one_that_isnt_and_a_failure_offers_its_fix() {
         "{t}"
     );
     assert!(t.contains("✗ GitHub CLI: still not logged in (`gh auth status` says so)"), "{t}");
-    assert!(t.contains("? Antigravity: can't be checked; it signs in when it starts (`ptyro login agy` starts it now)"), "{t}");
+    assert!(t.contains("? OpenCode: can't be checked; it signs in when it starts (`ptyro login opencode` starts it now)"), "{t}");
 
     // Named, the one that can't be checked runs too, and says it can't be confirmed.
-    let o = m.run(&["login", "agy"], "");
+    let o = m.run(&["login", "opencode"], "");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
-    assert!(t.contains("This starts Antigravity: sign in, then quit it to come back here."), "{t}");
-    assert!(t.contains("? Antigravity: done."), "{t}");
-    assert_eq!(m.ran().last().map(String::as_str), Some("login antigravity"));
+    assert!(t.contains("This starts OpenCode: sign in, then quit it to come back here."), "{t}");
+    assert!(t.contains("? OpenCode: done."), "{t}");
+    assert_eq!(m.ran().last().map(String::as_str), Some("login opencode"));
 
     // Not installed, or no login at all.
-    let o = m.run(&["login", "opencode"], "");
+    let o = Machine::new(json!({})).run(&["login", "opencode"], "");
     assert_eq!(o.status.code(), Some(1));
     assert!(
         text(&o).contains("– OpenCode: not installed: `ptyro install opencode`"),
@@ -179,7 +179,7 @@ fn ptyro_login_logs_in_each_one_that_isnt_and_a_failure_offers_its_fix() {
 #[test]
 fn check_and_json_only_ask_the_status_commands() {
     let m = Machine::new(json!({
-        "installed": { "claude": "2.1.319", "gh": "2.57.0", "gemini": "0.30.0" },
+        "installed": { "claude": "2.1.319", "gh": "2.57.0", "opencode": "1.19.5" },
         "logged_in": ["gh"],
     }));
     let o = m.run(&["login", "--check"], "");
@@ -192,7 +192,7 @@ fn check_and_json_only_ask_the_status_commands() {
         "{t}"
     );
     assert!(t.contains("✓ GitHub CLI: logged in"), "{t}");
-    assert!(t.contains("? Gemini CLI: can't be checked"), "{t}");
+    assert!(t.contains("? OpenCode: can't be checked"), "{t}");
     assert!(!t.contains("Codex"), "what isn't installed isn't listed unless named: {t}");
     let o = m.run(&["login", "--json"], "");
     let rows: Value = serde_json::from_slice(&o.stdout).unwrap();
@@ -201,12 +201,12 @@ fn check_and_json_only_ask_the_status_commands() {
     };
     assert_eq!(state("claude"), "logged_out");
     assert_eq!(state("gh"), "logged_in");
-    assert_eq!(state("gemini"), "unconfirmed");
+    assert_eq!(state("opencode"), "unconfirmed");
     assert_eq!(state("codex"), "missing");
     assert_eq!(rows[0]["command"], "claude auth login");
     assert_eq!(rows[0]["check"], "claude auth status");
     assert!(m.ran().is_empty(), "{:?}", m.logins());
-    // Only the status commands ran: Claude's and gh's (Gemini names none).
+    // Only the status commands ran: Claude's and gh's (OpenCode names none).
     let mut asked = m.logins();
     asked.sort();
     asked.dedup();
@@ -474,32 +474,35 @@ fn http(port: u16, path: &str, token: Option<&str>, body: &Value) -> (u16, Value
 
 #[test]
 fn one_that_cant_be_checked_starts_when_just_installed_or_named_never_on_every_rerun() {
-    // Antigravity here already, Gemini CLI not: setup starts only the one it just installed.
-    let m = Machine::new(json!({
-        "installed": { "antigravity": "1.0.0", "node": "24.13.0" },
-        "programs": ["apt-get", "sudo", "curl"],
-    }));
-    let o = m.run(&["setup", "--agents", "agy,gemini", "--tools", "none"], "\n");
+    // Not here yet: setup starts it once it has installed it.
+    let m = Machine::new(json!({ "programs": ["apt-get", "sudo", "curl"] }));
+    let o = m.run(&["setup", "--agents", "opencode", "--tools", "none"], "\n");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
-    assert_eq!(m.ran(), ["login gemini"], "{t}");
-    assert!(t.contains("? Antigravity: can't be checked; it signs in when it starts (`ptyro login agy` starts it now)"), "{t}");
-    // Again: Gemini CLI is here now, so neither starts.
-    let o = m.run(&["setup", "--agents", "agy,gemini", "--tools", "none"], "\n");
-    assert!(o.status.success(), "{}", text(&o));
-    assert_eq!(m.ran(), ["login gemini"], "{}", text(&o));
+    assert_eq!(m.ran(), ["login opencode"], "{t}");
+    // Again: it is here now, so it doesn't start; it says how to start it.
+    let o = m.run(&["setup", "--agents", "opencode", "--tools", "none"], "\n");
+    let t = text(&o);
+    assert!(o.status.success(), "{t}");
+    assert_eq!(m.ran(), ["login opencode"], "{t}");
+    assert!(t.contains("? OpenCode: can't be checked; it signs in when it starts (`ptyro login opencode` starts it now)"), "{t}");
 }
 
 #[test]
 fn quitting_one_that_cant_be_checked_is_a_skip_not_a_failure() {
     // Ctrl+C (or however the agent quits) ends it non-zero.
     let m = Machine::new(
-        json!({ "installed": { "antigravity": "1.0.0" }, "logins": { "antigravity": "fail" } }),
+        json!({ "installed": { "opencode": "1.0.0" }, "logins": { "opencode": "fail" } }),
     );
-    let o = m.run(&["login", "agy"], "");
+    let o = m.run(&["login", "opencode"], "");
     let t = text(&o);
     assert!(o.status.success(), "{t}");
-    assert!(t.contains("– Antigravity: skipped (it exited with 1). If it isn't signed in, it asks when it starts"), "{t}");
+    assert!(
+        t.contains(
+            "– OpenCode: skipped (it exited with 1). If it isn't signed in, it asks when it starts"
+        ),
+        "{t}"
+    );
     assert!(!t.contains("✗"), "{t}");
 }
 

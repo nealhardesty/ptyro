@@ -91,7 +91,7 @@ fn record(
     let _ = events.send(DomainEvent::SetupProgress { run: run.to_owned(), event, side, seq });
 }
 
-/// Item ids for what a client named (`agy`, `github-cli`).
+/// Item ids for what a client named (`opencode`, `github-cli`).
 fn ids(names: &[String]) -> Result<Vec<String>, Error> {
     let mut out = Vec::new();
     for n in names {

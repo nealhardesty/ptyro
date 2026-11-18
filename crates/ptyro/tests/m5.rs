@@ -1,8 +1,8 @@
 //! M5 end-to-end tests: the scriptable control plane. A shell script drives a whole task with
 //! `ptyro` commands only (the milestone's Done-when); `send`/`wait`/`read`/`events` details;
 //! stable exit codes; the `--json` shapes (snapshots); completions; `doctor` with its hook
-//! self-test; `install-service`; `init`; other tools' committed config; and the TUI's broadcast
-//! and tour.
+//! self-test; `install-service`; `setup`'s questions after its checklist; other tools'
+//! committed config; and the TUI's broadcast.
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -326,7 +326,6 @@ fn json_shapes() {
         ("wt_ls", vec!["wt", "ls", "--json"]),
         ("profile_ls", vec!["profile", "ls", "--json"]),
         ("daemon_status", vec!["daemon", "status", "--json"]),
-        ("integrations", vec!["integrations", "ls", "--json"]),
         ("config_check", vec!["config", "check", "--json"]),
     ] {
         let mut v = w.json(&args);
@@ -387,7 +386,7 @@ fn doctor_self_test_and_service() {
         checks.as_array().unwrap().iter().find(|c| c["section"] == s && c["name"] == n).cloned()
     };
     for a in ["claude", "codex", "opencode"] {
-        let c = find("integrations", a).unwrap_or_else(|| panic!("no {a} self-test: {checks}"));
+        let c = find("hooks", a).unwrap_or_else(|| panic!("no {a} self-test: {checks}"));
         assert_eq!(c["level"], "ok", "{c}");
     }
     assert_eq!(find("daemon", "running").unwrap()["level"], "ok");
@@ -436,8 +435,11 @@ fn doctor_self_test_and_service() {
     }
 }
 
-#[test]
-fn init_detects_and_writes_only_whats_missing() {
+/// `ptyro setup` at a terminal: the checklist, then what `ptyro init` asked before it was merged
+/// in (2026-11-17): the accounts found become profiles, and the config gets only what it lacks.
+/// `ptyro init` itself says it was removed and names setup.
+#[tokio::test]
+async fn setup_goes_on_to_accounts_and_writes_only_whats_missing() {
     let w = World::new("");
     let h = w.home();
     std::fs::create_dir_all(h.join(".claude-work")).unwrap();
@@ -446,27 +448,45 @@ fn init_detects_and_writes_only_whats_missing() {
         "claude-work() {\n  CLAUDE_CONFIG_DIR=\"$HOME/.claude-work\" claude \"$@\"\n}\n",
     )
     .unwrap();
-    let dry = w.ok(&["init", "--dry-run"]);
-    assert!(
-        dry.contains("[profiles.work]") && dry.contains("claude = \"~/.claude-work\""),
-        "{dry}"
-    );
+    // The checklist looks at a fake machine (BOOT1's), never this one.
+    let fake = h.join("fake");
+    std::fs::create_dir_all(&fake).unwrap();
+    std::fs::write(fake.join("world.json"), r#"{"platform": "linux", "programs": []}"#).unwrap();
+    if !cfg!(windows) {
+        let r = ptyro_testkit::headless::run(
+            w.tui(&["setup"])
+                .env("PTYRO_TEST_SETUP", &fake.to_string_lossy())
+                .timeout(30.0)
+                .send_when("Enter to install", "q\\r")
+                .send_when("accounts, preferences and repositories? [Y/n]", "\\r")
+                .send_when("add profile work? [Y/n]", "\\r")
+                .send_when("prefix keys", "\\r")
+                .send_when("where worktrees go", "\\r")
+                .send_when("desktop notifications", "\\r")
+                .send_when("web app for your phone?", "\\r")
+                .send_when("write it? [Y/n]", "\\r")
+                .send_when("add completions to", "\\r")
+                .send_when("start the daemon at login", "\\r")
+                .until("done. `ptyro` opens the TUI"),
+        )
+        .await
+        .unwrap();
+        assert!(r.screen.contains("done."), "{}", r.screen);
+        let config = std::fs::read_to_string(
+            w.d.env()
+                .iter()
+                .find(|(k, _)| k == "PTYRO_HOME")
+                .map(|(_, v)| PathBuf::from(v).join("config/config.toml"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(config.contains("[agents.claude]"), "kept what was there: {config}");
+        assert!(config.contains("[profiles.work]"), "{config}");
+    }
     let out = w.cli(&["init", "--yes"]);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let config = std::fs::read_to_string(
-        w.d.env()
-            .iter()
-            .find(|(k, _)| k == "PTYRO_HOME")
-            .map(|(_, v)| PathBuf::from(v).join("config/config.toml"))
-            .unwrap(),
-    )
-    .unwrap();
-    assert!(config.contains("[agents.claude]"), "kept what was there: {config}");
-    assert!(config.contains("[profiles.work]"), "{config}");
-    // A second run finds nothing to add.
-    let again = w.cli(&["init", "--yes"]);
-    assert!(String::from_utf8_lossy(&again.stderr).contains("nothing to add"));
-    assert_eq!(w.code(&["init"]), 2, "no terminal and no --yes: refuses to guess");
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("`ptyro init` was removed") && err.contains("`ptyro setup`"), "{err}");
 }
 
 #[test]
@@ -516,7 +536,7 @@ fn other_tools_config_becomes_scripts() {
 }
 
 #[tokio::test]
-async fn tui_broadcast_and_a_tour_of_its_own() {
+async fn tui_broadcast() {
     let w = World::new("");
     w.ok(&["new", "-d", "-n", "b1", "--agent", "claude"]);
     w.ok(&["new", "-d", "-n", "b2", "--agent", "claude"]);
@@ -545,22 +565,6 @@ async fn tui_broadcast_and_a_tour_of_its_own() {
         let screen = w.ok(&["read", s]);
         assert!(screen.contains("worked: broadcasted"), "{s}: {screen}");
     }
-    // The tour (UX1.22) runs a ptyro of its own: leaving it at its first step, this daemon has
-    // none of its project or sessions, and its own are as they were. (Unix: on Windows the tour
-    // runs in WSL.)
-    if cfg!(windows) {
-        return;
-    }
-    let tour = ptyro_testkit::headless::run(
-        w.tui(&["tour"])
-            .timeout(30.0)
-            .send_when("Tour 1/4: start a task", "\\x11d")
-            .until("the tour is over"),
-    )
-    .await
-    .unwrap();
-    assert!(tour.screen.contains("the tour is over"), "{}", tour.screen);
-    assert!(!w.ok(&["project", "ls"]).contains("demo"), "the tour's project stays its own");
     let ls = w.ok(&["ls"]);
     assert!(ls.contains("b1") && ls.contains("b2") && ls.lines().count() == 3, "{ls}");
 }

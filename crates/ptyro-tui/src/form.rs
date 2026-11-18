@@ -635,7 +635,6 @@ const COLOURS: &[&str] = &["blue", "green", "yellow", "magenta", "cyan", "red", 
 const DIRS: &[(&str, &str, &str)] = &[
     ("dir_claude", "Claude dir", "claude="),
     ("dir_codex", "Codex dir", "codex="),
-    ("dir_gemini", "Gemini dir", "gemini="),
     ("dir_opencode", "OpenCode dir", "opencode="),
     ("dir_gh", "gh dir", "gh="),
 ];
@@ -770,7 +769,7 @@ impl App {
             Field::choice(
                 "login",
                 "Then log in to",
-                ["claude", "codex", "gemini", "opencode", "gh"]
+                ["claude", "codex", "opencode", "gh"]
                     .iter()
                     .map(|a| ((*a).to_owned(), format!("{a}, now")))
                     .chain(std::iter::once(("".to_owned(), "nothing yet".to_owned())))

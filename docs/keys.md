@@ -11,7 +11,7 @@ itself to the program (a ptyro inside ptyro, over ssh), press the prefix and the
 one, `Ctrl-Q`.
 
 There are two so that one always gets through (SPEC §21.2):
-- **`Ctrl-Q`**: none of Claude Code, Codex, Gemini CLI or OpenCode binds it, and it sits in the
+- **`Ctrl-Q`**: none of Claude Code, Codex or OpenCode binds it, and it sits in the
   same place on every keyboard layout. VS Code's terminal on Linux and Windows takes it for Quick
   Open, unless you add `-workbench.action.quickOpenView` to
   `terminal.integrated.commandsToSkipShell`. Zellij's default keys quit Zellij on it.
@@ -24,9 +24,7 @@ replaces both defaults. `C-]` needs AltGr on some non-US layouts.
 Don't know the next key? Pause after the prefix: a menu of the keys that follow appears
 (`[ui] which_key_delay`, 400 ms; `0` turns it off). `.` (after the prefix, or in the sidebar, or a
 right-click on a row) lists everything you can do with that session, worktree or project.
-`Ctrl-Q ?` lists every binding as it is configured right now, and `ptyro tour` (or
-`help.tour` in the palette) has you do the whole loop for real, with a pretend agent in a ptyro
-of its own. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
+`Ctrl-Q ?` lists every binding as it is configured right now. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
 action by name.
 
 ## After the prefix
@@ -252,13 +250,10 @@ key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `notify.test`,
-`theme.next`, `config.edit`, `help.tour`.
+`theme.next`, `config.edit`.
 
 ## Other overlays
 
-- **Tour** (`ptyro tour`, `help.tour`): a coach in the corner says what to do next, with your keys;
-  it never takes keys itself. Leave with `Ctrl-Q d`; everything the tour made is deleted.
-  `help.tour` again starts it over.
 - **Trust** (a project's scripts): `y` trusts, `n` goes on without them, `j` / `k` scroll.
 
 ## Rebinding

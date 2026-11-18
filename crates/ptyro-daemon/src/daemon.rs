@@ -828,13 +828,7 @@ impl Daemon {
         let (argv, kind) = match (&agent, spec.argv.is_empty()) {
             (Some(a), _) => {
                 if ptyro_agents::command(&config, a).is_none() {
-                    return Err(Error::new(
-                        ErrorCode::NotFound,
-                        format!(
-                            "no agent named {a:?} (known: {})",
-                            ptyro_agents::names(&config).join(", ")
-                        ),
-                    ));
+                    return Err(Error::new(ErrorCode::NotFound, ptyro_agents::unknown(&config, a)));
                 }
                 // Extra arguments; the adapter builds the rest at launch.
                 (spec.argv.clone(), SessionKind::Agent)

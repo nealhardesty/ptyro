@@ -1,4 +1,4 @@
-//! `ptyro uninstall` and `ptyro backup` end to end (ROADMAP H2.3). Everything runs in a fake
+//! `ptyro uninstall` end to end (ROADMAP H2.3). Everything runs in a fake
 //! `$HOME` and a throwaway ptyro home (or fake XDG directories), so nothing of the machine's is
 //! touched: the pure planning and classification are unit-tested in the crate.
 
@@ -126,7 +126,7 @@ async fn the_plan_flags_lost_work_and_a_dry_run_removes_nothing() {
     assert_eq!(plan["worktrees"][0]["branch"], "fix");
     // A sandbox keeps the machine's things and the binary.
     assert_eq!(plan["binary"]["action"], "keep");
-    assert!(plan["service"].is_null() && plan["integrations"].as_array().unwrap().is_empty());
+    assert!(plan["service"].is_null() && plan.get("integrations").is_none());
     assert_eq!(plan["daemon_running"], true);
     // The human form says it plainly.
     let said =
@@ -309,86 +309,6 @@ fn it_refuses_inside_a_session() {
         "{}",
         text(&out)
     );
-}
-
-fn list(file: &Path) -> Vec<String> {
-    let out = Command::new("tar").arg("-tzf").arg(file).output().unwrap();
-    assert!(out.status.success(), "tar: {}", text(&out));
-    String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()
-}
-
-/// A backup is a private tar.gz with a database that opens by itself and the config; no agent
-/// logins; and it never replaces a file.
-#[tokio::test]
-async fn a_backup_holds_the_state_not_the_logins_and_never_replaces_a_file() {
-    let w = World::new();
-    w.project("app");
-    w.d.write_config("[ui]\nmouse = false # mine\n").unwrap();
-    // A managed profile's login: never in a backup.
-    let login = w.d.paths.data.join("profiles/work/claude");
-    std::fs::create_dir_all(&login).unwrap();
-    std::fs::write(login.join(".credentials.json"), "{\"secret\":1}").unwrap();
-    std::fs::create_dir_all(w.d.paths.data.join("sessions/s1")).unwrap();
-    std::fs::write(w.d.paths.data.join("sessions/s1/pty.log"), "screen text").unwrap();
-
-    let file = w.home().join("out/b.tar.gz");
-    let said = w.ok(&["backup", "-o", file.to_str().unwrap()]);
-    assert!(said.contains("data/ptyro.db") && said.contains("agent logins"), "{said}");
-    assert_eq!(ptyro_pty::acl::readable_by_others(&file), None);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
-    }
-    let names = list(&file);
-    for want in [
-        "ptyro-backup/README.txt",
-        "ptyro-backup/manifest.json",
-        "ptyro-backup/config/config.toml",
-        "ptyro-backup/data/ptyro.db",
-    ] {
-        assert!(names.iter().any(|n| n == want), "{want} in {names:?}");
-    }
-    assert!(
-        !names
-            .iter()
-            .any(|n| n.contains("credentials") || n.contains("profiles") || n.contains("pty.log")),
-        "{names:?}"
-    );
-    // The database opens on its own and has the project.
-    let x = tempfile::tempdir().unwrap();
-    assert!(
-        Command::new("tar")
-            .arg("-xzf")
-            .arg(&file)
-            .arg("-C")
-            .arg(x.path())
-            .status()
-            .unwrap()
-            .success()
-    );
-    let store = ptyro_store::Store::open(&x.path().join("ptyro-backup/data/ptyro.db")).unwrap();
-    let reg = store.load_registry().await.unwrap();
-    assert!(reg.projects.iter().any(|p| p.slug == "app"), "{:?}", reg.projects);
-    assert!(
-        std::fs::read_to_string(x.path().join("ptyro-backup/config/config.toml"))
-            .unwrap()
-            .contains("# mine")
-    );
-    // It never replaces a file.
-    std::fs::write(&file, "mine").unwrap();
-    let again = w.cli(&["backup", "-o", file.to_str().unwrap()]);
-    assert!(!again.status.success() && text(&again).contains("never replace"), "{}", text(&again));
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine");
-    // The recordings come only when asked.
-    let with = w.home().join("out/c.tar.gz");
-    w.ok(&["backup", "-o", with.to_str().unwrap(), "--with-recordings", "--json"]);
-    assert!(list(&with).iter().any(|n| n.ends_with("sessions/s1/pty.log")));
-    // And an uninstall that is asked for a backup first makes it, before anything goes.
-    let kept = w.home().join("out/before.tar.gz");
-    let out = w.cli(&["uninstall", "--yes", "--keep-binary", "--backup", kept.to_str().unwrap()]);
-    assert!(out.status.success(), "{}", text(&out));
-    assert!(kept.exists() && !w.d.paths.data.exists());
 }
 
 /// Uninstall is about this computer: a saved remote (`client.default_remote`, which a Windows

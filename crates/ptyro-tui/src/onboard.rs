@@ -1,4 +1,4 @@
-//! The first run and home (ROADMAP UX1.19): what `ptyro init` asks, as a screen of checkboxes
+//! The first run and home (ROADMAP UX1.19): what `ptyro setup` asks, as a screen of checkboxes
 //! the first time `ptyro` opens with no config; and home, one list of what to do next (who needs
 //! you, recent projects, repositories found) when there's nothing to work on yet.
 //!
@@ -17,7 +17,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::app::{AfterAdd, App, Offer, Overlay, Pending, Purpose, Then};
+use crate::app::{AfterAdd, App, Overlay, Pending, Purpose};
 use crate::keymap::Command;
 use crate::palette::{Item, Palette, Target};
 use crate::setup_list::{Found, Setup};
@@ -419,8 +419,8 @@ impl App {
         }
     }
 
-    /// Write the config (profiles, notifications), register the repositories, offer the tour;
-    /// `later`: nothing installs, so say how to open the setup checklist again.
+    /// Write the config (profiles, notifications), register the repositories; `later`: nothing
+    /// installs, so say how to open the setup checklist again.
     fn finish_first_run(&mut self, choices: &[Choice], later: bool) {
         let path = Config::path(&self.paths);
         let on = |k: fn(&ChoiceKind) -> bool| choices.iter().filter(move |c| c.on && k(&c.kind));
@@ -453,14 +453,7 @@ impl App {
             (p, r) => format!("set up: {p} profile(s), {r} project(s)"),
         };
         let did = if later { format!("{did}; {}", self.setup_later()) } else { did };
-        self.toast_offer(
-            did,
-            false,
-            Offer {
-                label: "take the tour".into(),
-                then: Then::Run(Command { action: "help.tour", arg: None }),
-            },
-        );
+        self.toast(did);
     }
 
     // ── home ────────────────────────────────────────────────────────────────
@@ -892,13 +885,16 @@ mod tests {
         // A file that doesn't read: what was held.
         let bad = dir.path().join("bad.toml");
         std::fs::write(&bad, "[updates\n").unwrap();
-        assert_eq!(super::keep_value(&bad, &["gemini".into()], "codex"), r#"["gemini", "codex"]"#);
+        assert_eq!(
+            super::keep_value(&bad, &["opencode".into()], "codex"),
+            r#"["opencode", "codex"]"#
+        );
     }
 
     #[test]
     fn a_checklist_line_wraps_between_its_parts() {
-        let lines = super::fit("Google's coding agent · the vendor's installer · then log in", 30);
-        assert_eq!(lines, ["Google's coding agent", "the vendor's installer", "then log in"]);
+        let lines = super::fit("OpenAI's coding agent · the vendor's installer · then log in", 30);
+        assert_eq!(lines, ["OpenAI's coding agent", "the vendor's installer", "then log in"]);
         assert_eq!(super::fit("a · b", 30), ["a · b"]);
     }
 

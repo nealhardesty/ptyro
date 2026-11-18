@@ -5,7 +5,7 @@
 //! |---|---|
 //! | `-p --input-format stream-json …` | Claude stream-json |
 //! | `app-server` | Codex app-server (JSON-RPC, no `jsonrpc` field) |
-//! | `--acp` | ACP (Gemini) |
+//! | `--acp` | ACP (any ACP agent) |
 //! | `serve --port P` | OpenCode's HTTP server + server-sent events |
 //!
 //! Prompts: `work <secs> <text>` (a Bash tool call, then `worked: <text>`), `ask <cmd>` (a
@@ -400,7 +400,7 @@ fn codex() -> i32 {
     0
 }
 
-// ── ACP (Gemini) ──────────────────────────────────────────────────────────────────────────────
+// ── ACP ───────────────────────────────────────────────────────────────────────────────────
 
 fn acp() -> i32 {
     let rx = lines();
@@ -417,7 +417,7 @@ fn acp() -> i32 {
         let id = m["id"].clone();
         match m["method"].as_str() {
             Some("initialize") => rpc(
-                json!({ "id": id, "result": { "protocolVersion": 1, "agentCapabilities": { "loadSession": true }, "authMethods": [], "agentInfo": { "name": "fake-gemini", "version": "0.64.0" } } }),
+                json!({ "id": id, "result": { "protocolVersion": 1, "agentCapabilities": { "loadSession": true }, "authMethods": [], "agentInfo": { "name": "fake-acp", "version": "0.64.0" } } }),
             ),
             Some(method @ ("session/new" | "session/load"))
                 if !m["params"]["mcpServers"].is_null() =>

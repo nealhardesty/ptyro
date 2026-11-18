@@ -1296,8 +1296,7 @@ impl App {
 
     /// The agents ptyro knows: the built-in ones and yours.
     fn agent_names(&self) -> Vec<String> {
-        let mut names: Vec<String> =
-            ["claude", "codex", "gemini", "opencode"].map(String::from).into();
+        let mut names: Vec<String> = ["claude", "codex", "opencode"].map(String::from).into();
         let mine: Vec<String> =
             self.config.agents.keys().filter(|k| !names.contains(k)).cloned().collect();
         names.extend(mine);
@@ -2546,10 +2545,10 @@ mod tests {
     /// defaults.
     #[test]
     fn a_missing_agent_in_the_picker_sets_itself_up() {
-        let (detail, target) = agent_row("antigravity", "agy", None);
+        let (detail, target) = agent_row("opencode", "opencode", None);
         assert_eq!(detail, "not installed: ⏎ sets it up");
         assert!(
-            matches!(&target, Target::Action(Command { action: "app.setup", arg: Some(a) }) if a == "agy"),
+            matches!(&target, Target::Action(Command { action: "app.setup", arg: Some(a) }) if a == "opencode"),
             "{target:?}"
         );
         let (detail, target) = agent_row("codex", "codex", Some("~/.local/bin/codex".into()));

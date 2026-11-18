@@ -1,5 +1,5 @@
-//! The Agent Client Protocol (M10.2): JSON-RPC 2.0 over stdio, as Gemini CLI speaks it with
-//! `--acp` (and any other ACP agent). The handshake was run live against Gemini 0.64.0:
+//! The Agent Client Protocol (M10.2): JSON-RPC 2.0 over stdio, as any ACP agent speaks it
+//! (`protocol = "acp"` in `[agents.NAME]`). The handshake was recorded live against an ACP agent:
 //! `initialize {protocolVersion: 1, clientCapabilities}` → `{protocolVersion, authMethods,
 //! agentCapabilities: {loadSession, …}}`; `session/new {cwd, mcpServers}` → `{sessionId,
 //! modes, models}`, then `session/update` notifications. ptyro offers no file system or terminal
@@ -506,19 +506,19 @@ mod tests {
             (&json!("session/load"), &json!("s1"))
         );
         assert_eq!(load[0]["params"]["mcpServers"][0]["command"], "/p");
-        // Without: none (the user's own servers stay Gemini's business, not a chat's).
+        // Without: none (the user's own servers stay the agent's business, not a chat's).
         let mut a = Acp::new(Opts { cwd: "/w".into(), ..Opts::default() });
         a.start();
         assert_eq!(sent(&a.on_line(init))[0]["params"]["mcpServers"], json!([]));
     }
 
     #[test]
-    fn gemini_handshake_a_turn_and_a_permission() {
+    fn an_acp_handshake_a_turn_and_a_permission() {
         let mut a = Acp::new(Opts { cwd: "/w".into(), ..Opts::default() });
         let init = sent(&a.start());
         assert_eq!(init[0]["jsonrpc"], "2.0");
         assert_eq!(init[0]["params"]["clientCapabilities"]["terminal"], false);
-        // Gemini 0.64.0's answer (trimmed).
+        // A recorded answer (trimmed).
         let fx = a.on_line(r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"authMethods":[{"id":"oauth-personal","name":"Log in with Google"}],"agentInfo":{"name":"gemini-cli","version":"0.64.0"},"agentCapabilities":{"loadSession":true}}}"#);
         assert_eq!(sent(&fx)[0]["method"], "session/new");
         let fx = a.on_line(r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"94496331-6614-4bc8-b236-c933977aff64","modes":{"currentModeId":"default"}}}"#);

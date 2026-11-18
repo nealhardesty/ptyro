@@ -1674,11 +1674,12 @@ async fn the_web_app_asks_the_daemon_and_the_machine() {
             .any(|c| c["section"] == "daemon" && c["name"] == "running" && c["level"] == "ok"),
         "{v}"
     );
-    // A tour is for its own ptyro only: this one refuses to end itself.
-    let (_, v) = host(serve.port, Some(&full), &json!({ "op": "tour.end" }));
-    // (Windows has no tour of its own: it runs in WSL, and says so.)
-    let refused = if cfg!(windows) { "unsupported" } else { "invalid" };
-    assert_eq!(v["error"]["code"], refused, "{v}");
+    // What was removed (2026-11-17) is refused, saying so, for an older page that still asks.
+    for op in ["tour.start", "integrations.ls", "backup.create"] {
+        let (_, v) = host(serve.port, Some(&full), &json!({ "op": op }));
+        assert_eq!(v["error"]["code"], "unsupported", "{v}");
+        assert!(v["error"]["message"].as_str().unwrap().contains("removed"), "{v}");
+    }
 }
 
 /// CFG1.3: the web settings panel's logic (`web/test/config.mjs`), and through `ptyro serve` the

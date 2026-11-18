@@ -32,7 +32,9 @@ configuration with defaults filled in, and `ptyro config path` prints where it i
 
 A setting of a feature ptyro no longer has doesn't break your file: it is ignored, and
 `ptyro config check`, `ptyro doctor` and the health views name it with the fix
-(`ptyro config unset KEY`, or Remove on the web). A misspelt setting is still an error.
+(`ptyro config unset KEY`, or Remove on the web). A misspelt setting is still an error. The
+same goes for a `[keys]` line bound to an action ptyro no longer has, and for a default agent
+(or `chat.agent`) that names one it no longer has built in: `ptyro doctor` names the change.
 
 The full schema is in [`SPEC.md`](../SPEC.md) §13. This page covers the settings people change
 most; `ptyro config show` lists every key with the value in effect.

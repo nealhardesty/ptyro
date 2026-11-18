@@ -152,7 +152,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const log = new SetupLog();
   log.start();
-  log.started("r9", { entries: [{ id: "agy", side: "local", ticked: true, action: {} }] });
+  log.started("r9", { entries: [{ id: "opencode", side: "local", ticked: true, action: {} }] });
   log.event(ev("r9", 1, line("one")));
   assert.equal(log.sync(null, ""), "", "asked before the run was known");
   assert.equal(log.running, true);
@@ -168,7 +168,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const log = new SetupLog();
   log.start();
-  log.started("r7", { entries: [{ id: "agy", side: "local", ticked: true, action: {} }] });
+  log.started("r7", { entries: [{ id: "opencode", side: "local", ticked: true, action: {} }] });
   log.event(ev("r7", 1, line("one")));
   assert.equal(log.event(ev("r7", 4, line("four"))), "gap");
   assert.equal(log.event(ev("r7", 5, line("five"))), "", "asked once");
@@ -181,7 +181,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   assert.equal(log.sync({ run: "r7", plan: {}, events: [{ seq: 8, side: "local", event: line("eight") }] }, "r7"), "merged");
   assert.deepEqual(log.lines.slice(-3), ["… 2 earlier line(s) from while this page was away aren't shown", "  │ eight", "  │ nine"]);
   // Held events that hold the finish end it even when the plan says nothing is going.
-  log.event(ev("r7", 11, finished(["antigravity"])));
+  log.event(ev("r7", 11, finished(["opencode"])));
   assert.equal(log.sync(null, "r7"), "done");
   assert.match(log.lines.find((l) => l.includes("aren't shown") && l.includes("1 earlier")) ?? "", /1 earlier/);
 }
@@ -189,15 +189,15 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 // BOOT5: the doctor's update finding, read into its parts; the sessions an update leaves on the
 // old version; and a run that updated says so.
 {
-  const data = { id: "antigravity", name: "Antigravity", program: "agy", version: "1.3.2", latest: "1.4.0", command: "agy update", admin: false };
-  const c = { section: "updates", name: "antigravity", level: "warn", text: "whatever the words say", data };
-  assert.deepEqual(updateOffer(c), { id: "antigravity", name: "Antigravity", latest: "1.4.0", version: "1.3.2", program: "agy", command: "agy update", admin: false, path: null, managed: null, via: null });
+  const data = { id: "opencode", name: "OpenCode", program: "opencode", version: "1.3.2", latest: "1.4.0", command: "opencode upgrade", admin: false };
+  const c = { section: "updates", name: "opencode", level: "warn", text: "whatever the words say", data };
+  assert.deepEqual(updateOffer(c), { id: "opencode", name: "OpenCode", latest: "1.4.0", version: "1.3.2", program: "opencode", command: "opencode upgrade", admin: false, path: null, managed: null, via: null });
   assert.equal(updateOffer({ ...c, data: { ...data, admin: true } }).admin, true);
   assert.equal(updateOffer({ ...c, level: "note" }), null, "a skipped one (updates.ignore) offers no update");
   assert.equal(updateOffer({ ...c, data: undefined }), null, "no data, no button (never parsed from the words)");
   assert.equal(updateOffer({ section: "agents", level: "warn", data }), null);
   const s = (name, agent, t = "running", machine = null) => ({ name, agent, state: { t }, machine });
-  assert.deepEqual(runningAgent([s("a", "antigravity"), s("b", "claude"), s("c", "antigravity", "exited"), s("d", "antigravity", "running", "laptop2")], "antigravity"), ["a"]);
+  assert.deepEqual(runningAgent([s("a", "opencode"), s("b", "claude"), s("c", "opencode", "exited"), s("d", "opencode", "running", "laptop2")], "opencode"), ["a"]);
   const log = new SetupLog();
   log.start();
   log.started("u1", { entries: [{ id: "claude", side: "local", ticked: true, action: { update: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
@@ -275,9 +275,9 @@ console.log("setup: ok");
 // `ptyro_agents::locate`): the checklist's defaults for "no agent", that one ticked for a missing
 // one; nothing for a lock held by `ptyro install`, a move, or an update.
 {
-  const noAgent = "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex, or Antigravity for a Google account; Gemini CLI is for Gemini API keys and enterprise accounts)";
+  const noAgent = "No coding agent is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode)";
   assert.deepEqual(setupOffer(noAgent), []);
-  assert.deepEqual(setupOffer("No agent that can chat is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode; Gemini CLI with a Gemini API key; Antigravity, for a Google account, runs in sessions but can't chat)"), []);
+  assert.deepEqual(setupOffer("No agent that can chat is installed: `ptyro setup` installs one (Claude Code, Codex or OpenCode)"), []);
   assert.deepEqual(setupOffer("codex isn't installed (codex is nowhere ptyro looks): `ptyro install codex` installs it"), ["codex"]);
   assert.deepEqual(setupOffer("gh not found (optional): starting work from a GitHub issue (`--issue`) needs it; `ptyro install gh` installs it"), ["gh"]);
   assert.equal(setupOffer("setup is running already: `ptyro install` (process 42)"), null);
@@ -286,14 +286,14 @@ console.log("setup: ok");
   assert.equal(setupOffer("mine isn't installed (/opt/mine is nowhere ptyro looks): install it, or set [agents.mine] command to its full path"), null);
 }
 
-// A setup offer's button names what the checklist calls it: Antigravity, never its program
-// `agy` (BOOT9 review); the agent's name while no plan is known; the defaults with no picks.
+// A setup offer's button names what the checklist calls it, never the program (BOOT9 review);
+// the agent's name while no plan is known; the defaults with no picks.
 {
-  const agents = [{ name: "antigravity", program: "agy" }, { name: "codex", program: "codex" }];
-  const entries = [{ id: "antigravity", name: "Antigravity" }, { id: "gh", name: "GitHub CLI" }];
-  assert.equal(setupLabel(["agy"], agents, entries), "Set up Antigravity");
-  assert.equal(setupLabel(["agy", "gh"], agents, entries), "Set up Antigravity, GitHub CLI");
-  assert.equal(setupLabel(["agy"], agents, []), "Set up antigravity");
+  const agents = [{ name: "mine", program: "my-agent" }, { name: "codex", program: "codex" }];
+  const entries = [{ id: "mine", name: "My Agent" }, { id: "gh", name: "GitHub CLI" }];
+  assert.equal(setupLabel(["my-agent"], agents, entries), "Set up My Agent");
+  assert.equal(setupLabel(["my-agent", "gh"], agents, entries), "Set up My Agent, GitHub CLI");
+  assert.equal(setupLabel(["my-agent"], agents, []), "Set up mine");
   assert.equal(setupLabel(["codex"], agents, entries), "Set up codex");
   assert.equal(setupLabel([], agents, entries), "Set up agents and tools");
 }

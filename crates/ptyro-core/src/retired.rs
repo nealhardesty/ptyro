@@ -123,6 +123,11 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "importing your agents' own histories was removed; chats imported before stay, as ordinary chats",
     },
+    Retired {
+        key: "profiles.*.gemini",
+        removed: "2026-11-17",
+        why: "Gemini CLI is no longer built in; its directory stays where it is, and an agent of your own sets its variables with `[agents.NAME] env`",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
@@ -408,6 +413,26 @@ mod tests {
         assert_eq!(found(old).into_iter().map(|f| f.key).collect::<Vec<_>>(), ["summaries"]);
         assert!(find("summaries.command").is_some());
         assert_eq!(crate::config::Config::default().chat.title_command[..2], ["claude", "-p"]);
+    }
+
+    /// Gemini CLI and Antigravity (2026-11-17): a profile's Gemini directory is retired; an
+    /// `[agents.gemini]` that gives its own command is an agent of yours, and a default agent
+    /// that names a removed one still loads (`ptyro doctor` switches it).
+    #[test]
+    fn the_removed_agents_leave_configs_that_load() {
+        let old = "[agents]\ndefault = \"antigravity\"\n\n[agents.gemini]\ncommand = \"gemini\"\n\n[profiles.work]\nclaude = \"~/.claude-work\"\ngemini = \"~/.gemini-work\"\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert!(c.profiles["work"].claude.is_some());
+        assert_eq!(
+            found(old).into_iter().map(|f| f.key).collect::<Vec<_>>(),
+            ["profiles.work.gemini"]
+        );
+        let removed = |n: &str| crate::config::removed_agent(&c.agents, n).map(|(_, l)| l);
+        assert_eq!(removed("antigravity"), Some("Antigravity"));
+        assert_eq!(removed("gemini"), None, "it has a command of its own");
+        assert_eq!(removed("claude"), None);
+        let e = crate::config::Config::parse("[agents]\ndefault = \"nope\"\n").unwrap_err();
+        assert!(e.contains("no agent named \"nope\""), "{e}");
     }
 
     #[test]

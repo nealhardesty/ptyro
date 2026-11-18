@@ -166,7 +166,6 @@ fn plan_with(worktrees: Vec<Worktree>) -> Plan {
         worktrees,
         service: None,
         windows_app: false,
-        integrations: vec![Integration { agent: "gemini".into(), profile: None }],
         rc: Vec::new(),
         tailscale: None,
         refs: vec![Refs { repo: "/r".into(), archive: 2, taken: 1, other: 0 }],
@@ -198,7 +197,6 @@ fn the_plan_says_what_goes_what_is_lost_and_what_stays() {
         "3 uncommitted change(s) will be lost",
         "1 commit(s) not pushed",
         "(locked)",
-        "gemini",
         "~/.local/bin/ptyro",
         "Kept:",
         "3 snapshot ref(s)",
@@ -228,28 +226,6 @@ fn rc_files_follow_xdg_and_home() {
     assert!(rc_files(&e).contains(&PathBuf::from("/cfg/fish/config.fish")));
     e.home = None;
     assert!(rc_files(&e).is_empty());
-}
-
-#[test]
-fn integrations_are_found_where_ptyro_put_them() {
-    let home = tempfile::tempdir().unwrap();
-    let e = Env { home: Some(home.path().to_path_buf()), ..env("/x", None) };
-    let cfg = Config::default();
-    assert!(integrations_found(&cfg, &e).is_empty());
-    let g = home.path().join(".gemini");
-    std::fs::create_dir_all(g.join("extensions/ptyro")).unwrap();
-    std::fs::create_dir_all(g.join("config")).unwrap();
-    std::fs::write(
-        g.join("config/hooks.json"),
-        r#"{"hooks":{"x":[{"command":"ptyro hook antigravity"}]}}"#,
-    )
-    .unwrap();
-    let found: Vec<String> = integrations_found(&cfg, &e).into_iter().map(|i| i.agent).collect();
-    assert_eq!(found, ["gemini", "antigravity"]);
-    // Someone else's hooks file isn't ours.
-    std::fs::write(g.join("config/hooks.json"), r#"{"hooks":{}}"#).unwrap();
-    std::fs::remove_dir_all(g.join("extensions")).unwrap();
-    assert!(integrations_found(&cfg, &e).is_empty());
 }
 
 /// The tools `ptyro setup` installed were on PATH only through `ptyro shell-init`'s line: taking

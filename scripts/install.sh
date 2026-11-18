@@ -13,7 +13,7 @@
 #
 # Options:
 #   --uninstall [ARGS]     hand over to `ptyro uninstall ARGS` (it lists everything it removes and
-#                          asks first; --dry-run, --yes, --backup FILE…). If the installed binary
+#                          asks first; --dry-run, --yes…). If the installed binary
 #                          won't run, remove just what this script installed.
 #   -h, --help             this help
 #
@@ -72,7 +72,7 @@ case "${1:-}" in
     cat <<EOF
 usage: install.sh                  install the latest ptyro release in ${PTYRO_PREFIX:-$HOME/.local}/bin
        install.sh --uninstall [ARGS]   remove ptyro through \`ptyro uninstall ARGS\`
-                                       (--dry-run shows what; --yes, --backup FILE…)
+                                       (--dry-run shows what; --yes…)
 piped:  curl -fsSL https://github.com/$REPO/releases/latest/download/install.sh | sh -s -- --uninstall
 environment: PTYRO_VERSION, PTYRO_PREFIX, PTYRO_RELEASE_URL, PTYRO_VERIFY=0, PTYRO_REQUIRE_ATTESTATION=1
 EOF

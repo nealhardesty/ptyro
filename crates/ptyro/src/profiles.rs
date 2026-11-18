@@ -33,7 +33,7 @@ pub enum ProfileCmd {
     /// Create a profile in your config, adopting existing dirs (`--adopt claude=~/.claude-work`)
     New {
         name: String,
-        /// AGENT=DIR for claude, codex, gemini, opencode or gh (repeatable)
+        /// AGENT=DIR for claude, codex, opencode or gh (repeatable)
         #[arg(long, value_parser = parse_adopt)]
         adopt: Vec<(String, String)>,
         #[arg(long)]
@@ -75,7 +75,7 @@ pub enum ProfileCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Log in: run the tool's own login flow under the profile (claude, codex, gemini, opencode, gh)
+    /// Log in: run the tool's own login flow under the profile (claude, codex, opencode, gh)
     Login {
         #[arg(add = ArgValueCandidates::new(crate::complete::profiles), value_parser = addr)]
         name: String,
@@ -104,7 +104,7 @@ pub enum ProfileCmd {
 fn parse_adopt(s: &str) -> Result<(String, String), String> {
     let (a, d) = s.split_once('=').ok_or("expected AGENT=DIR, e.g. claude=~/.claude-work")?;
     if ptyro_agents::dir_var(a).is_none() {
-        return Err(format!("{a:?} is not one of claude, codex, gemini, opencode, gh"));
+        return Err(format!("{a:?} is not one of claude, codex, opencode, gh"));
     }
     Ok((a.to_owned(), d.to_owned()))
 }
@@ -173,7 +173,6 @@ pub(crate) fn credential_file(agent: &str) -> &'static str {
     match agent {
         "claude" => ".credentials.json",
         "codex" => "auth.json",
-        "gemini" => "oauth_creds.json",
         "opencode" => "auth.json",
         "gh" => "hosts.yml",
         _ => "",
@@ -413,9 +412,7 @@ pub(crate) async fn create(ctx: &Ctx, new: NewProfile) -> Result<Vec<String>, Er
     ptyro_core::names::validate(&name).map_err(Error::invalid)?;
     for (a, _) in &adopt {
         if ptyro_agents::dir_var(a).is_none() {
-            return Err(Error::invalid(format!(
-                "{a:?} is not one of claude, codex, gemini, opencode, gh"
-            )));
+            return Err(Error::invalid(format!("{a:?} is not one of claude, codex, opencode, gh")));
         }
     }
     edit(ctx, |doc| {
@@ -530,9 +527,7 @@ pub(crate) async fn login(
     attaching: bool,
 ) -> Result<(ptyro_client::Client, ptyro_core::session::SessionInfo), Error> {
     let argv = ptyro_agents::login_argv(target).ok_or_else(|| {
-        Error::invalid(format!(
-            "can't log in to {target:?}: use claude, codex, gemini, opencode or gh"
-        ))
+        Error::invalid(format!("can't log in to {target:?}: use claude, codex, opencode or gh"))
     })?;
     let config = load(ctx)?;
     if !profile::exists(&config, name) {

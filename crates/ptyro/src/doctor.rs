@@ -61,8 +61,7 @@ impl Report {
 }
 
 /// Agent versions ptyro was verified against (SPEC §8, §20).
-const TESTED: &[(&str, &str)] =
-    &[("claude", "2.1.304"), ("codex", "0.143.0"), ("gemini", "0.64.0")];
+const TESTED: &[(&str, &str)] = &[("claude", "2.1.304"), ("codex", "0.143.0")];
 
 /// Run a short command; `None` if it can't start or takes longer than `t`.
 async fn run(argv: &[String], env: &[(String, PathBuf)], t: Duration) -> Option<(bool, String)> {
@@ -135,13 +134,15 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
             if let Ok(text) = std::fs::read_to_string(&config_path) {
                 retired(&text, None, &mut r);
             }
+            stale_keys(&c, &mut r);
+            removed_agents(&c, &mut r);
             // Every shell ptyro starts reads its integration (SPEC §8.7): a folder others can
             // write to is one they could slip a line into, until ptyro writes it again.
             let shell = ctx.paths.data.join("integrations").join("shell");
             if let Some(who) = ptyro_pty::acl::writable_by_others(&shell) {
                 r.add(
                     "ptyro",
-                    "integrations",
+                    "shell integration",
                     Level::Warn,
                     format!(
                         "{} can be changed by {who}: the shells ptyro starts read what's in it. \
@@ -179,6 +180,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
     }
     remote(ctx, &config, &mut r);
     old_scratchpad(ctx, &mut r);
+    old_integrations(ctx, &config, &mut r);
     shell(&config, &mut r);
     if terminal_too {
         terminal(&mut r, &config).await;
@@ -227,7 +229,7 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
                 "ignore",
                 Level::Warn,
                 format!(
-                    "updates.ignore holds {i:?}, which isn't something ptyro updates (claude, codex, agy, opencode, gemini, ptyro): it skips nothing"
+                    "updates.ignore holds {i:?}, which isn't something ptyro updates (claude, codex, opencode, ptyro): it skips nothing"
                 ),
             );
         }
@@ -244,7 +246,7 @@ async fn updates(ctx: &Ctx, config: &Config, fresh: bool, r: &mut Report) {
                 "keep_installer",
                 Level::Warn,
                 format!(
-                    "updates.keep_installer holds {k:?}, which isn't an agent (claude, codex, agy, opencode, gemini): it keeps nothing"
+                    "updates.keep_installer holds {k:?}, which isn't an agent (claude, codex, opencode): it keeps nothing"
                 ),
             );
         }
@@ -978,17 +980,17 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     if ctx.local {
         windows_worktrees(&c, r).await;
     }
-    // The hook self-test: the fake agent through each per-launch integration.
+    // The hook self-test: the fake agent through each agent's hooks (or OpenCode's events).
     for adapter in ["claude", "codex", "opencode"] {
         match c.request(Request::SelfTest { adapter: adapter.into() }).await {
             Ok(Reply::SelfTest { result }) => r.add(
-                "integrations",
+                "hooks",
                 adapter,
                 Level::Ok,
                 format!("self-test passed: {}", result.seen.join(" → ")),
             ),
             Ok(_) => {}
-            Err(e) => r.add("integrations", adapter, Level::Problem, e.message),
+            Err(e) => r.add("hooks", adapter, Level::Problem, e.message),
         }
     }
 }
@@ -1579,27 +1581,140 @@ pub(crate) async fn agents(config: &Config, r: &mut Report) {
     if !any {
         r.add(S, "agents", Level::Warn, ptyro_agents::locate::no_agent());
     }
-    // Gemini CLI stopped serving unpaid / Google One accounts on 2026-06-18 (RESEARCH G3).
-    let gemini_key = std::env::var_os("GEMINI_API_KEY").is_some()
-        || std::env::var_os("GOOGLE_CLOUD_PROJECT").is_some()
-        || config
-            .profiles
-            .values()
-            .any(|p| p.gemini.as_ref().and_then(|g| g.def()).is_some_and(|d| d.api_key.is_some()));
-    if ptyro_agents::locate::find("gemini", &path_var).is_some() && !gemini_key {
-        // Antigravity offered where it isn't installed yet (BOOT9).
-        let agy = match ptyro_agents::locate::find("agy", &path_var) {
-            Some(_) => String::new(),
-            None => ptyro_agents::locate::install_fix("agy")
-                .map(|f| format!(": {f}"))
-                .unwrap_or_default(),
-        };
+}
+
+/// `[keys]` lines that bind an action ptyro doesn't have (removed by a release, or misspelt):
+/// those keys do nothing and the TUI says "unknown action". One warning names them all, with
+/// the line that takes them out (the TUI runs it; the web takes `data.unbind` out itself).
+fn stale_keys(config: &Config, r: &mut Report) {
+    let stale = ptyro_tui::keymap::stale_bindings(config);
+    if stale.is_empty() {
+        return;
+    }
+    let said: Vec<String> = stale.iter().map(|(k, a)| format!("{k} runs {a}")).collect();
+    // A key with a dot in it (`C-.`) is quoted, as `ptyro config` takes it.
+    let args: Vec<String> = stale
+        .iter()
+        .map(|(k, _)| if k.contains('.') { format!("'keys.\"{k}\"'") } else { format!("keys.{k}") })
+        .collect();
+    r.add(
+        "ptyro",
+        "config keys",
+        Level::Warn,
+        format!(
+            "[keys] binds actions ptyro no longer has (removed, or misspelt), so those keys do nothing: {}: remove them, `ptyro config unset {}`",
+            said.join(", "),
+            args.join(" ")
+        ),
+    );
+    r.add_data(serde_json::json!({
+        "unbind": stale.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(),
+    }));
+}
+
+/// The kept agent a setting that names a removed one switches to: Claude Code if it is
+/// installed, else the first installed of Codex and OpenCode, else Claude Code.
+fn kept_agent(config: &Config) -> &'static str {
+    let path = std::env::var("PATH").unwrap_or_default();
+    ["claude", "codex", "opencode"]
+        .into_iter()
+        .find(|a| ptyro_agents::resolve(config, a, &path).is_some())
+        .unwrap_or("claude")
+}
+
+/// Settings that name Gemini CLI or Antigravity, no longer built in (2026-11-17), with the
+/// change that fixes each (the TUI runs it; the web makes it from `data.set` / `data.unset`).
+/// An `[agents.gemini]` that gives its own command is an agent of yours and isn't one of them.
+fn removed_agents(config: &Config, r: &mut Report) {
+    use ptyro_core::config::removed_agent;
+    const S: &str = "agents";
+    let gone = |name: &str| removed_agent(&config.agents, name).map(|(_, label)| label);
+    let to = kept_agent(config);
+    let default = ptyro_agents::default_agent(config);
+    if let Some(label) = gone(&default) {
+        let n = &default;
         r.add(
             S,
-            "gemini",
-            Level::Note,
-            format!("Gemini CLI no longer serves consumer Google accounts (since 2026-06-18); with a personal Google account, use Antigravity (`agy`){agy}"),
+            "default",
+            Level::Problem,
+            format!(
+                "your default agent is {n} ({label}), which ptyro no longer has (removed 2026-11-17), so a new session without an agent can't start: `ptyro config set agents.default {to}` switches it"
+            ),
         );
+        r.add_data(serde_json::json!({ "set": "agents.default", "value": to }));
+    }
+    for (name, def) in config.agents.iter() {
+        if let Some(label) = gone(name) {
+            let n = name;
+            r.add(
+                S,
+                n,
+                Level::Warn,
+                format!(
+                    "[agents.{n}] sets up {label}, which ptyro no longer has (removed 2026-11-17); give it a command to run it as an agent of your own, or remove it, `ptyro config rm agents {n} --yes`"
+                ),
+            );
+            r.add_data(serde_json::json!({ "remove": "agents", "name": n }));
+        } else if let Some(a) = def.adapter.as_deref().filter(|a| gone(a).is_some()) {
+            r.add(
+                S,
+                name,
+                Level::Warn,
+                format!(
+                    "agents.{name}.adapter is {a}, which ptyro no longer has (removed 2026-11-17), so {name} runs as a generic agent: `ptyro config unset agents.{name}.adapter` says so"
+                ),
+            );
+            r.add_data(serde_json::json!({ "unset": format!("agents.{name}.adapter") }));
+        }
+    }
+    let chat = ptyro_agents::split_agent(&config.chat.agent).0;
+    if let Some(label) = gone(chat) {
+        let n = chat;
+        r.add(
+            "chat",
+            "agent",
+            Level::Warn,
+            format!(
+                "chat.agent is {n} ({label}), which ptyro no longer has (removed 2026-11-17), so a new chat can't start: `ptyro config unset chat.agent` lets chats use your default agent"
+            ),
+        );
+        r.add_data(serde_json::json!({ "unset": "chat.agent" }));
+    }
+}
+
+/// What `ptyro integrations install` put in Gemini CLI's and Antigravity's own folders, before
+/// both were removed (2026-11-17). They are the person's files, so they stay; say once where
+/// they are and how to take them out.
+fn old_integrations(ctx: &Ctx, config: &Config, r: &mut Report) {
+    // The default account's, and each profile's that ptyro kept for it.
+    let mut homes = vec![expand_home("~/.gemini")];
+    for p in config.profiles.keys() {
+        homes.push(ctx.paths.data.join("profiles").join(p).join("gemini").join(".gemini"));
+    }
+    for home in homes {
+        if home.join("extensions").join("ptyro").exists() {
+            r.add(
+                "agents",
+                "gemini extension",
+                Level::Note,
+                format!(
+                    "Gemini CLI still has ptyro's extension ({}), which does nothing now: `gemini extensions uninstall ptyro` removes it",
+                    home.join("extensions").join("ptyro").display()
+                ),
+            );
+        }
+        let hooks = home.join("config").join("hooks.json");
+        if std::fs::read_to_string(&hooks).is_ok_and(|t| t.contains("hook antigravity")) {
+            r.add(
+                "agents",
+                "antigravity hooks",
+                Level::Note,
+                format!(
+                    "{} still runs ptyro's hooks for Antigravity, which do nothing now: remove the entries that run `ptyro hook antigravity`",
+                    hooks.display()
+                ),
+            );
+        }
     }
 }
 
@@ -1939,6 +2054,6 @@ mod tests {
         assert_eq!(super::first_version("2.1.304 (Claude Code)").as_deref(), Some("2.1.304"));
         assert_eq!(super::first_version("codex-cli 0.143.0").as_deref(), Some("0.143.0"));
         assert_eq!(super::first_version("git version 2.53.0").as_deref(), Some("2.53.0"));
-        assert_eq!(super::first_version("gemini v0.64.0").as_deref(), Some("0.64.0"));
+        assert_eq!(super::first_version("tool v0.64.0").as_deref(), Some("0.64.0"));
     }
 }

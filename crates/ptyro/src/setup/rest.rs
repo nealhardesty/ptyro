@@ -1,17 +1,15 @@
-//! `ptyro init` (SPEC §12.3, M5.5): first-run setup in a few questions.
+//! The rest of `ptyro setup` (SPEC §12.3, M5.5), after the checklist and its logins: what `ptyro
+//! init` asked before it was merged into setup (2026-11-17). Only a person at a terminal is
+//! asked; a script's `ptyro setup --yes` installs and stops there.
 //!
-//! 1. What's here: the terminal (and tmux advice), the agent CLIs and their versions; the setup
-//!    checklist (`ptyro setup`, BOOT2) offered, to install agents and tools.
+//! 1. The terminal (and tmux advice).
 //! 2. Existing multi-account setups (aliases, functions, exports, `~/.claude-*` dirs, git
 //!    `includeIf`), offered as profiles, matched to repositories by their paths.
 //! 3. Prefix key, worktree location, desktop notifications.
 //! 4. The config file: only keys you don't have yet are added (comments and layout kept), shown
 //!    before anything is written.
 //! 5. Repositories under the discover roots, to register as projects.
-//! 6. Completions, the login service and the tour: offered, never done without a yes.
-//!
-//! `--yes` accepts every suggestion and skips the questions that change things outside ptyro
-//! (your rc file, the service); `--dry-run` shows the config it would write and stops.
+//! 6. Completions and the login service: offered, never done without a yes.
 
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -22,15 +20,10 @@ use ptyro_protocol::{Reply, Request};
 
 use crate::cli::Ctx;
 
-struct Asker {
-    yes: bool,
-}
+struct Asker;
 
 impl Asker {
     fn line(&self, q: &str, default: &str) -> String {
-        if self.yes {
-            return default.to_owned();
-        }
         eprint!("{q} [{default}] ");
         let _ = std::io::stderr().flush();
         let mut s = String::new();
@@ -48,9 +41,9 @@ impl Asker {
         }
     }
 
-    /// Questions that would change things outside ptyro: never answered by `--yes`.
+    /// Questions that would change things outside ptyro: no unless the answer is yes.
     fn outside(&self, q: &str) -> bool {
-        !self.yes && self.yes_no(q, false)
+        self.yes_no(q, false)
     }
 }
 
@@ -101,52 +94,30 @@ fn set_default(
     true
 }
 
-pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
-    let interactive = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
-    if !interactive && !yes && !dry_run {
-        return Err(Error::invalid(
-            "`ptyro init` asks questions: run it in a terminal, or pass --yes",
-        ));
+/// A person at a real terminal (not a pipe, and not a test's piped answers): the rest of setup
+/// is theirs to answer.
+pub(crate) fn wanted() -> bool {
+    std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+}
+
+pub async fn run(ctx: &Ctx) -> Result<i32, Error> {
+    let ask = Asker;
+    eprintln!();
+    if !ask.yes_no("Now your accounts, preferences and repositories?", true) {
+        eprintln!("`ptyro setup` asks again any time.");
+        return Ok(0);
     }
-    let ask = Asker { yes: yes || dry_run };
     let path = Config::path(&ctx.paths);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut =
         existing.parse().map_err(|e| Error::invalid(format!("{}: {e}", path.display())))?;
     let current = Config::parse(&existing).unwrap_or_default();
-    eprintln!("ptyro init: a few questions, then your config. Nothing changes until you say so.");
+    eprintln!("A few questions, then your config. Nothing changes until you say so.");
 
     section("your terminal");
     let mut r = crate::doctor::Report::default();
     crate::doctor::terminal(&mut r, &current).await;
     crate::doctor::print_checks(&r);
-
-    section("agents");
-    let mut r = crate::doctor::Report::default();
-    crate::doctor::agents(&current, &mut r).await;
-    // The no-agent line (it offers `ptyro setup`, BOOT9): nothing was found.
-    let none = r.0.iter().any(|c| c.name == "agents");
-    crate::doctor::print_checks(&r);
-    // The setup checklist (BOOT2): the agents and tools to install, then their logins. Asked
-    // first (yes by default when no agent is here); never with --yes or --dry-run.
-    if !ask.yes && ask.yes_no("  open the setup checklist, to install agents and tools?", none) {
-        let a = crate::setup::SetupArgs {
-            yes: false,
-            agents: None,
-            tools: None,
-            dry_run: false,
-            json: false,
-            place: None,
-            survey: false,
-            tty: false,
-            move_: false,
-        };
-        if let Err(e) = crate::setup::setup(ctx, a).await {
-            eprintln!("  setup: {}", e.message);
-        }
-    } else if none {
-        eprintln!("  `ptyro setup` installs them (a checklist), any time");
-    }
 
     section("accounts");
     let home = expand_home("~");
@@ -258,7 +229,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     }
     let new_text = doc.to_string();
     Config::parse(&new_text)
-        .map_err(|e| Error::internal(format!("the config init built is invalid: {e}")))?;
+        .map_err(|e| Error::internal(format!("the config setup built is invalid: {e}")))?;
     section(&format!("config: {}", path.display()));
     if changes.is_empty() {
         eprintln!("  nothing to add: your config already has all of it");
@@ -266,10 +237,6 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
         for c in &changes {
             eprintln!("  + {c}");
         }
-    }
-    if dry_run {
-        print!("{new_text}");
-        return Ok(0);
     }
     if !changes.is_empty() && ask.yes_no("  write it?", true) {
         crate::config::write_private(&path, &new_text)?;
@@ -309,12 +276,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
         if repos.len() > 40 {
             eprintln!("  … and {} more (`ptyro project add PATH` registers one)", repos.len() - 40);
         }
-        // `--yes` never registers a pile of repositories: that's a choice to make by hand.
-        let answer = if yes {
-            "none".to_owned()
-        } else {
-            ask.line("  register which? (1,3-5, all, none)", "none")
-        };
+        let answer = ask.line("  register which? (1,3-5, all, none)", "none");
         for i in pick(&answer, repos.len().min(40)) {
             match c.request(Request::ProjectAdd { path: repos[i].clone(), workspace: None }).await {
                 Ok(Reply::Project { info, notes }) => {
@@ -384,23 +346,11 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
         crate::service::install(ctx, false)?;
     }
     eprintln!();
-    eprintln!(
-        "done. `ptyro` opens the TUI; `ptyro doctor` checks everything; `ptyro tour` shows the keys."
-    );
-    if phone
-        && web_url.is_some()
-        && interactive
-        && ask.yes_no("show the QR code for your phone now?", true)
-    {
+    eprintln!("done. `ptyro` opens the TUI; `ptyro doctor` checks everything.");
+    if phone && web_url.is_some() && ask.yes_no("show the QR code for your phone now?", true) {
         crate::remote::pair(ctx, "phone".into(), None, None, false, false).await?;
     }
-    if interactive
-        && !yes
-        && ask.yes_no("take the tour now? (a task, start to finish, with a pretend agent)", true)
-    {
-        drop(c);
-        return crate::cli::run_tour(ctx).await;
-    }
+    drop(c);
     Ok(0)
 }
 

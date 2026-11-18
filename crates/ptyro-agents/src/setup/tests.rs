@@ -287,64 +287,27 @@ fn installed_items_are_not_ticked_and_need_nothing() {
 
 #[test]
 fn a_prerequisite_is_ticked_and_goes_first() {
-    // Gemini CLI needs Node.js 20; a Mac with Homebrew.
-    let host = TestHost::on(Platform::Macos).with(&["brew"]);
-    let p = plan(&survey(&host, &BTreeMap::new()), &picks(&["gemini"]));
+    // OpenCode on Windows needs Node.js; WinGet is here.
+    let host = TestHost::on(Platform::WindowsX64).with(&["winget"]);
+    let p = plan(&survey(&host, &BTreeMap::new()), &picks(&["opencode"]));
     let node = p.entry("node").unwrap();
     assert!(node.ticked && !node.picked);
-    assert_eq!(node.needed_by, ["gemini"]);
-    assert_eq!(node.action.as_ref().unwrap().command, "brew install node");
-    let gemini = p.entry("gemini").unwrap().action.clone().unwrap();
-    assert_eq!(gemini.after, ["node"]);
-    assert_eq!(gemini.command, "npm install -g @google/gemini-cli", "npm will be there");
+    assert_eq!(node.needed_by, ["opencode"]);
+    assert!(node.action.as_ref().unwrap().command.starts_with("winget install"));
+    let opencode = p.entry("opencode").unwrap().action.clone().unwrap();
+    assert_eq!(opencode.after, ["node"]);
+    assert_eq!(opencode.command, "npm install -g opencode-ai", "npm will be there");
     let order: Vec<&str> = p.steps().iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(order, ["node", "gemini"]);
+    assert_eq!(order, ["node", "opencode"]);
 }
 
 #[test]
-fn node_from_apt_only_when_new_enough() {
-    let s = |cand: &str| {
-        let mut h = TestHost::on(Platform::Linux).with(&["apt-get", "sudo"]);
-        h.candidates.insert("apt".into(), cand.into());
-        survey(&h, &BTreeMap::new())
-    };
-    // Ubuntu 24.04's 18.x is too old for Gemini CLI: nodejs.org's build, no admin.
-    let p = plan(&s("18.19.1"), &picks(&["gemini"]));
-    let node = p.entry("node").unwrap().action.clone().unwrap();
-    assert_eq!(node.via, Via::NodeDist);
-    assert!(!node.admin);
-    // A new enough one: apt's.
-    let p = plan(&s("22.11.0"), &picks(&["gemini"]));
-    assert_eq!(p.entry("node").unwrap().action.as_ref().unwrap().via, Via::Apt);
-    // apt's candidate unknown: not trusted to be new enough.
-    let h = TestHost::on(Platform::Linux).with(&["apt-get"]);
-    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["gemini"]));
-    assert_eq!(p.entry("node").unwrap().action.as_ref().unwrap().via, Via::NodeDist);
-    // Ticked on its own (nothing names a minimum): apt's, whatever it has.
-    let p = plan(&s("18.19.1"), &picks(&["node"]));
-    assert_eq!(p.entry("node").unwrap().action.as_ref().unwrap().via, Via::Apt);
-}
-
-#[test]
-fn an_old_node_is_too_old_and_replaced_by_nodejs_orgs() {
-    let mut h = TestHost::on(Platform::Linux).with(&["apt-get", "npm"]).have("node", "v18.19.1");
+fn node_ticked_on_its_own_comes_from_apt() {
+    let mut h = TestHost::on(Platform::Linux).with(&["apt-get", "sudo"]);
     h.candidates.insert("apt".into(), "18.19.1".into());
-    let s = survey(&h, &BTreeMap::new());
-    let p = plan(&s, &picks(&["gemini"]));
-    let node = p.entry("node").unwrap();
-    assert!(
-        matches!(&node.state, State::TooOld { min, .. } if min == "20.0.0"),
-        "{:?}",
-        node.state
-    );
-    assert!(node.ticked);
-    assert_eq!(node.action.as_ref().unwrap().via, Via::NodeDist);
-    // New enough: nothing to do for it.
-    let h = TestHost::on(Platform::Linux).with(&["npm"]).have("node", "v24.13.0");
-    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["gemini"]));
-    let node = p.entry("node").unwrap();
-    assert!(!node.ticked && node.action.is_none());
-    assert!(p.entry("gemini").unwrap().action.as_ref().unwrap().after.is_empty());
+    // Nothing names a minimum: apt's, whatever it has.
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["node"]));
+    assert_eq!(p.entry("node").unwrap().action.as_ref().unwrap().via, Via::Apt);
 }
 
 #[test]
@@ -382,13 +345,13 @@ fn states_other_and_outdated() {
 
 #[test]
 fn a_run_reports_each_step_and_a_failure_leaves_the_rest() {
-    let mut h = TestHost::on(Platform::Macos).with(&["brew"]);
+    let mut h = TestHost::on(Platform::WindowsX64);
     h.fail.insert("node".into());
-    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["gemini", "claude"]));
+    let p = plan(&survey(&h, &BTreeMap::new()), &picks(&["opencode", "claude"]));
     let (r, events) = run_all(&p, &h, Admin::Ask);
     assert_eq!(r.done, ["claude"]);
     assert_eq!(r.failed, ["node"]);
-    assert_eq!(r.skipped, ["gemini"], "it needs the Node.js that failed");
+    assert_eq!(r.skipped, ["opencode"], "it needs the Node.js that failed");
     assert!(!r.ok());
     assert!(events.iter().any(
         |e| matches!(e, Event::Line { id, text } if id == "claude" && text == "installing claude")
@@ -399,14 +362,14 @@ fn a_run_reports_each_step_and_a_failure_leaves_the_rest() {
     });
     assert!(fix.unwrap().contains("ptyro install node"));
     let why = events.iter().find_map(|e| match e {
-        Event::Skipped { id, reason, .. } if id == "gemini" => Some(reason.clone()),
+        Event::Skipped { id, reason, .. } if id == "opencode" => Some(reason.clone()),
         _ => None,
     });
     assert!(why.unwrap().contains("Node.js"));
     assert!(matches!(events.last(), Some(Event::Finished { .. })));
     // Claude was installed and has a login: the logins' turn (BOOT4) names it.
     assert!(events.iter().any(|e| matches!(e, Event::Logins { ids } if ids == &["claude"])));
-    assert_eq!(h.calls(), ["claude vendor", "node brew"]);
+    assert_eq!(h.calls(), ["claude vendor", "node node-dist"]);
 }
 
 #[test]
@@ -467,14 +430,15 @@ fn nodejs_orgs_build_marks_the_tools_folder_used() {
 #[test]
 fn names_resolve_as_people_say_them() {
     let id = |n: &str| resolve(n).map(|i| i.id.as_str());
-    assert_eq!(id("agy"), Ok("antigravity"));
-    assert_eq!(id("Antigravity"), Ok("antigravity"));
+    assert_eq!(id("opencode"), Ok("opencode"));
+    assert_eq!(id("OpenCode"), Ok("opencode"));
+    assert!(id("agy").is_err(), "no longer one setup installs (2026-11-17)");
     assert_eq!(id("github-cli"), Ok("gh"));
     assert_eq!(id("Claude Code"), Ok("claude"));
     assert_eq!(id("nodejs"), Ok("node"));
     assert_eq!(id("Node.js"), Ok("node"));
     let e = resolve("vim").unwrap_err();
-    assert!(e.contains("agy") && e.contains("gh"), "{e}");
+    assert!(e.contains("opencode") && e.contains("gh"), "{e}");
 }
 
 #[test]
@@ -615,9 +579,9 @@ fn ids(v: &[&str]) -> Vec<String> {
 fn windows_rows_say_windows_and_wsls_plan_joins_them_as_a_second_side() {
     let win = TestHost::on(Platform::WindowsX64).with(&["winget"]);
     let linux = TestHost::on(Platform::Linux).with(&["apt-get", "sudo", "curl"]);
-    let mine = plan(&survey(&win, &BTreeMap::new()), &ids(&["gemini"]));
+    let mine = plan(&survey(&win, &BTreeMap::new()), &ids(&["opencode"]));
     assert!(mine.entries.iter().all(|e| e.side == Side::Windows));
-    let theirs = plan(&survey(&linux, &BTreeMap::new()), &ids(&["gemini", "gh"]));
+    let theirs = plan(&survey(&linux, &BTreeMap::new()), &ids(&["opencode", "gh"]));
     assert!(theirs.entries.iter().all(|e| e.side == Side::Local));
     let status = WslStatus::Usable { distro: "Ubuntu".into(), version: "ptyro 0.0.63".into() };
     let both = Plan::merge(mine, Some(theirs), Some(status.clone()));
@@ -628,10 +592,9 @@ fn windows_rows_say_windows_and_wsls_plan_joins_them_as_a_second_side() {
         steps,
         [
             (Side::Windows, "node"),
-            (Side::Windows, "gemini"),
+            (Side::Windows, "opencode"),
+            (Side::Wsl, "opencode"),
             (Side::Wsl, "gh"),
-            (Side::Wsl, "node"),
-            (Side::Wsl, "gemini"),
         ]
     );
     let wsl = both.side(Side::Wsl);
@@ -681,11 +644,11 @@ fn where_means_sides_and_events_carry_theirs() {
 #[test]
 fn a_login_is_decided_by_its_status_commands_exit_code_alone() {
     let item = |id: &str| catalog::item(id).unwrap();
-    let h = TestHost::on(Platform::Linux).have("gh", "2.57.0").have("antigravity", "1.0.0");
+    let h = TestHost::on(Platform::Linux).have("gh", "2.57.0").have("opencode", "1.19.5");
     assert_eq!(login::status(&h, item("gh")), login::LoginState::LoggedOut);
     assert_eq!(login::status(&h, item("claude")), login::LoginState::Missing);
     // No status command documented: it can't be confirmed, and nothing is run to find out.
-    assert_eq!(login::status(&h, item("antigravity")), login::LoginState::Unconfirmed);
+    assert_eq!(login::status(&h, item("opencode")), login::LoginState::Unconfirmed);
     assert_eq!(h.calls(), ["status gh auth status"]);
     h.logged_in.lock().unwrap().insert("gh".into());
     assert_eq!(login::status(&h, item("gh")), login::LoginState::LoggedIn);
@@ -693,7 +656,7 @@ fn a_login_is_decided_by_its_status_commands_exit_code_alone() {
     // A list of them: the agents and gh, with what each runs and what confirms it.
     let rows = login::rows(&h, &[]);
     let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(ids, ["claude", "codex", "antigravity", "opencode", "gemini", "gh"]);
+    assert_eq!(ids, ["claude", "codex", "opencode", "gh"]);
     let gh = rows.iter().find(|r| r.id == "gh").unwrap();
     assert_eq!(gh.command, "gh auth login --web");
     assert_eq!(gh.check.as_deref(), Some("gh auth status"));
@@ -708,18 +671,18 @@ fn logging_in_runs_the_tools_own_flow_then_asks_its_status() {
     let mut h = TestHost::on(Platform::Linux)
         .have("codex", "0.162.1")
         .have("gh", "2.57.0")
-        .have("antigravity", "1.0.0");
+        .have("opencode", "1.19.5");
     h.login_fails.insert("gh".into());
-    h.login_fails.insert("antigravity".into());
+    h.login_fails.insert("opencode".into());
     let done = login::log_in(&h, item("codex")).unwrap();
     assert_eq!((done.state, done.ended), (login::LoginState::LoggedIn, None));
     let gh = login::log_in(&h, item("gh")).unwrap();
     assert_eq!(gh.state, login::LoginState::LoggedOut);
     assert_eq!(gh.ended.as_deref(), Some("it exited with 1"));
     // An agent with no status command, quit with Ctrl+C: how it ended, nothing more known.
-    let agy = login::log_in(&h, item("antigravity")).unwrap();
-    assert_eq!(agy.state, login::LoginState::Unconfirmed);
-    assert!(agy.ended.is_some());
+    let oc = login::log_in(&h, item("opencode")).unwrap();
+    assert_eq!(oc.state, login::LoginState::Unconfirmed);
+    assert!(oc.ended.is_some());
     assert_eq!(
         h.calls(),
         [
@@ -727,7 +690,7 @@ fn logging_in_runs_the_tools_own_flow_then_asks_its_status() {
             "status codex login status",
             "login gh auth login --web",
             "status gh auth status",
-            "login agy",
+            "login opencode auth login",
         ]
     );
 }
@@ -751,19 +714,14 @@ fn the_checklists_lines_say_what_the_tui_does() {
     let linux =
         TestHost::on(Platform::Linux).with(&["apt-get", "sudo", "curl"]).have("claude", "2.1.3");
     let here = survey(&linux, &BTreeMap::new());
-    let one = plan(&here, &ids(&["gemini"]));
+    let one = plan(&here, &ids(&["opencode"]));
     let ls = lines(&one, &here, None);
     assert_eq!(ls.len(), one.entries.len());
     let of = |ls: &[super::checklist::Line], id: &str, side: Side| {
         ls.iter().find(|l| l.id == id && l.side == side).unwrap().clone()
     };
-    let gemini = of(&ls, "gemini", Side::Local);
-    assert!(
-        gemini.about.contains("needs Node.js") && gemini.about.ends_with("then log in"),
-        "{gemini:?}"
-    );
-    assert_eq!(gemini.how, "npm");
-    assert!(of(&ls, "node", Side::Local).about.contains("ticked because Gemini CLI needs it"));
+    let opencode = of(&ls, "opencode", Side::Local);
+    assert!(opencode.about.ends_with("then log in"), "{opencode:?}");
     // Unticked: the method it would use, from what is on PATH.
     assert!(
         of(&ls, "gh", Side::Local).about.contains("apt · asks for admin"),
@@ -778,8 +736,8 @@ fn the_checklists_lines_say_what_the_tui_does() {
     let mine_s = survey(&win, &BTreeMap::new());
     let status = WslStatus::Usable { distro: "Ubuntu".into(), version: "ptyro 0.0.63".into() };
     let both = Plan::merge(
-        plan(&mine_s, &ids(&["git"])),
-        Some(plan(&here, &ids(&["gemini"]))),
+        plan(&mine_s, &ids(&["git", "opencode"])),
+        Some(plan(&here, &ids(&["gh"]))),
         Some(status),
     );
     let ls = lines(&both, &mine_s, Some(&here));
@@ -787,8 +745,10 @@ fn the_checklists_lines_say_what_the_tui_does() {
     assert!(!git.about.contains("WinGet"), "the method is the cell's: {git:?}");
     assert_eq!(git.how, "WinGet (admin)");
     assert_eq!(cell(both.entry_on("git", Side::Windows)), "[x] WinGet (admin)");
-    let node = of(&ls, "node", Side::Wsl);
-    assert_eq!(node.why, ["ticked because Gemini CLI needs it"]);
+    let opencode = of(&ls, "opencode", Side::Windows);
+    assert!(opencode.about.contains("needs Node.js"), "{opencode:?}");
+    let node = of(&ls, "node", Side::Windows);
+    assert_eq!(node.why, ["ticked because OpenCode needs it"]);
     // It travels as JSON and reads back.
     let back: Vec<super::checklist::Line> =
         serde_json::from_value(serde_json::to_value(&ls).unwrap()).unwrap();
@@ -819,7 +779,7 @@ fn a_newer_version_is_found_remembered_and_offered_with_its_update() {
     let v = updates::check(&host, dir.path(), 1_000);
     assert_eq!(v.checked, 1_000);
     assert_eq!(v.latest["claude"], "2.1.400");
-    // The others (Antigravity, OpenCode, Gemini CLI) couldn't be reached: kept, quietly.
+    // The other (OpenCode) couldn't be reached: kept, quietly.
     assert!(v.failed.contains_key("opencode"), "{:?}", v.failed);
     assert_eq!(v.outdated.len(), 1, "Codex is the newest already: {:?}", v.outdated);
     let o = &v.outdated[0];
@@ -1208,7 +1168,7 @@ fn a_homebrew_keg_is_homebrews_even_with_node_modules_inside_and_npm_has_its_pre
     use super::host::{installed_via, npm_prefix};
     use std::path::Path;
     let keg = Path::new(
-        "/opt/homebrew/Cellar/gemini-cli/0.33.0/libexec/lib/node_modules/@google/gemini-cli/dist/index.js",
+        "/opt/homebrew/Cellar/some-cli/0.33.0/libexec/lib/node_modules/@acme/some-cli/dist/index.js",
     );
     assert_eq!(installed_via(keg), Some(Via::Brew));
     let cask = Path::new("/opt/homebrew/Caskroom/codex/0.162.1/codex");

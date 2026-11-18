@@ -1,6 +1,6 @@
 [package]
 name = "ptyro-agents"
-description = "Agent adapters: claude, codex, gemini, opencode, shell, generic; profiles"
+description = "Agent adapters: claude, codex, opencode, shell, generic; profiles"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

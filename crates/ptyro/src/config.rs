@@ -192,9 +192,22 @@ async fn run_paths(paths: &Paths, cmd: ConfigCmd, ctx: &Ctx) -> Result<i32, Erro
         }
         ConfigCmd::Unset { keys, project, shared } => {
             let layer = layer(ctx, project.as_deref(), shared).await?;
+            // Keys go back to their defaults in one change: the file is checked as a whole, so
+            // several bindings to actions ptyro no longer has (`ptyro doctor`'s fix) go together.
+            let bound: Vec<String> = keys.iter().filter_map(|k| bound_key(&layer, k)).collect();
+            match bound.as_slice() {
+                [] => {}
+                [one] => {
+                    bind(&layer, one, None)?;
+                }
+                many => {
+                    let changes = many.iter().map(|n| (n.clone(), None)).collect();
+                    let what = format!("{} are back to their defaults", many.join(", "));
+                    change(&layer, &Op::Bind { changes }, &what)?;
+                }
+            }
             for key in keys {
-                if let Some(name) = bound_key(&layer, &key) {
-                    bind(&layer, &name, None)?;
+                if bound_key(&layer, &key).is_some() {
                     continue;
                 }
                 let done = if ptyro_core::retired::find(&key).is_some() {

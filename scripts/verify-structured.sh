@@ -1,7 +1,7 @@
 #!/bin/sh
 # Verify structured mode (M10), what chats run on, against the real agents installed here: one
-# tiny chat with each (Claude Code over stream-json with Haiku, Codex's app-server, Gemini's
-# ACP; a few tenths of a cent each on your default accounts). Agents that aren't installed are
+# tiny chat with each (Claude Code over stream-json with Haiku, Codex's app-server; a few
+# tenths of a cent each on your default accounts). Agents that aren't installed are
 # skipped. Uses a throwaway ptyro home under target/verify-structured; your agents' logins and
 # settings are used as they are.
 set -u
@@ -44,13 +44,6 @@ if command -v codex >/dev/null; then
   check codex app-server
 else
   skip "codex isn't installed"
-fi
-
-echo "gemini (acp):"
-if command -v gemini >/dev/null; then
-  check gemini acp
-else
-  skip "gemini isn't installed (an npx alias doesn't count: ptyro needs a command)"
 fi
 
 "$bin" daemon stop --force >/dev/null 2>&1
