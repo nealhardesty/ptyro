@@ -8,7 +8,6 @@ use std::sync::mpsc;
 use migrate::M;
 use ptyro_core::model::{PortBlock, ProjectInfo, WorkspaceInfo, WorktreeInfo};
 use ptyro_core::session::{ProcessState, SessionKind};
-use ptyro_core::status::{AttentionKind, InboxEntry};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -211,6 +210,9 @@ const MIGRATIONS: &[M] = &[
     M::up(
         "DELETE FROM kv WHERE key IN ('pr_watches', 'review_comments', 'reviewed', 'worktrees:integrated');",
     ),
+    // The inbox was removed (2026-11-17): a session that wants you shows on its row and in
+    // notifications, with no history kept.
+    M::up("DROP TABLE inbox;"),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -608,88 +610,6 @@ impl Store {
         .await
     }
 
-    pub async fn inbox_add(&self, e: InboxEntry) -> Result<i64> {
-        self.call(move |c| {
-            c.execute(
-                "INSERT INTO inbox (session_id, session_name, at, kind, title, body, read_at, workspace, profile)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    e.session,
-                    e.session_name,
-                    e.at_ms as i64,
-                    e.kind.label(),
-                    e.title,
-                    e.body,
-                    e.read_ms.map(|m| m as i64),
-                    e.workspace,
-                    e.profile
-                ],
-            )?;
-            Ok(c.last_insert_rowid())
-        })
-        .await
-    }
-
-    /// Newest first.
-    pub async fn inbox(
-        &self,
-        workspace: Option<String>,
-        unread_only: bool,
-        limit: usize,
-    ) -> Result<Vec<InboxEntry>> {
-        self.call(move |c| {
-            let mut st = c.prepare(
-                "SELECT id, session_id, session_name, at, kind, title, body, read_at, workspace, profile FROM inbox
-                 WHERE (?1 IS NULL OR workspace = ?1) AND (?2 = 0 OR read_at IS NULL)
-                 ORDER BY at DESC, id DESC LIMIT ?3",
-            )?;
-            let mut rows = st.query(params![workspace, i64::from(unread_only), limit as i64])?;
-            let mut out = Vec::new();
-            while let Some(r) = rows.next()? {
-                let kind: String = r.get(4)?;
-                out.push(InboxEntry { machine: None,
-                    id: r.get(0)?,
-                    session: r.get(1)?,
-                    session_name: r.get(2)?,
-                    at_ms: r.get::<_, i64>(3)? as u64,
-                    kind: AttentionKind::parse(&kind).unwrap_or(AttentionKind::Notification),
-                    title: r.get(5)?,
-                    body: r.get(6)?,
-                    read_ms: opt_ms(r.get(7)?),
-                    workspace: r.get(8)?,
-                    profile: r.get(9)?,
-                });
-            }
-            Ok(out)
-        })
-        .await
-    }
-
-    /// Mark entries read (or unread): by id, every entry of a session, or everything.
-    pub async fn inbox_mark(
-        &self,
-        ids: Vec<i64>,
-        session: Option<String>,
-        all: bool,
-        read: bool,
-    ) -> Result<usize> {
-        self.call(move |c| {
-            let at: Option<i64> = read.then(|| ptyro_core::now_ms() as i64);
-            let mut n = 0;
-            if all {
-                n += c.execute(
-                    "UPDATE inbox SET read_at = ?1 WHERE (?2 IS NULL OR session_id = ?2)",
-                    params![at, session],
-                )?;
-            }
-            for id in ids {
-                n += c.execute("UPDATE inbox SET read_at = ?1 WHERE id = ?2", params![at, id])?;
-            }
-            Ok(n)
-        })
-        .await
-    }
-
     /// Newest first. A row this build can't read (written by a newer one, or damaged) is
     /// skipped and logged, not allowed to hide every other session.
     pub async fn history(&self, limit: usize) -> Result<Vec<SessionRecord>> {
@@ -747,10 +667,6 @@ impl Store {
         self.call(|c| {
             let now = ptyro_core::now_ms() as i64;
             c.execute("DELETE FROM session_event WHERE at < ?1", params![now - 90 * 86_400_000])?;
-            c.execute(
-                "DELETE FROM inbox WHERE read_at IS NOT NULL AND read_at < ?1",
-                params![now - 30 * 86_400_000],
-            )?;
             c.execute(
                 "DELETE FROM session WHERE ended_at IS NOT NULL AND ended_at < ?1",
                 params![now - 30 * 86_400_000],
@@ -1041,7 +957,8 @@ mod tests {
             )
             .unwrap();
         }
-        if version >= 3 {
+        // v3 made the inbox and v9 dropped it (the inbox removed, 2026-11-17).
+        if (3..9).contains(&version) {
             c.execute_batch(
                 "INSERT INTO inbox (session_id, session_name, at, kind, title, body)
                  VALUES ('old-1', 'my-shell', 1, 'done', 'finished', 'b');",
@@ -1059,14 +976,6 @@ mod tests {
             .unwrap();
         }
         c.pragma_update(None, "user_version", version as i64).unwrap();
-    }
-
-    async fn count(s: &Store, table: &'static str) -> i64 {
-        s.call(
-            move |c| Ok(c.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?),
-        )
-        .await
-        .unwrap()
     }
 
     /// Every schema ptyro ever shipped opens with this build: nothing is lost, every row still
@@ -1104,10 +1013,7 @@ mod tests {
                 assert_eq!(reg.workspaces.len(), 1);
                 assert_eq!(reg.trust.len(), 1);
             }
-            if version >= 3 {
-                assert_eq!(count(&s, "inbox").await, 1, "from v{version}");
-            }
-            for gone in ["run", "run_event", "run_message", "lease"] {
+            for gone in ["run", "run_event", "run_message", "lease", "inbox"] {
                 assert!(!has_table(&s, gone).await, "{gone} is dropped (from v{version})");
             }
             // And it works afterwards: a write after migrating reads back.
@@ -1153,7 +1059,6 @@ mod tests {
         }
         let trust = s.load_registry().await.unwrap().trust;
         assert_eq!(trust.iter().map(|t| t.scope.as_str()).collect::<Vec<_>>(), ["scripts"]);
-        assert_eq!(count(&s, "inbox").await, 1, "the done entry stays");
         assert_eq!(s.history(10).await.unwrap().len(), 1, "sessions stay");
     }
 
@@ -1353,7 +1258,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dormant_and_inbox() {
+    async fn dormant() {
         let s = Store::open_in_memory().unwrap();
         let mut r = record("agent", "old");
         r.agent = Some("claude".into());
@@ -1369,29 +1274,6 @@ mod tests {
             h.iter().find(|x| x.id == "plain").unwrap().state,
             ProcessState::Failed { .. }
         ));
-        let e = InboxEntry {
-            machine: None,
-            id: 0,
-            session: "agent".into(),
-            session_name: "claude".into(),
-            at_ms: 5,
-            kind: AttentionKind::Blocked,
-            title: "[work] claude (app)".into(),
-            body: "wants permission: Bash(ls)".into(),
-            read_ms: None,
-            workspace: Some("main".into()),
-            profile: Some("work".into()),
-        };
-        let id = s.inbox_add(e.clone()).await.unwrap();
-        s.inbox_add(InboxEntry { at_ms: 6, workspace: Some("side".into()), ..e.clone() })
-            .await
-            .unwrap();
-        assert_eq!(s.inbox(None, false, 10).await.unwrap().len(), 2);
-        assert_eq!(s.inbox(Some("main".into()), false, 10).await.unwrap()[0].id, id);
-        s.inbox_mark(vec![id], None, false, true).await.unwrap();
-        assert_eq!(s.inbox(None, true, 10).await.unwrap().len(), 1);
-        s.inbox_mark(vec![], Some("agent".into()), true, true).await.unwrap();
-        assert!(s.inbox(None, true, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]

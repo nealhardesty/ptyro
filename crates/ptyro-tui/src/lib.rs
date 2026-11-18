@@ -19,7 +19,6 @@ pub mod tab;
 // The reply parsers are tested everywhere; only Unix asks the terminal yet (outer.rs).
 #[cfg_attr(not(unix), allow(dead_code))]
 mod outer;
-mod pad;
 #[doc(hidden)] // public for the benches
 pub mod paint;
 pub mod palette;

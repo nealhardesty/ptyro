@@ -178,7 +178,7 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
         windows_app(&mut r);
     }
     remote(ctx, &config, &mut r);
-    scratchpad(ctx, &config, &mut r);
+    old_scratchpad(ctx, &mut r);
     shell(&config, &mut r);
     if terminal_too {
         terminal(&mut r, &config).await;
@@ -667,56 +667,26 @@ fn shell(config: &Config, r: &mut Report) {
     }
 }
 
-/// The scratchpad (NOTE1): the file can be written, and there is a terminal editor for its pane.
-fn scratchpad(ctx: &Ctx, config: &Config, r: &mut Report) {
-    let path = config.scratchpad_path(&ctx.paths.data);
-    let pad = ptyro_core::scratchpad::Pad::new(
-        path.clone(),
-        ctx.paths.data.join("scratchpad.history"),
-        config.scratchpad.keep,
-    );
-    match pad.ensure() {
-        Ok(()) if std::fs::OpenOptions::new().append(true).open(&path).is_ok() => {
-            r.add(
-                "scratchpad",
-                "file",
-                Level::Ok,
-                format!("{} (also $PTYRO_SCRATCHPAD)", path.display()),
-            );
-        }
-        Ok(()) => r.add(
+/// The scratchpad was removed (2026-11-17): its notes file, and the copies ptyro saved of it, are
+/// the person's and stay where they are; say so once, so nobody wonders where the pad went.
+fn old_scratchpad(ctx: &Ctx, r: &mut Report) {
+    let file = ctx.paths.data.join("scratchpad.md");
+    let copies = ctx.paths.data.join("scratchpad.history");
+    let left: Vec<String> = [&file, &copies]
+        .into_iter()
+        .filter(|p| p.exists())
+        .map(|p| p.display().to_string())
+        .collect();
+    if !left.is_empty() {
+        r.add(
             "scratchpad",
-            "file",
-            Level::Problem,
+            "notes",
+            Level::Note,
             format!(
-                "{} isn't writable (`chmod u+w {}`, or set [scratchpad] path)",
-                path.display(),
-                path.display()
+                "ptyro no longer has a scratchpad (removed 2026-11-17); your notes are yours and stay where they are: {}",
+                left.join(", ")
             ),
-        ),
-        Err(e) => r.add(
-            "scratchpad",
-            "file",
-            Level::Problem,
-            format!("{}: {e} (set [scratchpad] path in `ptyro config edit`)", path.display()),
-        ),
-    }
-    match config.scratchpad_editor(true) {
-        Some(cmd) if which(&cmd[0]).is_some() || cmd[0].contains('/') => {
-            r.add("scratchpad", "editor", Level::Ok, cmd.join(" "));
-        }
-        Some(cmd) => r.add(
-            "scratchpad",
-            "editor",
-            Level::Warn,
-            format!("{} not found: the pane can't start it (install it, or set [scratchpad] editor)", cmd[0]),
-        ),
-        None => r.add(
-            "scratchpad",
-            "editor",
-            Level::Warn,
-            "no terminal editor found (install nvim, vim or nano, or set [scratchpad] editor): `C-q ;` can't open the pad",
-        ),
+        );
     }
 }
 

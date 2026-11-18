@@ -113,9 +113,6 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
         if app.chat_panel.is_some() {
             crate::chats::draw(app, f, app.main_area());
         }
-        if let Some(id) = app.pad_popup {
-            draw_pad_popup(app, f, area, id);
-        }
         if app.config.ui.status_bar && area.height > 2 {
             draw_status(app, f, Rect { y: area.bottom() - 1, height: 1, ..area });
         }
@@ -130,38 +127,6 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
         draw_overlay(app, f, o, area);
     } else if app.which_key_shown() {
         draw_which_key(app, f, area);
-    }
-}
-
-/// The scratchpad's editor as a window over everything (NOTE1.1, `[scratchpad] mode = "popup"`).
-fn draw_pad_popup(app: &App, f: &mut Frame<'_>, area: Rect, id: SessionId) {
-    let t = &app.theme;
-    let r = crate::pad::popup_rect(area);
-    f.render_widget(Clear, r);
-    let mut path = app.config.scratchpad_path(&app.paths.data).display().to_string();
-    // The end of a long path is the part that says which file.
-    let room = (r.width as usize).saturating_sub(34).max(12);
-    if path.chars().count() > room {
-        let tail: String =
-            path.chars().rev().take(room - 1).collect::<Vec<_>>().into_iter().rev().collect();
-        path = format!("…{tail}");
-    }
-    let close = app.pad_key().map(|k| format!(" · {k} closes")).unwrap_or_default();
-    let block = Block::default().borders(Borders::ALL).border_style(fg(app, t.border_focus)).title(
-        Span::styled(
-            format!(" ✎ Scratchpad · {path}{close} "),
-            fg(app, t.accent).add_modifier(Modifier::BOLD),
-        ),
-    );
-    let inner = block.inner(r);
-    f.render_widget(block, r);
-    let Some(cache) = app.caches.get(&id) else { return };
-    paint::screen(cache, f.buffer_mut(), inner, app.depth, false);
-    if app.overlay.is_none()
-        && !app.prefix
-        && let Some(p) = paint::cursor(cache, inner)
-    {
-        f.set_cursor_position(p);
     }
 }
 
@@ -235,7 +200,6 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
         &[
             ("attention.next", "who needs you"),
             ("peek", "peek & answer"),
-            ("inbox", "inbox"),
             ("session.find", "find"),
             ("session.next", "next"),
             ("session.last", "back & forth"),
@@ -265,7 +229,6 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("worktree.gc", "clean up"),
             ("shell.new", "new shell"),
             ("shell.drawer", "quick shell"),
-            ("scratchpad.toggle", "scratchpad"),
         ],
     ),
     (
@@ -1292,22 +1255,9 @@ fn draw_header(
             }
             let (g, gc) = glyph(app, s);
             let drawer = app.drawer.is_some_and(|d| d.pane == pane);
-            let g = if s.pad {
-                "✎"
-            } else if drawer || s.quick {
-                "›_"
-            } else {
-                g
-            };
+            let g = if drawer || s.quick { "›_" } else { g };
             left.push(Span::styled(format!(" {g} "), base.fg(app.depth.fit(gc))));
-            if s.pad
-                && let Some(k) = app.pad_key()
-            {
-                right.push(Span::styled(
-                    format!(" {k} {} ", if focused { "hide" } else { "focus" }),
-                    base.fg(app.depth.fit(t.dim)),
-                ));
-            } else if (drawer || s.quick)
+            if (drawer || s.quick)
                 && let Some(k) = app.quick_key()
             {
                 // A shell in a panel of its own goes back to what it replaced (UX2.3).
@@ -1419,7 +1369,7 @@ fn draw_header(
             {
                 left.push(Span::styled(format!(" · {title}"), base.fg(app.depth.fit(t.dim))));
             }
-            if let Some(cache) = app.caches.get(&s.id).filter(|_| !s.pad) {
+            if let Some(cache) = app.caches.get(&s.id) {
                 let (w, h) = (cache.size.cols, cache.size.rows);
                 if w > inner.width || h > inner.height {
                     right.push(Span::styled(
@@ -1565,19 +1515,6 @@ fn draw_status(app: &App, f: &mut Frame<'_>, r: Rect) {
             format!("⚕ {} ", app.health.findings.len()),
             bar.fg(app.depth.fit(if bad { t.error } else { t.blocked }))
                 .add_modifier(Modifier::BOLD),
-        ));
-    }
-    if app.pad_open > 0 {
-        right.push(Span::styled(
-            format!("✎ {} ", app.pad_open),
-            bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD),
-        ));
-    }
-    let unread = app.unread();
-    if unread > 0 {
-        right.push(Span::styled(
-            format!("✉ {unread} "),
-            bar.fg(app.depth.fit(t.accent)).add_modifier(Modifier::BOLD),
         ));
     }
     right.push(Span::styled(format!("{live} live"), bar));
@@ -1964,44 +1901,6 @@ fn draw_overlay(app: &App, f: &mut Frame<'_>, o: &Overlay, area: Rect) {
                     .block(block("Confirm".into())),
                 r,
             );
-        }
-        Overlay::Inbox { selected, tab } => {
-            let r = boxed(area, 100, area.height.saturating_sub(4));
-            f.render_widget(Clear, r);
-            let entries = app.inbox_tab(tab.as_deref());
-            let mut lines: Vec<Line<'_>> = Vec::new();
-            let width = r.width.saturating_sub(4) as usize;
-            let first = (*selected).saturating_sub(r.height.saturating_sub(5) as usize);
-            for (i, e) in entries.iter().enumerate().skip(first) {
-                let when = crate::ui::ago(e.at_ms);
-                let mark = if e.read_ms.is_none() { "●" } else { " " };
-                let mut text =
-                    format!("{mark} {:<12} {:<6} {} — {}", e.kind.label(), when, e.title, e.body);
-                if UnicodeWidthStr::width(text.as_str()) > width {
-                    truncate_width(&mut text, width.saturating_sub(1));
-                    text.push('…');
-                }
-                let mut style = match e.kind {
-                    ptyro_core::status::AttentionKind::Blocked => fg(app, t.blocked),
-                    ptyro_core::status::AttentionKind::Errored => fg(app, t.error),
-                    _ => Style::new(),
-                };
-                if e.read_ms.is_some() {
-                    style = style.add_modifier(Modifier::DIM);
-                }
-                if i == *selected {
-                    style = style.bg(app.depth.fit(t.selection_bg));
-                }
-                lines.push(Line::styled(text, style));
-            }
-            if entries.is_empty() {
-                lines.push(Line::styled(" nothing here", fg(app, t.dim)));
-            }
-            let name = tab.clone().unwrap_or_else(|| "all workspaces".into());
-            let title = format!(
-                "Inbox · {name} — ⏎ go · p peek · n note it · r read · R all read · Tab next tab · Esc"
-            );
-            f.render_widget(Paragraph::new(lines).block(block(title)), r);
         }
         Overlay::Peek { session, screen, reply } => {
             let r = boxed(area, 104, area.height.saturating_sub(4));

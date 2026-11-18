@@ -1,7 +1,7 @@
 //! `ptyro backup` (ROADMAP H2.3): a `.tar.gz` of ptyro's own state, so a machine can be moved or an
 //! uninstall undone by hand. It holds the config, a consistent copy of the database (sessions'
-//! history, projects, worktree records, paired devices as token hashes, saved views, trust), the
-//! scratchpad and its history. It leaves out what is a secret or somebody else's: the agents'
+//! history, projects, worktree records, paired devices as token hashes, saved views, trust) and
+//! the chats. It leaves out what is a secret or somebody else's: the agents'
 //! login directories under managed profiles, the web app's certificate authority key (`--with-ca`
 //! adds it), and the recordings, which are big and can hold what was on screen
 //! (`--with-recordings`). The file is private (0600) and never replaces one that is there.
@@ -70,7 +70,6 @@ fn readme(version: &str, items: &[String], left_out: &[String]) -> String {
          \x20 data/ptyro.db               to  ptyro's data directory (`ptyro daemon status` shows its logs\n\
          \x20                                 directory; the data directory is beside it, usually\n\
          \x20                                 ~/.local/share/ptyro), replacing ptyro.db there\n\
-         \x20 data/scratchpad.md and data/scratchpad.history/   likewise\n\
          \x20 data/chat.db                likewise (your chats)\n\
          Worktrees are not in it: they are in your repositories (their branches), and `ptyro wt restore`\n\
          brings archived ones back from the snapshots in your repositories.\n\
@@ -132,7 +131,6 @@ pub async fn create(ctx: &Ctx, o: &Opts) -> Result<Made, Error> {
         std::fs::copy(&cfg_path, root.join("config/config.toml")).map_err(|e| io("config", e))?;
         items.push("config/config.toml: your config".to_owned());
     }
-    let config = Config::load(&cfg_path).unwrap_or_default();
 
     // The database: a consistent copy, even while the daemon writes it.
     let db = paths.data.join("ptyro.db");
@@ -176,18 +174,6 @@ pub async fn create(ctx: &Ctx, o: &Opts) -> Result<Made, Error> {
             ))
         })?;
         items.push("data/chat.db: your chats (--no-chats leaves them out)".to_owned());
-    }
-
-    // The scratchpad and its saved copies.
-    let pad = config.scratchpad_path(&paths.data);
-    if pad.is_file() {
-        std::fs::copy(&pad, root.join("data/scratchpad.md")).map_err(|e| io("scratchpad", e))?;
-        items.push("data/scratchpad.md: the scratchpad".to_owned());
-    }
-    let history = paths.data.join("scratchpad.history");
-    if history.is_dir() {
-        copy_tree(&history, &root.join("data/scratchpad.history")).map_err(|e| io("history", e))?;
-        items.push("data/scratchpad.history/: its saved copies".to_owned());
     }
 
     // Opt-ins.

@@ -16,7 +16,6 @@ mod logins;
 mod machines;
 mod mcp;
 mod own;
-mod pad;
 #[cfg(test)]
 mod parity;
 mod profiles;
@@ -424,19 +423,6 @@ enum Cmd {
         #[command(flatten)]
         new: chat::NewArgs,
     },
-    /// The scratchpad: one notes file for ideas and bugs (`$PTYRO_SCRATCHPAD`), the same in every
-    /// session. Opens in your editor, here; `--pane` opens it as a session (`C-q ;` in the TUI)
-    #[command(visible_alias = "pad")]
-    Scratchpad {
-        #[command(subcommand)]
-        cmd: Option<pad::PadCmd>,
-        /// Open it as a session of its own (the editor, kept running) and attach
-        #[arg(long)]
-        pane: bool,
-        /// With --pane: print the session as JSON instead of attaching
-        #[arg(long, requires = "pane")]
-        json: bool,
-    },
     /// Serve the web app and the protocol over WebSocket for paired devices (phones)
     Serve {
         /// Who can reach it: localhost (this computer only), tailscale (also your tailnet) or
@@ -763,7 +749,7 @@ enum Cmd {
         /// Keep the config directory
         #[arg(long)]
         keep_config: bool,
-        /// Keep the data directory (history, scratchpad, profiles) and so the worktrees
+        /// Keep the data directory (history, profiles) and so the worktrees
         #[arg(long)]
         keep_data: bool,
         /// Don't remove the ptyro program itself
@@ -779,7 +765,7 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Save ptyro's own state (config, database, scratchpad) to a private .tar.gz
+    /// Save ptyro's own state (config, database, chats) to a private .tar.gz
     Backup {
         /// Where to write it (default: `~/ptyro-backup-DATE.tar.gz`); never replaces a file
         #[arg(short, long, value_name = "FILE")]
@@ -833,22 +819,8 @@ enum Cmd {
         #[arg(value_parser = ["allow", "always", "deny"])]
         decision: String,
     },
-    /// The inbox: what wanted you, newest first
-    Inbox {
-        /// Only this workspace (default: all)
-        #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
-        workspace: Option<String>,
-        /// Only unread entries
-        #[arg(short, long)]
-        unread: bool,
-        /// Mark everything read
-        #[arg(long)]
-        read: bool,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Silence notifications for a session, `project:<p>` or `workspace:<w>` (the inbox still
-    /// gets them)
+    /// Silence notifications for a session, `project:<p>` or `workspace:<w>` (its row still shows
+    /// when it wants you)
     Mute {
         target: String,
         /// For this long (`30m`, `2h`); default until unmuted

@@ -2,8 +2,8 @@
 //! another of it in one key (`C-q C-n`, `ptyro new --again`, the web's "+ claude"). It is always
 //! an agent (`!` is the key for a shell): the worktree's last one (with its profile and
 //! arguments), else its project's `default_agent`, else `[agents] default` (claude). Remembered
-//! for agents people start, never a client's tool, the quick terminal or the scratchpad's editor,
-//! and kept in `kv` across restarts.
+//! for agents people start, never a client's tool or the quick terminal, and kept in `kv` across
+//! restarts.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,10 +55,10 @@ impl Daemon {
     }
 
     /// Remember the agent `spec` started in the worktree `worktree` (an id). Shells, command
-    /// lines, tools, quick terminals and the scratchpad's editor don't count.
+    /// lines, tools and quick terminals don't count.
     pub(crate) async fn remember_launch(&self, worktree: Option<&str>, spec: &SpawnSpec) {
         let (Some(worktree), Some(agent)) = (worktree, &spec.agent) else { return };
-        if spec.tool || spec.quick || spec.pad {
+        if spec.tool || spec.quick {
             return;
         }
         let launch = LastLaunch {

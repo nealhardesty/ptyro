@@ -347,11 +347,6 @@ fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     w.until("a permission request", || {
         w.chats()[0]["attention"]["text"].as_str().is_some_and(|t| t.contains("wants permission"))
     });
-    // The inbox says what happened, never what it asked: a chat's words stay in chat.db.
-    let inbox = w.json(&["inbox", "--json"]);
-    let bodies: Vec<&str> =
-        inbox.as_array().unwrap().iter().filter_map(|e| e["body"].as_str()).collect();
-    assert_eq!(bodies, ["the chat asks for permission"], "{inbox}");
     // An answer to another card (a double tap, one answered elsewhere) decides nothing.
     let out = w.cli(&["chat", "answer", &addr, "allow", "--node", "01notthecard"]);
     assert!(!out.status.success());
@@ -369,7 +364,7 @@ fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
     let again = w.cli(&["chat", "answer", &addr, "allow", "--node", &card]);
     assert!(!again.status.success(), "answered once only");
     assert!(w.chats()[0]["attention"].is_null());
-    // An incognito chat's card is no inbox entry at all.
+    // An incognito chat's card leaves nothing of its words in ptyro.db either.
     w.ok(&["chat", "new", "--incognito", "--no-wait", "ask rm -rf /tmp/secretplan"]);
     w.until("its permission request", || {
         w.chats().iter().any(|c| {
@@ -377,7 +372,6 @@ fn a_permission_card_is_answered_and_chats_can_be_switched_off() {
                 && c["attention"]["text"].as_str().is_some_and(|t| t.contains("wants permission"))
         })
     });
-    assert_eq!(w.json(&["inbox", "--json"]).as_array().unwrap().len(), 1, "no new entry");
     let data = w.d.home.path().join("data");
     for f in [data.join("ptyro.db"), data.join("ptyro.db-wal")] {
         let bytes = String::from_utf8_lossy(&std::fs::read(&f).unwrap_or_default()).into_owned();

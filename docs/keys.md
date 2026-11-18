@@ -46,7 +46,6 @@ action by name.
 | `r` / `R` | run the project's default run script / pick a lifecycle script |
 | `a` | jump to the session that needs you most (blocked first) |
 | `p` | peek at the session that needs you most (else this one) and answer it without switching |
-| `i` | the inbox: everything that wanted you, per workspace |
 | `b` | broadcast one prompt into every session marked with `Space` in the sidebar |
 | `t` | structured session: chat view ⇄ terminal view |
 | `m` | a new chat with your agent, in this workspace, over the panes: type, `⏎` sends, `C-o` picks the agent and its tools (SPEC §22) |
@@ -71,9 +70,6 @@ action by name.
 | `e` | the shells menu: the workspace's SHELLS by number; a digit shows one, `c` a new shell, `!` a command (`htop`, `ssh prod`), `s` a scratch shell. `C-q e 3` works where Alt doesn't |
 | `C-t` | this worktree's quick terminal (one per worktree) in a drawer below a pane of its project (VS Code's toggle). Again focuses it, and once more hides it (the shell keeps running). When none of the project is open it is a panel of its own, and a note says so. With no worktree here it asks for a project first |
 | `T` | this worktree's quick terminal full sized. Again goes back |
-| `;` | the scratchpad: your notes file in the editor, shown as `[scratchpad] mode` says (below). Again focuses it, and once more hides it (the editor keeps running) |
-| `'` | add a line to the scratchpad without opening it (stamped with the time and where you are) |
-| `"` | the scratchpad's open items: type to search, `⏎` starts one as a task, `Ctrl-X` ticks it, `Ctrl-A` shows ticked ones, `Ctrl-E` opens the editor |
 | `H` | home: who needs you, PRs, recent projects and repositories found; ⏎ starts a task there |
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
 | `U` | set up agents and tools: the setup checklist (Agents, Tools, Already here). `Space` ticks (`←`/`→` picks the side, WSL or Windows, on Windows), `⏎` installs what's ticked in a split (live output, sudo's prompt there, then the logins), `s` not now. The first run opens with the same checklist at its top |
@@ -133,7 +129,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `Space` | mark a session for broadcast; on a workspace, project or worktree, fold or unfold |
 | `b` | broadcast one prompt into the marked sessions |
 | `n` / `C-n` / `N` | new task here / quick new (another of this worktree's agent, here) / new worktree |
-| `a` `p` `i` `e` | next attention / peek / inbox / why this status |
+| `a` `p` `e` | next attention / peek / why this status |
 | `x` / `X` | stop a session (on an ended one: remove it; a dormant one asks first) or remove a worktree (refuses to lose work, and offers archiving instead) / kill a session now. Its pane shows the next session |
 | `R` | restart an exited session |
 | `,` | rename |
@@ -144,7 +140,6 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys |
-| `;` / `'` | the scratchpad / add a line to it |
 | `!` | a new shell in this worktree, full sized |
 | `c` | a new shell in SHELLS, in the selected row's directory (on a SHELLS heading: that workspace's) |
 | `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
@@ -166,13 +161,6 @@ In a structured session's chat view, type into the pane and press `⏎` to send;
 `Alt-⏎` adds a line, `Esc` clears the draft, `PageUp` / `PageDown` scroll. On a permission card,
 with nothing typed: `a`, `y`, `1` or `⏎` allows, `A` or `2` always allows, `d`, `n`, `3` or `Esc`
 denies. `Ctrl-C` clears the draft, or interrupts the turn when the draft is empty.
-
-## The inbox (`Ctrl-Q i`)
-
-`j` / `k` move, `Tab` cycles this workspace, the others and All. `⏎` opens the entry's session,
-`p` peeks at it, `n` notes it to the scratchpad (a line you
-can edit, with a link back to the session), `r` marks it read, `R` marks all read, `q` or `Esc`
-closes.
 
 ## Chats (`Ctrl-Q m`, `Ctrl-Q g`)
 
@@ -257,26 +245,7 @@ through ptyro too).
 | `[` / `]` (or `{` / `}`) | previous / next shell prompt (bash, zsh, fish and PowerShell sessions) |
 | `v` / `V` / `C-v` | select characters / lines / a block (`o` jumps to the other end) |
 | `y` or `⏎` / `Y` | copy the selection / the line to your terminal's clipboard (works over SSH and in tmux) |
-| `a` | add the selection to the scratchpad, quoted, as a note |
 | `q`, `Esc` or `C-c` | leave (`Esc` first clears a selection) |
-
-## The scratchpad (`Ctrl-Q ;`)
-
-One notes file for ideas and bugs, the same in every session (`$PTYRO_SCRATCHPAD`; `ptyro
-scratchpad` on the command line). Its key opens it in your editor (`[scratchpad] editor`, else
-`$VISUAL` / `$EDITOR`, else nvim, vim, nano or vi) as one session that keeps running, so your
-cursor and undo are where you left them. `[scratchpad] mode` says where it shows:
-
-- `drawer` (the default): below the focused pane, like the quick terminal (they share the one
-  drawer; `+` / `-` resize it);
-- `popup`: a window over everything, about 80% by 70% of the screen. The editor has the keyboard;
-  only the prefix reaches ptyro, so `Ctrl-Q ;` closes it;
-- `pane`: a pane beside the focused one. The key closes it.
-
-Closing hides it; quitting the editor (`:q`) ends it, and the next press starts a new one. The
-status bar shows `✎ 7` when seven `- [ ]` items are open. `Ctrl-Q '` adds a line without opening
-the pad, and the row menu's "note this" (`.`, then `scratchpad.note`) starts that line from a
-session's task. The palette also has `scratchpad.history`: saved copies, `⏎` puts one back.
 
 ## Mouse
 
@@ -295,7 +264,7 @@ key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
 `session.mute`, `session.summarize` (a `≈` line from a small model), `notify.test`,
-`theme.next`, `config.edit`, `help.tour`, `scratchpad.history`, `scratchpad.note`.
+`theme.next`, `config.edit`, `help.tour`.
 
 ## Other overlays
 

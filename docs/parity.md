@@ -69,22 +69,6 @@ its row: its TUI action and its web one, or `waived:` and why.
 | `shells break` | `shells.break` (a pane's row menu, `.`; the palette) | `shells.break`: ⋯ → Break out to its own number |
 | `shells join` | `shells.join` (a shell's row menu, `.`; the palette): asks for the window's number | `shells.join`: ⋯ → Join another window… |
 
-## Scratchpad
-
-The scratchpad is one notes file (`$PTYRO_SCRATCHPAD`), the same in every session (ROADMAP NOTE1).
-
-| Command | In the TUI | On the web |
-|---|---|---|
-| `scratchpad edit` | `scratchpad.toggle` (`C-q ;`): the pad in your editor, in a drawer under the pane (or a popup, or a pane: `[scratchpad] mode`); again focuses it, then hides it (the editor keeps running). `--pane` is the same session | `scratchpad`: the Notes view, edited in the page; it saves as you type and merges with other writers |
-| `scratchpad path` | shown: its path heads the open-items list (`scratchpad.items`) and the history list | shown: its path heads the Notes view |
-| `scratchpad cat` | `scratchpad.toggle`: you read it in the editor; `scratchpad.items` lists the open items | `scratchpad`: the Notes view, or its Preview |
-| `scratchpad add` | `scratchpad.add` (`C-q '`): one line, stamped with where you are, without opening the editor; `scratchpad.note` (the row menu, `a` in copy mode, `n` in the inbox) adds the selected row's task, a selection or an inbox entry | `scratchpad.add`: the quick-add box on the session list and in the Notes view; the share sheet adds to it; `scratchpad.note` on a session card |
-| `scratchpad todo` | `scratchpad.items` (`C-q "`): the open items, searchable | `scratchpad.items`: the open items beside the text |
-| `scratchpad done` | `scratchpad.items` (`Ctrl-X` ticks, or unticks) | `scratchpad.tick`: tap a checkbox in the Preview |
-| `scratchpad start` | `scratchpad.items` (`⏎` starts the item as a task in a new worktree) | `scratchpad.start`: Start on an open item opens the new-task box with its text |
-| `scratchpad log` | `scratchpad.history` | `scratchpad.history`: saved copies |
-| `scratchpad restore` | `scratchpad.history` (`⏎` puts one back) | `scratchpad.history` |
-
 ## Chats
 
 Plain conversations with your agents, kept in `chat.db` (SPEC §22, ROADMAP CHAT1). Every
@@ -125,7 +109,6 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `inbox` | `inbox` (`i`) | `inbox`; `inbox.read` marks it read |
 | `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` | `session.mute`: ⋯ → Mute notifications |
 | `notify test` | `notify.test` | `notify.test`: More → Notifications → Send a test |
 | `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile | `usage`: More → Usage: each account's limits as meters |
@@ -243,7 +226,7 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `config get` | `config.panel`: the row's detail says its default, where it comes from and when a change applies | `settings`: each setting says its default, its file and line, and when a change applies |
 | `config set` | `config.panel`: ⏎ or space changes the setting by its kind (a switch, a list of choices, a number with `+`/`-`, a box that says why a value is wrong as you type); the daemon and every open screen pick it up; on a key, ⏎ is a menu: change its key (press it; a taken key asks before the two swap), change what it runs (searchable), unbind (`d`, a default stays listed); on a client of a remote daemon (ptyro.exe and WSL), a setting the daemon reads is tagged "daemon's" and ⏎ opens the daemon's own file there (the CLI's `config set` says where it lives) | `settings.set`: a switch, a list, a box checked as you type; `settings.keys` presses keys instead of typing their names; `settings.keychange` presses a new key for a binding (a taken key asks before swapping), `settings.keyaction` picks what it runs, `settings.keyunbind` switches a key off; `settings.target` saves a repository's to your file or the shared one |
 | `config unset` | `config.panel`: `r` puts a setting back to its default; `u` undoes the last change; on a key it brings the default back | `settings.reset`: Reset on a setting; `settings.keyreset`: Reset on a key; `settings.undo`: Undo on the message after any change |
-| `config add` | `config.panel`: ⏎ on `+ Add …` in Agents, Themes, Key bindings (one under each group: press the key, then pick what it runs; a taken key asks first), Notifications, Scratchpad and editors; Profiles run `profile.new` | `settings.add`: ＋ Add … under an agent, theme, editor, key binding, notification service, run script or prompt |
+| `config add` | `config.panel`: ⏎ on `+ Add …` in Agents, Themes, Key bindings (one under each group: press the key, then pick what it runs; a taken key asks first), Notifications, Editors; Profiles run `profile.new` | `settings.add`: ＋ Add … under an agent, theme, editor, key binding, notification service, run script or prompt |
 | `config rm` | `config.panel`: `d` on a member, asking first | `settings.remove`: Remove on a member's page, asking first |
 | `config rename` | `config.panel`: `R` on a member | `settings.rename`: Rename on a member's page |
 | `config schema` | waived: for programs that build forms of their own (the web app is one); people use the panel | waived: for programs that build forms of their own (the web app is one) |

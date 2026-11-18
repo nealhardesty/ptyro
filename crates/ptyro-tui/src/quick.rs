@@ -271,7 +271,7 @@ impl App {
         let live = self
             .drawer_session()
             .and_then(|id| self.session(id))
-            .is_some_and(|s| (s.quick || s.pad) && s.state.is_live());
+            .is_some_and(|s| s.quick && s.state.is_live());
         if self.drawer.is_some() && !live {
             self.hide_drawer();
         }
@@ -284,8 +284,8 @@ impl App {
         Stance { workspace: self.workspace.clone(), shown }
     }
 
-    /// The drawer and the scratchpad's popup are for quick actions: when another session or
-    /// workspace shows, they go away (the shells and the editor keep running). Moving focus
+    /// The drawer is for quick actions: when another session or workspace shows, it goes away
+    /// (its shell keeps running). Moving focus
     /// between panes that were already showing doesn't: the top agent and the drawer are used
     /// together. Focus in the sidebar doesn't count either: that is how you pick the next thing.
     pub(crate) fn tuck_away(&mut self, before: Stance) {
@@ -297,10 +297,6 @@ impl App {
             });
         if shows_new && self.drawer.is_some() {
             self.hide_drawer();
-        }
-        if shows_new && self.pad_popup.is_some() {
-            self.pad_popup = None;
-            self.sync();
         }
     }
 

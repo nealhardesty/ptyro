@@ -216,7 +216,7 @@ pub async fn run(ctx: &Ctx, yes: bool, dry_run: bool) -> Result<i32, Error> {
     }
     if desktop {
         let mut arr = toml_edit::Array::new();
-        for c in ["inbox", "osc", "bell", "desktop"] {
+        for c in ["osc", "bell", "desktop"] {
             arr.push(c);
         }
         if set_default(&mut doc, "notifications", "channels", toml_edit::value(arr)) {

@@ -307,9 +307,9 @@ fn shape(v: &Value) -> Value {
 /// `make snapshots` accepts intended changes.
 #[test]
 fn json_shapes() {
-    // Every turn's idle raises attention and an inbox entry (`min_work` 0 s), whatever the
-    // machine's load: at 1 s, a 0.1 s turn did only when a loaded machine stretched it past 1 s,
-    // and the snapshot's `inbox` and `attention` shapes changed with the load.
+    // Every turn's idle raises attention (`min_work` 0 s), whatever the machine's load: at 1 s,
+    // a 0.1 s turn did only when a loaded machine stretched it past 1 s, and the snapshot's
+    // `attention` shapes changed with the load.
     let w = World::with_min_work("0s", "");
     let root = w.repo("proj", &[(".ptyro.toml", "[scripts.run.dev]\ncommand = \"true\"\n")]);
     w.ok(&["project", "add", root.to_str().unwrap()]);
@@ -325,7 +325,6 @@ fn json_shapes() {
         ("ws_ls", vec!["ws", "ls", "--json"]),
         ("wt_ls", vec!["wt", "ls", "--json"]),
         ("profile_ls", vec!["profile", "ls", "--json"]),
-        ("inbox", vec!["inbox", "--json"]),
         ("daemon_status", vec!["daemon", "status", "--json"]),
         ("integrations", vec!["integrations", "ls", "--json"]),
         ("config_check", vec!["config", "check", "--json"]),

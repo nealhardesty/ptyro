@@ -320,9 +320,9 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
-        id: "scratchpad",
-        title: "Scratchpad and editors",
-        blurb: "The notes file, and the editor that opens things.",
+        id: "editors",
+        title: "Editors",
+        blurb: "The editor that opens a worktree.",
         scope: Scope::User,
     },
     Section {
@@ -450,7 +450,7 @@ pub const COLLECTIONS: &[Collection] = &[
     },
     Collection {
         path: "editors",
-        section: "scratchpad",
+        section: "editors",
         noun: "editor",
         layout: Layout::Tables,
         reserved: &["default"],
@@ -506,7 +506,6 @@ const KINDS: &[Choice] = &[
 ];
 const BREAKTHROUGH: &[Choice] = KINDS;
 const CHANNELS: &[Choice] = &[
-    c("inbox", "the inbox (always on)"),
     c("bell", "the terminal bell"),
     c("osc", "your terminal's own notification (OSC 9/777)"),
     c("desktop", "a desktop notification (a Windows toast inside WSL)"),
@@ -579,11 +578,6 @@ const LOCATION: &[Choice] = &[
 const START_AGENTS: &[Choice] = &[
     c("after_setup", "once the setup script has run"),
     c("immediately", "straight away, while setup runs"),
-];
-const PAD_MODE: &[Choice] = &[
-    c("drawer", "below the pane, like the quick terminal"),
-    c("popup", "a window over everything"),
-    c("pane", "a pane of its own beside the others"),
 ];
 const ADAPTERS: &[Choice] = &[
     c("claude", "Claude Code"),
@@ -704,7 +698,7 @@ pub const SETTINGS: &[Setting] = &[
     // ── Notifications ──
     s("notifications.channels", "notifications", some(CHANNELS), "How ptyro tells you.").also("notify alert sound beep ping bell"),
     s("notifications.on", "notifications", some(KINDS), "Which things notify you.").also("notify alert"),
-    s("notifications.quiet_hours", "notifications", Kind::Window, "Between these hours only the inbox is used, like 22:00-07:00 (kinds you set to always notify still do).").or("never quiet").eg("22:00-07:00"),
+    s("notifications.quiet_hours", "notifications", Kind::Window, "Between these hours nothing notifies you, like 22:00-07:00 (kinds you set to always notify still do).").or("never quiet").eg("22:00-07:00"),
     s("notifications.coalesce", "notifications", Kind::Duration, "At most one notification per session in this time."),
     s("notifications.desktop_command", "notifications", Kind::Argv, "Your own desktop notifier, as a command. {title} and {body} are replaced.").adv().or("the system's: macOS notifications, notify-send, or a Windows toast inside WSL").eg("my-notifier --title {title} {body}"),
     s("notifications.callback.listen", "notifications", Kind::Address, "Where approve/deny links in notifications are answered, like 127.0.0.1:7591. Off unless set.").restart().or("off").eg("127.0.0.1:7591"),
@@ -764,15 +758,10 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.tools.*.shell", "chat", Kind::Bool, "The agent's shell: it runs commands as you, so a web page it reads could steer it. Shown with ⚠; never in a built-in preset.").also("bash commands dangerous"),
     s("chat.tools.*.mcp", "chat", Kind::List, "MCP servers kept on, by the name the agent's own configuration gives them (`claude mcp list`, `codex mcp list`, Gemini's settings.json).").eg("github").also("tools servers"),
     s("chat.tools.*.allow", "chat", Kind::List, "More tools approved without asking, by the agent's own name for them.").adv(),
-    // ── Scratchpad and editors ──
-    s("scratchpad.mode", "scratchpad", pick(PAD_MODE), "How the scratchpad key shows it."),
-    s("scratchpad.editor", "scratchpad", Kind::Text, "The editor for the notes file, as a command line like `nvim` or `code -w`. (Worktrees open in the editor under Editors, below.)").or("your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi").eg("nvim"),
-    s("scratchpad.path", "scratchpad", Kind::Path, "Where the notes file lives. Point it into a synced folder to share it between machines.").or("scratchpad.md in ptyro's data directory").eg("~/Sync/pad.md"),
-    s("scratchpad.keep", "scratchpad", int(1, 3650), "How long saved copies of the notes are kept (the newest 20 always stay).").unit("days"),
-    s("scratchpad.tick_on_finish", "scratchpad", Kind::Bool, "Tick an item once the worktree started from it is removed."),
-    s("editors.default", "scratchpad", dynamic(Source::Editors), "The editor that opens a worktree (the notes file has its own, above). Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
-    s("editors.*.command", "scratchpad", Kind::Argv, "The program and arguments; {path} is the worktree."),
-    s("editors.*.inside", "scratchpad", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
+    // ── Editors ──
+    s("editors.default", "editors", dynamic(Source::Editors), "The editor that opens a worktree. Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
+    s("editors.*.command", "editors", Kind::Argv, "The program and arguments; {path} is the worktree."),
+    s("editors.*.inside", "editors", Kind::Bool, "Open it as a ptyro session, for terminal editors."),
     // ── Daemon and recording ──
     // ── Shells ──
     s("shell.command", "shells", Kind::Argv, "The shell new shell sessions run, like `pwsh -Login` for PowerShell. A bare bash, zsh, fish or PowerShell started any other way is a shell session too.").also("powershell pwsh zsh bash fish login terminal").or("your login shell; on Windows PowerShell 7, else Windows PowerShell, else cmd").eg("pwsh -Login").new_only(),

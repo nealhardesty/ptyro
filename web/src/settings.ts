@@ -42,7 +42,7 @@ const ACTIONS = {
   "daemon.upgrade": "Switch the daemon to the ptyro on disk, keeping every session",
   "daemon.restart": "Restart the daemon: running sessions are stopped; agents hibernate and come back resumable",
   "daemon.stop": "Stop every session and the daemon",
-  "backup.create": "Save ptyro's own state (config, database, scratchpad) to a private .tar.gz in your home directory on the computer",
+  "backup.create": "Save ptyro's own state (config and database) to a private .tar.gz in your home directory on the computer",
   "uninstall.plan": "What uninstalling ptyro would remove and what stays, and the command to run on the computer (it can't be done from here)",
   "daemon.service": "Start ptyro at login (a systemd or launchd service, or a Windows logon task)",
   "daemon.unservice": "Remove the login service",
@@ -71,7 +71,7 @@ const tip = actions(ACTIONS);
 
 const LEVEL: Record<string, [string, string]> = { ok: ["✓", "ok"], note: ["·", ""], warn: ["!", "warn"], problem: ["✗", "bad"] };
 const SCOPES: [string, string, string][] = [
-  ["read", "Read", "Watch sessions, screens and the inbox"],
+  ["read", "Read", "Watch sessions and screens"],
   ["approve", "Approve", "Also answer permission prompts"],
   ["control", "Control", "Also type into sessions and start configured agents"],
   ["full", "Full", "Everything: any command, the config, this page"],
@@ -89,7 +89,6 @@ const showNotes = (title: string, notes: string[]): void => { if (notes.length <
 function moreView(): HTMLElement {
   const scope = SCOPES.find(([k]) => k === conn.scope);
   const items: [string, string, string, string?][] = [
-    ["Inbox", "What happened while you were away", "#/inbox"],
     ["Health", "What's wrong, with its fixes", "#/health"],
     ["Usage", "Your accounts' limits", "#/usage"],
     ["Devices", "Phones and browsers paired with ptyro", "#/devices"],
@@ -651,7 +650,7 @@ function daemonView(): HTMLElement {
         bar(h("button", { title: tip("daemon.service"), onclick: async () => { const r = await doHost("service.install"); if (r) showNotes("Login service", r.notes ?? []); } }, "Install the service"),
           h("button", { title: tip("daemon.unservice"), onclick: async () => { const r = await doHost("service.uninstall"); if (r) showNotes("Login service", r.notes ?? []); } }, "Remove it"))),
 
-      section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history, scratchpad and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."),
+      section("Back up or leave", h("p", { class: "sub" }, "A backup holds your config, history and settings, in a private file on the computer. Uninstalling removes ptyro; your repositories stay."),
         bar(h("button", { title: tip("backup.create"), onclick: backupNow }, "Back up ptyro's state"),
           h("button", { class: "deny", title: tip("uninstall.plan"), onclick: showUninstall }, "Uninstall…")))) : h("p", { class: "intro" }, "Logs, upgrading and the service need a device paired with --scope full."));
   return h("div", {}, ui.header("Daemon", "#/more"), h("main", { class: "stack" }, body));

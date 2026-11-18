@@ -68,7 +68,6 @@ export interface Session {
   structured?: string | null;
   inner_agent?: string | null;
   quick?: boolean;
-  pad?: boolean;
   /// SHELLS (SPEC §23): it belongs to its workspace, not a worktree, under a number.
   loose?: boolean;
   slot?: number | null;
@@ -93,7 +92,6 @@ export interface Session {
   ports?: number[];
   turns?: number;
 }
-export interface InboxEntry { id: number; session: string; session_name: string; at_ms: number; kind: string; title: string; body: string; read_ms?: number | null }
 export type Outcome = { t: "ok"; reply: any } | { t: "err"; error: { code: string; message: string; fix?: unknown } };
 
 // ── a screen cache (crates/ptyro-core/src/cache.rs, in TypeScript) ───────────────────────────

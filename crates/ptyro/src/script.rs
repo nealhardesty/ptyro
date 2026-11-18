@@ -714,7 +714,6 @@ mod tests {
             summary: None,
             window_title: None,
             quick: false,
-            pad: false,
             model: None,
             chat: None,
             loose: false,

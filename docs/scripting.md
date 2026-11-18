@@ -69,7 +69,7 @@ EOF
 ptyro wait deps lint docs --for idle --timeout 8h --stall 30m || true
 ptyro ls --status blocked     # who's waiting for you
 ptyro ls --status active      # who is busy right now (working, blocked, running a command)
-ptyro inbox -u                # what each one wanted
+ptyro status                  # what each one is doing, and what it wants
 ```
 
 ### Wait for all of them, then test once
@@ -118,23 +118,6 @@ ptyro wt run app/fix-login dev
 ptyro wait fix-login.dev --match 'ready on|listening' --timeout 2m
 ```
 
-### Notes from scripts
-
-`$PTYRO_SCRATCHPAD` is set in every session, so a hook or a script can leave a note or read the
-open items:
-
-```bash
-# a failing nightly check becomes an item, with the log tail under it
-make test 2>&1 | tail -20 | ptyro scratchpad add --section Nightly -
-
-# what's open, as JSON
-ptyro scratchpad todo --json | jq -r '.items[] | "\(.line) \(.text)"'
-
-# start every open bug as a task (each gets its own worktree and agent)
-ptyro scratchpad todo --json | jq -r '.items[] | select(.section=="Bugs") | .line' |
-  while read n; do ptyro scratchpad start "$n"; done
-```
-
 ## Teach your agents ptyro (an AGENTS.md / skill snippet)
 
 Agents running inside ptyro can drive other sessions with the same commands. Paste this into a
@@ -153,9 +136,6 @@ Use these commands; they print JSON with `--json`:
 - `ptyro send NAME "TEXT" --wait-ready --wait`: give it the next instruction and wait for the turn.
 - `ptyro report --state working --msg "what you're doing"`: tell the human what you're doing.
 - `ptyro checkpoint ls`: your worktree after each of your turns (the human can restore one).
-- `ptyro scratchpad add "…"`: note something for the human (a bug you found but didn't fix, a
-  follow-up) in their scratchpad, `$PTYRO_SCRATCHPAD`, stamped with your name; `ptyro scratchpad
-  todo` lists what they've noted. Add with the command; don't edit the file.
 
 Rules: never `ptyro stop`, `kill` or `rm` sessions, or `ptyro wt rm` worktrees, you didn't create; never answer
 another session's permission prompt (`ptyro answer`); the human does that (ptyro refuses

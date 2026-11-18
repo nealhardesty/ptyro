@@ -1,10 +1,10 @@
-// ptyro web app (SPEC §16.4, M9.3): sessions, the inbox, a live terminal view drawn from the
+// ptyro web app (SPEC §16.4, M9.3): sessions, a live terminal view drawn from the
 // daemon's screen frames, quick replies, and answers to permission prompts. Talks the ptyro
 // protocol (JSON encoding) over `ptyro serve`'s WebSocket, signed in with a device token from
 // `ptyro pair`. No dependencies, no third-party requests.
 
 import { Screen, modelLabel } from "./screen.js";
-import type { Frame, InboxEntry, Session } from "./screen.js";
+import type { Frame, Session } from "./screen.js";
 import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
@@ -15,7 +15,6 @@ import "./settings.js";
 import "./panel.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
-import { initNotes, notesConnected, notesEvent, notesLink, notesNeedsLoad, notesLoad, notesNoteButton, notesQuickAdd, notesShown, notesStart, notesView } from "./notes.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { coach, offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
 import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
@@ -32,17 +31,8 @@ const ACTIONS = {
   "session.keys": "Keys for the session: arrows, Esc, Tab, Enter, Ctrl-C",
   "session.view": "Chat or terminal; the terminal fitted or 1:1",
   "answer": "Answer what it asks: allow once, always, or deny",
-  "inbox": "The inbox: what happened while you were away",
   "host.load": "The load average of the computer ptyro runs on, over 1, 5 and 15 minutes: amber once every CPU is busy, red at twice that ([ui] load)",
-  "inbox.read": "Mark everything in the inbox read",
   "notifications": "Notifications on this device (a test is sent)",
-  "scratchpad": "The scratchpad: your notes file, edited here; it saves as you type",
-  "scratchpad.add": "Add a line to the scratchpad, stamped with the time",
-  "scratchpad.items": "The scratchpad's open items (- [ ] lines)",
-  "scratchpad.start": "Start an open item as a task in a new worktree",
-  "scratchpad.tick": "Tick or untick an item in the scratchpad",
-  "scratchpad.history": "Saved copies of the scratchpad; put one back",
-  "scratchpad.note": "Note this session in the scratchpad",
   "pair": "Pair this device with the link or QR code from `ptyro pair`",
   "unpair": "Forget this device's pairing",
 } as const;
@@ -122,16 +112,15 @@ function statusOf(s: Session): string {
 /// waiting for you, a shell with a command running). Quick terminals aren't sessions of their own.
 type Show = "all" | "running" | "active";
 const SHOWS: Show[] = ["all", "running", "active"];
-const isRunning = (s: Session): boolean => !s.quick && !s.pad && (s.state.t === "running" || s.state.t === "starting");
+const isRunning = (s: Session): boolean => !s.quick && (s.state.t === "running" || s.state.t === "starting");
 const isActive = (s: Session): boolean => isRunning(s) && (s.status ? ["working", "blocked", "starting"].includes(s.status.status) : !!s.command && s.command.ended_ms == null);
-const KEEPS: Record<Show, (s: Session) => boolean> = { all: (s) => !s.quick && !s.pad, running: isRunning, active: isActive };
+const KEEPS: Record<Show, (s: Session) => boolean> = { all: (s) => !s.quick, running: isRunning, active: isActive };
 let show: Show = ((): Show => { const v = store.get("ptyro.show"); return SHOWS.find((x) => x === v) ?? "all"; })();
 
 // ── app state and views ─────────────────────────────────────────────────────────────────────
 
 const app = {
   sessions: new Map<string, Session>(),
-  inbox: [] as InboxEntry[],
   screens: new Map<string, Screen>(),
   /// Structured sessions' transcripts (M10), and the ones shown as a terminal instead.
   chats: new Map<string, { items: ChatItem[]; draft: string }>(),
@@ -144,13 +133,12 @@ const app = {
 
 const root = document.getElementById("app") as HTMLElement;
 
-/// `#/s/<id>` a session, `#/inbox`, `#/<name>/<rest>` a registered view (kit.ts), else the list.
+/// `#/s/<id>` a session, `#/<name>/<rest>` a registered view (kit.ts), else the list.
 function route(): { view: string; id?: string } {
   const m = location.hash.match(/^#\/s\/(.+)$/);
   if (m) {
     try { return { view: "session", id: decodeURIComponent(m[1]) }; } catch { return { view: "list" }; }
   }
-  if (location.hash === "#/inbox") return { view: "inbox" };
   const v = location.hash.match(/^#\/([a-z]+)(?:\/(.*))?$/);
   if (v && views.has(v[1])) return { view: v[1], id: v[2] ?? "" };
   return { view: "list" };
@@ -172,8 +160,6 @@ async function refresh(): Promise<void> {
     const r = await conn.request({ t: "list" });
     // A chat's engine belongs to its chat, not to the session list (SPEC §22.2).
     app.sessions = new Map((r.sessions as Session[]).filter((s) => !s.chat).map((s) => [s.id, s]));
-    const ib = await conn.request({ t: "inbox", unread_only: false, limit: 50 });
-    app.inbox = ib.entries;
   } catch { /* reconnecting */ }
   render();
 }
@@ -218,7 +204,6 @@ function setHostLoad(l: HostLoad | null): void {
 
 /// `back`: true goes to the session list; a string is where it goes instead.
 function header(title: string, back: boolean | string, ...extra: Child[]): HTMLElement {
-  const unread = app.inbox.filter((e) => !e.read_ms).length;
   const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
   return h("header", {},
     back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }),
@@ -226,8 +211,6 @@ function header(title: string, back: boolean | string, ...extra: Child[]): HTMLE
     ...extra,
     conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null,
     dot,
-    notesLink(),
-    h("a", { class: "inbox-link", href: "#/inbox", title: tip("inbox") }, "✉", unread ? h("b", {}, String(unread)) : null),
     h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔"),
   );
 }
@@ -245,7 +228,6 @@ function sessionCard(s: Session): HTMLElement {
       detail ? h("div", { class: "detail" }, detail) : null,
     ),
     h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)),
-    notesNoteButton(s, true),
   );
   if (s.status?.status === "blocked" && s.state.t === "running") {
     return h("div", { class: "blocked-wrap" }, card,
@@ -307,18 +289,8 @@ function listView(): HTMLElement {
   // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
   const aside = chatsShown() ? chatsAside() : null;
   const shells = can("full") || [...app.sessions.values()].some((s) => s.loose) ? shellsGroup(app.sessions.values(), sessionCard) : null;
-  return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, notesQuickAdd(), h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body),
+  return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body),
     h("a", { class: "foot-link", href: "#/history", title: tipOf("session.history") }, "Earlier sessions"), aside));
-}
-
-function inboxView(): HTMLElement {
-  const items = app.inbox.map((e) => h("a", { class: `entry ${e.read_ms ? "read" : ""}`, href: `#/s/${encodeURIComponent(e.session)}` },
-    h("span", { class: `kind ${e.kind}` }, e.kind),
-    h("div", { class: "main" }, h("div", { class: "name" }, e.title), h("div", { class: "detail" }, e.body)),
-    h("time", {}, ago(e.at_ms)),
-  ));
-  const mark = h("button", { class: "small", title: tip("inbox.read"), onclick: async () => { await conn.request({ t: "inbox_mark", all: true, read: true }); await refresh(); } }, "Mark all read");
-  return h("div", {}, header("Inbox", true), h("main", { class: "list" }, items.length ? mark : null, ...(items.length ? items : [h("p", { class: "empty" }, "Nothing here.")])));
 }
 
 /// The open session's page. Its textarea, terminal and chat stay in the DOM across renders
@@ -409,10 +381,9 @@ function sessionView(id: string): HTMLElement {
     ...(chat ? [h("div", { class: "keys", title: tip("session.keys") },
       ...([["Esc", { t: "esc" }], ["Tab", { t: "tab" }], ["↑", { t: "up" }], ["↓", { t: "down" }], ["←", { t: "left" }], ["→", { t: "right" }], ["⏎", { t: "enter" }]] as [string, object][]).map(([label, code]) => h("button", { onclick: () => sh.term.key({ code: code as any, mods: 0 }) }, label)),
       h("button", { onclick: () => sh.term.key({ code: { t: "char", c: "c" }, mods: 4 }) }, "^C"),
-      notesNoteButton(s, false),
       h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, app.termView.has(id) ? "Chat" : "Terminal"))]
       : [canType(id) ? sh.term.keybar : null,
-         h("div", { class: "keys term-more" }, notesNoteButton(s, false),
+         h("div", { class: "keys term-more" },
            s.structured ? h("button", { title: tip("session.view"), onclick: () => { if (!app.termView.delete(id)) app.termView.add(id); render(); } }, "Chat") : null,
            h("button", { title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa"),
            canType(id) ? null : h("span", { class: "sub" }, "Watching: this device may look, not type"))]),
@@ -506,8 +477,7 @@ function render(): void {
   }
   const r = route();
   if (r.view !== "session" || r.id !== app.viewing) subscribe(r.view === "session" ? r.id! : null);
-  if (notesNeedsLoad()) void notesLoad();
-  const view = withTabs(r.view, location.hash === "#/notes" ? notesView() : r.view === "session" ? sessionView(r.id!) : r.view === "inbox" ? inboxView() : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
+  const view = withTabs(r.view, r.view === "session" ? sessionView(r.id!) : views.has(r.view) ? views.get(r.view)!(r.id ?? "") : listView());
   if (conn.state !== "open") view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
   if (root.firstChild !== view || root.childNodes.length !== 1) root.replaceChildren(view);
   // The number of agents waiting on you, in the tab's title and on an installed app's icon.
@@ -539,9 +509,7 @@ function subscribe(id: string | null): void {
 async function forget(): Promise<void> {
   store.remove("ptyro.token");
   store.remove("ptyro.tour");
-  store.remove("ptyro.padq");
   await idbSet("token", null).catch(() => {});
-  await idbSet("padq", null).catch(() => {});
   // This device's push subscription goes too: nothing should be sent to a device that forgot.
   try {
     const reg = await Promise.race([navigator.serviceWorker.ready, new Promise<undefined>((ok) => setTimeout(() => ok(undefined), 1500))]);
@@ -610,7 +578,6 @@ conn.listeners.add((msg) => {
     }
     void refresh();
     void loadAll();
-    notesConnected();
     setupConnected();
     conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => {});
     return;
@@ -654,15 +621,10 @@ conn.listeners.add((msg) => {
       app.screens.delete(e.id);
       app.drafts.delete(e.id);
       render();
-    } else if (e.t === "inbox_added") {
-      app.inbox.unshift(e.entry);
-      render();
     } else if (e.t === "bell") {
       if (shell && shell.id === e.session) shell.term.bell();
     } else if (e.t === "clipboard") {
       if (shell && shell.id === e.session) shell.term.fromProgram(e.text);
-    } else if (e.t === "scratch_changed") {
-      notesEvent(e);
     } else if (e.t === "setup_progress") {
       setupEvent(e);
     }
@@ -685,14 +647,14 @@ ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };
 
-// Keys, for a desktop: n new task, m new chat, / find, C-g find in every chat, g then s c p r e i m go to a tab, ? this list.
+// Keys, for a desktop: n new task, m new chat, / find, C-g find in every chat, g then s c p m go to a tab, ? this list.
 let goKey = 0;
 document.addEventListener("keydown", (e) => {
   const t = e.target as HTMLElement;
   // C-g: find across every chat (not in a terminal, whose program has the key).
   if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) { e.preventDefault(); findAllChats(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token()) return;
-  const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", m: "#/more", i: "#/inbox" };
+  const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", m: "#/more" };
   if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) { goKey = 0; location.hash = tabs[e.key]; e.preventDefault(); return; }
   goKey = 0;
   if (e.key === "g") goKey = Date.now();
@@ -712,13 +674,11 @@ document.addEventListener("keydown", (e) => {
     if (r) { e.preventDefault(); if (!r.value) { r.value = "/"; r.dispatchEvent(new Event("input")); } r.focus(); }
   }
   else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
-  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g i", "Inbox"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
-window.addEventListener("hashchange", () => { takePairCode(); notesShown(); render(); });
+window.addEventListener("hashchange", () => { takePairCode(); render(); });
 takePairCode();
-initNotes({ request: (r) => conn.request(r), connected: () => conn.state === "open", toast, render, header, tip });
-notesStart();
 if ("serviceWorker" in navigator) void navigator.serviceWorker.register("/sw.js");
 render();
 conn.connect();

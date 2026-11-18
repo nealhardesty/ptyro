@@ -58,6 +58,11 @@ pub const RETIRED: &[Retired] = &[
         removed: "2026-11-17",
         why: "verified-done (a check an agent's turn had to pass) was removed",
     },
+    Retired {
+        key: "scratchpad",
+        removed: "2026-11-17",
+        why: "the scratchpad was removed; your notes file is yours and stays where it is",
+    },
 ];
 
 /// A key a test retires, in this crate's tests and, in a debug build, when
@@ -253,6 +258,21 @@ mod tests {
         let repo = "[verify]\ncheck = \"test\"\nmax_bounces = 3\nauto = true\n";
         assert!(!crate::project::ProjectConfig::parse(repo).unwrap().contains_key("verify"));
         assert_eq!(found(repo)[0].key, "verify");
+    }
+
+    /// The scratchpad's settings (2026-11-17) load and are reported; a notification list that
+    /// still names the inbox's channel loads too, and an editor of `[editors]` is still read.
+    #[test]
+    fn the_scratchpad_keys_are_retired_and_the_inbox_channel_is_ignored() {
+        let old = "[scratchpad]\npath = \"~/Sync/pad.md\"\nmode = \"popup\"\neditor = \"hx\"\nkeep = 30\ntick_on_finish = true\n\n[editors]\ndefault = \"zed\"\n\n[notifications]\nchannels = [\"inbox\", \"osc\"]\n";
+        let c = crate::config::Config::parse(old).expect("an old config loads");
+        assert!(c.editors.contains_key("default"), "[editors] is still read");
+        assert!(c.notifications.channels.contains(&"osc".to_owned()));
+        assert_eq!(found(old).into_iter().map(|f| f.key).collect::<Vec<_>>(), ["scratchpad"]);
+        assert!(find("scratchpad.tick_on_finish").is_some());
+        let (out, _) = strip(old).unwrap();
+        assert!(!out.contains("pad.md") && out.contains("default = \"zed\""), "{out}");
+        assert!(!crate::config::Config::default().notifications.channels.contains(&"inbox".into()));
     }
 
     #[test]

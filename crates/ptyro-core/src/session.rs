@@ -201,10 +201,6 @@ pub struct SessionInfo {
     /// Its worktree's (or directory's) quick terminal (UX1.25): one shell, reused, and quiet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
-    /// The scratchpad's editor (NOTE1.1): one, in a pane or drawer of its own, kept out of the
-    /// sidebar.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub pad: bool,
     /// It belongs to its workspace's SHELLS, not to a worktree (SPEC §23.2): never placed under
     /// one, whatever its directory.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -480,7 +476,7 @@ pub struct SpawnSpec {
     pub prompt: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
-    /// The daemon's own starts (`scratchpad`): a `name` taken in the project it lands in
+    /// The daemon's own starts (the quick terminal): a `name` taken in the project it lands in
     /// becomes `name-2`, … instead of being refused. Never from a client.
     #[serde(skip)]
     pub name_or_next: bool,
@@ -501,9 +497,6 @@ pub struct SpawnSpec {
     /// Make it the quick terminal of where it starts (UX1.25; `QuickShell` reuses it).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
-    /// Make it the scratchpad's editor (NOTE1.1; `ScratchPane` reuses it).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub pad: bool,
     /// Quick-new (UX3.2): start what was last started in its workspace (`agent`, `argv` and
     /// `profile` come from that), else the default agent.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -617,9 +610,9 @@ impl SessionInfo {
         }
     }
 
-    /// A session of its own: not a worktree's quick terminal, not the scratchpad's editor.
+    /// A session of its own: not a worktree's quick terminal.
     pub fn is_real(&self) -> bool {
-        !self.quick && !self.pad
+        !self.quick
     }
 
     /// A real session whose process is alive (not exited, failed or hibernated).

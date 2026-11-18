@@ -204,7 +204,7 @@ fn bad_values_are_refused_with_the_reason() {
     assert!(err("ports.range", "100-200").contains("1024"));
     assert!(err("ui.nonsense", "1").contains("no such setting"));
     assert!(err("ui.theme", "").contains("pick one"));
-    assert!(err("scratchpad.keep", "0").contains("outside 1 to 3650"));
+    assert!(err("worktrees.stale_days", "0").contains("outside 1 to 3650"));
     assert!(err("agents.claude.env", "x").contains("edit it in the file"));
     // A project setting is not a user setting, and the other way round.
     assert!(err("project.base", "main").contains("use `-p .`"));
@@ -361,8 +361,8 @@ fn entries_say_where_each_value_comes_from() {
     assert_eq!(get("agents.pair.dangerous").origin, Origin::Default);
     assert_eq!(get("agents.pair.hibernate_after").shown(), "(never)");
     assert_eq!(
-        get("scratchpad.editor").default_shown(),
-        "(your default editor, $VISUAL, $EDITOR, then nvim, vim, nano or vi)"
+        get("editors.default").default_shown(),
+        "(the first of nvim, vim, hx, code, zed, cursor that is installed)"
     );
     // The project's two files: the local one wins.
     let shared = "[project]\nbase = \"origin/main\"\n[worktree]\ncopy = [\".env\"]\n";

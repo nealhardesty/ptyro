@@ -401,7 +401,7 @@ impl Daemon {
 
     /// Make a session loose in its home workspace with the next free number (SPEC §23.3): it
     /// lost its place (its project let go, its worktree gone), or was set loose by hand.
-    /// Quick terminals, the scratchpad's editor and chats' engines never are. `false`: it isn't.
+    /// Quick terminals and chats' engines never are. `false`: it isn't.
     pub(crate) fn shelve(&self, s: &Arc<Session>, pinned: bool) -> bool {
         let ws = {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -409,7 +409,7 @@ impl Daemon {
                 f.pinned |= pinned;
                 return true;
             }
-            if m.place.quick || m.place.pad || m.place.chat.is_some() {
+            if m.place.quick || m.place.chat.is_some() {
                 return false;
             }
             m.place.workspace.clone().unwrap_or_else(|| MAIN_WORKSPACE.into())
@@ -771,16 +771,12 @@ impl Daemon {
         let s = self.resolve(addr)?;
         let (name, is_loose, special) = {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (
-                m.name.clone(),
-                m.shelf.is_some(),
-                m.place.quick || m.place.pad || m.place.chat.is_some(),
-            )
+            (m.name.clone(), m.shelf.is_some(), m.place.quick || m.place.chat.is_some())
         };
         if loose {
             if special {
                 return Err(Error::invalid(format!(
-                    "{name} is a quick terminal or the scratchpad's editor: it stays where it is"
+                    "{name} is a quick terminal: it stays where it is"
                 )));
             }
             self.shelve(&s, true);

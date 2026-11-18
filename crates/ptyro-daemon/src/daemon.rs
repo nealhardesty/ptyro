@@ -86,8 +86,6 @@ pub struct Daemon {
     /// The agent each worktree last started, by worktree id (UX3.7, `again.rs`).
     pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     pub(crate) last_notified: Mutex<HashMap<SessionId, u64>>,
-    /// The inbox when the store is unavailable.
-    pub(crate) inbox_mem: Mutex<Vec<ptyro_core::status::InboxEntry>>,
     /// Approve/deny link nonces already used → their expiry.
     pub(crate) used_links: Mutex<HashMap<String, u64>>,
     /// Usage per (profile, agent).
@@ -131,8 +129,6 @@ pub struct Daemon {
     pub(crate) serve_child: crate::serve_child::ServeChild,
     /// Inside WSL, the `wsl.exe` that keeps the distro running (SPEC §20.10).
     pub(crate) wsl_hold: crate::wsl_hold::Holder,
-    /// The scratchpad's revisions and write lock (NOTE1).
-    pub(crate) pad_state: crate::scratchpad::PadState,
     /// Launches in flight: sessions relaunching, and the (project, name) of sessions being
     /// started (`launch.rs` `Claim`).
     #[allow(clippy::type_complexity)]
@@ -224,7 +220,6 @@ impl Daemon {
             mirrored: broadcast::channel(1024).0,
             upstream_ids: Mutex::new(HashMap::new()),
             last_notified: Mutex::new(HashMap::new()),
-            inbox_mem: Mutex::new(Vec::new()),
             used_links: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             codex_usage: Mutex::new(std::collections::HashSet::new()),
@@ -256,7 +251,6 @@ impl Daemon {
             held: Mutex::new(HashMap::new()),
             serve_child: crate::serve_child::ServeChild::default(),
             wsl_hold: crate::wsl_hold::Holder::default(),
-            pad_state: crate::scratchpad::PadState::default(),
             launching: Mutex::new(Default::default()),
             kv_gens: Arc::new(Mutex::new(HashMap::new())),
             kv_writer: Arc::new(tokio::sync::Mutex::new(())),
@@ -435,7 +429,6 @@ impl Daemon {
                     agent: r.agent.clone(),
                     script: r.script.clone(),
                     quick: false,
-                    pad: false,
                     chat: None,
                     // Not in the store: a login session restarted after the daemon itself restarted is
                     // recorded as usual (it has ended by then).
@@ -794,12 +787,10 @@ impl Daemon {
         let target =
             if asked_loose { None } else { self.target(spec.worktree.as_deref(), &spec.cwd)? };
         // One started outside every project joins SHELLS too (SPEC §23.3), unless it is a
-        // quick terminal, the scratchpad's editor, a client's tool, or ptyro's own work in its
-        // data directory.
+        // quick terminal, a client's tool, or ptyro's own work in its data directory.
         let loose = asked_loose
             || (target.is_none()
                 && !spec.quick
-                && !spec.pad
                 && !spec.tool
                 && !spec.cwd.starts_with(&self.paths.data));
         let id = SessionId::new();
@@ -886,7 +877,7 @@ impl Daemon {
         let wording = spec.title.clone().or_else(|| spec.prompt.clone());
         let project = target.as_ref().map(|(_, p)| p.id.as_str());
         let name = match spec.name {
-            // Composed by ptyro itself (the scratchpad's editor), so derived: made a
+            // Composed by ptyro itself (the quick terminal), so derived: made a
             // valid name of at most 64, then a free one.
             Some(n) if spec.name_or_next => {
                 let n = names::derive(&n)
@@ -916,7 +907,6 @@ impl Daemon {
             agent: agent.clone(),
             script: None,
             quick: spec.quick && agent.is_none(),
-            pad: spec.pad && agent.is_none(),
             chat: None,
             unrecorded: spec.unrecorded,
         };
@@ -1523,18 +1513,6 @@ impl Daemon {
             Request::QuickShell { worktree, cwd, create, env, size, workspace } => {
                 self.quick_shell(worktree, cwd, create, env, size, workspace).await
             }
-            Request::ScratchGet => self.scratch_get(),
-            Request::ScratchPut { base, text } => self.scratch_put(&base, &text, None),
-            Request::ScratchAdd { text, section, note, stamp, session, cwd } => {
-                self.scratch_add(&text, section, note, stamp, session.as_deref(), cwd.as_deref())
-            }
-            Request::ScratchTodo { all } => self.scratch_todo(all),
-            Request::ScratchMark { sel, mark } => self.scratch_mark(&sel, &mark),
-            Request::ScratchHistory => self.scratch_history(),
-            Request::ScratchRestore { rev } => self.scratch_restore(&rev),
-            Request::ScratchPane { create, env, size, workspace } => {
-                self.scratch_pane(create, env, size, workspace).await
-            }
             Request::Retitle { addr, title, worktree } => self.retitle(&addr, title, worktree),
             Request::Summarize { addr } => self.summarize_now(&addr).await,
             Request::ChatGet { addr } => {
@@ -1556,49 +1534,6 @@ impl Daemon {
                 let d = ptyro_agents::Decision::parse(&decision)
                     .ok_or_else(|| Error::invalid("decision must be allow, always or deny"))?;
                 self.answer(&addr, d, expect).await
-            }
-            Request::Inbox { workspace, unread_only, limit } => {
-                let limit = limit.unwrap_or(100) as usize;
-                let entries = match &self.store {
-                    Some(st) => st
-                        .inbox(workspace, unread_only, limit)
-                        .await
-                        .map_err(|e| Error::internal(e.to_string()))?,
-                    None => {
-                        let mem = self.inbox_mem.locked();
-                        mem.iter()
-                            .rev()
-                            .filter(|e| {
-                                workspace.as_ref().is_none_or(|w| e.workspace.as_ref() == Some(w))
-                            })
-                            .filter(|e| !unread_only || e.read_ms.is_none())
-                            .take(limit)
-                            .cloned()
-                            .collect()
-                    }
-                };
-                Ok(Reply::Inbox { entries })
-            }
-            Request::InboxMark { ids, all, session, read } => {
-                let session = session.map(|a| self.resolve(&a).map(|s| s.id.full())).transpose()?;
-                match &self.store {
-                    Some(st) => {
-                        st.inbox_mark(ids, session, all, read)
-                            .await
-                            .map_err(|e| Error::internal(e.to_string()))?;
-                    }
-                    None => {
-                        let at = read.then(now_ms);
-                        for e in self.inbox_mem.locked().iter_mut() {
-                            if ids.contains(&e.id)
-                                || (all && session.as_ref().is_none_or(|s| *s == e.session))
-                            {
-                                e.read_ms = at;
-                            }
-                        }
-                    }
-                }
-                Ok(Reply::Done)
             }
             Request::Mute { target, minutes, unmute } => self.mute(&target, minutes, unmute).await,
             Request::Usage => Ok(self.usage_list()),

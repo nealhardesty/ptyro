@@ -469,11 +469,11 @@ impl Default for Callback {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Notifications {
-    /// `inbox` (always), `bell`, `osc` (OSC 9/777 to your terminal), `desktop`, `sinks`.
+    /// `bell`, `osc` (OSC 9/777 to your terminal), `desktop`, `sinks`.
     pub channels: Vec<String>,
     /// Which attention kinds notify: blocked, errored, done, idle, exited, notification.
     pub on: Vec<String>,
-    /// `"22:00-07:00"`: only the inbox (and breakthrough kinds) in this window.
+    /// `"22:00-07:00"`: nothing notifies in this window (breakthrough kinds still do).
     pub quiet_hours: Option<String>,
     /// At most one notification per session this often.
     pub coalesce: String,
@@ -487,7 +487,7 @@ pub struct Notifications {
 impl Default for Notifications {
     fn default() -> Self {
         Self {
-            channels: ["inbox", "osc", "bell"].map(String::from).into(),
+            channels: ["osc", "bell"].map(String::from).into(),
             on: ["blocked", "errored", "done", "idle"].map(String::from).into(),
             quiet_hours: None,
             coalesce: "10s".into(),
@@ -592,7 +592,6 @@ pub struct Config {
     pub clipboard: Clipboard,
     pub shell: Shell,
     pub summaries: Summaries,
-    pub scratchpad: Scratchpad,
     pub chat: Chat,
     pub client: Client,
     pub updates: Updates,
@@ -881,31 +880,6 @@ impl Chat {
     }
 }
 
-/// The scratchpad (NOTE1, SPEC §13.6): one notes file, opened in your editor in a pane.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Scratchpad {
-    /// Where the file lives (default: `scratchpad.md` in ptyro's data directory). Point it into a
-    /// synced folder or a repository to share it between machines.
-    pub path: Option<String>,
-    /// How its key shows it: `drawer` (below the pane, like the quick terminal), `popup` (a
-    /// window over everything) or `pane` (a pane of its own beside the others).
-    pub mode: String,
-    /// The editor, as a command line (`"nvim"`, `"hx"`, `"code -w"`); default: `[editors]`
-    /// default, else `$VISUAL`, `$EDITOR`, then nvim, vim, nano or vi, whichever is installed.
-    pub editor: Option<String>,
-    /// How many days of saved copies to keep (the newest 20 always stay).
-    pub keep: u64,
-    /// Tick an item once the worktree started from it is merged or cleaned up.
-    pub tick_on_finish: bool,
-}
-
-impl Default for Scratchpad {
-    fn default() -> Self {
-        Self { path: None, mode: "drawer".into(), editor: None, keep: 30, tick_on_finish: true }
-    }
-}
-
 /// Turn `[remote] serve` on or off in the config file (`ptyro web`, `ptyro daemon start --serve`,
 /// and the daemon's own `Request::Web`; WEB1.9), keeping the rest of the file as it is. When
 /// turning it on, `access` (`localhost`, `tailscale` or `open`) says who can reach it; left out,
@@ -1043,31 +1017,6 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), crate::Error>
         let _ = std::fs::remove_file(&tmp);
     }
     r
-}
-
-impl Config {
-    /// Where the scratchpad file is: `[scratchpad] path`, else `scratchpad.md` in `data`.
-    pub fn scratchpad_path(&self, data: &std::path::Path) -> PathBuf {
-        match &self.scratchpad.path {
-            Some(p) if !p.trim().is_empty() => expand_home(p.trim()),
-            _ => data.join("scratchpad.md"),
-        }
-    }
-}
-
-impl Scratchpad {
-    fn validate(&self) -> Result<(), String> {
-        if !["drawer", "popup", "pane"].contains(&self.mode.as_str()) {
-            return Err(format!("scratchpad.mode: {:?} (drawer, popup or pane)", self.mode));
-        }
-        if self.keep == 0 || self.keep > 3650 {
-            return Err("scratchpad.keep: 1 to 3650 days".into());
-        }
-        if self.editor.as_deref().is_some_and(|e| e.split_whitespace().next().is_none()) {
-            return Err("scratchpad.editor: must not be empty".into());
-        }
-        Ok(())
-    }
 }
 
 /// A one-line summary of what a session is doing, from a small, cheap model (UX1.3, SPEC
@@ -1737,7 +1686,6 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
-        self.scratchpad.validate()?;
         self.client.validate()?;
         self.chat.validate()?;
         self.updates.validate()?;
@@ -1795,9 +1743,11 @@ impl Config {
             parse_quiet_hours(q).map_err(|e| format!("notifications.quiet_hours: {e}"))?;
         }
         for c in &self.notifications.channels {
+            // `inbox` went with the inbox (2026-11-17): a list that still names it is read as
+            // if it didn't.
             if !["inbox", "bell", "osc", "desktop", "sinks"].contains(&c.as_str()) {
                 return Err(format!(
-                    "notifications.channels: unknown channel {c:?} (inbox, bell, osc, desktop, sinks)"
+                    "notifications.channels: unknown channel {c:?} (bell, osc, desktop, sinks)"
                 ));
             }
         }
@@ -2065,7 +2015,7 @@ fn terminal_app(name: &str, here: &Installed) -> Option<Vec<String>> {
                     _ => "Alacritty",
                 };
                 let p = here.app(app)?.join("Contents/MacOS").join(name);
-                crate::scratchpad::is_exec(&p).then(|| p.to_string_lossy().into_owned())?
+                crate::os::is_executable(&p).then(|| p.to_string_lossy().into_owned())?
             };
             let mut v = vec![prog];
             v.extend(flags.iter().map(|&f| f.to_owned()));
@@ -2124,7 +2074,7 @@ fn on_path(path: &std::ffi::OsStr, prog: &str) -> bool {
     }
     let names = crate::os::program_names(prog);
     let found = std::env::split_paths(path)
-        .any(|d| names.iter().any(|n| crate::scratchpad::is_exec(&d.join(n))));
+        .any(|d| names.iter().any(|n| crate::os::is_executable(&d.join(n))));
     let mut seen = SEEN.locked();
     match seen.as_mut() {
         Some((p, at, map)) if p == path && at.elapsed() < FOR => {
@@ -2159,7 +2109,7 @@ impl Installed {
 
     fn program(&self, prog: &str) -> bool {
         if prog.contains('/') {
-            return crate::scratchpad::is_exec(Path::new(prog));
+            return crate::os::is_executable(Path::new(prog));
         }
         on_path(&self.path, prog)
     }
@@ -2193,7 +2143,7 @@ impl Installed {
         }
         places
             .into_iter()
-            .find(|p| crate::scratchpad::is_exec(p))
+            .find(|p| crate::os::is_executable(p))
             .map(|p| p.to_string_lossy().into_owned())
     }
 }
@@ -2251,30 +2201,6 @@ impl Config {
             }
             _ => None,
         }
-    }
-
-    /// The scratchpad's editor as argv (`{path}` may stand for the file): `[scratchpad] editor`,
-    /// else the default editor of `[editors]` (only a terminal one when `terminal`), else
-    /// `$VISUAL` / `$EDITOR`, else the first of nvim, vim, nano and vi that is installed.
-    pub fn scratchpad_editor(&self, terminal: bool) -> Option<Vec<String>> {
-        let words = |l: &str| l.split_whitespace().map(str::to_owned).collect::<Vec<_>>();
-        if let Some(e) = &self.scratchpad.editor {
-            return Some(words(e));
-        }
-        if let Some(EditorEntry::Name(n)) = self.editors.get("default")
-            && let Some(def) = self.editor(n)
-            && (def.inside || !terminal)
-        {
-            return Some(def.command);
-        }
-        for var in ["VISUAL", "EDITOR"] {
-            if let Ok(v) = std::env::var(var)
-                && !v.trim().is_empty()
-            {
-                return Some(words(&v));
-            }
-        }
-        crate::scratchpad::fallback_editor().map(|e| vec![e])
     }
 
     /// `editors.default`, else `$VISUAL`/`$EDITOR` if it names an editor, else the first
@@ -2734,7 +2660,7 @@ hibernate_after = "2h"
 [agents.aider]
 command = ["aider", "--no-auto-commits"]
 [notifications]
-channels = ["inbox", "desktop", "sinks"]
+channels = ["desktop", "sinks"]
 quiet_hours = "22:00-07:00"
 sinks = [{ type = "ntfy", url = "https://ntfy.sh/x", on = ["blocked"] }, { type = "command", command = ["notify-me"] }]
 callback = { listen = "127.0.0.1:7591" }
@@ -3112,7 +3038,6 @@ mod hardening {
         assert!(parse_duration("99999999999999d").unwrap_err().contains("too long"));
         assert!(parse_duration("18446744073709551615s").is_err());
         for (bad, key) in [
-            ("[scratchpad]\nkeep = 300000000000\n", "scratchpad.keep"),
             ("[ui]\nsidebar_width = 60000\n", "ui.sidebar_width"),
             ("[discover]\ndepth = 200\n", "discover.depth"),
             ("[summaries]\ncommand = []\n", "summaries.command"),

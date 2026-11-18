@@ -228,18 +228,8 @@ pub fn local_time_hm_at(secs: i64) -> Option<(u8, u8)> {
     local_at(secs).map(|t| (t.hour, t.minute))
 }
 
-/// Local date and time as `2026-10-24 14:02` (honouring `TZ`), for the scratchpad's stamps.
-pub fn local_datetime() -> Option<String> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    let t = local_at(i64::try_from(now).ok()?)?;
-    Some(format!("{:04}-{:02}-{:02} {:02}:{:02}", t.year, t.month, t.day, t.hour, t.minute))
-}
-
 /// A moment in local time.
 struct Local {
-    year: i32,
-    month: u8,
-    day: u8,
     hour: u8,
     minute: u8,
 }
@@ -252,13 +242,7 @@ fn local_at(secs: i64) -> Option<Local> {
     // SAFETY: `tm` is a zeroed out-parameter owned by this frame; localtime_r is reentrant.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
-    ok.then_some(Local {
-        year: tm.tm_year + 1900,
-        month: (tm.tm_mon + 1) as u8,
-        day: tm.tm_mday as u8,
-        hour: tm.tm_hour as u8,
-        minute: tm.tm_min as u8,
-    })
+    ok.then_some(Local { hour: tm.tm_hour as u8, minute: tm.tm_min as u8 })
 }
 
 /// The time crate's local offset, which is sound on Windows (no environment races there).
@@ -266,13 +250,7 @@ fn local_at(secs: i64) -> Option<Local> {
 fn local_at(secs: i64) -> Option<Local> {
     let at = time::OffsetDateTime::from_unix_timestamp(secs).ok()?;
     let t = at.to_offset(time::UtcOffset::local_offset_at(at).ok()?);
-    Some(Local {
-        year: t.year(),
-        month: t.month().into(),
-        day: t.day(),
-        hour: t.hour(),
-        minute: t.minute(),
-    })
+    Some(Local { hour: t.hour(), minute: t.minute() })
 }
 
 /// How many processes are in process group `pgid`, its leader (`pid == pgid`) aside. Zombies

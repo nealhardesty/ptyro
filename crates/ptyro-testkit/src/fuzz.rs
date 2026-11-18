@@ -289,7 +289,7 @@ pub fn handoff(data: &[u8]) {
 
 /// Configuration values and files, and the small text formats around them.
 pub fn parsers(data: &[u8]) {
-    use ptyro_core::{config, names, project::ProjectConfig, scratchpad};
+    use ptyro_core::{config, names, project::ProjectConfig};
     let text = String::from_utf8_lossy(data);
     let _ = config::Config::parse(&text);
     let _ = ProjectConfig::parse(&text);
@@ -304,19 +304,6 @@ pub fn parsers(data: &[u8]) {
     let _ = names::problem(&text);
     let _ = names::tidy(&text);
     let _ = names::from_text(&text);
-    let (a, rest) = text.split_once('\u{1}').unwrap_or((&text, ""));
-    let (b, c) = rest.split_once('\u{1}').unwrap_or((rest, ""));
-    let merged = scratchpad::merge3(a, b, c);
-    let _ = scratchpad::rev(&merged.text);
-    let _ = scratchpad::insert_under(a, b, c);
-    let line = u32::from(data.first().copied().unwrap_or(1) % 12);
-    for item in scratchpad::items(a) {
-        let _ = scratchpad::body(a, &item);
-    }
-    let _ = scratchpad::select(a, b);
-    let _ = scratchpad::tick(a, line, Some(1));
-    let _ = scratchpad::untick(a, line);
-    let _ = scratchpad::tag_worktree(a, line, b);
 }
 
 /// Seeds for the mutation runner: real escape sequences, protocol frames, recordings.
@@ -402,15 +389,9 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
             }
         }
         "parsers" => {
-            for s in [
-                "[daemon]\nlog = \"info\"\n",
-                "10s",
-                "5 GiB",
-                "22:00-07:00",
-                "#ff8800",
-                "C-q c",
-                "- [ ] a\n- [x] b\n\u{1}- [ ] a\n\u{1}- [ ] c\n",
-            ] {
+            for s in
+                ["[daemon]\nlog = \"info\"\n", "10s", "5 GiB", "22:00-07:00", "#ff8800", "C-q c"]
+            {
                 v.push(s.as_bytes().to_vec());
             }
         }

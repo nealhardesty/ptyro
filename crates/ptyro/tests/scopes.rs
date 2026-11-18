@@ -55,7 +55,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"status"}), READ, true),
         s(json!({"t":"resolve","addr":a}), READ, true),
         s(json!({"t":"status_explain","addr":a}), READ, true),
-        s(json!({"t":"inbox","workspace":null,"unread_only":false,"limit":5}), READ, true),
         s(json!({"t":"events","session":null,"limit":5}), READ, true),
         s(json!({"t":"usage"}), READ, true),
         s(json!({"t":"machine_list"}), READ, true),
@@ -113,16 +112,8 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"push_unsubscribe","endpoint":"https://push.invalid/x"}), READ, true),
         s(json!({"t":"push_test"}), READ, false),
         s(json!({"t":"chat_get","addr":a}), READ, true),
-        s(json!({"t":"scratch_get"}), READ, true),
         s(json!({"t":"last_launch","workspace":"main"}), READ, true),
-        s(json!({"t":"scratch_todo","all":false}), READ, true),
-        s(json!({"t":"scratch_history"}), READ, true),
-        // Finding the shell or the pad's pane reads; starting one is a shell.
-        s(
-            json!({"t":"scratch_pane","create":false,"env":{},"size":null,"workspace":null}),
-            READ,
-            true,
-        ),
+        // Finding the shell reads; starting one is a shell.
         s(
             json!({"t":"quick_shell","worktree":null,"cwd":"/nonexistent-scopes-test","create":false,"env":{},"size":null,"workspace":null}),
             READ,
@@ -134,11 +125,6 @@ fn table() -> Vec<Sample> {
         // "Always" writes a standing permission into the agent's settings: control.
         s(json!({"t":"answer","addr":a,"decision":"always","expect":null}), CONTROL, true),
         s(json!({"t":"clear_attention","addr":a}), APPROVE, true),
-        s(
-            json!({"t":"inbox_mark","ids":[999999],"all":false,"session":null,"read":true}),
-            APPROVE,
-            true,
-        ),
         s(json!({"t":"mute","target":a,"minutes":1,"unmute":true}), APPROVE, false),
         // ── control ──
         s(
@@ -157,14 +143,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"retitle","addr":a,"title":"x","worktree":false}), CONTROL, true),
         s(json!({"t":"summarize","addr":a}), CONTROL, true),
         s(json!({"t":"worktree_open","addr":a,"editor":null}), CONTROL, true),
-        s(json!({"t":"scratch_put","base":"","text":"x"}), CONTROL, false),
-        s(
-            json!({"t":"scratch_add","text":"x","section":null,"note":false,"stamp":false,"session":null,"cwd":null}),
-            CONTROL,
-            false,
-        ),
-        s(json!({"t":"scratch_mark","sel":"nosuch","mark":"open"}), CONTROL, true),
-        s(json!({"t":"scratch_restore","rev":a}), CONTROL, true),
         s(json!({"t":"adopt","addr":a}), CONTROL, true),
         // A configured agent (its command comes from the user's config) is control…
         s(json!({"t":"spawn","spec":spawn_spec(json!({"agent":"claude"}))}), CONTROL, false),
@@ -191,11 +169,6 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"shell_scratch_remove","path":"/nonexistent-scopes-test"}), FULL, false),
         s(
             json!({"t":"quick_shell","worktree":null,"cwd":"/nonexistent-scopes-test","create":true,"env":{},"size":null,"workspace":null}),
-            FULL,
-            false,
-        ),
-        s(
-            json!({"t":"scratch_pane","create":true,"env":{},"size":null,"workspace":null}),
             FULL,
             false,
         ),

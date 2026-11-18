@@ -1,6 +1,7 @@
-//! Notifications (SPEC §9.5, §9.6, M4.6, M4.22): every attention goes to the inbox; then, unless
-//! muted, quiet, coalesced or kept to a badge by its workspace, to the TUI (OSC 9/777 and the
-//! bell), the desktop, and external sinks (ntfy, Pushover, Slack, Discord, Telegram, a command).
+//! Notifications (SPEC §9.5, §9.6, M4.6, M4.22): every attention is announced as an alert (a
+//! linked machine delivers it too); then, unless muted, quiet, coalesced or kept to a badge by its
+//! workspace, it goes to the TUI (OSC 9/777 and the bell), the desktop, and external sinks (ntfy,
+//! Pushover, Slack, Discord, Telegram, a command).
 //!
 //! Approve/deny links in sinks point at a small callback listener (off unless configured). Links
 //! are signed (HMAC-SHA256 with a daemon key), single-use and expiring. A GET only shows a page
@@ -15,7 +16,7 @@ use std::time::Duration;
 use ptyro_agents::Decision;
 use ptyro_core::config::{Secret, SinkDef, in_quiet_hours, parse_duration, parse_quiet_hours};
 use ptyro_core::model::DEFAULT_PROFILE;
-use ptyro_core::status::{AgentStatus, AttentionKind, InboxEntry};
+use ptyro_core::status::{AgentStatus, Alert, AttentionKind};
 use ptyro_core::{Error, now_ms};
 use ptyro_protocol::{DomainEvent, Reply};
 use sha2::{Digest, Sha256};
@@ -43,7 +44,7 @@ pub struct Note {
     pub deny_url: Option<String>,
 }
 
-/// What a chat's alert says in the inbox: what happened, never its text.
+/// What a chat's alert says to a linked machine: what happened, never its text.
 fn chat_happened(kind: AttentionKind) -> &'static str {
     match kind {
         AttentionKind::Blocked => "the chat asks for permission",
@@ -54,7 +55,7 @@ fn chat_happened(kind: AttentionKind) -> &'static str {
 }
 
 impl Daemon {
-    /// The inbox entry, then every channel that applies.
+    /// The alert, then every channel that applies.
     pub(crate) async fn notify(
         self: &Arc<Self>,
         s: &Arc<Session>,
@@ -63,9 +64,9 @@ impl Daemon {
     ) {
         let info = self.info(s);
         let config = self.config();
-        // A chat's words stay in chat.db (SPEC §22.4): its inbox entry says what happened, not
-        // what was asked or said; an incognito chat's (§22.9) has no entry, and the channels
-        // hear no more than that either.
+        // A chat's words stay in chat.db (SPEC §22.4): its alert says what happened, not what
+        // was asked or said; an incognito chat's (§22.9) has none, and the channels hear no more
+        // than that either.
         let chat = s.meta.locked().place.chat.clone();
         let incognito = chat.as_deref().is_some_and(|c| self.incognito_of(c).is_some());
         let (body, stored) = match &chat {
@@ -84,31 +85,20 @@ impl Daemon {
             title.push_str(&format!(" ({p})"));
         }
         if let Some(stored) = stored {
-            let mut entry = InboxEntry {
+            let alert = Alert {
                 machine: None,
-                id: 0,
                 session: info.id.full(),
                 session_name: info.name.clone(),
                 at_ms: now_ms(),
                 kind,
                 title: title.clone(),
                 body: stored,
-                read_ms: None,
                 workspace: info.workspace.clone(),
                 profile: Some(info.profile.clone()),
             };
-            entry.id = match &self.store {
-                Some(st) => st.inbox_add(entry.clone()).await.unwrap_or(0),
-                None => {
-                    let mut mem = self.inbox_mem.locked();
-                    let id = mem.len() as i64 + 1;
-                    mem.push(InboxEntry { id, ..entry.clone() });
-                    id
-                }
-            };
-            let _ = self.events.send(DomainEvent::InboxAdded { entry });
+            let _ = self.events.send(DomainEvent::Alert { alert });
         }
-        // Beyond the inbox: kind, mute, workspace mode, quiet hours, coalescing.
+        // Then the channels: kind, mute, workspace mode, quiet hours, coalescing.
         let n = &config.notifications;
         let breakthrough = config.attention.breakthrough.iter().any(|k| k == kind.label());
         if !n.on.iter().any(|k| k == kind.label()) {
@@ -191,7 +181,7 @@ impl Daemon {
     pub(crate) async fn deliver(self: &Arc<Self>, note: &Note, report: bool) -> Vec<String> {
         let config = self.config();
         let ch = &config.notifications.channels;
-        let mut results = vec!["inbox: added".to_owned()];
+        let mut results = Vec::new();
         if ch.iter().any(|c| c == "osc" || c == "bell")
             && let Ok(session) = note.session.parse()
         {
@@ -304,7 +294,11 @@ impl Daemon {
             approve_url: None,
             deny_url: None,
         };
-        Ok(Reply::Notified { results: self.deliver(&note, true).await })
+        let mut results = self.deliver(&note, true).await;
+        if results.is_empty() {
+            results.push("nothing was sent: the terminal shows a session's own alerts only, and no other channel is on (turn on desktop, or add a service, under Notifications in the configuration panel)".into());
+        }
+        Ok(Reply::Notified { results })
     }
 
     fn sink_secret(&self, s: &Secret) -> Result<String, String> {

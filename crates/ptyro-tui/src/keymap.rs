@@ -102,23 +102,6 @@ pub const ACTIONS: &[ActionSpec] = &[
         "shell.pane",
         "The quick terminal in a panel of its own, replacing the pane you are in; again goes back",
     ),
-    a(
-        "scratchpad.toggle",
-        "The scratchpad: your notes file in the editor, in a drawer, popup or pane ([scratchpad] mode); again focuses, then hides it",
-    ),
-    a(
-        "scratchpad.add",
-        "Add a line to the scratchpad without opening it, stamped with where you are",
-    ),
-    a(
-        "scratchpad.items",
-        "The scratchpad's open items: search them, tick one, start one as a task",
-    ),
-    a("scratchpad.history", "The scratchpad's saved copies: put one back"),
-    a(
-        "scratchpad.note",
-        "Note this to the scratchpad: the selected session's task, or what you type",
-    ),
     a("session.next", "Show the next session in sidebar order (across projects) here"),
     a("session.prev", "Show the previous session in sidebar order (across projects) here"),
     ActionSpec {
@@ -164,7 +147,6 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("shells.join", "Join this shell into another SHELLS window as a pane (tmux's join-pane)"),
     a("attention.next", "Jump to the session that needs you most (blocked first)"),
-    a("inbox", "The inbox: everything that wanted you, per workspace"),
     a("peek", "Peek at a session's screen and what it wants; reply or answer inline"),
     a("session.resume", "Resume a dormant agent into its conversation"),
     a(
@@ -177,7 +159,10 @@ pub const ACTIONS: &[ActionSpec] = &[
         "session.summarize",
         "Summarize it: what it's doing, in a line, from a small model ([summaries])",
     ),
-    a("session.mute", "Mute this session's notifications for an hour (the inbox still gets them)"),
+    a(
+        "session.mute",
+        "Mute this session's notifications for an hour (its row still shows when it wants you)",
+    ),
     a("session.tab", "Open this session in a new tab of your terminal (tmux, Windows Terminal)"),
     a("session.pane", "Open this session in a new pane beside this one (tmux, Windows Terminal)"),
     a("notify.test", "Send a test notification through every channel and sink"),
@@ -224,7 +209,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("daemon.upgrade", "Switch the daemon to the installed binary, live (sessions keep running)"),
     a(
         "app.backup",
-        "Back up ptyro's own state (config, database, scratchpad) to a private .tar.gz, in a split",
+        "Back up ptyro's own state (config, database, chats) to a private .tar.gz, in a split",
     ),
     a(
         "app.uninstall",
@@ -435,9 +420,12 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("workspace.notify", "How this workspace notifies you: all, badge or mute"),
     a(
         "workspace.mute",
-        "Mute this workspace's notifications for an hour (the inbox still gets them)",
+        "Mute this workspace's notifications for an hour (rows still show what wants you)",
     ),
-    a("project.mute", "Mute this project's notifications for an hour (the inbox still gets them)"),
+    a(
+        "project.mute",
+        "Mute this project's notifications for an hour (rows still show what wants you)",
+    ),
     a("profile.list", "Your profiles: accounts, git identity, SSH key, in a split"),
     a("profile.show", "One profile in full"),
     a("profile.new", "A new profile"),
@@ -536,7 +524,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "Up", "session.prev"),
     (Table::Prefix, "/", "session.find"),
     (Table::Prefix, "a", "attention.next"),
-    (Table::Prefix, "i", "inbox"),
     (Table::Prefix, "p", "peek"),
     (Table::Prefix, "b", "broadcast"),
     (Table::Prefix, "m", "chat.new"),
@@ -559,9 +546,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "u", "toast.act"),
     (Table::Prefix, ".", "row.menu"),
     (Table::Prefix, "!", "shell.new"),
-    (Table::Prefix, ";", "scratchpad.toggle"),
-    (Table::Prefix, "'", "scratchpad.add"),
-    (Table::Prefix, "\"", "scratchpad.items"),
     (Table::Prefix, "C-t", "shell.drawer"),
     (Table::Prefix, "T", "shell.pane"),
     (Table::Prefix, "H", "home"),
@@ -622,7 +606,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, ",", "session.rename"),
     (Table::Nav, "/", "session.find"),
     (Table::Nav, "a", "attention.next"),
-    (Table::Nav, "i", "inbox"),
     (Table::Nav, "p", "peek"),
     (Table::Nav, "e", "session.explain"),
     (Table::Nav, "?", "help"),
@@ -637,8 +620,6 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "C-t", "shell.drawer"),
     (Table::Nav, "c", "shells.new"),
     (Table::Nav, "T", "shell.pane"),
-    (Table::Nav, ";", "scratchpad.toggle"),
-    (Table::Nav, "'", "scratchpad.add"),
     (Table::Nav, "H", "home"),
     (Table::Nav, "M", "health"),
     (Table::Nav, "I", "app.about"),

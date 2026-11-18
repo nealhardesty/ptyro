@@ -51,9 +51,6 @@ pub struct Place {
     /// The quick terminal of its worktree or directory (UX1.25).
     #[serde(default)]
     pub quick: bool,
-    /// The scratchpad's editor (NOTE1.1).
-    #[serde(default)]
-    pub pad: bool,
     /// The chat it is the engine of (SPEC §22.2): hidden from the session tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chat: Option<String>,
@@ -615,7 +612,6 @@ impl Session {
             inner_agent: meta.inner_agent.clone(),
             summary: meta.summary.clone(),
             quick: meta.place.quick,
-            pad: meta.place.pad,
             chat: meta.place.chat.clone(),
             loose: meta.shelf.is_some(),
             slot: meta.shelf.as_ref().map(|f| f.slot),
@@ -789,7 +785,7 @@ impl Session {
     /// Its worktree's or directory's quick terminal (UX1.25).
     pub fn is_quick(&self) -> bool {
         let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        m.place.quick || m.place.pad
+        m.place.quick
     }
 
     /// Running something that removing its worktree would cut short: any live session but a

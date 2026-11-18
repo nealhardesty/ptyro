@@ -27,7 +27,6 @@ mod pair;
 mod push;
 mod quick;
 mod registry;
-mod scratchpad;
 mod serve_child;
 mod session;
 mod setup;
@@ -479,7 +478,6 @@ async fn serve(
     daemon.load_pairs().await;
     daemon.start_serve_supervisor();
     daemon.start_wsl_hold();
-    daemon.start_pad_watcher();
     daemon.start_chats().await;
     // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
     {

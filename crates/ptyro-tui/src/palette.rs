@@ -39,10 +39,6 @@ pub enum Target {
     RunScript(String, String),
     /// Health: fix finding N (UX1.20).
     Fix(usize),
-    /// Scratchpad: the item on this line (NOTE1.3).
-    PadItem(u32),
-    /// Scratchpad: a saved copy, by revision.
-    PadRev(String),
     /// Palette: this configuration option, in the settings panel (CFG1.1).
     Setting(String),
     /// Palette: open this chat (SPEC §22.12).

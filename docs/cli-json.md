@@ -136,13 +136,12 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
 - `controller_changed`, `bell`, `notification`, `notify`;
 - projects and worktrees: `project_updated`/`removed`, `workspace_updated`/`removed`,
   `worktree_updated`/`removed`, `worktree_progress`;
-- `inbox_added`, `usage_updated`, `config_reloaded`, `host_load` (`load`: the computer's load average, or null once `[ui] load` is off);
+- `alert` (a session wants you: `{session, session_name, at_ms, kind, title, body, workspace?, profile?}`; what a linked machine's daemon delivers), `usage_updated`, `config_reloaded`, `host_load` (`load`: the computer's load average, or null once `[ui] load` is off);
 - `events_lost` (`count`): this stream fell behind and skipped events, so re-read state with
   `ls --json`.
 
 ## Agents
 
-- `ptyro inbox --json` → `[{id, session, session_name, at_ms, kind, title, body, read_ms?, workspace?, profile?}]`
 - `ptyro usage --json` → `[{profile, agent, windows: [{name, used_percent, resets_at_ms?}], cost_millis?, context_percent?, limited_until_ms?, at_ms}]`
 - `ptyro integrations ls --json` → `[{agent, needs_install, active, detail}]`
 
@@ -179,17 +178,6 @@ A structured session's transcript, oldest first. `ChatItem` is `{id, at_ms, rev,
   last_via?, push, pending}`. `scope` is `read`, `approve`, `control` or `full`; `last_via` is
   the address it last connected from; `push` counts its Web Push subscriptions; `pending`: its
   pairing code hasn't been claimed yet.
-
-## Scratchpad (NOTE1)
-
-- `ptyro scratchpad cat --json`, `scratchpad add --json` → `{path, rev, text, open, done}`: `rev` is
-  the first 12 hex digits of the text's SHA-256, `open` and `done` count `- [ ]` and `- [x]` items.
-- `ptyro scratchpad todo --json` → `{rev, items: [Item]}`; `Item`: `{line, done, text, section?, at?,
-  whence?, by?, worktree?, pr?}`. `line` is 1-based; `at` is `2026-10-24 14:02` from the stamp;
-  `whence` the worktree or directory it was added in; `by` the agent that added it; `worktree`
-  the `[wt:…]` tag; `pr` the `(#N)` that finished it.
-- `ptyro scratchpad log --json` → `[{rev, at_ms, bytes, lines}]`, newest first.
-- `ptyro scratchpad --pane --json` → a `Session` (the editor; `pad: true`).
 
 ## Setup, config and the daemon
 

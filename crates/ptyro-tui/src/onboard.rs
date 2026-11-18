@@ -105,7 +105,7 @@ impl App {
         choices.push(Choice {
             section: "notifications",
             label: "desktop notifications".into(),
-            detail: "when an agent needs you (the inbox and your terminal always tell you)".into(),
+            detail: "when an agent needs you (its row and your terminal always tell you)".into(),
             on: false,
             kind: ChoiceKind::Desktop,
         });
@@ -472,14 +472,6 @@ impl App {
 
     pub(crate) fn show_home(&mut self, discovered: Vec<PathBuf>) {
         let mut items: Vec<Item> = Vec::new();
-        if self.pad_open > 0 {
-            items.push(Item {
-                label: format!("✎ scratchpad · {} open", self.pad_open),
-                detail: "search the items, tick one, start one as a task".into(),
-                key: self.keymap.key_for("scratchpad.items"),
-                target: Target::Action(Command { action: "scratchpad.items", arg: None }),
-            });
-        }
         for id in self.attention_order(true) {
             let Some(s) = self.session(id) else { continue };
             let why = s.attention.as_ref().map(|a| a.text.clone()).unwrap_or_default();
@@ -567,9 +559,7 @@ fn write_first_config(path: &Path, profiles: &[String], desktop: bool) -> Result
         "# ptyro configuration. Every key is optional; `ptyro config edit` explains them, and\n# changes apply live.\n",
     );
     if desktop {
-        text.push_str(
-            "\n[notifications]\nchannels = [\"inbox\", \"osc\", \"bell\", \"desktop\"]\n",
-        );
+        text.push_str("\n[notifications]\nchannels = [\"osc\", \"bell\", \"desktop\"]\n");
     }
     for p in profiles {
         text.push('\n');

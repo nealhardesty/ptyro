@@ -574,10 +574,6 @@ impl Daemon {
         if let (Some(n), None) = (spec.pr, &wt.title) {
             self.title_from_pr(&wt, n);
         }
-        // Started from a scratchpad item (NOTE1.3): the item says where it is being worked.
-        if let Some(line) = spec.pad_item {
-            self.pad_started(line, &wt.qualified());
-        }
         Ok(Reply::WorktreeCreated {
             info: wt,
             setup: setup.map(|s| self.info(&s)),
@@ -678,7 +674,6 @@ impl Daemon {
                 agent: None,
                 script: Some(role),
                 quick: false,
-                pad: false,
                 chat: None,
                 unrecorded: false,
             },
@@ -828,7 +823,6 @@ impl Daemon {
         }
         self.drop_worktree(wt.clone());
         self.forget_launch(&wt.id).await;
-        self.pad_finished(&wt.qualified());
         notes.insert(0, format!("removed {}", wt.qualified()));
         Ok(Reply::Removed { notes })
     }
@@ -1223,7 +1217,6 @@ impl Daemon {
             store.save_worktree(wt.clone());
         }
         let _ = self.events.send(DomainEvent::WorktreeUpdated { info: wt.clone() });
-        self.pad_renamed(&[(found.qualified(), wt.qualified())]);
         let (path, n) = (wt.path.clone(), name.to_owned());
         blocking(move || {
             let Ok(dir) = Git::new().git_dir(&path) else { return };

@@ -349,6 +349,11 @@ async fn a_removed_request_is_answered_with_what_went() {
         (serde_json::json!({ "t": "worktree_diff", "addr": "w" }), "the diff inspector"),
         (serde_json::json!({ "t": "worktree_finish", "addr": "w" }), "finishing worktrees"),
         (serde_json::json!({ "t": "set_verify", "addr": "a", "check": "true" }), "verified-done"),
+        // The scratchpad and the inbox (the same day).
+        (serde_json::json!({ "t": "scratch_get" }), "the scratchpad"),
+        (serde_json::json!({ "t": "scratch_add", "text": "x" }), "the scratchpad"),
+        (serde_json::json!({ "t": "inbox", "unread_only": false }), "the inbox"),
+        (serde_json::json!({ "t": "inbox_mark", "all": true }), "the inbox"),
     ]
     .into_iter()
     .enumerate()
