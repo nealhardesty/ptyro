@@ -25,8 +25,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
 
-/// The agent's three pipes, as each platform drives them. On Unix, duplicates of their
-/// descriptors are kept for a live upgrade, which carries them by number.
+/// The agent's three pipes. Duplicates of their descriptors are kept for a live upgrade, which
+/// carries them by number.
 #[cfg(unix)]
 mod pipes {
     use std::io;
@@ -84,67 +84,6 @@ mod pipes {
     }
 
     pub fn unquiesce(_out: &Out) {}
-}
-
-/// Windows: plain anonymous pipes, made here (std's are overlapped, which a blocking read can't
-/// drive), read on a thread a handover can stop (`winread`, WIN9). A handover copies their
-/// handles into the next daemon, which takes them by value.
-#[cfg(windows)]
-mod pipes {
-    use std::io;
-    use std::os::windows::io::AsRawHandle;
-
-    pub type In = tokio::fs::File;
-    pub type Out = ptyro_pty::winread::PipeReader;
-    pub type ErrOut = ptyro_pty::winread::PipeReader;
-    /// The three pipes' handles, by value (`In`, `Out` and `ErrOut` own them), for a handover.
-    pub type Kept = [usize; 3];
-
-    /// The child's ends (stdin, stdout, stderr), for its `Stdio`, and ours.
-    #[allow(clippy::type_complexity)]
-    pub fn for_child() -> io::Result<([std::fs::File; 3], (In, Out, ErrOut, Option<Kept>))> {
-        let (in_r, in_w) = ptyro_pty::anon_pipe()?;
-        let (out_r, out_w) = ptyro_pty::anon_pipe()?;
-        let (err_r, err_w) = ptyro_pty::anon_pipe()?;
-        let kept = [
-            in_w.as_raw_handle() as usize,
-            out_r.as_raw_handle() as usize,
-            err_r.as_raw_handle() as usize,
-        ];
-        let ours = (
-            tokio::fs::File::from_std(in_w),
-            ptyro_pty::winread::PipeReader::new(out_r, "agent-stdout")?,
-            ptyro_pty::winread::PipeReader::new(err_r, "agent-stderr")?,
-            Some(kept),
-        );
-        Ok(([in_r, out_w, err_w], ours))
-    }
-
-    /// The previous daemon's pipes, by the values it copied into this process.
-    pub fn adopt(fds: [i32; 3]) -> io::Result<(In, Out, ErrOut, Option<Kept>)> {
-        let [i, o, e] = fds.map(|h| h as u32 as usize);
-        let input = ptyro_pty::adopt_pipe(i)?;
-        let out = ptyro_pty::winread::adopt(o, "agent-stdout")?;
-        let err = ptyro_pty::winread::adopt(e, "agent-stderr")?;
-        Ok((tokio::fs::File::from_std(input), out, err, Some([i, o, e])))
-    }
-
-    /// The values a handover writes: handle values fit in 32 bits (Windows keeps them so, for
-    /// 32-bit programs).
-    pub fn numbers(k: &Kept) -> [i32; 3] {
-        k.map(|h| h as i32)
-    }
-
-    /// Stop reading for a handover, and what was read but not yet taken.
-    pub fn quiesce(out: &mut Out) -> io::Result<Vec<u8>> {
-        tokio::task::block_in_place(|| out.pause())?;
-        Ok(out.take_pending())
-    }
-
-    /// Read again (a handover that was called off).
-    pub fn unquiesce(out: &Out) {
-        out.resume();
-    }
 }
 
 use crate::session::{Session, Spawned};
@@ -395,12 +334,6 @@ impl Structured {
         self.bump_chat();
     }
 
-    /// Windows: the agent's three pipes' handles, by value, for a handover to copy (WIN9).
-    #[cfg(windows)]
-    pub fn pipe_handles(&self) -> Option<[usize; 3]> {
-        *self.fds.locked()
-    }
-
     pub fn image(&self, live: bool) -> std::io::Result<StructuredImage> {
         let (driver, buffer) = self.parked.locked().clone().unwrap_or_default();
         let fds = if live {
@@ -470,15 +403,6 @@ pub fn spawn_child(
         let p = pipes::from_child(&mut child)?;
         (child, p)
     };
-    #[cfg(windows)]
-    let (child, (stdin, stdout, stderr, kept)) = {
-        let ([i, o, e], ours) = pipes::for_child()?;
-        cmd.stdin(i).stdout(o).stderr(e);
-        let child = cmd.spawn()?;
-        // Our copies of the child's ends close with `cmd`, so its output ends when it exits.
-        drop(cmd);
-        (child, ours)
-    };
     *st.fds.locked() = kept;
     Ok((
         ptyro_pty::contain(child)?,
@@ -542,7 +466,6 @@ async fn driver_loop(session: Arc<Session>, st: Arc<Structured>, r: Resume) {
     let mut chunk = vec![0u8; 64 * 1024];
     loop {
         if *pause.borrow_and_update() {
-            // Windows: the reader's thread stops, and what it read joins the buffer (WIN9).
             match pipes::quiesce(&mut stdout) {
                 Ok(rest) => buf.extend_from_slice(&rest),
                 Err(e) => tracing::warn!(session = %session.id, "pausing the agent's output: {e}"),

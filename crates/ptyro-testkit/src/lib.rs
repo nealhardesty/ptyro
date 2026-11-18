@@ -5,7 +5,6 @@ pub mod fake_adapters;
 pub mod fake_agent;
 pub mod fake_gh;
 pub mod fake_structured;
-pub mod fake_wsl;
 pub mod fuzz;
 pub mod headless;
 pub mod program;
@@ -72,13 +71,6 @@ impl TempDaemon {
         let mut cmd = Command::new(&self.bin);
         isolate(&mut cmd, self.home.path(), &self.bin);
         cmd.envs(self.daemon_env.iter().map(|(k, v)| (k, v)));
-        // Windows programs (agents, PowerShell) find home by `USERPROFILE`: a test's `HOME` is it.
-        if cfg!(windows)
-            && let Some((_, home)) = self.daemon_env.iter().find(|(k, _)| k == "HOME")
-            && !self.daemon_env.iter().any(|(k, _)| k == "USERPROFILE")
-        {
-            cmd.env("USERPROFILE", home);
-        }
         let child = cmd
             .args(["daemon", "start", "--foreground"])
             .stdin(std::process::Stdio::null())
@@ -167,8 +159,7 @@ impl TempDaemon {
         bail!("timed out waiting for {needle:?}; screen was:\n{last}")
     }
 
-    /// Stop the daemon gracefully (SIGTERM; on Windows, `ptyro daemon stop`) and wait for it
-    /// (also done on drop).
+    /// Stop the daemon gracefully (SIGTERM) and wait for it (also done on drop).
     pub fn stop(&mut self) {
         let Some(mut child) = self.child.take() else { return };
         #[cfg(unix)]
@@ -176,13 +167,8 @@ impl TempDaemon {
             rustix::process::Pid::from_raw(child.id() as i32).expect("pid"),
             rustix::process::Signal::TERM,
         );
-        // Windows has no SIGTERM: `daemon stop --force` is the same graceful stop (sessions end,
-        // agents hibernate, state is saved). Without --force it refuses while sessions run, and
-        // the kill below then lost what wasn't saved yet (WIN13). It waits for the exit itself.
-        #[cfg(windows)]
-        let _ = self.cmd().args(["daemon", "stop", "--force"]).output();
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(if cfg!(windows) { 30 } else { 10 }) {
+        while start.elapsed() < Duration::from_secs(10) {
             if let Ok(Some(_)) = child.try_wait() {
                 return;
             }
@@ -212,21 +198,9 @@ impl Drop for TempDaemon {
     }
 }
 
-/// Whether a daemon accepts connections at `socket`: a Unix socket that connects, or a Windows
-/// pipe that exists (every instance busy counts: someone serves it).
+/// Whether a daemon accepts connections at `socket`: a Unix socket that connects.
 fn accepts(socket: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        std::os::unix::net::UnixStream::connect(socket).is_ok()
-    }
-    #[cfg(windows)]
-    {
-        const ERROR_PIPE_BUSY: i32 = 231;
-        match std::fs::OpenOptions::new().read(true).write(true).open(socket) {
-            Ok(_) => true,
-            Err(e) => e.raw_os_error() == Some(ERROR_PIPE_BUSY),
-        }
-    }
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
 }
 
 pub fn paths_for(home: &Path) -> Result<Paths> {
@@ -245,10 +219,6 @@ fn isolate(cmd: &mut Command, home: &Path, bin: &Path) {
     // Inside WSL a daemon holds the distro open with a wsl.exe of its own (SPEC §20.10): test
     // daemons don't, unless a test asks (`start_with_env(…, &[("PTYRO_WSL_HOLD", "1")])`).
     cmd.env("PTYRO_WSL_HOLD", "0");
-    // A Windows client with no remote looks for ptyro in WSL first: a test's is its own daemon.
-    if cfg!(windows) {
-        cmd.env("PTYRO_REMOTE", "local");
-    }
 }
 
 /// Whether something is listening on `127.0.0.1:port`. Connecting to a free ephemeral port can

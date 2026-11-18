@@ -45,15 +45,12 @@ Google, or any other tool named here; their names and trademarks belong to their
 - **Linux, macOS or WSL2.** On WSL2 nothing needs setting up: WSL normally stops a distro
   about 15 seconds after its last terminal closes, so ptyro's daemon keeps WSL running while it
   runs, and your agents keep working with every terminal closed. `ptyro daemon stop` lets WSL
-  stop; `[daemon] hold_wsl = false` (Settings → daemon) turns that off. **On Windows itself**,
-  `ptyro.exe` is a client of the daemon in WSL ([below](#windows)); a native Windows daemon is
-  planned (ROADMAP WIN, track D).
+  stop; `[daemon] hold_wsl = false` (Settings → daemon) turns that off. On Windows, ptyro runs
+  inside WSL2 ([below](#windows)).
 - **Rust 1.99 or later** to build. A checkout pins 1.99.1 in `rust-toolchain.toml`, and
   [rustup](https://rustup.rs) fetches it for you. No Rust yet? In a checkout, `make rust-install`
-  installs rustup and the pinned toolchain on Linux, macOS and Windows. It needs a C compiler,
-  which it checks for but never installs. On Windows that means the Visual Studio Build Tools'
-  C++ workload, and the target runs from Git Bash, MSYS2 or Cygwin (without make, run
-  `sh scripts/rust-install.sh`).
+  installs rustup and the pinned toolchain on Linux and macOS (and inside WSL2). It needs a C
+  compiler, which it checks for but never installs (without make, run `sh scripts/rust-install.sh`).
 - **git 2.40 or later**, and **GNU make** for building from a checkout.
 - **At least one agent CLI:** [Claude Code](https://code.claude.com) (the best supported),
   [Codex CLI](https://github.com/openai/codex), or [OpenCode](https://opencode.ai). Any other
@@ -150,26 +147,25 @@ ptyro login --check                           # where each login stands, changin
 ```
 
 - **The vendors' own ways.** Each install command is the vendor's recommended one for your
-  platform (Claude Code's, Codex's and OpenCode's installers, npm for OpenCode on Windows, apt,
-  dnf, Homebrew or WinGet for git and the GitHub CLI), from a table checked against
+  platform (Claude Code's, Codex's and OpenCode's installers, apt,
+  dnf or Homebrew for git and the GitHub CLI), from a table checked against
   their documentation (SPEC §24.1). Nothing is guessed.
-- **Prerequisites come along.** Ticking OpenCode on Windows ticks Node.js. Without a package
+- **Prerequisites come along.** Ticking an agent that needs Node.js ticks Node.js. Without a package
   manager that has it, ptyro puts nodejs.org's build, checked
   against its published checksums, in a folder of its own (`~/.local/share/ptyro-tools`), with no
   admin rights and no `sudo npm`. It then offers to add a line to your shell's rc file so new
-  terminals find it (on Windows, your `PATH`); ptyro's own sessions find it
+  terminals find it; ptyro's own sessions find it
   already. `ptyro uninstall` leaves that folder alone, and on PATH: the tools are yours.
-- **Admin rights only after asking, once.** apt, dnf and WinGet's machine-wide installers need
-  them: sudo asks for your password once, in your terminal, before the first of them (on Windows
-  each installer raises its own UAC prompt). ptyro never sees the password. `--yes` asks nothing:
+- **Admin rights only after asking, once.** apt and dnf need them: sudo asks for your password
+  once, in your terminal, before the first of them. ptyro never sees the password. `--yes` asks nothing:
   a step that would need a password is skipped and its command printed for you to run.
 - **No daemon needed**, so it works on a machine where ptyro has never run.
 - **On the web, too.** The web app has the same checklist under Settings → Agents and tools (and
   More → Set up ptyro): Agents, Tools and Already here, each with the same line as the TUI's.
   Tick what you want and tap Install: it runs on the computer, with its output on the page. While
   no agent is installed, the Sessions tab shows a banner that opens it ("Not now" hides it on that
-  device). Steps that need admin rights never run from the web, where a password or a Windows
-  prompt would go over the network: the page shows the command to run on the computer (with Copy),
+  device). Steps that need admin rights never run from the web, where a password would go over
+  the network: the page shows the command to run on the computer (with Copy),
   and the TUI's way (`Ctrl-Q U`) or `ptyro setup`, which ask for the password there; the button
   counts only what will run from the page, and the result says what was left for the computer.
 - **One install at a time on a machine**, whoever starts it: a second `ptyro install`, `ptyro
@@ -187,30 +183,19 @@ ptyro login --check                           # where each login stands, changin
   badge's fixes (`Ctrl-Q M`) open it for a missing agent or git, and the palette's `first.run`
   opens the whole first-run screen again.
   `app.install` installs one by name.
-- **Windows: WSL, Windows, or both.** On Windows each agent and tool can go into your WSL
-  distro, onto Windows itself, or both: the checklist has a column each, a number ticks it on
-  the side your daemon runs on (WSL's when ptyro works with ptyro in WSL), and `3:wsl`,
-  `3:windows` or `3:both` puts item 3 there. Unattended, `--where wsl|windows|both`
-  (`ptyro install gh --where both`). WSL's half is done by the ptyro inside the distro, through
-  `wsl.exe`, so its sudo prompt is in your terminal too. WSL is yours to bring: setup never
-  installs WSL, a distro, or ptyro in one. Without them it sets up Windows and says what's
-  missing, with the line to fix it (ptyro in WSL is
-  `wsl -- sh -c "curl -fsSL https://github.com/nealhardesty/ptyro/releases/latest/download/install.sh | sh"`);
-  run setup again afterwards for WSL's side. The TUI's checklist has the same two columns
-  (`←`/`→` picks one, `Space` ticks it there); the web app shows both when its daemon runs on
-  Windows.
+
 - **Logins, one account each.** After installing, setup logs you in to each agent and the GitHub
   CLI it installed, one after another, through the tool's own sign-in: a page in your browser,
   or a link and a code to enter, right there in your terminal (Ctrl+C skips one). ptyro never
   sees a credential: whether it worked is the tool's own status command saying so (`claude auth
   status`, `codex login status`, `gh auth status`). OpenCode names no
   such command, so it signs in when it starts; `ptyro login opencode` starts it now. Later,
-  `ptyro login` does the same for anything not logged in (`ptyro login gh` for one,
-  `--where wsl` for WSL's side). In the TUI it's `app.login`; on the web, Settings → Agents and
-  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there (on Windows with WSL, WSL's logins are listed there too). With `--yes`,
+  `ptyro login` does the same for anything not logged in (`ptyro login gh` for one). In the TUI
+  it's `app.login`; on the web, Settings → Agents and
+  tools (or More → Set up ptyro) → Log in, which runs the sign-in in a session and shows its link and code there. With `--yes`,
   setup only says which aren't logged in.
-- **Installed another way? Move it, or keep it.** An agent you installed with npm, Homebrew or
-  WinGet (Codex through `npm install -g @openai/codex`, say) shows in the checklist as "installed
+- **Installed another way? Move it, or keep it.** An agent you installed with npm or Homebrew
+  (Codex through `npm install -g @openai/codex`, say) shows in the checklist as "installed
   with npm · move to the recommended installer?". Tick it (or `ptyro install codex`, which asks
   first; unattended, `ptyro install codex --yes --move`) and ptyro moves it: it installs the vendor's recommended way first, checks the new one answers
   `--version`, and only then removes the old copy with that tool's own uninstall (`npm uninstall
@@ -239,8 +224,8 @@ ptyro looks for newer versions of your agents (Claude Code, Codex, OpenCode), an
 `ptyro` starts ("Codex 0.170.0 is out (you have 0.162.1)": press `Ctrl-Q u` while the note shows,
 or use the palette's `app.update`), in the health badge (`Ctrl-Q M`), on the web app's Health
 page, and in `ptyro doctor`, which always looks afresh. Each says what the update runs. Nothing
-is ever updated without you. The TUI shows the agents of the computer its daemon runs on (with
-WSL's daemon, WSL's; with a remote one, that computer's, named), since those are what your
+is ever updated without you. The TUI shows the agents of the computer its daemon runs on (with a remote one,
+that computer's, named), since those are what your
 sessions run; `ptyro doctor` on a computer covers that computer's own.
 
 ```bash
@@ -255,9 +240,7 @@ ptyro machine update      # just the linked machines behind this one, each updat
   release's `SHA256SUMS` (and its signed provenance when the GitHub CLI is installed), exactly as
   the install scripts do, and put in place of the old binary; the old one is kept until the new
   one runs, and put back if it doesn't. A download that fails its checksum is refused, and
-  nothing is replaced. Then the daemon is upgraded live: every session keeps running. On Windows
-  with WSL, Windows' `ptyro.exe` and the ptyro in your distro are updated together, so the two
-  always match. Installed with Homebrew, it runs `brew upgrade ptyro`; installed another way
+  nothing is replaced. Then the daemon is upgraded live: every session keeps running. Installed with Homebrew, it runs `brew upgrade ptyro`; installed another way
   (cargo, a system package, Nix or Guix), ptyro says how to update it and never replaces it. In a folder only
   an administrator can write (`/usr/local/bin`), `ptyro update ptyro` in a terminal asks for your
   password (sudo); the web app shows the command to run there instead.
@@ -273,9 +256,7 @@ ptyro machine update      # just the linked machines behind this one, each updat
   it (above); `ptyro update` itself never moves anything. git, the GitHub CLI and Node.js stay
   with their own updaters.
 - **Sessions keep running.** An agent can be updated while sessions use it; ptyro names the
-  sessions that keep the old version until you restart them. On Windows, a program can't be
-  replaced while it runs: ptyro says so, names the sessions running it, and offers to try again
-  once you've closed them.
+  sessions that keep the old version until you restart them.
 - **In the TUI and on the web, too.** In the TUI, `Enter` on the badge's finding (or the
   palette's `app.update`) runs `ptyro update` in a split, where the daemon is. On the web, Health →
   the finding → Update shows what it runs, then runs it on the computer with its progress on the
@@ -298,93 +279,24 @@ ptyro machine update      # just the linked machines behind this one, each updat
 
 ### Removing ptyro
 
-`ptyro uninstall` (or the install script's `--uninstall`, or `-Uninstall` on Windows) shows what it keeps on your machine (sessions, worktrees
+`ptyro uninstall` (or the install script's `--uninstall`) shows what it keeps on your machine (sessions, worktrees
 with any uncommitted work flagged, its directories, the login service, shell-rc
 lines, the binary), asks, and removes it. Your repositories,
 their branches and `.ptyro.toml` stay. See [`docs/uninstall.md`](docs/uninstall.md).
 
 ### Windows
 
-ptyro's daemon (where your agents run) lives in WSL2. From Windows itself, `ptyro.exe` is its
-client: the TUI in Windows Terminal, and every command from PowerShell.
+On Windows, ptyro runs inside WSL2: open your WSL terminal (`wsl --install` gives you one) and
+install it there with the Linux line above. Everything works from inside WSL: links and folders
+open in Windows (your browser, Explorer, VS Code through Remote-WSL), notifications are Windows
+toasts, and the daemon keeps WSL running while your agents work (see Requirements).
 
-1. Install ptyro in your WSL distro, as above (`wsl` opens it).
-2. Install `ptyro.exe`, from PowerShell (x64 and ARM64):
-
-   ```powershell
-   irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex
-   ```
-
-   It downloads the release's zip for your machine, checks it against `SHA256SUMS` (and its
-   signed build provenance when you have `gh`), installs `%LOCALAPPDATA%\Programs\ptyro\bin\ptyro.exe`
-   and puts that folder on your `PATH` (`$env:PTYRO_VERSION`, `PTYRO_PREFIX`,
-   `PTYRO_NO_MODIFY_PATH=1` change that). `ptyro uninstall` removes it again, `PATH` entry
-   included. So does the script: `iex` takes no arguments, so set `PTYRO_UNINSTALL` or run it as
-   a script block, whose arguments go to `ptyro uninstall`:
-
-   ```powershell
-   $env:PTYRO_UNINSTALL = '1'; irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1 | iex
-   & ([scriptblock]::Create((irm https://github.com/nealhardesty/ptyro/releases/latest/download/install.ps1))) -Uninstall --dry-run
-   ```
- `ptyro.exe` isn't code-signed yet, so Windows' Smart App Control, when it's on, may
-   refuse to run it; the installer says so if it does. Or build it yourself: see
-   [Build on Windows](#build-on-windows); from Linux or WSL, `make check-windows`'s toolchain
-   cross-builds it (`cargo xwin build --release --target x86_64-pc-windows-msvc -p ptyro`,
-   `aarch64-…` for ARM).
-3. Run `ptyro`. The first time, it finds the WSL distro that has ptyro and asks to use it (or
-   offers to install it there); the answer is kept in `client.default_remote`
-   (`ptyro --remote wsl://<distro>` picks one for a single command).
-
-What works from Windows: the TUI (the WSL daemon's sidebar, attaching, typing), every CLI command
-(`ptyro ls --json | ConvertFrom-Json` in PowerShell), and opening a session in a new Windows
-Terminal tab or pane (`ptyro attach S --tab`, `--pane`; the TUI's `session.tab`). The folder you
-run `ptyro new` in becomes the distro's (`C:\src` is `/mnt/c/src`). "Open in" an editor or the
-file manager opens it from WSL, on this computer (VS Code through Remote-WSL, the folder in
-Explorer). Sessions get Windows Terminal's own colours, and Shift+Enter works without any setup.
-Settings: the screen's own (the look, keys, the clipboard) are `ptyro.exe`'s; everything
-else is read by the daemon in WSL, so the settings panel marks those "daemon's" and opens the
-daemon's file to change them (`ptyro config set` of one says where it lives).
-
-**Start at login.** `ptyro daemon install-service` (the TUI's palette, `daemon.service`; the web
-app's More → Daemon → Install the service) adds a logon task to Windows' Task Scheduler that
-starts WSL and its ptyro daemon when you log on, so your agents and the web app are there before
-you open a terminal. It runs as you, needs no administrator, and opens no window
-(`ptyrow.exe`, installed beside `ptyro.exe`, starts it hidden). `ptyro daemon uninstall-service`
-removes it.
-
-**Notifications.** The daemon's desktop notifications are Windows toasts from "ptyro", with its
-icon. Clicking one opens that session in a new Windows Terminal tab; a permission prompt's toast
-has Approve and Deny buttons when [approve links](#agent-status-and-notifications) are on. `ptyro.exe` registers
-itself with Windows the first time it runs (in your user's registry, no administrator), and
-`ptyro uninstall` takes that away again.
-
-**A daemon on Windows itself (preview).** ptyro can also run its daemon natively, with sessions
-in Windows' pseudoconsoles (ConPTY) and your repos on NTFS. It is still being built (shells,
-processes and agents on Windows come next), so WSL stays the default. To try it:
-
-```powershell
-ptyro config set client.default_remote local   # or once: ptyro --remote local …
-ptyro new                                      # starts the daemon, then a shell (PowerShell)
-```
-
-`local` means this computer's own daemon; `ptyro config unset client.default_remote` goes back
-to WSL. The zip ships Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`) beside
-`ptyro.exe`: it passes programs' output through untouched, where Windows' own repaints it, so
-`ptyro doctor` warns when those two files are missing. A project's scripts run in the shell
-they're written for: a `.ps1` file in PowerShell, a `.sh` file (and Conductor's and the other
-tools' imported scripts) in Git Bash, the rest in PowerShell; `[scripts] shell` in
-`.ptyro.toml` (or the settings panel) picks one for the whole project. A bash script checked out
-with Windows line endings is a `doctor` finding, which says how to fix it. The daemon listens on a named pipe only
-you can open. `ptyro daemon install-service` then starts this native daemon at logon instead of
-WSL's, and the web app (`ptyro web on`, with its own certificate, pairing and Tailscale's) runs
-here too. Not there yet: a live `daemon upgrade` (stop and start it; agents' conversations
-can be resumed) and the foreground program's name and directory.
-
-**Reaching a Windows computer from elsewhere.** `ptyro --remote me@winbox` works over Windows'
-own OpenSSH server (Settings → System → Optional features → OpenSSH Server): ptyro notices the
-host is Windows and runs `ptyro proxy` there as it is, reaching whichever daemon that computer
-uses, WSL's included. `ptyro machine add` links it into [another machine's view](#your-phone-and-other-machines)
-either over ssh or with a code from its `ptyro machine pair`.
+**Moving from the native Windows ptyro** (`ptyro.exe`, removed on 2026-11-18): in PowerShell, run
+your old `ptyro.exe uninstall` first; it removes the logon task, the `ptyro:` link handler and its
+files. If it won't run, delete `ptyro.exe`, `ptyrow.exe`, `conpty.dll` and `OpenConsole.exe`
+from `%LOCALAPPDATA%\Programs\ptyro\bin` (or wherever `PTYRO_PREFIX` put them). Then install
+ptyro inside WSL2 and run `ptyro` there. An old `ptyro.exe update` finds no Windows download in
+new releases.
 
 ## Quick start
 
@@ -858,36 +770,13 @@ Everything runs through `make`; `make` on its own lists the targets. CI calls th
 (`make check`, `make msrv`, `make deny`, `make fuzz-smoke`, `make web-check`, `make web-e2e`, `make installer-check`),
 never raw `cargo`, so local runs and CI behave the same.
 
-### Build on Windows
-
-From a clone on Windows, in PowerShell (it needs no `make`, and installs only what's missing,
-asking first only where Windows does):
-
-```powershell
-git clone https://github.com/nealhardesty/ptyro; cd ptyro
-powershell -ExecutionPolicy Bypass -File scripts\windows-setup.ps1
-```
-
-It installs, with winget: Git, rustup, the Visual Studio Build Tools' C++ workload (rustc links
-with MSVC; a few GB, and Windows asks for an administrator once) and GNU make. Then it fetches the
-Rust toolchain this checkout pins, builds `target\release\ptyro.exe`, puts Microsoft's packaged
-ConPTY beside it (pinned and SHA-256 checked, as `make conpty` does), and runs it once. Run it
-again any time: what's there is skipped. Afterwards `make build-windows` rebuilds (it installs
-nothing), and `make windows-setup` runs the whole thing; both work from PowerShell as well as Git
-Bash. The Makefile's other targets are POSIX shell: run them from Git Bash (`make test` runs every test there, as CI's Windows job does).
-
-With Smart App Control on, Windows may refuse a `ptyro.exe` you built: it runs only signed
-programs it knows, and decides build by build. The script says so when it happens; the client in
-WSL works meanwhile.
-
 | Target | Does |
 |---|---|
 | `make help` | list the targets (the default) |
-| `make windows-setup` / `make build-windows` | on Windows, from PowerShell or Git Bash ([Build on Windows](#build-on-windows)): install what building needs with winget, then build `ptyro.exe` with its ConPTY / rebuild it, installing nothing |
-| `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux, macOS, and Windows from Git Bash, MSYS2 or Cygwin (the MSVC host) |
+| `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux and macOS (on Windows, inside WSL2) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
-| `make test` (`FLAKE_BUDGET=2`) / `make smoke` | all tests: a test that fails runs again once, alone, and if it passes then it's a flake, named in the output and `target/flakes.txt`; a test failing twice, or more flakes than the budget, fails the run. On Windows (Git Bash) the same tests run natively, two at a time per binary, with scripted TUI runs given twice their times (`PTYRO_TEST_TIME_SCALE`); a test binary past `TEST_BINARY_TIMEOUT` (1200 s) is killed / quick end-to-end checks of the PTY and emulator |
+| `make test` (`FLAKE_BUDGET=2`) / `make smoke` | all tests: a test that fails runs again once, alone, and if it passes then it's a flake, named in the output and `target/flakes.txt`; a test failing twice, or more flakes than the budget, fails the run; a test binary past `TEST_BINARY_TIMEOUT` (1200 s) is killed / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
@@ -904,11 +793,7 @@ WSL works meanwhile.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
-| `make check-windows` (`TARGETS=x86_64\|aarch64`, `XWIN_ACCEPT_LICENSE=1` once) | cross-checks ptyro for Windows, x64 and ARM64, from Linux or macOS with cargo-xwin (no Windows machine): every crate with all its tests (what can't run on Windows is `cfg(unix)`, with its reason). Needs clang, lld and cargo-xwin, and says how to install what's missing. The first run downloads Microsoft's CRT and SDK (about 1 GB) under Microsoft's licence, which you accept with `XWIN_ACCEPT_LICENSE=1`. `make test` runs it too when the tools are there, and says so when they aren't |
-| `make conpty` (`INTO=<dir>`, `ARCH=x86_64\|aarch64`) | fetches Microsoft's packaged ConPTY (`conpty.dll`, `OpenConsole.exe`; one pinned NuGet version, its SHA-256 checked) into `target/conpty/<arch>/`, and with `INTO` copies one architecture's pair beside a `ptyro.exe`. The Windows zips and `make test-windows` use it |
-| `make test-windows` | on Windows itself (the release check): `make test`, every test natively, native daemons in ConPTY with the packaged ConPTY beside the test binaries |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
-| `make spike-conpty` (`ARGS=report`) | ROADMAP WIN0.2 and WIN0.3, from WSL or Git Bash on Windows: plays what ptyro needs (its OSCs, queries, keys, Ctrl+C, resizes, recorded Claude Code and Codex screens, a 2 MiB burst) through Windows' own ConPTY and Microsoft's packaged conpty.dll (fetched from NuGet, its signature checked), tests whether a second process can take a pseudoconsole over, and writes `spikes/conpty/REPORT.md` (SPEC §20.13). Smart App Control may refuse the unsigned spike; it says so |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
@@ -921,19 +806,19 @@ WSL works meanwhile.
 | `make latency` (`ARGS=…`) | key → echo → frame round trip through a real daemon, p50/p99 |
 | `make soak` (`DURATION=10m`) | fake agents and shells with live upgrades; fails on leaks, stuck turns or lag |
 | `make web` / `make web-check` | build the web app (needs Node) / check the committed `web/dist` matches (CI) |
-| `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball (on Windows, a zip) + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
+| `make dist` (`TRIPLE=…`) / `changelog` / `homebrew-formula` | release tarball + `.sha256` in `dist/` / regenerate `CHANGELOG.md` / render `dist/ptyro.rb` from the checksums |
 | `make sbom` | the software bill of materials (CycloneDX) from `Cargo.lock`: `dist/ptyro-<version>.cdx.json` |
-| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused), then remove it again with `--uninstall`; on Windows (Git Bash), the zip through `scripts/install.ps1` / `make dist` and then that |
+| `make dist-check` (`TRIPLE=…`) / `make installer-check` | install the tarball in `dist/` with `scripts/install.sh` into a temp prefix and run it (a tampered tarball must be refused), then remove it again with `--uninstall` / `make dist` and then that |
 | `make brew-check` (`TRIPLE=…`) | install the tarball in `dist/` through the Homebrew formula from a throwaway local tap, then `brew test` and `brew audit --strict` it (a wrong checksum must be refused); skips without Homebrew unless `PTYRO_REQUIRE_BREW=1`; refuses if a Homebrew `ptyro` is already installed; run after `make dist` |
 | `make bump` (`V=patch\|minor\|major\|X.Y.Z`) | set the version in `Cargo.toml` and `Cargo.lock` (default: next patch); it prints the commit and tag to run |
 | `make check-macos` | type-check the workspace for macOS from Linux |
 
 To release, run `make bump V=…`, commit, merge to `master`, then push the `vX.Y.Z` tag. The release
 workflow first checks that the tag is on `master` and is the crate's version; runs `make check` on
-Linux (x86_64 and arm64) and macOS, `make test-windows` on Windows and, for the tagged commit,
-`deny`, `web-check`, `msrv` and `fuzz-smoke`; builds the four tarballs and the two Windows zips
-(each must install through `scripts/install.sh`, or `scripts/install.ps1` for the zips); and only
-then publishes: the release gets the tarballs, the zips, `SHA256SUMS`, the software bill of materials, the
+Linux (x86_64 and arm64) and macOS and, for the tagged commit,
+`deny`, `web-check`, `msrv` and `fuzz-smoke`; builds the four tarballs (each must install
+through `scripts/install.sh`); and only
+then publishes: the release gets the tarballs, `SHA256SUMS`, the software bill of materials, the
 changelog notes and signed build provenance (`gh attestation verify`). Only the final `publish` job
 gets a write token. It runs in the `release` environment, which holds the `HOMEBREW_TAP_TOKEN`
 secret (a fine-grained token that can write only to `nealhardesty/homebrew-ptyro`); restrict

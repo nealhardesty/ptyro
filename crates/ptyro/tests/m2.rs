@@ -466,9 +466,8 @@ async fn tui_splits_and_restores_the_layout_on_reattach() {
         split.contains("osc7501=yes") && split.contains(&header),
         "both panes visible:\n{split}"
     );
-    // Ctrl-Space (NUL), the second default prefix, works like Ctrl-Q. Windows: a NUL typed into
-    // ConPTY may not arrive as Ctrl+Space's key (unverified there), so it detaches with Ctrl-Q.
-    let detach = if cfg!(windows) { "\\x11d" } else { "\\x00d" };
+    // Ctrl-Space (NUL), the second default prefix, works like Ctrl-Q.
+    let detach = "\\x00d";
     let r2 = run(tui(&d, &[]).snapshot(1.8).send(2.2, detach).timeout(4.0)).await;
     let restored = r2.at(1.8);
     assert!(

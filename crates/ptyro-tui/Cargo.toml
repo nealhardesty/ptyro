@@ -27,12 +27,8 @@ rustix.workspace = true
 tokio.workspace = true
 unicode-width.workspace = true
 
-# ptyro-pty, the one crate allowed `unsafe`: local time, and making a file private (an access
-# list on Windows, WIN7). On Windows the clock uses the time crate's local offset (WIN3).
+# ptyro-pty, the one crate allowed `unsafe`: local time, and making a file private (WIN7).
 ptyro-pty.workspace = true
-
-[target.'cfg(windows)'.dependencies]
-time = { workspace = true, features = ["local-offset"] }
 
 [dev-dependencies]
 criterion.workspace = true

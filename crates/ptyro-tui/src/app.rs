@@ -531,14 +531,12 @@ pub enum AppMsg {
         on_disk: Option<String>,
         daemon: String,
     },
-    /// What the setup checklist found (BOOT2): the sides, the default place, and why that
-    /// isn't the daemon's side; `None` if looking failed.
+    /// What the setup checklist found (BOOT2); `None` if looking failed.
     SetupFound(Option<Box<SetupLook>>),
 }
 
 /// What [`crate::setup_list::look`] found.
-pub type SetupLook =
-    (ptyro_agents::setup::checklist::Sides, ptyro_agents::setup::Where, Option<String>);
+pub type SetupLook = ptyro_agents::setup::Survey;
 
 /// One pane's live state.
 #[derive(Default)]
@@ -2849,7 +2847,6 @@ impl App {
             // With names: those ticked (a message's offer, BOOT9).
             "app.setup" => self.open_setup(
                 cmd.arg.as_deref().map(|a| a.split_whitespace().map(str::to_owned).collect()),
-                None,
             ),
             "app.update" => self.update_agents(
                 cmd.arg.as_deref().unwrap_or("").split_whitespace().map(str::to_owned).collect(),
@@ -7014,17 +7011,17 @@ mod tests {
         let mut app = app();
         let here = std::env::current_exe().unwrap().to_string_lossy().into_owned();
         assert_eq!(app.daemon_ptyro(), here);
-        app.connect.remote = Some("wsl://Ubuntu".into());
+        app.connect.remote = Some("me@devbox".into());
         let there = std::env::var("PTYRO_REMOTE_BIN").unwrap_or_else(|_| "ptyro".into());
         assert_eq!(app.daemon_ptyro(), there);
-        assert!(app.daemon_file_note().contains("wsl://Ubuntu"));
+        assert!(app.daemon_file_note().contains("me@devbox"));
     }
 
     #[test]
     fn on_another_computer_open_in_lists_the_daemons_editors() {
         // WIN3: the paths are the daemon's, so are the editors (and it opens them).
         let mut app = app();
-        app.connect.remote = Some("wsl://Ubuntu".into());
+        app.connect.remote = Some("me@devbox".into());
         app.worktrees.push(root("p1"));
         app.handle_reply(
             Pending::RemoteEditors("p1-root".into()),
@@ -8092,10 +8089,7 @@ mod tests {
         assert!(
             mv.text.contains("Codex is installed with npm: moving it to the vendor's installer")
         );
-        assert_eq!(
-            mv.fix,
-            Some(crate::health::Fix::Setup { names: vec!["codex".into()], place: None })
-        );
+        assert_eq!(mv.fix, Some(crate::health::Fix::Setup { names: vec!["codex".into()] }));
         // Asked again: replaced, never piled up.
         app.got_updates(vec![codex.clone()], Vec::new(), false);
         assert_eq!(app.health.findings.iter().filter(|f| f.what.ends_with(" move")).count(), 1);
@@ -8152,17 +8146,13 @@ mod tests {
     }
 
     /// BOOT2: while the checklist's install runs, `U` (or a health fix, or `first.run`) never
-    /// opens another: it says so. Each side's split starts once the one before it ends.
+    /// opens another: it says so.
     #[tokio::test]
-    async fn a_running_setup_is_never_joined_by_a_second_and_sides_run_in_turn() {
+    async fn a_running_setup_is_never_joined_by_a_second() {
         let mut app = app();
-        let words = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
-        app.setup_run = Some(crate::setup_list::SetupRun {
-            split: "ptyro-install".into(),
-            seen: false,
-            queue: vec![(None, words(&["install", "codex", "--confirmed", "--where", "wsl"]))],
-        });
-        app.open_setup(None, None);
+        app.setup_run =
+            Some(crate::setup_list::SetupRun { split: "ptyro-install".into(), seen: false });
+        app.open_setup(None);
         assert!(app.first_run.is_none(), "no second checklist");
         assert!(app.last_cli.is_none(), "no second install");
         assert!(
@@ -8172,16 +8162,8 @@ mod tests {
         assert!(app.first_run.is_none());
         // Still starting (not in the list yet): it waits.
         app.setup_tick();
-        assert!(app.last_cli.is_none());
-        // Seen, then gone: WSL's side starts now, and is the one running.
-        app.setup_run.as_mut().unwrap().seen = true;
-        app.setup_tick();
-        assert_eq!(
-            app.last_cli,
-            Some(words(&["install", "codex", "--confirmed", "--where", "wsl"]))
-        );
-        let run = app.setup_run.as_ref().expect("WSL's side runs");
-        assert!(run.queue.is_empty());
+        assert!(app.setup_run.is_some());
+        // Seen, then gone: done.
         app.setup_run.as_mut().unwrap().seen = true;
         app.setup_tick();
         assert!(app.setup_run.is_none(), "done: the checklist can open again");
@@ -8193,13 +8175,8 @@ mod tests {
     async fn a_setup_split_that_fails_closes_or_dies_frees_the_checklist_and_the_badge_looks_again()
     {
         let mut app = app();
-        let run = || {
-            Some(crate::setup_list::SetupRun {
-                split: "ptyro-install".into(),
-                seen: false,
-                queue: Vec::new(),
-            })
-        };
+        let run =
+            || Some(crate::setup_list::SetupRun { split: "ptyro-install".into(), seen: false });
         let spawned = || Pending::Spawned {
             split: None,
             spec: Box::new(SpawnSpec {
@@ -8260,58 +8237,6 @@ mod tests {
         assert!(app.health.running && !app.health.again, "looking again now");
         app.got_health(Vec::new());
         assert!(app.health.findings.is_empty(), "the badge shows the install's result");
-    }
-
-    /// BOOT2: two sides fit an 80-column terminal: the cells beside the name, the line under it.
-    #[test]
-    fn a_two_sided_checklist_fits_80_columns() {
-        use crate::onboard::FirstRun;
-        // 80 columns, tall enough to show everything.
-        let draw = |app: &App| {
-            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 60)).unwrap();
-            t.draw(|f| crate::ui::draw(app, f)).unwrap();
-            let buf = t.backend().buffer();
-            buf.content.chunks(80).fold(String::new(), |mut s, row| {
-                s.extend(row.iter().map(|c| c.symbol()));
-                s.push('\n');
-                s
-            })
-        };
-        // The box's lines (`│` at both edges): nothing runs into its right edge, where a cut
-        // line would end.
-        let fits = |shown: &str| {
-            for line in shown.lines() {
-                let c: Vec<char> = line.chars().collect();
-                let Some(left) = c.iter().position(|ch| *ch == '│') else { continue };
-                let Some(right) = c.iter().rposition(|ch| *ch == '│').filter(|r| *r > left + 10)
-                else {
-                    continue;
-                };
-                assert_eq!(c[right - 1], ' ', "cut off:\n{shown}");
-            }
-        };
-        let mut app = app();
-        let mut setup = crate::setup_list::tests::two();
-        // OpenCode on Windows' side: Node.js there, with the line saying why under its row.
-        let opencode = setup.rows().iter().position(|e| e.id == "opencode").unwrap();
-        setup.toggle(opencode);
-        app.first_run = Some(FirstRun { setup, only_setup: true, ..FirstRun::default() });
-        let shown = draw(&app);
-        assert!(shown.contains("WSL (Ubuntu)"), "{shown}");
-        assert!(shown.contains("[x] the vendor's installer"), "{shown}");
-        assert!(shown.contains("then log in"), "{shown}");
-        assert!(shown.contains("Windows: ticked because OpenCode needs it"), "{shown}");
-        fits(&shown);
-        // Windows without a usable WSL: its reason and fix, and the default side's, wrap.
-        app.first_run = Some(FirstRun {
-            setup: crate::setup_list::tests::unusable(),
-            only_setup: true,
-            ..FirstRun::default()
-        });
-        let shown = draw(&app);
-        assert!(shown.contains("WSL: WSL isn't installed or has no distro"), "{shown}");
-        assert!(shown.contains("By default this sets up Windows"), "{shown}");
-        fits(&shown);
     }
 
     /// BOOT2: `app.setup` (`U`) is the checklist alone; `s` (not now) installs nothing and says

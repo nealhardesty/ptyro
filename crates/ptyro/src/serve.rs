@@ -556,38 +556,11 @@ async fn accept_loop(
 }
 
 /// Started by the daemon: leave when it is gone (it is our parent), or its socket has been
-/// missing for 30 s. On Windows (WIN11) the daemon names itself (`PTYRO_DAEMON_PID`) and we wait
-/// on its process; its socket is a named pipe, which is never looked at (asking for a pipe's
-/// attributes can take an instance its clients are waiting for).
+/// missing for 30 s.
 async fn exit_with_daemon(socket: std::path::PathBuf) {
-    #[cfg(windows)]
-    {
-        let _ = socket;
-        let Some(pid) = std::env::var("PTYRO_DAEMON_PID").ok().and_then(|p| p.parse::<u32>().ok())
-        else {
-            return;
-        };
-        // When it started, where the daemon says: a daemon gone before we first looked may have
-        // left its id to another process, which we would otherwise wait on instead.
-        let started =
-            std::env::var("PTYRO_DAEMON_STARTED").ok().and_then(|t| t.parse::<u64>().ok());
-        std::thread::spawn(move || {
-            loop {
-                let gone = match started {
-                    Some(t) => ptyro_pty::wait_for_exit_of(pid, t, Duration::from_secs(3600)),
-                    None => ptyro_pty::wait_for_exit(pid, Duration::from_secs(3600)),
-                };
-                if gone {
-                    std::process::exit(0);
-                }
-            }
-        });
-    }
-    #[cfg(not(windows))]
     exit_with_parent(socket).await;
 }
 
-#[cfg(not(windows))]
 async fn exit_with_parent(socket: std::path::PathBuf) {
     // The daemon that started us is our parent: when it is gone (killed, crashed, replaced) the
     // next one starts a server of its own, and ours would hold the port for good. A crash leaves

@@ -384,7 +384,7 @@ async fn codex_and_opencode_adapters() {
         codex_home.join("config.toml"),
         format!(
             "notify = [\"sh\", \"-c\", \"echo \\\"$1\\\" >> {}\", \"x\"]\n",
-            ptyro_testkit::program::shell_path(&chained.to_string_lossy())
+            chained.to_string_lossy()
         ),
     )
     .unwrap();
@@ -434,10 +434,7 @@ async fn codex_and_opencode_adapters() {
             let by_hand = std::process::Command::new("sh")
                 .args([
                     "-c",
-                    &format!(
-                        "echo \"$1\" >> {}",
-                        ptyro_testkit::program::shell_path(&chained.to_string_lossy())
-                    ),
+                    &format!("echo \"$1\" >> {}", chained.to_string_lossy()),
                     "x",
                     "by-hand",
                 ])
@@ -676,8 +673,8 @@ async fn notifications_sinks_mutes_and_signed_links() {
     let log = tmp.path().join("sink.jsonl");
     let cfg = format!(
         "[notifications]\nchannels = [\"sinks\"]\non = [\"blocked\", \"idle\", \"errored\"]\nsinks = [{{ type = \"command\", command = [\"sh\", \"-c\", \"cat >> {} && echo >> {}\"], on = [\"blocked\", \"idle\"] }}]\ncallback = {{ listen = \"127.0.0.1:{port}\" }}\n",
-        ptyro_testkit::program::shell_path(&log.to_string_lossy()),
-        ptyro_testkit::program::shell_path(&log.to_string_lossy())
+        log.to_string_lossy(),
+        log.to_string_lossy()
     );
     let w = World::new(&cfg);
     let c = w.d.client().await.unwrap();

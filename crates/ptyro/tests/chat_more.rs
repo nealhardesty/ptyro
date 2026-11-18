@@ -255,7 +255,7 @@ fn search_scopes_find_and_the_history_tools() {
 
     // From inside a chat's agent (the fake runs `sh` as a tool): its profile's chats only, and
     // it may not change anything.
-    let q = format!("sh {} chat search jitter --json", ptyro_testkit::program::shell_path(BIN));
+    let q = format!("sh {} chat search jitter --json", BIN);
     let out = w.ok(&["chat", "send", &retry, &q]);
     assert!(out.contains("Retry design") || out.contains("ran:"), "{out}");
     let shown = w.show(&retry);
@@ -268,7 +268,7 @@ fn search_scopes_find_and_the_history_tools() {
         .collect();
     assert!(!tool.contains("Work notes"), "a default-profile chat never sees a work one: {tool}");
     assert!(!tool.contains("Retry design\""), "nor itself");
-    let rm = format!("sh {} chat rm {retry}", ptyro_testkit::program::shell_path(BIN));
+    let rm = format!("sh {} chat rm {retry}", BIN);
     w.idle(&retry);
     w.ok(&["chat", "send", &retry, &rm]);
     let shown = w.show(&retry);
@@ -283,19 +283,9 @@ fn search_scopes_find_and_the_history_tools() {
     // Nor read one outside its scope, or itself, by name.
     let work = w.addr_of("Work notes");
     w.idle(&retry);
-    w.ok(&[
-        "chat",
-        "send",
-        &retry,
-        &format!("sh {} chat show {work}", ptyro_testkit::program::shell_path(BIN)),
-    ]);
+    w.ok(&["chat", "send", &retry, &format!("sh {} chat show {work}", BIN)]);
     w.idle(&retry);
-    w.ok(&[
-        "chat",
-        "send",
-        &retry,
-        &format!("sh {} chat show {retry}", ptyro_testkit::program::shell_path(BIN)),
-    ]);
+    w.ok(&["chat", "send", &retry, &format!("sh {} chat show {retry}", BIN)]);
     let shown = w.show(&retry);
     let tool: Vec<String> = shown["nodes"]
         .as_array()

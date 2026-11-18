@@ -1,20 +1,17 @@
 //! `ptyro setup` and `ptyro install` (ROADMAP BOOT1, SPEC §24.2): the setup checklist in a
 //! terminal, and installing by name. Both use the one plan engine (`ptyro_agents::setup`) on
 //! this computer, with no daemon (a fresh machine has none yet). Admin steps ask once, in this
-//! terminal (sudo's own prompt; Windows' UAC from the installer); `--yes` asks nothing and
-//! reports what would have needed a prompt, with its command.
+//! terminal (sudo's own prompt); `--yes` asks nothing and reports what would have needed a
+//! prompt, with its command.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, IsTerminal, Write};
 
-use ptyro_agents::catalog::{self, Kind, Platform};
+use ptyro_agents::catalog::{self, Kind};
 use ptyro_agents::own;
-use ptyro_agents::setup::checklist::{self, Picks, Sides, cell, here_already, mark, rows};
-use ptyro_agents::setup::{
-    self, Admin, Entry, Event, Plan, Report, Side, Sided, State, Where, WslStatus,
-};
+use ptyro_agents::setup::checklist::{self, here_already, mark, rows};
+use ptyro_agents::setup::{self, Admin, Entry, Event, Plan, Report, State, Survey};
 use ptyro_agents::updates::{self, Outdated};
-use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
 
@@ -28,13 +25,8 @@ pub struct SetupArgs {
     pub tools: Option<Vec<String>>,
     pub dry_run: bool,
     pub json: bool,
-    /// `--where` (BOOT8): on Windows `wsl`, `windows` or `both`.
+    /// The removed `--where` (hidden): refused with what to do instead.
     pub place: Option<String>,
-    /// Hidden: print what is installed as JSON (Windows' ptyro asks a WSL distro's this way).
-    pub survey: bool,
-    /// Hidden: a person answers on stdin, terminal or not (the TUI's split in WSL running
-    /// Windows' ptyro.exe through interop, whose console is a pipe).
-    pub tty: bool,
     /// `--move` (BOOT7): with `--yes`, move the ticked agents installed another way too.
     pub move_: bool,
 }
@@ -44,133 +36,41 @@ pub struct InstallArgs {
     pub yes: bool,
     pub dry_run: bool,
     pub json: bool,
+    /// The removed `--where` (hidden): refused with what to do instead.
     pub place: Option<String>,
-    /// Hidden `--admin ask|silent|never`: Windows' ptyro running this in a WSL distro, the person having
-    /// said yes there already. `ask`: sudo may prompt in the terminal; `never`: for the web.
-    pub admin: Option<String>,
-    pub tty: bool,
     /// Hidden `--confirmed`: the TUI's checklist asked already (BOOT2), so no `Install?`; the
     /// rest (sudo's prompt, the logins, the profiles line) is as when typed.
     pub confirmed: bool,
     /// `--move` (BOOT7): with `--yes`, move the named agents installed another way too.
     pub move_: bool,
-    /// Hidden `--moves`: the agents Windows' ptyro may move here (it asked already).
-    pub moves: Vec<String>,
 }
 
-/// A person can answer: a terminal (or a test's fake machine, which pipes its answers; or
-/// `--tty`, said by the TUI).
-pub(crate) fn interactive(tty: bool) -> bool {
-    tty || (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
+/// A person can answer: a terminal (or a test's fake machine, which pipes its answers).
+pub(crate) fn interactive() -> bool {
+    (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
         || ptyro_core::test_knob("PTYRO_TEST_SETUP").is_some()
 }
 
-/// `--where`, checked against this machine: on Windows any of them; elsewhere only `local`.
-/// `cmd` is the command it's for (`setup`, `login`), for the words of a refusal.
-pub(crate) fn place_of(
-    given: Option<&str>,
-    platform: Platform,
-    cmd: &str,
-) -> Result<Option<Where>, Error> {
-    let Some(w) = given else { return Ok(None) };
-    let w: Where = w.parse().map_err(Error::invalid)?;
-    if platform.is_windows() || w == Where::Local {
-        return Ok(Some(w));
+/// `--where` chose a side for native Windows' ptyro, which is gone (2026-11-18): refused, with
+/// what to do instead. `None`: nothing given, nothing to say.
+pub(crate) fn where_removed(given: Option<&str>) -> Result<(), Error> {
+    match given {
+        None => Ok(()),
+        Some(_) => Err(Error::invalid(
+            "`--where` chose Windows' or WSL's side for the native Windows ptyro, which was removed on 2026-11-18: setup installs on this computer (inside WSL, into WSL). Leave --where out",
+        )),
     }
-    let (here, sides) = if cmd == "login" {
-        (
-            "`ptyro login` here logs in to it",
-            "an agent can be logged in on WSL's side, Windows', or both",
-        )
-    } else {
-        ("setup here installs into it", "an agent can go into WSL, onto Windows, or both")
-    };
-    Err(Error::invalid(if platform == Platform::Wsl {
-        format!(
-            "--where {} is for Windows' ptyro: this is WSL, and {here}. For Windows itself, run `ptyro {cmd} --where windows` in a Windows terminal",
-            w.name()
-        )
-    } else {
-        format!(
-            "--where {} is for Windows, where {sides}; on {} everything is on this computer: leave --where out",
-            w.name(),
-            platform.name()
-        )
-    }))
 }
 
-/// Look at this computer, and on Windows at WSL (unless only Windows is wanted). The default
-/// place is the side the user's daemon runs on: WSL's when `client.default_remote` is a
-/// `wsl://` one and WSL is usable, else this computer.
-async fn look(
-    paths: &Paths,
-    given: Option<&str>,
-    quiet: bool,
-) -> Result<(Box<dyn setup::Host + Send>, Sides, Where), Error> {
-    if !quiet {
-        eprintln!("Looking at what's installed…");
-    }
+/// Look at this computer.
+fn look(paths: &Paths) -> (Box<dyn setup::Host + Send>, Survey) {
+    eprintln!("Looking at what's installed…");
     let host = setup::host(paths);
     // The remembered newest versions (BOOT5): an outdated agent shows so, and can be ticked;
     // one installed another way is offered the move unless `updates.keep_installer` keeps it
     // (BOOT7).
     let here = updates::survey(&*host, &paths.state, &updates_config(paths));
-    let platform = here.platform;
-    let place = place_of(given, platform, "setup")?;
-    if !platform.is_windows() {
-        let status = (platform == Platform::Wsl)
-            .then(|| WslStatus::Inside { distro: std::env::var("WSL_DISTRO_NAME").ok() });
-        let sides = Sides { here, side: Side::Local, wsl: None, status };
-        return Ok((host, sides, Where::Local));
-    }
-    let remote = crate::winclient::resolve(None, paths, false).await;
-    let prefer = remote.as_deref().and_then(ptyro_client::remote::wsl_distro).map(str::to_owned);
-    let mut sides = Sides { here, side: Side::Windows, wsl: None, status: None };
-    if !matches!(place, Some(Where::Windows | Where::Local)) {
-        if !quiet {
-            eprintln!("Looking at WSL…");
-        }
-        let mut status = wsl_setup::probe(prefer.as_deref()).await;
-        if let Some(d) = status.usable().map(str::to_owned) {
-            match wsl_setup::survey(&d).await {
-                Ok(s) => sides.wsl = Some(s),
-                Err(why) => status = why,
-            }
-        }
-        sides.status = Some(status);
-    }
-    let place = match place {
-        Some(Where::Wsl) if sides.wsl.is_none() => {
-            let why = match &sides.status {
-                Some(WslStatus::Unusable { reason, fix }) => format!("{reason}: {fix}"),
-                _ => "WSL isn't usable here".to_owned(),
-            };
-            return Err(Error::new(ErrorCode::Unsupported, format!("--where wsl: {why}")));
-        }
-        Some(Where::Both) if sides.wsl.is_none() => {
-            if let Some(s) = &sides.status {
-                eprintln!("{}", s.words());
-            }
-            Where::Windows
-        }
-        Some(p) => p,
-        None => default_place(prefer.as_deref(), sides.status.as_ref(), quiet),
-    };
-    Ok((host, sides, place))
-}
-
-/// The default side on Windows ([`checklist::default_place`]), saying why it isn't the
-/// daemon's distro when it isn't (unless `quiet`).
-pub(crate) fn default_place(
-    prefer: Option<&str>,
-    status: Option<&WslStatus>,
-    quiet: bool,
-) -> Where {
-    let (place, why) = checklist::default_place(prefer, status);
-    if let Some(why) = why.filter(|w| !quiet && !w.is_empty()) {
-        eprintln!("{why}");
-    }
-    place
+    (host, here)
 }
 
 /// The ids `names` mean, each of `kind`; `none` is none.
@@ -196,17 +96,11 @@ fn ids_of(names: &[String], kind: Kind, flag: &str) -> Result<Vec<String>, Error
 }
 
 pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
-    if a.survey {
-        let host = setup::host(&ctx.paths);
-        let survey = updates::survey(&*host, &ctx.paths.state, &updates_config(&ctx.paths));
-        let text = serde_json::to_string(&survey).map_err(|e| Error::internal(e.to_string()))?;
-        println!("{text}");
-        return Ok(0);
-    }
+    where_removed(a.place.as_deref())?;
     let named = a.agents.is_some() || a.tools.is_some();
     let mut ids = ids_of(a.agents.as_deref().unwrap_or_default(), Kind::Agent, "--agents")?;
     ids.extend(ids_of(a.tools.as_deref().unwrap_or_default(), Kind::Tool, "--tools")?);
-    if !a.yes && !a.dry_run && !interactive(a.tty) {
+    if !a.yes && !a.dry_run && !interactive() {
         return Err(Error::invalid(
             "`ptyro setup` is a checklist: run it in a terminal, or pass --yes (with --agents and --tools, or the defaults: Claude Code, Codex, git, GitHub CLI)",
         ));
@@ -214,16 +108,16 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     // Already running (the web's, another terminal's, the TUI's): say so before the checklist,
     // and hold the machine's lock from here, so nothing starts while this one is asked.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, "`ptyro setup`")?) };
-    let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), false).await?;
-    let mut picks = if named { sides.picks(place, &ids) } else { sides.defaults(place) };
+    let (host, mut survey) = look(&ctx.paths);
+    let mut picks = if named { ids } else { setup::defaults(&survey) };
     // Unattended, nothing moves unless `--move` (BOOT7: a move is offered, never done unasked);
     // each one passed over is said.
     if a.yes && !a.move_ {
-        say_unmoved(&sides.plan(&picks), &[]);
-        sides.keep_all(&[]);
+        say_unmoved(&setup::plan(&survey, &picks), &[]);
+        checklist::keep_all(&mut survey, &[]);
     }
     if a.dry_run {
-        return show_plan(&sides.plan(&picks), a.json);
+        return show_plan(&setup::plan(&survey, &picks), a.json);
     }
     // A person at a terminal goes on to the rest after the checklist (what `ptyro init` asked):
     // accounts, preferences, repositories. A script's run, or one for named items, stops here.
@@ -231,7 +125,7 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
     if !a.yes {
         // Let go of stdin before the rest of setup reads it (its lock isn't reentrant).
         let picked =
-            checklist(&sides, place, picks, &mut std::io::stdin().lock(), &mut std::io::stderr());
+            checklist(&survey, picks, &mut std::io::stdin().lock(), &mut std::io::stderr());
         match picked {
             Some(p) => picks = p,
             None => {
@@ -241,9 +135,9 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
             }
         }
     }
-    let plan = sides.plan(&picks);
+    let plan = setup::plan(&survey, &picks);
     let admin = if a.yes { Admin::Silent } else { Admin::Ask };
-    let code = go(ctx, &*host, &sides, &plan, admin, a.json, false, lock, "`ptyro setup`")?;
+    let code = go(ctx, &*host, &plan, admin, a.json, lock, "`ptyro setup`")?;
     if rest {
         rest::run(ctx).await?;
     }
@@ -251,6 +145,7 @@ pub async fn setup(ctx: &Ctx, a: SetupArgs) -> Result<i32, Error> {
 }
 
 pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
+    where_removed(a.place.as_deref())?;
     let mut ids = Vec::new();
     for n in a.names.iter().flat_map(|n| n.split([',', ' '])).filter(|n| !n.is_empty()) {
         let item = setup::resolve(n).map_err(|e| Error::new(ErrorCode::NotFound, e))?;
@@ -261,61 +156,36 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
     if ids.is_empty() {
         return Err(Error::invalid("name what to install: `ptyro install codex`"));
     }
-    // Asked already, by Windows' ptyro (BOOT8): run, and ask only for administrator rights.
-    let asked = match a.admin.as_deref() {
-        None => None,
-        Some("ask") => Some(Admin::Ask),
-        Some("silent") => Some(Admin::Silent),
-        Some("never") => Some(Admin::Never),
-        Some(other) => {
-            return Err(Error::invalid(format!(
-                "--admin takes ask, silent or never, not {other:?}"
-            )));
-        }
-    };
-    if !a.yes && !a.dry_run && asked.is_none() && !interactive(a.tty) {
+    if !a.yes && !a.dry_run && !interactive() {
         return Err(Error::invalid(
             "`ptyro install` asks before it installs: run it in a terminal, or pass --yes",
         ));
     }
-    let quiet = asked.is_some();
-    let who = if quiet {
-        "`ptyro install`, for Windows' ptyro"
-    } else if a.confirmed {
-        "the TUI's setup checklist"
-    } else {
-        "`ptyro install`"
-    };
+    let who = if a.confirmed { "the TUI's setup checklist" } else { "`ptyro install`" };
     // Already running: say so before asking anything, and hold the lock from here.
     let lock = if a.dry_run { None } else { Some(take_lock(ctx, who)?) };
-    let (host, mut sides, place) = look(&ctx.paths, a.place.as_deref(), quiet).await?;
+    let (host, mut survey) = look(&ctx.paths);
     // A move is offered, never done unasked (BOOT7, the design): the question asks it, the TUI's
     // checklist ticked it, or `--move` says so; unattended (`--yes`) the agent stays as it is.
-    if !(a.move_ || a.confirmed || (!a.yes && asked.is_none())) {
-        let offered = sides.plan(&sides.picks(place, &ids));
-        let allowed: Vec<String> =
-            a.moves.iter().flat_map(|m| setup::resolve(m).ok()).map(|i| i.id.clone()).collect();
-        if !quiet {
-            say_unmoved(&offered, &allowed);
-        }
-        sides.keep_all(&allowed);
+    if !(a.move_ || a.confirmed || !a.yes) {
+        say_unmoved(&setup::plan(&survey, &ids), &[]);
+        checklist::keep_all(&mut survey, &[]);
     }
-    let mut plan = sides.plan(&sides.picks(place, &ids));
+    let mut plan = setup::plan(&survey, &ids);
     if a.dry_run {
         return show_plan(&plan, a.json);
     }
-    let two = plan.sides().len() > 1;
-    if !a.yes && asked.is_none() && !a.confirmed && !plan.steps().is_empty() {
+    if !a.yes && !a.confirmed && !plan.steps().is_empty() {
         eprintln!();
         for e in plan.steps() {
-            eprintln!("  {}", step_line(e, two));
+            eprintln!("  {}", step_line(e));
         }
         // A move to the recommended installer (BOOT7) can be declined for good: `k` keeps
-        // those the way they're installed (this computer's own; WSL's keeps its own).
+        // those the way they're installed.
         let moving: Vec<&Entry> = plan
             .steps()
             .into_iter()
-            .filter(|e| e.side != Side::Wsl && e.action.as_ref().is_some_and(|a| a.moving))
+            .filter(|e| e.action.as_ref().is_some_and(|a| a.moving))
             .collect();
         let q = if moving.is_empty() {
             "Install? [Y/n] ".to_owned()
@@ -349,10 +219,8 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
                 }
                 // Not run this time either: kept is a no to the move, not a yes to an update.
                 let rest: Vec<String> = ids.iter().filter(|i| !kept.contains(i)).cloned().collect();
-                sides.here.keep.extend(kept);
-                let mut picks = sides.picks(place, &rest);
-                picks.wsl = sides.picks(place, &ids).wsl;
-                plan = sides.plan(&picks);
+                survey.keep.extend(kept);
+                plan = setup::plan(&survey, &rest);
                 if plan.steps().is_empty() {
                     eprintln!("Nothing else to install.");
                     return Ok(0);
@@ -364,8 +232,8 @@ pub async fn install(ctx: &Ctx, a: InstallArgs) -> Result<i32, Error> {
             }
         }
     }
-    let admin = asked.unwrap_or(if a.yes { Admin::Silent } else { Admin::Ask });
-    go(ctx, &*host, &sides, &plan, admin, a.json, quiet, lock, who)
+    let admin = if a.yes { Admin::Silent } else { Admin::Ask };
+    go(ctx, &*host, &plan, admin, a.json, lock, who)
 }
 
 /// Unattended (`--yes` without `--move`), each picked agent installed another way that is left
@@ -414,7 +282,6 @@ pub struct UpdateArgs {
     pub check: bool,
     pub yes: bool,
     pub json: bool,
-    pub tty: bool,
     /// This machine only, not the machines linked to it (SPEC §24.8).
     pub here: bool,
 }
@@ -423,10 +290,8 @@ pub struct UpdateArgs {
 /// update the agents that have one (those named, or every one `updates.ignore` doesn't skip),
 /// each through the plan engine with the method it was installed by, under the machine's setup
 /// lock, after a yes. Sessions running an updated agent keep the old version until they restart,
-/// and are named; on Windows, an agent that can't be replaced while it runs is offered a retry.
-/// ptyro itself is one more row (BOOT6, SPEC §24.8): its release downloaded, checked and swapped
-/// in last, then the daemon upgraded live, and on Windows with WSL the other half brought to the
-/// same version.
+/// and are named. ptyro itself is one more row (BOOT6, SPEC §24.8): its release downloaded,
+/// checked and swapped in last, then the daemon upgraded live.
 pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let cfg = updates_config(&ctx.paths);
     let mut ids: Vec<String> = Vec::new();
@@ -478,7 +343,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         say_where_each_stands(&v, &survey, &cfg, &ids);
         return Ok(0);
     }
-    if !a.yes && !interactive(a.tty) {
+    if !a.yes && !interactive() {
         return Err(Error::invalid(
             "`ptyro update` asks before it updates: run it in a terminal, or pass --yes",
         ));
@@ -494,25 +359,16 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     let host = setup::host(&ctx.paths);
     // Looked up before the lock is taken: a slow network never holds it.
     let looked = updates::lookup(&*host);
-    // ptyro itself (BOOT6): whether it will be updated (or was named), so the other half of a
-    // Windows install with WSL is looked at now, before the lock (a cold distro takes seconds).
+    // ptyro itself (BOOT6).
     let install = own::Install::here();
     let ptyro_named = ids.iter().any(|i| i == own::ID);
     // As `updates::remember` will see it: this look's, else the one remembered (the API may be
-    // out of requests while the download still works), so the halves are decided on the same
-    // view the update list is.
+    // out of requests while the download still works).
     let ptyro_latest = looked
         .0
         .get(own::ID)
         .cloned()
         .or_else(|| updates::load(&state).latest.get(own::ID).cloned());
-    let ptyro_wanted = match own::finding(&install, ptyro_latest.as_deref()) {
-        Some(o) if ids.is_empty() => !updates::ignored(&cfg.ignore, &o) && o.managed.is_none(),
-        Some(_) => ptyro_named,
-        None => ptyro_named && ptyro_latest.is_some(),
-    };
-    let half =
-        if ptyro_wanted { crate::own::other_half(&ctx.paths, host.platform()).await } else { None };
     let lock = take_lock(ctx, "`ptyro update`")?;
     let since = updates::generation(&state);
     let (v, survey) = updates::remember(&*host, &state, updates::now(), since, Some(looked), true);
@@ -570,9 +426,6 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         }
         drop(lock);
         let mut ok = true;
-        if let (Some(h), Some(now)) = (&half, own::version_of(&install.path)) {
-            ok = crate::own::keep_in_step(h, &now, a.json).await;
-        }
         // This machine is current; machines linked to it may not be.
         if !linked.is_empty() {
             eprintln!("\nThis machine runs ptyro {target}; machines linked here are behind:");
@@ -592,15 +445,6 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         for o in todo.iter().filter(|o| o.id == own::ID) {
             for l in crate::own::question(o, &install) {
                 eprintln!("{l}");
-            }
-            if let Some(h) = half.as_ref().filter(|h| h.version.as_deref() != Some(&o.latest)) {
-                eprintln!(
-                    "    and {} {} too, so both halves agree",
-                    h.label,
-                    h.version
-                        .as_deref()
-                        .map_or("(version unknown)".into(), |v| format!("{v} → {}", o.latest))
-                );
             }
         }
         if !linked.is_empty() {
@@ -626,7 +470,6 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         }
     }
     let admin = if a.yes { Admin::Silent } else { Admin::Ask };
-    let windows = survey.platform.is_windows();
     let names: BTreeMap<String, String> =
         todo.iter().map(|o| (o.id.clone(), o.name.clone())).collect();
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
@@ -639,19 +482,11 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         );
         s
     };
-    let mut plan = setup::plan(&never_move(&survey), &todo_ids);
     let mut done: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
-    let agents = todo.iter().any(|o| o.id != own::ID);
-    loop {
-        if !agents {
-            break;
-        }
-        let mut busy: Vec<String> = Vec::new();
+    if todo.iter().any(|o| o.id != own::ID) {
+        let plan = setup::plan(&never_move(&survey), &todo_ids);
         let mut on = |ev: Event| {
-            if let Event::Failed { id, in_use: true, .. } = &ev {
-                busy.push(id.clone());
-            }
             if a.json {
                 if let Ok(line) = serde_json::to_string(&ev) {
                     println!("{line}");
@@ -667,58 +502,12 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
                         .unwrap_or("(updated; a new terminal may be needed to find it)")
                 ),
                 Event::Finished { .. } | Event::Logins { .. } => {}
-                _ => print_event(&ev, &name, windows),
+                _ => print_event(&ev, &name),
             }
         };
         let report = setup::run(&plan, &*host, admin, &mut on);
         done.extend(report.done.iter().cloned());
-        failed.retain(|f| !report.done.contains(f));
-        for f in report.failed.iter().chain(&report.skipped).chain(&report.blocked) {
-            if !failed.contains(f) {
-                failed.push(f.clone());
-            }
-        }
-        // Windows won't replace a program while it runs: say which sessions run it, and
-        // offer to try again once they're closed (a person at the terminal only).
-        if !(windows && admin == Admin::Ask && !a.json && !busy.is_empty()) {
-            break;
-        }
-        let now_running = sessions_running(ctx, &busy).await;
-        for id in &busy {
-            let who = now_running
-                .get(id)
-                .map(|n| format!(" ({}: {})", sessions(n.len()), n.join(", ")))
-                .unwrap_or_default();
-            eprintln!(
-                "\n{} is still running{who}, and Windows won't replace a program while it runs.",
-                name(id)
-            );
-        }
-        eprintln!("End those sessions (or quit it wherever else it runs), then try again here.");
-        if !confirm("Try again now? [Y/n] ") {
-            break;
-        }
-        // Looked at again: one that updated itself meanwhile (Claude Code does)
-        // is done, not a failure.
-        let fresh = setup::survey(&*host, &v.latest);
-        let mut still: Vec<String> = Vec::new();
-        for id in busy {
-            let old = matches!(
-                fresh.states.get(&id),
-                Some(State::Outdated { .. } | State::Other { latest: Some(_), .. })
-            );
-            if old {
-                still.push(id);
-            } else {
-                eprintln!("✓ {} is up to date now", name(&id));
-                failed.retain(|f| f != &id);
-                done.push(id);
-            }
-        }
-        if still.is_empty() {
-            break;
-        }
-        plan = setup::plan(&never_move(&fresh), &still);
+        failed.extend(report.failed.iter().chain(&report.skipped).chain(&report.blocked).cloned());
     }
     // ptyro itself last (BOOT6), still under the lock: its release, checked and swapped in.
     let mut ptyro_new: Option<String> = None;
@@ -729,7 +518,7 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
                     println!("{line}");
                 }
             } else {
-                print_event(&ev, &name, false);
+                print_event(&ev, &name);
             }
         };
         // Off the runtime's thread, its progress shown as it comes.
@@ -754,22 +543,11 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
     }
     let after = updates::refresh(&*host, &state, updates::now());
     drop(lock);
-    // Then the daemon onto it, live, and the other half to the same version (also when ptyro
-    // was named and is the newest already).
+    // Then the daemon onto it, live.
     if let Some(v) = &ptyro_new
         && !crate::own::upgrade_daemon(ctx, install.after(), v).await
     {
         failed.push("daemon".into());
-    }
-    let ptyro_now = match (&ptyro_new, &ptyro_todo) {
-        (Some(v), _) => Some(v.clone()),
-        (None, None) if ptyro_named => own::version_of(&install.path),
-        _ => None,
-    };
-    if let (Some(h), Some(v)) = (&half, &ptyro_now)
-        && !crate::own::keep_in_step(h, v, a.json).await
-    {
-        failed.push("the other half".into());
     }
     // Then the machines linked here, once this one is on the release they will install (asked
     // over connections of their own, so their links being down for the version doesn't matter).
@@ -812,11 +590,6 @@ pub async fn update(ctx: &Ctx, a: UpdateArgs) -> Result<i32, Error> {
         }
     }
     Ok(if failed.is_empty() { 0 } else { 1 })
-}
-
-/// `1 session`, `2 sessions`.
-fn sessions(n: usize) -> String {
-    if n == 1 { "1 session".into() } else { format!("{n} sessions") }
 }
 
 /// `1 session still runs`, `2 sessions still run`.
@@ -932,10 +705,7 @@ async fn sessions_running(ctx: &Ctx, ids: &[String]) -> BTreeMap<String, Vec<Str
         let prog = s
             .argv
             .first()
-            .map(|p| {
-                let base = p.rsplit(['/', '\\']).next().unwrap_or(p);
-                base.strip_suffix(".exe").unwrap_or(base).to_owned()
-            })
+            .map(|p| p.rsplit('/').next().unwrap_or(p).to_owned())
             .unwrap_or_default();
         for id in ids {
             let Some(item) = catalog::item(id) else { continue };
@@ -947,41 +717,24 @@ async fn sessions_running(ctx: &Ctx, ids: &[String]) -> BTreeMap<String, Vec<Str
     out
 }
 
-/// Run the plan with live output, side by side (this computer first, then WSL's), then what's
-/// next. `quiet`: run for Windows' ptyro, which says the rest itself. `lock`: the machine's
-/// setup lock, held since before the questions; `None`, it is taken here for `who`.
-#[allow(clippy::too_many_arguments)]
+/// Run the plan with live output, then what's next. `lock`: the machine's setup lock, held since
+/// before the questions; `None`, it is taken here for `who`.
 fn go(
     ctx: &Ctx,
     host: &dyn setup::Host,
-    sides: &Sides,
     plan: &Plan,
     admin: Admin,
     json: bool,
-    quiet: bool,
     lock: Option<setup::lock::Lock>,
     who: &str,
 ) -> Result<i32, Error> {
-    let two = plan.sides().len() > 1;
-    let tag =
-        |e: &Entry| if two { format!(" ({})", side_name(e.side, sides)) } else { String::new() };
-    if !quiet {
-        for e in
-            plan.entries.iter().filter(|e| e.picked && e.action.is_none() && e.blocked.is_none())
-        {
-            eprintln!("✓ {}{} is here already ({})", e.name, tag(e), e.state.words());
-        }
+    for e in plan.entries.iter().filter(|e| e.picked && e.action.is_none() && e.blocked.is_none()) {
+        eprintln!("✓ {} is here already ({})", e.name, e.state.words());
     }
-    let work = |side: Side| {
-        plan.side(side).entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some()))
-    };
-    let busy: Vec<Side> = plan.sides().into_iter().filter(|s| work(*s)).collect();
-    if busy.is_empty() {
-        if !quiet {
-            eprintln!("Nothing to install.");
-            if !json {
-                logins(host, sides, plan, &[], admin);
-            }
+    if !plan.entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some())) {
+        eprintln!("Nothing to install.");
+        if !json {
+            logins(host, plan, &Report::default(), admin);
         }
         return Ok(0);
     }
@@ -993,51 +746,16 @@ fn go(
     let names: BTreeMap<String, String> =
         plan.entries.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
     let name = |id: &str| names.get(id).cloned().unwrap_or_else(|| id.to_owned());
-    let windows = plan.platform.is_windows();
-    let mut total = Report::default();
-    let mut reports: Vec<(Side, Report)> = Vec::new();
-    let mut tools = false;
-    for side in &busy {
-        let side = *side;
-        if busy.len() > 1 && !json {
-            eprintln!(
-                "
-── {} ──",
-                side_name(side, sides)
-            );
+    let mut on = |ev: Event| {
+        if json {
+            if let Ok(line) = serde_json::to_string(&ev) {
+                println!("{line}");
+            }
+            return;
         }
-        let mut on = |ev: Event| {
-            if json {
-                let line = if windows {
-                    serde_json::to_string(&Sided { side, event: ev })
-                } else {
-                    serde_json::to_string(&ev)
-                };
-                if let Ok(line) = line {
-                    println!("{line}");
-                }
-                return;
-            }
-            print_event(&ev, &name, windows && side != Side::Wsl);
-        };
-        let report = match (side, sides.distro()) {
-            (Side::Wsl, Some(distro)) => {
-                let how = match admin {
-                    Admin::Ask => wsl_setup::Admin::Ask,
-                    Admin::Silent => wsl_setup::Admin::Silent,
-                    Admin::Never => wsl_setup::Admin::Never,
-                };
-                wsl_setup::run(distro, plan, how, &mut on)
-            }
-            _ => {
-                let r = setup::run(&plan.side(side), host, admin, &mut on);
-                tools |= r.tools;
-                r
-            }
-        };
-        total.merge(&report);
-        reports.push((side, report));
-    }
+        print_event(&ev, &name);
+    };
+    let total = setup::run(plan, host, admin, &mut on);
     if !total.done.is_empty() || !total.failed.is_empty() {
         // What is out of date changed (BOOT5; a move that failed half way changed it too,
         // BOOT7): the badge and the start-up note follow. Under the lock still, so a look beside
@@ -1045,11 +763,11 @@ fn go(
         updates::refresh(host, &ctx.paths.state, updates::now());
     }
     drop(lock);
-    if tools {
+    if total.tools {
         offer_path(&ctx.paths, admin != Admin::Ask);
     }
-    if !quiet && !json {
-        logins(host, sides, plan, &reports, admin);
+    if !json {
+        logins(host, plan, &total, admin);
     }
     Ok(if total.ok() { 0 } else { 1 })
 }
@@ -1059,47 +777,19 @@ fn take_lock(ctx: &Ctx, who: &str) -> Result<setup::lock::Lock, Error> {
     setup::lock::Lock::take(&ctx.paths.state, who).map_err(Error::conflict)
 }
 
-/// After the installs (BOOT4): each side's logins, walked through in this terminal when a person
-/// is here (else where each stands), then how to add more accounts as profiles. The exit code
-/// stays the installs'.
-fn logins(
-    host: &dyn setup::Host,
-    sides: &Sides,
-    plan: &Plan,
-    reports: &[(Side, Report)],
-    admin: Admin,
-) {
-    let none = Report::default();
-    let mut any = false;
-    for side in plan.sides() {
-        let report = reports.iter().find(|(s, _)| *s == side).map_or(&none, |(_, r)| r);
-        let ids = setup::login::after(&plan.side(side), report);
-        let distro = if side == Side::Wsl { sides.distro() } else { None };
-        if side == Side::Wsl && distro.is_none() {
-            continue;
-        }
-        if plan.sides().len() > 1 && !ids.is_empty() {
-            eprintln!("\n── {} ──", side_name(side, sides));
-        }
-        any |= crate::logins::after_setup(host, &ids, &report.done, distro, admin == Admin::Ask);
-    }
-    if any {
+/// After the installs (BOOT4): the logins, walked through in this terminal when a person is here
+/// (else where each stands), then how to add more accounts as profiles. The exit code stays the
+/// installs'.
+fn logins(host: &dyn setup::Host, plan: &Plan, report: &Report, admin: Admin) {
+    let ids = setup::login::after(plan, report);
+    if crate::logins::after_setup(host, &ids, &report.done, admin == Admin::Ask) {
         eprintln!("\n{}", setup::login::PROFILES_HINT);
     }
 }
 
-/// `Windows`, `WSL (Ubuntu)`.
-fn side_name(side: Side, sides: &Sides) -> String {
-    sides.name(side)
-}
-
-fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
+fn print_event(ev: &Event, name: &dyn Fn(&str) -> String) {
     let list = |ids: &[String]| ids.iter().map(|i| name(i)).collect::<Vec<_>>().join(", ");
     match ev {
-        Event::Elevating { ids } if windows => eprintln!(
-            "\n{} need administrator rights: Windows asks (a UAC prompt) as each installer starts.",
-            list(ids)
-        ),
         Event::Elevating { ids } => eprintln!(
             "\n{} need administrator rights: sudo asks for your password once, here.",
             list(ids)
@@ -1128,7 +818,7 @@ fn print_event(ev: &Event, name: &dyn Fn(&str) -> String, windows: bool) {
             eprintln!("– {}: not installed, {reason}", name(id));
             eprintln!("  fix: {fix}");
         }
-        // The logins are walked through after every side's run (`logins`).
+        // The logins are walked through after the run (`logins`).
         Event::Logins { .. } => {}
         Event::Finished { report } => eprintln!("\n{}", summary(report)),
     }
@@ -1183,8 +873,8 @@ pub(crate) fn confirm(q: &str) -> bool {
 }
 
 /// New terminals need ptyro's tools folders on `PATH`: through `ptyro shell-init`'s line in the
-/// shell's rc file (it adds them first), or on Windows the user's `PATH`. Asked; `--yes` only
-/// says how, as it leaves rc files alone everywhere else.
+/// shell's rc file (it adds them first). Asked; `--yes` only says how, as it leaves rc files
+/// alone.
 fn offer_path(paths: &Paths, yes: bool) {
     let dirs = setup::path_dirs(paths);
     let shown: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
@@ -1192,19 +882,6 @@ fn offer_path(paths: &Paths, yes: bool) {
         "\nSome of this went into ptyro's tools folder ({}). ptyro's own sessions find it.",
         paths.tools().display()
     );
-    if cfg!(windows) {
-        if yes || !confirm("Add its folders to your PATH, for new terminals? [Y/n] ") {
-            eprintln!("For other terminals, add these to your PATH: {}", shown.join("; "));
-            return;
-        }
-        match add_user_path(&dirs) {
-            Ok(()) => eprintln!("Added to your PATH: new terminals find them."),
-            Err(e) => {
-                eprintln!("Couldn't change your PATH ({e}): add {} yourself", shown.join("; "))
-            }
-        }
-        return;
-    }
     let shell = std::env::var("SHELL").unwrap_or_default();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     let (Some(kind), Some(home)) = (ptyro_core::shell::ShellKind::of_program(&shell), home) else {
@@ -1236,30 +913,6 @@ fn offer_path(paths: &Paths, yes: bool) {
     }
 }
 
-/// Windows: `dirs` at the front of the user's `PATH` (HKCU\Environment), each once. Read and
-/// written as stored: `%VAR%` entries stay unexpanded and REG_EXPAND_SZ stays so (PowerShell's
-/// `[Environment]::SetEnvironmentVariable` would expand them for good and write REG_SZ).
-#[cfg(windows)]
-fn add_user_path(dirs: &[std::path::PathBuf]) -> Result<(), String> {
-    use ptyro_pty::winreg::{Raw, announce_environment, get_raw, set_raw};
-    let cur =
-        get_raw(false, "Environment", "Path").unwrap_or(Raw { text: String::new(), expand: true });
-    let mine: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
-    let next = setup::prepend_entries(&cur.text, &mine);
-    if next != cur.text {
-        // A Path that held only plain folders may stay REG_SZ; one with `%VAR%` must expand.
-        set_raw("Environment", "Path", &next, cur.expand || next.contains('%'))
-            .map_err(|e| e.to_string())?;
-        announce_environment();
-    }
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn add_user_path(_dirs: &[std::path::PathBuf]) -> Result<(), String> {
-    Err("only on Windows".into())
-}
-
 /// `--dry-run`: the checklist and what would run.
 fn show_plan(plan: &Plan, json: bool) -> Result<i32, Error> {
     if json {
@@ -1272,15 +925,13 @@ fn show_plan(plan: &Plan, json: bool) -> Result<i32, Error> {
     let mut out = std::io::stdout();
     let _ = render(plan, &mut out);
     let steps = plan.steps();
-    let two = plan.sides().len() > 1;
     if steps.is_empty() {
         let _ = writeln!(out, "\nNothing to install.");
     } else {
         let _ = writeln!(out, "\nWhat would run, in order:");
         for (e, a) in steps.iter().filter_map(|e| Some((e, e.action.as_ref()?))) {
             let admin = if a.admin { " (as administrator)" } else { "" };
-            let at = if two { format!(" ({})", e.side.words()) } else { String::new() };
-            let _ = writeln!(out, "  {}{at}{admin}:", e.name);
+            let _ = writeln!(out, "  {}{admin}:", e.name);
             for l in a.command.lines() {
                 let _ = writeln!(out, "    $ {}", l.trim());
             }
@@ -1289,21 +940,14 @@ fn show_plan(plan: &Plan, json: bool) -> Result<i32, Error> {
     Ok(0)
 }
 
-/// `GitHub CLI: through apt (as administrator)`; with two sides, which (`… (WSL)`).
-fn step_line(e: &Entry, two: bool) -> String {
-    let at = if two { format!(" ({})", e.side.words()) } else { String::new() };
-    let Some(a) = &e.action else { return format!("{}{at}", e.name) };
+/// `GitHub CLI: through apt (as administrator)`.
+fn step_line(e: &Entry) -> String {
+    let Some(a) = &e.action else { return e.name.clone() };
     let admin = if a.admin { " (as administrator)" } else { "" };
     if let Some(m) = e.moves.as_ref().filter(|_| a.moving) {
         let from = e.state.path().map(|p| format!(" ({p})")).unwrap_or_default();
-        // WSL's agents are kept as installed from WSL, in its own config.
-        let wsl = if e.side == Side::Wsl {
-            " (to keep it as installed instead, add it to updates.keep_installer in WSL)"
-        } else {
-            ""
-        };
         return format!(
-            "{}{at}: {}{from}{admin}: install it through {}, check it runs, then `{}`; {}{wsl}",
+            "{}: {}{from}{admin}: install it through {}, check it runs, then `{}`; {}",
             e.name,
             m.words(),
             m.to.words(),
@@ -1312,29 +956,13 @@ fn step_line(e: &Entry, two: bool) -> String {
         );
     }
     let what = if a.update { "update" } else { "install" };
-    format!("{}{at}: {what} through {}{admin}", e.name, a.via.words())
+    format!("{}: {what} through {}{admin}", e.name, a.via.words())
 }
 
-/// The checklist: agents, tools (numbered), and what's here already; with two sides, a column
-/// each. Then what WSL is, when it matters.
-fn render(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
-    if plan.sides().len() > 1 {
-        render_sides(plan, out)?;
-    } else {
-        render_one(plan, out)?;
-    }
-    match &plan.wsl {
-        Some(w @ (WslStatus::Unusable { .. } | WslStatus::Inside { .. })) => {
-            writeln!(out, "\n{}", w.words())
-        }
-        _ => Ok(()),
-    }
-}
-
-/// What a checklist line says after the name, for one side's entry.
-fn notes_of(plan: &Plan, e: &Entry, label: bool) -> Vec<String> {
+/// What a checklist line says after the name.
+fn notes_of(plan: &Plan, e: &Entry) -> Vec<String> {
     let mut notes = Vec::new();
-    if let Some(l) = e.label.as_ref().filter(|_| label) {
+    if let Some(l) = &e.label {
         notes.push(l.clone());
     }
     if !e.needed_by.is_empty() {
@@ -1363,7 +991,8 @@ fn notes_of(plan: &Plan, e: &Entry, label: bool) -> Vec<String> {
     notes
 }
 
-fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
+/// The checklist: agents, tools (numbered), and what's here already.
+fn render(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
     let pick = rows(plan);
     for (title, kind) in [("Agents", Kind::Agent), ("Tools", Kind::Tool)] {
         let rows: Vec<(usize, &&Entry)> =
@@ -1373,7 +1002,7 @@ fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
         }
         writeln!(out, "\n{title}")?;
         for (i, e) in rows {
-            let mut notes = notes_of(plan, e, true);
+            let mut notes = notes_of(plan, e);
             if let Some(a) = e.action.as_ref().filter(|a| e.ticked && !a.moving) {
                 let admin = if a.admin { ", as administrator" } else { "" };
                 // Where "through" goes: before a reason it can't, as BOOT1 wrote it.
@@ -1396,99 +1025,23 @@ fn render_one(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
     Ok(())
 }
 
-const NAME: usize = 13;
-const CELL: usize = 28;
-
-fn render_sides(plan: &Plan, out: &mut dyn Write) -> std::io::Result<()> {
-    let sides = plan.sides();
-    let heads: Vec<String> = sides
-        .iter()
-        .map(|s| match (s, &plan.wsl) {
-            (Side::Wsl, Some(WslStatus::Usable { distro, .. })) => format!("WSL ({distro})"),
-            (s, _) => s.words().to_owned(),
-        })
-        .collect();
-    let pick = rows(plan);
-    for (title, kind) in [("Agents", Kind::Agent), ("Tools", Kind::Tool)] {
-        let rows: Vec<(usize, &&Entry)> =
-            pick.iter().enumerate().filter(|(_, e)| e.kind == kind).collect();
-        if rows.is_empty() {
-            continue;
-        }
-        let head: String = heads.iter().map(|h| format!("{h:<CELL$}")).collect();
-        writeln!(out, "\n{:<w$}{}", title, head.trim_end(), w = NAME + 6)?;
-        for (i, e) in rows {
-            let cells: String = sides
-                .iter()
-                .map(|s| format!("{:<CELL$}", cell(plan.entry_on(&e.id, *s))))
-                .collect();
-            let label = e.label.as_ref().map(|l| format!("  ({l})")).unwrap_or_default();
-            let line = format!("  {:>2} {:<NAME$} {}", i + 1, e.name, cells);
-            writeln!(out, "{}{label}", line.trim_end())?;
-            for (s, h) in sides.iter().zip(&heads) {
-                let Some(x) = plan.entry_on(&e.id, *s) else { continue };
-                let notes = notes_of(plan, x, false);
-                if !notes.is_empty() {
-                    writeln!(out, "       {h}: {}", notes.join("; "))?;
-                }
-            }
-        }
-    }
-    let here: Vec<&Entry> = plan
-        .entries
-        .iter()
-        .filter(|e| e.side == sides[0])
-        .filter(|e| sides.iter().all(|s| plan.entry_on(&e.id, *s).is_none_or(here_already)))
-        .collect();
-    if !here.is_empty() {
-        writeln!(out, "\nAlready here")?;
-        for e in here {
-            let each: Vec<String> = sides
-                .iter()
-                .zip(&heads)
-                .filter_map(|(s, h)| {
-                    plan.entry_on(&e.id, *s).map(|x| format!("{h} {}", x.state.words()))
-                })
-                .collect();
-            writeln!(out, "     ✓ {}: {}", e.name, each.join("; "))?;
-        }
-    }
-    Ok(())
-}
-
-/// The checklist in a terminal: tick and untick by number (or name) until Enter. With WSL's
-/// side too, a number ticks on `place`'s sides, and `3:wsl`, `3:windows` or `3:both` puts item 3
-/// there. `None`: quit.
+/// The checklist in a terminal: tick and untick by number (or name) until Enter. `None`: quit.
 fn checklist(
-    sides: &Sides,
-    place: Where,
-    mut picks: Picks,
+    survey: &Survey,
+    mut picks: Vec<String>,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
-) -> Option<Picks> {
-    let two = sides.wsl.is_some();
-    let also = sides.distro().map(|d| format!(" and WSL ({d})")).unwrap_or_default();
+) -> Option<Vec<String>> {
     let _ = writeln!(
         out,
-        "\nSet up this computer ({}){also}: tick what to install. [x] ticked, [+] needed by something ticked.",
-        sides.here.platform.name()
+        "\nSet up this computer ({}): tick what to install. [x] ticked, [+] needed by something ticked.",
+        survey.platform.name()
     );
-    if two {
-        let _ = writeln!(
-            out,
-            "A number ticks it on {}; 3:wsl, 3:windows or 3:both puts item 3 there.",
-            match place {
-                Where::Both => "both".to_owned(),
-                p => side_name(sides.sides(p)[0], sides),
-            }
-        );
-    }
-    let offered: Vec<Side> = sides.sides(Where::Both);
     loop {
-        let plan = sides.plan(&picks);
+        let plan = setup::plan(survey, &picks);
         let _ = render(&plan, out);
-        let hint = if two { " (e.g. 3 5, or 3:both)" } else { " (e.g. 3 5)" };
-        let _ = write!(out, "\nNumbers to tick or untick{hint}, Enter to install, q to quit: ");
+        let _ =
+            write!(out, "\nNumbers to tick or untick (e.g. 3 5), Enter to install, q to quit: ");
         let _ = out.flush();
         let mut line = String::new();
         if input.read_line(&mut line).ok()? == 0 {
@@ -1504,49 +1057,15 @@ fn checklist(
         }
         let pick = rows(&plan);
         for word in line.split([',', ' ']).filter(|w| !w.is_empty()) {
-            let (what, at) = match word.split_once(':') {
-                Some((w, s)) => (w, Some(s)),
-                None => (word, None),
-            };
-            let at = match at.map(str::parse::<Where>) {
-                None => None,
-                Some(Ok(w)) if two => Some(w),
-                Some(Ok(_)) => {
-                    let _ = writeln!(out, "  {word:?}: everything here installs on this computer");
-                    continue;
-                }
-                Some(Err(e)) => {
-                    let _ = writeln!(out, "  {word:?}: {e}");
-                    continue;
-                }
-            };
-            let entry = match what.parse::<usize>() {
+            let entry = match word.parse::<usize>() {
                 Ok(n) => pick.get(n.wrapping_sub(1)).copied(),
-                Err(_) => setup::resolve(what).ok().and_then(|i| plan.entry(&i.id)),
+                Err(_) => setup::resolve(word).ok().and_then(|i| plan.entry(&i.id)),
             };
             let Some(e) = entry else {
                 let _ = writeln!(out, "  {word:?}: not on the list");
                 continue;
             };
-            let targets = sides.sides(at.unwrap_or(place));
-            let on =
-                |s: Side| if two { format!(" on {}", side_name(s, sides)) } else { String::new() };
-            if at.is_some() {
-                // A place named: ticked there, and nowhere else.
-                for s in &offered {
-                    let Some(x) = plan.entry_on(&e.id, *s) else { continue };
-                    let list = picks.of(*s);
-                    if !targets.contains(s) {
-                        list.retain(|p| *p != e.id);
-                    } else if here_already(x) {
-                        let _ = writeln!(out, "  {} is here already{}", e.name, on(*s));
-                    } else if !list.contains(&e.id) {
-                        list.push(e.id.clone());
-                    }
-                }
-                continue;
-            }
-            for line in checklist::toggle(sides, &plan, &mut picks, &e.id, place) {
+            for line in checklist::toggle(&plan, &mut picks, &e.id) {
                 let _ = writeln!(out, "  {line}");
             }
         }
@@ -1557,7 +1076,6 @@ fn checklist(
 mod tests {
     use super::*;
     use ptyro_agents::catalog::{self, Platform};
-    use ptyro_agents::setup::Survey;
 
     fn survey(installed: &[(&str, &str)]) -> Survey {
         let mut states = BTreeMap::new();
@@ -1579,10 +1097,9 @@ mod tests {
 
     fn drive(s: &Survey, picks: &[&str], answers: &str) -> (Option<Vec<String>>, String) {
         let mut out = Vec::new();
-        let sides = Sides { here: s.clone(), side: Side::Local, wsl: None, status: None };
-        let picks = Picks { here: picks.iter().map(|p| (*p).to_owned()).collect(), wsl: vec![] };
-        let r = checklist(&sides, Where::Local, picks, &mut answers.as_bytes(), &mut out);
-        (r.map(|p| p.here), String::from_utf8(out).unwrap())
+        let picks = picks.iter().map(|p| (*p).to_owned()).collect();
+        let r = checklist(s, picks, &mut answers.as_bytes(), &mut out);
+        (r, String::from_utf8(out).unwrap())
     }
 
     #[test]
@@ -1607,20 +1124,21 @@ mod tests {
     }
 
     #[test]
-    fn a_needed_item_stays_and_quitting_installs_nothing() {
-        // Windows: OpenCode needs Node.js (agents 1-3, git 4, gh 5, node 6).
-        let mut s = survey(&[]);
-        s.platform = Platform::WindowsX64;
-        s.programs = ["winget".to_owned()].into();
-        let mut out = Vec::new();
-        let sides = Sides { here: s.clone(), side: Side::Windows, wsl: None, status: None };
-        let picks = Picks { here: vec!["opencode".to_owned()], wsl: vec![] };
-        let r = checklist(&sides, Where::Windows, picks, &mut "6\n9\nq\n".as_bytes(), &mut out);
-        let out = String::from_utf8(out).unwrap();
+    fn an_unknown_answer_is_said_and_quitting_installs_nothing() {
+        let s = survey(&[]);
+        let (r, out) = drive(&s, &["claude"], "9\nq\n");
         assert!(r.is_none());
-        assert!(out.contains("Node.js is needed by something ticked"), "{out}");
         assert!(out.contains("\"9\": not on the list"), "{out}");
         let (r, _) = drive(&s, &[], "");
         assert!(r.is_none(), "end of input is quit");
+    }
+
+    /// The old `--where` (native Windows' sides, removed 2026-11-18) is refused with what to do.
+    #[test]
+    fn the_removed_where_says_to_leave_it_out() {
+        assert!(where_removed(None).is_ok());
+        let e = where_removed(Some("wsl")).unwrap_err();
+        assert!(e.message.contains("removed on 2026-11-18"), "{}", e.message);
+        assert!(e.message.contains("Leave --where out"), "{}", e.message);
     }
 }

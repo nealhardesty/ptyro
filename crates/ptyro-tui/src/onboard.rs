@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-use ptyro_agents::setup::WslStatus;
 use ptyro_core::config::{Config, expand_home};
 use ptyro_core::input::{KeyCode, KeyEvent};
 use ptyro_protocol::Request;
@@ -146,8 +145,6 @@ impl App {
         match key.code {
             KeyCode::Down | KeyCode::Char { c: 'j' } if n > 0 => fr.sel = (fr.sel + 1) % n,
             KeyCode::Up | KeyCode::Char { c: 'k' } if n > 0 => fr.sel = (fr.sel + n - 1) % n,
-            KeyCode::Left | KeyCode::Char { c: 'h' } => fr.setup.side_step(-1),
-            KeyCode::Right | KeyCode::Char { c: 'l' } => fr.setup.side_step(1),
             KeyCode::Char { c: ' ' } if fr.sel < ns => fr.setup.toggle(fr.sel),
             // Keep an agent installed another way as it is (BOOT7): no move, now or later.
             KeyCode::Char { c: 'K' } if fr.sel < ns => match fr.setup.keep(fr.sel) {
@@ -205,34 +202,28 @@ impl App {
     // ── the setup checklist (BOOT2) ─────────────────────────────────────────
 
     /// `app.setup` (`U`), a health fix: the checklist on its own; `want` ticks those (item names,
-    /// as `ptyro install` takes them) instead of the defaults, on `place`'s side when it names
-    /// one (`--where`). With a daemon on another computer, that computer's `ptyro setup` (or
-    /// `ptyro install` of `want`), in a split there. While an install the checklist started
-    /// still runs, its split is shown instead: never a second install beside it.
-    pub fn open_setup(&mut self, want: Option<Vec<String>>, place: Option<String>) {
+    /// as `ptyro install` takes them) instead of the defaults. With a daemon on another computer,
+    /// that computer's `ptyro setup` (or `ptyro install` of `want`), in a split there. While an
+    /// install the checklist started still runs, its split is shown instead: never a second
+    /// install beside it.
+    pub fn open_setup(&mut self, want: Option<Vec<String>>) {
         if self.setup_running() || self.first_run.is_some() {
             return;
         }
-        if crate::setup_list::elsewhere(self.connect.remote.as_deref(), cfg!(windows)).is_some() {
+        if crate::setup_list::elsewhere(self.connect.remote.as_deref()).is_some() {
             let Some(names) = want.filter(|w| !w.is_empty()) else {
                 return self.start_cli("app.setup");
             };
-            let mut args: Vec<String> =
-                std::iter::once("install".to_owned()).chain(names).collect();
-            if let Some(p) = place {
-                args.extend(["--where".to_owned(), p]);
-            }
+            let args: Vec<String> = std::iter::once("install".to_owned()).chain(names).collect();
             return self.run_cli(&args);
         }
-        let want_place = place.and_then(|p| p.parse::<ptyro_agents::setup::Where>().ok());
         let want = want.map(|names| {
             names
                 .iter()
                 .filter_map(|n| ptyro_agents::setup::resolve(n).ok().map(|i| i.id.clone()))
                 .collect()
         });
-        let mut setup = self.setup_look(want);
-        setup.want_place = want_place;
+        let setup = self.setup_look(want);
         self.overlay = None;
         self.first_run = Some(FirstRun { setup, only_setup: true, choices: Vec::new(), sel: 0 });
         self.dirty = true;
@@ -241,14 +232,13 @@ impl App {
     /// Start looking at what's installed (in the background); the checklist fills in once it
     /// answers.
     fn setup_look(&mut self, want: Option<Vec<String>>) -> Setup {
-        let remote = self.connect.remote.clone();
-        if let Some(r) = crate::setup_list::elsewhere(remote.as_deref(), cfg!(windows)) {
+        if let Some(r) = crate::setup_list::elsewhere(self.connect.remote.as_deref()) {
             return Setup { found: Found::Elsewhere(r), ..Setup::looking(want) };
         }
         let (paths, tx) = (self.paths.clone(), self.tx.clone());
         if tokio::runtime::Handle::try_current().is_ok() {
             tokio::spawn(async move {
-                let found = crate::setup_list::look(paths, remote).await;
+                let found = crate::setup_list::look(paths).await;
                 let _ = tx.send(crate::app::AppMsg::SetupFound(found.map(Box::new)));
             });
         }
@@ -263,8 +253,7 @@ impl App {
         }
         match found {
             Some(f) => {
-                let (sides, place, note) = *f;
-                fr.setup.found(sides, place, note);
+                fr.setup.found(*f);
                 fr.setup.check_busy(&self.paths.state);
             }
             None => fr.setup.found = Found::Failed,
@@ -282,21 +271,13 @@ impl App {
         if let Some(by) = ptyro_agents::setup::lock::Lock::held_by(&self.paths.state) {
             return self.toast_err(ptyro_agents::setup::lock::busy(&by));
         }
-        let wsl_daemon =
-            crate::cli_actions::where_offered(cfg!(windows), self.connect.remote.as_deref())
-                == Some(true);
-        match setup.commands(wsl_daemon, crate::cli_actions::exe_in_wsl().as_deref()) {
-            Ok(runs) if runs.is_empty() => {
+        match setup.command() {
+            None => {
                 if only {
                     self.toast(format!("nothing ticked to install; {}", self.setup_later()));
                 }
             }
-            Ok(mut runs) => {
-                // One split at a time: the next side's starts once this one ends (`setup_tick`).
-                let first = runs.remove(0);
-                self.setup_start(first, runs);
-            }
-            Err(e) => self.toast_err(e),
+            Some(args) => self.setup_start(&args),
         }
     }
 
@@ -304,8 +285,8 @@ impl App {
     /// (BOOT5): `ptyro update [names…]` in a split, a real terminal where it shows each update's
     /// command and asks first, as the checklist's installs run: one at a time (never beside a
     /// running install), and the badge looks again once it ends. It runs where the daemon is,
-    /// whose agents the findings are (`Request::Updates`): this computer's ptyro, WSL's own (its
-    /// split runs in WSL), or a remote computer's.
+    /// whose agents the findings are (`Request::Updates`): this computer's ptyro, or a remote
+    /// computer's.
     pub fn update_agents(&mut self, names: Vec<String>) {
         if self.first_run.is_some() {
             return self.toast("close the setup checklist first, then update (it runs in a split)");
@@ -321,34 +302,22 @@ impl App {
         {
             return self.toast_err(ptyro_agents::setup::lock::busy(&by));
         }
-        self.setup_start((None, args), Vec::new());
+        self.setup_start(&args);
     }
 
-    /// Where the daemon's agents are, for words: `None` this computer; `WSL` (Windows with WSL's
-    /// daemon); or the remote computer's name.
+    /// Where the daemon's agents are, for words: `None` this computer, or the remote computer's
+    /// name.
     pub(crate) fn update_place(&self) -> Option<String> {
-        let remote = self.connect.remote.as_deref();
-        if let Some(r) = crate::setup_list::elsewhere(remote, cfg!(windows)) {
-            let host = r.strip_prefix("ssh://").unwrap_or(&r);
-            let host = host.rsplit_once('@').map_or(host, |(_, h)| h).to_owned();
-            return Some(host);
-        }
-        (crate::cli_actions::where_offered(cfg!(windows), remote) == Some(true))
-            .then(|| "WSL".to_owned())
+        let r = crate::setup_list::elsewhere(self.connect.remote.as_deref())?;
+        let host = r.strip_prefix("ssh://").unwrap_or(&r);
+        Some(host.rsplit_once('@').map_or(host, |(_, h)| h).to_owned())
     }
 
-    /// Run one of the checklist's splits, `queue` after it.
-    fn setup_start(
-        &mut self,
-        (bin, args): crate::setup_list::Split,
-        queue: Vec<crate::setup_list::Split>,
-    ) {
-        match bin {
-            Some(bin) => self.run_cli_with(bin, &args),
-            None => self.run_cli(&args),
-        }
+    /// Run the checklist's split.
+    fn setup_start(&mut self, args: &[String]) {
+        self.run_cli(args);
         let Some(split) = self.last_split.clone() else { return };
-        self.setup_run = Some(crate::setup_list::SetupRun { split, seen: false, queue });
+        self.setup_run = Some(crate::setup_list::SetupRun { split, seen: false });
     }
 
     /// The checklist's install still runs: show its split and say so (true), rather than open
@@ -368,8 +337,8 @@ impl App {
     }
 
     /// The reply to a spawn: the checklist's split started (it is in the session list from now
-    /// on), or it couldn't, which ends the run at once (and the splits queued after it: the
-    /// failure is said, and the checklist can open again).
+    /// on), or it couldn't, which ends the run at once (the failure is said, and the checklist
+    /// can open again).
     pub(crate) fn setup_spawned(&mut self, name: Option<&str>, ok: bool) {
         let Some(run) = &mut self.setup_run else { return };
         if name != Some(run.split.as_str()) {
@@ -382,8 +351,8 @@ impl App {
         }
     }
 
-    /// From `tick`: once the running split ends, the next side's starts; after the last, the
-    /// health badge looks again, so it no longer offers what was just installed.
+    /// From `tick`: once the running split ends, the health badge looks again, so it no longer
+    /// offers what was just installed.
     pub(crate) fn setup_tick(&mut self) {
         let Some(run) = &mut self.setup_run else { return };
         let ended = match self.sessions.iter().find(|s| s.name == run.split) {
@@ -399,14 +368,8 @@ impl App {
         if !ended {
             return;
         }
-        let mut queue = std::mem::take(&mut run.queue);
         self.setup_run = None;
-        if queue.is_empty() {
-            self.health_again();
-        } else {
-            let next = queue.remove(0);
-            self.setup_start(next, queue);
-        }
+        self.health_again();
         self.dirty = true;
     }
 
@@ -609,12 +572,10 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     }
     lines.push(Line::raw(""));
     let steps = fr.setup.steps();
-    let two = fr.setup.ready().is_some_and(|r| r.plan.sides().len() > 1);
-    let side = if two { " · ←/→ side" } else { "" };
     let keys = if fr.only_setup {
         let go = if steps > 0 { format!("⏎ install {steps}") } else { "⏎ done".to_owned() };
         let keep = if fr.setup.offers_moves() { " · K keep as installed" } else { "" };
-        format!(" {go} · Space toggle · j/k move{side}{keep} · s not now")
+        format!(" {go} · Space toggle · j/k move{keep} · s not now")
     } else {
         let go = if steps > 0 {
             format!("⏎ install {steps} and use these")
@@ -623,7 +584,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
         };
         let keep = if fr.setup.offers_moves() { " · K keep as installed" } else { "" };
         format!(
-            " {go} · Space ticks · j/k move{side}{keep} · s not now (installs nothing) · Esc skip   (the repository you're in is added on its own)"
+            " {go} · Space ticks · j/k move{keep} · s not now (installs nothing) · Esc skip   (the repository you're in is added on its own)"
         )
     };
     lines.push(Line::styled(keys, fg(app, t.accent)));
@@ -646,9 +607,9 @@ pub fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
 }
 
 /// The checklist's part (BOOT2): Agents and Tools to tick, each with what it is and how it
-/// installs (a column per side on Windows with WSL), then Already here, then what WSL is.
+/// installs, then Already here.
 fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'static>>) {
-    use crate::setup_list::{SECTIONS, about, cells, heads, programs_of};
+    use crate::setup_list::{SECTIONS, about, programs_of};
     use ptyro_agents::setup::checklist::{already, mark};
     let t = &app.theme;
     let dim = fg(app, t.dim);
@@ -680,12 +641,9 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
         }
     };
     let plan = &r.plan;
-    let sides = plan.sides();
-    let two = sides.len() > 1;
     let rows = fr.setup.rows();
     const NAME: usize = 13;
-    const CELL: usize = 26;
-    let programs = programs_of(r, sides.first().copied().unwrap_or_default());
+    let programs = programs_of(r);
     for (title, kind) in SECTIONS {
         let these: Vec<(usize, &&ptyro_agents::setup::Entry)> =
             rows.iter().enumerate().filter(|(_, e)| e.kind == kind).collect();
@@ -693,49 +651,23 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
             continue;
         }
         lines.push(Line::raw(""));
-        let mut head = vec![Span::styled(format!(" {title}"), italic)];
-        if two {
-            let pad = (NAME + 6).saturating_sub(title.len() + 1);
-            head.push(Span::raw(" ".repeat(pad)));
-            for h in heads(r) {
-                head.push(Span::styled(format!("{h:<CELL$} "), italic));
-            }
-        }
-        lines.push(Line::from(head));
+        lines.push(Line::styled(format!(" {title}"), italic));
         for (i, e) in these {
             let mut style = ratatui::style::Style::new();
             if i == fr.sel {
                 style = style.bg(app.depth.fit(t.selection_bg));
             }
             let accent = style.fg(app.depth.fit(t.accent));
-            let mut spans = Vec::new();
-            if two {
-                spans.push(Span::styled(
-                    format!("   {:<NAME$}  ", e.name),
-                    style.add_modifier(Modifier::BOLD),
-                ));
-                for (c, text) in cells(plan, &e.id).into_iter().enumerate() {
-                    let mut st = accent;
-                    if i == fr.sel && c == fr.setup.col {
-                        st = st.add_modifier(Modifier::REVERSED);
-                    }
-                    spans.push(Span::styled(format!("{:<CELL$}", clip(&text, CELL)), st));
-                    spans.push(Span::styled(" ", style));
-                }
-            } else {
-                spans.push(Span::styled(format!("   {} ", mark(e)), accent));
-                spans.push(Span::styled(
-                    format!("{:<NAME$}", e.name),
-                    style.add_modifier(Modifier::BOLD),
-                ));
-            }
+            let mut spans = vec![
+                Span::styled(format!("   {} ", mark(e)), accent),
+                Span::styled(format!("{:<NAME$}", e.name), style.add_modifier(Modifier::BOLD)),
+            ];
             // The line wraps between its parts, under itself, rather than run off the box; when
-            // the cells leave too little room beside them (80 columns, two sides), it goes under
-            // the row instead.
+            // the name leaves too little room beside it, it goes under the row instead.
             let used: usize = spans.iter().map(|s| s.content.chars().count()).sum::<usize>() + 1;
             let beside = width.saturating_sub(used) >= 30;
             let at = if beside { used } else { 7 };
-            let text = about(plan, e, &programs, two);
+            let text = about(plan, e, &programs);
             let mut wrapped = fit(&text, width.saturating_sub(at + 1).max(20)).into_iter();
             let detail = style.fg(app.depth.fit(t.dim));
             if beside {
@@ -746,19 +678,6 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
             for more in wrapped {
                 lines.push(Line::from(Span::styled(format!("{}{more}", " ".repeat(at)), detail)));
             }
-            if two {
-                // What a side's cell can't say: why it can't, what needs it.
-                for s in &sides {
-                    let Some(x) = plan.entry_on(&e.id, *s) else { continue };
-                    let why = ptyro_agents::setup::checklist::why(plan, x);
-                    if !why.is_empty() {
-                        let text = format!("{}: {}", r.sides.name(*s), why.join("; "));
-                        for l in wrap_words(&text, width.saturating_sub(8)) {
-                            lines.push(Line::styled(format!("       {l}"), dim));
-                        }
-                    }
-                }
-            }
         }
     }
     let here = already(plan);
@@ -767,23 +686,11 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
         lines.push(Line::styled(" Already here", italic));
         let default = ptyro_agents::default_agent(&app.config);
         for e in here {
-            let each: Vec<String> = sides
-                .iter()
-                .filter_map(|s| {
-                    let x = plan.entry_on(&e.id, *s)?;
-                    let at = x.state.path().map(|p| format!(" ({p})")).unwrap_or_default();
-                    let words = x.state.words();
-                    Some(if two {
-                        format!("{} {words}{at}", r.sides.name(*s))
-                    } else {
-                        format!("{words}{at}")
-                    })
-                })
-                .collect();
+            let at = e.state.path().map(|p| format!(" ({p})")).unwrap_or_default();
             let def = if e.id == default { " · your default agent" } else { "" };
             let head = format!("   ✓ {}", e.name);
+            let text = format!("{}{at}{def}", e.state.words());
             let at = head.chars().count() + 2;
-            let text = format!("{}{def}", each.join(" · "));
             let mut wrapped = fit(&text, width.saturating_sub(at + 1).max(20)).into_iter();
             lines.push(Line::from(vec![
                 Span::styled(head, fg(app, t.done)),
@@ -792,16 +699,6 @@ fn setup_lines(app: &App, fr: &FirstRun, width: usize, lines: &mut Vec<Line<'sta
             for more in wrapped {
                 lines.push(Line::styled(format!("{}{more}", " ".repeat(at)), dim));
             }
-        }
-    }
-    let wsl = match &plan.wsl {
-        Some(w @ (WslStatus::Unusable { .. } | WslStatus::Inside { .. })) => Some(w.words()),
-        _ => None,
-    };
-    for note in [wsl, r.note.clone()].into_iter().flatten() {
-        lines.push(Line::raw(""));
-        for l in wrap_words(&note, width.saturating_sub(2)) {
-            lines.push(Line::styled(format!(" {l}"), dim));
         }
     }
     if let Some(by) = &fr.setup.busy {
@@ -838,16 +735,6 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
             }
         }
     }
-    out
-}
-
-/// `text` in at most `width` characters, an ellipsis ending what's cut.
-fn clip(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_owned();
-    }
-    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-    out.push('…');
     out
 }
 

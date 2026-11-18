@@ -3,7 +3,7 @@
 //! GitHub's releases; the finding is the installed binary's version against it; and the update,
 //! run only after the person's yes and under the machine's setup lock, downloads the release for
 //! this machine, checks it against the release's `SHA256SUMS` (and its signed build provenance
-//! when `gh` is here), exactly as `scripts/install.sh` and `install.ps1` do, and puts it in place
+//! when `gh` is here), exactly as `scripts/install.sh` does, and puts it in place
 //! of the old binary atomically, keeping the old one until the new one has answered `--version`
 //! (else it is put back). The caller then live-upgrades the daemon (`daemon upgrade`).
 //!
@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::catalog::{Latest, Mark, Source, Version, Via};
-use crate::setup::host::{capture, quiet, sha256_file, stream, writable};
+use crate::setup::host::{capture, sha256_file, stream, writable};
 use crate::setup::{Admin, Event};
 use crate::updates::Outdated;
 
@@ -40,7 +40,7 @@ pub fn source() -> Latest {
 /// How the ptyro on this computer was installed, so how it updates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum How {
-    /// A release binary (`install.sh`, `install.ps1`, or copied by hand) in a folder the user
+    /// A release binary (`install.sh`, or copied by hand) in a folder the user
     /// can write: downloaded, checked and replaced here.
     Release,
     /// The same, in a folder only an administrator can write (`/usr/local/bin` owned by root):
@@ -48,7 +48,7 @@ pub enum How {
     Admin,
     /// Homebrew's: `brew upgrade ptyro`.
     Brew,
-    /// Another manager's (cargo, a system package, WinGet, Scoop): updated its way, never here.
+    /// Another manager's (cargo, a system package, Nix): updated its way, never here.
     Managed(String),
     /// A build in a cargo `target` folder: rebuilt, never offered an update.
     Build,
@@ -96,9 +96,9 @@ impl Install {
     }
 }
 
-/// `ptyro`, or `ptyro.exe` on Windows.
+/// The binary's name.
 fn exe_name() -> &'static str {
-    if cfg!(windows) { "ptyro.exe" } else { "ptyro" }
+    "ptyro"
 }
 
 /// This ptyro's binary (on Linux even after it was replaced on disk), or a test's.
@@ -111,17 +111,10 @@ pub fn binary() -> PathBuf {
 }
 
 /// The installed binary's own name for a running image's path: on Linux a replaced file's
-/// ` (deleted)` dropped; on Windows an image an update renamed aside (`ptyro.exe.old`,
-/// `ptyro.exe.old.<pid>`: a daemon whose upgrade didn't happen still runs it) is `ptyro.exe`,
-/// so an update never writes under the aside name.
+/// ` (deleted)` dropped.
 pub fn installed_name(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
-    let s = s.strip_suffix(" (deleted)").unwrap_or(&s);
-    let s = match s.rsplit_once(".old.") {
-        Some((head, pid)) if !pid.is_empty() && pid.chars().all(|c| c.is_ascii_digit()) => head,
-        _ => s.strip_suffix(".old").unwrap_or(s),
-    };
-    PathBuf::from(s)
+    PathBuf::from(s.strip_suffix(" (deleted)").unwrap_or(&s))
 }
 
 /// A release version as GitHub's tags carry it, strictly (`0.0.64`, `1.2.3-rc.1`): nothing else
@@ -164,12 +157,7 @@ pub fn classify(path: &Path) -> How {
     if low.contains("/.cargo/") {
         return How::Managed("cargo (`cargo install`)".into());
     }
-    if low.contains("/winget/") {
-        return How::Managed("WinGet (`winget upgrade`)".into());
-    }
-    if low.contains("/scoop/") {
-        return How::Managed("Scoop (`scoop update ptyro`)".into());
-    }
+
     // Nix's and Guix's stores are read-only and theirs alone: never a sudo swap there.
     if s.starts_with("/nix/store/") {
         return How::Managed("Nix (`nix profile upgrade`, or your Nix configuration)".into());
@@ -257,27 +245,18 @@ pub fn admin_command(path: &Path, version: &str) -> Option<String> {
     }
     let prefix = bin.parent()?.to_string_lossy().into_owned();
     let base = format!("https://github.com/{REPO}/releases/download/v{version}");
-    // The prefix as one word (`/Users/Jane Doe/…`), in each shell's single quotes.
-    Some(if cfg!(windows) {
-        let prefix = prefix.replace('\'', "''");
-        format!(
-            "$env:PTYRO_PREFIX = '{prefix}'; $env:PTYRO_VERSION = '{version}'; irm {base}/install.ps1 | iex   (in PowerShell run as administrator)"
-        )
-    } else {
-        let prefix = prefix.replace('\'', r"'\''");
-        format!(
-            "curl -fsSL {base}/install.sh | sudo env PTYRO_PREFIX='{prefix}' PTYRO_VERSION={version} sh"
-        )
-    })
+    // The prefix as one word (`/Users/Jane Doe/…`), in the shell's single quotes.
+    let prefix = prefix.replace('\'', r"'\''");
+    Some(format!(
+        "curl -fsSL {base}/install.sh | sudo env PTYRO_PREFIX='{prefix}' PTYRO_VERSION={version} sh"
+    ))
 }
 
-/// The release's name for this machine: `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`,
-/// `x86_64-pc-windows-msvc`… (the four tarballs and two zips `make dist` builds).
+/// The release's name for this machine: `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`…
+/// (the four tarballs `make dist` builds).
 pub fn triple() -> &'static str {
     let arm = cfg!(target_arch = "aarch64");
-    if cfg!(windows) {
-        if arm { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
-    } else if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos") {
         if arm { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" }
     } else if arm {
         "aarch64-unknown-linux-gnu"
@@ -286,11 +265,9 @@ pub fn triple() -> &'static str {
     }
 }
 
-/// The release's archive for this machine: `ptyro-0.0.64-x86_64-unknown-linux-gnu.tar.gz`
-/// (Windows: `.zip`).
+/// The release's archive for this machine: `ptyro-0.0.64-x86_64-unknown-linux-gnu.tar.gz`.
 pub fn archive(version: &str) -> String {
-    let ext = if cfg!(windows) { "zip" } else { "tar.gz" };
-    format!("ptyro-{version}-{}.{ext}", triple())
+    format!("ptyro-{version}-{}.tar.gz", triple())
 }
 
 /// Where `version`'s files are: GitHub's release, or a debug build's `PTYRO_TEST_RELEASE_URL`
@@ -363,7 +340,7 @@ pub fn update(
             format!("update it with {m}; ptyro never replaces a binary a package manager owns"),
         )),
         How::Brew => brew(install, version, on),
-        How::Admin if admin != Admin::Ask || cfg!(windows) => Err(fail(
+        How::Admin if admin != Admin::Ask => Err(fail(
             format!("{} can only be replaced as administrator", install.path.display()),
             match admin_command(&install.path, version) {
                 Some(c) => format!(
@@ -537,13 +514,13 @@ fn release(
         .map_err(|e| fail(format!("{}: {e}", unpack.display()), again))?;
     let refused =
         |why: String| fail(format!("{file} isn't a plain archive ({why}): not installing"), again);
-    let list = vec![tar_program(), "-tf".to_owned(), download.to_string_lossy().into_owned()];
+    let list = vec!["tar".to_owned(), "-tf".to_owned(), download.to_string_lossy().into_owned()];
     match capture(&list, &[], Duration::from_secs(120)) {
         Some((true, names)) => names_inside(&names).map_err(refused)?,
         _ => return Err(fail(format!("couldn't read {file}'s list of files"), again)),
     }
     let tar = vec![
-        tar_program(),
+        "tar".to_owned(),
         "-xf".to_owned(),
         download.to_string_lossy().into_owned(),
         "-C".to_owned(),
@@ -551,7 +528,7 @@ fn release(
     ];
     stream(&tar, &[], &mut say).map_err(|e| fail(format!("couldn't unpack {file}: {e}"), again))?;
     plain_files(&unpack).map_err(refused)?;
-    let stem = file.trim_end_matches(".tar.gz").trim_end_matches(".zip");
+    let stem = file.trim_end_matches(".tar.gz");
     let from = unpack.join(stem);
     let new = from.join(exe_name());
     if !std::fs::symlink_metadata(&new).is_ok_and(|m| m.file_type().is_file()) {
@@ -566,21 +543,13 @@ fn release(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| exe_name().to_owned());
-    // The binary under the installed one's name; on Windows also what the zip carries beside it
-    // (`ptyrow.exe`, the packaged ConPTY), as install.ps1 puts them.
-    let mut files: Vec<(PathBuf, String)> = vec![(new, target_name.clone())];
-    if cfg!(windows) {
-        for f in ["ptyrow.exe", "conpty.dll", "OpenConsole.exe"] {
-            if std::fs::symlink_metadata(from.join(f)).is_ok_and(|m| m.file_type().is_file()) {
-                files.push((from.join(f), f.to_owned()));
-            }
-        }
-    }
+    // The binary under the installed one's name.
+    let files: Vec<(PathBuf, String)> = vec![(new, target_name.clone())];
     let check = |p: &Path| -> Result<(), String> {
         match version_of(p) {
             Some(v) if v == version => Ok(()),
             Some(v) => Err(format!("it says it is {v}, not {version}")),
-            None => Err("it doesn't answer `ptyro --version` (Windows' Smart App Control, or a broken download?)".into()),
+            None => Err("it doesn't answer `ptyro --version` (a broken download?)".into()),
         }
     };
     say(&format!("replacing {}", install.path.display()));
@@ -663,34 +632,13 @@ fn provenance(download: &Path, say: &mut dyn FnMut(&str)) -> Result<(), Failure>
 /// `program` on `PATH`.
 fn which(program: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    let names: Vec<String> = if cfg!(windows) {
-        vec![format!("{program}.exe"), format!("{program}.cmd")]
-    } else {
-        vec![program.to_owned()]
-    };
-    std::env::split_paths(&path).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
-}
-
-/// Windows' own `tar` (bsdtar, in System32 since Windows 10 1803), which unpacks a zip; Git's
-/// GNU tar earlier on `PATH` can't. Elsewhere, `tar`.
-fn tar_program() -> String {
-    if cfg!(windows)
-        && let Some(root) = std::env::var_os("SystemRoot")
-    {
-        let t = PathBuf::from(root).join("System32").join("tar.exe");
-        if t.is_file() {
-            return t.to_string_lossy().into_owned();
-        }
-    }
-    "tar".into()
+    std::env::split_paths(&path).map(|d| d.join(program)).find(|p| p.is_file())
 }
 
 /// Put `files` (each a new file and the name it goes under) into `dir` atomically, then
 /// `check` the binary `main`; on failure every file is put back as it was (the error says if one
-/// couldn't be). The old files are kept until the check passes: on Windows renamed aside to
-/// `<name>.old.<pid>` (a running program can't be overwritten, but it can be renamed; [`sweep`]
-/// removes the leftovers once this process is gone), elsewhere hard-linked aside (so the name is
-/// never missing).
+/// couldn't be). The old files are kept until the check passes, hard-linked aside (so the name
+/// is never missing).
 pub fn swap(
     dir: &Path,
     files: &[(PathBuf, String)],
@@ -747,12 +695,8 @@ pub fn swap(
         };
         if let Err(e) = std::fs::rename(tmp, target) {
             if let Some(old) = &old {
-                // Windows moved it aside: back; elsewhere it was only linked: the link goes.
-                let _ = if cfg!(windows) {
-                    std::fs::rename(old, target)
-                } else {
-                    std::fs::remove_file(old)
-                };
+                // It was only linked aside: the link goes.
+                let _ = std::fs::remove_file(old);
             }
             let restored = undo(&done);
             unstage(&staged);
@@ -766,85 +710,27 @@ pub fn swap(
     }
     for (_, old) in &done {
         if let Some(old) = old {
-            // Windows: still running (the daemon, a TUI) can't be removed: a later start does.
             let _ = std::fs::remove_file(old);
         }
     }
     Ok(())
 }
 
-/// Where the old `target` is kept meanwhile: `<name>.old.<pid>` on Windows (this process's, so a
-/// sweep by another ptyro starting meanwhile leaves it), `.<name>.old.<pid>` elsewhere.
+/// Where the old `target` is kept meanwhile: `.<name>.old.<pid>`.
 fn aside(target: &Path, pid: u32) -> PathBuf {
     let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    if cfg!(windows) {
-        target.with_file_name(format!("{name}.old.{pid}"))
-    } else {
-        target.with_file_name(format!(".{name}.old.{pid}"))
-    }
+    target.with_file_name(format!(".{name}.old.{pid}"))
 }
 
-/// Keep the old file at `old`: renamed there on Windows (a running program can be renamed, not
-/// overwritten), hard-linked there elsewhere (copied where links aren't possible).
+/// Keep the old file at `old`: hard-linked there (copied where links aren't possible).
 fn keep_old(target: &Path, old: &Path) -> std::io::Result<()> {
-    if cfg!(windows) {
-        std::fs::rename(target, old)
-    } else {
-        let _ = std::fs::remove_file(old);
-        std::fs::hard_link(target, old).or_else(|_| std::fs::copy(target, old).map(|_| ()))
-    }
+    let _ = std::fs::remove_file(old);
+    std::fs::hard_link(target, old).or_else(|_| std::fs::copy(target, old).map(|_| ()))
 }
 
-#[cfg(unix)]
 fn executable(p: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755));
-}
-
-#[cfg(not(unix))]
-fn executable(_: &Path) {}
-
-/// Leftovers of an update the files were still running for (Windows: install.ps1's
-/// `ptyro.exe.old`, an update's `ptyro.exe.old.<pid>`, and the same for what the zip carries),
-/// removed once nothing runs them: called as ptyro starts. An update still going (its `<pid>`
-/// alive) keeps its own: a rollback may need them. Quietly does nothing for one still in use.
-pub fn sweep(binary: &Path) {
-    sweep_with(binary, &pid_alive);
-}
-
-/// Whether the process `pid` runs.
-fn pid_alive(pid: u32) -> bool {
-    #[cfg(windows)]
-    {
-        ptyro_pty::alive(pid)
-    }
-    #[cfg(not(windows))]
-    {
-        ptyro_core::os::alive(pid)
-    }
-}
-
-fn sweep_with(binary: &Path, alive: &dyn Fn(u32) -> bool) {
-    // Beside the file itself: an update puts its aside files there, not beside a link to it.
-    let binary = ptyro_core::os::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
-    let Some(dir) = binary.parent() else { return };
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    let names = ["ptyro.exe", "ptyrow.exe", "conpty.dll", "OpenConsole.exe"];
-    for e in entries.flatten() {
-        let n = e.file_name().to_string_lossy().into_owned();
-        let old = names.iter().any(|f| {
-            n.strip_prefix(f).is_some_and(|rest| {
-                rest == ".old"
-                    || rest
-                        .strip_prefix(".old.")
-                        .and_then(|p| p.parse::<u32>().ok())
-                        .is_some_and(|pid| !alive(pid))
-            })
-        });
-        if old {
-            let _ = std::fs::remove_file(e.path());
-        }
-    }
 }
 
 /// An administrator's binary (Unix): the new file put in place with `sudo` (the program; a
@@ -862,10 +748,8 @@ fn sudo_swap(
     let run = |script: &str, args: &[&Path], extra: Option<&str>| -> Result<(), String> {
         let mut cmd = Command::new(sudo);
         cmd.args(sudo_args(script, args, extra));
-        let s = quiet(&mut cmd)
-            .stdin(Stdio::inherit())
-            .status()
-            .map_err(|e| format!("couldn't run sudo: {e}"))?;
+        let s =
+            cmd.stdin(Stdio::inherit()).status().map_err(|e| format!("couldn't run sudo: {e}"))?;
         if s.success() {
             Ok(())
         } else {
@@ -932,7 +816,7 @@ mod tests {
         let c = |p: &str| classify(Path::new(p));
         assert_eq!(c("/src/ptyro/target/debug/ptyro"), How::Build);
         assert_eq!(c("/src/ptyro/target/debug/deps/ptyro-1a2b"), How::Build);
-        assert_eq!(c(r"C:\src\ptyro\target\x86_64-pc-windows-msvc\release\ptyro.exe"), How::Build);
+        assert_eq!(c("/src/ptyro/target/x86_64-unknown-linux-gnu/release/ptyro"), How::Build);
         assert_ne!(c("/src/ptyro/target/tmp/t1/bin/ptyro"), How::Build, "a test's own folder");
         assert_eq!(c("/opt/homebrew/Cellar/ptyro/0.0.4/bin/ptyro"), How::Brew);
         assert_eq!(c("/home/linuxbrew/.linuxbrew/bin/ptyro"), How::Brew);
@@ -947,10 +831,7 @@ mod tests {
         assert!(
             matches!(c("/gnu/store/abc123-ptyro/bin/ptyro"), How::Managed(m) if m.starts_with("Guix"))
         );
-        assert!(matches!(
-            c(r"C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\x\ptyro.exe"),
-            How::Managed(m) if m.contains("WinGet")
-        ));
+
         let d = tempfile::tempdir().unwrap();
         assert_eq!(classify(&d.path().join("ptyro")), How::Release, "a folder the user can write");
         assert_eq!(
@@ -974,17 +855,13 @@ mod tests {
     #[test]
     fn an_administrators_install_gets_the_installers_command() {
         let c = admin_command(Path::new("/usr/local/bin/ptyro"), "0.0.64").unwrap();
-        if cfg!(windows) {
-            assert!(c.contains("install.ps1"), "{c}");
-        } else {
-            assert_eq!(
-                c,
-                "curl -fsSL https://github.com/nealhardesty/ptyro/releases/download/v0.0.64/install.sh | sudo env PTYRO_PREFIX='/usr/local' PTYRO_VERSION=0.0.64 sh"
-            );
-            // A prefix with a space, or a quote, stays one word (the final review's M3).
-            let c = admin_command(Path::new("/Users/Jane Doe's/bin/ptyro"), "0.0.64").unwrap();
-            assert!(c.contains(r"PTYRO_PREFIX='/Users/Jane Doe'\''s' PTYRO_VERSION"), "{c}");
-        }
+        assert_eq!(
+            c,
+            "curl -fsSL https://github.com/nealhardesty/ptyro/releases/download/v0.0.64/install.sh | sudo env PTYRO_PREFIX='/usr/local' PTYRO_VERSION=0.0.64 sh"
+        );
+        // A prefix with a space, or a quote, stays one word (the final review's M3).
+        let c = admin_command(Path::new("/Users/Jane Doe's/bin/ptyro"), "0.0.64").unwrap();
+        assert!(c.contains(r"PTYRO_PREFIX='/Users/Jane Doe'\''s' PTYRO_VERSION"), "{c}");
         assert_eq!(admin_command(Path::new("/opt/tools/ptyro"), "0.0.64"), None);
     }
 
@@ -1088,54 +965,13 @@ mod tests {
     }
 
     #[test]
-    fn leftovers_are_swept_but_never_a_running_updates() {
-        let d = tempfile::tempdir().unwrap();
-        for f in [
-            "ptyro.exe",
-            "ptyro.exe.old",
-            "ptyro.exe.old.123",
-            "conpty.dll.old",
-            "conpty.dll.old.77",
-            "ptyrow.exe.old.77",
-            "notes.old",
-        ] {
-            std::fs::write(d.path().join(f), "x").unwrap();
-        }
-        // 77 is an update still going: its rollback may need what it moved aside.
-        sweep_with(&d.path().join("ptyro.exe"), &|pid| pid == 77);
-        assert_eq!(
-            names(d.path()),
-            ["conpty.dll.old.77", "notes.old", "ptyro.exe", "ptyrow.exe.old.77"]
-        );
-    }
-
-    /// The sweep looks beside the file itself, where an update put its aside files, even when
-    /// ptyro is reached through a link.
-    #[cfg(unix)]
-    #[test]
-    fn the_sweep_looks_beside_the_file_a_link_points_at() {
-        let d = tempfile::tempdir().unwrap();
-        let real = d.path().join("real");
-        std::fs::create_dir_all(&real).unwrap();
-        std::fs::write(real.join("ptyro.exe"), "x").unwrap();
-        std::fs::write(real.join("ptyro.exe.old.99"), "x").unwrap();
-        let link = d.path().join("ptyro.exe");
-        std::os::unix::fs::symlink(real.join("ptyro.exe"), &link).unwrap();
-        sweep_with(&link, &|_| false);
-        assert_eq!(names(&real), ["ptyro.exe"], "the stale aside file in the real folder is gone");
-    }
-
-    #[test]
     fn a_renamed_running_image_still_names_the_installed_binary() {
         let n = |p: &str| installed_name(Path::new(p));
         assert_eq!(
             n("/home/me/.local/bin/ptyro (deleted)"),
             PathBuf::from("/home/me/.local/bin/ptyro")
         );
-        assert_eq!(n(r"C:\p\ptyro.exe.old"), PathBuf::from(r"C:\p\ptyro.exe"));
-        assert_eq!(n(r"C:\p\ptyro.exe.old.4242"), PathBuf::from(r"C:\p\ptyro.exe"));
         assert_eq!(n("/x/ptyro"), PathBuf::from("/x/ptyro"));
-        assert_eq!(n("/x/ptyro.old.v2"), PathBuf::from("/x/ptyro.old.v2"), "not an update's");
     }
 
     #[test]
@@ -1280,59 +1116,5 @@ mod tests {
             ["sh", "-c", "S", "sh", "/a b", "/c", "ok"],
             "paths are arguments, never in the script"
         );
-    }
-
-    /// Windows: a running program can't be overwritten but can be renamed. A copy of a system
-    /// program, running, is swapped and rolled back while it runs.
-    #[cfg(windows)]
-    #[test]
-    fn a_running_exe_is_renamed_aside_and_swapped_on_windows() {
-        let d = tempfile::tempdir().unwrap();
-        let (dir, src) = (d.path().join("bin"), d.path().join("src"));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::create_dir_all(&src).unwrap();
-        let sys = PathBuf::from(std::env::var("SystemRoot").unwrap()).join("System32");
-        let target = dir.join("ptyro.exe");
-        std::fs::copy(sys.join("PING.EXE"), &target).unwrap();
-        /// Killed however the test ends, so it never outlives it or holds the folder.
-        struct Running(std::process::Child);
-        impl Drop for Running {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-        let running = Running(
-            Command::new(&target)
-                .args(["-n", "120", "127.0.0.1"])
-                .stdout(Stdio::null())
-                .spawn()
-                .unwrap(),
-        );
-        assert!(std::fs::write(&target, "x").is_err(), "a running exe can't be overwritten");
-        std::fs::write(src.join("ptyro.exe"), "new").unwrap();
-        let files = vec![(src.join("ptyro.exe"), "ptyro.exe".to_owned())];
-        // Rolled back while it runs.
-        let e = swap(&dir, &files, "ptyro.exe", &|_| Err("no".into())).unwrap_err();
-        assert_eq!(e.restored, Ok(()));
-        assert_ne!(std::fs::read(&target).unwrap(), b"new");
-        // Swapped while it runs: its image is kept aside, under this process's id.
-        swap(&dir, &files, "ptyro.exe", &|_| Ok(())).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"new");
-        let aside = dir.join(format!("ptyro.exe.old.{}", std::process::id()));
-        assert!(aside.exists(), "still running, so still there");
-        sweep(&target);
-        assert!(aside.exists(), "this update's own, kept while it runs");
-        drop(running);
-        // Windows may hold the image (or a virus scanner the file) a moment after it ends.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        loop {
-            sweep_with(&target, &|_| false);
-            if !aside.exists() {
-                break;
-            }
-            assert!(std::time::Instant::now() < deadline, "swept once nothing runs it");
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
     }
 }

@@ -756,13 +756,13 @@ fn a_draft_of_several_lines_is_edited_a_line_at_a_time() {
     assert!(!e.vertical(false));
 }
 
-/// With a remote daemon (ptyro.exe and WSL), a setting the daemon reads is changed in the daemon's
+/// With a remote daemon (over ssh), a setting the daemon reads is changed in the daemon's
 /// own file: any key that would change it here asks to open that instead, and this computer's file
 /// is left alone. The screen's own settings still change here.
 #[test]
 fn a_remote_daemons_settings_are_changed_there() {
     let mut t = T::new("");
-    t.p.remote = Some("wsl://Ubuntu".into());
+    t.p.remote = Some("me@devbox".into());
     t.go("daemon.hold_wsl");
     for k in ["<Enter>", "<Space>", "r", "<BS>"] {
         assert_eq!(t.press(k), vec![Action::Daemon(Some("daemon.hold_wsl".into()))], "{k}");

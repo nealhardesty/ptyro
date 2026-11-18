@@ -31,18 +31,9 @@ pub fn daemon_start(foreground: bool, spawned: bool) -> i32 {
         return start_detached();
     }
     // Leave the client's session and process group so its terminal closing can't hang us up.
-    // Done before any runtime exists: we never fork an initialized tokio process. (On Windows the
-    // client starts it detached instead.)
-    #[cfg(unix)]
+    // Done before any runtime exists: we never fork an initialized tokio process.
     if spawned {
         let _ = rustix::process::setsid();
-    }
-    #[cfg(not(unix))]
-    let _ = spawned;
-    // Windows: ptyro is an app Windows knows (its toasts' name and icon, its links) (WIN10).
-    #[cfg(windows)]
-    if let Ok(p) = Paths::from_env() {
-        crate::winapp::ensure(&p.data);
     }
     match ptyro_daemon::run(ptyro_daemon::Options { foreground }) {
         Ok(()) => 0,
@@ -131,7 +122,7 @@ pub struct Ctx {
     /// `--remote`: the daemon is on another machine (over ssh).
     pub remote: Option<String>,
     /// This computer's own daemon was asked for (`--remote local`, `client.default_remote =
-    /// local`): on Windows, what lets ptyro start one (WIN5).
+    /// local`).
     pub local: bool,
 }
 
@@ -168,27 +159,6 @@ async fn dispatch(
 ) -> Result<i32, Error> {
     let paths = Paths::from_env().map_err(|e| Error::internal(e.to_string()))?;
     let encoding = if json_wire { Encoding::Json } else { Encoding::MsgPack };
-    // Where the daemon is (WIN3). Commands that never talk to one don't go looking for it.
-    let discover = !matches!(
-        cmd,
-        Some(
-            Cmd::Config { .. }
-                | Cmd::Completions { .. }
-                | Cmd::ShellInit { .. }
-                | Cmd::Setup { .. }
-                | Cmd::Install { .. }
-                | Cmd::Update { .. }
-                | Cmd::Login { .. }
-                | Cmd::Uninstall { .. }
-                | Cmd::Daemon { .. }
-                | Cmd::Proxy
-        )
-    );
-    // Windows: so the toasts of a daemon in WSL say "ptyro" and open their session (WIN10). Not
-    // on the way out.
-    if !matches!(cmd, Some(Cmd::Uninstall { .. })) {
-        crate::winapp::ensure(&paths.data);
-    }
     // Uninstall is about this computer: a saved or given remote never sends it to another
     // machine's daemon, which it would stop with every session.
     let remote = if matches!(cmd, Some(Cmd::Uninstall { .. })) {
@@ -206,33 +176,22 @@ async fn dispatch(
         // updates (BOOT5).
         if let Some(r) = remote.filter(|r| !ptyro_client::is_local(Some(r))) {
             if matches!(cmd, Some(Cmd::Update { .. })) {
-                let there = match r.strip_prefix("wsl://") {
-                    Some(d) if !d.is_empty() => format!("`wsl -d {d} -- ptyro update`"),
-                    Some(_) => "`wsl ptyro update`".to_owned(),
-                    None => format!("`ptyro update` on {r}"),
-                };
                 return Err(Error::invalid(format!(
-                    "update is about this computer's agents, not {r}'s: run {there}"
+                    "update is about this computer's agents, not {r}'s: run `ptyro update` on {r}"
                 )));
             }
             let what = if matches!(cmd, Some(Cmd::Login { .. })) { "login" } else { "setup" };
-            if r.starts_with("wsl://") {
-                return Err(Error::invalid(format!(
-                    "{what} reaches WSL itself: `ptyro {what} --where wsl` (or both), not --remote {r}"
-                )));
-            }
             return Err(Error::invalid(format!(
                 "{what} is about this computer, not {r}: run `ptyro {what}` there"
             )));
         }
         None
     } else {
-        crate::winclient::resolve(remote, &paths, discover).await
+        resolve_remote(remote, &paths)
     };
     // `local` is this computer's own daemon, not a remote one.
     let local = ptyro_client::is_local(remote.as_deref());
     let remote = remote.filter(|_| !local);
-    DAEMON_ELSEWHERE.store(remote.is_some(), std::sync::atomic::Ordering::Relaxed);
     let ctx = Ctx { paths, encoding, remote, local };
     match cmd {
         None if !task.is_empty() => start_task(&ctx, &task.join(" ")).await,
@@ -365,52 +324,21 @@ async fn dispatch(
             print!("{}", crate::complete::registration(&shell).map_err(Error::invalid)?);
             Ok(0)
         }
-        Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, survey, move_, tty }) => {
-            let a = crate::setup::SetupArgs {
-                yes,
-                agents,
-                tools,
-                dry_run,
-                json,
-                place,
-                survey,
-                tty,
-                move_,
-            };
+        Some(Cmd::Setup { yes, agents, tools, dry_run, json, place, move_ }) => {
+            let a = crate::setup::SetupArgs { yes, agents, tools, dry_run, json, place, move_ };
             crate::setup::setup(&ctx, a).await
         }
-        Some(Cmd::Install {
-            names,
-            yes,
-            dry_run,
-            json,
-            place,
-            admin,
-            tty,
-            confirmed,
-            move_,
-            moves,
-        }) => {
-            let a = crate::setup::InstallArgs {
-                names,
-                yes,
-                dry_run,
-                json,
-                place,
-                admin,
-                tty,
-                confirmed,
-                move_,
-                moves,
-            };
+        Some(Cmd::Install { names, yes, dry_run, json, place, confirmed, move_ }) => {
+            let a =
+                crate::setup::InstallArgs { names, yes, dry_run, json, place, confirmed, move_ };
             crate::setup::install(&ctx, a).await
         }
-        Some(Cmd::Update { names, check, yes, json, tty, here }) => {
-            let a = crate::setup::UpdateArgs { names, check, yes, json, tty, here };
+        Some(Cmd::Update { names, check, yes, json, here }) => {
+            let a = crate::setup::UpdateArgs { names, check, yes, json, here };
             crate::setup::update(&ctx, a).await
         }
-        Some(Cmd::Login { names, check, json, place, tty, installed }) => {
-            let a = crate::logins::LoginArgs { names, check, json, place, tty, installed };
+        Some(Cmd::Login { names, check, json, place }) => {
+            let a = crate::logins::LoginArgs { names, check, json, place };
             crate::logins::login(&ctx, a).await
         }
         Some(Cmd::About { json }) => crate::about::run(&ctx, json).await,
@@ -576,7 +504,7 @@ async fn dispatch(
         }
         Some(Cmd::Usage { json }) => crate::agents::usage(&ctx, json).await,
         Some(Cmd::Notify { cmd }) => crate::agents::notify(&ctx, cmd).await,
-        Some(Cmd::Hook { .. } | Cmd::StatuslineRelay | Cmd::OpenUrl { .. }) => {
+        Some(Cmd::Hook { .. } | Cmd::StatuslineRelay) => {
             unreachable!("handled in main")
         }
         Some(Cmd::ShellInit { shell }) => {
@@ -586,7 +514,7 @@ async fn dispatch(
         Some(Cmd::Daemon { cmd }) => daemon(&ctx, cmd).await,
         Some(Cmd::FakeAgent { .. }) => unreachable!("handled in main"),
         #[cfg(debug_assertions)]
-        Some(Cmd::FakeGh { .. } | Cmd::FakeInstaller { .. } | Cmd::FakeWsl { .. }) => {
+        Some(Cmd::FakeGh { .. } | Cmd::FakeInstaller { .. }) => {
             unreachable!("handled in main")
         }
     }
@@ -639,16 +567,10 @@ pub(crate) async fn upgrade(
                 "the upgrade was called off, so the daemon {} carries on with every session; see `ptyro daemon logs`, or `ptyro daemon restart --hibernate` to restart it instead (agents resume their conversations; shells and commands start again)",
                 status.version
             );
-        } else if status.pid == before.pid {
+        } else {
             eprintln!(
                 "upgraded in {ms} ms: daemon {} (pid {}, unchanged), {} session(s)",
                 status.version, status.pid, status.sessions
-            );
-        } else {
-            // Windows: the new daemon is another process; every session's program is the same.
-            eprintln!(
-                "upgraded in {ms} ms: daemon {} (pid {}, was {}), {} session(s) handed over",
-                status.version, status.pid, before.pid, status.sessions
             );
         }
         return Ok(if status.rolled_back { 1 } else { 0 });
@@ -789,12 +711,22 @@ pub fn client_env() -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Whether the daemon is another computer's (a WSL distro counts): set once, by `dispatch`.
-static DAEMON_ELSEWHERE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The daemon to use: `--remote` (`given`), else `PTYRO_REMOTE`, else `[client] default_remote`.
+pub(crate) fn resolve_remote(given: Option<String>, paths: &Paths) -> Option<String> {
+    if given.is_some() {
+        return given;
+    }
+    if let Ok(r) = std::env::var("PTYRO_REMOTE")
+        && !r.trim().is_empty()
+    {
+        return Some(r);
+    }
+    let config = ptyro_core::config::Config::load(&ptyro_core::config::Config::path(paths))
+        .unwrap_or_default();
+    config.client.default_remote.filter(|r| !r.trim().is_empty())
+}
 
-/// The current directory, as the daemon sees it: here, canonical; on Windows, where the daemon
-/// is WSL's (WIN3), the same folder as the distro names it (`C:\src` is `/mnt/c/src`). A native
-/// Windows daemon (WIN5) takes the Windows path as it is.
+/// The current directory, as the daemon sees it: here, canonical.
 pub fn current_dir() -> Result<std::path::PathBuf, Error> {
     let cwd =
         std::env::current_dir().map_err(|e| Error::invalid(format!("current directory: {e}")))?;
@@ -818,33 +750,9 @@ pub fn addr_here_opt(addr: Option<String>) -> Result<Option<String>, Error> {
     addr.map(addr_here).transpose()
 }
 
-/// A folder on this computer as the daemon names it: canonical, and on Windows translated as
-/// `current_dir` says.
+/// A folder on this computer as the daemon names it: canonical.
 fn daemon_path(p: &std::path::Path) -> Result<std::path::PathBuf, Error> {
-    let cwd = p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?;
-    if cfg!(windows) && !DAEMON_ELSEWHERE.load(std::sync::atomic::Ordering::Relaxed) {
-        return Ok(plain_windows_path(&cwd));
-    }
-    if cfg!(windows) {
-        let shown = cwd.to_string_lossy();
-        return ptyro_core::wsl::path_in_distro(&shown, "/mnt/").map(Into::into).ok_or_else(|| {
-            Error::invalid(format!(
-                "{shown} isn't a folder WSL can reach: work from a drive (C:\\…) or the distro \
-                 (\\\\wsl.localhost\\…)"
-            ))
-        });
-    }
-    Ok(cwd)
-}
-
-/// `canonicalize`'s verbatim form as programs write it: `\\?\C:\src` is `C:\src`, and
-/// `\\?\UNC\server\share` is `\\server\share`.
-fn plain_windows_path(p: &std::path::Path) -> std::path::PathBuf {
-    let s = p.to_string_lossy();
-    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{unc}").into();
-    }
-    s.strip_prefix(r"\\?\").map_or_else(|| p.to_path_buf(), Into::into)
+    p.canonicalize().map_err(|e| Error::invalid(format!("{}: {e}", p.display())))
 }
 
 /// Ask a yes/no question on the terminal; `false` without one.
@@ -1134,8 +1042,7 @@ fn restart_args(
 }
 
 /// An update replaced this binary and upgraded the daemon: the new TUI takes this one's place,
-/// in this terminal (SPEC §24.8a). On Unix it replaces this process; on Windows, which can't, it
-/// runs in this console and its exit is this one's.
+/// in this terminal (SPEC §24.8a): it replaces this process.
 fn restart_tui(args: &[String], to: &str) -> Result<i32, Error> {
     let exe = std::env::current_exe().map_err(|e| Error::internal(format!("ptyro's path: {e}")))?;
     let exe = ptyro_agents::own::installed_name(&exe);
@@ -1146,16 +1053,8 @@ fn restart_tui(args: &[String], to: &str) -> Result<i32, Error> {
             "ptyro {to} is installed, but it didn't start in this TUI's place ({e}): run `ptyro` again"
         ))
     };
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        Err(failed(cmd.exec()))
-    }
-    #[cfg(not(unix))]
-    {
-        let status = cmd.status().map_err(failed)?;
-        Ok(status.code().unwrap_or(1))
-    }
+    use std::os::unix::process::CommandExt;
+    Err(failed(cmd.exec()))
 }
 
 /// Expand selectors (each may be a name, handle or `@…` selector) into sessions.
@@ -1222,7 +1121,7 @@ pub enum Shell {
     Bash,
     Zsh,
     Fish,
-    /// PowerShell (pwsh 7+ and Windows PowerShell 5.1)
+    /// PowerShell (pwsh 7+)
     #[value(alias = "powershell")]
     Pwsh,
 }
@@ -1297,8 +1196,8 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
             all.retain(|s| filter.keeps(s, &projects));
             (all, worktrees)
         }
-        // No local daemon simply means no sessions (`local` too: this computer's own, as a
-        // Windows client names it); an unreachable remote is an error.
+        // No local daemon simply means no sessions (`local` too: this computer's own); an
+        // unreachable remote is an error.
         Err(e)
             if e.code == ErrorCode::DaemonUnavailable && {
                 let remote = ctx.options(ClientKind::Cli, false).remote;
@@ -1659,9 +1558,6 @@ const HANDOFF_VERSIONS: &[u32] = ptyro_daemon::HANDOFF_VERSIONS;
 
 #[cfg(test)]
 mod path_tests {
-    use super::plain_windows_path;
-    use std::path::{Path, PathBuf};
-
     #[test]
     fn a_relative_path_is_this_clients_and_a_name_stays_a_name() {
         use super::{addr_here, current_dir};
@@ -1673,16 +1569,6 @@ mod path_tests {
             assert_eq!(addr_here(name.into()).unwrap(), name, "a name, id or absolute path");
         }
         assert!(addr_here("./no-such-folder-here".into()).is_err(), "a missing path says so");
-    }
-
-    #[test]
-    fn a_verbatim_windows_path_is_written_the_usual_way() {
-        assert_eq!(plain_windows_path(Path::new(r"\\?\C:\src")), PathBuf::from(r"C:\src"));
-        assert_eq!(
-            plain_windows_path(Path::new(r"\\?\UNC\nas\share\x")),
-            PathBuf::from(r"\\nas\share\x")
-        );
-        assert_eq!(plain_windows_path(Path::new("/home/me")), PathBuf::from("/home/me"));
     }
 }
 

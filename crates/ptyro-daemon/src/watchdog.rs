@@ -139,11 +139,7 @@ fn rss_kib() -> u64 {
             })
             .unwrap_or(0)
     }
-    #[cfg(windows)]
-    {
-        ptyro_pty::winproc::own_memory_kib()
-    }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(target_os = "linux"))]
     {
         std::process::Command::new("ps")
             .args(["-o", "rss=", "-p", &std::process::id().to_string()])
@@ -154,15 +150,10 @@ fn rss_kib() -> u64 {
     }
 }
 
-/// Open files and sockets: on Windows, every handle the process holds.
+/// Open files and sockets.
 fn open_fds() -> u32 {
-    #[cfg(windows)]
-    return ptyro_pty::winproc::own_handles();
-    #[cfg(not(windows))]
-    {
-        let dir = if cfg!(target_os = "linux") { "/proc/self/fd" } else { "/dev/fd" };
-        std::fs::read_dir(dir).map_or(0, |d| d.count() as u32)
-    }
+    let dir = if cfg!(target_os = "linux") { "/proc/self/fd" } else { "/dev/fd" };
+    std::fs::read_dir(dir).map_or(0, |d| d.count() as u32)
 }
 
 impl Daemon {

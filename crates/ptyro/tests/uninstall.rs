@@ -329,12 +329,8 @@ async fn uninstall_never_follows_a_saved_remote() {
     assert!(out.status.success(), "{}", text(&out));
     let p: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(p["daemon_running"], true, "{p}");
-    let out = plan(&["--remote", "wsl://Ubuntu"], false);
+    let out = plan(&["--remote", "me@box"], false);
     assert!(!out.status.success());
-    assert!(
-        text(&out).contains("not from wsl://Ubuntu: run `ptyro uninstall` there"),
-        "{}",
-        text(&out)
-    );
+    assert!(text(&out).contains("not from me@box: run `ptyro uninstall` there"), "{}", text(&out));
     assert!(w.d.client().await.is_ok(), "the daemon was left running");
 }

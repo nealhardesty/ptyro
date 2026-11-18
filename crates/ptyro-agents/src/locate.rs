@@ -4,13 +4,6 @@
 //! that cache. ptyro never downloads an agent: it runs one that is already on disk, and when none
 //! is, it offers setup to install it ([`install_fix`], BOOT9; the vendor's own command is
 //! [`install_hint`]).
-//!
-//! On Windows (WIN8) a program has an extension from `PATHEXT` (`claude.exe`, `codex.cmd`), the
-//! home is `%USERPROFILE%`, and the places are Windows' own: Claude's native installer
-//! (`~\.local\bin`), npm's prefix (`%APPDATA%\npm`), WinGet's links, Scoop's shims. An npm
-//! `.cmd` shim is read and what it starts runs instead (a Node script with `node`, or the `.exe`
-//! a package links): through the shim, `cmd.exe` would stand between ptyro and the agent, ask
-//! "Terminate batch job (Y/N)?" at Ctrl+C, and be the session's program.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -113,12 +106,9 @@ pub fn setup_offer(text: &str) -> Option<Vec<String>> {
     })
 }
 
-/// The user's home: `$HOME`, else `%USERPROFILE%` (Windows sets only that).
+/// The user's home: `$HOME`.
 fn home() -> Option<PathBuf> {
-    ["HOME", "USERPROFILE"]
-        .into_iter()
-        .find_map(|v| std::env::var_os(v).filter(|h| !h.is_empty()))
-        .map(PathBuf::from)
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
 /// Where to look besides `PATH`, and how.
@@ -127,10 +117,8 @@ struct Places {
     dirs: Vec<(PathBuf, String)>,
     /// nvm's folder (`versions/node/*/bin` under it).
     nvm: PathBuf,
-    /// `npx`'s cache (`~/.npm/_npx`; `%LOCALAPPDATA%\npm-cache\_npx` on Windows).
+    /// `npx`'s cache (`~/.npm/_npx`).
     npx: PathBuf,
-    /// Windows: `PATHEXT`, the extensions a program may have. `None`: a program is its name.
-    exts: Option<String>,
 }
 
 /// `prog` on `path`, else where npm, nvm and `npx` put it under the home.
@@ -144,12 +132,7 @@ pub fn find(prog: &str, path: &str) -> Option<Found> {
 pub fn find_all(prog: &str, path: &str) -> Vec<Found> {
     let Some(places) = places() else { return Vec::new() };
     let none = PathBuf::from(NO_PATH);
-    let only = |dirs: Vec<(PathBuf, String)>| Places {
-        dirs,
-        nvm: none.clone(),
-        npx: none.clone(),
-        exts: places.exts.clone(),
-    };
+    let only = |dirs: Vec<(PathBuf, String)>| Places { dirs, nvm: none.clone(), npx: none.clone() };
     let mut out: Vec<Found> = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
     let mut add = |f: Option<Found>| {
@@ -181,49 +164,20 @@ fn places() -> Option<Places> {
     let home = home()?;
     let var = |v: &str| std::env::var_os(v).filter(|x| !x.is_empty()).map(PathBuf::from);
     let mut dirs: Vec<(PathBuf, String)> = Vec::new();
-    let places = if cfg!(windows) {
-        // npm puts a global package's commands in its prefix itself on Windows, not in `bin`.
-        if let Some(p) = var("NPM_CONFIG_PREFIX") {
-            dirs.push((p, "npm prefix".into()));
-        }
-        if let Some(a) = var("APPDATA") {
-            dirs.push((a.join("npm"), "npm".into()));
-        }
-        // Claude Code's native installer (`irm https://claude.ai/install.ps1 | iex`).
-        dirs.push((home.join(".local").join("bin"), "~\\.local\\bin".into()));
-        let local = var("LOCALAPPDATA").unwrap_or_else(|| home.join("AppData").join("Local"));
-        dirs.push((local.join("Microsoft").join("WinGet").join("Links"), "WinGet".into()));
-        let scoop = var("SCOOP").unwrap_or_else(|| home.join("scoop"));
-        dirs.push((scoop.join("shims"), "Scoop".into()));
-        // nvm-windows: the active Node's folder, where its global packages' commands are.
-        if let Some(n) = var("NVM_SYMLINK") {
-            dirs.push((n, "nvm".into()));
-        }
-        dirs.push((home.join(".bun").join("bin"), "~\\.bun\\bin".into()));
-        Places {
-            dirs,
-            nvm: home.join(".nvm"),
-            npx: local.join("npm-cache").join("_npx"),
-            exts: Some(std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())),
-        }
-    } else {
-        if let Some(p) = var("NPM_CONFIG_PREFIX") {
-            dirs.push((p.join("bin"), "npm prefix".into()));
-        }
-        for d in [".npm-global/bin", ".local/bin", ".volta/bin", ".bun/bin", ".claude/local"] {
-            dirs.push((home.join(d), format!("~/{d}")));
-        }
-        for d in ["/opt/homebrew/bin", "/usr/local/bin"] {
-            dirs.push((PathBuf::from(d), d.to_owned()));
-        }
-        Places {
-            dirs,
-            nvm: var("NVM_DIR").unwrap_or_else(|| home.join(".nvm")),
-            npx: home.join(".npm/_npx"),
-            exts: None,
-        }
+    if let Some(p) = var("NPM_CONFIG_PREFIX") {
+        dirs.push((p.join("bin"), "npm prefix".into()));
+    }
+    for d in [".npm-global/bin", ".local/bin", ".volta/bin", ".bun/bin", ".claude/local"] {
+        dirs.push((home.join(d), format!("~/{d}")));
+    }
+    for d in ["/opt/homebrew/bin", "/usr/local/bin"] {
+        dirs.push((PathBuf::from(d), d.to_owned()));
+    }
+    let mut places = Places {
+        dirs,
+        nvm: var("NVM_DIR").unwrap_or_else(|| home.join(".nvm")),
+        npx: home.join(".npm/_npx"),
     };
-    let mut places = places;
     for d in vendor_bins(crate::catalog::Platform::current()) {
         if !places.dirs.iter().any(|(p, _)| *p == d.0) {
             places.dirs.push(d);
@@ -246,9 +200,8 @@ fn vendor_bins(platform: crate::catalog::Platform) -> Vec<(PathBuf, String)> {
         for b in &m.bin {
             let Some(dir) = crate::setup::expand_place(b) else { continue };
             let dir = PathBuf::from(dir);
-            let say = if platform.is_windows() { b.replace('/', "\\") } else { b.clone() };
             if !out.iter().any(|(p, _)| *p == dir) {
-                out.push((dir, say));
+                out.push((dir, b.clone()));
             }
         }
     }
@@ -257,24 +210,8 @@ fn vendor_bins(platform: crate::catalog::Platform) -> Vec<(PathBuf, String)> {
 
 /// After `PATH`: `places.dirs`, then nvm, then `npx`'s cache.
 fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
-    let exts = places.exts.as_deref();
-    // The names `p` may have on disk: itself; on Windows, with each runnable extension (and
-    // never npm's extensionless `sh` shim beside its `.cmd`).
-    let names = |p: &str| -> Vec<String> {
-        match exts {
-            None => vec![p.to_owned()],
-            Some(e) => ptyro_core::os::windows_program_names(p, e)
-                .into_iter()
-                .filter(|n| ptyro_core::os::windows_runnable(Path::new(n), e))
-                .collect(),
-        }
-    };
-    // An npm shim whose package is gone (removed, or an install that rolled back) runs nothing:
-    // it isn't found, so the agent reads as not installed, with how to install it.
-    let in_dir = |d: &Path, p: &str| {
-        names(p).into_iter().map(|n| d.join(n)).find(|f| f.is_file() && !broken_shim(f))
-    };
-    if prog.contains('/') || (exts.is_some() && prog.contains('\\')) {
+    let in_dir = |d: &Path, p: &str| Some(d.join(p)).filter(|f| f.is_file());
+    if prog.contains('/') {
         let p = PathBuf::from(prog);
         return p.is_file().then(|| Found { argv: vec![prog.to_owned()], path: p, via: None });
     }
@@ -286,31 +223,13 @@ fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
             .or_else(|| in_dir(beside, "node"))
             .or_else(|| node_bins.iter().find_map(|d| in_dir(d, "node")))
     };
-    // An npm `.cmd` shim runs what it starts, without cmd.exe in between.
-    let unshim = |f: &Path| -> Option<(Vec<String>, PathBuf)> {
-        let target = shim_target(f)?;
-        let is_js = target.extension().is_some_and(|e| e.eq_ignore_ascii_case("js"));
-        if is_js || node_script(&target) {
-            let n = node(f.parent()?)?;
-            let argv =
-                vec![n.to_string_lossy().into_owned(), target.to_string_lossy().into_owned()];
-            return Some((argv, target));
-        }
-        Some((vec![target.to_string_lossy().into_owned()], target))
-    };
     if let Some(p) = on_path(prog) {
-        if let Some((argv, real)) = unshim(&p) {
-            return Some(Found { argv, path: real, via: None });
-        }
         return Some(Found { argv: vec![prog.to_owned()], path: p, via: None });
     }
     let mut dirs = places.dirs.clone();
     dirs.extend(node_bins.iter().map(|d| (d.clone(), "nvm".to_owned())));
     for (dir, via) in &dirs {
         let Some(f) = in_dir(dir, prog) else { continue };
-        if let Some((argv, real)) = unshim(&f) {
-            return Some(Found { argv, path: real, via: Some(via.clone()) });
-        }
         let real = ptyro_core::os::canonicalize(&f).unwrap_or_else(|_| f.clone());
         let argv = if node_script(&real) && on_path("node").is_none() {
             let Some(n) = node(dir) else { continue };
@@ -329,34 +248,6 @@ fn find_in(prog: &str, path: &str, places: &Places) -> Option<Found> {
         path: script,
         via: Some("npx cache".into()),
     })
-}
-
-/// An npm `.cmd` shim whose target isn't on disk: it would fail when run.
-fn broken_shim(f: &Path) -> bool {
-    let is_cmd = f.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd"));
-    is_cmd
-        && std::fs::read_to_string(f).is_ok_and(|t| t.contains("\"%dp0%\\node_modules\\"))
-        && shim_target(f).is_none()
-}
-
-/// What an npm `.cmd` shim starts, when `f` is one and that is on disk: the last quoted
-/// `"%dp0%\…"` in it, a path from the shim's folder (`%dp0%\node_modules\@openai\codex\bin\
-/// codex.js`). npm's shims (cmd-shim) end by running it, after picking a `node`.
-fn shim_target(f: &Path) -> Option<PathBuf> {
-    let is_cmd = f.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd"));
-    if !is_cmd {
-        return None;
-    }
-    let text = std::fs::read_to_string(f).ok()?;
-    let at = text.rfind("\"%dp0%\\")? + "\"%dp0%\\".len();
-    let rel = &text[at..at + text[at..].find('"')?];
-    // Inside the shim's folder only: a plain relative path, never climbing out.
-    let parts: Vec<&str> = rel.split(['\\', '/']).filter(|p| !p.is_empty()).collect();
-    if parts.is_empty() || parts.iter().any(|p| *p == ".." || p.contains(':') || p.contains('%')) {
-        return None;
-    }
-    let target = parts.iter().fold(f.parent()?.to_path_buf(), |d, p| d.join(p));
-    target.is_file().then_some(target)
 }
 
 /// nvm's `versions/node/*/bin`, newest version first.
@@ -422,7 +313,7 @@ fn npx_cached(cache: &Path, pkg: &str, prog: &str) -> Option<PathBuf> {
 fn tilde(p: &Path) -> String {
     let s = p.to_string_lossy();
     match home().map(|h| h.to_string_lossy().into_owned()) {
-        Some(h) if s.starts_with(&format!("{h}/")) || s.starts_with(&format!("{h}\\")) => {
+        Some(h) if s.starts_with(&format!("{h}/")) => {
             format!("~{}", &s[h.len()..])
         }
         _ => s.into_owned(),
@@ -434,8 +325,8 @@ mod vendor_tests {
     use super::*;
 
     /// Every folder the version table says a vendor installer puts its program in is one
-    /// `locate` searches (the final review's I2: `~/.opencode/bin` and Codex's Windows folder
-    /// were missing), so `find` sees a fresh install.
+    /// `locate` searches (the final review's I2: `~/.opencode/bin` was missing), so `find` sees a
+    /// fresh install.
     #[test]
     fn every_vendor_bin_in_the_table_is_searched() {
         let platform = crate::catalog::Platform::current();
@@ -457,10 +348,8 @@ mod vendor_tests {
             }
         }
         assert!(checked > 0, "no vendor bin on {platform:?}");
-        if !platform.is_windows() {
-            let home = home().unwrap();
-            assert!(dirs.contains(&home.join(".opencode").join("bin")), "{dirs:?}");
-        }
+        let home = home().unwrap();
+        assert!(dirs.contains(&home.join(".opencode").join("bin")), "{dirs:?}");
     }
 }
 
@@ -471,7 +360,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn places(home: &Path, nvm: &Path) -> Places {
-        Places { dirs: Vec::new(), nvm: nvm.to_owned(), npx: home.join(".npm/_npx"), exts: None }
+        Places { dirs: Vec::new(), nvm: nvm.to_owned(), npx: home.join(".npm/_npx") }
     }
 
     fn exe(p: &Path, body: &str) {
@@ -547,29 +436,23 @@ mod tests {
     /// The hint is the version table's recommended command for the platform.
     #[test]
     fn install_hints_come_from_the_table() {
-        use crate::catalog::Platform::{Linux, Macos, WindowsArm64, WindowsX64, Wsl};
+        use crate::catalog::Platform::{Linux, Macos, Wsl};
         let h = |p, on| hint_on(p, on);
         assert_eq!(
             h("claude", Wsl).as_deref(),
             Some("curl -fsSL https://claude.ai/install.sh | bash")
         );
-        assert_eq!(
-            h("claude", WindowsX64).as_deref(),
-            Some("irm https://claude.ai/install.ps1 | iex")
-        );
+
         assert_eq!(
             h("codex", Macos).as_deref(),
             Some("curl -fsSL https://chatgpt.com/codex/install.sh | sh")
         );
-        assert_eq!(
-            h("codex", WindowsArm64).as_deref(),
-            Some("irm https://chatgpt.com/codex/install.ps1 | iex")
-        );
+
         assert_eq!(
             h("opencode", Linux).as_deref(),
             Some("curl -fsSL https://opencode.ai/install | bash")
         );
-        assert_eq!(h("opencode", WindowsX64).as_deref(), Some("npm install -g opencode-ai"));
+
         assert_eq!(h("my-own-agent", Linux), None);
     }
 
@@ -612,90 +495,5 @@ mod tests {
             "the offer, wherever it is in the message"
         );
         assert_eq!(setup_offer("nothing to see"), None);
-    }
-}
-
-/// Windows' rules, which hold on any system: a program has an extension from `PATHEXT`, and an
-/// npm `.cmd` shim runs what it starts.
-#[cfg(test)]
-mod windows_rules {
-    use super::*;
-
-    /// npm's shim (cmd-shim) for a package command, as `npm i -g` writes it on Windows.
-    fn shim(target: &str) -> String {
-        format!(
-            "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
-             SETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  \
-             SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n)\r\n\r\n\
-             endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \
-             \"%dp0%\\{target}\" %*\r\n"
-        )
-    }
-
-    fn write(p: &Path, body: &str) {
-        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-        std::fs::write(p, body).unwrap();
-    }
-
-    #[test]
-    fn programs_have_extensions_and_npm_shims_run_what_they_start() {
-        let t = tempfile::tempdir().unwrap();
-        let home = t.path();
-        let npm = home.join("AppData/Roaming/npm");
-        let local_bin = home.join(".local/bin");
-        let places = Places {
-            dirs: vec![(npm.clone(), "npm".into()), (local_bin.clone(), "~\\.local\\bin".into())],
-            nvm: home.join(".nvm"),
-            npx: home.join("npm-cache/_npx"),
-            exts: Some(".COM;.EXE;.BAT;.CMD".into()),
-        };
-        let path = home.join("bin").to_string_lossy().into_owned();
-        // Claude's native installer: `claude.exe`, run as it is.
-        write(&local_bin.join("claude.exe"), "MZ");
-        let f = find_in("claude", &path, &places).unwrap();
-        assert_eq!(f.argv, [local_bin.join("claude.exe").to_string_lossy()]);
-        assert_eq!(f.via.as_deref(), Some("~\\.local\\bin"));
-        // npm's three files for codex: the extensionless `sh` shim is passed over, and the
-        // `.cmd` runs its script with the `node.exe` beside it (no node on PATH).
-        let script =
-            npm.join("node_modules").join("@openai").join("codex").join("bin").join("codex.js");
-        write(&script, "#!/usr/bin/env node\n");
-        write(&npm.join("codex"), "#!/bin/sh\n");
-        write(&npm.join("codex.cmd"), &shim(r"node_modules\@openai\codex\bin\codex.js"));
-        write(&npm.join("node.exe"), "MZ");
-        let f = find_in("codex", &path, &places).unwrap();
-        assert_eq!(
-            f.argv.iter().map(PathBuf::from).collect::<Vec<_>>(),
-            [npm.join("node.exe"), script.clone()],
-            "{f:?}"
-        );
-        assert_eq!((f.path, f.via.as_deref()), (script, Some("npm")));
-        // A shim to a package's own `.exe` runs that `.exe`.
-        let bin = npm.join("node_modules/opencode-ai/bin/opencode.exe");
-        write(&bin, "MZ");
-        write(&npm.join("opencode.cmd"), &shim(r"node_modules\opencode-ai\bin\opencode.exe"));
-        let as_paths = |argv: &[String]| argv.iter().map(PathBuf::from).collect::<Vec<_>>();
-        assert_eq!(as_paths(&find_in("opencode", &path, &places).unwrap().argv), [bin]);
-        // On PATH too: what the shim starts, found by `PATHEXT`.
-        let on_path = home.join("bin");
-        let gem = on_path.join("node_modules/mine-cli/bin/mine.js");
-        write(&gem, "#!/usr/bin/env node\n");
-        write(&on_path.join("mine.cmd"), &shim(r"node_modules\mine-cli\bin\mine.js"));
-        write(&on_path.join("node.exe"), "MZ");
-        let f = find_in("mine", &path, &places).unwrap();
-        assert_eq!(as_paths(&f.argv), [on_path.join("node.exe"), gem]);
-        assert_eq!(f.via, None);
-        // A shim whose target climbs out of its folder, or isn't there, runs as itself.
-        write(&npm.join("own.cmd"), &shim(r"..\..\evil.exe"));
-        write(&home.join("AppData/evil.exe"), "MZ");
-        assert_eq!(
-            find_in("own", &path, &places).unwrap().argv,
-            [npm.join("own.cmd").to_string_lossy()]
-        );
-        assert_eq!(shim_target(&npm.join("codex")), None, "only a .cmd is a shim");
-        // A shim left behind by an install that rolled back (its package gone): not found.
-        write(&npm.join("mine.cmd"), &shim(r"node_modules\mine-cli\bin\mine.js"));
-        std::fs::remove_dir_all(home.join("bin")).unwrap();
-        assert!(find_in("mine", &path, &places).is_none(), "a broken shim runs nothing");
     }
 }

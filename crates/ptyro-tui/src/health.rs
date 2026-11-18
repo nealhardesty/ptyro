@@ -42,10 +42,10 @@ pub enum Fix {
     /// Open the settings panel at this option: WSL hiding an open web app opens `remote.access`,
     /// WSL stopping ptyro with the last terminal opens `daemon.hold_wsl`.
     Setting(&'static str),
-    /// Open the setup checklist (BOOT2) with these ticked (none: the defaults), on the side a
-    /// suggested `--where` names: an agent or git not found, no agent at all, or a doctor line
-    /// that suggests `ptyro setup` / `ptyro install`.
-    Setup { names: Vec<String>, place: Option<String> },
+    /// Open the setup checklist (BOOT2) with these ticked (none: the defaults): an agent or git
+    /// not found, no agent at all, or a doctor line that suggests `ptyro setup` / `ptyro
+    /// install`.
+    Setup { names: Vec<String> },
     /// An agent out of date (BOOT5): `ptyro update <names>` in a split, one at a time like the
     /// checklist's installs, and the badge looks again once it ends.
     Update(Vec<String>),
@@ -108,12 +108,9 @@ fn backed_up(mut args: Vec<String>) -> Vec<String> {
     args
 }
 
-/// The path in "`<path> is 644: …`" (the doctor's wording; on Windows "`<path> is readable by
-/// Everyone: …`"): everything before the mode, so a path with a space in it stays whole.
+/// The path in "`<path> is 644: …`" (the doctor's wording): everything before the mode, so a
+/// path with a space in it stays whole.
 fn private_path(text: &str) -> Option<&str> {
-    if let Some(i) = text.find(" is readable by ") {
-        return Some(&text[..i]);
-    }
     text.rmatch_indices(" is ").find_map(|(i, _)| {
         let mode = &text[i + 4..];
         (mode.len() >= 4
@@ -133,17 +130,15 @@ fn setup_fix(c: &Check) -> Option<Fix> {
         if first != "setup" && first != "install" {
             return None;
         }
-        // Names, and `--where X` (`--where=X`) kept as the side; other flags dropped, with the
-        // value of those that take one (`--agents a,b` names too, as setup's).
-        let (mut names, mut place) = (Vec::new(), None);
+        // Names; flags dropped, with the value of those that take one (`--agents a,b` names
+        // too, as setup's).
+        let mut names = Vec::new();
         let mut it = rest.iter();
         while let Some(w) = it.next() {
             match w.split_once('=') {
-                Some(("--where", v)) => place = Some(v.to_owned()),
                 Some((f, v)) if f == "--agents" || f == "--tools" => names.extend(
                     v.split(',').filter(|n| !n.is_empty() && *n != "none").map(str::to_owned),
                 ),
-                _ if w == "--where" => place = it.next().cloned(),
                 _ if w == "--agents" || w == "--tools" => {
                     if let Some(v) = it.next() {
                         names.extend(
@@ -157,10 +152,10 @@ fn setup_fix(c: &Check) -> Option<Fix> {
                 _ => names.push(w.clone()),
             }
         }
-        return Some(Fix::Setup { names, place });
+        return Some(Fix::Setup { names });
     }
     if c.section == "agents" && c.name == "agents" {
-        return Some(Fix::Setup { names: Vec::new(), place: None });
+        return Some(Fix::Setup { names: Vec::new() });
     }
     let prog = c
         .text
@@ -169,7 +164,7 @@ fn setup_fix(c: &Check) -> Option<Fix> {
     let prog = prog.trim();
     let known = ptyro_agents::setup::resolve(prog).ok()?;
     matches!(c.section.as_str(), "agents" | "git")
-        .then(|| Fix::Setup { names: vec![known.program.clone()], place: None })
+        .then(|| Fix::Setup { names: vec![known.program.clone()] })
 }
 
 /// A doctor check as a finding: only warnings and problems, with the fix its text implies.
@@ -299,7 +294,7 @@ impl App {
                         from.words(),
                         to.words()
                     ),
-                    fix: Some(Fix::Setup { names: vec![o.program.clone()], place: None }),
+                    fix: Some(Fix::Setup { names: vec![o.program.clone()] }),
                 });
                 std::iter::once(update).chain(moving)
             })
@@ -490,9 +485,7 @@ impl App {
             Some(Fix::Cli(args)) => self.run_cli(&backed_up(args)),
             Some(Fix::Action(action)) => self.run(&crate::keymap::Command { action, arg: None }),
             Some(Fix::Setting(key)) => self.open_settings(Some(key)),
-            Some(Fix::Setup { names, place }) => {
-                self.open_setup((!names.is_empty()).then_some(names), place)
-            }
+            Some(Fix::Setup { names }) => self.open_setup((!names.is_empty()).then_some(names)),
             Some(Fix::Update(names)) => self.update_agents(names),
             Some(Fix::Private(path)) => {
                 // Only a file: 600 on a directory would shut its owner out of it.
@@ -503,8 +496,7 @@ impl App {
                 match ptyro_pty::acl::make_private(&path) {
                     Ok(()) => {
                         self.health.findings.remove(i);
-                        let how = if cfg!(windows) { "only you can read it" } else { "600" };
-                        self.toast(format!("{} is private now ({how})", path.display()));
+                        self.toast(format!("{} is private now (600)", path.display()));
                     }
                     Err(e) => self.toast_err(format!("{}: {e}", path.display())),
                 }
@@ -554,8 +546,7 @@ impl App {
         self.run_cli_with(self.daemon_ptyro(), args);
     }
 
-    /// [`App::run_cli`] with another ptyro: Windows' ptyro.exe from a split in WSL (BOOT8).
-    pub fn run_cli_with(&mut self, bin: String, args: &[String]) {
+    fn run_cli_with(&mut self, bin: String, args: &[String]) {
         self.last_cli = Some(args.to_vec());
         let argv: Vec<String> = std::iter::once(bin).chain(args.iter().cloned()).collect();
         let base = format!("ptyro-{}", args.first().map_or("cli", String::as_str));
@@ -582,9 +573,8 @@ mod tests {
         let fix = |section: &str, name: &str, level: &str, text: &str| {
             finding(&check(section, name, level, text)).unwrap().fix
         };
-        let s = |v: &[&str]| {
-            Some(Fix::Setup { names: v.iter().map(|s| (*s).to_owned()).collect(), place: None })
-        };
+        let s =
+            |v: &[&str]| Some(Fix::Setup { names: v.iter().map(|s| (*s).to_owned()).collect() });
         // The doctor's words (BOOT9): each offers setup, which the badge's ⏎ opens.
         assert_eq!(
             fix(
@@ -615,17 +605,10 @@ mod tests {
             s(&["opencode", "gh"])
         );
         assert_eq!(fix("agents", "x", "warn", "`ptyro setup` installs them"), s(&[]));
-        // The side a line names is kept; a flag's value is never a name.
+        // A flag's value is never a name.
         assert_eq!(
-            fix("agents", "x", "warn", "`ptyro install gh --where wsl` installs it there"),
-            Some(Fix::Setup { names: vec!["gh".into()], place: Some("wsl".into()) })
-        );
-        assert_eq!(
-            fix("agents", "x", "warn", "`ptyro setup --agents claude,codex --where=both`"),
-            Some(Fix::Setup {
-                names: vec!["claude".into(), "codex".into()],
-                place: Some("both".into())
-            })
+            fix("agents", "x", "warn", "`ptyro setup --agents claude,codex --yes`"),
+            Some(Fix::Setup { names: vec!["claude".into(), "codex".into()] })
         );
         // Something setup doesn't install keeps its own fix.
         assert_eq!(fix("agents", "mine", "problem", "my-agent not found"), None);
@@ -674,18 +657,7 @@ mod tests {
             finding(&check("ptyro", "config mode", "warn", "/Users/John Smith/c.toml is 644: …"))
                 .unwrap();
         assert_eq!(spaced.fix, Some(Fix::Private("/Users/John Smith/c.toml".into())));
-        // Windows says who can read it (an access list, WIN7).
-        let win = finding(&check(
-            "ptyro",
-            "config mode",
-            "warn",
-            r"C:\Users\Jo Smith\AppData\Roaming\ptyro\config.toml is readable by Everyone, Users: …",
-        ))
-        .unwrap();
-        assert_eq!(
-            win.fix,
-            Some(Fix::Private(r"C:\Users\Jo Smith\AppData\Roaming\ptyro\config.toml".into()))
-        );
+
         // A key a removed feature had (SPEC §13.8): ⏎ takes it out of the file.
         let gone = finding(&check(
             "ptyro",

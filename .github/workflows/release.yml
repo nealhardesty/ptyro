@@ -3,9 +3,9 @@
 # and changelog notes, and update the Homebrew tap. Like CI, it calls make targets only.
 #
 # Nothing is published unless, for the tagged commit: the tag is on master and matches the crate
-# version; the checks pass on Linux (x86_64 and arm64), macOS and Windows (the client); licenses,
-# advisories and the web build are clean; and every platform's archive installs through its
-# installer (scripts/install.sh; Windows' zip through scripts/install.ps1).
+# version; the checks pass on Linux (x86_64 and arm64) and macOS; licenses, advisories and the web
+# build are clean; and every platform's archive installs through its installer (scripts/install.sh).
+# (Native Windows was removed on 2026-11-18: on Windows, ptyro is the Linux build inside WSL2.)
 #
 # A rehearsal: run it by hand with dry_run on any branch (`gh workflow run release.yml --ref <branch>
 # -f tag=<branch> -f dry_run=true`). It builds and checks everything and publishes nothing.
@@ -59,24 +59,17 @@ jobs:
           - { os: ubuntu-24.04, target: check }
           - { os: ubuntu-24.04-arm, target: check }
           - { os: macos-15, target: check }
-          # Windows, as CI's windows job checks it (every test, natively: WIN13).
-          - { os: windows-latest, target: test-windows }
     runs-on: ${{ matrix.os }}
-    # Windows runs every test natively (WIN13), which takes longer.
-    timeout-minutes: 120
+    timeout-minutes: 60
     defaults:
       run: { shell: bash }
     steps:
-      - if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", persist-credentials: false }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: "22" }
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - if: runner.os == 'Windows'
-        run: command -v make || choco install make -y --no-progress
       - run: make ${{ matrix.target }}
 
   supply:
@@ -105,23 +98,13 @@ jobs:
           - { os: macos-15, triple: aarch64-apple-darwin }
           # macos-13 is retired; macos-15-intel is the supported x86_64 image.
           - { os: macos-15-intel, triple: x86_64-apple-darwin }
-          # ptyro.exe, the Windows client (WIN3): a zip each, built and installed natively.
-          - { os: windows-latest, triple: x86_64-pc-windows-msvc }
-          - { os: windows-11-arm, triple: aarch64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
       run: { shell: bash }
     steps:
-      - if: runner.os == 'Windows'
-        run: git config --global core.autocrlf false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.TAG }}", fetch-depth: 0, persist-credentials: false }
-      # The Arm image may come without rustup: the checksum-verified installer brings it.
-      - if: runner.os == 'Windows'
-        run: |
-          command -v make || choco install make -y --no-progress
-          command -v rustup || { sh scripts/rust-install.sh && echo "$USERPROFILE/.cargo/bin" >> "$GITHUB_PATH"; }
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with: { key: "${{ matrix.triple }}" }
@@ -137,7 +120,6 @@ jobs:
           name: dist-${{ matrix.triple }}
           path: |
             dist/*.tar.gz*
-            dist/*.zip*
 
   publish:
     needs: build
@@ -157,8 +139,8 @@ jobs:
       - name: checksums, bill of materials and notes
         run: |
           # The installers ride along, so releases/latest/download/install.sh is always the newest.
-          cp scripts/install.sh scripts/install.ps1 dist/
-          (cd dist && cat *.sha256 > SHA256SUMS && sha256sum install.sh install.ps1 >> SHA256SUMS && sha256sum -c SHA256SUMS)
+          cp scripts/install.sh dist/
+          (cd dist && cat *.sha256 > SHA256SUMS && sha256sum install.sh >> SHA256SUMS && sha256sum -c SHA256SUMS)
           make sbom
           scripts/changelog.sh --notes "$TAG" > notes.md
           make homebrew-formula VERSION="${TAG#v}"
@@ -168,16 +150,14 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
-            dist/*.zip
             dist/*.cdx.json
             dist/install.sh
-            dist/install.ps1
             dist/SHA256SUMS
       - name: GitHub release
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "ptyro $TAG" --notes-file notes.md --verify-tag
-          gh release upload "$TAG" dist/*.tar.gz dist/*.zip dist/*.cdx.json dist/install.sh dist/install.ps1 dist/SHA256SUMS dist/ptyro.rb --clobber
+          gh release upload "$TAG" dist/*.tar.gz dist/*.cdx.json dist/install.sh dist/SHA256SUMS dist/ptyro.rb --clobber
       # Needs a secret HOMEBREW_TAP_TOKEN on the `release` environment: a fine-grained token with
       # contents: write on nealhardesty/homebrew-ptyro only.
       - name: Homebrew tap

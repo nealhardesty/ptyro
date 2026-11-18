@@ -27,40 +27,17 @@ struct Two {
 /// A script standing in for ssh: whatever it's asked, it bridges to the daemon whose variables
 /// are in `env` (written once that daemon runs).
 fn fake_ssh(dir: &Path, name: &str, env: &Path) -> PathBuf {
-    let exe = ptyro_testkit::program::program(
+    ptyro_testkit::program::program(
         dir,
         name,
-        BIN,
         &format!("exec env $(cat '{}') PTYRO_NO_AUTOSPAWN=1 '{BIN}' proxy", env.display()),
-        &[BIN, "proxy"],
-        &[("PTYRO_NO_AUTOSPAWN", "1")],
-    );
-    // Windows: ssh's own arguments aren't proxy's.
-    #[cfg(windows)]
-    ptyro_testkit::program::set_shim_with(
-        &exe,
-        &[BIN, "proxy"],
-        &[("PTYRO_NO_AUTOSPAWN", "1")],
-        false,
-    );
-    exe
+    )
 }
 
 /// The daemon `d`'s variables, for the "ssh" to it (`laptopN.env` is `ssh-to-laptopN`'s).
 fn write_env(path: &Path, d: &TempDaemon) {
     let line: Vec<String> = d.env().into_iter().map(|(k, v)| format!("{k}={v}")).collect();
     std::fs::write(path, line.join(" ")).unwrap();
-    // Windows' stand-in reads them from its shim, not the file.
-    #[cfg(windows)]
-    {
-        let stem = path.file_stem().unwrap().to_string_lossy();
-        let exe = path.with_file_name(format!("ssh-to-{stem}.exe"));
-        let env = d.env();
-        let mut pairs: Vec<(&str, &str)> =
-            env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-        pairs.push(("PTYRO_NO_AUTOSPAWN", "1"));
-        ptyro_testkit::program::set_shim_with(&exe, &[BIN, "proxy"], &pairs, false);
-    }
 }
 
 impl Two {

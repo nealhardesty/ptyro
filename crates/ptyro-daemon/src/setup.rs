@@ -1,18 +1,14 @@
 //! Setup over the protocol (BOOT1, SPEC §24.2): the checklist and installs on the daemon's
 //! machine, for clients that can't run the engine themselves (the web). The same engine as `ptyro
 //! setup` (`ptyro_agents::setup`); administrator steps never run here (`Admin::Never`): a
-//! password or a UAC prompt never goes through the web, so each is reported with its command.
-//! On a Windows daemon with a usable WSL, WSL's distro is a second side (BOOT8): its own ptyro
-//! plans and installs there, through `wsl.exe`, with the same rule.
+//! password never goes through the web, so each is reported with its command.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use ptyro_agents::catalog::Platform;
-use ptyro_agents::setup::{self, Admin, Plan, Side, Survey, WslStatus, checklist};
+use ptyro_agents::setup::{self, Admin, Plan, checklist};
 use ptyro_agents::updates;
-use ptyro_client::wsl_setup;
 use ptyro_core::paths::Paths;
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{DomainEvent, Reply, SetupLogged, SetupRunning};
@@ -70,17 +66,12 @@ fn current() -> Option<SetupRunning> {
 
 /// Keep one of the run's events, numbered, and tell every watcher; under `CURRENT`'s lock, so a
 /// `SetupPlan` either holds an event or comes before it is sent.
-fn record(
-    events: &tokio::sync::broadcast::Sender<DomainEvent>,
-    run: &str,
-    side: Side,
-    event: setup::Event,
-) {
+fn record(events: &tokio::sync::broadcast::Sender<DomainEvent>, run: &str, event: setup::Event) {
     let Ok(mut c) = CURRENT.lock() else { return };
     let seq = match c.as_mut().filter(|c| c.run == run) {
         Some(c) => {
             let seq = c.events.last().map_or(1, |l| l.seq + 1);
-            c.events.push(SetupLogged { seq, side, event: event.clone() });
+            c.events.push(SetupLogged { seq, event: event.clone() });
             if c.events.len() > KEPT {
                 c.events.remove(0);
             }
@@ -88,7 +79,7 @@ fn record(
         }
         None => 0,
     };
-    let _ = events.send(DomainEvent::SetupProgress { run: run.to_owned(), event, side, seq });
+    let _ = events.send(DomainEvent::SetupProgress { run: run.to_owned(), event, seq });
 }
 
 /// Item ids for what a client named (`opencode`, `github-cli`).
@@ -103,52 +94,11 @@ fn ids(names: &[String]) -> Result<Vec<String>, Error> {
     Ok(out)
 }
 
-/// WSL as last found, kept a minute: the web re-plans on every tick, and asking WSL's ptyro
-/// takes a second or two. A run forgets it (what's installed changed).
-static WSL_SEEN: Mutex<Option<(Instant, WslStatus, Option<Survey>)>> = Mutex::new(None);
-
-/// On a Windows daemon, WSL and what its distro has (BOOT8); inside WSL, that this is it.
-async fn wsl_side(platform: Platform) -> (Option<WslStatus>, Option<Survey>) {
-    if platform == Platform::Wsl {
-        let distro = std::env::var("WSL_DISTRO_NAME").ok();
-        return (Some(WslStatus::Inside { distro }), None);
-    }
-    if !platform.is_windows() {
-        return (None, None);
-    }
-    if let Ok(seen) = WSL_SEEN.lock()
-        && let Some((at, status, survey)) = seen.as_ref()
-        && at.elapsed() < Duration::from_secs(60)
-    {
-        return (Some(status.clone()), survey.clone());
-    }
-    let mut status = wsl_setup::probe(None).await;
-    let mut survey = None;
-    if let Some(d) = status.usable().map(str::to_owned) {
-        match wsl_setup::survey(&d).await {
-            Ok(s) => survey = Some(s),
-            Err(why) => status = why,
-        }
-    }
-    if let Ok(mut seen) = WSL_SEEN.lock() {
-        *seen = Some((Instant::now(), status.clone(), survey.clone()));
-    }
-    (Some(status), survey)
-}
-
-fn forget_wsl() {
-    if let Ok(mut seen) = WSL_SEEN.lock() {
-        *seen = None;
-    }
-}
-
-/// The plan for `picks` here (the defaults when `None`), and on Windows `wsl_picks` in WSL's
-/// distro beside it.
+/// The plan for `picks` here (the defaults when `None`).
 async fn plan_on(
     paths: &Paths,
     updates_cfg: &ptyro_core::config::Updates,
     picks: Option<Vec<String>>,
-    wsl_picks: Option<Vec<String>>,
     moves: Option<&[String]>,
 ) -> Result<(Box<dyn setup::Host + Send>, Plan, Vec<checklist::Line>), Error> {
     let paths = paths.clone();
@@ -163,24 +113,13 @@ async fn plan_on(
     })
     .await
     .map_err(|e| Error::internal(e.to_string()))?;
-    let (status, mut wsl) = wsl_side(here.platform).await;
     let mut here = here;
     if let Some(moves) = moves {
-        let keep: Vec<String> = ptyro_agents::catalog::items()
-            .iter()
-            .filter(|i| i.kind == ptyro_agents::catalog::Kind::Agent && !moves.contains(&i.id))
-            .map(|i| i.id.clone())
-            .collect();
-        here.keep.extend(keep.iter().cloned());
-        if let Some(w) = &mut wsl {
-            w.keep.extend(keep);
-        }
+        checklist::keep_all(&mut here, moves);
     }
     let picks = picks.unwrap_or_else(|| setup::defaults(&here));
-    let mine = setup::plan(&here, &picks);
-    let theirs = wsl.as_ref().map(|s| setup::plan(s, &wsl_picks.unwrap_or_default()));
-    let plan = Plan::merge(mine, theirs, status);
-    let lines = checklist::lines(&plan, &here, wsl.as_ref());
+    let plan = setup::plan(&here, &picks);
+    let lines = checklist::lines(&plan, &here);
     Ok((host, plan, lines))
 }
 
@@ -315,15 +254,9 @@ impl Daemon {
     }
 
     /// `SetupPlan`.
-    pub(crate) async fn setup_plan(
-        &self,
-        picks: Option<Vec<String>>,
-        wsl_picks: Option<Vec<String>>,
-    ) -> Result<Reply, Error> {
+    pub(crate) async fn setup_plan(&self, picks: Option<Vec<String>>) -> Result<Reply, Error> {
         let picks = picks.map(|p| ids(&p)).transpose()?;
-        let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
-        let (_, plan, lines) =
-            plan_on(&self.paths, &self.config().updates, picks, wsl_picks, None).await?;
+        let (_, plan, lines) = plan_on(&self.paths, &self.config().updates, picks, None).await?;
         let default_agent = ptyro_agents::default_agent(&self.config());
         let running = current();
         // Someone else's install (a terminal's, the TUI's): the page says so instead of offering
@@ -334,17 +267,14 @@ impl Daemon {
         Ok(Reply::SetupPlan { plan, lines, default_agent, running, held_by })
     }
 
-    /// `SetupRun`: the plan now, its progress as `SetupProgress` events (this computer's side
-    /// first, then WSL's, each ending with its own `finished`).
+    /// `SetupRun`: the plan now, its progress as `SetupProgress` events, ending with `finished`.
     pub(crate) async fn setup_run(
         self: &Arc<Self>,
         picks: Vec<String>,
-        wsl_picks: Option<Vec<String>>,
         moves: Vec<String>,
     ) -> Result<Reply, Error> {
         let picks = ids(&picks)?;
         let moves = ids(&moves)?;
-        let wsl_picks = wsl_picks.map(|p| ids(&p)).transpose()?;
         // Another run holding the machine's lock is refused at once; the take itself (which waits
         // out a probe's instant) runs off the runtime's workers.
         if !RUNNING.load(Ordering::Acquire)
@@ -358,8 +288,7 @@ impl Daemon {
             .map_err(|e| Error::internal(e.to_string()))?
             .map_err(Error::conflict)?;
         let (host, plan, _) =
-            plan_on(&self.paths, &self.config().updates, Some(picks), wsl_picks, Some(&moves))
-                .await?;
+            plan_on(&self.paths, &self.config().updates, Some(picks), Some(&moves)).await?;
         let run = {
             // A short id (`setup-7f3a2c`).
             let full = ptyro_core::SessionId::new().full();
@@ -371,40 +300,20 @@ impl Daemon {
         let events = self.events.clone();
         let (r, p) = (run.clone(), plan.clone());
         let state = self.paths.state.clone();
-        let me = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _running = running;
+            let mut on = |event: setup::Event| record(&events, &r, event);
             let mut changed = false;
-            for side in p.sides() {
-                let mut on = |event: setup::Event| {
-                    // What it installed is on the daemon's PATH before anyone hears it ended,
-                    // for the sessions and worktrees started next (SPEC §24.2).
-                    if matches!(event, setup::Event::Finished { .. }) {
-                        me.refresh_path();
-                    }
-                    record(&events, &r, side, event)
-                };
-                let part = p.side(side);
-                if !part.entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some())) {
-                    continue;
-                }
-                match (side, p.wsl.as_ref().and_then(WslStatus::usable)) {
-                    (Side::Wsl, Some(distro)) => {
-                        wsl_setup::run(distro, &p, wsl_setup::Admin::Never, &mut on);
-                    }
-                    _ => {
-                        // A move that failed half way changed what is installed too (BOOT7).
-                        let r = setup::run(&part, &*host, Admin::Never, &mut on);
-                        changed |= !r.done.is_empty() || !r.failed.is_empty();
-                    }
-                }
+            if p.entries.iter().any(|e| e.will_run() || (e.ticked && e.blocked.is_some())) {
+                // A move that failed half way changed what is installed too (BOOT7).
+                let r = setup::run(&p, &*host, Admin::Never, &mut on);
+                changed = !r.done.is_empty() || !r.failed.is_empty();
             }
             // What is out of date changed (an update, BOOT5): the Health page and the badge
             // follow. Before the run lets go of the lock, so nothing starts meanwhile.
             if changed {
                 updates::refresh(&*host, &state, updates::now());
             }
-            forget_wsl();
         });
         Ok(Reply::SetupStarted { run, plan })
     }

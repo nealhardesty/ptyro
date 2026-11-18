@@ -231,15 +231,13 @@ pub fn shell_label(s: &SessionInfo, home: Option<&std::path::Path>) -> String {
         return s.name.clone();
     }
     let dir = s.live_cwd.as_deref().unwrap_or(&s.cwd);
-    // A Windows daemon's directory reads with `\`, wherever it's shown (WIN7).
-    let sep = if dir.to_string_lossy().contains('\\') { '\\' } else { '/' };
     let dir = match home.and_then(|h| dir.strip_prefix(h).ok()) {
         Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-        Some(rest) => format!("~{sep}{}", rest.display()),
+        Some(rest) => format!("~/{}", rest.display()),
         None => {
             let whole = dir.to_string_lossy();
-            match whole.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next() {
-                Some(last) if !last.is_empty() && last != whole => format!("…{sep}{last}"),
+            match whole.trim_end_matches('/').rsplit('/').next() {
+                Some(last) if !last.is_empty() && last != whole => format!("…/{last}"),
                 _ => whole.into_owned(),
             }
         }
@@ -251,20 +249,10 @@ pub fn shell_label(s: &SessionInfo, home: Option<&std::path::Path>) -> String {
     }
 }
 
-/// A program's name from its path, as the process list names it (`foreground`): its last part
-/// (by either separator: a Windows daemon's sessions are shown everywhere), a login shell's `-`
-/// dropped; for a Windows path (with `\`, or a runnable extension) also without the extension
-/// and lowercase, as WIN7 names a Windows process (`C:\…\pwsh.exe` is `pwsh`). The same table is
-/// in `web/test/shells.mjs`.
+/// A program's name from its path, as the process list names it (`foreground`): its last part,
+/// a login shell's `-` dropped. The same table is in `web/test/shells.mjs`.
 pub fn program_name(argv0: &str) -> String {
-    let last = argv0.rsplit(['/', '\\']).next().unwrap_or(argv0).trim_start_matches('-');
-    let lower = last.to_ascii_lowercase();
-    let ext = [".exe", ".cmd", ".bat", ".com"].iter().find_map(|e| lower.strip_suffix(e));
-    match ext {
-        Some(stem) => stem.to_owned(),
-        None if argv0.contains('\\') => lower,
-        None => last.to_owned(),
-    }
+    argv0.rsplit('/').next().unwrap_or(argv0).trim_start_matches('-').to_owned()
 }
 
 /// What a SHELLS shell is watched for (SPEC §23.9).
@@ -588,10 +576,9 @@ impl SessionInfo {
 mod model_label_tests {
     use super::model_label;
 
-    /// A Windows daemon's shell, as `ptyro list --json` printed one (WIN7): its idle PowerShell
-    /// isn't named as though something ran in it, and its directory reads with `\`.
+    /// An idle shell isn't named as though something ran in it.
     #[test]
-    fn a_windows_shell_is_labelled_by_where_it_is() {
+    fn a_shell_is_labelled_by_where_it_is() {
         let s = |argv0: &str, fg: &str, cwd: &str| -> super::SessionInfo {
             serde_json::from_value(serde_json::json!({
                 "id": "01m6mxc13w7wz153srvrxtcsg5", "handle": "csg5", "name": "s1", "kind": "shell",
@@ -604,9 +591,9 @@ mod model_label_tests {
         let label = |x: &super::SessionInfo, home: &str| {
             super::shell_label(x, Some(std::path::Path::new(home)))
         };
-        let pwsh = r"C:\Program Files\PowerShell\7\pwsh.exe";
-        assert_eq!(label(&s(pwsh, "pwsh", r"D:\src\app"), r"C:\Users\me"), r"…\app");
-        assert_eq!(label(&s(pwsh, "htop", r"D:\src\app"), r"C:\Users\me"), r"htop · …\app");
+        let pwsh = "/usr/bin/pwsh";
+        assert_eq!(label(&s(pwsh, "pwsh", "/src/app"), "/home/me"), "…/app");
+        assert_eq!(label(&s(pwsh, "htop", "/src/app"), "/home/me"), "htop · …/app");
         assert_eq!(label(&s("/bin/zsh", "zsh", "/home/me/dl"), "/home/me"), "~/dl", "as before");
         assert_eq!(label(&s("/bin/zsh", "zsh", "/tmp"), "/home/me"), "…/tmp");
     }
@@ -620,11 +607,7 @@ mod model_label_tests {
             ("-zsh", "zsh"),
             ("bash", "bash"),
             ("/opt/My Tools/Fish", "Fish"),
-            (r"C:\Program Files\PowerShell\7\pwsh.exe", "pwsh"),
-            (r"C:\Windows\System32\WindowsPowerShell\v1.0\PowerShell.EXE", "powershell"),
-            (r"C:\Windows\System32\cmd.exe", "cmd"),
-            (r"C:\Program Files\Git\bin\bash", "bash"),
-            ("pwsh.exe", "pwsh"),
+            ("/usr/bin/pwsh", "pwsh"),
         ] {
             assert_eq!(program_name(argv0), name, "{argv0}");
         }

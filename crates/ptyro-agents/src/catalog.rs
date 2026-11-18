@@ -12,27 +12,22 @@ use serde::{Deserialize, Serialize};
 
 const DATA: &str = include_str!("catalog.toml");
 
-/// Where something is installed. WSL is a platform of its own: its Linux side is set up apart
-/// from Windows' (BOOT8).
+/// Where something is installed. WSL is a platform of its own (a Linux whose vendors sometimes
+/// say more).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Platform {
     Linux,
     Macos,
     Wsl,
-    WindowsX64,
-    WindowsArm64,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 5] =
-        [Self::Linux, Self::Macos, Self::Wsl, Self::WindowsX64, Self::WindowsArm64];
+    pub const ALL: [Platform; 3] = [Self::Linux, Self::Macos, Self::Wsl];
 
     /// The platform this process runs on.
     pub fn current() -> Self {
-        if cfg!(windows) {
-            if cfg!(target_arch = "aarch64") { Self::WindowsArm64 } else { Self::WindowsX64 }
-        } else if cfg!(target_os = "macos") {
+        if cfg!(target_os = "macos") {
             Self::Macos
         } else if ptyro_core::wsl::detect().is_some() {
             Self::Wsl
@@ -41,24 +36,17 @@ impl Platform {
         }
     }
 
-    /// `windows-x64`, as the table names it.
+    /// `macos`, as the table names it.
     pub fn name(self) -> &'static str {
         match self {
             Self::Linux => "linux",
             Self::Macos => "macos",
             Self::Wsl => "wsl",
-            Self::WindowsX64 => "windows-x64",
-            Self::WindowsArm64 => "windows-arm64",
         }
-    }
-
-    pub fn is_windows(self) -> bool {
-        matches!(self, Self::WindowsX64 | Self::WindowsArm64)
     }
 }
 
-/// A processor architecture, for downloads that name one (nodejs.org).
-/// Windows platforms carry theirs; elsewhere it is the host's.
+/// A processor architecture, for downloads that name one (nodejs.org): the host's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Arch {
     X64,
@@ -68,15 +56,6 @@ pub enum Arch {
 impl Arch {
     pub fn host() -> Self {
         if cfg!(target_arch = "aarch64") { Self::Arm64 } else { Self::X64 }
-    }
-
-    /// `platform`'s own architecture when it has one, else `self`.
-    fn on(self, platform: Platform) -> Self {
-        match platform {
-            Platform::WindowsX64 => Self::X64,
-            Platform::WindowsArm64 => Self::Arm64,
-            _ => self,
-        }
     }
 }
 
@@ -120,7 +99,6 @@ pub enum Via {
     Vendor,
     Npm,
     Brew,
-    Winget,
     Apt,
     Dnf,
     /// Apple's Command Line Tools (`xcode-select --install`).
@@ -136,7 +114,6 @@ impl Via {
             Self::Vendor => "vendor",
             Self::Npm => "npm",
             Self::Brew => "brew",
-            Self::Winget => "winget",
             Self::Apt => "apt",
             Self::Dnf => "dnf",
             Self::Xcode => "xcode",
@@ -150,7 +127,6 @@ impl Via {
             Self::Vendor => "the vendor's installer",
             Self::Npm => "npm",
             Self::Brew => "Homebrew",
-            Self::Winget => "WinGet",
             Self::Apt => "apt",
             Self::Dnf => "dnf",
             Self::Xcode => "Xcode's Command Line Tools",
@@ -165,8 +141,6 @@ impl Via {
 pub enum Shell {
     /// `sh -c` (the command may pipe into `bash`).
     Sh,
-    /// `powershell -NoProfile -ExecutionPolicy Bypass -Command`.
-    Powershell,
 }
 
 impl Shell {
@@ -174,9 +148,6 @@ impl Shell {
     pub fn argv(self, command: &str) -> Vec<String> {
         let pre: &[&str] = match self {
             Self::Sh => &["sh", "-c"],
-            Self::Powershell => {
-                &["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
-            }
         };
         pre.iter().map(|s| (*s).to_owned()).chain([command.to_owned()]).collect()
     }
@@ -191,7 +162,7 @@ pub struct Method {
     /// `None` only for [`Via::NodeDist`], which downloads [`Method::url`].
     #[serde(default)]
     pub shell: Option<Shell>,
-    /// A program that must be on `PATH` for this method (`apt-get`, `brew`, `winget`, `npm`).
+    /// A program that must be on `PATH` for this method (`apt-get`, `brew`, `npm`).
     #[serde(default)]
     pub needs: Option<String>,
     #[serde(default)]
@@ -203,8 +174,8 @@ pub struct Method {
     /// method), as the vendor or the package manager documents it.
     #[serde(default)]
     pub uninstall: Option<String>,
-    /// A vendor installer's: where its copy really is (folders, `~` for the home, `%VAR%` on
-    /// Windows), so the copy it installed is known by its path (BOOT7: a move removes the old
+    /// A vendor installer's: where its copy really is (folders, `~` for the home, `%VAR%` from the
+    /// environment), so the copy it installed is known by its path (BOOT7: a move removes the old
     /// copy only once this one answers). Empty: not known, and no move to it is offered.
     #[serde(default)]
     pub places: Vec<String>,
@@ -240,13 +211,12 @@ impl Method {
         let os = match platform {
             Platform::Linux | Platform::Wsl => "linux",
             Platform::Macos => "darwin",
-            Platform::WindowsX64 | Platform::WindowsArm64 => "win",
         };
-        let arch = match arch.on(platform) {
+        let arch = match arch {
             Arch::X64 => "x64",
             Arch::Arm64 => "arm64",
         };
-        let ext = if platform.is_windows() { "zip" } else { "tar.xz" };
+        let ext = "tar.xz";
         let v = version.trim_start_matches('v');
         Some(
             self.url
@@ -315,7 +285,7 @@ pub enum Source {
 #[serde(deny_unknown_fields)]
 pub struct Latest {
     pub source: Source,
-    /// May hold `{platform}` (`linux_amd64`, `windows_arm64`…).
+    /// May hold `{platform}` (`linux_amd64`, `darwin_arm64`…).
     url: String,
     #[serde(default)]
     pub tag_prefix: Option<String>,
@@ -348,14 +318,13 @@ impl Latest {
         }
     }
 
-    /// What to fetch for `platform` (and, off Windows, `arch`).
+    /// What to fetch for `platform` and `arch`.
     pub fn url(&self, platform: Platform, arch: Arch) -> String {
         let os = match platform {
             Platform::Linux | Platform::Wsl => "linux",
             Platform::Macos => "darwin",
-            Platform::WindowsX64 | Platform::WindowsArm64 => "windows",
         };
-        let arch = match arch.on(platform) {
+        let arch = match arch {
             Arch::X64 => "amd64",
             Arch::Arm64 => "arm64",
         };
@@ -508,7 +477,7 @@ impl Version {
                 Some((n, p)) => (n, Some(p.to_owned())),
                 None => (w, None),
             };
-            // Up to the first part that isn't a number: Git for Windows says `2.51.0.windows.1`.
+            // Up to the first part that isn't a number (`2.51.0.windows.1` is 2.51.0).
             let parts: Vec<u64> = num.split('.').map_while(|p| p.parse().ok()).collect();
             let whole = parts.len() == num.split('.').count();
             (parts.len() >= 2).then_some(Self { parts, pre: if whole { pre } else { None } })
@@ -597,7 +566,7 @@ mod tests {
             assert_eq!(i.version.first(), Some(&i.program), "{}: version runs the program", i.id);
             for p in Platform::ALL {
                 // A platform's last method needs nothing beyond itself, or is a package manager
-                // the platform has (WinGet on Windows, Homebrew…): there is always one to offer.
+                // the platform has (Homebrew…): there is always one to offer.
                 assert!(i.methods(p).next().is_some(), "{} has no method on {}", i.id, p.name());
             }
             for m in i.methods.iter().chain(&i.others) {
@@ -608,30 +577,7 @@ mod tests {
                     let cmd =
                         m.install.as_deref().unwrap_or_else(|| panic!("{}: no install", i.id));
                     assert!(!cmd.trim().is_empty(), "{}", i.id);
-                    let sh = m.shell.unwrap_or_else(|| panic!("{}: {cmd} has no shell", i.id));
-                    // PowerShell on Windows, sh everywhere else.
-                    for p in &m.platforms {
-                        assert_eq!(
-                            p.is_windows(),
-                            sh == Shell::Powershell,
-                            "{}: {cmd} on {}",
-                            i.id,
-                            p.name()
-                        );
-                    }
-                    // WinGet runs with no input: its first-use agreements are accepted up
-                    // front, and its own source named (not the msstore's).
-                    for c in [Some(cmd), m.update.as_deref()].into_iter().flatten() {
-                        if m.via == Via::Winget {
-                            for flag in [
-                                "--source winget",
-                                "--accept-source-agreements",
-                                "--accept-package-agreements",
-                            ] {
-                                assert!(c.contains(flag), "{}: {c} lacks {flag}", i.id);
-                            }
-                        }
-                    }
+                    assert!(m.shell.is_some(), "{}: {cmd} has no shell", i.id);
                     // A way it may already be installed says how it is removed, for a move to
                     // the recommended one (BOOT7); never with sudo (ptyro adds it, only for a
                     // copy in an administrator's folder).
@@ -640,9 +586,6 @@ mod tests {
                             panic!("{}: the {} way says no uninstall", i.id, m.via.name())
                         });
                         assert!(!u.trim().is_empty() && !u.contains("sudo"), "{}: {u}", i.id);
-                        if m.via == Via::Winget {
-                            assert!(u.contains("--source winget"), "{}: {u}", i.id);
-                        }
                     }
                     // sudo means admin, and admin is said.
                     if cmd.contains("sudo ") {
@@ -715,19 +658,12 @@ mod tests {
         }
         // The design's recommended methods (RESEARCH G, 2026-11-06).
         let lin = |id: &str| item(id).unwrap().method(Platform::Linux, |_| true).unwrap();
-        let win = |id: &str| item(id).unwrap().method(Platform::WindowsArm64, |_| true).unwrap();
         assert_eq!(
             lin("claude").install.as_deref(),
             Some("curl -fsSL https://claude.ai/install.sh | bash")
         );
-        assert_eq!(
-            win("claude").install.as_deref(),
-            Some("irm https://claude.ai/install.ps1 | iex")
-        );
         assert_eq!(lin("codex").via, Via::Vendor);
         assert_eq!(lin("opencode").via, Via::Vendor);
-        assert_eq!(win("opencode").via, Via::Npm);
-        assert_eq!(win("gh").via, Via::Winget);
     }
 
     #[test]
@@ -738,8 +674,6 @@ mod tests {
         assert_eq!(node.method(Platform::Linux, |p| p == "apt-get").unwrap().via, Via::Apt);
         assert_eq!(node.method(Platform::Macos, |p| p == "brew").unwrap().via, Via::Brew);
         assert_eq!(node.method(Platform::Macos, none).unwrap().via, Via::NodeDist);
-        assert_eq!(node.method(Platform::WindowsX64, none).unwrap().via, Via::NodeDist);
-        assert!(item("opencode").unwrap().method(Platform::WindowsX64, none).is_none());
         let git = item("git").unwrap();
         assert_eq!(git.method(Platform::Macos, none).unwrap().via, Via::Xcode);
     }
@@ -754,8 +688,6 @@ mod tests {
         );
         let oc = item("opencode").unwrap();
         assert_eq!(oc.prereqs(Platform::Linux).count(), 0);
-        assert_eq!(oc.prereqs(Platform::WindowsX64).next().unwrap().item, "node");
-        assert!(item("claude").unwrap().prereqs(Platform::WindowsArm64).all(|p| !p.required));
     }
 
     #[test]
@@ -791,18 +723,13 @@ mod tests {
         assert_eq!(src.url(Platform::Linux, Arch::X64), format!("{base}linux_amd64.json"));
         assert_eq!(src.url(Platform::Wsl, Arch::Arm64), format!("{base}linux_arm64.json"));
         assert_eq!(src.url(Platform::Macos, Arch::Arm64), format!("{base}darwin_arm64.json"));
-        // Windows' platforms carry their architecture.
-        assert_eq!(src.url(Platform::WindowsArm64, Arch::X64), format!("{base}windows_arm64.json"));
         let node = item("node").unwrap();
         let dist = node.methods.iter().find(|m| m.via == Via::NodeDist).unwrap();
         assert_eq!(
             dist.download("v26.13.0", Platform::Wsl, Arch::X64).unwrap(),
             "https://nodejs.org/dist/v26.13.0/node-v26.13.0-linux-x64.tar.xz"
         );
-        assert_eq!(
-            dist.download("26.13.0", Platform::WindowsArm64, Arch::X64).unwrap(),
-            "https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-arm64.zip"
-        );
+
         assert_eq!(
             dist.download("26.13.0", Platform::Macos, Arch::Arm64).unwrap(),
             "https://nodejs.org/dist/v26.13.0/node-v26.13.0-darwin-arm64.tar.xz"
@@ -824,9 +751,6 @@ mod tests {
         assert_eq!(v("0.164.0-alpha.7").pre.as_deref(), Some("alpha.7"));
         assert!(Version::parse("no version here").is_none());
         // What the table's `version` argvs print on each platform.
-        assert_eq!(v("git version 2.51.0.windows.1").parts, [2, 51, 0]);
-        assert_eq!(v("git version 2.51.0.windows.1").pre, None);
-        assert!(v("git version 2.51.0.windows.1").at_least("2.23"));
         assert_eq!(v("git version 2.39.5 (Apple Git-154)").parts, [2, 39, 5]);
         assert_eq!(
             v("gh version 2.83.0 (2025-11-04)\nhttps://github.com/cli/cli/releases/tag/v2.83.0")
@@ -850,7 +774,7 @@ mod tests {
     #[test]
     fn shells_build_their_argv() {
         assert_eq!(Shell::Sh.argv("echo hi"), ["sh", "-c", "echo hi"]);
-        assert_eq!(Shell::Powershell.argv("irm x | iex").last().unwrap(), "irm x | iex");
+
         assert!(Platform::ALL.contains(&Platform::current()));
     }
 }

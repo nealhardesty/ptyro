@@ -19,8 +19,7 @@ another one; `--shared` for the committed one). Each setting says when a change 
 a daemon restart (which the panel offers). A new option isn't done until it has its entry in
 `ptyro-core`'s settings table (SPEC §13.7); a test fails without one.
 
-**With a daemon on another computer** (`ptyro.exe` on Windows and the daemon in WSL, or
-`--remote` over ssh) there are two files: this computer's holds what the screen reads (`ui`,
+**With a daemon on another computer** (`--remote` over ssh) there are two files: this computer's holds what the screen reads (`ui`,
 `keys`, `clipboard`, `client`), and the daemon's computer holds everything else. The
 settings panel tags those "daemon's" and opens the daemon's own file to change one; `ptyro config
 set` of one says so and names the command that changes it there.
@@ -114,10 +113,10 @@ max_bytes = "16MiB"                       # per session, as a ring
 [updates]
 check = "daily"                           # look for newer agent versions once a day and offer them (never installed without you); "off" never looks
 # ignore = ["codex@0.170.0"]              # updates not to offer: an agent ("codex") or one version of it
-# keep_installer = ["codex"]              # agents to keep the way you installed them (npm, Homebrew, WinGet): no move to the vendor's installer offered
+# keep_installer = ["codex"]              # agents to keep the way you installed them (npm, Homebrew): no move to the vendor's installer offered
 
 [client]
-# default_remote = "wsl://Ubuntu"         # where this ptyro's daemon is, when --remote / PTYRO_REMOTE don't say (wsl://, wsl://<distro>, an ssh host); on Windows asked the first time
+# default_remote = "me@devbox"            # where this ptyro's daemon is, when --remote / PTYRO_REMOTE don't say (an ssh host, or local)
 
 [remote]
 serve = true                              # the daemon runs `ptyro serve` (docs/remote.md)

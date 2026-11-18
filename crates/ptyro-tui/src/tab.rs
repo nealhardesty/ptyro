@@ -2,8 +2,8 @@
 //! S --tab|--pane`, the TUI's `session.tab` / `session.pane`, and the web's "open on the computer".
 //!
 //! The innermost one that can be asked wins: tmux (a window, or a split), else Windows Terminal
-//! (`WT_SESSION`; a tab, or a split pane), whether ptyro runs on Windows or in WSL inside it.
-//! Anywhere else there is no one to ask, and the error says what to run instead.
+//! (`WT_SESSION`; a tab, or a split pane) when ptyro runs in WSL inside it. Anywhere else there
+//! is no one to ask, and the error says what to run instead.
 
 use std::path::{Path, PathBuf};
 
@@ -26,8 +26,6 @@ pub struct Plan {
 pub struct Here {
     pub tmux: bool,
     pub windows_terminal: bool,
-    /// Windows itself (not WSL): ptyro.exe.
-    pub windows: bool,
     /// Inside WSL: the distro, and where `wt.exe` is.
     pub wsl_distro: Option<String>,
     pub wt_exe: Option<PathBuf>,
@@ -40,7 +38,6 @@ pub fn here() -> Here {
     Here {
         tmux: std::env::var_os("TMUX").is_some_and(|v| !v.is_empty()),
         windows_terminal: std::env::var_os("WT_SESSION").is_some_and(|v| !v.is_empty()),
-        windows: cfg!(windows),
         wsl_distro: wsl.and_then(|w| w.distro.clone()),
         wt_exe: wsl.and_then(wt_in_wsl),
         exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ptyro")),
@@ -67,7 +64,7 @@ pub fn plan(place: Place, addr: &str, remote: Option<&str>, h: &Here) -> Result<
         ptyro.extend(["--remote".to_owned(), r.to_owned()]);
     }
     ptyro.extend(["attach".to_owned(), addr.to_owned()]);
-    if h.tmux && !h.windows {
+    if h.tmux {
         let verb = match place {
             Place::Tab => "new-window",
             Place::Pane => "split-window",
@@ -81,33 +78,29 @@ pub fn plan(place: Place, addr: &str, remote: Option<&str>, h: &Here) -> Result<
         return Ok(Plan { argv, what: what.into() });
     }
     if h.windows_terminal {
-        let wt = if h.windows {
-            "wt.exe".to_owned()
-        } else {
-            match &h.wt_exe {
-                Some(p) => p.to_string_lossy().into_owned(),
-                None => {
-                    return Err(
-                        "Windows Terminal's wt.exe isn't reachable from WSL (is interop on?)"
-                            .into(),
-                    );
-                }
-            }
+        let Some(wt) = &h.wt_exe else {
+            return Err(
+                "Windows Terminal's wt.exe isn't reachable from WSL (is interop on?)".into()
+            );
         };
         let verb = match place {
             Place::Tab => "new-tab",
             Place::Pane => "split-pane",
         };
-        // `-w 0`: this window. `--`: what follows is the command, whatever it holds.
-        let mut argv = vec![wt, "-w".into(), "0".into(), verb.into(), "--".into()];
-        if !h.windows {
-            // From WSL the tab runs wsl.exe, back into this distro, then ptyro.
-            argv.push("wsl.exe".into());
-            if let Some(d) = &h.wsl_distro {
-                argv.extend(["-d".to_owned(), d.clone()]);
-            }
-            argv.extend(["--cd".to_owned(), "~".to_owned(), "--".to_owned()]);
+        // `-w 0`: this window. `--`: what follows is the command, whatever it holds. The tab
+        // runs wsl.exe, back into this distro, then ptyro.
+        let mut argv = vec![
+            wt.to_string_lossy().into_owned(),
+            "-w".into(),
+            "0".into(),
+            verb.into(),
+            "--".into(),
+            "wsl.exe".into(),
+        ];
+        if let Some(d) = &h.wsl_distro {
+            argv.extend(["-d".to_owned(), d.clone()]);
         }
+        argv.extend(["--cd".to_owned(), "~".to_owned(), "--".to_owned()]);
         // wt splits its command line at every `;` (its own separator, even after `--`); `\;`
         // keeps one in an argument.
         let n = argv.len();
@@ -198,34 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_terminal_from_windows_runs_ptyro_exe_with_its_remote() {
-        let here = Here {
-            windows_terminal: true,
-            windows: true,
-            exe: PathBuf::from(r"C:\Users\me\ptyro.exe"),
-            ..Here::default()
-        };
-        let p = plan(Place::Tab, "01abc", Some("wsl://Ubuntu"), &here).unwrap();
-        assert_eq!(
-            p.argv,
-            [
-                "wt.exe",
-                "-w",
-                "0",
-                "new-tab",
-                "--",
-                r"C:\Users\me\ptyro.exe",
-                "--remote",
-                "wsl://Ubuntu",
-                "attach",
-                "01abc"
-            ]
-        );
-        assert_eq!(p.what, "a new Windows Terminal tab");
-        assert_eq!(plan(Place::Pane, "x", None, &here).unwrap().argv[3], "split-pane");
-    }
-
-    #[test]
     fn windows_terminal_from_wsl_goes_back_into_the_distro() {
         let here = Here {
             windows_terminal: true,
@@ -255,6 +220,8 @@ mod tests {
                 "01abc"
             ]
         );
+        assert_eq!(p.what, "a new Windows Terminal tab");
+        assert_eq!(plan(Place::Pane, "x", None, &here).unwrap().argv[3], "split-pane");
         let no_wt = Here { wt_exe: None, ..here };
         assert!(plan(Place::Tab, "x", None, &no_wt).unwrap_err().contains("wt.exe"));
     }
@@ -263,21 +230,21 @@ mod tests {
     fn a_semicolon_reaches_windows_terminal_escaped() {
         let here = Here {
             windows_terminal: true,
-            windows: true,
-            exe: PathBuf::from(r"C:\odd;name\ptyro.exe"),
+            wt_exe: Some(PathBuf::from("/mnt/c/wt.exe")),
+            exe: PathBuf::from("/odd;name/ptyro"),
             ..Here::default()
         };
         let p = plan(Place::Tab, "a;b", None, &here).unwrap();
-        assert_eq!(p.argv[5], r"C:\odd\;name\ptyro.exe");
+        assert_eq!(p.argv[9], r"/odd\;name/ptyro");
         assert_eq!(p.argv.last().map(String::as_str), Some(r"a\;b"));
     }
 
     #[test]
     fn elsewhere_it_says_what_to_run() {
-        let e = plan(Place::Tab, "01abc", Some("wsl://"), &h()).unwrap_err();
+        let e = plan(Place::Tab, "01abc", Some("me@box"), &h()).unwrap_err();
         assert!(
             e.contains("can't be asked for a tab")
-                && e.contains("`ptyro --remote wsl:// attach 01abc`"),
+                && e.contains("`ptyro --remote me@box attach 01abc`"),
             "{e}"
         );
     }

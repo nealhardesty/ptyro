@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::host::Host;
-use super::{Plan, Report, Side};
+use super::{Plan, Report};
 use crate::catalog::{self, Item};
 
 /// Where an item's login stands.
@@ -33,8 +33,6 @@ pub enum LoginState {
 pub struct LoginRow {
     pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub side: Side,
     pub state: LoginState,
     /// What logging in runs, as typed (`gh auth login --web`).
     pub command: String,
@@ -63,7 +61,6 @@ pub fn status(host: &dyn Host, item: &Item) -> LoginState {
 
 /// The logins of `ids` (those with a login; every one with an empty list).
 pub fn rows(host: &dyn Host, ids: &[String]) -> Vec<LoginRow> {
-    let side = if host.platform().is_windows() { Side::Windows } else { Side::Local };
     catalog::items()
         .iter()
         .filter(|i| ids.is_empty() || ids.contains(&i.id))
@@ -72,7 +69,6 @@ pub fn rows(host: &dyn Host, ids: &[String]) -> Vec<LoginRow> {
             Some(LoginRow {
                 id: i.id.clone(),
                 name: i.name.clone(),
-                side,
                 state: status(host, i),
                 command: l.start.join(" "),
                 check: l.check.as_ref().map(|c| c.join(" ")),

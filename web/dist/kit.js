@@ -472,8 +472,6 @@ export function download(name, text, type = "text/plain") {
 }
 /// Go to a route.
 export const go = (hash) => { location.hash = hash; };
-/// How many sides a setup run reports on (BOOT8): in setupkit.ts, with the rest of setup's logic.
-export { setupSides } from "./setupkit.js";
 export const enc = encodeURIComponent;
 /// `decodeURIComponent` that never throws: a malformed escape in a route (`%E0%A4%A`) is kept as typed.
 export function safeDecode(s) {

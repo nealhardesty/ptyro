@@ -136,14 +136,12 @@ pub fn matches(def: &ProfileDef, remotes: &[String], path: &Path) -> bool {
         let pat = ptyro_git::normalize_remote(pat);
         norm.iter().any(|r| crate::glob::matches(&pat, r))
     });
-    // Both with `/` (a Windows path and an expanded `~/…` mix separators otherwise).
-    let path_s = ptyro_core::os::slash_path(&path.to_string_lossy());
-    let path_hit = def.matches.paths.iter().any(|pat| {
-        crate::glob::matches(
-            &ptyro_core::os::slash_path(&expand_home(pat).to_string_lossy()),
-            &path_s,
-        )
-    });
+    let path_s = path.to_string_lossy();
+    let path_hit = def
+        .matches
+        .paths
+        .iter()
+        .any(|pat| crate::glob::matches(&expand_home(pat).to_string_lossy(), &path_s));
     remote_hit || path_hit
 }
 
@@ -532,22 +530,9 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// A symbolic link at `dst` to `src`. Windows tells file links from folder links, and makes them
-/// only with Developer Mode or the right privilege: without, the error says so and the share is
-/// refused, as any other failed link is.
+/// A symbolic link at `dst` to `src`.
 fn link(src: &Path, dst: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(src, dst)
-    }
-    #[cfg(windows)]
-    {
-        if src.is_dir() {
-            std::os::windows::fs::symlink_dir(src, dst)
-        } else {
-            std::os::windows::fs::symlink_file(src, dst)
-        }
-    }
+    std::os::unix::fs::symlink(src, dst)
 }
 
 #[cfg(test)]

@@ -414,7 +414,7 @@ pub struct Panel {
     note: Option<(String, bool)>,
     help: bool,
     pub hits: RefCell<Hits>,
-    /// The daemon this TUI talks to, when it's another computer's (`wsl://Ubuntu`): it reads its
+    /// The daemon this TUI talks to, when it's another computer's (`me@devbox`): it reads its
     /// own file, so its settings are changed there, not in this one (WIN3).
     pub remote: Option<String>,
 }

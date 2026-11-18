@@ -1,5 +1,4 @@
-//! Process name and cwd probes (SPEC §5.1): `/proc` on Linux, libproc on macOS; on Windows
-//! (WIN7) none yet, so each answers "unknown".
+//! Process name and cwd probes (SPEC §5.1): `/proc` on Linux, libproc on macOS.
 
 use std::path::PathBuf;
 
@@ -126,21 +125,12 @@ pub fn parent_pid(pid: u32) -> Option<u32> {
     (n == size).then_some(info.pbi_ppid)
 }
 
-/// Not asked on Windows: a parent's pid can belong to another process by the time it is read
-/// (Windows reuses them freely), and which session a process runs in is its Job Object's to say
-/// (`session_leader`).
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn parent_pid(_pid: u32) -> Option<u32> {
     None
 }
 
-/// Windows: the image's stem, or the script an interpreter runs (WIN7).
-#[cfg(windows)]
-fn kernel_name(pid: u32) -> Option<String> {
-    crate::winproc::name(pid)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn kernel_name(_pid: u32) -> Option<String> {
     None
 }
@@ -150,13 +140,7 @@ fn argv0(_pid: u32) -> Option<String> {
     None
 }
 
-/// Windows: from the process's PEB (WIN7).
-#[cfg(windows)]
-pub fn cwd_of(pid: u32) -> Option<PathBuf> {
-    crate::winproc::cwd(pid)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn cwd_of(_pid: u32) -> Option<PathBuf> {
     None
 }
@@ -170,7 +154,7 @@ pub fn session_leader(pid: u32) -> Option<u32> {
     rustix::process::getsid(Some(pid)).ok().map(|p| p.as_raw_nonzero().get() as u32)
 }
 
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 pub fn session_leader(_pid: u32) -> Option<u32> {
     None
 }
@@ -192,7 +176,7 @@ pub fn exec_env_var(_pid: u32, _name: &str) -> Option<String> {
 }
 
 /// The system's load average over 1, 5 and 15 minutes: `/proc/loadavg` on Linux (WSL too),
-/// `getloadavg` on macOS; Windows keeps none.
+/// `getloadavg` on macOS.
 #[cfg(target_os = "linux")]
 pub fn load_average() -> Option<[f64; 3]> {
     parse_loadavg(&std::fs::read_to_string("/proc/loadavg").ok()?)
@@ -245,14 +229,6 @@ fn local_at(secs: i64) -> Option<Local> {
     ok.then_some(Local { hour: tm.tm_hour as u8, minute: tm.tm_min as u8 })
 }
 
-/// The time crate's local offset, which is sound on Windows (no environment races there).
-#[cfg(windows)]
-fn local_at(secs: i64) -> Option<Local> {
-    let at = time::OffsetDateTime::from_unix_timestamp(secs).ok()?;
-    let t = at.to_offset(time::UtcOffset::local_offset_at(at).ok()?);
-    Some(Local { hour: t.hour(), minute: t.minute() })
-}
-
 /// How many processes are in process group `pgid`, its leader (`pid == pgid`) aside. Zombies
 /// count until reaped. On an error listing them, one (as if the group were still busy).
 #[cfg(target_os = "linux")]
@@ -288,7 +264,7 @@ pub fn others_in_group(pgid: u32) -> usize {
     pids[..got.min(pids.len())].iter().filter(|p| **p > 0 && **p as u32 != pgid).count()
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn others_in_group(_pgid: u32) -> usize {
     0
 }

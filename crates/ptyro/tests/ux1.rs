@@ -38,15 +38,7 @@ impl World {
         )
         .unwrap();
         // (Windows' sessions start PowerShell, whatever `SHELL` says; it waits as this does.)
-        let say = ptyro_testkit::program::say_then_wait("", 60);
-        let sh = ptyro_testkit::program::program(
-            &h,
-            "fake-shell",
-            BIN,
-            shell,
-            &say.iter().map(String::as_str).collect::<Vec<_>>(),
-            &[],
-        );
+        let sh = ptyro_testkit::program::program(&h, "fake-shell", shell);
         let config = format!(
             "[attention]\nmin_work = \"1s\"\n[worktrees]\nfetch = false\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n{extra}"
         );
@@ -532,8 +524,8 @@ async fn the_task_box_takes_several_lines_as_one_prompt() {
         script
             .send_when("▾ main", "\\x11n")
             .send_when("What should it do?", "fix the login")
-            // Ctrl+J; through ConPTY (Windows) a typed LF is Enter, and ESC CR is Alt+Enter.
-            .send_when("fix the login", if cfg!(windows) { "\\x1b\\r" } else { "\\x0a" })
+            // Ctrl+J.
+            .send_when("fix the login", "\\x0a")
             .send_when("new line", "and the logout")
             .send_when("and the logout", "\\r")
             .until("prompt over 2 lines"),
@@ -879,12 +871,9 @@ async fn ux1_done_when_from_a_fresh_machine_to_a_cleaned_up_task() {
     ptyro_testkit::program::program(
         &bin,
         "claude",
-        BIN,
         &format!(
             "PTYRO_FAKE_TASK=1 PTYRO_FAKE_PASTE=1 exec \"{BIN}\" fake-agent --as claude \"$@\""
         ),
-        &[BIN, "fake-agent", "--as", "claude"],
-        &[("PTYRO_FAKE_TASK", "1"), ("PTYRO_FAKE_PASTE", "1")],
     );
     // myrepo, cloned from a "remote".
     let git = |dir: &Path, args: &[&str]| {

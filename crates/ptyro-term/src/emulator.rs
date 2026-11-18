@@ -822,9 +822,6 @@ fn osc9_cwd(arg: &str, wsl_root: Option<&str>) -> Option<std::path::PathBuf> {
     if p.is_empty() || p.chars().any(char::is_control) {
         return None;
     }
-    if cfg!(windows) {
-        return Some(p.into());
-    }
     if p.starts_with('/') {
         return Some(p.into());
     }
@@ -1158,10 +1155,8 @@ mod tests {
         assert_eq!(cwd("\\\\wsl.localhost\\Ubuntu\\home\\me", wsl).as_deref(), Some("/home/me"));
         assert_eq!(cwd("\\\\WSL$\\Debian\\srv\\app", wsl).as_deref(), Some("/srv/app"));
         assert_eq!(cwd("/tmp/x", None).as_deref(), Some("/tmp/x"));
-        if !cfg!(windows) {
-            assert_eq!(cwd("C:\\Users", None), None, "outside WSL a drive letter is nowhere");
-            assert_eq!(cwd("\\\\wsl$\\Ubuntu\\home", None), None);
-        }
+        assert_eq!(cwd("C:\\Users", None), None, "outside WSL a drive letter is nowhere");
+        assert_eq!(cwd("\\\\wsl$\\Ubuntu\\home", None), None);
         assert_eq!(cwd("\"\"", wsl), None);
         assert_eq!(cwd("C:\\a\u{7}b", wsl), None);
     }

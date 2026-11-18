@@ -6,15 +6,15 @@
 import assert from "node:assert/strict";
 import { adminSteps, bannerWants, isHere, leftForComputer, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "../dist/setupkit.js";
 
-const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, side: "local", ticked: false, picked: false, ...more });
+const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() + id.slice(1), kind, state, ticked: false, picked: false, ...more });
 
-// The banner: no agent here on any side; an installed (or other-installed) one hides it; an
+// The banner: no agent here; an installed (or other-installed) one hides it; an
 // empty or missing plan never shows it.
 {
   const bare = { entries: [entry("claude", "agent", "missing"), entry("git", "tool", "installed")] };
   assert.equal(noAgent(bare), true);
   assert.equal(noAgent({ entries: [entry("claude", "agent", "other"), entry("git", "tool", "missing")] }), false);
-  assert.equal(noAgent({ entries: [entry("codex", "agent", "installed", { side: "wsl" }), entry("codex", "agent", "missing", { side: "windows" })] }), false);
+
   assert.equal(noAgent({ entries: [entry("claude", "agent", "outdated")] }), false, "an outdated agent is still an agent");
   assert.equal(noAgent(undefined), false);
   assert.equal(noAgent({ entries: [] }), false);
@@ -38,46 +38,36 @@ const entry = (id, kind, state, more = {}) => ({ id, name: id[0].toUpperCase() +
     entry("gh", "tool", "missing", { action: apt }),
   ] };
   assert.deepEqual(leftForComputer(plan).map((e) => e.id), ["codex", "git", "node"]);
-  assert.deepEqual(adminSteps(plan), [{ side: "local", names: ["Codex", "Git", "Node.js"], command: "ptyro install codex git node" }]);
+  assert.deepEqual(adminSteps(plan), [{ names: ["Codex", "Git", "Node.js"], command: "ptyro install codex git node" }]);
   assert.deepEqual(waitsForAdmin(plan), [["Codex", "Node.js"]]);
   assert.deepEqual(webSteps(plan).map((e) => e.id), ["claude"], "Install 1, not 2: Codex can't run from here");
   const onlyAdmin = { entries: [entry("git", "tool", "missing", { ticked: true, picked: true, action: apt })] };
   assert.deepEqual(webSteps(onlyAdmin), [], "nothing to install from here");
-  const two = { entries: [
-    entry("git", "tool", "missing", { side: "windows", ticked: true, picked: true, action: { via: "winget", admin: true } }),
-    entry("git", "tool", "missing", { side: "wsl", ticked: true, picked: true, action: apt }),
-    entry("claude", "agent", "missing", { side: "wsl", ticked: true, picked: true, action: { via: "vendor", admin: false, after: ["git"] } }),
-    entry("codex", "agent", "missing", { side: "windows", ticked: true, picked: true, action: { via: "vendor", admin: false, after: [] } }),
-  ] };
-  assert.deepEqual(adminSteps(two).map((a) => a.command), ["ptyro install git --where windows", "ptyro install git claude --where wsl"]);
-  assert.deepEqual(webSteps(two).map((e) => `${e.side}:${e.id}`), ["windows:codex"], "waiting is per side");
+
   assert.deepEqual(adminSteps({ entries: [entry("claude", "agent", "missing", { ticked: true, action: { admin: false } })] }), []);
 }
 
-const ev = (run, seq, event, side = "local") => ({ run, seq, side, event });
+const ev = (run, seq, event) => ({ run, seq, event });
 const line = (text) => ({ event: "line", text });
 const finished = (done = [], skipped = []) => ({ event: "finished", report: { done, failed: [], skipped, blocked: [] } });
 
-// This page's own run: events before its reply wait, then count; the sides come from the plan
-// the daemon runs; it ends when each side has finished.
+// This page's own run: events before its reply wait, then count; it ends on its finish.
 {
   const log = new SetupLog();
   log.start();
   assert.equal(log.event(ev("r1", 1, { event: "started", name: "Claude Code", command: "curl … | bash" })), "");
-  log.started("r1", { entries: [{ id: "claude", side: "windows", ticked: true, action: {} }, { id: "git", name: "git", side: "wsl", ticked: true, action: { admin: true } }] });
-  assert.equal(log.sides, 2);
+  log.started("r1", { entries: [{ id: "claude", ticked: true, action: {} }, { id: "git", name: "git", ticked: true, action: { admin: true } }] });
   assert.equal(log.running, true);
   assert.equal(log.theirs, false);
-  assert.deepEqual(log.lines, ["▸ Windows: Claude Code: curl … | bash"]);
+  assert.deepEqual(log.lines, ["▸ Claude Code: curl … | bash"]);
   log.event(ev("r1", 2, line("downloading")));
   log.event(ev("r1", 2, line("downloading")));
   assert.equal(log.lines.length, 2, "an event seen twice shows once");
-  assert.equal(log.event(ev("r1", 3, finished(["claude"]), "windows")), "");
-  log.event(ev("r1", 4, { event: "skipped", id: "git", reason: "it needs administrator rights", fix: "on the computer itself: `ptyro install git`" }, "wsl"));
-  assert.equal(log.lines.at(-1), "– WSL: git: left for the computer: on the computer itself: `ptyro install git`");
-  assert.equal(log.event(ev("r1", 5, finished([], ["git"]), "wsl")), "done");
+  log.event(ev("r1", 3, { event: "skipped", id: "git", reason: "it needs administrator rights", fix: "on the computer itself: `ptyro install git`" }));
+  assert.equal(log.lines.at(-1), "– git: left for the computer: on the computer itself: `ptyro install git`");
+  assert.equal(log.event(ev("r1", 4, finished(["claude"], ["git"]))), "done");
   assert.equal(log.running, false);
-  assert.equal(log.summary(), "1 installed. git is left for the computer (administrator rights): run ptyro install git --where wsl there.");
+  assert.equal(log.summary(), "1 installed. git is left for the computer (administrator rights): run ptyro install git there.");
 }
 
 // An older daemon's events are unnumbered (seq 0): every one counts.
@@ -92,14 +82,14 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 
 // A run going already (another device, or before a reload): the first event of an unknown run
 // says "new" (the page asks the daemon); the plan's `running` holds what happened so far, and
-// what arrived meanwhile is added once, in order. Its sides come from its own plan.
+// what arrived meanwhile is added once, in order.
 {
   const log = new SetupLog();
   assert.equal(log.event(ev("other", 3, line("third"))), "new");
   assert.equal(log.event(ev("other", 4, line("fourth"))), "", "asked once");
   assert.equal(log.running, false);
-  const joined = log.sync({ run: "other", plan: { entries: [{ side: "local", ticked: true, action: {} }] },
-    events: [{ seq: 1, side: "local", event: { event: "started", name: "Codex", command: "npm i -g @openai/codex" } }, { seq: 2, side: "local", event: line("second") }, { seq: 3, side: "local", event: line("third") }] });
+  const joined = log.sync({ run: "other", plan: { entries: [{ ticked: true, action: {} }] },
+    events: [{ seq: 1, event: { event: "started", name: "Codex", command: "npm i -g @openai/codex" } }, { seq: 2, event: line("second") }, { seq: 3, event: line("third") }] });
   assert.equal(joined, "joined");
   assert.equal(log.theirs, true);
   assert.equal(log.running, true);
@@ -117,7 +107,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const log = new SetupLog();
   log.event(ev("late", 2, finished(["gh"])));
-  log.sync({ run: "late", plan: { entries: [{ side: "local", ticked: true, action: {} }] }, events: [{ seq: 1, side: "local", event: line("one") }] });
+  log.sync({ run: "late", plan: { entries: [{ ticked: true, action: {} }] }, events: [{ seq: 1, event: line("one") }] });
   assert.equal(log.running, false);
   assert.equal(log.summary(), "1 installed.");
 }
@@ -132,18 +122,17 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   assert.equal(log.theirs, false);
 }
 
-// What is left for the computer is told apart by side: git skipped on Windows for another
-// reason is "not run"; git left on WSL is the computer's.
+// A skip for another reason than administrator rights is "not run"; one left for them is the
+// computer's.
 {
   const log = new SetupLog();
   log.start();
   log.started("rs", { entries: [
-    { id: "git", name: "git", side: "windows", ticked: true, action: { admin: false, after: [] } },
-    { id: "git", name: "git", side: "wsl", ticked: true, action: { admin: true, after: [] } },
+    { id: "gh", name: "gh", ticked: true, action: { admin: false, after: [] } },
+    { id: "git", name: "git", ticked: true, action: { admin: true, after: [] } },
   ] });
-  log.event(ev("rs", 1, finished([], ["git"]), "windows"));
-  log.event(ev("rs", 2, finished([], ["git"]), "wsl"));
-  assert.equal(log.summary(), "0 installed, 1 not run. git is left for the computer (administrator rights): run ptyro install git --where wsl there.");
+  log.event(ev("rs", 1, finished([], ["gh", "git"])));
+  assert.equal(log.summary(), "0 installed, 1 not run. git is left for the computer (administrator rights): run ptyro install git there.");
 }
 
 // Away and back (a phone's socket dropped): the run ended meanwhile. A plan asked for after the
@@ -152,7 +141,7 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const log = new SetupLog();
   log.start();
-  log.started("r9", { entries: [{ id: "opencode", side: "local", ticked: true, action: {} }] });
+  log.started("r9", { entries: [{ id: "opencode", ticked: true, action: {} }] });
   log.event(ev("r9", 1, line("one")));
   assert.equal(log.sync(null, ""), "", "asked before the run was known");
   assert.equal(log.running, true);
@@ -168,17 +157,17 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
 {
   const log = new SetupLog();
   log.start();
-  log.started("r7", { entries: [{ id: "opencode", side: "local", ticked: true, action: {} }] });
+  log.started("r7", { entries: [{ id: "opencode", ticked: true, action: {} }] });
   log.event(ev("r7", 1, line("one")));
   assert.equal(log.event(ev("r7", 4, line("four"))), "gap");
   assert.equal(log.event(ev("r7", 5, line("five"))), "", "asked once");
   assert.deepEqual(log.lines, ["  │ one"]);
-  const events = [1, 2, 3, 4].map((n) => ({ seq: n, side: "local", event: line(["one", "two", "three", "four"][n - 1]) }));
+  const events = [1, 2, 3, 4].map((n) => ({ seq: n, event: line(["one", "two", "three", "four"][n - 1]) }));
   assert.equal(log.sync({ run: "r7", plan: {}, events }, "r7"), "merged");
   assert.deepEqual(log.lines, ["one", "two", "three", "four", "five"].map((t) => `  │ ${t}`));
   // The daemon kept only the latest: what's gone is said.
   assert.equal(log.event(ev("r7", 9, line("nine"))), "gap");
-  assert.equal(log.sync({ run: "r7", plan: {}, events: [{ seq: 8, side: "local", event: line("eight") }] }, "r7"), "merged");
+  assert.equal(log.sync({ run: "r7", plan: {}, events: [{ seq: 8, event: line("eight") }] }, "r7"), "merged");
   assert.deepEqual(log.lines.slice(-3), ["… 2 earlier line(s) from while this page was away aren't shown", "  │ eight", "  │ nine"]);
   // Held events that hold the finish end it even when the plan says nothing is going.
   log.event(ev("r7", 11, finished(["opencode"])));
@@ -200,27 +189,25 @@ const finished = (done = [], skipped = []) => ({ event: "finished", report: { do
   assert.deepEqual(runningAgent([s("a", "opencode"), s("b", "claude"), s("c", "opencode", "exited"), s("d", "opencode", "running", "laptop2")], "opencode"), ["a"]);
   const log = new SetupLog();
   log.start();
-  log.started("u1", { entries: [{ id: "claude", side: "local", ticked: true, action: { update: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
+  log.started("u1", { entries: [{ id: "claude", ticked: true, action: { update: true } }, { id: "gh", ticked: true, action: {} }] });
   log.event(ev("u1", 1, finished(["claude"])));
   assert.equal(log.summary(), "1 updated.");
   const both = new SetupLog();
   both.start();
-  both.started("u2", { entries: [{ id: "claude", side: "local", ticked: true, action: { update: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
+  both.started("u2", { entries: [{ id: "claude", ticked: true, action: { update: true } }, { id: "gh", ticked: true, action: {} }] });
   both.event(ev("u2", 1, finished(["claude", "gh"])));
   assert.equal(both.summary(), "1 installed, 1 updated.");
   // An update refused because the program runs (in_use): the page offers to try it again; a
   // plain failure doesn't; a new run starts with none.
   const busy = new SetupLog();
   busy.start();
-  busy.started("u3", { entries: [{ id: "claude", side: "windows", ticked: true, action: { update: true } }, { id: "codex", side: "windows", ticked: true, action: { update: true } }] });
-  busy.event(ev("u3", 1, { event: "failed", id: "claude", error: "it exited with 1: being used by another process", fix: "end the sessions", in_use: true }, "windows"));
-  busy.event(ev("u3", 2, { event: "failed", id: "codex", error: "no network", fix: "try again" }, "windows"));
-  busy.event(ev("u3", 3, { event: "finished", report: { done: [], failed: ["claude", "codex"], skipped: [], blocked: [] } }, "windows"));
-  assert.deepEqual(busy.retry, [{ id: "claude", side: "windows" }]);
-  // Its button: the label, and the side it runs on (the daemon's picks, or WSL's).
-  assert.deepEqual(retryOf(busy.retry[0], "Claude Code"), { label: "Try updating Claude Code again", picks: ["claude"], wslPicks: null });
-  assert.deepEqual(retryOf({ id: "codex", side: "wsl" }, "Codex"), { label: "Try updating Codex again", picks: [], wslPicks: ["codex"] });
-  assert.deepEqual(retryOf({ id: "codex", side: "local" }, "Codex").picks, ["codex"]);
+  busy.started("u3", { entries: [{ id: "claude", ticked: true, action: { update: true } }, { id: "codex", ticked: true, action: { update: true } }] });
+  busy.event(ev("u3", 1, { event: "failed", id: "claude", error: "it exited with 1: Text file busy", fix: "end the sessions", in_use: true }));
+  busy.event(ev("u3", 2, { event: "failed", id: "codex", error: "no network", fix: "try again" }));
+  busy.event(ev("u3", 3, { event: "finished", report: { done: [], failed: ["claude", "codex"], skipped: [], blocked: [] } }));
+  assert.deepEqual(busy.retry, [{ id: "claude" }]);
+  // Its button: the label, and what it runs.
+  assert.deepEqual(retryOf(busy.retry[0], "Claude Code"), { label: "Try updating Claude Code again", picks: ["claude"] });
   busy.start();
   assert.deepEqual(busy.retry, []);
 }
@@ -261,14 +248,14 @@ console.log("setup: ok");
   assert.equal(viaWords("brew"), "Homebrew");
   const log = new SetupLog();
   log.start();
-  log.started("m1", { entries: [{ id: "codex", side: "local", ticked: true, action: { moving: true } }, { id: "gh", side: "local", ticked: true, action: {} }] });
+  log.started("m1", { entries: [{ id: "codex", ticked: true, action: { moving: true } }, { id: "gh", ticked: true, action: {} }] });
   log.event(ev("m1", 1, finished(["codex", "gh"])));
   assert.equal(log.summary(), "1 installed, 1 moved to the recommended installer.");
-  const plan = { entries: [{ id: "claude", name: "Claude Code", side: "local", ticked: true, action: { moving: true, admin: true }, moves: { ...move, admin: true } }] };
-  assert.deepEqual(adminSteps(plan), [{ side: "local", names: ["Claude Code"], command: "ptyro install claude" }]);
+  const plan = { entries: [{ id: "claude", name: "Claude Code", ticked: true, action: { moving: true, admin: true }, moves: { ...move, admin: true } }] };
+  assert.deepEqual(adminSteps(plan), [{ names: ["Claude Code"], command: "ptyro install claude" }]);
   assert.equal(webSteps(plan).length, 0);
   // A run asks to move only what was ticked where offered.
-  assert.deepEqual(movesOf({ entries: [{ id: "codex", picked: true, moves: move }, { id: "claude", picked: false, moves: move }, { id: "gh", picked: true }, { id: "codex", side: "wsl", picked: true, moves: move }] }), ["codex"]);
+  assert.deepEqual(movesOf({ entries: [{ id: "codex", picked: true, moves: move }, { id: "claude", picked: false, moves: move }, { id: "gh", picked: true }] }), ["codex"]);
 }
 
 // BOOT9: a message that an agent or tool isn't installed offers setup (the daemon's words,

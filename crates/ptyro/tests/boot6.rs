@@ -2,7 +2,7 @@
 //! version comes from the fixture registry (`PTYRO_TEST_LATEST/ptyro`, GitHub's release JSON),
 //! its release from a fake release server on 127.0.0.1 (`PTYRO_TEST_RELEASE_URL`, as
 //! `install.sh`'s `PTYRO_RELEASE_URL`), and the binary it replaces is one of the test's own
-//! (`PTYRO_TEST_SELF_EXE`), never the build under test. WSL is `ptyro fake-wsl`.
+//! (`PTYRO_TEST_SELF_EXE`), never the build under test.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 const BIN: &str = env!("CARGO_BIN_EXE_ptyro");
 /// The version under test: what a release built from this tree says it is.
 const V: &str = env!("CARGO_PKG_VERSION");
-const EXE: &str = if cfg!(windows) { "ptyro.exe" } else { "ptyro" };
+const EXE: &str = "ptyro";
 
 /// A fake GitHub release: files served from a folder, each request logged.
 struct Server {
@@ -157,16 +157,9 @@ impl Box_ {
             .env("PTYRO_TEST_LATEST", self.path("registry"))
             .env("PTYRO_TEST_RELEASE_URL", &self.server.url)
             .env("PTYRO_TEST_SELF_EXE", self.installed())
-            .env("PTYRO_WSL", self.path("no-wsl"))
             .env("PTYRO_NO_AUTOSPAWN", "1")
             .env("PTYRO_VERIFY", "0");
-        for v in [
-            "PTYRO_SOCKET",
-            "PTYRO_SESSION_ID",
-            "PTYRO_CONFIG",
-            "PTYRO_REMOTE",
-            "PTYRO_TEST_WINDOWS_PTYRO",
-        ] {
+        for v in ["PTYRO_SOCKET", "PTYRO_SESSION_ID", "PTYRO_CONFIG", "PTYRO_REMOTE"] {
             c.env_remove(v);
         }
         for (k, v) in &self.extra {
@@ -390,105 +383,6 @@ fn a_yes_installs_it_and_the_daemon_upgrades_live_with_every_session() {
     assert!(!v["outdated"].as_array().unwrap().iter().any(|o| o["id"] == "ptyro"), "{v}");
 }
 
-/// "Windows" (the fake machine's platform) with its installed ptyro 0.0.1, and WSL's distro
-/// Ubuntu with ptyro, its own installed binary 0.0.1 (`ptyro fake-wsl`): the box, WSL's binary
-/// and fake-wsl's folder.
-#[cfg(unix)]
-fn windows_with_ubuntu() -> (Box_, PathBuf, PathBuf) {
-    let mut b = Box_::new(json!({ "platform": "windows-x64" }));
-    std::fs::write(b.installed(), script("0.0.1")).unwrap();
-    executable(&b.installed());
-    b.release(V, &script(V), false);
-    let wsl = b.path("wsl");
-    std::fs::write(wsl.join("distros"), "Ubuntu\n").unwrap();
-    for d in ["ptyro", "fake", "home", "bin"] {
-        std::fs::create_dir_all(wsl.join("Ubuntu").join(d)).unwrap();
-    }
-    std::fs::write(wsl.join("Ubuntu/fake/world.json"), json!({"platform": "linux"}).to_string())
-        .unwrap();
-    let theirs = wsl.join("Ubuntu/bin/ptyro");
-    std::fs::write(&theirs, script("0.0.1")).unwrap();
-    executable(&theirs);
-    let stand_in = ptyro_testkit::program::program(
-        &b.path("tools"),
-        "wsl",
-        BIN,
-        &format!("exec \"{BIN}\" fake-wsl \"$@\""),
-        &[BIN, "fake-wsl"],
-        &[],
-    );
-    b.extra = vec![
-        ("PTYRO_WSL".into(), stand_in.display().to_string()),
-        ("PTYRO_FAKE_WSL".into(), wsl.display().to_string()),
-    ];
-    (b, theirs, wsl)
-}
-
-/// Windows with WSL: Windows' ptyro updates itself, then asks the distro's ptyro to update
-/// itself too (through `wsl.exe`), so both halves are the same version.
-#[cfg(unix)]
-#[test]
-fn on_windows_wsls_half_is_brought_along() {
-    let (b, theirs, wsl) = windows_with_ubuntu();
-    b.publish(V);
-    let o = b.run(&["update", "ptyro"], "y\n");
-    let said = text(&o);
-    assert!(o.status.success(), "{said}");
-    assert!(said.contains("and WSL's ptyro (Ubuntu) 0.0.1"), "said in the question: {said}");
-    assert!(said.contains(&format!("✓ WSL's ptyro (Ubuntu) {V}")), "{said}");
-    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
-    assert_eq!(version_of(&theirs), format!("ptyro {V}"), "WSL's half too");
-    let log = std::fs::read_to_string(wsl.join("wsl.log")).unwrap();
-    assert!(log.lines().any(|l| l.ends_with("update ptyro --yes")), "{log}");
-    // Asked again: both the newest, nothing to do, and the halves agree.
-    let o = b.run(&["update", "ptyro"], "");
-    assert!(o.status.success(), "{}", text(&o));
-    assert!(text(&o).contains(&format!("✓ WSL's ptyro (Ubuntu) is {V} too")), "{}", text(&o));
-}
-
-/// Inside WSL: Windows' ptyro.exe is asked to update itself too; one too old to know how says
-/// the fix.
-#[cfg(unix)]
-#[test]
-fn in_wsl_windows_half_is_brought_along_or_its_fix_said() {
-    let mut b = Box_::new(json!({ "platform": "wsl" }));
-    std::fs::write(b.installed(), script("0.0.1")).unwrap();
-    executable(&b.installed());
-    b.publish(V);
-    b.release(V, &script(V), false);
-    let win = b.path("win.exe");
-    let log = b.path("win.log");
-    let done = b.path("win.done");
-    let old = b.path("win.old");
-    std::fs::write(&old, "").unwrap();
-    std::fs::write(
-        &win,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{log}'\nif [ \"$1\" = --version ]; then if [ -f '{done}' ]; then echo 'ptyro {V}'; else echo 'ptyro 0.0.1'; fi; exit 0; fi\nif [ -f '{old}' ]; then echo \"error: ptyro isn't something ptyro installs\" >&2; exit 3; fi\ntouch '{done}'\n",
-            log = log.display(),
-            done = done.display(),
-            old = old.display()
-        ),
-    )
-    .unwrap();
-    executable(&win);
-    b.extra = vec![("PTYRO_TEST_WINDOWS_PTYRO".into(), win.display().to_string())];
-    let o = b.run(&["update", "ptyro", "--yes"], "");
-    let said = text(&o);
-    assert_eq!(o.status.code(), Some(1), "{said}");
-    assert!(said.contains(&format!("ptyro {V} is in")), "this half updated: {said}");
-    assert!(said.contains("✗ Windows' ptyro.exe wasn't updated"), "{said}");
-    assert!(said.contains("install.ps1"), "the fix for one from before: {said}");
-    // A ptyro.exe that knows how.
-    std::fs::remove_file(&old).unwrap();
-    let o = b.run(&["update", "ptyro", "--yes"], "");
-    let said = text(&o);
-    assert!(o.status.success(), "{said}");
-    assert!(said.contains(&format!("✓ Windows' ptyro.exe {V}")), "{said}");
-    let asked = std::fs::read_to_string(&log).unwrap();
-    assert!(asked.lines().any(|l| l == "update ptyro --yes"), "{asked}");
-}
-
 /// Homebrew's ptyro is updated through Homebrew, never overwritten.
 #[cfg(unix)]
 #[test]
@@ -599,7 +493,6 @@ fn the_web_runs_it_in_a_session_the_daemons_live_upgrade_keeps() {
         ("PTYRO_TEST_RELEASE_URL".into(), b.server.url.clone()),
         ("PTYRO_TEST_SELF_EXE".into(), s(b.installed())),
         ("PTYRO_VERIFY".into(), "0".into()),
-        ("PTYRO_WSL".into(), s(b.path("no-wsl"))),
     ];
     let pairs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let d = TempDaemon::start_with_env(BIN, &pairs).unwrap();
@@ -685,55 +578,6 @@ fn homebrew_behind_the_release_is_said_not_claimed() {
     assert!(!said.contains("upgraded in"), "no daemon upgrade onto the old version: {said}");
 }
 
-/// GitHub's API out of requests (the lookup fails) while the remembered newest release is newer:
-/// ptyro is updated from what was remembered, and the other half with it, never one alone.
-#[cfg(unix)]
-#[test]
-fn with_the_lookup_failing_the_remembered_release_updates_both_halves() {
-    let (b, theirs, wsl) = windows_with_ubuntu();
-    // No `registry/ptyro`: the lookup fails. Each side remembers V from an earlier look.
-    let remembered = json!({ "checked": 1, "latest": { "ptyro": V } }).to_string();
-    for home in [b.path("ptyro"), wsl.join("Ubuntu/ptyro")] {
-        let state = ptyro_testkit::paths_for(&home).unwrap().state;
-        std::fs::create_dir_all(&state).unwrap();
-        std::fs::write(state.join("versions.json"), &remembered).unwrap();
-    }
-    let o = b.run(&["update", "ptyro"], "y\n");
-    let said = text(&o);
-    assert!(o.status.success(), "{said}");
-    assert!(said.contains("and WSL's ptyro (Ubuntu) 0.0.1"), "said in the question: {said}");
-    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
-    assert_eq!(version_of(&theirs), format!("ptyro {V}"), "WSL's half too");
-}
-
-/// A WSL half whose ptyro is there but doesn't answer is said, so one half is never updated
-/// without a word about the other; a distro without ptyro is a normal state, and says nothing.
-#[cfg(unix)]
-#[test]
-fn a_wsl_half_that_cant_be_checked_is_said_and_one_without_ptyro_isnt() {
-    let (b, theirs, wsl) = windows_with_ubuntu();
-    b.publish(V);
-    std::fs::write(&theirs, "#!/bin/sh\necho broken >&2\nexit 1\n").unwrap();
-    let o = b.run(&["update", "ptyro", "--yes"], "");
-    let said = text(&o);
-    assert!(o.status.success(), "{said}");
-    assert!(said.contains("note: WSL's ptyro (Ubuntu) couldn't be checked"), "{said}");
-    assert!(said.contains("wsl -d Ubuntu -- ptyro update ptyro"), "{said}");
-    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"), "this half updated");
-    // No ptyro in the distro at all: nothing to keep in step, nothing said.
-    let (b, _, wsl2) = windows_with_ubuntu();
-    let _ = wsl;
-    b.publish(V);
-    std::fs::remove_dir_all(wsl2.join("Ubuntu/ptyro")).unwrap();
-    std::fs::remove_dir_all(wsl2.join("Ubuntu/bin")).unwrap();
-    let o = b.run(&["update", "ptyro", "--yes"], "");
-    let said = text(&o);
-    assert!(o.status.success(), "{said}");
-    assert!(!said.contains("couldn't be checked"), "{said}");
-    assert!(!said.contains("WSL's ptyro"), "{said}");
-    assert_eq!(version_of(&b.installed()), format!("ptyro {V}"));
-}
-
 /// `SelfUpdate` (what another machine sends, SPEC §24.8): the daemon runs `ptyro update ptyro
 /// --yes --here` in a session of its own, which checks the release and upgrades it live.
 #[cfg(unix)]
@@ -755,7 +599,6 @@ fn a_daemon_asked_to_update_itself_does_in_a_session_its_upgrade_keeps() {
         ("PTYRO_TEST_RELEASE_URL".into(), b.server.url.clone()),
         ("PTYRO_TEST_SELF_EXE".into(), s(b.installed())),
         ("PTYRO_VERIFY".into(), "0".into()),
-        ("PTYRO_WSL".into(), s(b.path("no-wsl"))),
     ];
     let pairs: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let d = TempDaemon::start_with_env(BIN, &pairs).unwrap();

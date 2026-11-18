@@ -2050,9 +2050,7 @@ pub(crate) fn help_lines<'a>(app: &'a App, filter: &str) -> Vec<Line<'a>> {
         lines.push(Line::styled(
             format!(
                 "── this terminal: {} · colours {:?} · theme {} ──",
-                if cfg!(windows) {
-                    "Windows console keys (Shift+Enter works)"
-                } else if app.kitty {
+                if app.kitty {
                     "kitty keyboard on (Shift+Enter works)"
                 } else {
                     "kitty keyboard off (Shift+Enter falls back to Enter)"
@@ -2115,9 +2113,9 @@ pub(crate) fn edit_rows(
 }
 
 /// The key that starts a new line, as this terminal can send it: Shift+Enter with the kitty
-/// protocol, and on Windows, whose console sends whole key records (Shift+Enter is itself).
+/// protocol.
 pub(crate) fn newline_hint(app: &App) -> &'static str {
-    if app.kitty || cfg!(windows) { "⇧⏎ new line" } else { "C-j new line" }
+    if app.kitty { "⇧⏎ new line" } else { "C-j new line" }
 }
 
 #[cfg(test)]

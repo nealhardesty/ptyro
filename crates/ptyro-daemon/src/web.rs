@@ -32,10 +32,8 @@ impl Daemon {
         (agents, ptyro_agents::default_agent(&config))
     }
 
-    /// The daemon's `PATH` (what sessions see), refreshed first: what setup just installed is
-    /// found (SPEC §24.2). (Windows names it `Path`.)
+    /// The daemon's `PATH` (what sessions see).
     pub(crate) fn daemon_path(&self) -> String {
-        self.refresh_path();
         self.base_env()
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case("PATH"))

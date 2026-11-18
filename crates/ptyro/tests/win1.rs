@@ -189,8 +189,6 @@ async fn shells_get_their_integration_with_no_setup() {
     }
 }
 
-// Unix: on Windows, Git's `sh -l` didn't run the line typed into it under ConPTY (WIN13, CI's
-// second Windows run; open). Windows' shells and their integration are tests/win6.rs's.
 #[cfg(unix)]
 #[tokio::test]
 async fn shell_command_and_switching_the_integration_off() {
