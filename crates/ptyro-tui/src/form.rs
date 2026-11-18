@@ -55,8 +55,6 @@ pub enum Arg {
     Switch(&'static str),
     /// `--flag <prefix><value>` (`--adopt claude=~/.claude-work`).
     Pair(&'static str, String),
-    /// Ticks: all of them, nothing (the default); some, `--flag a,b`; none, the second flag.
-    Subset(&'static str, &'static str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -236,15 +234,6 @@ impl Form {
         for f in &self.fields {
             let v = f.value();
             let v = v.trim();
-            if let (Arg::Subset(flag, none), Kind::Multi { on, .. }) = (&f.arg, &f.kind) {
-                if on.iter().all(|x| *x) {
-                } else if v.is_empty() {
-                    args.push((*none).to_owned());
-                } else {
-                    args.extend([(*flag).to_owned(), v.to_owned()]);
-                }
-                continue;
-            }
             if v.is_empty() {
                 continue;
             }
@@ -261,7 +250,6 @@ impl Form {
                 Arg::Pair(flag, prefix) => {
                     args.extend([(*flag).to_owned(), format!("{prefix}{v}")])
                 }
-                Arg::Subset(..) => {}
             }
         }
         args
@@ -590,9 +578,8 @@ mod tests {
 
     #[test]
     fn a_cli_form_builds_the_commands_words_leaving_out_what_is_empty() {
-        let ticks = || opts(["contract", "push", "land"].map(|g| (g.to_owned(), g.to_owned())));
         let mut f = Form::new(
-            "New change set",
+            "New thing",
             vec![
                 Field::name("name", "Name", "", "").arg(Arg::Pos),
                 Field::multi(
@@ -608,20 +595,18 @@ mod tests {
                     .arg(Arg::Pair("--adopt", "claude=".into())),
                 Field::yes_no("overlay", "Overlay", true, "").arg(Arg::Switch("--overlay")),
                 Field::yes_no("quiet", "Quiet", false, "").arg(Arg::Switch("--quiet")),
-                Field::multi("gates", "Approvals", ticks(), |_| true, "")
-                    .arg(Arg::Subset("--gates", "--no-gates")),
                 Field::text("unused", "Unused", "", "").arg(Arg::Flag("--never")),
             ],
-            Make::Cli(vec!["cs".into(), "new".into()]),
+            Make::Cli(vec!["thing".into(), "new".into()]),
         );
         set(&mut f, "name", "billing");
         set(&mut f, "agents", "api=codex, web=claude");
         set(&mut f, "dir", "~/.claude-work");
-        let base = ["cs".to_owned(), "new".to_owned()];
+        let base = ["thing".to_owned(), "new".to_owned()];
         assert_eq!(
             f.cli_args(&base),
             [
-                "cs",
+                "thing",
                 "new",
                 "billing",
                 "--projects",
@@ -633,13 +618,10 @@ mod tests {
                 "--adopt",
                 "claude=~/.claude-work",
                 "--overlay"
-            ],
-            "all gates ticked: the default, nothing said"
+            ]
         );
-        tick(&mut f, "gates", &[true, false, true]);
-        assert!(f.cli_args(&base).ends_with(&["--gates".to_owned(), "contract,land".to_owned()]));
-        tick(&mut f, "gates", &[false, false, false]);
-        assert!(f.cli_args(&base).ends_with(&["--no-gates".to_owned()]));
+        tick(&mut f, "projects", &[false, true]);
+        assert_eq!(f.cli_args(&base)[3..5], ["--projects".to_owned(), "b".to_owned()]);
     }
 
     #[test]
@@ -1110,121 +1092,6 @@ impl App {
 
     fn open(&mut self, form: Form) {
         self.overlay = Some(Overlay::Form(Box::new(form)));
-    }
-
-    /// `sets.new`: `ptyro cs new` and everything it takes.
-    pub(crate) fn open_set_form(&mut self) {
-        let here = self.context_project_slug();
-        let templates = self.changeset_templates();
-        let fields = vec![
-            Field::name("name", "Name", "", "The change set's name").arg(Arg::Pos),
-            Field::multi(
-                "projects",
-                "Projects",
-                self.project_options(),
-                |p| Some(p) == here.as_deref(),
-                "Its member repositories (with a template: extra members)",
-            )
-            .arg(Arg::Flag("--projects")),
-            Field::text("goal", "Goal", "what the change is, for the lead and every member", "The goal, for the lead and every member")
-                .arg(Arg::Flag("--prompt")),
-            Field::text("issue", "From issue", "(none)", "The goal from a GitHub issue instead: a number in the first member's repo, or a URL")
-                .arg(Arg::Flag("--from-issue")),
-            Field::choice(
-                "template",
-                "Template",
-                std::iter::once((String::new(), "none".to_owned()))
-                    .chain(templates.into_iter().map(|t| (t.clone(), t)))
-                    .collect(),
-                0,
-                "A template from ~/.config/ptyro/changesets/ (a hub repo's: by name in the CLI)",
-            )
-            .arg(Arg::Flag("--template")),
-            Field::choice(
-                "layout",
-                "Layout",
-                opts([
-                    ("lead".into(), "lead: one agent per member, and a lead".into()),
-                    ("solo".into(), "solo: one agent for all of them".into()),
-                    ("manual".into(), "manual: no agents, you drive".into()),
-                ]),
-                0,
-                "Who works on it",
-            )
-            .arg(Arg::Flag("--layout")),
-            Field::choice("lead", "Lead agent", self.agent_options(Some("your default agent")), 0, "The lead's agent")
-                .arg(Arg::Flag("--lead-as")),
-            Field::text("agents", "Member agents", "api=codex, web=claude", "A member's own agent; several: comma separated")
-                .arg(Arg::Each("--agent")),
-            Field::text("bases", "Member bases", "web=origin/develop", "A member's own base; several: comma separated")
-                .arg(Arg::Each("--base")),
-            Field::text("depends", "Depends", "(from the template, else the manifests)", "`sdk:api, web:api+sdk`: who builds on whom")
-                .arg(Arg::Each("--depends")),
-            Field::multi(
-                "gates",
-                "Approvals",
-                opts(["contract", "push", "land"].map(|g| (g.to_owned(), g.to_owned()))),
-                |_| true,
-                "Where it waits for you to approve; untick all for none",
-            )
-            .arg(Arg::Subset("--gates", "--no-gates")),
-            Field::text("integration", "Integration check", "(none)", "A check run in the set's root; several: comma separated")
-                .arg(Arg::Each("--integration")),
-            Field::yes_no("overlay", "Build against siblings", false, "Turn on the overlays the manifests suggest")
-                .arg(Arg::Switch("--overlay")),
-            Field::choice("workspace", "Workspace", self.workspace_options(), 0, "Where its sessions live")
-                .arg(Arg::Flag("--workspace")),
-        ];
-        let mut form =
-            Form::new("New change set", fields, Make::Cli(vec!["cs".into(), "new".into()]));
-        form.sel = 0;
-        self.open(form);
-    }
-
-    /// The templates in `~/.config/ptyro/changesets/` (none when the daemon is elsewhere).
-    fn changeset_templates(&self) -> Vec<String> {
-        if self.connect.remote.is_some() {
-            return Vec::new();
-        }
-        let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-        else {
-            return Vec::new();
-        };
-        let dir =
-            ptyro_core::config::config_home(std::path::Path::new(&home)).join("ptyro/changesets");
-        let mut v: Vec<String> = std::fs::read_dir(dir)
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter_map(|e| {
-                let p = e.path();
-                if p.extension()? != "toml" {
-                    return None;
-                }
-                Some(p.file_stem()?.to_string_lossy().into_owned())
-            })
-            .collect();
-        v.sort();
-        v
-    }
-
-    /// `set.add`: a project into the selected change set, with its agent and what it needs.
-    pub(crate) fn open_set_add_form(&mut self, set: String) {
-        let fields = vec![
-            Field::choice("project", "Project", self.project_options(), 0, "The repository to add")
-                .arg(Arg::Pos),
-            Field::choice("agent", "Agent", self.agent_options(Some("the set's")), 0, "Its agent")
-                .arg(Arg::Flag("--agent")),
-            Field::text("depends", "Depends on", "(none)", "Members it builds on, comma separated")
-                .arg(Arg::Flag("--depends-on")),
-        ];
-        let mut form = Form::new(
-            format!("Add to change set {set}"),
-            fields,
-            Make::Cli(vec!["cs".into(), "add".into(), set]),
-        );
-        form.verb = "add";
-        self.open(form);
     }
 
     /// `session.lead`: lead the selected session's fan-out of workers.

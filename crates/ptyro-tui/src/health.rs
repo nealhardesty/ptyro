@@ -696,6 +696,20 @@ mod tests {
             win.fix,
             Some(Fix::Private(r"C:\Users\Jo Smith\AppData\Roaming\ptyro\config.toml".into()))
         );
+        // A key a removed feature had (SPEC §13.8): ⏎ takes it out of the file.
+        let gone = finding(&check(
+            "ptyro",
+            "app config retired",
+            "warn",
+            "themes is no longer used (removed 2026-11-17: …): remove it, `ptyro config unset themes -p app --shared`",
+        ))
+        .unwrap();
+        assert_eq!(
+            gone.fix,
+            Some(Fix::Cli(
+                ["config", "unset", "themes", "-p", "app", "--shared"].map(String::from).to_vec()
+            ))
+        );
         // A placeholder it can't fill: no fix rather than a wrong one.
         assert!(suggested_cli(&check("x", "y", "warn", "run `ptyro thing <name>`")).is_none());
     }

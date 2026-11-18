@@ -344,8 +344,10 @@ const USER_ONLY: &[(&str, &str)] = &[
 impl ProjectConfig {
     /// Parse one file's text (layering is [`load`](Self::load)'s job).
     pub fn parse(text: &str) -> Result<toml::Table, String> {
-        let table: toml::Table =
+        let mut table: toml::Table =
             toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())?;
+        // A removed feature's keys are ignored (the doctor reports them, SPEC §13.8).
+        crate::retired::strip_table(&mut table);
         for (key, what) in USER_ONLY {
             if table.contains_key(*key) {
                 return Err(format!(

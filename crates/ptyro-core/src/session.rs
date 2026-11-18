@@ -563,9 +563,6 @@ pub struct SpawnSpec {
     /// Drive the agent over its structured protocol instead of its terminal UI (M10).
     #[serde(default)]
     pub structured: bool,
-    /// Give the agent `ptyro mcp` (a change set's lead, M11; `lead` implies it).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub mcp: bool,
     /// Resume this conversation of the agent instead of starting one (UX1.4: adopting).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume: Option<String>,

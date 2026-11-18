@@ -8,7 +8,8 @@ expression: "Value::Object(all)"
     "exists": "bool",
     "notes": [],
     "ok": "bool",
-    "path": "string"
+    "path": "string",
+    "retired": []
   },
   "daemon_status": {
     "clients": "number",

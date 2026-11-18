@@ -643,7 +643,6 @@ async fn dispatch(
         }
         Some(Cmd::Iterate { run, args }) => crate::orch::iterate(&ctx, run, args).await,
         Some(Cmd::Gate { cmd }) => crate::orch::gate(&ctx, cmd).await,
-        Some(Cmd::Cs { cmd }) => crate::cs::cs(&ctx, cmd).await,
         Some(Cmd::Msg { cmd }) => crate::orch::msg(&ctx, cmd).await,
         Some(Cmd::Lease { cmd }) => crate::orch::lease(&ctx, cmd).await,
         Some(Cmd::Radar { project, json }) => crate::orch::radar(&ctx, project, json).await,
@@ -907,7 +906,6 @@ pub fn said(e: &Error) -> String {
         Again::Stop => "--stop".to_owned(),
         Again::Trust { fingerprint } => format!("--trust {fingerprint}"),
         Again::Release => "--release".to_owned(),
-        Again::IgnoreDependents => "--ignore-dependents".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
 }

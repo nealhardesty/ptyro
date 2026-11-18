@@ -129,6 +129,11 @@ function fixesFor(c) {
     if (c.section === "ptyro" && c.name === "config mode")
         out.push({ label: "Make it private (mode 600)", hint: "Saves it again as it is", run: async () => { const g = await doHost("config.get"); if (g && await doHost("config.save", { text: g.text }, "Saved: only you can read it"))
                 health.reload(""); } });
+    // A key a removed feature had (SPEC §13.8): taken out of its file, as `ptyro config unset` would.
+    const gone = c.data?.retired;
+    if (gone)
+        out.push({ label: `Remove ${gone}`, hint: "ptyro no longer uses it", run: async () => { if (await doHost("settings.apply", { ...(c.data.project ? { scope: "project", project: c.data.project, shared: !!c.data.shared } : { scope: "user" }), change: { t: "unset", key: gone } }, `Removed ${gone}`))
+                health.reload(""); } });
     if (c.section === "ptyro" && c.name.startsWith("config"))
         out.push({ label: "Edit the config", run: () => go("#/config") });
     if (c.section === "remote" || /restart/.test(c.text))

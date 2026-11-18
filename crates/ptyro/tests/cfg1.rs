@@ -303,3 +303,59 @@ async fn config_get_set_unset_list_add_and_rm_on_the_command_line() {
             && v["sections"].as_array().unwrap().len() >= 14
     );
 }
+
+/// A key a removed feature had (SPEC §13.8; `PTYRO_TEST_RETIRED` retires a test's own key) keeps
+/// an old config loading: the daemon starts, `config check` and the doctor name it with the
+/// command that takes it out, and that command does, keeping the rest of the file. A typo in a
+/// live key is still an error.
+#[test]
+fn a_retired_key_loads_is_reported_and_unset_removes_it() {
+    const OLD: &str = "# mine\n[ui]\nmouse = false\n\n[retired_for_tests]\nold = 1\n";
+    let knob = [("PTYRO_TEST_RETIRED", "1")];
+    let d = TempDaemon::start_with(BIN, &knob, Some(OLD)).unwrap();
+    let run = |args: &[&str]| d.cmd().env("PTYRO_TEST_RETIRED", "1").args(args).output().unwrap();
+    let check = run(&["config", "check"]);
+    assert!(check.status.success(), "{}", text(&check));
+    assert!(
+        text(&check).contains("retired_for_tests is no longer used")
+            && text(&check).contains("`ptyro config unset retired_for_tests`"),
+        "{}",
+        text(&check)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&run(&["config", "check", "--json"]).stdout).unwrap();
+    assert_eq!(
+        (json["ok"].as_bool(), json["retired"][0]["key"].as_str()),
+        (Some(true), Some("retired_for_tests"))
+    );
+    let doctor: serde_json::Value =
+        serde_json::from_slice(&run(&["doctor", "--quick", "--json"]).stdout).unwrap();
+    let found = doctor
+        .as_array()
+        .or_else(|| doctor["checks"].as_array())
+        .expect("the doctor's checks")
+        .iter()
+        .find(|c| c["name"] == "config retired")
+        .cloned()
+        .expect("the doctor names it");
+    assert_eq!(
+        (found["level"].as_str(), found["data"]["retired"].as_str()),
+        (Some("warn"), Some("retired_for_tests"))
+    );
+
+    let unset = run(&["config", "unset", "retired_for_tests"]);
+    assert!(unset.status.success(), "{}", text(&unset));
+    let after = std::fs::read_to_string(d.paths.config.join("config.toml")).unwrap();
+    assert!(
+        !after.contains("retired_for_tests")
+            && after.contains("mouse = false")
+            && after.contains("# mine"),
+        "{after}"
+    );
+    let check = run(&["config", "check"]);
+    assert!(!text(&check).contains("retired_for_tests"), "{}", text(&check));
+
+    std::fs::write(d.paths.config.join("config.toml"), "[ui]\nmousse = false\n").unwrap();
+    let typo = run(&["config", "check"]);
+    assert!(!typo.status.success() && text(&typo).contains("mousse"), "{}", text(&typo));
+}

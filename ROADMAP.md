@@ -34,7 +34,7 @@ Conventions:
 | **M8** | Hardening | Live upgrade, recorder/replay, perf, fuzzing, crash safety |
 | **M9** | Remote | SSH remote TUI, WebSocket server, PWA/phone client, remote approvals |
 | **M10** | Structured sessions | ACP / stream-json / app-server sessions with a native chat view (done) |
-| **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done) |
+| **M11** | Change sets | One coordinated change across several repos: lead + member agents, contract, integration overlay, set checkpoints, merge train (done; removed 2026-11-17) |
 | **H1** | Hardening review | ~120 findings of a full code review fixed (security, crashes, correctness, build) (done) |
 | **UX1** | Out of the box | From `cd repo && ptyro` to a shipped, cleaned-up worktree by keys alone; sidebar rows that say what's going on (done) |
 | **WEB1** | Web parity | The web client does what the CLI and TUI do, and the parity check covers it (done) |
@@ -1095,6 +1095,21 @@ Codex agents, a fake `gh`, temp repos with bare remotes):
 **Not yet:** `--from-issue` reads GitHub only; integration checks don't block a `ready` report;
 PR tables refresh on `cs pr` and landings, not from the PR poller. **Needs you:** a real
 multi-repo set of yours end to end (the experiment used toy repos), and a real `gh` merge train.
+
+**Removed (2026-11-17): change sets, pare-down batch 1.** The owner went deep, not wide, and
+never used them (`docs/review-2026-11/pare-down.md`). Gone from every surface: `ptyro cs` (alias
+`changeset`) and its subcommands, `cs new --from-issue` included; the TUI's sets view (`S`) and
+its `sets.*`/`set.*` actions; the web's Sets tab (`#/sets`, `g e`) and its `set.*` actions; the
+daemon's change-set runs, gates, ledger, set checkpoints, write fences, set addressing in mail
+and the lead's `cs_*` tools in `ptyro mcp`; templates (`~/.config/ptyro/changesets/`, a hub's
+`.ptyro/changesets/`); `Request::Cs`/`Reply::Cs` (protocol 1.41); `make changeset-demo`. A store
+migration deletes the change-set runs' rows (with their events and mail) and hub templates'
+trust; an old client that sends `cs` is told change sets were removed. Left behind on purpose,
+since they are the user's: set worktrees, branches, template files and the `refs/ptyro/cs/*`
+refs. Mail, runs, recipes, fan-out, leads and gates stay. Built with it, for every later batch:
+**retired keys** (SPEC §13.8), so a removed feature's settings are ignored, not an error, and
+`config check`, the doctor and both health views offer `ptyro config unset KEY`. RESEARCH:
+R-ORC-14 and R-ORC-12 marked, R-ORC-21 noted. SPEC §10.11, §15.5 and §15.7 keep one line each.
 
 ---
 

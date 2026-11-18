@@ -86,7 +86,7 @@ export const fixOf = (e) => e?.fix;
 /// `req` again with `f` said, where the request keeps that field; `null` when it has none.
 export function withFix(req, f) {
     const r = JSON.parse(JSON.stringify(req));
-    for (const o of [r, r.opts, r.op, r.op?.spec]) {
+    for (const o of [r, r.opts]) {
         if (o && typeof o === "object" && f.fix in o) {
             o[f.fix] = f.fix === "trust" ? f.fingerprint : true;
             return r;

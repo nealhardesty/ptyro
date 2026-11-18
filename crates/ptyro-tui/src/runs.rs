@@ -85,8 +85,6 @@ impl App {
                 },
             );
         }
-        let id = run.state.id.clone();
-        let set = run.state.changeset.is_some();
         self.keeping_run_selection(|app| {
             match app.runs.iter_mut().find(|r| r.state.id == run.state.id) {
                 Some(r) => *r = run,
@@ -94,13 +92,9 @@ impl App {
             }
             app.runs.sort_by_key(|r| std::cmp::Reverse(r.state.created_ms));
         });
-        if set {
-            self.refresh_set_nodes();
-            self.set_run_changed(&id);
-        }
     }
 
-    /// Change `runs`, keeping the runs list and the set list on the run they had selected.
+    /// Change `runs`, keeping the runs list on the run it had selected.
     pub(crate) fn keeping_run_selection(&mut self, change: impl FnOnce(&mut Self)) {
         let orch = self
             .orch
@@ -108,11 +102,6 @@ impl App {
             .filter(|o| o.view == View::List)
             .and_then(|o| self.runs.get(o.sel))
             .map(|r| r.state.id.clone());
-        let set = self
-            .sets_view
-            .as_ref()
-            .filter(|v| v.run.is_none())
-            .and_then(|v| self.set_runs().get(v.sel).map(|r| r.state.id.clone()));
         change(self);
         if let Some(id) = orch
             && let Some(i) = self.runs.iter().position(|r| r.state.id == id)
@@ -120,18 +109,11 @@ impl App {
         {
             o.sel = i;
         }
-        if let Some(id) = set
-            && let Some(i) = self.set_runs().iter().position(|r| r.state.id == id)
-            && let Some(v) = &mut self.sets_view
-        {
-            v.sel = i;
-        }
     }
 
     pub fn open_runs(&mut self) {
         // One full-screen view at a time.
         self.inspector = None;
-        self.sets_view = None;
         self.orch = Some(Orch { view: View::List, sel: 0, compare: None, loading: true });
         self.request(Pending::Runs, Request::RunList { active: false, limit: Some(100) });
     }
@@ -139,7 +121,6 @@ impl App {
     /// Open a run's page (from the inbox's gate entries, too).
     pub fn open_run(&mut self, id: String) {
         self.inspector = None;
-        self.sets_view = None;
         self.orch = Some(Orch { view: View::Run(id), sel: 0, compare: None, loading: false });
         self.request(Pending::Runs, Request::RunList { active: false, limit: Some(100) });
     }

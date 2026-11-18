@@ -251,14 +251,22 @@ pub async fn serve(daemon: Arc<Daemon>, stream: crate::listen::Stream, pid: Opti
                         // A request we can't read still gets an answer, so its caller doesn't
                         // wait forever (a newer client, a typo'd field).
                         #[derive(serde::Deserialize)]
+                        struct Tag {
+                            t: String,
+                        }
+                        #[derive(serde::Deserialize)]
                         struct Envelope {
                             t: String,
                             id: Option<u32>,
+                            req: Option<Tag>,
                         }
-                        if let Ok((Envelope { t, id: Some(rid) }, _)) = decode::<Envelope>(&bytes)
+                        if let Ok((Envelope { t, id: Some(rid), req }, _)) = decode::<Envelope>(&bytes)
                             && t == "request"
                         {
-                            let error = ptyro_core::Error::invalid(format!("the daemon couldn't read this request: {e}"));
+                            // One an older ptyro had says what went, not that it is unreadable.
+                            let error = req
+                                .and_then(|r| ptyro_protocol::retired_request(&r.t))
+                                .unwrap_or_else(|| ptyro_core::Error::invalid(format!("the daemon couldn't read this request: {e}")));
                             let _ = conn.out.send(ServerMsg::Response { id: rid, outcome: ptyro_protocol::Outcome::Err { error } }).await;
                         }
                     }

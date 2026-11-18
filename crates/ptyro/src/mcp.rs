@@ -28,8 +28,6 @@ use crate::cli::Ctx;
 /// works without `initialize`, so it is fine too).
 const VERSIONS: [&str; 5] = ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
-const CS_INSTRUCTIONS: &str = "You lead a ptyro change set: one change across several repositories, one member agent per repository. You read every member but never edit member code. Own the contract (CONTRACT.md; cs_contract_get, cs_contract_submit for the first revision, cs_contract_revise later: the members a change affects hear at once). Coordinate with cs_status, cs_assign and cs_send; members reach you through check_messages (questions, ready_for_integration, blocked_on). Look at their work with cs_member_diff, run cs_integration_check, take cs_checkpoint before risky steps, and ask the human with cs_request_gate. There is no push or merge tool: shipping is the human's train.";
-
 const CHAT_INSTRUCTIONS: &str = "Your user's other chats with you are searchable here: chat_search finds messages (words, \"phrases\", prefix*, -word, agent:codex, since:7d), chat_read reads a chat around a message, chat_list lists the recent ones. Use them when the user refers to something said before (\"as we discussed\", \"last week\"), and cite what you use as c:HANDLE/NODE.";
 
 /// The chat history tools (SPEC §22.10): what a chat's agent (and a lead whose policy says
@@ -367,103 +365,6 @@ fn tools() -> Vec<Value> {
     ]
 }
 
-/// A change set lead's tools (SPEC §15.5.9), plus the mailbox.
-fn cs_tools() -> Vec<Value> {
-    let s = |d: &str| json!({ "type": "string", "description": d });
-    let n = |d: &str| json!({ "type": "integer", "description": d });
-    let list =
-        |d: &str| json!({ "type": "array", "items": { "type": "string" }, "description": d });
-    let keep = [
-        "check_messages",
-        "ack",
-        "post_message",
-        "scratchpad_read",
-        "scratchpad_todo",
-        "scratchpad_add",
-    ];
-    let mut v = vec![
-        tool(
-            "cs_status",
-            "The set: members (agent status, ready, blocked_on, commits), the contract revision, open gates, and every issue with its suggested action.",
-            json!({}),
-            &[],
-            true,
-        ),
-        tool(
-            "cs_assign",
-            "Give a member a task (delivered between its turns).",
-            json!({ "member": s("member name"), "task": s("what to do; be complete") }),
-            &["member", "task"],
-            true,
-        ),
-        tool(
-            "cs_send",
-            "Message a member (or @all). interrupt stops its current turn first; use it only when the work in flight is wrong.",
-            json!({ "member": s("member name or @all"), "message": s("the message"), "kind": s("assign | answer | question | handoff (default assign)"), "interrupt": { "type": "boolean" } }),
-            &["member", "message"],
-            true,
-        ),
-        tool(
-            "cs_contract_get",
-            "The contract: the latest revision (or rev N), or the draft before r1.",
-            json!({ "rev": n("a revision number") }),
-            &[],
-            true,
-        ),
-        tool(
-            "cs_contract_submit",
-            "Record CONTRACT.md as a revision now; the first one goes to the human for approval, then the members start.",
-            json!({ "summary": s("what this revision says") }),
-            &[],
-            false,
-        ),
-        tool(
-            "cs_contract_revise",
-            "A new contract revision: the full text, or a unified diff against the current one. Members named in the changed sections' affects: lines (or `affects`) are told at once; the rest at their next idle.",
-            json!({ "text": s("the whole new contract"), "diff": s("a unified diff instead of text"), "affects": list("members it is for (default: from affects: lines)"), "summary": s("why") }),
-            &[],
-            false,
-        ),
-        tool(
-            "cs_member_diff",
-            "A member's changes against its base (committed and not).",
-            json!({ "member": s("member name") }),
-            &["member"],
-            false,
-        ),
-        tool(
-            "cs_integration_check",
-            "Run the set's integration checks (in the root, against the overlay) and the members' contract checks.",
-            json!({}),
-            &[],
-            false,
-        ),
-        tool(
-            "cs_checkpoint",
-            "Snapshot every member at once (multi-repo undo; the human restores).",
-            json!({ "label": s("what this point is") }),
-            &[],
-            false,
-        ),
-        tool(
-            "cs_request_gate",
-            "Ask the human a question; the answer comes back to you as a message.",
-            json!({ "question": s("what to decide"), "options": list("answers (default approve/reject)") }),
-            &["question"],
-            false,
-        ),
-        tool(
-            "cs_log",
-            "The set's ledger: events and messages, oldest first (after a seq).",
-            json!({ "since": n("the last seq you saw") }),
-            &[],
-            false,
-        ),
-    ];
-    v.extend(tools().into_iter().filter(|t| t["name"].as_str().is_some_and(|n| keep.contains(&n))));
-    v
-}
-
 fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a str> {
     a.get(k).and_then(Value::as_str)
 }
@@ -486,8 +387,6 @@ fn secs(a: &Value, k: &str) -> Option<u64> {
 struct Server {
     client: Client,
     lead: String,
-    /// The change set this session leads, if it does (M11).
-    set: Option<String>,
     /// The chat history tools: only them (a chat's agent), or beside a lead's (its policy).
     chat: ChatTools,
 }
@@ -507,90 +406,12 @@ impl Server {
         }
     }
 
-    async fn cs(&self, op: ptyro_run::wire::CsOp) -> Result<Value, Error> {
-        match self.client.request(Request::Cs { op }).await? {
-            Reply::Cs { value } => Ok(value),
-            other => Err(crate::cli::unexpected(other)),
-        }
-    }
-
     async fn call(&self, name: &str, a: &Value) -> Result<Value, Error> {
-        use ptyro_run::wire::{ContractAction, CsOp};
         if name.starts_with("chat_") && self.chat != ChatTools::None {
             return chat_call(&self.client, name, a).await;
         }
         if self.chat == ChatTools::Only {
             return Err(Error::invalid(format!("no tool named {name}")));
-        }
-        if let Some(rest) = name.strip_prefix("cs_") {
-            let set = self
-                .set
-                .clone()
-                .ok_or_else(|| Error::invalid("this session doesn't lead a change set"))?;
-            return match rest {
-                "status" => self.cs(CsOp::Show { set }).await,
-                "assign" => {
-                    self.cs(CsOp::Assign {
-                        set,
-                        member: need(a, "member")?,
-                        task: need(a, "task")?,
-                    })
-                    .await
-                }
-                "send" => {
-                    self.cs(CsOp::Msg {
-                        set,
-                        to: need(a, "member")?,
-                        text: need(a, "message")?,
-                        kind: arg(a, "kind").map(str::to_owned),
-                        interrupt: a.get("interrupt").and_then(Value::as_bool).unwrap_or(false),
-                    })
-                    .await
-                }
-                "contract_get" => {
-                    let rev = a.get("rev").and_then(Value::as_u64).map(|n| n as u32);
-                    self.cs(CsOp::Contract { set, action: ContractAction::Show { rev } }).await
-                }
-                "contract_submit" => {
-                    self.cs(CsOp::Contract {
-                        set,
-                        action: ContractAction::Submit {
-                            summary: arg(a, "summary").map(str::to_owned),
-                        },
-                    })
-                    .await
-                }
-                "contract_revise" => {
-                    self.cs(CsOp::Contract {
-                        set,
-                        action: ContractAction::Revise {
-                            text: arg(a, "text").map(str::to_owned),
-                            diff: arg(a, "diff").map(str::to_owned),
-                            affects: strings(a, "affects"),
-                            summary: arg(a, "summary").map(str::to_owned),
-                        },
-                    })
-                    .await
-                }
-                "member_diff" => self.cs(CsOp::Diff { set, member: need(a, "member")? }).await,
-                "integration_check" => self.cs(CsOp::Check { set }).await,
-                "checkpoint" => {
-                    self.cs(CsOp::Checkpoint { set, label: arg(a, "label").map(str::to_owned) })
-                        .await
-                }
-                "request_gate" => {
-                    self.cs(CsOp::Gate {
-                        set,
-                        question: need(a, "question")?,
-                        options: strings(a, "options"),
-                    })
-                    .await
-                }
-                "log" => {
-                    self.cs(CsOp::Log { set, since: a.get("since").and_then(Value::as_u64) }).await
-                }
-                other => Err(Error::invalid(format!("no tool named cs_{other}"))),
-            };
         }
         match name {
             "list_sessions" => self.lead(LeadOp::ListSessions).await,
@@ -770,17 +591,7 @@ pub async fn serve(ctx: &Ctx, chat_only: bool) -> Result<i32, Error> {
     } else {
         ChatTools::None
     };
-    // A change set's lead gets the set's tools instead of the worker ones (SPEC §15.5.9).
-    let set = match chat {
-        ChatTools::Only => None,
-        _ => match client.request(Request::Cs { op: ptyro_run::wire::CsOp::Whoami }).await {
-            Ok(Reply::Cs { value }) if value["role"] == "lead" => {
-                value["set"].as_str().map(str::to_owned)
-            }
-            _ => None,
-        },
-    };
-    let server = Arc::new(Server { client, lead, set, chat });
+    let server = Arc::new(Server { client, lead, chat });
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     let writer = tokio::spawn(async move {
         let mut out = tokio::io::stdout();
@@ -830,9 +641,8 @@ pub async fn serve(ctx: &Ctx, chat_only: bool) -> Result<i32, Error> {
                         "protocolVersion": version,
                         "capabilities": { "tools": { "listChanged": false } },
                         "serverInfo": { "name": "ptyro", "version": env!("CARGO_PKG_VERSION") },
-                        "instructions": match (server.chat, server.set.is_some()) {
-                            (ChatTools::Only, _) => CHAT_INSTRUCTIONS,
-                            (_, true) => CS_INSTRUCTIONS,
+                        "instructions": match server.chat {
+                            ChatTools::Only => CHAT_INSTRUCTIONS,
                             _ => INSTRUCTIONS,
                         },
                     }),
@@ -842,9 +652,8 @@ pub async fn serve(ctx: &Ctx, chat_only: bool) -> Result<i32, Error> {
                 let _ = tx.send(reply(&id, json!({})));
             }
             "tools/list" => {
-                let mut list = match (server.chat, server.set.is_some()) {
-                    (ChatTools::Only, _) => Vec::new(),
-                    (_, true) => cs_tools(),
+                let mut list = match server.chat {
+                    ChatTools::Only => Vec::new(),
                     _ => tools(),
                 };
                 if server.chat != ChatTools::None {
@@ -913,25 +722,13 @@ mod tests {
 
     #[test]
     fn tool_definitions_are_well_formed() {
-        for t in [tools(), cs_tools(), chat_tools()] {
+        for t in [tools(), chat_tools()] {
             well_formed(&t);
         }
         let mut all = tools();
         all.extend(chat_tools());
         well_formed(&all);
         assert_eq!(marked("a \u{2}hit\u{3} b"), "a **hit** b");
-        let names: Vec<String> =
-            cs_tools().iter().map(|x| x["name"].as_str().unwrap().to_owned()).collect();
-        // No shipping tools for a set's lead, by design.
-        assert!(
-            names
-                .iter()
-                .all(|n| !n.contains("push") && !n.contains("merge") && !n.contains("land"))
-        );
-        assert!(
-            names.contains(&"cs_contract_revise".to_owned())
-                && names.contains(&"check_messages".to_owned())
-        );
     }
 
     fn well_formed(t: &[Value]) {

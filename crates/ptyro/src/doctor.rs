@@ -132,6 +132,9 @@ pub(crate) async fn collect(ctx: &Ctx, quick: bool, terminal_too: bool, fresh: b
                 };
                 r.add("ptyro", "config mode", Level::Warn, text);
             }
+            if let Ok(text) = std::fs::read_to_string(&config_path) {
+                retired(&text, None, &mut r);
+            }
             // Every shell ptyro starts reads its integration (SPEC §8.7): a folder others can
             // write to is one they could slip a line into, until ptyro writes it again.
             let shell = ctx.paths.data.join("integrations").join("shell");
@@ -514,6 +517,13 @@ async fn scripts(ctx: &Ctx, r: &mut Report) {
     let Ok(c) = ctx.connect(false).await else { return };
     let Ok(Reply::Projects { projects }) = c.request(Request::ProjectList).await else { return };
     for p in projects.iter().filter(|p| p.machine.is_none()) {
+        for (file, shared) in
+            [(ptyro_core::project::FILE, true), (ptyro_core::project::LOCAL_FILE, false)]
+        {
+            if let Ok(text) = std::fs::read_to_string(p.root.join(file)) {
+                retired(&text, Some((&p.slug, shared)), r);
+            }
+        }
         let Ok(pc) = ptyro_core::project::ProjectConfig::load(&p.root, &p.root) else { continue };
         let crlf = pc.scripts.crlf_files(&p.root);
         if !crlf.is_empty() {
@@ -543,6 +553,31 @@ async fn scripts(ctx: &Ctx, r: &mut Report) {
                 );
             }
         }
+    }
+}
+
+/// Each key a removed feature had that a config file still sets (SPEC §13.8): ignored, so a
+/// warning with the command that takes it out (the TUI runs it, the web removes it itself, from
+/// `data`). `project`: a repository's file (its slug; `true` for the committed `.ptyro.toml`).
+fn retired(text: &str, project: Option<(&str, bool)>, r: &mut Report) {
+    for f in ptyro_core::retired::found(text) {
+        let (name, unset) = match project {
+            None => ("config retired".to_owned(), format!("ptyro config unset {}", f.key)),
+            Some((slug, shared)) => (
+                format!("{slug} config retired"),
+                format!(
+                    "ptyro config unset {} -p {slug}{}",
+                    f.key,
+                    if shared { " --shared" } else { "" }
+                ),
+            ),
+        };
+        r.add("ptyro", &name, Level::Warn, f.note(&unset));
+        r.add_data(serde_json::json!({
+            "retired": f.key,
+            "project": project.map(|(s, _)| s),
+            "shared": project.is_some_and(|(_, s)| s),
+        }));
     }
 }
 

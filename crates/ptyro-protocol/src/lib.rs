@@ -40,7 +40,20 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 40 };
+pub const PROTO: Version = Version { major: 1, minor: 41 };
+
+/// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
+/// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
+pub const RETIRED_REQUESTS: &[(&str, &str)] = &[("cs", "change sets")];
+
+/// The answer to a request this ptyro no longer has (see [`RETIRED_REQUESTS`]); `None` for any
+/// other `t`.
+pub fn retired_request(t: &str) -> Option<Error> {
+    let (_, what) = RETIRED_REQUESTS.iter().find(|(name, _)| *name == t)?;
+    Some(Error::invalid(format!(
+        "this ptyro no longer has {what} (removed 2026-11-17); the client that asked is older than the daemon: update it (`ptyro update`)"
+    )))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1203,11 +1216,6 @@ pub enum Request {
         lead: String,
         op: LeadOp,
     },
-    /// Change sets (M11): `ptyro cs …` and a set lead's `cs_*` tools. Agents may only do what
-    /// their role allows; shipping is the human's.
-    Cs {
-        op: ptyro_run::wire::CsOp,
-    },
     // ── Chats (1.22, SPEC §22.14). A `chat` is an address: `7f3k`, `c:7f3k`, a title that
     // matches one chat, `@last`, or `laptop2:c:7f3k` for another machine's. ──
     /// A new chat (in the workspace given, else `main`); with `prompt`, its first message.
@@ -1679,7 +1687,6 @@ impl Request {
                 | Request::ProjectRemove { .. }
                 | Request::Shutdown { .. }
                 | Request::Convert { .. }
-                | Request::Cs { .. }
                 | Request::RecipeRun { .. }
         )
     }
@@ -1688,7 +1695,6 @@ impl Request {
     /// button; `None` when it can't say that.
     pub fn with_fix(&self, again: &ptyro_core::error::Again) -> Option<Request> {
         use ptyro_core::error::Again as A;
-        use ptyro_run::wire::CsOp;
         let mut r = self.clone();
         match (&mut r, again) {
             (Request::Remove { stop, .. }, A::Stop) => *stop = true,
@@ -1700,19 +1706,6 @@ impl Request {
             (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
             (Request::Shutdown { force } | Request::Convert { force, .. }, A::Force) => {
                 *force = true
-            }
-            (
-                Request::Cs {
-                    op:
-                        CsOp::Restore { force, .. } | CsOp::Drop { force, .. } | CsOp::Rm { force, .. },
-                },
-                A::Force,
-            ) => *force = true,
-            (Request::Cs { op: CsOp::Drop { ignore_dependents, .. } }, A::IgnoreDependents) => {
-                *ignore_dependents = true
-            }
-            (Request::Cs { op: CsOp::New { spec } }, A::Trust { fingerprint }) => {
-                spec.trust = Some(fingerprint.clone())
             }
             (Request::RecipeRun { trust, .. }, A::Trust { fingerprint }) => {
                 *trust = Some(fingerprint.clone())
@@ -1967,10 +1960,6 @@ pub enum Reply {
     },
     /// A lead op's answer (JSON, as `ptyro mcp` returns it).
     LeadResult {
-        value: serde_json::Value,
-    },
-    /// A change-set op's answer (`ChangeSetInfo`, `[LedgerEntry]`, notes…, as JSON).
-    Cs {
         value: serde_json::Value,
     },
     /// What a hook should print for the agent (a Stop bounce, a PreToolUse denial).

@@ -521,22 +521,18 @@ impl Daemon {
         let cwd = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).cwd.clone();
         // The path a guard or lease sees: relative to the worktree, `..` folded and symlinks
         // resolved, so `src/../.github/x` or a link can't slip past a pattern.
-        let rel =
-            |f: &str| -> String {
-                let p = PathBuf::from(f);
-                let abs =
-                    crate::changesets::real_path(&crate::changesets::normalize(
-                        &if p.is_absolute() { p } else { cwd.join(p) },
-                    ));
-                match root.as_deref().map(crate::changesets::real_path) {
-                    Some(r) => ptyro_core::os::slash_path(
-                        &abs.strip_prefix(&r)
-                            .map(|x| x.to_string_lossy().into_owned())
-                            .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
-                    ),
-                    None => ptyro_core::os::slash_path(f.trim_start_matches("./")),
-                }
-            };
+        let rel = |f: &str| -> String {
+            let p = PathBuf::from(f);
+            let abs = real_path(&normalize(&if p.is_absolute() { p } else { cwd.join(p) }));
+            match root.as_deref().map(real_path) {
+                Some(r) => ptyro_core::os::slash_path(
+                    &abs.strip_prefix(&r)
+                        .map(|x| x.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| abs.to_string_lossy().into_owned()),
+                ),
+                None => ptyro_core::os::slash_path(f.trim_start_matches("./")),
+            }
+        };
         if let Some(g) = &guard {
             if let Some(c) = &command
                 && let Some(d) = g.deny_cmds.iter().find(|d| command_matches(c, d))
@@ -556,10 +552,6 @@ impl Daemon {
         }
         if files.is_empty() {
             return None;
-        }
-        // A change set's write fences (M11.4).
-        if let Some(r) = self.cs_fence(s, &files) {
-            return Some(r);
         }
         let project =
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.project.clone();
@@ -603,7 +595,6 @@ const CHECK_TAIL_BYTES: u64 = 256 << 10;
 /// How a command run by [`run_to_log`] ended.
 pub(crate) struct Ran {
     pub code: Option<i32>,
-    pub success: bool,
     /// The end of its output (the whole of it is in the log file).
     pub text: String,
     /// Why it was stopped: it ran out of time, or wrote too much.
@@ -663,7 +654,6 @@ pub(crate) async fn run_to_log(
     }
     Ok(Ran {
         code: status.and_then(|s| s.code()),
-        success: status.is_some_and(|s| s.success()),
         text: String::from_utf8_lossy(&text).into_owned(),
         stopped,
     })
@@ -722,6 +712,40 @@ pub fn tool_target(adapter: &str, p: &Value) -> (String, Vec<String>, Option<Str
 }
 
 /// `git push origin x` matches `git push`; `cd a && git push` too.
+/// `path` with its longest existing ancestor canonicalized (symlinks resolved); the rest, not
+/// created yet, appended as is.
+fn real_path(path: &Path) -> PathBuf {
+    let mut base = path.to_path_buf();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(c) = ptyro_core::os::canonicalize(&base) {
+            return rest.iter().rev().fold(c, |acc, x: &std::ffi::OsString| acc.join(x));
+        }
+        match (base.file_name().map(std::ffi::OsStr::to_os_string), base.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                base = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// `a/./b/../c` → `a/c`, without touching the file system.
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn command_matches(cmd: &str, deny: &str) -> bool {
     let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     let (cmd, deny) = (norm(cmd), norm(deny));
@@ -745,6 +769,12 @@ pub fn deny_output(adapter: &str, reason: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paths_normalize_lexically() {
+        assert_eq!(normalize(Path::new("/r/web/../api/x.go")), PathBuf::from("/r/api/x.go"));
+        assert_eq!(normalize(Path::new("/r/./a")), PathBuf::from("/r/a"));
+    }
 
     #[test]
     fn tool_targets_and_command_matching() {
@@ -778,12 +808,12 @@ mod tests {
         c.arg("-c").arg("while :; do echo 0123456789abcdef0123456789abcdef; done");
         let ran = run_to_log(c, &log, Duration::from_secs(30), 256 << 10).await.unwrap();
         assert!(ran.stopped.as_deref().is_some_and(|w| w.contains("output")), "{:?}", ran.stopped);
-        assert!(!ran.success && ran.text.len() as u64 <= CHECK_TAIL_BYTES);
+        assert!(ran.code != Some(0) && ran.text.len() as u64 <= CHECK_TAIL_BYTES);
         // A normal check: its exit code, its output, nothing stopped.
         let mut c = tokio::process::Command::new("sh");
         c.arg("-c").arg("echo out; echo err >&2; exit 3");
         let ran = run_to_log(c, &log, Duration::from_secs(30), 1 << 20).await.unwrap();
-        assert_eq!((ran.code, ran.success, ran.stopped.is_none()), (Some(3), false, true));
+        assert_eq!((ran.code, ran.stopped.is_none()), (Some(3), true));
         assert!(ran.text.contains("out") && ran.text.contains("err"), "{}", ran.text);
         let mode = std::os::unix::fs::PermissionsExt::mode(
             &std::fs::metadata(&log).unwrap().permissions(),

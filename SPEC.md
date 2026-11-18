@@ -109,7 +109,7 @@ Status markers used below:
   - Waivers are for commands that are another program's tool (agents' own mail, hooks, shell
     completions), never for "not built yet".
   - **Creating shows every option.** *(owner, 2026-11-09)* Whatever a client creates (a
-    workspace, profile, session, worktree, project, shell, change set, fan-out, recipe run,
+    workspace, profile, session, worktree, project, shell, fan-out, recipe run,
     PR, device, machine…), its form shows every option the CLI's command takes, each with its
     default visible and, wherever the answers are known (profiles, agents, projects,
     workspaces, recipes), as a pick rather than free text. The quick path stays quick: ⏎ (or
@@ -182,12 +182,12 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
 - **One name policy** (owner, 2026-11-09). Every name a person, an agent or a script gives
   follows the same rule, `names::validate`: `[a-z0-9._-]`, 1–64 characters, not all digits, not
   starting with `.` or `-`, no `..`, not ending in `.` or `.lock`. That covers sessions (and
-  shells), worktrees, workspaces, profiles, change sets, a fan-out's name prefix, a lead's name
+  shells), worktrees, workspaces, profiles, a fan-out's name prefix, a lead's name
   for its worker, machines, paired devices, and the config panel's named members (agents,
-  tools, …). A change set's name and a fan-out's prefix are at most 40 characters, kept short
-  because member names are appended (`<set>-<member>`, `<prefix>-<agent>`); the fix offered
+  tools, …). A fan-out's prefix is at most 40 characters, kept short
+  because agent names are appended (`<prefix>-<agent>`); the fix offered
   then fits in 40 too (`names::validate_within`).
-  - **Given names are refused, never rewritten.** `cs new my_fix` makes `my_fix`. A bad one is an
+  - **Given names are refused, never rewritten.** `ws new my_fix` makes `my_fix`. A bad one is an
     error that offers the fix: `invalid name "My Feature": 'M' (uppercase) isn't allowed (only
     a-z 0-9 . _ -); try "my-feature"` (`names::tidy`). An empty name is refused, never replaced
     by a stand-in.
@@ -198,7 +198,7 @@ Workspace 1──* Chat 1──* Node (a tree) ; Chat 1──* Conv ── its e
   - **Derived names may be tidied silently**, since they are no one's input: names made from a
     title, a prompt, a directory, a recipe's template (`names::derive`, always valid, or none so
     the caller picks its own fallback), a machine's name from what it calls itself, and names
-    ptyro composes itself (`<set>-<member>`, a step's agent, `judge`). A taken name gets `-2`,
+    ptyro composes itself (a step's agent, `judge`). A taken name gets `-2`,
     `-3` (`names::numbered`), its base cut so the whole stays within 64.
   - **Project slugs** fold to the narrower `[a-z0-9-]`, at most 40 (`model::slugify`, built on the
     same `names::fold`). A slug is derived once and stored, and `<data>/worktrees/<slug>/` holds
@@ -263,8 +263,7 @@ inside them, so CLI commands default to the worktree you're standing in. Ids are
 show the suggestion before ⏎ (§11.2h).
 
 **One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
-way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, runs, change
-sets, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
+way: sessions, worktrees, projects, workspaces, profiles, chats and their messages, runs, devices, archived worktrees and machines. The code is `ptyro_core::lookup`; each resolver
 uses it, so the rules can't drift apart.
 
 1. **Order**: an exact name (a project's slug) → the qualified form where the kind has one
@@ -1084,15 +1083,8 @@ Push messages have no id.
   `POST /api/request`).
 
 **[built M11] Protocol 1.9** (additive):
-- **Change sets:** `Cs{op}` → `Cs{value}` (JSON). `op` is one of `new{spec}`, `list`,
-  `show{set}`, `log{set, since}`, `whoami`, `msg{set, to, text, kind, interrupt}`,
-  `ready{set, member, note}`, `blocked{set, on, member, note}`, `assign{set, member, task}`,
-  `contract{set, action}` (`show`, `history`, `diff`, `submit`, `revise`), `diff{set, member}`,
-  `check`, `checkpoint`, `restore`, `overlay`, `commit`, `push`, `pr`, `land`, `add`, `drop`,
-  `rm`, `gate{set, question, options}` and `templates`. Values are `ChangeSetInfo`,
-  `[LedgerEntry]`, `[TemplateInfo]` or small objects (§15.7, `docs/cli-json.md`).
-- **Runs:** `RunKind::Changeset`; `RunState` gains `changeset`; `RunEvent` gains `lead_set` and
-  `cs` (a `CsEvent`, tagged `c`).
+- **Change sets:** `Cs{op}` → `Cs{value}`, `RunKind::Changeset` and the run state and events
+  that carried a set. Removed on 2026-11-17 with change sets (§15.5).
 - `SpawnSpec` gains `mcp` (give the agent `ptyro mcp`); `WorktreeSpec` gains `path` (put the
   worktree there instead of `worktrees.location`).
 
@@ -1182,6 +1174,13 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built 2026-11-17] Protocol 1.41** (a removal): change sets are gone (§15.5). `Request::Cs`,
+`Reply::Cs`, `RunKind::Changeset`, `RunEvent::LeadSet`, `SpawnSpec.mcp` and the fix kind
+`ignore_dependents` were removed. A request the daemon can't read is still answered (§6.3), and
+one an older ptyro had (`RETIRED_REQUESTS` in `ptyro-protocol`; `cs` first) says what went: "this
+ptyro no longer has change sets (removed 2026-11-17)…", with `ptyro update` for the older client.
+`ptyro serve`'s one-shot POST answers such a request `410 Gone` with the same words.
 
 **[built 2026-11-11] Protocol 1.40** (additive, §24.8a): `SelfUpdate` → `Session` (this machine
 updates its own ptyro in a session) and `MachineUpdate{name}` → `Session` (that machine is asked
@@ -1372,12 +1371,11 @@ the CLI adds the flag, the TUI and the web a button or a confirmation. A test
 **The way through is data, not words** (protocol 1.38). A refusal that has one carries
 `Error.fix`: `{fix, label, fingerprint?}`, where `fix` says what the same request says the
 second time: `force`, `stop_sessions`, `stop`, `trust` (with the `fingerprint` read),
-`release`, or `ignore_dependents`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
+or `release`. The daemon sets it exactly where that way applies (removing a running session: `stop`,
 "Stop and remove"; a busy worktree's remove or archive: `stop_sessions`; unsaved work, a mid-turn
-convert, a daemon stop with sessions, a change set's restore, drop or remove: `force`; an
-untrusted recipe or template: `trust`; forgetting a project with running sessions: `release`,
-"Let them go"; dropping a change-set member others depend on: `ignore_dependents`, "Drop it
-anyway"), never for a refusal it doesn't undo (removing while it restarts, a restart while
+convert, a daemon stop with sessions: `force`; an
+untrusted recipe: `trust`; forgetting a project with running sessions: `release`,
+"Let them go"), never for a refusal it doesn't undo (removing while it restarts, a restart while
 it runs). The machine's own operations do the same (a profile in use: `force`, "Remove anyway"),
 and the web's HTTP API passes `fix` through. Clients act on `fix`, never on an error code that
 happens to go with it. The CLI prints "(again with `--force`: remove anyway)"
@@ -2378,9 +2376,7 @@ modes, other-workspace badges and the per-workspace inbox tabs.
   keep it unique. `ptyro project rename P NEW` changes it (§2.3; `.ptyro.toml` only names a
   project when it is added). Sessions, workspaces, trust and pins refer to the project by id,
   so they follow on their own; its worktrees' `project/name` and its archives
-  (`wt restore NEW/name`) follow it. A change set's member keeps the name it was added with:
-  that is the member's directory in the set. A change-set template that names its members by
-  slug doesn't follow either: after a rename, edit the template (or name the project by id).
+  (`wt restore NEW/name`) follow it.
   On another machine's project (MM1.B), the clients offer and check the name it has there
   (`app`, not `laptop2:app`), and the daemon takes the `laptop2:` off a rename's new name where it
   routes the request. Sessions and workspaces are renamed the same way.
@@ -2561,7 +2557,7 @@ Scripts are defined in the project config (§13.3): `setup`, `run.<name>` (named
   --id Git.Git -e`), by the script's start and by `doctor` (`scripts <project> shell`). cmd's
   command text goes raw (after `/c`): it doesn't read Rust's `\"` quoting. A shell other than
   `auto` is part of the trust fingerprint (`auto` isn't, so scripts trusted before still are).
-  Verify checks (§15.6.5) resolve the same way; a change set's checks keep `sh -c` on Unix.
+  Verify checks (§15.6.5) resolve the same way.
 - **[built WIN6] Line endings:** a bash script (a `.sh` file, or a `#!` line naming a POSIX
   shell) named by a project's scripts with Windows (CRLF) line endings is a `doctor` finding
   (`scripts <project>`, every platform: bash reads the `\r` as part of each command). `ptyro
@@ -3028,9 +3024,7 @@ or containers (backlog: sandbox per profile).
 
 ### 10.11 Change sets
 
-A **change set** bundles linked worktrees of several projects (one per repo, same branch) into
-one coordinated change with a lead agent, a contract and a dependency-ordered ship train. Its
-worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
+Removed on 2026-11-17 (pare-down): the owner never used them.
 
 ---
 
@@ -3119,7 +3113,7 @@ worktrees are ordinary §10 worktrees. The orchestration design is in §15.5.
   whitespace and `~ ^ : ? * [ \` for `-`, and drops them or a `-` at the start. It applies to
   every interactive name field in the TUI and the web (`slug` on a form field): session rename,
   the task box's name, new session, shell and worktree, workspace new and rename, profile new
-  and rename, a change set's and a fan-out's name, a paired device's, config-panel members,
+  and rename, a fan-out's name, a paired device's, config-panel members,
   machine names, and the branch rename. The CLI
   and the daemon stay strict: a bad name given as an argument is an error, so a script never
   gets a name it didn't write.
@@ -3417,10 +3411,10 @@ learning anything up front.
   unpair|rename_branch`, `workspace.rename|remove|profile|notify|mute`, `pr.open` (the PR's
   worktree and session, else a new worktree on it). The long tail is
   `crates/ptyro-tui/src/cli_actions.rs`: a table of `ptyro …` templates whose words come from the
-  selection (`{session}`, `{worktree}`, `{project}`, `{set}`), a pick (`{profile}`, `{agent}`,
+  selection (`{session}`, `{worktree}`, `{project}`), a pick (`{profile}`, `{agent}`,
   `{choose:…}`) or a question (`{ask:…}`, optional when left empty; `{vars}` → `--var k=v`), then
   run in a split: profiles (login included), recipes, checkpoints, verify, messages, PR replies,
-  leases, the radar, every change-set command, serving, pairing (its QR code in the split),
+  leases, the radar, serving, pairing (its QR code in the split),
   devices, replay and export, `config show`.
 - **About** (UX2.1, `crates/ptyro/src/about.rs`, `crates/ptyro-tui/src/about.rs`,
   `aboutView` in `web/src/settings.ts`). `ptyro about [--json]` is one document: the version and
@@ -3626,8 +3620,8 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   - **active**: running and busy now: an agent that is `working`, `blocked` (it waits for you: you
     want to see it) or `starting`, or a shell with a command running (OSC 133). An agent between
     turns, a shell at its prompt and a command session with no status are running, not active.
-  - A header (machine/workspace, project, worktree) is listed only while something under it is; a
-    change set shows only while its lead does. Folds, numbering (`1`–`9`) and `j`/`k` follow the
+  - A header (machine/workspace, project, worktree) is listed only while something under it is.
+    Folds, numbering (`1`–`9`) and `j`/`k` follow the
     filter. The count in a chip is of every real session, not of what is listed.
   - Chats aren't sessions: while it filters, a workspace's CHATS section keeps only the chat last
     written to (`last_ms`), and none under a workspace that isn't listed.
@@ -3680,8 +3674,8 @@ action's key. Differences from the proposal below:
 - In the sidebar, `⏎`/`Space` fold or open, `h`/`l` fold and unfold, and `x` on a worktree row
   removes it (with confirmation and the safety checks).
 - **Fold everything** (`Z` in the sidebar, `C-z` after the prefix; `sidebar.fold_all`): every key
-  the sidebar can fold (`Inputs::fold_keys`: change sets, `ws:<name>`, `chats:<name>`, projects,
-  worktrees) goes into `collapsed`, so the sidebar is the change sets, then one line a workspace,
+  the sidebar can fold (`Inputs::fold_keys`: `ws:<name>`, `chats:<name>`, projects,
+  worktrees) goes into `collapsed`, so the sidebar is one line a workspace,
   and opening one by hand shows its levels folded too. The set folded before is kept
   (`folded_before`) until `Z` puts it back or you fold or open a row by hand (`fold_by_hand`; a
   workspace's header folds like a project's, by key or click): folding again after going to a
@@ -3731,7 +3725,6 @@ The full sidebar table (no prefix) is in [`docs/keys.md`](docs/keys.md#in-the-si
 | `C-c` / `e` | **[proposed SH]** a new shell in SHELLS (tmux's `c`) / the shells menu (a digit picks one) |
 | `b` | broadcast prompt to selected sessions (multi-select with `space` in sidebar) |
 | `w` | workspace switcher (shows each workspace's profile label and attention badges) |
-| `S` | change sets (§15.5.10): the list; in the sidebar on a set row, that set |
 | `d` | detach (TUI exits, everything keeps running) |
 | `C-d` | quit ptyro (`app.quit`): after a yes, stop the daemon and every session, then exit |
 | `q` | send the prefix key itself to the program (`prefix.send`) |
@@ -3779,7 +3772,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
   `profile.new` (name, label, colour, each agent's directory to adopt, git identity, SSH
   key, matching remotes, then a login); the task box's `C-o` and `N` (task, agent, shell or
   command, profile, where, start from, base, name, title, verify, structured, setup,
-  fetch); `project.add` and `project.workspaces`; `shells.command`; `sets.new`, `set.add`,
+  fetch); `project.add` and `project.workspaces`; `shells.command`;
   `recipe.run` (a field per variable), `session.lead`, fan-out (`F` in the runs view), `P`
   in the inspector, `remote.pair`, `machine.add`, `machine.pair`, `chat.import`.
 - **Quick creates stay quick.** `n` ⏎ (the task box), `C-q C-c` (a shell, at once) and
@@ -3813,7 +3806,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     (`no_flag_insists_on_an_equals_sign`). `config … -p .` is the repository you're in.
   - A project or worktree address that starts with `.` (`.`, `../api`) is a path from the
     directory you run the command in, never the daemon's, in every command that takes one
-    (`cli::addr_here`: `ws add-project`, `cs add`, `cs new --projects`, `new --wt`, `shell`,
+    (`cli::addr_here`: `ws add-project`, `new --wt`, `shell`,
     `shells adopt` as much as `wt`/`project` commands).
   - A command that starts a session you'd work in (`new`, `wt new --agent`, `shells new`,
     `shells split`, `chat task`) attaches in a terminal unless `-d/--detach`; `--json` prints
@@ -3830,7 +3823,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
 - Destructive commands ask for confirmation on a TTY; `--yes` for scripts.
 - **Removing is one rule in every client** *(owner, 2026-11-09)*. Every destructive command
   (`chat rm`, `rm` of a dormant session, `project rm`, `wt rm`, `wt archive-rm`, `ws rm`, `profile rm`, `devices revoke`,
-  `machine rm`, `cs drop`, `cs rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
+  `machine rm`, `discard`, `config rm`, `review rm --all`; `gc` asks per
   item) asks on a
   terminal unless `-y`/`--yes` (`cli::ask_first`); with no terminal and no `--yes` it refuses
   (exit 5, `… (no terminal to ask: pass --yes)`) and changes nothing. The TUI and the web always
@@ -3846,7 +3839,7 @@ holding every option of the matching CLI command (§1.3, "Creating shows every o
     their id, archives by name or handle, several of one name listed, never picked).
   - **Resolved, then asked.** The CLI resolves the address before it asks, so a typo is "not
     found" without a question, and the question names what was found (`wt rm`, `ws rm`,
-    `project rm`, `cs drop`/`rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`,
+    `project rm`, `discard`, `machine rm`, `devices revoke`, `review rm --all`,
     `wt archive-rm` (through `WorktreeArchiveGet`, which resolves as restoring and deleting do),
     `profile rm` (in the config file); `chat rm`'s question comes from the daemon after it
     resolves). What is removed after the yes is what was asked about, by its id or exact name,
@@ -4562,6 +4555,24 @@ prompts) are **collections**: their fields are the entries whose key reads `agen
   offers the restart; scrollback, recording, ports, agents and profiles apply to what starts
   next.
 
+### 13.8 Retired keys **[built 2026-11-17]**
+
+A feature that is removed can leave its keys in people's files, and `Config` and `ProjectConfig`
+refuse a key they don't know (`deny_unknown_fields`: a typo is an error, with its line). The keys
+a removed feature had are listed once, in `ptyro-core` (`retired.rs`, `RETIRED`: the dotted path
+or a table's, the day it went, one line of why); later removals add theirs, and nothing is taken
+out. Such a key is **accepted and ignored**: `Config::parse` takes it out of the text before the
+parser reads it (`toml_edit`, so the file's other errors keep their lines), `ProjectConfig::parse`
+out of the table, so an old config and an old `.ptyro.toml` load, and the daemon starts. It is
+**reported, with its fix**: `ptyro config check` (a note, and `retired` in `--json`) and
+`ptyro doctor` (a `warn` in `ptyro`, `config retired` or `<slug> config retired` for a
+repository's file, `data: {retired, project, shared}`) say "KEY is no longer used (removed DATE:
+why): remove it, `ptyro config unset KEY`" (`-p SLUG [--shared]` for a repository). `config
+unset` takes a retired key out (the rest of the file as it was); the TUI's health list runs that
+command on ⏎, and the web's Health page offers "Remove KEY", which is `settings.apply` with that
+unset. Change sets had no settings, so the table starts empty; the tests retire a key of their
+own (`PTYRO_TEST_RETIRED`, read only by a debug build).
+
 ### 13.6 The scratchpad **[built NOTE1; NOTE1.7 tried and dropped]**
 
 One persistent notes file for ideas and bugs: plain Markdown, the same in every session and
@@ -4716,14 +4727,6 @@ CREATE TABLE inbox (id INTEGER PRIMARY KEY, session_id TEXT, at INTEGER, kind TE
 CREATE TABLE trust (project_id TEXT REFERENCES project ON DELETE CASCADE, scope TEXT NOT NULL,
                     fingerprint TEXT NOT NULL, approved_at INTEGER, PRIMARY KEY (project_id, scope));
 CREATE TABLE run (id TEXT PRIMARY KEY, kind TEXT, spec JSON, state TEXT, created_at INTEGER, ended_at INTEGER);
-CREATE TABLE changeset_member (run_id TEXT REFERENCES run ON DELETE CASCADE,   -- §15.5 (kind = changeset)
-                               project_id TEXT REFERENCES project, worktree_id TEXT REFERENCES worktree,
-                               role TEXT NOT NULL,            -- lead | member
-                               agent TEXT, session_id TEXT, depends_on JSON, overlay TEXT,
-                               state TEXT, PRIMARY KEY (run_id, project_id));
-CREATE TABLE changeset_checkpoint (run_id TEXT REFERENCES run ON DELETE CASCADE, n INTEGER,
-                                   label TEXT, refs JSON,   -- {project: {head, snapshot}}
-                                   created_at INTEGER, PRIMARY KEY (run_id, n));
 CREATE TABLE run_message (id INTEGER PRIMARY KEY, run_id TEXT REFERENCES run ON DELETE CASCADE,
                           at INTEGER, sender TEXT, recipient TEXT, kind TEXT, body JSON, acked_at INTEGER);
 CREATE TABLE kv (key TEXT PRIMARY KEY, value JSON);
@@ -4771,7 +4774,8 @@ makes resumable agents `dormant` (§7.5), and mutes persist in `kv`.
   times, `hop`, `priority` and `expires_at`;
 - `lease` (holder, pattern, project, exclusive, reason, expiry).
 
-No `changeset_*` tables: a change set (M11) is a run whose projection carries its members, contract and train (§15.7.2).
+No `changeset_*` tables: a change set (M11) was a run (kind `changeset`). Change sets were removed on
+2026-11-17 (§15.5), and a migration deletes those runs' rows.
 
 **[built UX1.24] Store v5** (migration 5): `session.title` and `worktree.title`. A session's
 upsert also rewrites its `worktree_id` and `project_id`, since a session can now move into a
@@ -4892,204 +4896,10 @@ addresses (`@idle`, `@codex`, `@all`). **Policy limits** (max sessions per run, 
 allowed worktree targets, no destructive git ops) are enforced by the daemon, not trusted to the
 agent.
 
-### 15.5 Change sets — one change across several repos **[built M11; what was built, and where it differs, is §15.7]**
+### 15.5 Change sets **[removed 2026-11-17]**
 
-The owner regularly needs **one coordinated change across several repositories**: an API field
-added in `api`, consumed in `web`, exposed in `sdk`, documented in `docs`. Agents can coordinate
-that by hand, but nothing gives the work one name, one place, one status and one safe way to ship.
-Most worktree tools stop at a single repo, for real reasons: git, branches, PRs and CI are
-per-repo, an agent starts in one directory, and cross-repo commits can't be atomic. A change set
-doesn't pretend otherwise. It gives the multi-repo change a lead, a contract, a shared timeline,
-safe checkpoints and an explicit ship order, and is honest about partial states.
-
-#### 15.5.1 Shape
-
-```text
-change set "add-user-tier"   (workspace: work · profile: work)
-├─ lead       claude   · cwd = change-set root · sees every member, read-only by policy
-├─ api        codex    · worktree api/   branch add-user-tier   depends_on: —
-├─ sdk        claude   · worktree sdk/   branch add-user-tier   depends_on: api
-└─ web        claude   · worktree web/   branch add-user-tier   depends_on: api, sdk
-root: data/changesets/add-user-tier/
-      ├─ CHANGESET.md      generated brief: goal, members, roles, order, conventions
-      ├─ CONTRACT.md       the cross-repo contract (owned by the lead, versioned by ptyro)
-      ├─ api/ sdk/ web/    the members' worktrees (ordinary ptyro worktrees, §10)
-      └─ .ptyro/           ledger, checkpoints, generated build overlay
-```
-
-- A change set is a **Run** of kind `changeset` (§15.3 storage, mailbox and gates reused). It
-  lives in one workspace and therefore runs under one profile (§10.10). Every member must resolve
-  to that same profile, or creation is refused: no accidental cross-account sets.
-- **Members** are projects of that workspace. Each gets an ordinary worktree on the shared branch
-  name, so every single-repo feature and safety rule (§10.4–§10.8) applies unchanged. Members
-  may have different base branches (`api` off `main`, `web` off `develop`).
-- The **default layout** is decided by the owner: **one lead plus one agent per member**. Each
-  member agent's adapter comes from its project (`default_agent`), so `api` may run Codex while
-  `web` runs Claude. A `solo` layout (one agent across all members) and `manual` (no agents; just
-  the linked worktrees and lockstep git) are options.
-
-#### 15.5.2 Roles and the rules the daemon enforces
-
-| Role | Sees | May change | Talks to |
-|---|---|---|---|
-| **Lead** | every member (read), the ledger, CONTRACT.md | CONTRACT.md, CHANGESET.md; never member code | members (assign/answer/revise), the human (gates) |
-| **Member** | its own worktree (rw) and its siblings (read) | only its own worktree | the lead (questions, ready, blocked) |
-| **Human** | everything | everything | anyone; resolves gates |
-
-Enforced, not just requested:
-- **Write fences.** ptyro's injected `PreToolUse` hook (Claude, Codex) denies edit/write tools
-  whose target resolves outside the agent's allowed paths. Denials are reported to the agent with
-  the reason ("web may not edit api/; ask the lead"). Where an agent has no hook,
-  the fence is advisory, and `cs status` flags any out-of-fence diff.
-- **No silent shipping.** Agents may commit inside their worktree. Push, PR, merge and rebase of
-  the *set* go through ptyro (`cs push|pr|land`), and by default through a human gate.
-- **Policy limits** (§15.4) apply per set: max member agents, allowed adapters, turn and time budgets.
-
-#### 15.5.3 The contract (the novel part)
-
-Multi-repo changes fail at the seams, not inside repos. So the lead's first job is to write a
-**contract** before any member writes code: the interfaces between members (endpoints and
-payloads, schema migrations, event names, exported types, version bumps, feature flags), plus the
-merge and deploy order.
-
-- `CONTRACT.md` is versioned by ptyro: each save is a **revision** (r1, r2, …), stored in the
-  ledger with its diff.
-- **Gate 1: the human approves r1** before members are started. This is cheap to review and
-  prevents most wasted work.
-- Members get the approved contract as part of their brief and work against it.
-- **Contract changes propagate.** When the lead (or a member, via a `contract_change` request to
-  the lead) revises the contract, ptyro sends every affected member a `contract_revised` message
-  with the diff. Members listed in the changed section's `affects:` get it as an interrupt; others
-  get it at their next idle.
-- **Contract checks (optional, per member):** commands that turn the contract into something
-  verifiable. For example, `api` regenerates its OpenAPI spec and ptyro diffs it against the
-  contract's schema block; `sdk` type-checks against the generated client. Failures are attached
-  to the member's status (`⚠ contract drift`).
-
-#### 15.5.4 Status-aware messaging (the ledger)
-
-The mailbox from §15.4, made aware of agent status, since ptyro knows when each agent is working,
-blocked or idle (§9):
-
-- Typed messages: `assign`, `question`, `answer`, `contract_revised`, `ready_for_integration`,
-  `blocked_on{member}`, `handoff`, `heartbeat`, `gate_request`.
-- **Delivery waits for the right moment.** A message to a `working` member is queued and delivered
-  as a prompt when it goes `idle`. `interrupt` messages are delivered at once (Esc, then the
-  prompt), and `blocked` members are never auto-answered. Agents never get a message pasted into
-  the middle of a turn.
-- **Dependency-aware waiting:** a member that sends `blocked_on: api` is shown blocked *on api*,
-  and the lead is told. When `api` posts `ready_for_integration`, the blocked member is woken
-  automatically.
-- Everything lands in an append-only **ledger** (`run_message`), which is the set's memory: who
-  decided what, when, and why. `cs log` prints it; the TUI renders it as a timeline.
-
-#### 15.5.5 The integration overlay ("build against my siblings")
-
-What makes a change set more than N worktrees: members can **build and test against each other's
-in-progress code** before anything is pushed. ptyro knows every member's path, so it generates the
-wiring per ecosystem, opt-in per member, and never committed:
-
-| Ecosystem | Overlay |
-|---|---|
-| Go | `go.work` in the root listing member modules |
-| Rust | `.cargo/config.toml` `[patch]` path overrides in the consuming worktree (git-excluded) |
-| Node | `pnpm.overrides` / npm `overrides` via a generated `.npmrc`/`pnpm-workspace.yaml` in the root, or `link:` rewrites in a git-excluded copy |
-| Python | editable installs of sibling members into the consumer's venv |
-| Containers | `compose.override.yml` mapping sibling worktrees as build contexts |
-
-**Integration checks** are commands that run in the root against the overlay (`docker compose up
--d && pnpm e2e`), defined in the set template. Their results gate `ready_for_integration` and
-`cs land`.
-
-#### 15.5.6 Set checkpoints (multi-repo undo)
-
-`cs checkpoint [label]` records a **consistent snapshot of the whole set**: each member's HEAD
-plus a stash-like commit of its uncommitted work, under `refs/ptyro/cs/<set>/<n>` in each repo.
-Checkpoints are also taken automatically before contract revisions and before `land`.
-`cs restore <n>` returns *every* member to that snapshot, after checking that nothing newer would
-be lost. One command to undo a multi-repo wrong turn.
-
-#### 15.5.7 Shipping: lockstep git and the merge train
-
-- **Commits** may be per member (agents) or set-wide (`cs commit -m`: one message, plus the
-  trailers `Change-Set: add-user-tier` and `Change-Set-Members: api@a1b2c3 sdk@d4e5f6 web@0a9b8c`
-  so the history links the repos together).
-- **Push in dependency order** (`depends_on`, topologically sorted; cycles are refused when the
-  set is created). A failure stops the train and reports exactly which members pushed and which
-  didn't; `cs push` resumes. ptyro never pretends a partial push is atomic.
-- **Linked PRs** (`cs pr`, M6 plumbing): one PR per member; each body carries a generated "change
-  set" table with the sibling PRs, their CI states and the merge order. ptyro refreshes it as
-  siblings change.
-- **`cs land`, the merge train:** merges in order, waits for each member's checks (and the
-  integration checks) before the next, and stops on failure with a precise partial-state report.
-  Every step goes through a gate unless `--yes`.
-- **Removal** (`cs rm`) applies §10.8 to *every* member; one dirty member blocks removal of the
-  whole set (or `--keep-member <member>`).
-
-#### 15.5.8 Templates
-
-Recurring sets get a template in user config (`~/.config/ptyro/changesets/*.toml`) or in a
-trusted "hub" repo:
-
-```toml
-name = "api-sdk-web"
-members = [
-  { project = "api", agent = "codex",  depends_on = [] },
-  { project = "sdk", agent = "claude", depends_on = ["api"], overlay = "node" },
-  { project = "web", agent = "claude", depends_on = ["api", "sdk"], overlay = "node" },
-]
-lead = { agent = "claude" }
-gates = ["contract", "push", "land"]          # where the human must approve
-integration = ["docker compose up -d", "pnpm -C web e2e"]
-contract_checks = { api = "make openapi && ptyro cs contract diff openapi.yaml" }
-```
-
-`depends_on` can be suggested on creation by reading manifests (a sibling's package or module
-name in another member's dependencies).
-
-#### 15.5.9 Lead tools (via `ptyro mcp`, §15.4)
-
-`cs_status`, `cs_assign(member, task)`, `cs_send(member, msg, interrupt?)`, `cs_contract_get`,
-`cs_contract_revise(diff, affects)`, `cs_member_diff(member)`, `cs_integration_check`,
-`cs_checkpoint(label)`, `cs_request_gate(question)`. There is deliberately **no**
-`push`/`merge` tool: shipping is the human's train.
-
-#### 15.5.10 CLI and TUI
-
-```text
-ptyro cs new <name> --projects api,sdk,web [--template t] [--lead-as claude] [--layout lead|solo|manual]
-             [--prompt <goal> | --from-issue <url>]
-ptyro cs ls | show <set> | status <set> [--json] | log <set> [--follow]
-ptyro cs msg <set> <member|@lead|@all> <text> [--interrupt]
-ptyro cs contract <set> [show|edit|diff <file>|history]
-ptyro cs check <set>                       # integration + contract checks
-ptyro cs checkpoint <set> [label] | restore <set> <n>
-ptyro cs commit|push|pr|land <set>        # lockstep, dependency-ordered, gated
-ptyro cs add <set> <project> | drop <set> <member> | rm <set> [--keep-member <member>]
-```
-
-- **Sidebar:** a change set is a group node (`◆ add-user-tier 3/4 ready · r3`) above its members'
-  worktrees and sessions.
-- **Set view** (`prefix S`): swimlanes, one per member plus the lead, showing status, commits,
-  contract revisions, ledger messages drawn as arrows between lanes, and check results. Live air
-  traffic control for the change.
-- **Attention** rolls up: one gate or one blocked member puts the set in the inbox.
-
-#### 15.5.11 Failure modes we design for
-
-A member's rebase conflicts; a member agent errors out; a contract revision after some members
-are done; a sibling's PR merged out of order by a human; a member repo without a remote; differing
-CI systems. Each maps to an explicit set state (`member_conflict`, `member_failed`, `stale_contract`,
-`out_of_order`, …) with a suggested action, never a silent "done".
-
-#### 15.5.12 Experiment first
-
-Before building the machinery, ROADMAP M11.0 runs the workflow by hand: linked worktrees, a lead
-Claude with `--add-dir` per member, member agents prompted by the lead, using only ptyro's
-existing primitives (`new`, `send`, `wait`, `read`) and a shared `CONTRACT.md`. Its findings
-decide the default layout, the message types and which parts are worth automating.
-
----
+Change sets (one change across several repos, M11) were removed on 2026-11-17 in the pare-down:
+the owner never used them.
 
 ### 15.6 What M7 built **[built M7]**
 
@@ -5331,7 +5141,7 @@ After every agent turn that changed its worktree, the turn is checkpointed:
   - removes untracked files the checkpoint lacks;
   - checks out its tree, leaving the index at HEAD (the changes come back uncommitted).
 
-`[orchestration] checkpoints = false` turns them off. Shares code with M11.8.
+`[orchestration] checkpoints = false` turns them off.
 
 #### 15.6.7 Mailbox, leases and the collision radar (M7.7, M7.13)
 
@@ -5422,223 +5232,9 @@ peer pid). Inside a lead or worker session with a policy, the CLI is restricted 
 
 Any agent session is refused `gate resolve` and `answer`.
 
-### 15.7 What M11 built **[built M11]**
+### 15.7 What M11 built **[removed 2026-11-17]**
 
-The pure model is `ptyro-run/src/changeset.rs`; the daemon's half is
-`ptyro-daemon/src/changesets.rs`; the CLI is `ptyro cs` (`crates/ptyro/src/cs.rs`); the lead's
-tools live in `ptyro mcp`; the TUI's set view is `ptyro-tui/src/sets.rs`. User guide:
-`docs/changesets.md`.
-
-#### 15.7.1 The experiment (M11.0, 2026-10-21)
-
-Three small repositories (`api` and `sdk` Go modules, `sdk` with `replace example.com/api =>
-../api`; `web` in Node), worktrees laid out by hand side by side in one root on one branch, a
-hand-written brief, a lead Claude (Sonnet 5.5) in the root with `--add-dir` per member, and
-member Claudes (Haiku) started by the lead with `ptyro new … --prompt`. The lead coordinated with
-`ptyro wait --for idle` and `git -C`. Done in 7 min 47 s of lead time; all three committed with
-tests green; nothing pushed. What it decided:
-- **Members live side by side in the set's root.** `sdk` built against `api`'s *uncommitted*
-  code through its relative `replace ../api`: the layout is itself an overlay for every
-  relative-path dependency (`replace`, `path = "../x"`, `file:../x`). So member worktrees are
-  created at `<root>/<member>` (`WorktreeSpec.path`), not under `worktrees.location`.
-- **The lead writes sections per member, unprompted** (`## api (Go…)`, `## Wire format (api ->
-  everyone)`, `## Merge order`) and no `affects:` lines. So a section without an `affects:` line
-  concerns the members its *title* names, or everyone when it says `everyone`/`all`.
-- **Dependency waves emerged:** the lead started `api` and `web` together and `sdk` after `api`.
-  Members needed no messages for a change this size; the contract carried it. ptyro starts
-  every member at once after approval and gives them `blocked_on` for the waves.
-- **The lead committed for the members** (`git -C api commit -am …`), a write no edit fence
-  sees. So briefs say commits are the members' (or `cs commit`'s), and the actor flags member
-  changes made during the lead's turn while the member's own agent was idle (§15.7.4).
-- **The lead stopped the members when done.** A member that exits cleanly isn't failed; mail
-  waiting for it resumes it.
-- **Every member's first start showed Claude's folder-trust dialog**, and `ptyro answer allow`
-  sent `1`, which that dialog ignores: members sat there. Fixed: adapters answer whatever is on
-  screen (§20.1).
-- 13 real permission prompts in 8 minutes: unattended sets need the inbox/phone approvals (M9)
-  or an allow-list.
-
-#### 15.7.2 Model and storage
-
-- **A set is a run** of kind `changeset` named after the set; its `RunState.changeset` is the
-  `ChangeSet` projection, changed only by `RunEvent::Cs(CsEvent)` in the run's log. The spec's
-  `changeset_member` table was not added: members live in that projection, so there is one
-  source of truth and restarts need nothing new.
-- **`CsEvent`s:** `created`, `member_added`, `member_dropped`, `member_info` (worktree, path,
-  branch, start commit, session, overlay), `contract`, `contract_approved`, `delivered`, `ready`,
-  `unready`, `blocked_on`, `unblocked`, `failed`, `conflict`, `checked`, `checkpoint`,
-  `committed`, `pushed`, `no_remote`, `pr`, `landed`, `out_of_order`, `phase`, `train`.
-- **Phases:** `drafting` → `working` (the contract approved; at once for `solo`/`manual`) →
-  `landing` → `landed`; `removed`. Finer states are derived (§15.7.7).
-- **Steps:** the lead is step `lead` (or `solo`), each member agent is a step named after the
-  member, and gates are steps (`contract-r1`, `push-<ms>`, `land-<member>`, `ask-<ms>`), so the
-  runs view and `run show` show a set like any run.
-- **Creation** (`cs new`): projects (and/or a template) → one workspace and **one profile for
-  every member** (refused otherwise, naming both); `depends_on` from `--depends`, else the
-  template, else **manifests** (`go.mod` requires, `package.json` dependencies, `Cargo.toml`
-  dependencies by package name, `pyproject.toml` dependencies; B depends on A when B requires a
-  name A provides); cycles refused with the cycle printed. Each member's agent: `--agent m=a`,
-  else the template's, else the project's `default_agent`, else the default.
-- **Linked worktrees** (M11.2): one per member at `<root>/<member>`, on the project's branch
-  template (`ptyro/<set>`), base from `--base m=ref`/template/project. Creation is all or
-  nothing: a failure removes the worktrees already made and the root, and cancels the run.
-- **The root** (`<data>/changesets/<set>/`): `CHANGESET.md` (the generated brief, rewritten when
-  membership changes), `CONTRACT.md`, the members, `.ptyro/` (overlay record), and overlay
-  files.
-
-#### 15.7.3 Agents and the contract
-
-- **Layouts:** `lead` (default) starts the lead at once and the members when r1 is approved;
-  `solo` starts one agent in the root that may edit every member (no contract gate); `manual`
-  starts none.
-- **The lead** runs in the root with `--add-dir` per member (Claude) and `ptyro mcp`
-  (`SpawnSpec.mcp`), which detects a set's lead (`Cs whoami`) and offers the set's tools instead
-  of the worker ones. Its run carries a policy that allows no ad-hoc workers and no shipping.
-- **Members** run in their worktrees with `--add-dir` for siblings (Claude), `PTYRO_CS`,
-  `PTYRO_CS_ROOT`, `PTYRO_RUN_ID` and `PTYRO_STEP_ID`, and a brief: their part, the approved
-  contract, the rules and the exact commands (`ptyro cs ready|blocked|msg "$PTYRO_CS"`).
-- **Revisions:** `CONTRACT.md` becomes a revision when it changed and its editor is idle (the
-  actor checks every 1.5 s and on every run event; r1 also waits for the lead's first turn to
-  end), or on `cs contract submit|revise|edit` (`revise` takes a whole text or a unified diff,
-  applied with `git apply`). Each revision stores its text, sha, diff (`git diff --no-index`),
-  author, summary and `affects`.
-- **Gate 1:** r1 opens gate `contract-r1` (`approve` / `revise` / `reject`). `approve` starts
-  the members; anything else goes back to the lead with the note; its next save opens a new gate.
-  Without the `contract` gate, r1 is approved by `auto`.
-- **Propagation:** later revisions are checkpointed first, then each member gets a
-  `contract_revised` message with the diff: as an **interrupt** when the revision names it in
-  `affects`, normal (next idle) otherwise. `affects` comes from the changed sections' `affects:`
-  lines, else their titles (§15.7.1), else everyone; `--affects` overrides.
-- **Contract checks** (`contract_checks` in a template) run per member in `cs check` and before
-  that member lands; failures go to the lead and the set's state (`check_failed`).
-  `cs contract diff FILE` compares the latest revision with any file (a regenerated OpenAPI spec)
-  and exits 1 on drift.
-
-#### 15.7.4 Fences and the ledger
-
-- **Write fences** (M11.4) are checked in PreToolUse before leases: the lead may write the root's
-  files (`CONTRACT.md`, notes) but no member's; a member only its own worktree (not siblings,
-  not the root, not the contract: "ask the lead … --kind contract_change"); `solo` anything in
-  the root. Paths resolve against the session's directory (`..` folded lexically). Scratch files
-  in the temp directory are allowed unless the set itself lives there. The reason names the
-  owner and the command to ask.
-- **Advisory fences:** at each lead turn's start and end the actor fingerprints every member
-  (HEAD plus `git status --porcelain`); a member that changed while its own agent was idle is
-  flagged `out_of_fence` ("changed during the lead's turn").
-- **Messages** are the mailbox (§15.6.7) with run = the set and typed kinds: `assign`,
-  `question`, `answer`, `contract_revised`, `contract_change` (also notifies you),
-  `ready_for_integration`, `blocked_on`, `handoff`, `heartbeat`, `gate_request`. Addresses: a
-  member, `@lead`, `@all`. Delivery waits for idle; an **interrupt** to a working agent without
-  an inbox socket gets the adapter's interrupt keys once (Esc; at most every 15 s) and is typed
-  when the agent is idle.
-- **Readiness:** `cs ready` records the member ready against the current revision, tells the
-  lead, wakes every member blocked on it, and runs the integration checks once everyone is
-  ready. `cs blocked SET ON` marks it blocked on that member, tells the lead and puts the set in
-  your inbox; when ON is ready already, it's woken at once.
-- **The actor also** records failures (the agent errored or exited non-zero → `member_failed`,
-  inbox, the lead hears; cleared by the next good turn), resumes an exited member that has mail
-  waiting (at most once a minute), and every 5 s notices members merged outside the train (their
-  branch gained commits since its recorded start commit and they're all in the base, or the PR
-  is `MERGED`): landed, and `out_of_order` when a dependency hadn't landed.
-- **The ledger** (`cs log`, `--follow`) is the run's events described in one line each plus the
-  set's messages, by time.
-
-#### 15.7.5 Overlays, checks and checkpoints
-
-- **Overlays** (M11.7) are opt-in per member (`overlay = "…"`, `cs new --overlay` takes the
-  manifests' suggestion, `cs overlay SET [auto|go|rust|node|python|compose|off] [--member]`).
-  Files are recorded in `.ptyro/overlay.json` and taken back on `off`:
-  - **go:** `go.work` in the root listing every Go member (Go finds it from inside each member);
-  - **rust:** the root's `.cargo/config.toml` with `[patch.crates-io]` (or `[patch."<git url>"]`)
-    path overrides for sibling crates the consumer depends on (cargo reads it from every member);
-  - **node:** `node_modules/<pkg>` symlinked to the sibling (what `npm link` does), the installed
-    copy set aside and put back; `/node_modules/` git-excluded;
-  - **python:** a `ptyro-cs-<sibling>.pth` in the consumer's `.venv`/`venv` site-packages (an
-    editable install of the sibling's `src/` or root);
-  - **compose:** a git-excluded `compose.override.yml` in the consumer making siblings' worktrees
-    the build contexts of services named like them (never overwriting one that isn't ours).
-- **Integration checks** (`integration = [...]`, `cs new --integration`) run with `sh -c` in the
-  root under the set's profile (30-minute limit, 40-line tail kept); `cs check` runs them plus
-  every contract check and exits 1 on any failure.
-- **Set checkpoints** (M11.8): `refs/ptyro/cs/<set>/<n>` in each member (the M7.11 checkpoint
-  commit: HEAD plus uncommitted work), recorded with each member's HEAD. Taken by `cs
-  checkpoint`, the lead's `cs_checkpoint`, before every contract revision after r1, and before
-  `land`. `cs restore SET N` refuses while any member's agent works, and refuses when a member's
-  present matches no recorded checkpoint (naming them) unless `--force`, which checkpoints the
-  present first; members that joined later are left alone; agents are told.
-
-#### 15.7.6 Lockstep git and the train
-
-- **`cs commit -m`** commits every member with changes (`add --all`) in dependency order under
-  each worktree's profile. Trailers: `Change-Set: <set>` and `Change-Set-Members:` listing the
-  members committed before it with their short sha (a commit can't name its own sha, so each
-  commit names the sibling commits it was built against, dependencies first). Clean members
-  count with their HEAD.
-- **`cs push`** pushes every member in order (`--set-upstream`), skipping members whose remote
-  branch already equals HEAD, so running it again resumes. A failure stops it with exactly who
-  pushed, who was up to date and who wasn't; a member without a remote is `no_remote`. The
-  `push` gate applies unless `--yes`; on a terminal the CLI asks first, otherwise a gate waits
-  in the inbox and the push runs when it's answered.
-- **`cs pr`** opens one PR per member (M6 plumbing, which pushes), dependencies first, each body
-  with the goal and a sibling table between `<!-- ptyro:changeset -->` markers: order, member,
-  PR link, CI (`passing`/`failing`/`pending`/`none`), merged/open. Tables are rewritten after
-  `cs pr` and after every landing.
-- **`cs land`** (a background job; one push or land per set at a time): the integration checks
-  first (any failure stops before anything merges), a checkpoint, then each member not landed
-  in order: its dependencies must have landed; its gate `land-<member>` unless `--yes` (the CLI
-  answers it on a terminal, else it waits in the inbox/phone); then
-  - **with a PR:** wait for its checks (polling; an hour at most), stop on a failure, then
-    `gh pr merge --<github.merge_method>`;
-  - **without:** its contract check, then rebase onto its base branch, fast-forward and push
-    (M6's integrate); a rebase conflict is `member_conflict`.
-  A failure stops the train with `land_stopped` and the report "the merge train stopped at sdk:
-  CI failed on PR #12: build. Landed: api; not landed: sdk, web"; running `cs land` again
-  resumes from the member that stopped it. When every member has landed the set is `landed` and
-  its run succeeds.
-- **`cs rm`** checks every member's safety first (§10.8); one with work that would be lost blocks
-  the whole set unless `--keep` it or `--force`. Then the set's agents stop and the worktrees go
-  (branches kept for members that didn't land). `cs drop` removes one member (refused while
-  others depend on it, unless `--ignore-dependents`, fix `ignore_dependents`, "Drop it anyway").
-  Overriding the dependency never discards work: unsaved work in its worktree is a refusal of
-  its own, through only with `--force` (fix `force`), as `wt rm` (owner, 2026-11-09: one flag,
-  one meaning; `--force` always means "discard the work"); `cs add` adds one (same profile, no cycles) and starts
-  its agent when the set is working.
-
-#### 15.7.7 States, actions, tools and the TUI
-
-- **The report** (`ChangeSet::report`, pure): a state word, every issue with a suggested action,
-  and per-member words (`working`, `idle`, `ready`, `stale`, `blocked_on:api`, `failed`,
-  `conflict`, `landed`, `missing`). Issues, most pressing first: `land_stopped`,
-  `member_conflict`, `member_failed`, `out_of_order`, `missing_worktree`,
-  `integration_failed`, `check_failed`, `stale_contract` (ready against an older revision that a
-  later one affects), `out_of_fence`, `no_remote`, `blocked_on`. The state is the most pressing
-  issue's, except that `blocked_on`, `no_remote` and `out_of_fence` are things to know rather
-  than the set's state; without one it's `drafting`, `contract_review`, `working`, `ready`,
-  `landing`, `landed` or `removed`. Nothing reads "done" unless every member landed. Differing CI
-  systems need nothing special: a PR without checks merges after its gate (CI `none`).
-- **Templates** (M11.12): `~/.config/ptyro/changesets/*.toml`, then every registered project's
-  `.ptyro/changesets/*.toml` ("hub" repositories, trusted per template: scope
-  `changeset:<name>`, fingerprint the source's sha; `cs new --trust FP`, or the CLI asks on a
-  terminal). Validated with every mistake at once (unknown fields, unknown members, cycles, bad
-  overlays and gates).
-- **The lead's tools** (M11.10): `cs_status`, `cs_assign`, `cs_send`, `cs_contract_get`,
-  `cs_contract_submit`, `cs_contract_revise`, `cs_member_diff`, `cs_integration_check`,
-  `cs_checkpoint`, `cs_request_gate` (the answer returns as a message), `cs_log`, plus
-  `check_messages`, `ack` and `post_message`. No push, PR, merge, land or restore tool exists,
-  and the daemon refuses those ops (and `new`, `add`, `drop`, `rm`, `overlay`, `commit`) from any
-  agent; `submit`, `revise`, `assign`, `checkpoint` and questions are the lead's (or yours).
-- **The TUI** (M11.11): a sidebar node per set still going (`▾ ◆ tier working 2/3 ready · r2`,
-  amber while a gate or an issue wants you) with its lead under it; `prefix S` (or `S` in the
-  sidebar, `⏎` on the node) opens the set view: one swimlane per lead and member (status word,
-  branch, commits, uncommitted, PR, landed), the open gates (`1`–`9` answer), the issues with
-  their actions, and the ledger as a timeline with one column per lane, where messages are
-  arrows (`●──▶`) and set events marks (`◆`) in their member's lane. `m` messages the selected
-  lane, `⏎` shows its agent, `c` runs the checks, `p` takes a checkpoint. Attention rolls up
-  through the inbox: gates, blocked members, failures and a stopped train each add an entry.
-- **Not built:** `cs new --from-issue` reads only GitHub issues; integration checks inform
-  readiness but don't block a `ready` report; the overlay doesn't rewrite `link:`/`overrides` in
-  a copy (node uses symlinks); no `cs pr` refresh from the PR poller (tables refresh on `cs pr`
-  and landings).
+Removed with change sets (§15.5).
 
 ## 16. Remote access **[built M9, except §16.5]**
 
@@ -5864,12 +5460,12 @@ is "the web is up when the daemon is".
     them (a shell included: typing into a shell is running commands as you), start configured
     agents, stop things. It is not "can't run commands"; only `full` reaches the machine itself
     (config, host operations). `Compare` (it runs a project's checks and may start a judge
-    agent), answering `always`, and the change-set `push-*` and `land-*` gates need `control`;
+    agent) and answering `always` need `control`;
     `read` can see screens, scrollback, recordings and diffs, so a lost `read` device is a
     secrets leak too. A gate answered from a device is recorded under the device's name.
   - **Agents calling the daemon (`Hook`, `StatusLine`, `Report`) speak for their own session
     only:** a caller the daemon places in session X can't report on or feed hooks for Y. Under a
-    run policy the allow-list applies. Verified-done's `deny_cmds`, leases and fences are
+    run policy the allow-list applies. Verified-done's `deny_cmds` and leases are
     tripwires for an agent that is behaving, not a sandbox (`bash -c`, `sed -i`, links get past
     them).
 
@@ -5966,8 +5562,8 @@ check. It speaks the protocol over its WebSocket, and a few things a browser can
   one module per kind of work (`sessions`, `projects`, `review`, `runs`, `settings`), `qr.ts`
   (a QR encoder, so pairing another device needs no library), `color.ts`, `app.ts` (the router,
   the tab bar, the session page, push).
-- **Navigation:** a bottom tab bar (Sessions, Projects, Runs, Sets, More) and hash routes
-  (`#/s/<id>`, `#/wt/<id>/<tab>`, `#/run/<id>`, `#/set/<name>/contract`, …). Dialogs are sheets
+- **Navigation:** a bottom tab bar (Sessions, Projects, Runs, More) and hash routes
+  (`#/s/<id>`, `#/wt/<id>/<tab>`, `#/run/<id>`, …). Dialogs are sheets
   that slide up on a phone and close with the page they belong to.
 - **Scope-aware:** `Welcome.scope` says what the device may do; the daemon refuses the rest and
   its message names the `ptyro pair --scope` that would work. Pages that change the machine say
@@ -6189,7 +5785,7 @@ holding several machines) was not chosen.
   the workspace that lists the worktree's project, whichever machine that is, not to the
   selected row's. Requests
   about this machine itself are never routed (devices, push, the scratchpad, views, hooks and
-  status lines, runs, recipes, fan-outs, gates, compare, mail and leases, change sets, profiles'
+  status lines, runs, recipes, fan-outs, gates, compare, mail and leases, profiles'
   own operations, doctor, the web server, `Agents`, `Editors`, machines).
 - **Screens and keys** (`conn.rs`): a client's `Subscribe`, `Unsubscribe`, `Ack`, `Input`,
   `Resize` and `Focus` for a mirrored session go over an upstream connection of that client's own
@@ -6529,7 +6125,7 @@ are built on tags later. CI only ever calls make targets.
 | 15 | **Profiles: identity bundles referenced by workspaces, user-config only, fixed per session** | owner uses multiple accounts; one place to set agent dirs + git + gh + secrets; a cloned repo must never pick your credentials | per-agent variants like `[agents.claude-work]` (doesn't cover git/gh/shells, easy to pick the wrong one), identity stored on the workspace itself (can't share one identity across workspaces), separate daemon per account (duplicate everything) |
 | 16 | **`ptyro serve` as its own process; devices authenticated by the daemon** (M9) | the daemon stays a local socket; a crash or bug in HTTP/TLS code can't take sessions down; the daemon is the single authority for tokens and scopes, and `serve` only transports (rewriting the Hello so browsers can't pose as local clients) | the daemon listening on TCP itself; `serve` checking tokens (two authorities); cookie sessions (CSWSH, CSRF) |
 | 17 | **Structured sessions render their transcript into the session's emulator** (M10) | `read`, `wait --match`, the recorder, live upgrades and every terminal client work unchanged; the chat view is an enhancement on top (`ServerMsg::Chat`) | a separate session type with no terminal (every existing path would need a structured variant); clients rendering transcripts only |
-| 18 | **A change set is a run, and its members live side by side in the set's root** (M11) | runs already give durability, gates, the mailbox, policies and the runs view; the side-by-side layout makes relative-path dependencies build against siblings with no overlay at all (M11.0), and lets `go.work` and `.cargo/config.toml` in the root reach every member | a separate changeset table and engine (two sources of truth); member worktrees under `worktrees.location` with symlinks in the root (tools resolve symlinks differently; fences and `--add-dir` get confusing) |
+| 18 | ~~**A change set is a run, and its members live side by side in the set's root** (M11)~~ | removed 2026-11-17 with change sets (§15.5) | |
 | 19 | **A chat is ptyro's own durable record; the agent's conversation is a replaceable engine** (CHAT) | one truth for history, search, forks, switching agent and the machine mirror; agents' own histories differ, change format and vanish; native resume and fork stay as optimisations | indexing the agents' own history files (four unstable formats, no fork, no switch); a chat as a session kind (the transcript dies with the session, no tree) |
 | 20 | **Chat text lives in its own `chat.db`** (CHAT) | sensitive and large; FTS churn and long writes must not touch the metadata store's thread; backup, retention, delete and uninstall treat it on its own (`--no-chats`) | new tables in `ptyro.db` (every backup and `VACUUM INTO` copies chats; contention); a JSONL file per chat (no search, no tree queries) |
 | 21 | **Seed-replay is the contract; native resume and fork are optimisations** (CHAT) | works for every agent, an agent switch, a fork from the middle, a lost conversation; the cost is tokens, shown once | requiring native fork (only Codex forks at any turn; Claude only from the end); making switching agents impossible |
@@ -6603,7 +6199,7 @@ learn something the hard way.
 - **[verified 2026-10-21, 2.1.306, M11.0]** The trust dialog has no number keys: `1` does
   nothing, so `ptyro answer S allow` used to leave it waiting. Down then Enter selects "Yes, I
   trust this folder"; Esc leaves (and Claude exits). Every new worktree is a new folder, so each
-  change-set member's first start shows it (unlike Codex, Claude has no flag to pre-trust a
+  one's first start shows it (unlike Codex, Claude has no flag to pre-trust a
   path). The `--add-dir` directories don't need their own trust.
 - **[verified 2026-10-21, 2.1.306, M11.0]** A lead blocking in `ptyro wait … --for idle --timeout
   15m` inside one Bash tool call works (the call ran for minutes); Claude backgrounds nothing.
@@ -7526,7 +7122,7 @@ Windows) wasn't needed to get the list below: compile errors are the same either
 - **What running every test on Windows found (WIN13)** [V, 2026-11-06, CI's `windows-latest`
   and Windows 11 build 26200]:
   - **Paths as patterns see `/`.** A tool's file comes as `src\api.rs` on Windows, and leases,
-    guards, change-set fences and a profile's `match.paths` are written with `/`: none of them
+    guards and a profile's `match.paths` are written with `/`: none of them
     matched until both sides were spelled with `/` (`os::slash_path`).
   - **An address typed as `C:\…` is a path** (`os::looks_like_path`): `--project C:\src\app`
     was looked up as a project's name.
@@ -7780,11 +7376,8 @@ host). The fix for users is in `docs/remote.md` (Tailscale's certificate).
    today via shell aliases with separate config dirs (→ `ptyro init` adoption, §10.10). `default`
    becomes `isolate = true` once any profile is defined (decided 2026-10-20).
 7. ~~**Antigravity CLI** adapter~~ — built from its docs as M4.21 (§8.6b); unverified against a real install.
-8. **Change sets (§15.5)** — **direction decided 2026-10-20:** one lead plus one agent per member
-   repo, validated by the hands-on experiment M11.0 before the machinery is built. Still open:
-   should the lead be allowed to edit member code in `solo` layout only, or never; do the contract
-   checks belong in the template or in each repo's `.ptyro.toml`; and how deep should the merge
-   train integrate with forge-native merge queues?
+8. ~~**Change sets (§15.5)**~~ — built as M11, removed 2026-11-17 (pare-down): the owner never used
+   them.
 9. **A resident summariser ("concierge")** — the UX1.3 spike's option B (owner's idea,
    2026-10-22): one long-lived, cheap structured session per profile, fed turn digests, that
    could answer "what's going on?" across sessions or act as the default lead. Per-turn

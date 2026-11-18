@@ -30,6 +30,10 @@ and what it does, all commented out) and validates it when you save. Changes
 apply live. `ptyro config check` validates the file, `ptyro config show` prints the effective
 configuration with defaults filled in, and `ptyro config path` prints where it is.
 
+A setting of a feature ptyro no longer has doesn't break your file: it is ignored, and
+`ptyro config check`, `ptyro doctor` and the health views name it with the fix
+(`ptyro config unset KEY`, or Remove on the web). A misspelt setting is still an error.
+
 The full schema is in [`SPEC.md`](../SPEC.md) §13. This page covers the settings people change
 most; `ptyro config show` lists every key with the value in effect.
 
@@ -295,7 +299,7 @@ ptyro follows the XDG directories:
 
 | Path | Holds |
 |---|---|
-| `~/.config/ptyro/` | `config.toml`, `recipes/`, `changesets/` (templates) |
+| `~/.config/ptyro/` | `config.toml`, `recipes/` |
 | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `scratchpad.md` and `scratchpad.history/` |
 | `~/.local/state/ptyro/` | logs, `crashes/`, `versions.json` (the agents' newest versions, as last looked up) |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |

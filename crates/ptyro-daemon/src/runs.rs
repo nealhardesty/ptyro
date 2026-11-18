@@ -374,9 +374,6 @@ impl Daemon {
                 self.recover(&row.id).await;
                 self.start_actor(&row.id);
             }
-            if self.run_state(&row.id).is_some_and(|s| s.kind == RunKind::Changeset) {
-                self.start_cs_actor(&row.id);
-            }
             tracing::info!(run = %row.id, "run resumed");
         }
         // Finished runs stay listable.
@@ -2563,11 +2560,9 @@ impl Daemon {
 mod tests {
     use super::*;
 
-    fn entry(id: &str, name: &str, set: Option<&str>) -> RunEntry {
-        let changeset =
-            set.map(|n| ptyro_run::changeset::ChangeSet { name: n.into(), ..Default::default() });
+    fn entry(id: &str, name: &str) -> RunEntry {
         RunEntry {
-            state: RunState { id: id.into(), name: name.into(), changeset, ..Default::default() },
+            state: RunState { id: id.into(), name: name.into(), ..Default::default() },
             recipe: None,
             src: None,
             policy: None,
@@ -2576,20 +2571,16 @@ mod tests {
         }
     }
 
-    /// Runs and change sets resolve like everything else (SPEC §2.3): the end of an id, 4
-    /// characters or more, never a part of the middle; several are listed by id.
+    /// Runs resolve like everything else (SPEC §2.3): the end of an id, 4 characters or more,
+    /// never a part of the middle; several are listed by id.
     #[tokio::test]
-    async fn runs_and_change_sets_match_the_end_of_their_id() {
+    async fn runs_match_the_end_of_their_id() {
         let dir = tempfile::tempdir().unwrap();
         let d = crate::daemon::test_daemon(dir.path(), Default::default());
         let e = d.find_run("@last").unwrap_err();
         assert_eq!((e.code, e.message.as_str()), (ErrorCode::NotFound, "there are no runs yet"));
-        for (id, name, set) in [
-            ("r-ab1234", "fanout", None),
-            ("r-cd1234", "review", None),
-            ("r-ef9999", "changeset", Some("login")),
-        ] {
-            d.runs.locked().insert(id.into(), entry(id, name, set));
+        for (id, name) in [("r-ab1234", "fanout"), ("r-cd1234", "review")] {
+            d.runs.locked().insert(id.into(), entry(id, name));
         }
         assert_eq!(d.find_run("R-AB1234").unwrap(), "r-ab1234");
         assert_eq!(d.find_run("b1234").unwrap(), "r-ab1234");
@@ -2607,15 +2598,5 @@ mod tests {
         assert_eq!(e.message, r#"no run matches "ab12""#);
         let e = d.find_run("234").unwrap_err();
         assert!(e.message.contains("at least 4 characters"), "{}", e.message);
-
-        assert_eq!(d.find_set("LOGIN").unwrap(), "r-ef9999");
-        assert_eq!(d.find_set("9999").unwrap(), "r-ef9999");
-        // A new name is checked against names only: `9999` is free though `r-ef9999` exists.
-        assert!(!d.set_named("9999") && d.set_named("Login"));
-        let e = d.find_set("nope").unwrap_err();
-        assert_eq!(
-            (e.code, e.message.as_str()),
-            (ErrorCode::NotFound, r#"no change set matches "nope""#)
-        );
     }
 }

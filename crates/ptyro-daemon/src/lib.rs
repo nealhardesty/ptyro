@@ -6,7 +6,6 @@ mod agents;
 mod approvals;
 mod autoreg;
 mod background;
-mod changesets;
 mod chats;
 mod conn;
 mod daemon;

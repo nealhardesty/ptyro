@@ -3,7 +3,6 @@
 //! (`ptyro-daemon/src/runs.rs`) executes; this crate only decides, so it does no I/O.
 
 pub mod builtin;
-pub mod changeset;
 pub mod engine;
 pub mod expr;
 pub mod output;

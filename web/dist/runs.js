@@ -1,9 +1,8 @@
-// Runs and change sets (ROADMAP WEB1.5): recipes and fan-outs with their steps, gates and the
-// compare-and-pick view, and change sets (one change across repositories) with their contract,
-// checks, checkpoints and merge train.
+// Runs (ROADMAP WEB1.5): recipes and fan-outs with their steps, gates and the compare-and-pick
+// view.
 import { conn } from "./conn.js";
 import { data } from "./data.js";
-import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, confirmed, cycle, enc, errText, facts, fixOf, form, go, h, menu, slugInput, openWeb, pending, poll, row, safeDecode, section, sheet, textSheet, ui, views } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, cycle, enc, errText, facts, form, go, h, menu, pending, poll, row, safeDecode, section, textSheet, ui, views } from "./kit.js";
 import { allSessions } from "./sessions.js";
 const ACTIONS = {
     "runs": "Runs: recipes, fan-outs and leads, with the gates waiting for you",
@@ -23,32 +22,8 @@ const ACTIONS = {
     "recipe.run": "Run a recipe: its variables, then the run",
     "gate.list": "Open gates: questions a run waits on you for",
     "gate.resolve": "Answer a gate",
-    "sets": "Change sets: one change across several repositories",
-    "set.new": "Start a change set: its name, projects, template and goal",
-    "set.templates": "Change-set templates, yours and the repositories'",
-    "set.show": "A change set: members, gates, what's wrong and what to do about it",
-    "set.log": "The set's ledger: events and messages, oldest first",
-    "set.message": "Message the set's members or its lead",
-    "set.check": "Run the integration and contract checks",
-    "set.checkpoint": "Checkpoint every member of the set",
-    "set.checkpoints": "The set's checkpoints",
-    "set.restore": "Put every member back to a checkpoint",
-    "set.diff": "What a member changed",
-    "set.contract": "The contract: its text, history and drift",
-    "set.contract_edit": "Revise the contract yourself",
-    "set.contract_approve": "Approve the contract revision waiting for you: the members start",
-    "set.contract_reject": "Send the contract revision back to the lead, with a note",
-    "set.overlay": "Wire members to their siblings' working trees (go.work, cargo patch…)",
-    "set.commit": "Commit every member",
-    "set.push": "Push every member, in dependency order",
-    "set.pr": "Open a pull request for every member, linked together",
-    "set.land": "Land the set: merge its members in order, one by one",
-    "set.add": "Add a project to the set",
-    "set.drop": "Take a member out of the set",
-    "set.remove": "Remove the set and its worktrees",
 };
 const tip = actions(ACTIONS);
-const asArray = (v) => (Array.isArray(v) ? v : []);
 const GLYPH = { running: "●", waiting: "⚠", succeeded: "✓", failed: "✗", cancelled: "–", pending: "○", skipped: "–", crashed: "✗" };
 const KIND_OF = { succeeded: "ok", failed: "bad", crashed: "bad", waiting: "warn", running: "info" };
 const status = (s) => badge(`${GLYPH[s] ?? "·"} ${s}`, KIND_OF[s] ?? "");
@@ -61,7 +36,6 @@ function resolveGate(g, choice, withNote = false) {
         gates.refresh("");
         runs.refresh("");
         run.refresh(g.run);
-        sets.refresh("");
     };
     if (!withNote) {
         void send(null).catch((e) => ui.toast(errText(e)));
@@ -136,8 +110,7 @@ function runsView() {
     poll("runs", () => { runs.refresh(""); gates.refresh(""); });
     const list = runs.get("");
     const open = gates.get("") ?? [];
-    const mine = list?.filter((r) => r.state.kind !== "changeset");
-    return h("div", {}, ui.header("Runs", false, h("button", { class: "icon", title: tip("recipe.list"), "aria-label": "Recipes", onclick: () => go("#/recipes") }, "📜"), h("button", { class: "icon plus", title: tip("fanout"), "aria-label": "Start a run", onclick: newRunMenu }, "＋")), h("main", { class: "list", title: tip("runs") }, open.length ? h("div", { class: "gates", title: tip("gate.list") }, ...open.map(gateCard)) : null, pending(runs, "") ?? (mine.length ? h("div", { class: "rows" }, ...mine.map(runCard)) : h("div", { class: "empty" }, h("p", {}, "No runs yet."), h("button", { class: "primary", onclick: newRunMenu }, "Start one")))));
+    return h("div", {}, ui.header("Runs", false, h("button", { class: "icon", title: tip("recipe.list"), "aria-label": "Recipes", onclick: () => go("#/recipes") }, "📜"), h("button", { class: "icon plus", title: tip("fanout"), "aria-label": "Start a run", onclick: newRunMenu }, "＋")), h("main", { class: "list", title: tip("runs") }, open.length ? h("div", { class: "gates", title: tip("gate.list") }, ...open.map(gateCard)) : null, pending(runs, "") ?? (list.length ? h("div", { class: "rows" }, ...list.map(runCard)) : h("div", { class: "empty" }, h("p", {}, "No runs yet."), h("button", { class: "primary", onclick: newRunMenu }, "Start one")))));
 }
 // ── a run ───────────────────────────────────────────────────────────────────────────────────
 const run = new Cache((id) => conn.request({ t: "run_get", id }).then((r) => r.run));
@@ -174,7 +147,7 @@ function runView(rest) {
     const body = pending(run, id) ?? (() => {
         const s = r.state;
         const myGates = (gates.get("") ?? []).filter((g) => g.run === id);
-        return h("div", { class: "stack-in" }, myGates.map(gateCard).length ? h("div", {}, ...myGates.map(gateCard)) : null, h("div", { class: "pr-head" }, status(s.status), badge(s.kind), s.forked_from ? h("span", { class: "sub" }, `forked from ${s.forked_from[0]}`) : null), s.error ? h("p", { class: "form-err" }, s.error) : null, bar(s.kind === "fanout" || s.picked?.length || s.discarded?.length ? h("button", { class: "primary", title: tip("compare"), onclick: () => go(`#/compare/${enc(id)}`) }, "Compare") : null, h("button", { title: tip("run.events"), onclick: () => go(`#/run/${enc(id)}/events`) }, "Events"), s.status === "running" || s.status === "waiting" ? h("button", { class: "deny", title: tip("run.cancel"), onclick: () => confirm(`Cancel run ${id}?`, "Its running steps are cancelled and the agents they started are stopped; their worktrees stay.", "Cancel it", async () => { await ask({ t: "run_cancel", id }, "Cancelled"); run.refresh(id); }) }, "Cancel") : null, s.changeset ? h("button", { onclick: () => go(`#/set/${enc(s.changeset.name)}`) }, "Open the change set") : null), section("Steps", h("div", { class: "rows", title: tip("run.show") }, ...r.order.map((k) => {
+        return h("div", { class: "stack-in" }, myGates.map(gateCard).length ? h("div", {}, ...myGates.map(gateCard)) : null, h("div", { class: "pr-head" }, status(s.status), badge(s.kind), s.forked_from ? h("span", { class: "sub" }, `forked from ${s.forked_from[0]}`) : null), s.error ? h("p", { class: "form-err" }, s.error) : null, bar(s.kind === "fanout" || s.picked?.length || s.discarded?.length ? h("button", { class: "primary", title: tip("compare"), onclick: () => go(`#/compare/${enc(id)}`) }, "Compare") : null, h("button", { title: tip("run.events"), onclick: () => go(`#/run/${enc(id)}/events`) }, "Events"), s.status === "running" || s.status === "waiting" ? h("button", { class: "deny", title: tip("run.cancel"), onclick: () => confirm(`Cancel run ${id}?`, "Its running steps are cancelled and the agents they started are stopped; their worktrees stay.", "Cancel it", async () => { await ask({ t: "run_cancel", id }, "Cancelled"); run.refresh(id); }) }, "Cancel") : null), section("Steps", h("div", { class: "rows", title: tip("run.show") }, ...r.order.map((k) => {
             const st = s.steps[k] ?? { status: "pending", attempts: [] };
             const a = st.attempts[st.attempts.length - 1];
             return row(h("span", {}, k, " ", status(st.status)), [st.reason, st.decided_by ? `by ${st.decided_by}` : "", st.attempts.length > 1 ? `${st.attempts.length} attempts` : ""].filter(Boolean).join(" · ") || (a?.session ? "has a session" : ""), st.started_ms ? ago(st.ended_ms ?? st.started_ms) : "", { onclick: () => stepMenu(r, k) });
@@ -283,269 +256,7 @@ function recipesView() {
                     textSheet(r.name, x.src); } },
         ]) }))) : h("p", { class: "empty" }, "No recipes."))));
 }
-// ── change sets ─────────────────────────────────────────────────────────────────────────────
-const sets = new Cache(() => conn.request({ t: "cs", op: { op: "list" } }).then((r) => asArray(r.value)));
-const set = new Cache((name) => conn.request({ t: "cs", op: { op: "show", set: name } }).then((r) => r.value));
-const csOp = async (op, ok) => { const r = await ask({ t: "cs", op }, ok); return r?.value; };
-const headline = (i) => {
-    const c = i.set;
-    const head = [...(c.contract ?? [])].pop();
-    const appr = [...(c.contract ?? [])].reverse().find((x) => x.approved);
-    const contract = !head ? "no contract yet" : appr && appr.n === head.n ? `contract r${head.n}` : appr ? `contract r${head.n} (approved r${appr.n})` : `contract r${head.n} (not approved)`;
-    return `${i.report.state} · ${i.report.ready[0]}/${i.report.ready[1]} ready · ${contract}${i.job ? ` · ${i.job} running` : ""}`;
-};
-function newSet() {
-    const projects = [...data.projects.values()];
-    const agents = data.agents.filter((a) => a.installed).map((a) => a.name);
-    const agentSel = (first) => h("select", {}, h("option", { value: "" }, first), ...agents.map((a) => h("option", { value: a }, a)));
-    const check = (label, on = false, value = "") => { const c = h("input", { type: "checkbox", value }); c.checked = on; return [c, h("label", { class: "field check" }, c, h("span", {}, label))]; };
-    const fold = (title, ...kids) => h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, title), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, ...kids));
-    // A member each: ticked, and its own agent, base and dependencies (`--agent`, `--base`, `--depends`).
-    const members = projects.map((p) => {
-        const [pick, pickRow] = check(p.slug);
-        const agent = agentSel("the layout's default");
-        const base = h("input", { placeholder: "default: the project's base", autocapitalize: "off", spellcheck: "false" });
-        const deps = h("div", { class: "field", role: "group", "aria-label": `${p.slug} depends on` });
-        const opts = h("div", { style: "display: grid; gap: 8px; padding-left: 28px" }, h("label", { class: "field" }, h("span", {}, "Agent"), agent), h("label", { class: "field" }, h("span", {}, "Base"), base), deps);
-        return { p, pick, pickRow, agent, base, deps, opts, on: new Set() };
-    });
-    const syncMembers = () => {
-        const chosen = members.filter((m) => m.pick.checked);
-        for (const m of members) {
-            m.opts.hidden = !m.pick.checked;
-            const others = chosen.filter((o) => o !== m);
-            m.deps.replaceChildren(...(others.length ? [h("span", {}, "Depends on"), ...others.map((o) => {
-                    const [c, r] = check(o.p.slug, m.on.has(o.p.slug), o.p.slug);
-                    c.addEventListener("change", () => { if (c.checked)
-                        m.on.add(o.p.slug);
-                    else
-                        m.on.delete(o.p.slug); });
-                    return r;
-                }), h("small", {}, "None ticked: the template's, else what the manifests suggest")] : []));
-        }
-    };
-    for (const m of members)
-        m.pick.addEventListener("change", syncMembers);
-    syncMembers();
-    const name = h("input", { placeholder: "e.g. add-user-tier", autocapitalize: "off", spellcheck: "false" });
-    slugInput(name, "name");
-    const goal = h("textarea", { rows: 3, placeholder: "What the change is, across the repositories" });
-    const fromIssue = h("input", { placeholder: "a number in the first member's repository, or a URL", autocapitalize: "off", spellcheck: "false" });
-    const tpl = h("select", {}, h("option", { value: "" }, "No template"));
-    const layout = h("select", {}, ...[["lead", "A lead agent drafts the contract"], ["solo", "One agent, every member"], ["manual", "Nobody: you drive"]].map(([v, l]) => h("option", { value: v }, l)));
-    const lead = agentSel(`default (${data.defaultAgent})`);
-    const leadRow = h("label", { class: "field" }, h("span", {}, "Lead agent"), lead);
-    layout.addEventListener("change", () => { leadRow.hidden = layout.value === "manual"; });
-    const gates = ["contract", "push", "land"].map((g) => check({ contract: "Approve the contract", push: "Approve pushing", land: "Approve landing (the merge train)" }[g], true, g));
-    const integration = h("textarea", { rows: 2, placeholder: "e.g. make e2e — one command per line", autocapitalize: "off", spellcheck: "false" });
-    const [overlay, overlayRow] = check("Build against siblings' in-progress code (the overlays the manifests suggest)");
-    const wsNames = [...data.workspaces.values()].map((w) => w.name);
-    const workspace = h("select", {}, h("option", { value: "" }, "default"), ...wsNames.map((w) => h("option", { value: w }, w)));
-    const err = h("p", { class: "form-err" });
-    const s = sheet("New change set", [
-        h("label", { class: "field" }, h("span", {}, "Name"), name, h("small", {}, NAME_HINT)),
-        h("div", { class: "field" }, h("span", {}, "Projects"), ...members.flatMap((m) => [m.pickRow, m.opts])),
-        h("label", { class: "field" }, h("span", {}, "Goal"), goal),
-        h("label", { class: "field" }, h("span", {}, "Template"), tpl),
-        h("label", { class: "field" }, h("span", {}, "Layout"), layout), leadRow,
-        fold("More options", h("label", { class: "field" }, h("span", {}, "Goal from an issue"), fromIssue, h("small", {}, "Instead of writing the goal")), h("div", { class: "field", role: "group", "aria-label": "Gates" }, h("span", {}, "Where you approve"), ...gates.map(([, r]) => r), h("small", {}, "Untick all for no approvals")), h("label", { class: "field" }, h("span", {}, "Integration checks"), integration, h("small", {}, "Run in the set's root")), overlayRow, h("label", { class: "field" }, h("span", {}, "Workspace"), workspace)),
-        err,
-    ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
-                const chosen = members.filter((m) => m.pick.checked);
-                if (!name.value) {
-                    err.textContent = "Name it.";
-                    return;
-                }
-                if (!chosen.length && !tpl.value) {
-                    err.textContent = "Pick the projects, or a template.";
-                    return;
-                }
-                const on = gates.filter(([c]) => c.checked).map(([c]) => c.value);
-                const map = (f) => Object.fromEntries(chosen.map((m) => [m.p.slug, f(m).trim()]).filter(([, v]) => v));
-                const depends = Object.fromEntries(chosen.filter((m) => m.on.size).map((m) => [m.p.slug, [...m.on].filter((d) => chosen.some((o) => o.p.slug === d))]));
-                const spec = (trust) => ({
-                    name: name.value, projects: chosen.map((m) => m.p.id), template: tpl.value || null, lead: (layout.value !== "manual" && lead.value) || null, layout: layout.value,
-                    goal: goal.value.trim() || null, from_issue: fromIssue.value.trim() || null, depends, agents: map((m) => m.agent.value), bases: map((m) => m.base.value),
-                    // All three ticked: the default (the template's, else all three); none: no approvals.
-                    gates: on.length === gates.length ? null : on,
-                    integration: integration.value.split("\n").map((l) => l.trim()).filter(Boolean), workspace: workspace.value || null, overlay: overlay.checked, env: {}, trust
-                });
-                try {
-                    let r;
-                    try {
-                        r = await conn.request({ t: "cs", op: { op: "new", spec: spec(null) } });
-                    }
-                    catch (e) {
-                        const fp = fixOf(e)?.fingerprint;
-                        if (!fp)
-                            throw e;
-                        // Only "Trust and go on" says yes; Cancel, Esc, ✕ and a tap outside all say no.
-                        if (!(await confirmed("Trust this template?", e.message, "Trust and go on", false)))
-                            return;
-                        r = await conn.request({ t: "cs", op: { op: "new", spec: spec(fp.trim()) } });
-                    }
-                    s.close();
-                    sets.reload("");
-                    go(`#/set/${enc(r.value.set.name)}`);
-                }
-                catch (e) {
-                    err.textContent = errText(e);
-                }
-            } }, "Start")]);
-    conn.request({ t: "cs", op: { op: "templates" } }).then((r) => { for (const t of asArray(r.value))
-        tpl.append(h("option", { value: t.name }, `${t.name} — ${t.members.join(", ")}`)); }, () => { });
-}
-function templatesSheet() {
-    conn.request({ t: "cs", op: { op: "templates" } }).then((r) => {
-        const list = asArray(r.value);
-        sheet("Templates", [list.length ? h("div", { class: "rows", title: tip("set.templates") }, ...list.map((t) => row(h("span", {}, t.name, " ", badge(t.source), t.untrusted ? badge("untrusted", "warn") : null), `${t.members.join(", ")}${t.description ? ` — ${t.description}` : ""}`, null))) : h("p", { class: "empty" }, "No templates: add them in ~/.config/ptyro/changesets/*.toml or a repository's .ptyro/changesets/.")]);
-    }, (e) => ui.toast(errText(e)));
-}
-function setsView() {
-    poll("sets", () => sets.refresh(""));
-    const list = sets.get("");
-    return h("div", {}, ui.header("Change sets", false, h("button", { class: "icon", title: tip("set.templates"), "aria-label": "Templates", onclick: templatesSheet }, "📋"), h("button", { class: "icon plus", title: tip("set.new"), "aria-label": "New change set", onclick: newSet }, "＋")), h("main", { class: "list", title: tip("sets") }, ...(gates.get("") ?? []).filter((g) => /contract|push|land/.test(g.step)).map(gateCard), pending(sets, "") ?? (list.length ? h("div", { class: "rows" }, ...list.map((i) => row(h("span", {}, i.set.name, " ", badge(i.set.phase), i.report.issues.length ? badge(`${i.report.issues.length} issue${i.report.issues.length === 1 ? "" : "s"}`, "bad") : null), headline(i), null, { href: `#/set/${enc(i.set.name)}` })))
-        : h("div", { class: "empty" }, h("p", {}, "No change sets: one change across several repositories."), h("button", { class: "primary", onclick: newSet }, "Start one")))));
-}
-const MARK = { ready: "✓", landed: "✓", working: "●", failed: "✗", conflict: "✗", missing: "✗", stale: "!" };
-const markOf = (w) => MARK[w] ?? (w.startsWith("blocked") ? "◐" : "·");
-function setMemberMenu(i, m) {
-    const name = i.set.name;
-    menu(m.name, [
-        i.sessions[m.name] && { label: "Open its agent", run: () => go(`#/s/${enc(i.sessions[m.name])}`) },
-        m.worktree && { label: "Its worktree", run: () => go(`#/wt/${enc(m.worktree)}`) },
-        { title: tip("set.diff"), label: "What it changed", run: async () => { const v = await csOp({ op: "diff", set: name, member: m.name }); if (v)
-                textSheet(`${m.name}: changes`, v.diff || "No changes."); } },
-        { title: tip("set.message"), label: "Message it…", run: () => msgSet(name, m.name) },
-        { title: tip("set.overlay"), label: "Wire it to its siblings…", run: () => overlaySet(name, m.name) },
-        m.pr_url && { label: `Pull request #${m.pr}`, run: () => openWeb(m.pr_url) },
-        { title: tip("set.drop"), label: "Take it out of the set", danger: true, run: () => confirm(`Drop ${m.name} from change set ${name}?`, "It leaves the set and its worktree is removed. Nothing is removed if that would lose work.", "Drop", async () => { await csOp({ op: "drop", set: name, member: m.name, force: false, ignore_dependents: false }, "Dropped"); set.reload(name); }) },
-    ]);
-}
-function msgSet(name, to) {
-    form(`Message ${to ?? "the set"}`, [
-        { key: "to", label: "To", value: to ?? "@all", hint: "A member, @lead or @all" },
-        { key: "text", label: "Message", type: "textarea", required: true },
-        { key: "interrupt", label: "Interrupt a working agent", type: "check" },
-    ], "Send", async (v) => { const r = await conn.request({ t: "cs", op: { op: "msg", set: name, to: v.to, text: v.text, kind: null, interrupt: !!v.interrupt } }); ui.toast(asArray(r.value?.to).length ? `Sent to ${r.value.to.join(", ")}` : "Not sent (a repeat, or the queue is full)"); });
-}
-function overlaySet(name, member) {
-    form("Wire to siblings", [{ key: "mode", label: "Mode", type: "select", options: [["auto", "Automatic"], ["go", "Go (go.work)"], ["rust", "Rust (cargo patch)"], ["node", "Node"], ["python", "Python"], ["compose", "Compose"], ["off", "Off"]] }], "Apply", async (v) => {
-        const r = await conn.request({ t: "cs", op: { op: "overlay", set: name, member: member ?? null, mode: v.mode } });
-        const notes = asArray(r.value?.notes);
-        ui.toast(notes[0] ?? "Nothing to wire: no member consumes a sibling in that ecosystem");
-        set.reload(name);
-    });
-}
-async function checkSet(name) {
-    const b = sheet("Checking…", [h("p", { class: "intro" }, "⏳ Running the integration and contract checks.")]);
-    try {
-        const r = await conn.request({ t: "cs", op: { op: "check", set: name } });
-        b.close();
-        const v = r.value;
-        const line = (x, label) => `${x.ok ? "✓" : "✗"} ${label}: ${x.command} (${x.duration_ms} ms)${x.ok ? "" : `\n${String(x.tail ?? "").split("\n").slice(-12).map((l) => `    ${l}`).join("\n")}`}`;
-        const out = [...asArray(v.integration).map((x) => line(x, "integration")), ...Object.entries(v.members ?? {}).map(([m, x]) => line(x, m))];
-        textSheet(v.ok ? "Checks pass" : "Checks failed", out.join("\n") || "No checks are defined (a template's integration and contract_checks, or `cs new --integration`).");
-        set.reload(name);
-    }
-    catch (e) {
-        b.close();
-        ui.toast(errText(e));
-    }
-}
-function shipMenu(i) {
-    const name = i.set.name;
-    menu("Ship the set", [
-        { title: tip("set.commit"), label: "Commit every member…", run: () => form("Commit the set", [{ key: "message", label: "Message", type: "textarea", required: true, rows: 3 }], "Commit", async (v) => { const r = await conn.request({ t: "cs", op: { op: "commit", set: name, message: v.message } }); ui.toast(`Committed ${asArray(r.value?.committed).length} member(s)`); set.reload(name); }) },
-        { title: tip("set.push"), label: "Push, in dependency order", run: async () => { const v = await csOp({ op: "push", set: name, yes: false }); if (v) {
-                ui.toast(v.gate ? "Waiting for your approval below" : `Pushed: ${asArray(v.pushed).join(", ") || "none"}`);
-                set.reload(name);
-            } } },
-        { title: tip("set.pr"), label: "Open the pull requests", run: async () => { const v = await csOp({ op: "pr", set: name, draft: false }); if (v) {
-                textSheet("Pull requests", asArray(v.opened).map((x) => `${x.member}  #${x.number}  ${x.url}`).join("\n") || "None opened.");
-                set.reload(name);
-            } } },
-        { title: tip("set.land"), label: "Land the set", hint: "Merge the members one by one, in order", run: () => confirm("Land the set?", `Merges ${(i.set.train?.order ?? i.set.members.map((m) => m.name)).join(" → ")}, stopping at the first that fails.`, "Land it", async () => { const v = await csOp({ op: "land", set: name, yes: false }); if (v) {
-                ui.toast(`Landing ${asArray(v.landing).join(" → ")}`);
-                set.reload(name);
-            } }, false) },
-    ]);
-}
-function setView(rest) {
-    const [raw, sub] = rest.split("/");
-    const name = safeDecode(raw);
-    if (sub === "contract")
-        return contractView(name);
-    if (sub === "log")
-        return ledgerView(name);
-    if (sub === "checkpoints")
-        return setCheckpointsView(name);
-    poll("set", () => set.refresh(name));
-    const i = set.get(name);
-    const body = pending(set, name) ?? (() => {
-        const c = i.set;
-        const myGates = i.gates;
-        return h("div", { class: "stack-in", title: tip("set.show") }, ...myGates.map(gateCard), h("div", { class: "pr-head" }, badge(i.report.state, i.report.issues.length ? "bad" : "info"), badge(c.phase), badge(c.layout), i.job ? badge(`${i.job} running`, "warn") : null), c.goal ? h("p", { class: "intro" }, c.goal.split("\n")[0]) : null, bar(h("button", { class: "primary", title: tip("set.contract"), onclick: () => go(`#/set/${enc(name)}/contract`) }, "Contract"), h("button", { title: tip("set.check"), onclick: () => void checkSet(name) }, "Check"), h("button", { onclick: () => shipMenu(i) }, "Ship…"), h("button", { title: tip("set.message"), onclick: () => msgSet(name) }, "Message"), h("button", { class: "icon", "aria-label": "More", onclick: () => menu(name, [
-                { title: tip("set.log"), label: "Ledger", run: () => go(`#/set/${enc(name)}/log`) },
-                { title: tip("set.checkpoint"), label: "Checkpoint now", run: async () => { const v = await csOp({ op: "checkpoint", set: name, label: null }); if (v) {
-                        ui.toast(`Checkpoint #${v.n}`);
-                        set.reload(name);
-                    } } },
-                { title: tip("set.checkpoints"), label: "Checkpoints", run: () => go(`#/set/${enc(name)}/checkpoints`) },
-                { title: tip("set.overlay"), label: "Wire members to each other…", run: () => overlaySet(name) },
-                i.lead && { label: "Open the lead", run: () => go(`#/s/${enc(i.lead)}`) },
-                { title: tip("set.add"), label: "Add a project…", run: () => addMember(name) },
-                { title: tip("set.remove"), label: "Remove the set", danger: true, run: () => confirm(`Remove change set ${name}?`, "Every member's worktree is removed, or none is. Nothing is removed if that would lose work.", "Remove", async () => { const v = await csOp({ op: "rm", set: name, keep: [], force: false }, "Removed"); if (v)
-                        go("#/sets"); }) },
-            ]) }, "⋯")), ...i.report.issues.map((x) => h("section", { class: "issue" }, h("b", {}, `✗ ${x.state.replace(/_/g, " ")}${x.member ? ` · ${x.member}` : ""}`), h("div", {}, x.detail), h("div", { class: "sub" }, `→ ${x.action}`))), section("Members", h("div", { class: "rows" }, ...c.members.map((m) => {
-            const word = i.report.members[m.name] ?? "";
-            const live = i.live[m.name] ?? {};
-            const bits = [live.ahead ? `+${live.ahead} commit(s)` : "", live.dirty ? "uncommitted" : "", m.pr ? `PR #${m.pr}` : "", m.overlay ? `overlay ${m.overlay}` : "", m.landed ?? ""].filter(Boolean).join(", ");
-            return row(h("span", {}, markOf(word), " ", m.name, " ", badge(word || "idle")), `${data.projects.get(m.project)?.slug ?? m.project} · ${m.branch}${bits ? ` · ${bits}` : ""}`, m.depends_on?.length ? `after ${m.depends_on.join(", ")}` : "", { onclick: () => setMemberMenu(i, m) });
-        }))));
-    })();
-    return h("div", {}, ui.header(name, "#/sets"), h("main", { class: "stack" }, body));
-}
-function addMember(name) {
-    form("Add a project", [
-        { key: "project", label: "Project", type: "select", options: [...data.projects.values()].map((p) => [p.id, p.slug]) },
-        { key: "agent", label: "Agent", placeholder: "default" },
-        { key: "after", label: "Depends on", placeholder: "members, comma separated" },
-    ], "Add", async (v) => { await conn.request({ t: "cs", op: { op: "add", set: name, project: v.project, agent: v.agent || null, depends_on: (v.after || "").split(",").map((s) => s.trim()).filter(Boolean) } }); set.reload(name); });
-}
-// the contract
-const contract = new Cache((name) => conn.request({ t: "cs", op: { op: "contract", set: name, action: { do: "show", rev: null } } }).then((r) => r.value));
-const contractLog = new Cache((name) => conn.request({ t: "cs", op: { op: "contract", set: name, action: { do: "history" } } }).then((r) => asArray(r.value)));
-function contractView(name) {
-    const c = contract.get(name);
-    const hist = contractLog.get(name);
-    const i = set.get(name);
-    const waiting = i?.gates?.find((g) => g.step.startsWith("contract-r"));
-    const body = pending(contract, name) ?? h("div", { class: "stack-in", title: tip("set.contract") }, waiting ? h("section", { class: "prompt gate" }, h("b", {}, `${waiting.step.replace("contract-", "Contract ")} waits for you`), h("div", { class: "actions" }, h("button", { class: "allow", title: tip("set.contract_approve"), onclick: () => resolveGate(waiting, "approve") }, "Approve"), h("button", { class: "deny", title: tip("set.contract_reject"), onclick: () => resolveGate(waiting, "revise", true) }, "Send back…"))) : null, h("div", { class: "pr-head" }, c.draft ? badge("draft: no revision yet") : badge(`r${c.n} by ${c.by}`), c.approved ? badge(`approved by ${c.approved}`, "ok") : null), bar(h("button", { class: "primary", title: tip("set.contract_edit"), onclick: () => form("Revise the contract", [{ key: "text", label: "CONTRACT.md", type: "textarea", rows: 16, value: c.text ?? "", required: true }, { key: "summary", label: "What changed", value: "edited by the human" }], "Save a revision", async (v) => { await conn.request({ t: "cs", op: { op: "contract", set: name, action: { do: "revise", text: v.text, diff: null, affects: [], summary: v.summary || null } } }); contract.reload(name); contractLog.reload(name); set.reload(name); }) }, "Edit"), h("button", { onclick: async () => { const v = await csOp({ op: "contract", set: name, action: { do: "diff", a: null, b: null, file: null } }); if (v)
-            textSheet(v.same ? "No drift" : "Revision to revision", v.same ? `The file matches contract r${v.a}.` : v.diff); } }, "Diff"), h("button", { class: "icon", "aria-label": "Refresh", onclick: () => { contract.reload(name); contractLog.reload(name); } }, "↻")), h("pre", { class: "block" }, c.text ?? ""), section("History", pending(contractLog, name) ?? h("div", { class: "rows" }, ...hist.map((r) => row(`r${r.n} · by ${r.by}`, `${r.summary ?? ""}${r.affects?.length ? ` · affects ${r.affects.join(", ")}` : ""}`, r.approved ? badge("approved", "ok") : ago(r.at_ms), { onclick: async () => { const v = await csOp({ op: "contract", set: name, action: { do: "show", rev: r.n } }); if (v)
-            textSheet(`Contract r${r.n}`, v.text); } })))));
-    return h("div", {}, ui.header("Contract", `#/set/${enc(name)}`), h("main", { class: "stack" }, body));
-}
-const ledger = new Cache((name) => conn.request({ t: "cs", op: { op: "log", set: name, since: null } }).then((r) => asArray(r.value)));
-function ledgerView(name) {
-    poll("ledger", () => ledger.refresh(name), 3000);
-    const l = ledger.get(name);
-    return h("div", {}, ui.header("Ledger", `#/set/${enc(name)}`), h("main", { class: "stack", title: tip("set.log") }, pending(ledger, name) ?? h("div", { class: "timeline" }, ...[...l].reverse().map((e) => h("div", { class: "tl" }, h("time", {}, new Date(e.at_ms).toLocaleTimeString()), h("b", {}, e.t === "message" ? `${e.from ?? ""} → ${e.to ?? ""}` : e.kind), h("span", {}, e.text))))));
-}
-function setCheckpointsView(name) {
-    const i = set.get(name);
-    const cps = i?.set.checkpoints ?? [];
-    return h("div", {}, ui.header("Set checkpoints", `#/set/${enc(name)}`), h("main", { class: "stack", title: tip("set.checkpoints") }, pending(set, name) ?? (cps.length ? h("div", { class: "rows" }, ...[...cps].reverse().map((k) => row(`#${k.n} ${k.label ?? ""}`, `${k.reason} · ${Object.keys(k.members).length} members`, ago(k.at_ms), {
-        onclick: () => menu(`Checkpoint ${k.n}`, [{ title: tip("set.restore"), label: "Put every member back to this", danger: true, run: () => confirm(`Restore checkpoint ${k.n}?`, "Every member's worktree goes back to how it was then.", "Restore", async () => { const v = await csOp({ op: "restore", set: name, n: k.n, force: false }); if (v) {
-                    ui.toast(asArray(v.notes)[0] ?? "Restored");
-                    set.reload(name);
-                } }) }])
-    })))
-        : h("p", { class: "empty" }, "No checkpoints yet."))));
-}
 views.set("runs", () => runsView());
 views.set("run", runView);
 views.set("compare", compareView);
 views.set("recipes", () => recipesView());
-views.set("sets", () => setsView());
-views.set("set", setView);

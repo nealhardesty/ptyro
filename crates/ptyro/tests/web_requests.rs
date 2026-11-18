@@ -53,27 +53,6 @@ fn every_request_the_web_app_names_exists() {
     }
 }
 
-/// The change-set operations (`{t: "cs", op: {op: …}}`) the pages send.
-#[test]
-fn every_change_set_operation_the_web_app_names_exists() {
-    let mut seen = 0;
-    for (file, src) in sources() {
-        for part in src.split("op: { op: \"").skip(1).chain(src.split("csOp({ op: \"").skip(1)) {
-            let name: String =
-                part.chars().take_while(|c| c.is_ascii_lowercase() || *c == '_').collect();
-            seen += 1;
-            let err = serde_json::from_value::<Request>(json!({ "t": "cs", "op": { "op": name } }))
-                .err()
-                .map(|e| e.to_string());
-            assert!(
-                err.as_deref().is_none_or(|e| !e.contains("unknown variant")),
-                "web/src/{file}: no change-set operation {name:?}"
-            );
-        }
-    }
-    assert!(seen > 20, "the scan found only {seen} operations");
-}
-
 /// The shapes the pages send, written as the pages write them (nulls for what's left out).
 #[test]
 fn the_shapes_the_web_app_sends_parse() {
@@ -138,20 +117,6 @@ fn the_shapes_the_web_app_sends_parse() {
         json!({ "t": "web" }),
         json!({ "t": "web", "on": true, "via": "lan" }),
         json!({ "t": "web", "on": false, "via": null }),
-        json!({ "t": "cs", "op": { "op": "new", "spec": { "name": "n", "projects": ["p"], "template": null, "lead": null, "layout": "manual", "goal": null, "from_issue": null, "depends": {}, "agents": {}, "bases": {}, "gates": null, "integration": [], "workspace": null, "overlay": false, "env": {}, "trust": null } } }),
-        json!({ "t": "cs", "op": { "op": "log", "set": "s", "since": null } }),
-        json!({ "t": "cs", "op": { "op": "msg", "set": "s", "to": "@all", "text": "t", "kind": null, "interrupt": false } }),
-        json!({ "t": "cs", "op": { "op": "contract", "set": "s", "action": { "do": "show", "rev": null } } }),
-        json!({ "t": "cs", "op": { "op": "contract", "set": "s", "action": { "do": "history" } } }),
-        json!({ "t": "cs", "op": { "op": "contract", "set": "s", "action": { "do": "diff", "a": null, "b": null, "file": null } } }),
-        json!({ "t": "cs", "op": { "op": "contract", "set": "s", "action": { "do": "revise", "text": "t", "diff": null, "affects": [], "summary": null } } }),
-        json!({ "t": "cs", "op": { "op": "checkpoint", "set": "s", "label": null } }),
-        json!({ "t": "cs", "op": { "op": "restore", "set": "s", "n": 1, "force": false } }),
-        json!({ "t": "cs", "op": { "op": "overlay", "set": "s", "member": null, "mode": "auto" } }),
-        json!({ "t": "cs", "op": { "op": "add", "set": "s", "project": "p", "agent": null, "depends_on": [] } }),
-        json!({ "t": "cs", "op": { "op": "rm", "set": "s", "keep": [], "force": false } }),
-        json!({ "t": "cs", "op": { "op": "push", "set": "s", "yes": false } }),
-        json!({ "t": "cs", "op": { "op": "land", "set": "s", "yes": false } }),
     ];
     for s in shapes {
         if let Err(e) = serde_json::from_value::<Request>(s.clone()) {

@@ -1035,7 +1035,13 @@ async fn api_request(
         Err((code, why)) => return respond(code, "text/plain", why),
     };
     let Ok(request) = serde_json::from_slice::<ptyro_protocol::Request>(&body) else {
-        return respond(StatusCode::BAD_REQUEST, "text/plain", "expected a JSON request");
+        let retired = serde_json::from_slice::<serde_json::Value>(&body).ok().and_then(|v| {
+            v["t"].as_str().and_then(ptyro_protocol::retired_request).map(|e| e.message)
+        });
+        return match retired {
+            Some(why) => respond(StatusCode::GONE, "text/plain", why),
+            None => respond(StatusCode::BAD_REQUEST, "text/plain", "expected a JSON request"),
+        };
     };
     let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Web);
     // Anyone who can reach this port could otherwise start a daemon.
