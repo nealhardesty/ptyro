@@ -21,6 +21,7 @@ pub const TARGETS: &[(&str, Target)] = &[
     ("hostjson", hostjson),
     ("handoff", handoff),
     ("parsers", parsers),
+    ("kb", kb),
 ];
 
 pub fn target(name: &str) -> Option<fn(&[u8])> {
@@ -340,6 +341,18 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
             r.extend_from_slice(b"hello");
             v.push(r);
         }
+        "kb" => {
+            for s in [
+                "\0# Title\n\ntext. More text?\n\n## Sub ##\n\n```\n# code\n```\n\nSetext\n===\n\nbody\n---\n",
+                "\x01export API_TOKEN=abc123def456 \"password\": \"hunter2\" token = get_token()\n",
+                "\x02a turn\n\nBearer eyJhbGciOi.eyJzdWIiOiIx.sig and https://u:pw@h/x\n\nsk-ant-api03-aaaaaaaaaaaaaaaa1",
+                "\x06-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n-----BEGIN X-----\nAAAA\n",
+                "\x00---\nby: you\n---\n\n9f8e7d6c5b4a39281706f5e4d3c2b1a0ZZZZYYYY <secret:NAME> <redacted>\n",
+                "\x04*.pem\n.env*\nfixtures/**/keys\n(unclosed[\n",
+            ] {
+                v.push(s.as_bytes().to_vec());
+            }
+        }
         "settings" => {
             for s in [
                 "\n\n\n\n",
@@ -472,6 +485,61 @@ pub fn mutate(rng: &mut Rng, input: &[u8], corpus: &[Vec<u8>]) -> Vec<u8> {
     }
     v.truncate(64 * 1024);
     v
+}
+
+/// The knowledge base's way in (SPEC §25.5) on any text: redaction, the never list, the
+/// cutters and the plan never panic; no piece passes the limit; a cutter loses nothing but
+/// white space; and the same source gives the same plan.
+pub fn kb(data: &[u8]) {
+    use ptyro_core::kb::chunk::{self, LIMIT, Part};
+    use ptyro_core::kb::ingest::{self, Body, Gate, Never, Source, Stamp};
+    use ptyro_core::kb::redact::Redactor;
+    use ptyro_core::kb::{ChunkKind, ItemKind, Writer};
+
+    let head = data.first().copied().unwrap_or(0);
+    let text = String::from_utf8_lossy(data.get(1..).unwrap_or_default());
+    // The first line is also tried as a secret's value, a pattern, a glob and a path.
+    let line = text.lines().next().unwrap_or_default().to_owned();
+    let (redactor, _) =
+        Redactor::new(vec![(line.clone(), "<secret:FUZZ>".into())], std::slice::from_ref(&line));
+    let strict = Redactor::strict(vec![(line.clone(), "<secret:FUZZ>".into())]);
+    let _ = redactor.redact(&text);
+    let _ = strict.redact(&text);
+    let never = Never::new(std::slice::from_ref(&line));
+    let _ = never.is_never(std::path::Path::new(&line));
+
+    let strip = |s: &str| s.split_whitespace().collect::<String>();
+    let pieces = chunk::split(&text);
+    assert!(pieces.iter().all(|p| !p.is_empty() && p.chars().count() <= LIMIT));
+    assert_eq!(strip(&pieces.concat()), strip(&text), "the cutter lost text");
+    for part in chunk::markdown("f.md", &text, 0) {
+        assert!(part.text.chars().count() <= LIMIT);
+    }
+
+    let body = match head % 3 {
+        0 => Body::Markdown { name: "f.md".into(), text: text.clone().into_owned(), at_ms: 0 },
+        1 => Body::Plain { name: "f.txt".into(), text: text.clone().into_owned(), at_ms: 0 },
+        _ => Body::Parts(
+            text.split("\n\n")
+                .enumerate()
+                .map(|(i, t)| Part::new(ChunkKind::User, t, i as u64).anchor(format!("a{}", i / 2)))
+                .collect(),
+        ),
+    };
+    let mut source = Source::new(ItemKind::File, "file:///fuzz", body);
+    source.title = Some(line);
+    source.append = head & 4 != 0;
+    let plan = |s: Source| {
+        let passed = ingest::gate(&Gate::open(&never)).ok()?;
+        ingest::plan(passed, s, Stamp::new(Writer::File, None), &redactor).ok()
+    };
+    let a = plan(source.clone());
+    assert_eq!(a, plan(source), "the same source gave another plan");
+    if let Some(p) = a {
+        assert!(p.chunks.iter().all(|c| c.text.chars().count() <= LIMIT && !c.text.is_empty()));
+        // (More than that is refused whole, not kept.)
+        assert!(p.append || p.hits <= ptyro_core::kb::redact::MAX_HITS);
+    }
 }
 
 #[cfg(test)]

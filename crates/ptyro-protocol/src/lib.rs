@@ -1036,6 +1036,9 @@ pub struct DaemonDoctor {
     /// run (SPEC §22.10).
     #[serde(default)]
     pub meaning: Option<String>,
+    /// `kb.db`, the knowledge base: what it holds, or why it can't be opened (SPEC §25.4).
+    #[serde(default)]
+    pub kb: Option<String>,
     /// What removed features left in ptyro's records that is still the person's (archived
     /// worktrees' snapshots, a main checkout still paired), each with how to get it back (1.45).
     #[serde(default)]

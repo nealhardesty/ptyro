@@ -139,6 +139,10 @@ pub struct Plan {
     /// The size of `chat.db`, your chats' text, which goes with the data directory (SPEC §22.4).
     #[serde(default)]
     pub chats: Option<u64>,
+    /// The size of `kb.db`, the knowledge base: what was kept of your agents' sessions, which
+    /// goes with the data directory (SPEC §25.12).
+    #[serde(default)]
+    pub knowledge: Option<u64>,
     /// The size of `scratchpad.md` and its saved copies: notes from when ptyro had a scratchpad
     /// (removed 2026-11-17), the person's own, which go with the data directory.
     #[serde(default)]
@@ -493,6 +497,9 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     let chats = std::fs::metadata(paths.data.join("chat.db")).ok().map(|m| {
         m.len() + std::fs::metadata(paths.data.join("chat.db-wal")).map_or(0, |w| w.len())
     });
+    let knowledge = std::fs::metadata(paths.data.join("kb.db"))
+        .ok()
+        .map(|m| m.len() + std::fs::metadata(paths.data.join("kb.db-wal")).map_or(0, |w| w.len()));
     let notes = std::fs::metadata(paths.data.join("scratchpad.md"))
         .ok()
         .map(|m| m.len() + dir_size(&paths.data.join("scratchpad.history")));
@@ -577,6 +584,7 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         dirs,
         logins,
         chats,
+        knowledge,
         notes,
         worktrees,
         uncommitted_total,
@@ -625,6 +633,15 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         plan.chats.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
     {
         let _ = writeln!(s, "  chats         every chat you kept, chat.db ({})", human(bytes));
+    }
+    if let Some(bytes) =
+        plan.knowledge.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
+    {
+        let _ = writeln!(
+            s,
+            "  knowledge     what the knowledge base kept of your work, kb.db ({})",
+            human(bytes)
+        );
     }
     if let Some(bytes) =
         plan.notes.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))

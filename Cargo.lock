@@ -2388,6 +2388,7 @@ version = "0.0.89"
 dependencies = [
  "etcetera",
  "getrandom 0.4.3",
+ "regex",
  "rustix",
  "serde",
  "serde_json",
@@ -2498,6 +2499,7 @@ dependencies = [
 name = "ptyro-store"
 version = "0.0.89"
 dependencies = [
+ "proptest",
  "ptyro-core",
  "ptyro-meaning",
  "rusqlite",

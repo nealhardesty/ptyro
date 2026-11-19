@@ -90,3 +90,10 @@ path = "fuzz_targets/parsers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "kb"
+path = "fuzz_targets/kb.rs"
+test = false
+doc = false
+bench = false

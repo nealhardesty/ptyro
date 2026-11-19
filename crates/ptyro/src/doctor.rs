@@ -1071,6 +1071,13 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
         };
         r.add(S, "chat meaning", level, m.clone());
     }
+    if let Some(k) = &report.kb {
+        // The knowledge base (SPEC §25.4): `kb.db` opens, its schema, what it holds; or why not.
+        let bad = !k.starts_with("knowledge base: ")
+            || ["integrity", "FTS5", "secure delete"].iter().any(|w| k.contains(w));
+        let level = if bad { Level::Problem } else { Level::Ok };
+        r.add(S, "knowledge base", level, k.clone());
+    }
     worktrees(&c, config, r).await;
     if quick {
         return;

@@ -575,8 +575,38 @@ pub struct Config {
     pub clipboard: Clipboard,
     pub shell: Shell,
     pub chat: Chat,
+    pub kb: Kb,
     pub client: Client,
     pub updates: Updates,
+}
+
+/// The knowledge base (SPEC §25.13): everything that happens in ptyro, searchable in one
+/// place, kept in `kb.db`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Kb {
+    /// Off: nothing is ingested and nothing is offered; what is stored stays.
+    pub enabled: bool,
+    /// More patterns to redact before anything is stored (regexes), beside the built-in rules
+    /// for credentials (§25.7).
+    pub redact: Vec<String>,
+    /// More paths never to read (globs), beside the built-in list of key and credential files.
+    pub exclude: Vec<String>,
+}
+
+impl Default for Kb {
+    fn default() -> Self {
+        Self { enabled: true, redact: Vec::new(), exclude: Vec::new() }
+    }
+}
+
+impl Kb {
+    fn validate(&self) -> Result<(), String> {
+        for p in &self.redact {
+            crate::kb::redact::pattern(p).map_err(|e| format!("kb.redact: {e}"))?;
+        }
+        Ok(())
+    }
 }
 
 /// Newer versions of your agents (BOOT5, SPEC §24.7): looked for at most once a day, offered,
@@ -1543,6 +1573,7 @@ impl Config {
     fn validate(&self) -> Result<(), String> {
         self.client.validate()?;
         self.chat.validate()?;
+        self.kb.validate()?;
         self.updates.validate()?;
         parse_duration(&self.shell.notify_after).map_err(|e| format!("shell.notify_after: {e}"))?;
         if self.ui.prefix.keys().is_empty() {
@@ -2323,6 +2354,20 @@ pub fn normalize_key(k: KeyEvent) -> KeyEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_knowledge_base_is_on_and_a_bad_pattern_is_refused() {
+        let c = Config::parse("").unwrap();
+        assert!(c.kb.enabled && c.kb.redact.is_empty() && c.kb.exclude.is_empty());
+        let c = Config::parse(
+            "[kb]\nenabled = false\nredact = ['ACME-\\d+']\nexclude = ['private/**']\n",
+        )
+        .unwrap();
+        assert!(!c.kb.enabled);
+        assert_eq!((c.kb.redact.len(), c.kb.exclude.len()), (1, 1));
+        let e = Config::parse("[kb]\nredact = ['(open']\n").unwrap_err();
+        assert!(e.starts_with("kb.redact: \"(open\" is not a pattern"), "{e}");
+    }
 
     #[test]
     fn what_a_chat_may_use() {

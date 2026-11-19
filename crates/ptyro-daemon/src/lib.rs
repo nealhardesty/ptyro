@@ -16,6 +16,7 @@ mod engine;
 mod github;
 mod guard;
 mod handoff;
+mod kb;
 mod kept;
 mod launch;
 mod listen;
@@ -384,6 +385,7 @@ async fn serve(
     daemon.start_serve_supervisor();
     daemon.start_wsl_hold();
     daemon.start_chats().await;
+    daemon.start_kb();
     // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
     {
         let d = Arc::clone(&daemon);

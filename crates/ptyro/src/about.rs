@@ -216,6 +216,8 @@ pub async fn collect(ctx: &Ctx) -> About {
     let places = vec![
         place("config", config_path),
         place("data", ctx.paths.data.clone()),
+        // What the knowledge base keeps (SPEC §25.12): sessions' text, on this computer only.
+        place("knowledge", ctx.paths.data.join("kb.db")),
         place("logs", ctx.paths.log_dir()),
         place("socket", ctx.paths.socket.clone()),
     ];

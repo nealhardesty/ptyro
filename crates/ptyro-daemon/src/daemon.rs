@@ -136,6 +136,8 @@ pub struct Daemon {
     pub(crate) project_adding: tokio::sync::Mutex<()>,
     /// Chats (SPEC §22): `chat.db` and the chats being followed or answered.
     pub(crate) chats: crate::chats::Chats,
+    /// The knowledge base (SPEC §25): `kb.db` and the queue of what is to be ingested.
+    pub(crate) kb: crate::kb::Kb,
 }
 
 impl Daemon {
@@ -161,6 +163,7 @@ impl Daemon {
         let (io_pause, pause_rx) = watch::channel(false);
         let (run_id, started_ms) = identity.unwrap_or_else(|| (SessionId::new().full(), now_ms()));
         let chats = crate::chats::Chats::open(&paths.data.join("chat.db"));
+        let kb = crate::kb::Kb::new(paths.data.join("kb.db"));
         let tools_path = ptyro_agents::setup::path_dirs(&paths);
         Arc::new(Self {
             paths,
@@ -248,6 +251,7 @@ impl Daemon {
             kv_writer: Arc::new(tokio::sync::Mutex::new(())),
             project_adding: tokio::sync::Mutex::new(()),
             chats,
+            kb,
         })
     }
 
@@ -1399,6 +1403,7 @@ impl Daemon {
                 report.warnings.extend(warnings);
                 report.chats = self.chat_doctor().await;
                 report.meaning = self.meaning_doctor().await;
+                report.kb = self.kb_doctor().await;
                 Ok(Reply::Doctor { report })
             }
             Request::Agents => {

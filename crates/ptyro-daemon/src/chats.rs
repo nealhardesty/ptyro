@@ -2512,7 +2512,7 @@ fn count_in(
     true
 }
 
-fn human_bytes(n: u64) -> String {
+pub(crate) fn human_bytes(n: u64) -> String {
     match n {
         0..1024 => format!("{n} B"),
         1024..1_048_576 => format!("{:.0} KB", n as f64 / 1024.0),

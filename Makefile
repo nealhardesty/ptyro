@@ -24,7 +24,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments spike-wsl test-wsl tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments bench-kb-redact spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -146,6 +146,9 @@ spike-kb: ## KB0.1: the knowledge base's search at size, over CHUNKS (default 50
 
 spike-kb-comments: ## KB0.4: run the comment table (SPEC §25.6.3) over real code, read-only: ARGS="<folder>…" (default: this repository); counts what is kept and what each rule drops, with SAMPLE (default 8) of each to judge by eye
 	$(CARGO) run -q -p ptyro-core --example kb_comments -- $(or $(ARGS),.)
+
+bench-kb-redact: ## KB1.3: how long the knowledge base's redaction (SPEC §25.7) takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file)
+	$(CARGO) test --profile local -p ptyro-core --lib kb::redact::tests::a_mebibyte -- --nocapture
 
 spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
 	python3 scripts/spike-chat.py $(ARGS)

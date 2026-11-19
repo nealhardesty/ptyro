@@ -303,6 +303,12 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
+        id: "knowledge",
+        title: "Knowledge",
+        blurb: "One memory of your work for you and your agents, kept on this computer.",
+        scope: Scope::User,
+    },
+    Section {
         id: "editors",
         title: "Editors",
         blurb: "The editor that opens a worktree.",
@@ -699,6 +705,9 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.meaning", "chat", Kind::Bool, "Meaning search: also find messages by what they are about, not only by their words (marked ≈). Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; your chats never leave this machine.").also("semantic embeddings ai similar search"),
     s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
+    s("kb.enabled", "knowledge", Kind::Bool, "The knowledge base: what happens in ptyro is kept in one file on this computer (`kb.db`), for you and your agents to search. Off: nothing more is kept and nothing is offered; what is already stored stays.").also("memory recall library history search ingest"),
+    s("kb.redact", "knowledge", Kind::List, "More patterns to redact before anything is kept (regular expressions), beside the built-in rules for keys, tokens and passwords. What matches is stored as `<redacted>`.").also("secrets privacy credentials regex").or("none").eg("ACME-[0-9]{6}").adv(),
+    s("kb.exclude", "knowledge", Kind::List, "More paths never to read (globs like `*.sqlite` or `private/**`), beside the built-in list of key and credential files (`.env*`, `*.pem`, `.ssh/`…).").also("ignore never privacy secrets").or("none").eg("private/**").adv(),
     // ── Editors ──
     s("editors.default", "editors", dynamic(Source::Editors), "The editor that opens a worktree. Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
     s("editors.*.command", "editors", Kind::Argv, "The program and arguments; {path} is the worktree."),

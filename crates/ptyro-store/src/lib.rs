@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 pub mod chat;
+pub mod kb;
 mod migrate;
 
 /// Schema history. Never edit a released migration; append a new one.
