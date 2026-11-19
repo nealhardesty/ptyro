@@ -408,6 +408,9 @@ const scenarios = {
     await sleep(2500); // sleep 2 is over
     if (has("echo late")) throw new Error(`refused keys were typed: ${JSON.stringify(lines().filter(Boolean).slice(-6))}`);
     await tab.eval(`[...document.querySelectorAll(".term-lost button")].find(b => b.textContent === "Show").click()`);
+    // Hidden at first (they may be a password typed where nothing echoes); Reveal shows them.
+    await tab.waitFor("the keys, hidden", `document.querySelector("pre.lost-keys")?.textContent === ${JSON.stringify("••••••••••\n")}`);
+    await tab.eval(`[...document.querySelectorAll(".sheet button")].find(b => b.textContent === "Reveal").click()`);
     await tab.waitFor("the keys, readable", `document.querySelector("pre.lost-keys")?.textContent === ${JSON.stringify("echo late⏎\n")}`);
     await tab.eval(`[...document.querySelectorAll(".sheet button")].find(b => b.textContent === "Type them now").click()`);
     await until("the keys typed on purpose", () => has("late") >= 2 && lines().some((l) => l.trim() === "late"), 10_000);

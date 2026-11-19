@@ -39,11 +39,17 @@ export function shellsWorkspace(here) {
     return w ? workspaceOf(w) : listWorkspace();
 }
 /// `[shell] alt_digits` (default on): Alt+1…9 show shells, as in the TUI; off leaves them to the
-/// program in the terminal. Read where this device may read the config (on connecting, and on
-/// opening a session's page); elsewhere it is the default.
+/// program in the terminal. Read on connecting and on opening a session's page, from the daemon's
+/// status (1.52: every device may read it, whatever its scope); from an older daemon, from the
+/// config where this device may read it, else the default.
 let altDigits = true;
 export const altDigitsOn = () => altDigits;
 export async function readAltDigits() {
+    const st = await conn.request({ t: "status" }).catch(() => null);
+    if (typeof st?.status?.alt_digits === "boolean") {
+        altDigits = st.status.alt_digits;
+        return;
+    }
     if (conn.scope !== "full") {
         altDigits = true;
         return;

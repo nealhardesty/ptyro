@@ -3,7 +3,9 @@
 //! again: each lands once. A replay after the session asked something new (the fake agent's
 //! permission prompt) is refused and types nothing; so is one too old. A live upgrade keeps what
 //! was typed. A client that doesn't ask for numbered keys (an older web app) gets today's
-//! behaviour, and a named `send_text` sent twice types once.
+//! behaviour, and a named `send_text` sent twice types once. Live keys that arrive late (a dying
+//! connection held them) are judged; keys a session doesn't read are refused, not said typed;
+//! only typing takes control.
 
 use std::path::PathBuf;
 use std::process::{Child, Output, Stdio};
@@ -259,6 +261,30 @@ fn live(session: &str, stream: &str, keys: &[(u64, Value)]) -> Value {
     json!({ "t": "keys", "session": session, "stream": stream, "keys": keys })
 }
 
+/// Live keys typed once the page had heard of refusals up to `heard`.
+fn live_heard(session: &str, stream: &str, keys: &[(u64, Value)], heard: u64) -> Value {
+    let keys: Vec<Value> =
+        keys.iter().map(|(n, e)| json!({ "n": n, "event": e, "heard": heard })).collect();
+    json!({ "t": "keys", "session": session, "stream": stream, "keys": keys })
+}
+
+/// Live keys as the web app sends them: the token of the frame its page last drew, when they
+/// were typed on the daemon's clock, and the refusals it had heard of.
+fn stamped(
+    session: &str,
+    stream: &str,
+    keys: &[(u64, Value)],
+    token: &str,
+    typed_ms: u64,
+    heard: u64,
+) -> Value {
+    let keys: Vec<Value> = keys
+        .iter()
+        .map(|(n, e)| json!({ "n": n, "event": e, "token": token, "typed_ms": typed_ms, "heard": heard }))
+        .collect();
+    json!({ "t": "keys", "session": session, "stream": stream, "keys": keys })
+}
+
 /// A replay: each key with the token it was typed against and how long ago.
 fn replay(session: &str, stream: &str, keys: &[(u64, Value)], token: &str, age_ms: u64) -> Value {
     let keys: Vec<Value> = keys
@@ -337,10 +363,15 @@ async fn every_key_lands_exactly_once_across_a_dropped_socket() {
     );
     // A malformed one settles nothing: numbers not rising.
     b.send(live(&id, "s1", &[(20, ch('q')), (19, ch('q'))])).await;
-    let bad = b.typed("s1", 13).await;
+    let bad = b
+        .until("the malformed keys refused", |m| {
+            m["t"] == "typed" && m["stream"] == "s1" && m["refused"][0]["from"] == 20
+        })
+        .await;
     assert_eq!(bad["refused"][0]["why"], "invalid", "{bad}");
-    // Live keys after all that go as usual.
-    b.send(live(&id, "s1", &[(14, ch('o')), (15, ch('k')), (16, enter())])).await;
+    assert_eq!(bad["upto"], 0, "it settles nothing: {bad}");
+    // Live keys after all that (typed once the page heard of the refusal) go as usual.
+    b.send(live_heard(&id, "s1", &[(14, ch('o')), (15, ch('k')), (16, enter())], 13)).await;
     b.typed("s1", 16).await;
     let l = w.wait_lines("k", "the next line", |l| count(l, "ok") == 2);
     assert!(!l.iter().any(|x| x.contains('Z') || x.contains('q')), "{l:?}");
@@ -493,4 +524,184 @@ async fn what_was_typed_crosses_a_live_upgrade() {
     std::thread::sleep(Duration::from_millis(400));
     let l2 = w.lines("u");
     assert_eq!((count(&l2, "up"), count(&l2, "named")), (2, 2), "{l:?}");
+}
+
+/// Live keys are typed as they come, whatever their token (their own echo moves it), unless a
+/// dying connection held them: a frame says when it was made on the daemon's clock, keys say
+/// when they were typed on it, and keys late past the window are judged by their token, past the
+/// limit refused. Keys on their way behind a refused one aren't typed either. Only keys that
+/// were typed take control: a copy or a refusal doesn't.
+#[tokio::test]
+async fn late_keys_are_judged_and_only_typing_takes_control() {
+    let w = World::new();
+    let serve = w.serve();
+    let token = w.pair(&serve, "phone", "control");
+    let id = cat(&w, "late");
+    let mut a = Phone::new(serve.port, &token, true).await;
+    a.send(json!({ "t": "subscribe", "session": id, "size": null, "control": false })).await;
+    let f = a.until("a frame", |m| m["t"] == "screen" && m["frame"]["session"] == id).await;
+    let came = Instant::now();
+    let at = f["frame"]["at_ms"].as_u64().unwrap_or_else(|| panic!("a frame's clock: {f}"));
+    let tok = f["frame"]["state_token"].as_str().expect("a frame's token").to_owned();
+    let wall =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()
+            as u64;
+    assert!(at.abs_diff(wall) < 5_000, "the daemon's clock: {at} against {wall}");
+    // When a key typed `ago` ms before now was typed, on the daemon's clock, as the page reckons.
+    let clock = |ago: u64| at + came.elapsed().as_millis() as u64 - ago;
+
+    // Fresh, with a token the session no longer has (the page hadn't seen the new one): typed.
+    a.send(stamped(&id, "l1", &[(1, ch('f')), (2, enter())], "not-the-token", clock(0), 0)).await;
+    let ok = a.typed("l1", 2).await;
+    assert!(ok["refused"].is_null(), "{ok}");
+    w.wait_lines("late", "fresh keys", |l| count(l, "f") == 2);
+    let list = a.ok(json!({ "t": "list" })).await;
+    assert_eq!(session(&list, "late")["controller"], a.welcome["client_id"], "typing took control");
+    // Held 20 s by a dying connection: refused, whatever the token.
+    a.send(stamped(&id, "l1", &[(3, ch('Z')), (4, enter())], &tok, clock(20_000), 0)).await;
+    let no = a.typed("l1", 4).await;
+    assert_eq!(no["refused"][0]["why"], "stale", "{no}");
+    // 7 s late, the session as they saw it (a slow link): typed.
+    let ok_keys = [(5, ch('o')), (6, ch('k')), (7, enter())];
+    a.send(stamped(&id, "l1", &ok_keys, &tok, clock(7_000), 4)).await;
+    let ok = a.typed("l1", 7).await;
+    assert!(ok["refused"].is_null(), "{ok}");
+    w.wait_lines("late", "late keys into the same session", |l| count(l, "ok") == 2);
+    // 7 s late, and it changed since they were typed: refused.
+    a.send(stamped(&id, "l1", &[(8, ch('Q')), (9, enter())], "old-token", clock(7_000), 4)).await;
+    let no = a.typed("l1", 9).await;
+    assert_eq!(no["refused"][0]["why"], "changed", "{no}");
+    // On their way behind them, typed before the page heard: refused, fresh as they are.
+    a.send(stamped(&id, "l1", &[(10, ch('R')), (11, enter())], &tok, clock(0), 4)).await;
+    let no = a.typed("l1", 11).await;
+    let reason = no["refused"][0]["reason"].as_str().unwrap_or_default();
+    assert!(reason.starts_with("keys before them weren't typed"), "{no}");
+    // Typed once it heard: typed.
+    a.send(stamped(&id, "l1", &[(12, ch('g')), (13, enter())], &tok, clock(0), 11)).await;
+    a.typed("l1", 13).await;
+    let l = w.wait_lines("late", "keys typed after the refusal", |l| count(l, "g") == 2);
+    assert!(!l.iter().any(|x| x.contains('Z') || x.contains('Q') || x.contains('R')), "{l:?}");
+
+    // Another page of the same device: a copy of A's keys, and keys refused, take no control.
+    let mut b = Phone::new(serve.port, &token, true).await;
+    assert_ne!(b.welcome["client_id"], a.welcome["client_id"]);
+    b.send(live(&id, "l1", &[(1, ch('f'))])).await;
+    b.typed("l1", 1).await;
+    b.send(stamped(&id, "b1", &[(1, ch('X'))], &tok, clock(20_000), 0)).await;
+    let no = b.typed("b1", 1).await;
+    assert_eq!(no["refused"][0]["why"], "stale", "{no}");
+    let list = b.ok(json!({ "t": "list" })).await;
+    assert_eq!(session(&list, "late")["controller"], a.welcome["client_id"], "{list:#}");
+    // B types: now it controls.
+    b.send(live_heard(&id, "b1", &[(2, ch('b')), (3, enter())], 1)).await;
+    b.typed("b1", 3).await;
+    w.wait_lines("late", "B's keys", |l| count(l, "b") == 2);
+    let list = b.ok(json!({ "t": "list" })).await;
+    assert_eq!(session(&list, "late")["controller"], b.welcome["client_id"], "{list:#}");
+    // Every device may read whether Alt-1…9 are the shells' (`[shell] alt_digits`), even one
+    // that may only watch and can't read the settings.
+    let watch = w.pair(&serve, "watcher", "read");
+    let mut v = Phone::new(serve.port, &watch, true).await;
+    let st = v.ok(json!({ "t": "status" })).await;
+    assert_eq!(st["status"]["alt_digits"], true, "{st}");
+}
+
+/// A session that doesn't read its input (stopped, stuck) fills its input queue: what can't be
+/// queued is refused (`overflow`), never said typed; what follows it too.
+#[cfg(unix)]
+#[tokio::test]
+async fn keys_a_session_doesnt_read_are_refused_not_said_typed() {
+    let w = World::new();
+    let serve = w.serve();
+    let token = w.pair(&serve, "phone", "control");
+    // Raw, so a full terminal input buffer holds the writer (instead of dropping silently).
+    let v = w.json(&[
+        "new",
+        "-d",
+        "-n",
+        "stuck",
+        "--json",
+        "--",
+        "sh",
+        "-c",
+        "stty raw -echo; echo ready; exec sleep 600",
+    ]);
+    let id = v["id"].as_str().or_else(|| v["session"]["id"].as_str()).expect("an id").to_owned();
+    w.wait_lines("stuck", "it to be ready", |l| l.iter().any(|x| x == "ready"));
+    let mut p = Phone::new(serve.port, &token, true).await;
+    let per = ptyro_protocol::MAX_SEQ_KEYS as u64;
+    let rounds = 4;
+    for r in 0..rounds {
+        let keys: Vec<(u64, Value)> = (r * per + 1..=(r + 1) * per).map(|n| (n, ch('x'))).collect();
+        p.send(live(&id, "o1", &keys)).await;
+    }
+    let mut overflow = None;
+    let mut upto = 0;
+    while upto < rounds * per {
+        let m = p.typed("o1", upto + 1).await;
+        upto = m["upto"].as_u64().unwrap();
+        if let Some(r) = m["refused"].as_array().and_then(|a| a.first()) {
+            overflow.get_or_insert_with(|| r.clone());
+        }
+    }
+    let r = overflow.expect("keys the session couldn't take were refused, not said typed");
+    assert_eq!(r["why"], "overflow", "{r}");
+    assert!(r["from"].as_u64().unwrap() > 1, "the first keys went: {r}");
+}
+
+/// What a session waits for can change with nothing new on its screen (a hook sets its status):
+/// a frame says so all the same (its token alone), so the token a page's keys carry is the one
+/// the session has as the page shows it, never a list's newer one, and never left behind.
+#[tokio::test]
+async fn a_status_change_alone_brings_a_frame_with_its_token() {
+    let w = World::new();
+    let serve = w.serve();
+    let token = w.pair(&serve, "laptop", "full");
+    w.ok(&["new", "-d", "-n", "a1", "--agent", "claude"]);
+    let mut p = Phone::new(serve.port, &token, true).await;
+    let deadline = Instant::now() + WAIT;
+    let id = loop {
+        let list = p.ok(json!({ "t": "list" })).await;
+        let s = session(&list, "a1").clone();
+        if s["status"]["status"] == "idle" {
+            break s["id"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < deadline, "a1 never went idle: {s:#}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    p.send(json!({ "t": "subscribe", "session": id, "size": null, "control": false })).await;
+    let screen = |id: &str| {
+        let id = id.to_owned();
+        move |m: &Value| m["t"] == "screen" && m["frame"]["session"] == id.as_str()
+    };
+    // Drawn, and acknowledged as a page does (one frame is in flight until it is), until quiet.
+    let mut seq = p.until("the first frame", screen(&id)).await["frame"]["seq"].clone();
+    loop {
+        p.send(json!({ "t": "ack", "session": id, "seq": seq })).await;
+        p.quiet(600, |_| false).await;
+        let Some(i) = p.pushed.iter().rposition(screen(&id)) else { break };
+        seq = p.pushed[i]["frame"]["seq"].clone();
+        p.pushed.retain(|m| m["t"] != "screen");
+    }
+    let before = p.token_of("a1").await;
+    // A turn begins (as Claude's hook says when a prompt is submitted): nothing is drawn.
+    p.ok(json!({ "t": "hook", "session": id, "adapter": "claude", "event": "UserPromptSubmit", "payload": {} }))
+        .await;
+    let after = loop {
+        let t = p.token_of("a1").await;
+        if t != before {
+            break t;
+        }
+        assert!(Instant::now() < deadline, "the hook never moved the token");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let id2 = id.clone();
+    let f = p
+        .until("a frame with the new token", move |m| {
+            m["t"] == "screen"
+                && m["frame"]["session"] == id2.as_str()
+                && m["frame"]["state_token"] == after.as_str()
+        })
+        .await;
+    assert!(f["frame"]["at_ms"].as_u64().is_some(), "{f}");
 }

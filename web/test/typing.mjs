@@ -20,7 +20,7 @@
 //   ["blur"]
 // Between steps no time passes and no timer runs unless a wait says so (the same task).
 import assert from "node:assert/strict";
-import { MOD, Typist, SETTLE_MS, LIVE_MAX, dictated, straighten, multiword, hasCJK, strayKey, hardKey, ownKeyboard, autoFocus, shellDigit, keyOf } from "../dist/keys.js";
+import { MOD, Typist, SETTLE_MS, LIVE_MAX, dictated, straighten, multiword, hasCJK, strayKey, hardKey, ownKeyboard, autoFocus, shellDigit, isMac, keyOf } from "../dist/keys.js";
 
 const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: () => false, ...o });
 
@@ -359,7 +359,7 @@ function terminalFirst() {
 
 /// SHELLS' Alt+1…9, Alt+0: shell N, decided by the physical key, before the terminal sees it.
 function altDigits() {
-  const term = { focus: "field", terminal: true, dialog: false, on: true };
+  const term = { focus: "field", terminal: true, dialog: false, on: true, mac: true };
   const alt = (key, code, o = {}) => dom(key, { altKey: true, code, ...o });
   // Windows and Linux: Alt+1 says "1"; a Mac's Option+1 says "¡", Option+0 "º".
   assert.equal(shellDigit(alt("1", "Digit1"), term), 1);
@@ -384,4 +384,21 @@ function altDigits() {
   assert.equal(shellDigit(alt("å", "KeyA"), term), null);
   assert.equal(shellDigit(dom("1", { code: "Digit1" }), term), null, "a plain digit is typed");
   assert.equal(shellDigit(alt("1", "Digit1", { isComposing: true }), term), null);
+  // French AZERTY on Windows or Linux: the digit row types `& é " ' ( - è _ ç à` unshifted, and
+  // Alt doesn't change it: Alt+1 says `&`, Alt+0 `à`. Still the shells (Alt makes no character
+  // off a Mac; AltGr, which does, is Ctrl+Alt or AltGraph and stays out).
+  const pc = { ...term, mac: false };
+  for (const [k, code, want] of [["&", "Digit1", 1], ["é", "Digit2", 2], ['"', "Digit3", 3], ["'", "Digit4", 4], ["(", "Digit5", 5], ["-", "Digit6", 6], ["è", "Digit7", 7], ["_", "Digit8", 8], ["ç", "Digit9", 9], ["à", "Digit0", 10]]) {
+    assert.equal(shellDigit(alt(k, code), pc), want, `AZERTY Alt+${k}`);
+  }
+  assert.equal(shellDigit(alt("1", "Digit1"), pc), 1, "QWERTY Alt+1");
+  assert.equal(shellDigit(alt("~", "Digit2", { ctrlKey: true }), pc), null, "AltGr+2 on Windows types ~");
+  assert.equal(shellDigit(alt("{", "Digit4", { getModifierState: (k) => k === "AltGraph" }), pc), null, "AltGr+4 on Linux types {");
+  // On a Mac the layout's own characters still type: a French Mac's Option+5 is `{`.
+  assert.equal(shellDigit(alt("{", "Digit5"), term), null);
+  assert.equal(shellDigit(alt("&", "Digit1"), term), null, "on a Mac, an ASCII character Option types is the layout's");
+  assert.equal(isMac("MacIntel"), true);
+  assert.equal(isMac("iPhone"), true);
+  assert.equal(isMac("Win32"), false);
+  assert.equal(isMac("Linux x86_64"), false);
 }

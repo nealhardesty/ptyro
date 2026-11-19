@@ -1,18 +1,29 @@
 // Every key exactly once (ROADMAP WEB2.3; SPEC §16.4 WEB1.8, "Every key exactly once"), with no
 // DOM in it so web/test/outbox.mjs can drive it. A session's keys, pastes and clicks are numbered
 // in a stream of this page's own (`ClientMsg::Keys`) and kept until the daemon says they are
-// settled (`ServerMsg::Typed`). Keys typed while the connection is down, or unanswered for a
-// while, wait here and are shown as waiting; on reconnect (or after an unanswered wait) they go
-// again, numbered as before, so a copy the daemon already has is dropped. The daemon types them
-// only if the first was typed at most `REPLAY_WINDOW_MS` ago and the session still waits for what
-// it did (its `state_token`, carried by each key); otherwise none of them is typed, and nothing
-// typed after them goes either (half a command is worse than none): they are kept as `lost`, to
-// be said, shown and typed again on purpose. A daemon that can't number input (older than 1.52)
-// gets plain `Input`, as before, and nothing waits.
+// settled (`ServerMsg::Typed`). Each carries what its page last drew when it was typed: that
+// frame's state token, and when it was typed on the daemon's clock (the frame's `at_ms` plus
+// the time since it came), so the daemon can tell a key that arrives late (a dying connection
+// held it) and judge it. A key goes live only behind keys that went ahead of it on the same
+// connection: never past one that waits (offline, too much for one message, behind a replay).
+// Keys typed while the connection is down, or unanswered for a while, wait here and are shown as
+// waiting; on reconnect (or after an unanswered wait) they go again, numbered as before, so a
+// copy the daemon already has is dropped. The daemon types them only if the first was typed at
+// most `REPLAY_WINDOW_MS` ago and the session still waits for what it did; otherwise none of
+// them is typed, and nothing typed after them goes either (half a command is worse than none):
+// they are kept as `lost`, to be said, shown and typed again on purpose. A daemon that can't
+// number input (older than 1.52) gets plain `Input`, as before, and nothing waits.
 /// `ptyro_protocol::REPLAY_WINDOW_MS`: keys older than this when sent again are refused.
 export const REPLAY_WINDOW_MS = 5000;
+/// `ptyro_protocol::LATE_LIMIT_MS`: keys arriving this long after they were typed are refused.
+export const LATE_LIMIT_MS = 10_000;
 /// `ptyro_protocol::MAX_SEQ_KEYS`: the most events one message carries.
 export const MAX_SEQ_KEYS = 4096;
+/// The most one message carries, in bytes (under the server's 4.25 MiB, conn.ts `MAX_SEND`).
+export const MAX_BYTES = 4 * 1024 * 1024;
+/// What a message takes besides its keys, and each key besides its event (at most).
+const ENVELOPE = 512;
+const PER_KEY = 128;
 /// Unanswered this long: shown as waiting, and the connection asked whether it is alive.
 export const WAIT_MS = 1200;
 /// Unanswered this long on an open connection: sent again (a copy the daemon has is dropped).
@@ -32,11 +43,31 @@ const randomId = () => {
     }
     return [...a].map((b) => b.toString(16).padStart(2, "0")).join("");
 };
+/// An event's size in a message, in bytes (its JSON in UTF-8).
+const sizeOf = (event) => {
+    const s = JSON.stringify(event) ?? "";
+    let b = PER_KEY;
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c < 0x80)
+            b += 1;
+        else if (c < 0x800)
+            b += 2;
+        else if (c >= 0xd800 && c < 0xdc00) {
+            b += 4;
+            i++;
+        }
+        else
+            b += 3;
+    }
+    return b;
+};
 /// Clicks, drags, the wheel and focus are aimed at a screen as it was: never kept to send later.
 const positional = (event) => event?.t === "mouse" || event?.t === "focus";
 export class Outbox {
     session;
     io;
+    maxBytes;
     stream;
     next = 1;
     /// Not settled yet, in order.
@@ -50,11 +81,19 @@ export class Outbox {
     replayTo = 0;
     /// Keys were lost while offline: everything typed until the connection is back is lost too.
     closed = false;
-    /// When this connection's welcome came: keys typed before it go only in a replay.
+    /// When this connection's welcome came (a wait for an answer counts from it at the earliest).
     since = 0;
-    constructor(session, io, stream = randomId()) {
+    /// Connections so far: keys typed on an earlier one go only in a replay.
+    epoch = 0;
+    /// The highest refused number heard of (`Pending.heard`).
+    heard = 0;
+    /// Losses so far, and who waits for the queue to empty (`settled`).
+    losses = 0;
+    waiters = [];
+    constructor(session, io, stream = randomId(), maxBytes = MAX_BYTES) {
         this.session = session;
         this.io = io;
+        this.maxBytes = maxBytes;
         this.stream = stream;
     }
     /// Keys waiting to be sent or answered.
@@ -64,6 +103,13 @@ export class Outbox {
         if (!this.queue.length)
             return false;
         return !this.online || this.io.now() - this.queue[0].at >= WAIT_MS;
+    }
+    /// Once every key typed so far is settled: true if none of them was lost meanwhile (✎ compose
+    /// sends behind them, and not at all after keys that weren't sent).
+    settled() {
+        if (!this.queue.length)
+            return Promise.resolve(true);
+        return new Promise((done) => this.waiters.push({ losses: this.losses, done }));
     }
     /// An input event typed into the session. Its number, when it has one (WEB2.4's predictions
     /// learn from `Typed` when it was typed); null for an older daemon's plain input, or when dropped.
@@ -76,22 +122,24 @@ export class Outbox {
         if (positional(event) && (!this.online || this.mode !== "numbered"))
             return null;
         const now = this.io.now();
-        const k = { n: this.next++, event, token: this.io.token(), at: now, sent: null, went: false };
+        const seen = this.io.seen();
+        const k = { n: this.next++, event, token: seen.token, clock: seen.clock, heard: this.heard, at: now, epoch: this.epoch, sent: null, went: false, bytes: sizeOf(event) };
+        if (k.bytes + ENVELOPE > this.maxBytes) {
+            this.lose([k], "other", `it is too large to send from here (over ${Math.floor(this.maxBytes / 1048576)} MiB)`);
+            this.changed();
+            return null;
+        }
         if (this.closed) {
             this.lose([k], "after", "keys before them weren't sent");
+            this.changed();
             return null;
         }
         this.queue.push(k);
-        if (this.online && this.mode === "numbered" && !this.replayTo) {
-            if (this.io.send({ t: "keys", session: this.session, stream: this.stream, keys: [{ n: k.n, event }] })) {
-                k.sent = now;
-                k.went = true;
-            }
-        }
+        this.pump();
         if (!this.online)
             this.io.check();
         this.io.later(this.online ? WAIT_MS : 250);
-        this.io.changed();
+        this.changed();
         return k.n;
     }
     /// A welcome: `numbered` when it lists the feature. What waits goes again now.
@@ -100,17 +148,18 @@ export class Outbox {
         this.closed = false;
         this.replayTo = 0;
         this.since = this.io.now();
+        this.epoch++;
         for (const k of this.queue)
             k.sent = null;
         this.mode = numbered ? "numbered" : "plain";
         if (this.queue.length) {
             if (numbered)
-                this.replay();
+                this.pump();
             else
                 this.lose(this.queue.splice(0), "old", "this ptyro can't check keys typed while offline");
         }
         this.io.later(WAIT_MS);
-        this.io.changed();
+        this.changed();
     }
     /// The connection went: what waits goes again on the next one.
     disconnected() {
@@ -123,7 +172,7 @@ export class Outbox {
         if (this.queue.length)
             this.io.check();
         this.io.later(250);
-        this.io.changed();
+        this.changed();
     }
     /// `ServerMsg::Typed` for this session (another stream's is ignored).
     typed(msg) {
@@ -131,6 +180,8 @@ export class Outbox {
             return;
         const rs = (Array.isArray(msg.refused) ? msg.refused : msg.refused ? [msg.refused] : []).slice().sort((a, b) => a.from - b.from);
         if (rs.length) {
+            for (const r of rs)
+                this.heard = Math.max(this.heard, r.to);
             // One notice for them all, named by the first refusal (the rest follow from it).
             const inside = (k) => rs.some((r) => k.n >= r.from && k.n <= r.to);
             const gone = this.queue.filter(inside);
@@ -138,18 +189,18 @@ export class Outbox {
             const why = rs.find((r) => gone.some((k) => k.n >= r.from && k.n <= r.to)) ?? rs[0];
             if (gone.length)
                 this.lose(gone, why.why, why.reason);
-            // And everything after them that waits (half a command is worse than none).
+            // And everything after them that waits (half a command is worse than none): typed before
+            // this page heard of the refusal, the daemon refuses them too, if they reach it.
             const after = this.queue.filter((k) => k.n > rs[0].from);
             this.queue = this.queue.filter((k) => k.n < rs[0].from);
             if (after.length)
                 this.lose(after, "after", "keys before them weren't sent");
         }
         this.queue = this.queue.filter((k) => k.n > msg.upto);
-        if (this.replayTo && msg.upto >= this.replayTo) {
+        if (this.replayTo && msg.upto >= this.replayTo)
             this.replayTo = 0;
-            this.flush();
-        }
-        this.io.changed();
+        this.pump();
+        this.changed();
     }
     /// Time passed: show what waits, check the connection, send again, give up.
     tick() {
@@ -163,44 +214,73 @@ export class Outbox {
             if (now - head.at > REPLAY_WINDOW_MS && !this.queue.some((k) => k.went)) {
                 this.lose(this.queue.splice(0), "stale", "you were offline too long");
                 this.closed = true;
-                this.io.changed();
+                this.changed();
                 return;
             }
             this.io.check();
             this.io.later(500);
-            this.io.changed();
+            this.changed();
             return;
         }
         if (this.mode !== "numbered")
             return;
-        const out = Math.min(...this.queue.map((k) => (k.sent ?? now)));
+        // The oldest send still unanswered (none: nothing could be sent yet).
+        const out = this.queue.reduce((m, k) => (k.sent === null ? m : Math.min(m, k.sent)), Infinity);
         // (Counted from this connection's start for keys older than it.)
-        if (now - Math.max(head.at, this.since) >= GIVE_UP_MS && now - out >= RESEND_MS) {
+        if (now - Math.max(head.at, this.since) >= GIVE_UP_MS && (out === Infinity || now - out >= RESEND_MS)) {
             this.lose(this.queue.splice(0), "silent", "no word whether they arrived");
             this.replayTo = 0;
-            this.io.changed();
+            this.changed();
             return;
         }
         if (now - out >= RESEND_MS)
             this.replay();
-        else if (now - head.at >= WAIT_MS)
+        else
+            this.pump();
+        if (now - head.at >= WAIT_MS)
             this.io.check();
-        this.io.later(Math.max(200, RESEND_MS - (now - out)));
-        this.io.changed();
+        this.io.later(out === Infinity ? 250 : Math.max(200, RESEND_MS - (now - out)));
+        this.changed();
     }
     /// Forget the lost keys (the person dismissed them, or typed them again).
     dismiss() {
         this.lost = [];
-        this.io.changed();
+        this.changed();
     }
-    /// Everything waiting, again, as one replay with what each key was typed against.
-    replay() {
+    /// Send what hasn't gone on this connection, if it may go now: typed before the connection, a
+    /// replay; typed on it, live, behind keys that went ahead of it on it. Nothing while a replay
+    /// waits for its answer (if it is refused, what comes after isn't typed either).
+    pump() {
+        if (!this.online || this.mode !== "numbered" || this.replayTo)
+            return;
+        let i = this.queue.findIndex((k) => k.sent === null);
+        if (i < 0)
+            return;
+        if (this.queue[i].epoch < this.epoch) {
+            this.replay(i);
+            return;
+        }
         const now = this.io.now();
-        const keys = this.queue.slice(0, MAX_SEQ_KEYS);
-        const msg = {
-            t: "keys", session: this.session, stream: this.stream, replay: true,
-            keys: keys.map((k) => ({ n: k.n, event: k.event, ...(k.token ? { token: k.token } : {}), age_ms: Math.max(0, Math.round(now - k.at)) })),
-        };
+        while (i < this.queue.length) {
+            const keys = this.batch(i);
+            const msg = { t: "keys", session: this.session, stream: this.stream, keys: keys.map((k) => this.wire(k, null)) };
+            if (!this.io.send(msg))
+                return;
+            for (const k of keys) {
+                k.sent = now;
+                k.went = true;
+            }
+            i += keys.length;
+        }
+    }
+    /// Keys from `from` (the head: everything unanswered), again, as a replay with what each was
+    /// typed against: one message's worth; the rest after its answer.
+    replay(from = 0) {
+        const now = this.io.now();
+        const keys = this.batch(from);
+        if (!keys.length)
+            return;
+        const msg = { t: "keys", session: this.session, stream: this.stream, replay: true, keys: keys.map((k) => this.wire(k, now)) };
         if (!this.io.send(msg))
             return;
         for (const k of keys) {
@@ -209,25 +289,40 @@ export class Outbox {
         }
         this.replayTo = keys[keys.length - 1].n;
     }
-    /// After a replay was answered: what waited behind it goes, live (typed on this connection,
-    /// with its screen in sight), or as another replay (more than one message's worth, from before).
-    flush() {
-        const now = this.io.now();
-        const rest = this.queue.filter((k) => k.sent === null);
-        if (!rest.length || !this.online)
-            return;
-        if (rest.some((k) => k.at < this.since)) {
-            this.replay();
-            return;
+    /// As many keys from `from` as one message carries (by count and by size; one at least).
+    batch(from) {
+        const out = [];
+        let bytes = ENVELOPE;
+        for (let i = from; i < this.queue.length && out.length < MAX_SEQ_KEYS; i++) {
+            const k = this.queue[i];
+            if (out.length && bytes + k.bytes > this.maxBytes)
+                break;
+            out.push(k);
+            bytes += k.bytes;
         }
-        const msg = { t: "keys", session: this.session, stream: this.stream, keys: rest.map((k) => ({ n: k.n, event: k.event })) };
-        if (this.io.send(msg))
-            for (const k of rest) {
-                k.sent = now;
-                k.went = true;
-            }
+        return out;
+    }
+    /// A key as a message carries it (`SeqKey`); `now` for a replay (its age).
+    wire(k, now) {
+        return {
+            n: k.n, event: k.event,
+            ...(k.token ? { token: k.token } : {}),
+            ...(now !== null ? { age_ms: Math.max(0, Math.round(now - k.at)) } : {}),
+            ...(k.clock !== null ? { typed_ms: Math.max(0, Math.round(k.clock)) } : {}),
+            ...(k.heard ? { heard: k.heard } : {}),
+        };
+    }
+    changed() {
+        if (!this.queue.length && this.waiters.length) {
+            for (const w of this.waiters.splice(0))
+                w.done(w.losses === this.losses);
+        }
+        this.io.changed();
     }
     lose(keys, why, reason) {
+        if (!keys.length)
+            return;
+        this.losses++;
         const events = keys.filter((k) => !positional(k.event)).map((k) => k.event);
         if (!events.length)
             return;
@@ -279,6 +374,12 @@ export function whyText(l) {
         case "old": return "this ptyro is older and can't check keys typed while offline";
         case "after": return "they came after keys that weren't sent";
         case "silent": return "no word came back whether they arrived";
+        case "overflow": return "the session isn't reading what is typed (it is stopped or stuck)";
         default: return l.reason || "the daemon refused them";
     }
+}
+/// Keys not sent as the page shows them before Reveal: each character a dot (they may be a
+/// password typed at a prompt that doesn't echo), new lines kept.
+export function mask(text) {
+    return text.replace(/[^\n]/gu, "•");
 }

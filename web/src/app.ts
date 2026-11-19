@@ -5,10 +5,10 @@
 
 import { Screen, modelLabel } from "./screen.js";
 import type { Frame, Session } from "./screen.js";
-import { MAX_SEND, conn, store, token } from "./conn.js";
+import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
-import { FEATURE, Outbox, lostTitle } from "./outbox.js";
-import { autoFocus, hardKey, ownKeyboard, shellDigit, strayKey } from "./keys.js";
+import { FEATURE, GIVE_UP_MS, Outbox, RESEND_MS, lostTitle } from "./outbox.js";
+import { autoFocus, hardKey, isMac, ownKeyboard, shellDigit, strayKey } from "./keys.js";
 import type { Focus } from "./keys.js";
 import { PressGate, actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
@@ -154,7 +154,6 @@ async function refresh(): Promise<void> {
     const r = await conn.request({ t: "list" });
     // A chat's engine belongs to its chat, not to the session list (SPEC §22.2).
     app.sessions = new Map((r.sessions as Session[]).filter((s) => !s.chat).map((s) => [s.id, s]));
-    for (const s of app.sessions.values()) if (s.state_token) tokens.set(s.id, s.state_token);
   } catch { /* reconnecting */ }
   render();
 }
@@ -339,8 +338,10 @@ function whyNot(s: Session): string {
 /// They live as long as the page, not the terminal, so keys still waiting when you leave a
 /// session's page are sent (or said) all the same.
 const outboxes = new Map<string, Outbox>();
-/// The newest state token seen for each session: a frame's or its info's, whichever came last.
-const tokens = new Map<string, string>();
+/// What each session's page last drew (WEB2.3): its frame's state token, the daemon's clock as
+/// it was made (`at_ms`) and when it came here. Keys carry it, so a key is vouched for only by a
+/// screen its page drew (never a list's newer token) and the daemon can tell when it arrives late.
+const frames = new Map<string, { token: string; at: number | null; rx: number }>();
 
 function outboxOf(id: string): Outbox {
   const had = outboxes.get(id);
@@ -350,7 +351,10 @@ function outboxOf(id: string): Outbox {
   const o: Outbox = new Outbox(id, {
     send: (m) => conn.send(m),
     now: () => performance.now(),
-    token: () => tokens.get(id) ?? app.sessions.get(id)?.state_token ?? null,
+    seen: () => {
+      const f = frames.get(id);
+      return f ? { token: f.token, clock: f.at === null ? null : f.at + (performance.now() - f.rx) } : { token: null, clock: null };
+    },
     changed: () => {
       if (shell?.id === id) shell.term.showOutbox();
       // Lost on another page: said there.
@@ -431,8 +435,20 @@ function sessionShell(id: string): Shell {
     sending = true;
     sendBtn.disabled = true;
     try {
-      // Whatever the terminal's keyboard was holding (dictation, a composition) goes first.
+      // Whatever the terminal's keyboard was holding (dictation, a composition) goes first, and
+      // every key typed before it is settled before it goes (WEB2.3): it never overtakes keys
+      // waiting to be sent, and isn't sent after keys that weren't.
       sh.term.typist.interject();
+      const box = outboxOf(id);
+      if (box.waiting) {
+        const settled = await Promise.race([box.settled(), new Promise<null>((ok) => setTimeout(() => ok(null), GIVE_UP_MS + RESEND_MS))]);
+        if (settled !== true) {
+          toast(settled === null
+            ? "Not sent yet: keys typed before it are still waiting. Send it again once they're through."
+            : "Not sent: keys typed before it weren't sent. Look at the session, then send it again.");
+          return;
+        }
+      }
       // The same request as the CLI's `ptyro send`: the daemon pastes a multi-line text (bracketed
       // when the program asked) and then presses Enter, as a key, after a pause.
       if (once.text !== text) once = { text, name: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
@@ -441,8 +457,11 @@ function sessionShell(id: string): Shell {
       if (draft.value === text) { draft.value = ""; app.drafts.delete(id); grow(); sh.closeCompose(); }
     } catch (e) {
       const code = (e as { code?: string }).code;
+      // A daemon that numbers keys (1.52) honours the send's name; an older one types it again.
       toast(code === "daemon_unavailable" || code === "timeout"
-        ? "Not sure it was sent: the connection dropped. Send it again: it won't be typed twice."
+        ? conn.features.includes(FEATURE)
+          ? "Not sure it was sent: the connection dropped. Send it again: it won't be typed twice."
+          : "Not sure it was sent: the connection dropped. Look at the session before sending it again."
         : conn.state !== "open" ? "Not sent: offline. It reconnects by itself; then send it." : (e as Error).message);
     }
     finally { sending = false; sendBtn.disabled = false; }
@@ -458,12 +477,8 @@ function sessionShell(id: string): Shell {
     screen: () => app.screens.get(id),
     canType: () => canType(id),
     send: (m) => conn.send(m),
-    input: (event) => {
-      // Too big for the server (H2.7): said, never kept to be sent again and again.
-      const n = JSON.stringify(event).length;
-      if (n > MAX_SEND / 4 && new TextEncoder().encode(JSON.stringify(event)).length > MAX_SEND - 4096) { toast("Not sent: that paste is too large (over 4 MiB)"); return null; }
-      return outboxOf(id).type(event);
-    },
+    // (Too big for the server, H2.7: the outbox says so, and never keeps it to send again.)
+    input: (event) => outboxOf(id).type(event),
     outbox: () => outboxOf(id),
     request: (r) => conn.request(r),
     toast,
@@ -697,6 +712,9 @@ async function syncPush(): Promise<void> {
 
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
 
+/// Option on a Mac types the layout's own characters; Alt elsewhere doesn't (keys.ts `shellDigit`).
+const MAC = isMac((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent);
+
 conn.listeners.add((msg) => {
   if (msg.t === "disconnected") {
     for (const o of outboxes.values()) o.disconnected();
@@ -729,10 +747,10 @@ conn.listeners.add((msg) => {
   }
   if (msg.t === "screen") {
     const f = msg.frame as Frame;
-    if (f.state_token) tokens.set(f.session, f.state_token);
     const s = app.screens.get(f.session);
     if (s) {
       s.apply(f);
+      if (f.state_token) frames.set(f.session, { token: f.state_token, at: typeof f.at_ms === "number" ? f.at_ms : null, rx: performance.now() });
       if (f.session === app.viewing && shell?.id === f.session) shell.term.onFrame();
     }
     // Acked once drawn, so a slow screen gets fewer, bigger deltas; a hidden tab doesn't wait.
@@ -748,7 +766,6 @@ conn.listeners.add((msg) => {
     if (e.info?.chat) return;
     if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {
       app.sessions.set(e.info.id, e.info);
-      if (e.info.state_token) tokens.set(e.info.id, e.info.state_token);
       if (e.t === "session_restarted" && e.info.id === app.viewing) { app.viewing = null; }
       render();
     } else if (e.t === "session_removed") {
@@ -786,7 +803,7 @@ ui.forget = () => { void forget(); };
 // taken here, before the terminal's own keydown, so the program never sees it (as in the TUI).
 window.addEventListener("keydown", (e) => {
   const t = e.target as Element;
-  const n = token() ? shellDigit(e, { focus: focusOf(t), terminal: !!shell && t === shell.term.input, dialog: !!document.querySelector(".scrim"), on: altDigitsOn() }) : null;
+  const n = token() ? shellDigit(e, { focus: focusOf(t), terminal: !!shell && t === shell.term.input, dialog: !!document.querySelector(".scrim"), on: altDigitsOn(), mac: MAC }) : null;
   if (n == null) return;
   e.preventDefault();
   e.stopPropagation();

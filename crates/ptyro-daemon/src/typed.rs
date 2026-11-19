@@ -8,13 +8,25 @@
 //! session's state token as it is now, and the stream known (or provably new). Otherwise every
 //! key of it is refused, and settled, so no later copy of them is typed either.
 //!
+//! Live keys (typed with the screen in sight) are typed as they come, whatever the token: their
+//! own echo, or a turn their Enter started, must never refuse the next ones. Unless they arrive
+//! late: a dying connection (a phone in a tunnel) can deliver keys long after they were typed,
+//! into a session that asks something new by then. How late is the daemon's clock now against
+//! when the client says they were typed on it (`SeqKey::typed_ms`); later than
+//! `REPLAY_WINDOW_MS` they are judged by their tokens as a replay is, later than
+//! `LATE_LIMIT_MS` they are refused, replay or not.
+//!
+//! A gap in live numbers is typed past, deliberately: the client sends a key live only when
+//! every key before it went ahead of it on the same connection, so a missing number is one the
+//! client gave up on itself, never sent, and has said so (offline too long, refused).
+//!
 //! The table is bounded ([`MAX_STREAMS`] per session, each forgotten after [`STREAM_TTL_MS`]
 //! unused) and crosses a live upgrade in the handoff image.
 
 use std::collections::HashMap;
 
 use ptyro_core::status::{SignalSource, StatusRecord};
-use ptyro_protocol::{MAX_SEQ_KEYS, REPLAY_WINDOW_MS, Refused, RefusedWhy, SeqKey};
+use ptyro_protocol::{LATE_LIMIT_MS, MAX_SEQ_KEYS, REPLAY_WINDOW_MS, Refused, RefusedWhy, SeqKey};
 use serde::{Deserialize, Serialize};
 
 /// Streams remembered per session; the least recently used goes first.
@@ -40,6 +52,14 @@ struct Rec {
     /// The latest refusals, oldest first.
     #[serde(default)]
     refused: Vec<Refused>,
+    /// The highest number a refusal of its own covered (not one that only followed another):
+    /// a key whose client hadn't heard of it when it was typed (`SeqKey::heard`) isn't typed.
+    #[serde(default)]
+    bar: u64,
+    /// The highest number of a refusal no longer remembered (past [`MAX_REFUSALS`]): a settled
+    /// number at or below it may have been typed or refused, it can't tell which.
+    #[serde(default)]
+    forgot: u64,
 }
 
 /// One session's streams.
@@ -87,6 +107,10 @@ pub struct StreamImage {
     pub used_ms: u64,
     #[serde(default)]
     pub refused: Vec<Refused>,
+    #[serde(default)]
+    pub bar: u64,
+    #[serde(default)]
+    pub forgot: u64,
 }
 
 impl StreamsImage {
@@ -116,7 +140,13 @@ impl Streams {
             .streams
             .into_iter()
             .map(|s| {
-                let rec = Rec { high: s.high, used_ms: s.used_ms, refused: s.refused };
+                let rec = Rec {
+                    high: s.high,
+                    used_ms: s.used_ms,
+                    refused: s.refused,
+                    bar: s.bar,
+                    forgot: s.forgot,
+                };
                 ((s.who, s.stream), rec)
             })
             .collect();
@@ -133,6 +163,8 @@ impl Streams {
                 high: r.high,
                 used_ms: r.used_ms,
                 refused: r.refused.clone(),
+                bar: r.bar,
+                forgot: r.forgot,
             })
             .collect();
         streams.sort_by(|a, b| (a.who, &a.stream).cmp(&(b.who, &b.stream)));
@@ -181,42 +213,64 @@ impl Streams {
                 _ => vec![],
             };
             let plan = Plan::Refuse { from: 0, why: RefusedWhy::Invalid, reason: reason.into() };
-            return Decision { plan, upto: high, refused };
+            return Decision { plan, upto: 0, refused };
         }
         // Refusals this message's settled keys had: said again (their answer may have been lost).
         let mut refused: Vec<Refused> = self.recs.get(&key).map_or_else(Vec::new, |r| {
-            r.refused
+            let covered = |n: u64| r.refused.iter().any(|x| (x.from..=x.to).contains(&n));
+            let mut v: Vec<Refused> = r
+                .refused
                 .iter()
                 .filter(|x| keys.iter().any(|k| k.n <= high && (x.from..=x.to).contains(&k.n)))
                 .cloned()
-                .collect()
+                .collect();
+            // Settled at or below a refusal no longer remembered: typed or refused, it can't
+            // tell, so it doesn't say typed.
+            let unsure: Vec<u64> = keys
+                .iter()
+                .map(|k| k.n)
+                .filter(|&n| n <= high.min(r.forgot) && !covered(n))
+                .collect();
+            if let (Some(&from), Some(&to)) = (unsure.first(), unsure.last()) {
+                let reason = "ptyro no longer remembers whether they were typed".into();
+                v.push(Refused { from, to, why: RefusedWhy::Unknown, reason });
+            }
+            v.sort_by_key(|x| x.from);
+            v
         });
         let Some(from) = keys.iter().position(|k| k.n > high) else {
             if let Some(r) = self.recs.get_mut(&key) {
                 r.used_ms = now_ms;
             }
-            return Decision { plan: Plan::Nothing, upto: high, refused };
+            // Settled up to its last key, not to `high`: only this message's refusals are said
+            // again, so a number past it that was refused must not read as typed.
+            let upto = keys.last().map_or(0, |k| k.n);
+            return Decision { plan: Plan::Nothing, upto, refused };
         };
         let last = keys.last().map_or(high, |k| k.n);
-        let no = if !replay {
-            None
-        } else if let Some(before) = refused.last() {
-            // Refused keys came back with new ones after them: those follow keys that weren't
-            // typed, so they aren't either (half a command is worse than none).
-            Some((before.why, format!("keys before them weren't typed: {}", before.reason)))
-        } else {
-            self.judge(known, &keys[from..], token, now_ms)
+        let rec = self.recs.get(&key);
+        // The refusal these keys follow, if they do: refused keys that came back with new ones
+        // after them, or a refusal their client hadn't heard of when they were typed (keys in
+        // flight behind refused ones). Those follow keys that weren't typed, so they aren't
+        // either (half a command is worse than none).
+        let before = match refused.last() {
+            Some(before) if replay => Some(before.clone()),
+            _ => rec
+                .filter(|r| keys[from].heard < r.bar)
+                .and_then(|r| r.refused.iter().rev().find(|x| x.to == r.bar).or(r.refused.last()))
+                .cloned(),
+        };
+        let (no, own) = match before {
+            Some(b) => {
+                (Some((b.why, format!("keys before them weren't typed: {}", b.reason))), false)
+            }
+            None => (self.judge(known, &keys[from..], replay, token, now_ms), true),
         };
         self.settle(key.clone(), last, now_ms);
         let plan = match no {
             Some((why, reason)) => {
                 let r = Refused { from: keys[from].n, to: last, why, reason: reason.clone() };
-                if let Some(rec) = self.recs.get_mut(&key) {
-                    rec.refused.push(r.clone());
-                    let extra = rec.refused.len().saturating_sub(MAX_REFUSALS);
-                    rec.refused.drain(..extra);
-                }
-                refused.push(r);
+                refused.push(self.remember(&key, r, own));
                 Plan::Refuse { from, why, reason }
             }
             None => Plan::Type { from },
@@ -224,21 +278,82 @@ impl Streams {
         Decision { plan, upto: last, refused }
     }
 
-    /// Why a replay's unsettled keys may not be typed, if they may not.
+    /// Keys `from..=to`, settled as typed by [`decide`](Self::decide), couldn't be: the session's
+    /// input queue was full from `from` on (it isn't reading). Refused after all, and remembered
+    /// as any refusal is (a copy of them is told the same).
+    pub fn overflowed(&mut self, who: Who, stream: &str, from: u64, to: u64) -> Refused {
+        let r = Refused {
+            from,
+            to,
+            why: RefusedWhy::Overflow,
+            reason:
+                "the session isn't reading its input (it is stopped or stuck): they were dropped"
+                    .into(),
+        };
+        self.remember(&(who, stream.to_owned()), r, true)
+    }
+
+    /// Keep a refusal to say again; `own`: it raises the bar (it didn't only follow another).
+    fn remember(&mut self, key: &(Who, String), r: Refused, own: bool) -> Refused {
+        if let Some(rec) = self.recs.get_mut(key) {
+            if own {
+                rec.bar = rec.bar.max(r.to);
+            }
+            // One that follows the last straight on extends it (a chain of keys behind one
+            // refusal stays one entry).
+            match rec.refused.last_mut() {
+                Some(prev) if prev.to + 1 == r.from => prev.to = r.to,
+                _ => rec.refused.push(r.clone()),
+            }
+            let extra = rec.refused.len().saturating_sub(MAX_REFUSALS);
+            for gone in rec.refused.drain(..extra) {
+                rec.forgot = rec.forgot.max(gone.to);
+            }
+        }
+        r
+    }
+
+    /// Why unsettled keys may not be typed, if they may not: a replay always judged, live keys
+    /// only when they arrive late.
     fn judge(
         &self,
         known: bool,
         keys: &[SeqKey],
+        replay: bool,
         token: &str,
         now_ms: u64,
     ) -> Option<(RefusedWhy, String)> {
         let first = &keys[0];
-        let typed_ms = now_ms.saturating_sub(first.age_ms);
+        // How late the first (the oldest) arrived, its time on the wire included.
+        let late = first.typed_ms.map_or(0, |t| now_ms.saturating_sub(t));
+        let changed = || keys.iter().any(|k| k.token.as_deref() != Some(token));
+        if !replay {
+            // Live: typed with the screen in sight, and judged only when they come late.
+            if late > LATE_LIMIT_MS {
+                return Some((RefusedWhy::Stale, arrived_late(late)));
+            }
+            if late > REPLAY_WINDOW_MS && changed() {
+                return Some((
+                    RefusedWhy::Changed,
+                    format!(
+                        "they arrived {:.0} s after they were typed, and the session changed since (it asked something new, or started or finished something)",
+                        late as f64 / 1000.0
+                    ),
+                ));
+            }
+            return None;
+        }
+        // When the first was typed: its age counts until it was sent, `typed_ms` its time on the
+        // wire too (the earlier of the two: a replay slow on the wire is no younger).
+        let typed_ms = now_ms.saturating_sub(first.age_ms).min(first.typed_ms.unwrap_or(u64::MAX));
         if !known && self.floor_ms.saturating_add(SLACK_MS) >= typed_ms {
             return Some((
                 RefusedWhy::Unknown,
                 "ptyro can't tell whether they were typed already".into(),
             ));
+        }
+        if late > LATE_LIMIT_MS {
+            return Some((RefusedWhy::Stale, arrived_late(late)));
         }
         if first.age_ms > REPLAY_WINDOW_MS {
             return Some((
@@ -250,7 +365,7 @@ impl Streams {
                 ),
             ));
         }
-        if keys.iter().any(|k| k.token.as_deref() != Some(token)) {
+        if changed() {
             return Some((
                 RefusedWhy::Changed,
                 "the session changed since they were typed (it asked something new, or started or finished something)".into(),
@@ -260,7 +375,13 @@ impl Streams {
     }
 
     fn settle(&mut self, key: (Who, String), high: u64, now_ms: u64) {
-        let r = self.recs.entry(key).or_insert(Rec { high: 0, used_ms: now_ms, refused: vec![] });
+        let r = self.recs.entry(key).or_insert(Rec {
+            high: 0,
+            used_ms: now_ms,
+            refused: vec![],
+            bar: 0,
+            forgot: 0,
+        });
         r.high = r.high.max(high);
         r.used_ms = now_ms;
         while self.recs.len() > MAX_STREAMS {
@@ -288,6 +409,14 @@ impl Streams {
         });
         self.floor_ms = floor;
     }
+}
+
+fn arrived_late(late: u64) -> String {
+    format!(
+        "they arrived {:.0} s after they were typed, more than {} s (the connection held them)",
+        late as f64 / 1000.0,
+        LATE_LIMIT_MS / 1000
+    )
 }
 
 /// Named sends (`SendText.once`, WEB2.3): what each name's send came to, so the same name again
@@ -392,11 +521,23 @@ mod tests {
     const T: &str = "tok";
 
     fn k(n: u64) -> SeqKey {
-        SeqKey { n, event: InputEvent::Paste { text: n.to_string() }, token: None, age_ms: 0 }
+        SeqKey {
+            n,
+            event: InputEvent::Paste { text: n.to_string() },
+            token: None,
+            age_ms: 0,
+            typed_ms: None,
+            heard: 0,
+        }
     }
 
     fn r(n: u64, age_ms: u64, token: &str) -> SeqKey {
         SeqKey { token: Some(token.into()), age_ms, ..k(n) }
+    }
+
+    /// A key typed once its page had heard of refusals up to `heard`.
+    fn h(key: SeqKey, heard: u64) -> SeqKey {
+        SeqKey { heard, ..key }
     }
 
     fn dec(
@@ -460,8 +601,11 @@ mod tests {
         // A later copy of them, even one that would now match, types nothing.
         let c = [r(2, 600, "new"), r(3, 600, "new")];
         assert_eq!(dec(&mut t, None, "s", &c, true, "new", now).0, Plan::Nothing);
-        // What is typed next goes.
-        assert_eq!(dec(&mut t, None, "s", &[k(4)], false, "new", now).0, Plan::Type { from: 0 });
+        // What is typed next (its page heard of the refusal) goes.
+        assert_eq!(
+            dec(&mut t, None, "s", &[h(k(4), 3)], false, "new", now).0,
+            Plan::Type { from: 0 }
+        );
     }
 
     #[test]
@@ -502,16 +646,26 @@ mod tests {
         let ranges: Vec<_> = again.refused.iter().map(|x| (x.from, x.to)).collect();
         assert_eq!(ranges, vec![(2, 3), (4, 5)]);
         assert!(again.refused[1].reason.starts_with("keys before them weren't typed"));
-        // A plain copy of them is told the same, and types nothing.
+        // A plain copy of them is told the same (one refusal now: 4–5 followed 2–3 straight on),
+        // and types nothing.
         let copy = t.decide(None, "s", &keys, true, "b", now);
         assert_eq!(copy.plan, Plan::Nothing);
-        assert_eq!(copy.refused.len(), 2);
-        // Only so many are remembered.
+        let ranges: Vec<_> = copy.refused.iter().map(|x| (x.from, x.to, x.why)).collect();
+        assert_eq!(ranges, vec![(2, 5, RefusedWhy::Changed)]);
+        // Only so many are remembered: refused and typed in turn, twenty times.
         for i in 0..20u64 {
-            let n = 6 + i;
-            t.decide(None, "s", &[r(n, 10, "x")], true, "b", now);
+            let n = 6 + 2 * i;
+            t.decide(None, "s", &[h(r(n, 10, "x"), n - 1)], true, "b", now);
+            t.decide(None, "s", &[h(k(n + 1), n)], false, "b", now);
         }
-        assert_eq!(t.recs[&(None, "s".to_owned())].refused.len(), MAX_REFUSALS);
+        let rec = &t.recs[&(None, "s".to_owned())];
+        assert_eq!(rec.refused.len(), MAX_REFUSALS);
+        assert_eq!(rec.forgot, 6 + 2 * 11);
+        // A number at or below one it forgot isn't said typed: it can't tell (2–5 it forgot
+        // too); one it still remembers is said as it was.
+        let d = t.decide(None, "s", &[r(7, 10, "b"), r(44, 10, "b")], true, "b", now);
+        let ranges: Vec<_> = d.refused.iter().map(|x| (x.from, x.to, x.why)).collect();
+        assert_eq!(ranges, vec![(7, 7, RefusedWhy::Unknown), (44, 44, RefusedWhy::Changed)]);
         // And they cross an upgrade.
         let back = Streams::from_image(t.image(), now);
         assert_eq!(back, t);
@@ -526,10 +680,10 @@ mod tests {
         let (p, _) = dec(&mut t, None, "s", &b, true, T, now);
         assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Stale, .. }), "{p:?}");
         // Exactly at the window: typed.
-        let b = [r(4, REPLAY_WINDOW_MS, T)];
+        let b = [h(r(4, REPLAY_WINDOW_MS, T), 3)];
         assert_eq!(dec(&mut t, None, "s", &b, true, T, now).0, Plan::Type { from: 0 });
         // A replay without tokens can't be checked: refused.
-        let b = [k(5)];
+        let b = [h(k(5), 3)];
         let (p, _) = dec(&mut t, None, "s", &b, true, T, now);
         assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Changed, .. }), "{p:?}");
     }
@@ -547,6 +701,12 @@ mod tests {
         // A table that began after they were typed (an image without one) can't vouch for them.
         let mut t = Streams::new(now - 1500);
         let (p, _) = dec(&mut t, None, "s", &b, true, T, now);
+        assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Unknown, .. }), "{p:?}");
+        // Nor for ones sent young that were long on the wire: typed before it began, by their
+        // `typed_ms`, though their age says after.
+        let mut t = Streams::new(now - 3000);
+        let slow = [SeqKey { typed_ms: Some(now - 4000), ..r(1, 500, T) }];
+        let (p, _) = dec(&mut t, None, "s", &slow, true, T, now);
         assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Unknown, .. }), "{p:?}");
     }
 
@@ -593,13 +753,114 @@ mod tests {
         assert_eq!(dec(&mut t, None, "s", &[], false, T, now), (Plan::Nothing, 0));
     }
 
+    /// A copy answers for itself only: a refused number after it isn't said settled by it (a
+    /// replay split in two, the first half all copies).
+    #[test]
+    fn a_copy_settles_only_up_to_its_own_last_key() {
+        let mut t = Streams::new(0);
+        let now = 100_000;
+        dec(&mut t, None, "s", &[k(1), k(2), k(3)], false, T, now);
+        t.overflowed(None, "s", 3, 3);
+        let d = t.decide(None, "s", &[r(1, 10, T), r(2, 10, T)], true, T, now);
+        assert_eq!((d.plan, d.upto, d.refused.len()), (Plan::Nothing, 2, 0));
+        let d = t.decide(None, "s", &[r(3, 10, T)], true, T, now);
+        assert_eq!((d.plan, d.upto, d.refused[0].why), (Plan::Nothing, 3, RefusedWhy::Overflow));
+    }
+
     #[test]
     fn a_gap_in_live_keys_still_types_what_came() {
-        // Live keys (not a replay) are typed as they come: the client replays what went missing
-        // before anything newer, so a gap is a loss already reported, not a reason to stall.
+        // Deliberate: the client sends a key live only behind keys that went ahead of it on the
+        // same connection, so a gap is numbers it gave up on unsent and said so (offline too
+        // long, refused), never keys still on their way. Stalling on them would stop typing
+        // for good after any loss. (web/test/outbox.mjs checks the client never leaves one.)
         let mut t = Streams::new(0);
         dec(&mut t, None, "s", &[k(1)], false, T, 10);
         assert_eq!(dec(&mut t, None, "s", &[k(5)], false, T, 10), (Plan::Type { from: 0 }, 5));
+    }
+
+    /// A live key typed at `typed_ms` (on the daemon's clock) against `token`.
+    fn l(n: u64, typed_ms: u64, token: &str) -> SeqKey {
+        SeqKey { token: Some(token.into()), typed_ms: Some(typed_ms), ..k(n) }
+    }
+
+    #[test]
+    fn live_keys_are_typed_as_they_come_unless_they_arrive_late() {
+        let mut t = Streams::new(0);
+        let now = 100_000;
+        let ty = Plan::Type { from: 0 };
+        // Fresh: typed whatever their token says (their own echo, or the turn their Enter
+        // started, moved it before the page saw the new one).
+        let a = [l(1, now - 300, "old"), l(2, now - 200, "old")];
+        assert_eq!(dec(&mut t, None, "s", &a, false, "new", now), (ty.clone(), 2));
+        assert_eq!(
+            dec(&mut t, None, "s", &[l(3, now - REPLAY_WINDOW_MS, "old")], false, "new", now).0,
+            ty
+        );
+        // Late (a slow link, a connection that held them) and the session as they saw it: typed.
+        assert_eq!(dec(&mut t, None, "s", &[l(4, now - 7_000, "new")], false, "new", now).0, ty);
+        // Late, and it changed since (a new prompt): refused, every one, and settled for good.
+        let b = [l(5, now - 7_000, "old"), l(6, now - 100, "new")];
+        let d = t.decide(None, "s", &b, false, "new", now);
+        assert!(matches!(d.plan, Plan::Refuse { from: 0, why: RefusedWhy::Changed, .. }), "{d:?}");
+        assert_eq!((d.upto, d.refused.len()), (6, 1));
+        assert!(d.refused[0].reason.contains("arrived 7 s after"), "{d:?}");
+        assert_eq!(dec(&mut t, None, "s", &b, true, "new", now).0, Plan::Nothing);
+        // Later than the limit: refused, whatever the token.
+        let c = [h(l(7, now - LATE_LIMIT_MS - 1, "new"), 6)];
+        let (p, _) = dec(&mut t, None, "s", &c, false, "new", now);
+        assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Stale, .. }), "{p:?}");
+        // No frame seen (no `typed_ms`): typed as it comes.
+        assert_eq!(dec(&mut t, None, "s", &[h(k(8), 7)], false, "new", now).0, ty);
+        // A replay young by its own count but held on the wire past the limit: refused.
+        let held = [SeqKey { typed_ms: Some(now - LATE_LIMIT_MS - 1), ..h(r(9, 100, "new"), 7) }];
+        let (p, _) = dec(&mut t, None, "s", &held, true, "new", now);
+        assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Stale, .. }), "{p:?}");
+        // A clock that went back (typed "in the future"): not late.
+        assert_eq!(
+            dec(&mut t, None, "s", &[h(l(10, now + 5_000, "x"), 9)], false, "new", now).0,
+            ty
+        );
+    }
+
+    #[test]
+    fn keys_typed_before_their_page_heard_of_a_refusal_follow_it() {
+        let mut t = Streams::new(1);
+        let now = 100_000;
+        dec(&mut t, None, "s", &[k(1)], false, "a", now);
+        // 2 arrives late into a session that changed: refused, a refusal of its own.
+        let (p, _) = dec(&mut t, None, "s", &[l(2, now - 7_000, "a")], false, "b", now);
+        assert!(matches!(p, Plan::Refuse { why: RefusedWhy::Changed, .. }), "{p:?}");
+        // 3 and 4 were on their way behind it, typed before the page heard: refused, however
+        // fresh (the page says they weren't sent, so they must not be typed).
+        let behind = [l(3, now - 100, "b"), l(4, now - 90, "b")];
+        let d = t.decide(None, "s", &behind, false, "b", now);
+        assert!(matches!(d.plan, Plan::Refuse { from: 0, why: RefusedWhy::Changed, .. }), "{d:?}");
+        assert!(d.refused[0].reason.starts_with("keys before them weren't typed"), "{d:?}");
+        // 5, typed once the page heard of 2's refusal (not yet of 3–4's, which only followed it):
+        // typed. Nothing cascades however fast the typing.
+        let five = [SeqKey { heard: 2, ..l(5, now - 50, "b") }];
+        assert_eq!(dec(&mut t, None, "s", &five, false, "b", now).0, Plan::Type { from: 0 });
+        // The bar crosses an upgrade.
+        let back = Streams::from_image(t.image(), now);
+        assert_eq!(back, t);
+        assert_eq!(back.recs[&(None, "s".to_owned())].bar, 2);
+    }
+
+    #[test]
+    fn keys_a_full_input_queue_dropped_are_refused_and_said_again() {
+        let mut t = Streams::new(0);
+        let now = 100_000;
+        let a = [k(1), k(2), k(3)];
+        assert_eq!(dec(&mut t, None, "s", &a, false, T, now), (Plan::Type { from: 0 }, 3));
+        // 1 was queued; 2 and 3 found the queue full.
+        let o = t.overflowed(None, "s", 2, 3);
+        assert_eq!((o.from, o.to, o.why), (2, 3, RefusedWhy::Overflow));
+        // Sent again (the answer was lost), with 4 after them: told again, and 4 not typed.
+        let b = [r(2, 100, T), r(3, 100, T), r(4, 50, T)];
+        let d = t.decide(None, "s", &b, true, T, now);
+        assert!(matches!(d.plan, Plan::Refuse { from: 2, why: RefusedWhy::Overflow, .. }), "{d:?}");
+        let ranges: Vec<_> = d.refused.iter().map(|x| (x.from, x.to)).collect();
+        assert_eq!(ranges, vec![(2, 3), (4, 4)]);
     }
 
     #[test]

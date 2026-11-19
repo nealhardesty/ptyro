@@ -517,21 +517,26 @@ impl Session {
     }
 
     /// Write input to the program; for Ctrl-Z, watch whether it suspends itself.
-    fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) {
-        let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
-        if !bytes.is_empty() {
-            self.queue(WriterMsg::Bytes(bytes));
+    /// False: dropped, the input queue being full (or the child gone).
+    fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) -> bool {
+        if bytes.is_empty() {
+            return true;
         }
-        if let Some(watch) = suspending {
+        let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
+        let queued = self.queue(WriterMsg::Bytes(bytes));
+        if let Some(watch) = suspending.filter(|_| queued) {
             tokio::spawn(watch);
         }
+        queued
     }
 
-    /// Queue something for the child's input; full means it isn't reading, so drop it.
-    fn queue(&self, msg: WriterMsg) {
-        if self.writer.try_send(msg).is_err() {
+    /// Queue something for the child's input; full means it isn't reading, so drop it (false).
+    fn queue(&self, msg: WriterMsg) -> bool {
+        let queued = self.writer.try_send(msg).is_ok();
+        if !queued {
             tracing::debug!(session = %self.id, "its input queue is full: dropped");
         }
+        queued
     }
 
     pub(crate) fn signal(&self, list: Vec<Sourced>) {
@@ -1145,17 +1150,18 @@ impl Session {
     }
 
     /// [`input`](Self::input), without an await: typed while the numbered-input table is locked
-    /// (WEB2.3), so a copy arriving meanwhile finds it settled.
-    pub fn input_now(&self, event: &InputEvent) {
+    /// (WEB2.3), so a copy arriving meanwhile finds it settled. False: it was dropped, the
+    /// session's input queue being full (it isn't reading), so it must not be said typed.
+    pub fn input_now(&self, event: &InputEvent) -> bool {
         if let Some(st) = &self.structured {
             st.key(self, event);
-            return;
+            return true;
         }
         let bytes = {
             let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             ptyro_term::input::encode(event, &term.emu.modes())
         };
-        self.write_input(bytes, is_ctrl_z(event));
+        self.write_input(bytes, is_ctrl_z(event))
     }
 
     /// Ctrl-Z is about to reach the session's own process, in raw mode. It leads the PTY's session,

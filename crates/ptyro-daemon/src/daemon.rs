@@ -1067,6 +1067,7 @@ impl Daemon {
             machine: Some(self.machine()),
             wsl_hold: self.wsl_hold_status(),
             load: *self.host_load.locked(),
+            alt_digits: Some(self.config().shell.alt_digits),
         }
     }
 

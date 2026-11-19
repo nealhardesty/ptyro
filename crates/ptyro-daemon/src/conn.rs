@@ -465,9 +465,6 @@ impl Conn {
                 return;
             }
         }
-        if !keys.is_empty() {
-            self.take_control(&s).await;
-        }
         let token = s.state_token();
         let decided = {
             let mut table = s.typed.locked();
@@ -477,26 +474,31 @@ impl Conn {
                 None
             } else {
                 let who = self.caller.grant.map(|g| g.device);
-                let d = table.decide(who, &stream, &keys, replay, &token, now_ms());
+                let mut d = table.decide(who, &stream, &keys, replay, &token, now_ms());
+                let mut typed = 0;
                 if let Plan::Type { from } = &d.plan {
-                    for k in &keys[*from..] {
-                        s.input_now(&k.event);
+                    // A key the input queue drops (the session isn't reading) is not typed, and
+                    // neither is anything after it: refused, not said typed.
+                    let rest = &keys[*from..];
+                    typed = rest.iter().take_while(|k| s.input_now(&k.event)).count();
+                    if let Some(k) = rest.get(typed) {
+                        d.refused.push(table.overflowed(who, &stream, k.n, d.upto));
                     }
                 }
-                Some(d)
+                Some((d, typed))
             }
         };
-        let Some(d) = decided else { return };
-        match &d.plan {
-            Plan::Type { .. } => {
-                if let Some(g) = self.caller.grant {
-                    self.daemon.audit(&s, g, if replay { "typed (sent again)" } else { "typed" });
-                }
+        let Some((d, typed)) = decided else { return };
+        if typed > 0 {
+            // Typing makes this client the controller, as `Input` does; a copy or a refusal
+            // doesn't (it typed nothing).
+            self.take_control(&s).await;
+            if let Some(g) = self.caller.grant {
+                self.daemon.audit(&s, g, if replay { "typed (sent again)" } else { "typed" });
             }
-            Plan::Nothing => {}
-            Plan::Refuse { why, reason, .. } => {
-                tracing::info!(client = %self.id, session = %s.id, ?why, "keys not typed: {reason}");
-            }
+        }
+        if let Some(r) = d.refused.last() {
+            tracing::info!(client = %self.id, session = %s.id, why = ?r.why, "keys not typed: {}", r.reason);
         }
         let msg = ServerMsg::Typed { session: id, stream, upto: d.upto, refused: d.refused };
         let _ = self.out.send(msg).await;
@@ -921,6 +923,7 @@ async fn stream_frames(
     let mut changed = session.changed.subscribe();
     let mut styles = StyleTable::default();
     let mut sent: Option<u64> = None;
+    let mut sent_token: Option<String> = None;
     let mut flight = Inflight::default();
     loop {
         flight.acked(*acks.borrow_and_update(), Instant::now());
@@ -931,28 +934,35 @@ async fn stream_frames(
             continue;
         }
         changed.borrow_and_update();
+        // What the session waits for as this is drawn (WEB2.3), taken before the screen (the
+        // token takes the screen's lock, and `meta`'s, on its own): never newer than what the
+        // frame shows, so a key is never vouched for by a prompt its page hadn't drawn yet.
+        let token = session.state_token();
+        let at_ms = now_ms();
         let frame = {
             let mut term = session.term.locked();
             let term = &mut *term;
             let seq = term.tracker.seq();
-            if sent == Some(seq) {
-                None
+            // What the session waits for changed with nothing new on its screen (a hook set its
+            // status): a frame all the same, its token alone, so its page's keys say what it
+            // waits for as the page shows it.
+            let moved = sent_token.as_deref() != Some(token.as_str());
+            let delta = if sent == Some(seq) {
+                ptyro_core::screen::ScreenDelta::default()
             } else {
                 // Each delta is from the frame sent before it: the client applies them in order.
-                let delta = term.tracker.build(&term.emu, sent, &mut styles);
-                // Damage that changed nothing: no frame, nothing to ack.
-                (sent.is_none() || !delta.is_empty()).then(|| ScreenFrame {
-                    session: session.id,
-                    seq,
-                    keyframe: sent.is_none(),
-                    delta,
-                    state_token: None,
-                })
-            }
+                term.tracker.build(&term.emu, sent, &mut styles)
+            };
+            // Damage that changed nothing (and no new token): no frame, nothing to ack.
+            (sent.is_none() || !delta.is_empty() || moved).then(|| ScreenFrame {
+                session: session.id,
+                seq,
+                keyframe: sent.is_none(),
+                delta,
+                state_token: Some(token.clone()),
+                at_ms: Some(at_ms),
+            })
         };
-        // What the session waited for as this was drawn (WEB2.3): taken after the screen's lock
-        // goes (the token takes it, and `meta`'s, on its own).
-        let frame = frame.map(|f| ScreenFrame { state_token: Some(session.state_token()), ..f });
         if let Some(frame) = frame {
             let seq = frame.seq;
             crate::watchdog::FRAMES_SENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -960,6 +970,7 @@ async fn stream_frames(
                 return;
             }
             sent = Some(seq);
+            sent_token = Some(token);
             flight.sent(seq, Instant::now());
             tokio::time::sleep(interval).await;
             continue;

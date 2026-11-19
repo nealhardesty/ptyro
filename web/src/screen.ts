@@ -20,7 +20,7 @@ export interface Delta {
   title?: string;
 }
 /// `state_token` (1.52): what the session waited for as the frame was made (WEB2.3).
-export interface Frame { session: string; seq: number; keyframe: boolean; delta: Delta; state_token?: string | null }
+export interface Frame { session: string; seq: number; keyframe: boolean; delta: Delta; state_token?: string | null; at_ms?: number | null }
 export interface StatusRecord { status: string; kind?: string; detail?: string; since_ms: number; source: string }
 export interface Attention { kind: string; since_ms: number; text: string }
 /// A model's id shortened for a title or a card: `claude-opus-5-5` → `opus 5.5`,

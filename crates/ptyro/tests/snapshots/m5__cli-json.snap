@@ -12,6 +12,7 @@ expression: "Value::Object(all)"
     "retired": []
   },
   "daemon_status": {
+    "alt_digits": "bool",
     "clients": "number",
     "generation": "number",
     "live_sessions": "number",

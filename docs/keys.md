@@ -98,7 +98,8 @@ in the pane while they're bound (readline's `digit-argument`, irssi's and weecha
 `[shell] alt_digits = false` (Configuration → Shells) gives them back. **On the web** the same
 `Alt+1`…`Alt+9`, `Alt+0` work from any page, a terminal you are typing in too (and don't reach its
 program); Option on a Mac works as Alt there with no setting, except where Option types one of the
-layout's own characters (`[`, `#`); plain `1`…`9` work on the list and a shell you only watch. On macOS, Terminal.app and
+layout's own characters (`[`, `#`), and so does a keyboard whose digit row types `& é "…` (French
+AZERTY on Windows and Linux); plain `1`…`9` work on the list and a shell you only watch. On macOS, Terminal.app and
 iTerm2 type `¡™£` for Option-digit unless Option is set to act as Meta (Terminal.app: Settings →
 Profiles → Keyboard → "Use Option as Meta key"; iTerm2: Profiles → Keys → Left Option key: Esc+).
 Until then the hints say `C-q e 1…9`, which always works. `make verify-shells` shows what your

@@ -285,6 +285,8 @@ async fn another_machines_workspaces_sit_beside_ours_and_work_from_here() {
             event: ptyro_core::input::InputEvent::Paste { text: text.into() },
             token: None,
             age_ms: 0,
+            typed_ms: None,
+            heard: 0,
         }],
         replay,
     };

@@ -9,7 +9,7 @@ import { READABLE_PX, cellAt, clampPx, docOf, findIn, fitCells, fitPx, fitted, l
 import { ordered } from "./grid.js";
 import { MOD, MOUSE, Sticky, Typist, keyInput, mouseInput, pasteInput } from "./keys.js";
 import { actions, form, h, menu, sheet } from "./kit.js";
-import { describe, lostTitle } from "./outbox.js";
+import { describe, lostTitle, mask } from "./outbox.js";
 import { Predictor } from "./predict.js";
 const ACTIONS = {
     "term.type": "Type straight into the session: every key goes to it as you press it. With a keyboard just type (the terminal has the keys when the page opens); on a phone tap ⌨ Type or the screen",
@@ -624,17 +624,25 @@ export class Term {
                 this.lostText.textContent = title;
         }
     }
-    /// The keys that weren't sent, readable, to copy or type again on purpose.
+    /// The keys that weren't sent, to copy or type again on purpose. Hidden until Reveal: they may
+    /// be a password typed at a prompt that doesn't echo, and a page is easily seen over a shoulder.
     showLost() {
         const o = this.host.outbox();
         if (!o.lost.length)
             return;
         const text = o.lost.map((l) => describe(l.events)).join("");
-        const pre = h("pre", { class: "lost-keys" }, text);
+        const pre = h("pre", { class: "lost-keys", "aria-label": "Hidden: Reveal shows them" }, mask(text));
+        const reveal = h("button", { class: "small", "aria-pressed": "false", onclick: () => {
+                const shown = reveal.getAttribute("aria-pressed") !== "true";
+                reveal.setAttribute("aria-pressed", String(shown));
+                reveal.textContent = shown ? "Hide" : "Reveal";
+                pre.textContent = shown ? text : mask(text);
+                pre.setAttribute("aria-label", shown ? "The keys" : "Hidden: Reveal shows them");
+            } }, "Reveal");
         const s = sheet("Keys not sent", [
             h("p", {}, ...o.lost.map((l) => h("span", { class: "lost-why" }, lostTitle(l), " "))),
             pre,
-            h("p", { class: "compose-hint" }, "⏎ is Enter, ⌫ Backspace, ⎋ Esc, ^C Ctrl-C. Look at the session before typing them again."),
+            h("p", { class: "compose-hint" }, "Hidden, in case they hold a password: ", reveal, " shows them. ⏎ is Enter, ⌫ Backspace, ⎋ Esc, ^C Ctrl-C. Look at the session before typing them again."),
         ], [
             h("button", { onclick: () => { void this.toClipboard(text, "Copied"); } }, "Copy"),
             this.host.canType() ? h("button", { class: "primary", onclick: () => {
