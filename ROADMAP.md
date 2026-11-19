@@ -2655,6 +2655,31 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
     claimed device's id), so re-pairing doesn't leave a stale `bear` beside `bear-2`.
   - Behind a reverse proxy on loopback every client shares one login lockout.
 
+## WEB2 — Real typing on the web (2026-11-19)
+
+The owner asked for a real terminal typing experience on the web, bulletproof, and working with
+dictation (OS dictation and third-party tools such as Superwhisper). R-UX-46. Today keys go to
+the session as pressed only after a tap on the screen, a phone keyboard's composition reaches it
+a word at a time (only at `compositionend`), and each character waits a round trip to show.
+Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`).
+
+- [ ] **WEB2.1 Letters as you type them; dictation as one paste** — M. While a keyboard composes,
+  the difference between what was sent and the composition now goes at once (backspaces and new
+  letters; autocorrect becomes a correction). Dictation (multi-word or replacing compositions,
+  large commits, text set into the field without key events) is previewed and sent once settled,
+  as `Input::Paste`, so a spoken newline never presses Enter. iOS smart punctuation undone. An
+  opt-in "Plain keys (no suggestions)" that says it turns dictation off. Recorded keyboard traces
+  and a property test.
+- [ ] **WEB2.2 Terminal first** — S. On the session page the terminal takes the keys (focused on
+  open with a hardware keyboard); the reply box becomes ✎ compose, for long prompts and dictation.
+- [ ] **WEB2.3 Every key exactly once** — M. Protocol: input batches carry a sequence, the daemon
+  acks and drops duplicates per device and session; keys typed while reconnecting wait as
+  "pending" and are replayed only after a short gap with no change in what the session is waiting
+  for, else dropped and said.
+- [ ] **WEB2.4 Predicted echo** — M. Typed text drawn at the cursor at once (dim), confirmed or
+  wiped by the next frames; shown only on a slow link and while predictions prove right. A
+  couple of frames in flight on slow links.
+
 ## CHAT — Chat (proposed 2026-10-29; open)
 
 *Why:* the owner wants the quick, general chat that the Claude and ChatGPT desktop apps have, built
