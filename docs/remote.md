@@ -284,8 +284,9 @@ notifications on; a test notification arrives. The 🔔 goes once they are on.
 
 - **The list.** Blocked agents are at the top, with Allow / Deny right on the card.
 - **A session.** Its live screen is drawn from the daemon's own frames, at the session's size:
-  your phone never resizes it. There's a reply box (Enter sends), keys (Esc, Tab, arrows, ⏎,
-  ^C), and the permission card with its context.
+  your phone never resizes it. It is a terminal you type straight into (on a phone tap ⌨ Type),
+  with keys (Esc, Tab, arrows, ⏎, ^C), ✎ Compose for a long prompt or dictation, and the
+  permission card with its context.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
 - **"Offline: reconnecting…"** means the page (kept on the phone) can't reach the server. Opened
@@ -294,16 +295,34 @@ notifications on; a test notification arrives. The 🔔 goes once they are on.
 
 ### A terminal in the browser
 
-With a device of `control` scope or more, the session page's screen takes keys: tap it (or click
-it) and type. It is the daemon's own terminal, so `vim`, `htop`, `claude` and your shell behave as
+With a device of `control` scope or more, the session page's screen takes keys. On a computer
+just type: the terminal has the keys when the page opens and when you come back to the window,
+and a key pressed anywhere on the page goes to it (Tab still moves between the buttons). On a
+phone tap **⌨ Type** (or the screen) to bring the keyboard up, and **⌨ Done** to put it away; the
+page never pops the keyboard up by itself. It is the daemon's own terminal, so `vim`, `htop`, `claude` and your shell behave as
 they do in the TUI: arrows, Ctrl and Alt combinations, F-keys, bracketed paste, the mouse when the
 program wants it (hold Shift to select instead).
 
 - **On a phone**, the row under the screen has Esc, Tab, Ctrl, Alt and ⇧ (tap one for the next key,
   tap again to hold it), arrows (hold to repeat), Home/End/PgUp/PgDn, Ctrl-C/D/Z/L/R, punctuation,
   F1–F12 and Paste. **Aa** has text size, fit or 1:1, the on-screen keyboard on or off (off keeps a
-  hardware keyboard's keys without covering the screen), find, and *Resize the session to this
-  screen* (everyone attached sees the new size; whoever types last decides).
+  hardware keyboard's keys without covering the screen), *Plain keys*, *Predict typing*, find, and *Resize the session
+  to this screen* (everyone attached sees the new size; whoever types last decides).
+- **A phone's keyboard.** Letters arrive as you type them, even while the keyboard is still
+  composing the word, and an autocorrect arrives as a correction (backspaces, then the right
+  word). Curly quotes, `--` turned into a dash and the double-space full stop come out as you typed
+  them. Chinese, Japanese and Korean input methods send the converted text, not the romaji.
+  **Aa → Plain keys (no suggestions)** makes the keyboard send exactly what you press, with no
+  predictions or autocorrect. It also turns dictation (the mic) off on most keyboards. On a Mac
+  it stops other apps' hotkeys while the terminal has focus.
+- **✎ Compose** opens a box under the screen for a long prompt: write it (or dictate it, with
+  the keyboard's mic, macOS dictation or Superwhisper: it is an ordinary text box), read it over,
+  and send it as one. Enter sends, Shift+Enter is a new line, Esc or ✕ closes it and keeps the
+  draft (✎ shows a dot). Sending works like `ptyro send`: a multi-line prompt arrives as one paste,
+  then Enter.
+- **Dictation** (the keyboard's mic, iOS or macOS dictation, Superwhisper, Wispr Flow) shows dim at
+  the cursor while you speak, then goes to the session once you pause, as one paste. A spoken "new
+  line" never presses Enter (without bracketed paste it becomes a space). Tap ✕ to drop it.
 - **Zoom.** Pinch the screen to make the text bigger or smaller (pinch all the way in to fit the
   whole width); drag sideways or up and down to move around; tap with two fingers to switch
   between fitted and full size. On a computer, Ctrl and the wheel, or a trackpad pinch. A wide
@@ -315,6 +334,32 @@ program wants it (hold Shift to select instead).
   hold, then drag. The bar copies, selects everything, opens a link, or steps through find
   results. A program that copies to the clipboard (OSC 52) puts it on yours, or offers a Copy
   button when the browser wants a tap.
+- **Every key exactly once.** If the connection drops while you type (Wi-Fi to cellular, the
+  screen locked, the server or the daemon restarting), what you type meanwhile waits, and the
+  screen says "3 keys waiting". When the connection is back they go, each exactly once, even if
+  some had already arrived. They go only if you were away at most 5 seconds and nothing changed in
+  the session meanwhile: no new question or permission prompt, no command started or finished, the
+  same program on the screen. Otherwise none of them is typed (a `y⏎` meant for one question never
+  answers the next), and the screen says so: "4 keys weren't sent: the session changed while you
+  were away". **Show** lists them, hidden as dots until you press **Reveal** (they may be a
+  password typed where nothing echoes; ⏎ is Enter, ⌫ Backspace, ^C Ctrl-C), to copy, or to type
+  again on purpose once you have looked. Keys a dying connection delivers late (a phone in a
+  tunnel) are held to the same rule: more than 5 seconds late they go only if nothing changed,
+  more than 10 not at all. Keys a stuck session can't take are said not sent, never typed later.
+  ✎ Compose waits for the keys typed before it, and isn't sent if one of them wasn't. It is safe
+  to send again too: if the connection dropped mid-send, the page says it isn't sure it was sent,
+  and sending again never types it twice.
+  (An older ptyro, before protocol 1.52, can't check this: keys typed offline are dropped and said, as before.)
+- **Predicted typing.** On a slow connection (cellular, a VPN across the world) each letter
+  would wait a round trip before it shows. Instead, what you type shows at once, faint and
+  underlined, and turns into the session's own text when its echo arrives; a wrong guess (the
+  program printed something else, or moved the cursor) disappears with the very next screen
+  update. It only switches on when the echo is slow (over about 50 ms; never on a LAN), only
+  after the session has echoed at least two of the letters you just typed, and starts over after
+  Enter, Tab, an arrow or a Ctrl key, so a password prompt (which echoes nothing) never shows
+  what you type. It is only drawn on your screen: what is sent is exactly what you type.
+  **Aa → Predict typing: auto / off** (kept on this device). Programs that hide the cursor and
+  draw their own get no predictions.
 - **Below `control`** the screen is still live and you can scroll, select and copy, but nothing
   you type reaches the session.
 
@@ -358,6 +403,7 @@ through their protocol for a chat's agent.
 | The pairing link read off a screen, scrollback or recording | It is a code, not the token: claimed once, within 10 minutes, then worthless. `ptyro pair` reports who claimed it and from where; failed claims count toward the lockout. During those minutes it *is* a credential, so prefer a plain terminal. |
 | Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and the server takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
+| Keys typed while offline answering a prompt that appeared meanwhile, or typed twice | Keys are numbered: the daemon types each number at most once. Each key carries what the session was waiting for on the screen its page had drawn, and when it was typed; keys sent again after a reconnect, or arriving late, are typed only within 5 seconds and if that is still so (never more than 10 seconds late), else none of them, and the page says so. Numbering changes nothing about who may type: every message is checked against the device's scope. |
 | A paired phone changing the machine | The config file, profiles, the login service, and the daemon's restart need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
 | A browser posing as a local client | The server rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |

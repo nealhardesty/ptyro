@@ -330,7 +330,11 @@ mod tests {
             .args(["-c", &format!("{mark} sleep 30")])
             .spawn()
             .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        // A loaded machine may take a while to start it: look until it shows (or 5 s).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while with_marker(&mark).is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(with_marker(&mark), vec![child.id()]);
         assert!(with_marker(&marker(999_999, "43")).is_empty());
         let _ = child.kill();

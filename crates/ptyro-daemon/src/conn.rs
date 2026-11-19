@@ -2,17 +2,20 @@
 //! acks, input routing, controller tracking (SPEC §5.8) and event delivery.
 
 use ptyro_core::sync::MutexExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
+use ptyro_core::now_ms;
 use ptyro_core::{ClientId, SessionId, TermSize};
 use ptyro_protocol::{
-    ClientKind, ClientMsg, DomainEvent, OuterTerm, PROTO, ScreenFrame, ServerMsg, decode, encode,
-    framing,
+    ClientKind, ClientMsg, DomainEvent, OuterTerm, PROTO, Refused, RefusedWhy, ScreenFrame, SeqKey,
+    ServerMsg, decode, encode, framing,
 };
+
+use crate::typed::Plan;
 use ptyro_term::StyleTable;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
@@ -128,11 +131,20 @@ pub async fn serve(daemon: Arc<Daemon>, stream: crate::listen::Stream, pid: Opti
     let id = daemon.next_client_id();
     // Frame compression when the client asks for it (M8.7).
     let compress = features.iter().any(|f| f == ptyro_protocol::FEATURE_ZSTD);
+    // Numbered input (1.52, WEB2.3), said back to a client that asks.
+    let seq = features.iter().any(|f| f == ptyro_protocol::FEATURE_INPUT_SEQ);
+    let mut agreed = Vec::new();
+    if compress {
+        agreed.push(ptyro_protocol::FEATURE_ZSTD.to_owned());
+    }
+    if seq {
+        agreed.push(ptyro_protocol::FEATURE_INPUT_SEQ.to_owned());
+    }
     let welcome = ServerMsg::Welcome {
         proto: PROTO,
         daemon_version: version,
         client_id: id,
-        features: if compress { vec![ptyro_protocol::FEATURE_ZSTD.into()] } else { vec![] },
+        features: agreed,
         started_ms: daemon.started_ms,
         scope: grant.map(|g| g.scope),
         machine: Some(daemon.machine()),
@@ -359,6 +371,9 @@ impl Conn {
                     sub.acks.send_modify(|a| *a = (*a).max(seq));
                 }
             }
+            ClientMsg::Keys { session, stream, keys, replay } => {
+                self.keys(session, stream, keys, replay).await
+            }
             ClientMsg::Input { session, event } => {
                 // Lifecycle scripts are read-only (SPEC §7.1); stop them with `x`.
                 let script = |s: &Arc<Session>| {
@@ -416,6 +431,79 @@ impl Conn {
         }
     }
 
+    /// Numbered input (1.52, WEB2.3; `typed.rs`): the same rules as `Input` (scope, scripts,
+    /// an agent's guard, control), then each number typed at most once, a replay only while the
+    /// session waits for what it did; always answered with `Typed`, except while the daemon
+    /// hands off to its next image (the client sends them again there).
+    async fn keys(&mut self, id: SessionId, stream: String, keys: Vec<SeqKey>, replay: bool) {
+        let (first, last) = (keys.first().map_or(0, |k| k.n), keys.last().map_or(0, |k| k.n));
+        let refuse = |why: RefusedWhy, reason: &str| ServerMsg::Typed {
+            session: id,
+            stream: stream.clone(),
+            upto: last,
+            refused: vec![Refused { from: first, to: last, why, reason: reason.to_owned() }],
+        };
+        let script =
+            |s: &Arc<Session>| s.meta.locked().kind == ptyro_core::session::SessionKind::Script;
+        let Some(s) = self.daemon.session(id).filter(|s| s.is_live() && !script(s)) else {
+            let why = "the session isn't running";
+            let _ = self.out.send(refuse(RefusedWhy::Ended, why)).await;
+            return;
+        };
+        if let Some(g) = self.caller.grant {
+            if g.scope < ptyro_protocol::Scope::Control {
+                tracing::debug!(client = %self.id, "keys refused: scope {}", g.scope.label());
+                let why = "this device may only watch: typing needs `control` scope";
+                let _ = self.out.send(refuse(RefusedWhy::Scope, why)).await;
+                return;
+            }
+        } else if let Some(me) = self.placed_session() {
+            let req = ptyro_protocol::Request::SendBytes { addr: s.id.full(), bytes: Vec::new() };
+            if let Err(e) = self.daemon.guard_agent(&req, &me) {
+                tracing::debug!(client = %self.id, "keys refused: {}", e.message);
+                let _ = self.out.send(refuse(RefusedWhy::Scope, &e.message)).await;
+                return;
+            }
+        }
+        let token = s.state_token();
+        let decided = {
+            let mut table = s.typed.locked();
+            // Handing off: nothing more is typed or settled here, so the image holds exactly
+            // what was (it is written after this, under the same lock).
+            if self.daemon.goodbye.borrow().is_some() {
+                None
+            } else {
+                let who = self.caller.grant.map(|g| g.device);
+                let mut d = table.decide(who, &stream, &keys, replay, &token, now_ms());
+                let mut typed = 0;
+                if let Plan::Type { from } = &d.plan {
+                    // A key the input queue drops (the session isn't reading) is not typed, and
+                    // neither is anything after it: refused, not said typed.
+                    let rest = &keys[*from..];
+                    typed = rest.iter().take_while(|k| s.input_now(&k.event)).count();
+                    if let Some(k) = rest.get(typed) {
+                        d.refused.push(table.overflowed(who, &stream, k.n, d.upto));
+                    }
+                }
+                Some((d, typed))
+            }
+        };
+        let Some((d, typed)) = decided else { return };
+        if typed > 0 {
+            // Typing makes this client the controller, as `Input` does; a copy or a refusal
+            // doesn't (it typed nothing).
+            self.take_control(&s).await;
+            if let Some(g) = self.caller.grant {
+                self.daemon.audit(&s, g, if replay { "typed (sent again)" } else { "typed" });
+            }
+        }
+        if let Some(r) = d.refused.last() {
+            tracing::info!(client = %self.id, session = %s.id, why = ?r.why, "keys not typed: {}", r.reason);
+        }
+        let msg = ServerMsg::Typed { session: id, stream, upto: d.upto, refused: d.refused };
+        let _ = self.out.send(msg).await;
+    }
+
     async fn subscribe(&mut self, id: SessionId, size: Option<TermSize>, control: bool) {
         let Some(session) = self.daemon.session(id) else {
             let _ =
@@ -461,6 +549,7 @@ impl Conn {
             | ClientMsg::Unsubscribe { session }
             | ClientMsg::Ack { session, .. }
             | ClientMsg::Input { session, .. }
+            | ClientMsg::Keys { session, .. }
             | ClientMsg::Resize { session, .. }
             | ClientMsg::Focus { session, .. } => *session,
             _ => return Some(msg),
@@ -472,6 +561,11 @@ impl Conn {
             return Some(msg);
         };
         let scope = self.caller.grant.map(|g| g.scope);
+        if let ClientMsg::Keys { stream, keys, replay, .. } = msg {
+            self.keys_upstream(session, stream, keys, replay, &machine, &transport, online, scope)
+                .await;
+            return None;
+        }
         let msg = match msg {
             // A device below `control` watches at the session's own size and never types.
             ClientMsg::Input { .. } | ClientMsg::Resize { .. }
@@ -503,6 +597,101 @@ impl Conn {
         }
         self.send_upstream(&machine, &transport, msg).await;
         None
+    }
+
+    /// Numbered keys for another machine's session (1.52): its daemon settles them and its
+    /// `Typed` comes back through `relay_upstream`. Refused here when this device may only watch
+    /// or the machine is offline. A machine whose ptyro can't number input gets them as plain
+    /// `Input`, acknowledged once handed to its connection (what it could promise before); a
+    /// replay can't be checked there, so it is refused.
+    #[allow(clippy::too_many_arguments)]
+    async fn keys_upstream(
+        &mut self,
+        session: SessionId,
+        stream: String,
+        keys: Vec<SeqKey>,
+        replay: bool,
+        machine: &str,
+        transport: &ptyro_core::model::MachineTransport,
+        online: bool,
+        scope: Option<ptyro_protocol::Scope>,
+    ) {
+        let (first, last) = (keys.first().map_or(0, |k| k.n), keys.last().map_or(0, |k| k.n));
+        let answer = |refused: Option<(RefusedWhy, String)>| ServerMsg::Typed {
+            session,
+            stream: stream.clone(),
+            upto: last,
+            refused: refused
+                .map(|(why, reason)| Refused { from: first, to: last, why, reason })
+                .into_iter()
+                .collect(),
+        };
+        let why = if scope.is_some_and(|s| s < ptyro_protocol::Scope::Control) {
+            Some((
+                RefusedWhy::Scope,
+                "this device may only watch: typing needs `control` scope".into(),
+            ))
+        } else if !online {
+            Some((RefusedWhy::Offline, format!("{machine} is offline")))
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            let _ = self.out.send(answer(Some(why))).await;
+            return;
+        }
+        if !self.ensure_upstream(machine, transport).await {
+            return; // Unanswered: the client sends them again, or gives up and says so.
+        }
+        let numbered = self.upstreams.get(machine).is_some_and(|u| {
+            u.client.features.iter().any(|f| f == ptyro_protocol::FEATURE_INPUT_SEQ)
+        });
+        if numbered {
+            let msg = ClientMsg::Keys { session, stream: stream.clone(), keys, replay };
+            self.send_upstream(machine, transport, msg).await;
+            return;
+        }
+        if replay {
+            let why =
+                format!("{machine} runs an older ptyro, which can't check they are still wanted");
+            let _ = self.out.send(answer(Some((RefusedWhy::Unknown, why)))).await;
+            return;
+        }
+        let sent = self.upstreams.get(machine).is_some_and(|u| {
+            keys.into_iter()
+                .all(|k| u.client.send(ClientMsg::Input { session, event: k.event }).is_ok())
+        });
+        if sent {
+            let _ = self.out.send(answer(None)).await;
+        } else {
+            self.drop_upstream(machine);
+        }
+    }
+
+    /// This client's connection to `machine`, made if there is none. False: it can't be reached.
+    async fn ensure_upstream(
+        &mut self,
+        machine: &str,
+        transport: &ptyro_core::model::MachineTransport,
+    ) -> bool {
+        if self.upstreams.contains_key(machine) {
+            return true;
+        }
+        match self.daemon.dial(machine, transport).await {
+            Ok(mut c) => {
+                let pushes = c.pushes();
+                let theirs = c.id.0;
+                self.daemon.upstream_ids.locked().insert((machine.to_owned(), theirs), self.id);
+                let task = tokio::spawn(relay_upstream(pushes, self.out.clone()));
+                self.upstreams
+                    .insert(machine.to_owned(), Upstream { client: Arc::new(c), task, theirs });
+                true
+            }
+            Err(e) => {
+                tracing::debug!(client = %self.id, machine, "upstream: {}", e.message);
+                false
+            }
+        }
     }
 
     /// Say `msg` to `machine` over this client's own connection to it (made the first time; one
@@ -598,26 +787,8 @@ impl Conn {
     ) {
         let machine = machine.to_owned();
         for _ in 0..2 {
-            if !self.upstreams.contains_key(&machine) {
-                match self.daemon.dial(&machine, transport).await {
-                    Ok(mut c) => {
-                        let pushes = c.pushes();
-                        let theirs = c.id.0;
-                        self.daemon
-                            .upstream_ids
-                            .locked()
-                            .insert((machine.clone(), theirs), self.id);
-                        let task = tokio::spawn(relay_upstream(pushes, self.out.clone()));
-                        self.upstreams.insert(
-                            machine.clone(),
-                            Upstream { client: Arc::new(c), task, theirs },
-                        );
-                    }
-                    Err(e) => {
-                        tracing::debug!(client = %self.id, machine, "upstream: {}", e.message);
-                        return;
-                    }
-                }
+            if !self.ensure_upstream(&machine, transport).await {
+                return;
             }
             let sent = self.upstreams.get(&machine).map(|u| u.client.send(msg.clone()));
             match sent {
@@ -688,9 +859,61 @@ impl Conn {
     }
 }
 
-/// Send frames for one session to one client: a keyframe first, then deltas, at most one frame
-/// in flight (the client acks), at most one per `daemon.frame_interval_ms`. A slow client simply gets
-/// fewer, bigger deltas; the session never waits for it.
+/// Frames sent to a client and not acked yet, and how long its acks take (WEB2.4). A client
+/// whose acks come back quickly (a terminal on this computer, a LAN) has one frame in flight, as
+/// always; one far away (a phone on cellular, 100–300 ms) gets two or three, so a change made
+/// while a frame is on its way isn't held back a whole round trip before it is even sent. Still
+/// bounded: a client that stops acking gets at most `MAX` frames, then nothing until it acks.
+#[derive(Debug, Default)]
+struct Inflight {
+    sent: VecDeque<(u64, Instant)>,
+    /// The smoothed time from a frame to its ack.
+    srtt: Option<Duration>,
+}
+
+impl Inflight {
+    const MAX: usize = 3;
+    /// Acks this slow get a second frame in flight…
+    const TWO: Duration = Duration::from_millis(40);
+    /// …and this slow, a third.
+    const THREE: Duration = Duration::from_millis(120);
+
+    fn window(&self) -> usize {
+        match self.srtt {
+            Some(r) if r >= Self::THREE => Self::MAX,
+            Some(r) if r >= Self::TWO => 2,
+            _ => 1,
+        }
+    }
+
+    fn full(&self) -> bool {
+        self.sent.len() >= self.window()
+    }
+
+    fn sent(&mut self, seq: u64, at: Instant) {
+        self.sent.push_back((seq, at));
+    }
+
+    /// The client has every frame up to `upto`: the newest of them says how long acks take.
+    fn acked(&mut self, upto: u64, now: Instant) {
+        let mut took = None;
+        while let Some(&(seq, at)) = self.sent.front() {
+            if seq > upto {
+                break;
+            }
+            took = Some(now.saturating_duration_since(at));
+            self.sent.pop_front();
+        }
+        if let Some(t) = took {
+            self.srtt = Some(self.srtt.map_or(t, |s| (s * 3 + t) / 4));
+        }
+    }
+}
+
+/// Send frames for one session to one client: a keyframe first, then deltas, at most one per
+/// `daemon.frame_interval_ms`, with one frame in flight until the client acks it (two or three
+/// for a client far away: `Inflight`). A slow client simply gets fewer, bigger deltas; the
+/// session never waits for it.
 async fn stream_frames(
     session: Arc<Session>,
     out: mpsc::Sender<ServerMsg>,
@@ -700,24 +923,45 @@ async fn stream_frames(
     let mut changed = session.changed.subscribe();
     let mut styles = StyleTable::default();
     let mut sent: Option<u64> = None;
+    let mut sent_token: Option<String> = None;
+    let mut flight = Inflight::default();
     loop {
+        flight.acked(*acks.borrow_and_update(), Instant::now());
+        if flight.full() {
+            if acks.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
         changed.borrow_and_update();
+        // What the session waits for as this is drawn (WEB2.3), taken before the screen (the
+        // token takes the screen's lock, and `meta`'s, on its own): never newer than what the
+        // frame shows, so a key is never vouched for by a prompt its page hadn't drawn yet.
+        let token = session.state_token();
+        let at_ms = now_ms();
         let frame = {
             let mut term = session.term.locked();
             let term = &mut *term;
             let seq = term.tracker.seq();
-            if sent == Some(seq) {
-                None
+            // What the session waits for changed with nothing new on its screen (a hook set its
+            // status): a frame all the same, its token alone, so its page's keys say what it
+            // waits for as the page shows it.
+            let moved = sent_token.as_deref() != Some(token.as_str());
+            let delta = if sent == Some(seq) {
+                ptyro_core::screen::ScreenDelta::default()
             } else {
-                let delta = term.tracker.build(&term.emu, sent, &mut styles);
-                // Damage that changed nothing: no frame, nothing to ack.
-                (sent.is_none() || !delta.is_empty()).then(|| ScreenFrame {
-                    session: session.id,
-                    seq,
-                    keyframe: sent.is_none(),
-                    delta,
-                })
-            }
+                // Each delta is from the frame sent before it: the client applies them in order.
+                term.tracker.build(&term.emu, sent, &mut styles)
+            };
+            // Damage that changed nothing (and no new token): no frame, nothing to ack.
+            (sent.is_none() || !delta.is_empty() || moved).then(|| ScreenFrame {
+                session: session.id,
+                seq,
+                keyframe: sent.is_none(),
+                delta,
+                state_token: Some(token.clone()),
+                at_ms: Some(at_ms),
+            })
         };
         if let Some(frame) = frame {
             let seq = frame.seq;
@@ -726,15 +970,16 @@ async fn stream_frames(
                 return;
             }
             sent = Some(seq);
-            let paced = tokio::time::sleep(interval);
-            if acks.wait_for(|a| *a >= seq).await.is_err() {
-                return;
-            }
-            paced.await;
+            sent_token = Some(token);
+            flight.sent(seq, Instant::now());
+            tokio::time::sleep(interval).await;
             continue;
         }
-        if changed.changed().await.is_err() {
-            return;
+        let waiting = !flight.sent.is_empty();
+        tokio::select! {
+            r = changed.changed() => if r.is_err() { return; },
+            // (An ack is a sample of how far away the client is, taken as it comes.)
+            r = acks.changed(), if waiting => if r.is_err() { return; },
         }
     }
 }
@@ -847,7 +1092,7 @@ async fn relay_upstream(
 ) {
     while let Some(msg) = pushes.recv().await {
         let pass = match &msg {
-            ServerMsg::Screen { .. } | ServerMsg::ChatLive { .. } => true,
+            ServerMsg::Screen { .. } | ServerMsg::ChatLive { .. } | ServerMsg::Typed { .. } => true,
             ServerMsg::Event { event: DomainEvent::Clipboard { .. } } => true,
             ServerMsg::Goodbye { .. } => return,
             _ => false,
@@ -954,6 +1199,49 @@ async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frames_in_flight_follow_how_far_away_the_client_is() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut f = Inflight::default();
+        assert_eq!(f.window(), 1, "one in flight until acks are measured");
+        f.sent(1, ms(0));
+        assert!(f.full());
+        // A terminal nearby: acks in a few ms, one frame in flight, as before.
+        f.acked(1, ms(5));
+        assert_eq!((f.window(), f.full()), (1, false));
+        for i in 2..20 {
+            f.sent(i, ms(i * 10));
+            f.acked(i, ms(i * 10 + 15));
+        }
+        assert_eq!(f.window(), 1, "{:?}", f.srtt);
+        // A phone on cellular: two, then three.
+        for i in 20..40 {
+            f.sent(i, ms(i * 1000));
+            f.acked(i, ms(i * 1000 + 80));
+        }
+        assert_eq!(f.window(), 2, "{:?}", f.srtt);
+        for i in 40..60 {
+            f.sent(i, ms(i * 1000));
+            f.acked(i, ms(i * 1000 + 250));
+        }
+        assert_eq!(f.window(), Inflight::MAX, "{:?}", f.srtt);
+        // Never more than three, whatever the client does: one that stops acking gets no more.
+        for i in 60..63 {
+            assert!(!f.full());
+            f.sent(i, ms(70_000));
+        }
+        assert!(f.full());
+        // One ack covers every frame up to it.
+        f.acked(61, ms(70_300));
+        assert_eq!(f.sent.len(), 1);
+        f.acked(1000, ms(70_400));
+        assert!(f.sent.is_empty());
+        // An old ack (a reconnect's) changes nothing.
+        f.acked(3, ms(80_000));
+        assert_eq!(f.window(), Inflight::MAX);
+    }
 
     #[test]
     fn a_long_chat_is_sent_in_frames_that_fit() {

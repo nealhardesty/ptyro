@@ -124,6 +124,8 @@ fn the_web_app_works_in_a_real_browser() {
     let mut js = Command::new(node)
         .arg(script)
         .args([chrome.to_str().unwrap(), &format!("http://127.0.0.1:{port}"), &code])
+        // `PTYRO_E2E_ONLY="rename keep"` runs only those scenarios.
+        .args(std::env::var("PTYRO_E2E_ONLY").unwrap_or_default().split_whitespace())
         .env("E2E", e2e.to_string())
         .env_remove("PTYRO_SOCKET")
         .stdin(Stdio::piped())

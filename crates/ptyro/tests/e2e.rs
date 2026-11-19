@@ -136,6 +136,7 @@ async fn query_responder_and_program_status_work_end_to_end() {
         text: "ask Proceed?".into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     })
     .await
     .unwrap();

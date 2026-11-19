@@ -26,6 +26,8 @@ export class Conn {
   scope = "";
   /// The daemon's machine, from the welcome; kept when the connection drops.
   machine = "";
+  /// The features the daemon agreed to, from the welcome (`input_seq`: numbered keys, 1.52).
+  features: string[] = [];
   backoff = 500;
   onState: () => void = () => {};
   /// A message that was meant for the daemon and couldn't be sent (the socket is down).
@@ -44,7 +46,7 @@ export class Conn {
     const ws = new WebSocket(location.origin.replace(/^http/, "ws") + "/ws");
     this.ws = ws;
     ws.onopen = () => {
-      ws.send(JSON.stringify({ t: "hello", proto: PROTO, client: { kind: "web", version: "web", pid: 0, token: t }, features: [] }));
+      ws.send(JSON.stringify({ t: "hello", proto: PROTO, client: { kind: "web", version: "web", pid: 0, token: t }, features: ["input_seq"] }));
     };
     ws.onmessage = (ev) => {
       this.lastRx = Date.now();
@@ -54,6 +56,7 @@ export class Conn {
         this.state = "open";
         this.scope = msg.scope ?? "full";
         if (typeof msg.machine === "string") this.machine = msg.machine;
+        this.features = Array.isArray(msg.features) ? msg.features : [];
         this.backoff = 500;
         this.onState();
         ws.send(JSON.stringify({ t: "watch_events" }));
@@ -84,6 +87,7 @@ export class Conn {
     this.pending.clear();
     this.state = "closed";
     this.backoff = 500;
+    for (const l of this.listeners) l({ t: "disconnected" });
   }
 
   /// The socket is gone (closed, or found dead): fail what waits on it and reconnect.
@@ -92,19 +96,36 @@ export class Conn {
     this.ws = null;
     for (const p of this.pending.values()) p({ t: "err", error: { code: "daemon_unavailable", message: "connection lost" } });
     this.pending.clear();
+    for (const l of this.listeners) l({ t: "disconnected" });
     if (this.state === "rejected") return;
     this.state = "closed";
     this.onState();
-    setTimeout(() => this.connect(), this.backoff);
+    this.retry = window.setTimeout(() => { this.retry = 0; this.connect(); }, this.backoff);
     this.backoff = Math.min(this.backoff * 2, 10_000);
   }
+
+  private retry = 0;
+
+  /// Keys are waiting to be sent (WEB2.3): down, try again within half a second (not after a
+  /// backoff grown to ten); up, ask whether the connection is alive.
+  hurry(): void {
+    if (this.state === "open") { this.check(); return; }
+    if (this.state !== "closed" || !this.retry) return;
+    clearTimeout(this.retry);
+    this.retry = window.setTimeout(() => { this.retry = 0; this.connect(); }, 400);
+    this.backoff = 500;
+  }
+
+  private checking = false;
 
   /// Is the connection alive? A phone that changed network or woke from sleep can hold a socket
   /// that looks open and carries nothing; ask something cheap and, with no answer, start over.
   check(): void {
-    if (this.state !== "open" || !this.ws) return;
+    if (this.state !== "open" || !this.ws || this.checking) return;
     const ws = this.ws;
-    this.request({ t: "status" }, 4000).catch(() => {
+    this.checking = true;
+    this.request({ t: "status" }, 4000).then(() => { this.checking = false; }, () => {
+      this.checking = false;
       if (this.ws !== ws) return;
       try { ws.close(); } catch { /* already closing */ }
       this.lost(ws);

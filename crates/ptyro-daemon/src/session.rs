@@ -240,6 +240,8 @@ pub struct Session {
     record_dir: Mutex<Option<PathBuf>>,
     /// Driven over a structured protocol instead of a terminal (M10).
     pub structured: Option<Arc<crate::structured::Structured>>,
+    /// Numbered input settled so far, per device and stream (WEB2.3, `typed.rs`).
+    pub typed: Mutex<crate::typed::Streams>,
 }
 
 pub struct Spawned {
@@ -320,6 +322,10 @@ pub struct SessionImage {
     /// A structured session's driver, transcript and pipes (M10).
     #[serde(default)]
     pub structured: Option<crate::structured::StructuredImage>,
+    /// Numbered input settled so far (WEB2.3): so a key typed before the upgrade isn't typed
+    /// again when its client replays it to the new image.
+    #[serde(default, skip_serializing_if = "crate::typed::StreamsImage::is_empty")]
+    pub typed: crate::typed::StreamsImage,
 }
 
 fn new_meta(
@@ -426,6 +432,7 @@ impl Session {
             recorder: Mutex::new(recorder),
             record_dir: Mutex::new(s.record.map(|(d, _)| d)),
             structured: None,
+            typed: Mutex::new(crate::typed::Streams::fresh()),
         });
         session.save(Some(s.launch));
         tokio::spawn(writer_task(child.writer, writer_rx));
@@ -476,6 +483,7 @@ impl Session {
             recorder: Mutex::new(None),
             record_dir: Mutex::new(None),
             structured: None,
+            typed: Mutex::new(crate::typed::Streams::fresh()),
         })
     }
 
@@ -509,21 +517,26 @@ impl Session {
     }
 
     /// Write input to the program; for Ctrl-Z, watch whether it suspends itself.
-    fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) {
-        let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
-        if !bytes.is_empty() {
-            self.queue(WriterMsg::Bytes(bytes));
+    /// False: dropped, the input queue being full (or the child gone).
+    fn write_input(&self, bytes: Vec<u8>, ctrl_z: bool) -> bool {
+        if bytes.is_empty() {
+            return true;
         }
-        if let Some(watch) = suspending {
+        let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
+        let queued = self.queue(WriterMsg::Bytes(bytes));
+        if let Some(watch) = suspending.filter(|_| queued) {
             tokio::spawn(watch);
         }
+        queued
     }
 
-    /// Queue something for the child's input; full means it isn't reading, so drop it.
-    fn queue(&self, msg: WriterMsg) {
-        if self.writer.try_send(msg).is_err() {
+    /// Queue something for the child's input; full means it isn't reading, so drop it (false).
+    fn queue(&self, msg: WriterMsg) -> bool {
+        let queued = self.writer.try_send(msg).is_ok();
+        if !queued {
             tracing::debug!(session = %self.id, "its input queue is full: dropped");
         }
+        queued
     }
 
     pub(crate) fn signal(&self, list: Vec<Sourced>) {
@@ -534,9 +547,9 @@ impl Session {
 
     pub fn info(&self, handle: String) -> SessionInfo {
         let meta = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (size, title) = {
+        let (size, title, alt) = {
             let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            (term.emu.size(), term.emu.title().map(str::to_owned))
+            (term.emu.size(), term.emu.title().map(str::to_owned), term.emu.modes().alt_screen)
         };
         let fg = meta
             .state
@@ -551,6 +564,14 @@ impl Session {
             let e = self.engine.locked();
             (e.record.clone(), e.activity.clone())
         };
+        let live = meta.state.is_live();
+        let state_token = crate::typed::token(
+            meta.pid,
+            live,
+            if live { self.foreground_pid() } else { None },
+            alt,
+            status.as_ref(),
+        );
         SessionInfo {
             machine: None,
             id: self.id,
@@ -605,7 +626,21 @@ impl Session {
             lost: meta.shelf.as_ref().is_some_and(|f| f.lost),
             pane: meta.shelf.as_ref().map(Shelf::pane),
             layout: meta.shelf.as_ref().and_then(|f| f.layout.clone()),
+            state_token: Some(state_token),
         }
+    }
+
+    /// What it waits for, as a token (`SessionInfo::state_token`, WEB2.3). Takes each lock on
+    /// its own: never call it holding `meta`, `term` or `engine`.
+    pub fn state_token(&self) -> String {
+        let (pid, live) = {
+            let m = self.meta.locked();
+            (m.pid, m.state.is_live())
+        };
+        let alt = self.term.locked().emu.modes().alt_screen;
+        let status = self.engine.locked().record.clone();
+        let fg = if live { self.foreground_pid() } else { None };
+        crate::typed::token(pid, live, fg, alt, status.as_ref())
     }
 
     /// Its number in SHELLS, when it is loose (SPEC §23.3).
@@ -1111,15 +1146,22 @@ impl Session {
     }
 
     pub async fn input(&self, event: &InputEvent) {
+        self.input_now(event);
+    }
+
+    /// [`input`](Self::input), without an await: typed while the numbered-input table is locked
+    /// (WEB2.3), so a copy arriving meanwhile finds it settled. False: it was dropped, the
+    /// session's input queue being full (it isn't reading), so it must not be said typed.
+    pub fn input_now(&self, event: &InputEvent) -> bool {
         if let Some(st) = &self.structured {
             st.key(self, event);
-            return;
+            return true;
         }
         let bytes = {
             let term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             ptyro_term::input::encode(event, &term.emu.modes())
         };
-        self.write_input(bytes, is_ctrl_z(event));
+        self.write_input(bytes, is_ctrl_z(event))
     }
 
     /// Ctrl-Z is about to reach the session's own process, in raw mode. It leads the PTY's session,
@@ -1326,6 +1368,9 @@ impl Session {
             (Some(m), true) => Some(std::os::fd::AsRawFd::as_raw_fd(m)),
             _ => None,
         };
+        // Before the literal, whose `meta` guard lives to its end: `typed` is never taken under
+        // `meta` (numbered keys type, so take `meta`, under `typed`).
+        let typed = self.typed.locked().image();
         Ok(SessionImage {
             id: self.id.full(),
             meta: self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone(),
@@ -1339,6 +1384,7 @@ impl Session {
             stale_after_ms: stale,
             engine_clocks,
             structured,
+            typed,
         })
     }
 
@@ -1420,6 +1466,7 @@ impl Session {
             ),
             record_dir: Mutex::new(record.map(|(d, _)| d)),
             structured: structured.clone(),
+            typed: Mutex::new(crate::typed::Streams::from_image(img.typed, now_ms())),
         });
         // Its program is still our child: the reaper learns its end.
         if let Some((r, w)) = halves {
@@ -1496,6 +1543,7 @@ impl Session {
             recorder: Mutex::new(recorder),
             record_dir: Mutex::new(s.record.map(|(d, _)| d)),
             structured: Some(st),
+            typed: Mutex::new(crate::typed::Streams::fresh()),
         });
         session.save(Some(s.launch));
         tokio::spawn(Arc::clone(&session).waiter_task(child));

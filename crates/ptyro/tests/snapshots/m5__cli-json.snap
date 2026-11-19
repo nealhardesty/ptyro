@@ -12,6 +12,7 @@ expression: "Value::Object(all)"
     "retired": []
   },
   "daemon_status": {
+    "alt_digits": "bool",
     "clients": "number",
     "generation": "number",
     "live_sessions": "number",
@@ -127,6 +128,7 @@ expression: "Value::Object(all)"
       "state": {
         "t": "string"
       },
+      "state_token": "string",
       "status": {
         "confidence": "string",
         "since_ms": "number",
@@ -242,6 +244,7 @@ expression: "Value::Object(all)"
       "state": {
         "t": "string"
       },
+      "state_token": "string",
       "status": {
         "confidence": "string",
         "since_ms": "number",

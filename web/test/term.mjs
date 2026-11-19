@@ -1,6 +1,6 @@
 // The web terminal's keyboard and selection against a real daemon (ROADMAP WEB1.8). Run by
 // crates/ptyro/tests/m9.rs when Node is there; also by hand:
-//   node web/test/term.mjs units                       keys, soft keyboards, words, selections
+//   node web/test/term.mjs units                       keys, soft keyboards (and typing.mjs), words, selections
 //   node web/test/term.mjs plan                        {"count":N,"hex":"…"}: the bytes the cases make
 //   node web/test/term.mjs type  WS_URL TOKEN SESSION  press the cases' keys in the session
 //   node web/test/term.mjs scroll WS_URL TOKEN SESSION fetch the scrollback; print what a select copies
@@ -9,6 +9,7 @@
 // with `plan`, and a selection's text with `ptyro read --scrollback`.
 import assert from "node:assert/strict";
 import { MOD, Sticky, inputKeys, keyInput, keyOf, pasteInput } from "../dist/keys.js";
+import { units as typingUnits } from "./typing.mjs";
 import { docOf, selText, wordAt, lastUsed, ordered, span, urlAt, findIn, fitPx, fitted, pinchZoom, splitPan, clampPx, MIN_PX, MAX_PX, READABLE_PX, FIT_MAX_PX } from "../dist/grid.js";
 
 const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: (k) => k === "AltGraph" && !!o.altGraph, ...o });
@@ -127,7 +128,9 @@ if (mode === "units") {
   assert.deepEqual(splitPan(-30, 0, 0, false), { top: 0, rest: -30 }, "a screen that fits scrolls the history");
   assert.deepEqual(splitPan(-30, 50, 400, true), { top: 50, rest: -30 }, "coming back from the history: it first");
   assert.deepEqual(splitPan(20, 0, 0, false), { top: 0, rest: 20 });
-  console.log("ok");
+  // Soft keyboards, compositions and dictation (web/test/typing.mjs).
+  const typed = typingUnits();
+  console.log(`ok (typing: ${typed.traces} keyboard traces, ${typed.runs} property runs)`);
 } else if (mode === "plan") {
   console.log(JSON.stringify({ count: expected.length, hex: hex(...expected).join(" ") }));
 } else if (mode === "type" || mode === "scroll") {

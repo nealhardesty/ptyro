@@ -518,6 +518,7 @@ mod tests {
             lost: false,
             pane: None,
             layout: None,
+            state_token: None,
         }
     }
 

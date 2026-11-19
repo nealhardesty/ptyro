@@ -836,6 +836,7 @@ Push messages have no id.
 | `Unsubscribe { session }` | |
 | `Ack { session, seq }` | client finished painting up to `seq` (flow control) |
 | `Input { session, event }` | `Key`/`Mouse`/`Paste`/`Focus`/`RawBytes` (§5.5) |
+| `Keys { session, stream, keys: [SeqKey{n, event, token?, age_ms, typed_ms?, heard}], replay }` | 1.52: numbered input, each `n` typed at most once; a `replay` only while the session waits for what it did, live keys judged only when they arrive late (§16.4 WEB1.8, "Every key exactly once"); only to a daemon whose `Welcome` lists `input_seq` |
 | `Resize { session, size }` | only honoured from the controller |
 | `WatchEvents { filter }` | subscribe to the domain event stream |
 | `Ping` | keepalive (remote transports) |
@@ -865,6 +866,7 @@ Push messages have no id.
 | `Screen(ScreenFrame)` | keyframe or delta for a subscribed session |
 | `Event(DomainEvent)` | `SessionCreated/Updated/StatusChanged/Exited/Removed`, `AttentionChanged`, `Notification`, `WorktreeChanged`, `ProjectChanged`, `RunChanged`, `ConfigReloaded`, `ControllerChanged`, `Bell`, `Clipboard{text}` (controller only) |
 | `Goodbye { reason }` | daemon shutting down / upgrading (clients reconnect) |
+| `Typed { session, stream, upto, refused: [Refused{from, to, why, reason}] }` | 1.52: every `Keys` number up to `upto` (at most the message's last) is settled; `refused` names those not typed (`changed`, `stale`, `unknown`, `scope`, `ended`, `offline`, `invalid`, `overflow`) |
 
 **[built M2] Protocol 1.1** (minor bump, additive):
 - Requests: `Resolve`, `Restart`, `ReadScrollback`, `SaveView`, `LoadView`, `History`.
@@ -1110,6 +1112,32 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built 2026-11-19] Protocol 1.52** (additive; WEB2.3, every key exactly once, §16.4 WEB1.8):
+`ClientMsg::Keys{session, stream, keys: [SeqKey{n, event, token, age_ms, typed_ms, heard}], replay}`
+and `ServerMsg::Typed{session, stream, upto, refused: [Refused{from, to, why, reason}]}` (`why`
+includes `overflow`: the session's input queue was full; `upto` is never past the message's last
+number, so a refusal not said in it never reads as typed); the feature
+`input_seq` (`FEATURE_INPUT_SEQ`: a client lists it in `Hello`, the daemon lists it back in
+`Welcome` when it numbers input; `ptyro-client` always asks, and keeps `Welcome.features`);
+`SessionInfo.state_token` and `ScreenFrame.state_token` (16 hex digits, opaque; a frame's is taken
+before its screen, never newer than what it shows; when only the token moves, a status a hook set
+with nothing new drawn, a frame comes all the same: its seq unchanged, its delta empty) and
+`ScreenFrame.at_ms` (the daemon's clock as
+the frame was made; a key's `typed_ms` is that plus the time since the frame came, so no clocks
+need agree); `DaemonStatus.alt_digits` (`[shell] alt_digits`, for clients that can't read the
+settings); `Request::SendText.once` (a name: the same name from the same device and session within
+ten minutes types nothing twice); the constants `REPLAY_WINDOW_MS` (5000), `LATE_LIMIT_MS`
+(10 000) and `MAX_SEQ_KEYS` (4096).
+The handoff image's sessions gain `typed` (the stream table) and the image `sends` (named sends
+that went), both skipped when empty, so the committed fixture is unchanged. Compatibility: a 1.51
+daemon doesn't list `input_seq`, so the web app sends plain `Input` as before (and says keys
+typed offline weren't sent, as it did); a 1.51 web app never sends `Keys` and never gets `Typed`;
+an older daemon ignores `once` and the tokens. A mirroring daemon forwards `Keys` to a session's
+machine when that machine's `Welcome` listed `input_seq` and its `Typed` back
+(`relay_upstream`); to an older machine it sends live keys as `Input` (acknowledged once handed
+to that connection) and refuses a replay (`unknown`: it can't be checked there); an offline machine
+is `offline`. A watcher (scope below `control`) is told `scope`, where `Input` was dropped silently.
 
 **[built 2026-11-19] Protocol 1.51** (additive): `Request::GcKeep{worktree}` → `Reply::Notes`
 (§10.8, Keep it), full scope, routed to the worktree's machine. A 1.50 daemon answers it
@@ -1381,7 +1409,15 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
   can't drift from the daemon's emulator.
 - **Pacing:** the hub sends at most one frame per session per client per tick (default 8 ms,
   configurable), and holds at most **one unacked frame** per session per client. A slow client
-  simply receives fewer, larger deltas — never an unbounded queue.
+  simply receives fewer, larger deltas — never an unbounded queue. **[built 2026-11-19, WEB2.4]**
+  A client far away gets two or three: the daemon measures, per subscription, the smoothed time
+  from a frame to its ack (`Inflight` in `conn.rs`; no protocol change, so every client gets it);
+  at 40 ms or more two frames may be unacked, at 120 ms or more three (`Inflight::MAX`), so a
+  change made while a frame crosses a slow link is sent at once instead of a round trip later
+  (in the predicted-echo simulation, 66 % fewer expired guesses at 100 ms each way). Each delta
+  is still from the frame sent before it (the client applies them in order); a client nearby (a
+  terminal, a LAN: acks in a few ms, plus the web app's `requestAnimationFrame`) and one that
+  never acks (no measurement) keep one, and nothing ever exceeds three.
 - **Synchronized output:** while the child has an open DEC 2026 batch, frames are held (bounded by
   the processor's timeout) so clients never paint half-drawn Claude/Neovim screens.
 - Optional `zstd` compression for frames > 8 KiB on remote transports (feature `"zstd"`).
@@ -4847,7 +4883,8 @@ is "the web is up when the daemon is".
   expiry. Tokens are `ptd_` + 32 bytes from `/dev/urandom` (no fallback), checked in constant
   time against every record; an unclaimed record has no token and never authenticates.
 - **Scopes:** `read` < `approve` < `control` < `full`, enforced in `handle_as`
-  (`devices::needed`; unknown requests need `full`) and on `Input` (control). A device never
+  (`devices::needed`; unknown requests need `full`) and on `Input` and `Keys` (control; WEB2.3's
+  numbering and replays change nothing about who may type, every message is checked). A device never
   takes control or resizes a session. Revocation bumps an epoch, and the device's live
   connections get `Goodbye{"this device was revoked"}`. Approve-or-higher actions on a session
   are recorded as `remote` events with the device's name.
@@ -5020,11 +5057,210 @@ emulator, no WASM.
   decides), and Cmd stays the browser's (copy, paste). Paste is `Input::Paste` (bracketed by the
   daemon when the program asked); focus in and out is `Input::Focus` when it asked for that.
   Needs `control` scope and a running session; below it the page is a viewer (and says so).
+- **[built 2026-11-19, WEB2.3] Every key exactly once** (`web/src/outbox.ts`, tested by
+  `web/test/outbox.mjs` with 10 000 random runs over a lossy network; the daemon's side is
+  `crates/ptyro-daemon/src/typed.rs` and `conn.rs` `keys`; `crates/ptyro/tests/web2.rs`; e2e
+  `exactlyOnce`). **Numbered.** Against a daemon whose `Welcome` lists `input_seq` (1.52), every
+  input event of the terminal (keys, pastes, dictation's paste, clicks) goes as
+  `ClientMsg::Keys`, numbered from 1 in a *stream*: 24 random hex digits made per page load and
+  session, kept across reconnects (`Outbox`, one per session, living as long as the page, so keys
+  waiting when you leave a session's page are still sent or said). The daemon keeps, per session,
+  device and stream, the highest number settled (typed or refused) and the last
+  `MAX_REFUSALS` (8) refusals (one following the last straight on extends it; a settled number at
+  or below one forgotten is said `unknown`, never typed); a number at or below it is never typed
+  again, so a copy is dropped. Everything is answered with `Typed{upto, refused}` (`upto` never
+  past the message's last number); nothing is typed or settled once
+  the daemon has begun a live upgrade (no answer: the client sends again to the next image), and
+  the table crosses the upgrade in the handoff image. Memory: 64 streams per session, each
+  forgotten after 10 minutes unused; forgetting one raises the session's *floor*, and a stream the
+  daemon doesn't know may replay only keys typed after the floor (a new session's floor is its
+  start: nothing could have been typed before it). **Pending.** A key is kept until settled.
+  While the connection is down, or a key is unanswered for `WAIT_MS` (1.2 s), the terminal says
+  "N keys waiting" (`.term-wait`, `role=status`, bottom left), the connection is asked whether it
+  is alive (`conn.check`, a 4 s `status`), and a closed one retries within 0.4 s instead of its
+  grown backoff (`conn.hurry`). Clicks, drags, the wheel and focus are never kept: they are aimed
+  at a screen as it was. **What a key carries.** Each key carries what its page last *drew*: the
+  `state_token` of the last frame applied (never a list's or an event's newer one: a key must not
+  be vouched for by a prompt its page never drew; the daemon takes a frame's token before its
+  screen, so it is never newer than what the frame shows, and sends a frame with an empty delta
+  when only the token moved, so the page's is never left behind), `typed_ms` (that frame's `at_ms` plus
+  the time since it came: when the key was typed, on the daemon's clock), and `heard` (the highest
+  refused number the page had heard of). **In order.** A key goes live only behind keys that went
+  ahead of it on the same connection: never past one that waits (typed offline, behind a replay,
+  more than one message holds, or a send that didn't leave), so a gap in live numbers is only
+  ever keys the page gave up on unsent and said so, and the daemon types past it. Messages are
+  split by size (at most 4 MiB, under the server's limit) as by count. **Late.** Live keys are
+  typed as they come, whatever their token (their own echo, or the turn their Enter started,
+  moves it before the page sees the new one), unless they arrive late: a dying connection (a
+  phone in a tunnel) still delivers what it held. Arriving more than `REPLAY_WINDOW_MS` after
+  `typed_ms` they are judged by their tokens, as a replay is; more than `LATE_LIMIT_MS` (10 s,
+  well before the page gives up at 15 s and says "may not have been sent") they are refused,
+  replay or not. A key typed before its page heard of a refusal before it (`heard` below the
+  stream's highest refused number of a refusal of its own) is refused too: it was on its way behind
+  keys that weren't typed, and the page says so; one typed after is judged on its own, so nothing
+  cascades. **Replay, exactly.** On reconnect (and after `RESEND_MS`, 2.5 s, of no
+  answer on an open connection) every unsettled key goes again, numbered as before, as a
+  `replay` (one message's worth at a time, the rest after its answer) carrying for each key its
+  token and how long ago it was typed. The daemon drops the
+  ones it settled already (saying again any refusal among them: an answer lost with its
+  connection). The rest are typed, in order, only if all hold: none of the ones it brought again
+  was refused; the stream is known or provably new; the first was typed at most
+  `REPLAY_WINDOW_MS` (5 s) ago; and every one carries the token the session has *now*. Otherwise
+  none is typed (a batch is typed whole or not at all) and they are settled as refused. The
+  **state token** is FNV-1a (stable across builds and upgrades) over the session's process id and
+  whether it runs, the terminal's foreground process group (a command started or ended in a
+  shell), the alternate screen, and its status with the time that status began (a new permission
+  prompt, a question, a turn that ended or began, each is a new `since`), but not a status that is
+  only the output heuristic's guess (§9.3: the keys' own echo moves it), nor attention (looking
+  clears it), nor the status's detail. Keys behind an unanswered replay wait for its answer; when
+  keys are refused, every key after them still waiting is dropped with them ("they came after keys
+  that weren't sent": half a command is worse than none); offline past the window, keys never sent
+  are dropped at once (they can't be typed) and so is whatever is typed until the connection is
+  back. Keys that went may have been typed, so they are asked about, never assumed lost. No answer
+  at all for `GIVE_UP_MS` (15 s) on an open connection: dropped and said honestly ("may not have
+  been sent"). **Said.** Dropped keys are kept as *lost*: the terminal shows "4 keys weren't sent:
+  the session changed while you were away (it asked something new, or started or finished
+  something)." (`.term-lost`, `role=alert`), with **Show** (a sheet with the keys, hidden as dots
+  until **Reveal**, since they may be a password typed where nothing echoes: text as typed,
+  ⏎ ⌫ ⎋ ← ^C; **Copy**, **Type them now** to send them on purpose, **Forget them**) and ✕;
+  on another page, a toast. **Keys a session doesn't read** (stopped, stuck: its input queue of
+  8192 is full) are refused `overflow`, never said typed, with what follows them. **Control.**
+  Only keys that were typed make the device the session's controller (a copy or a refusal
+  doesn't). **Older daemons** (no `input_seq`): plain `Input`, as before; keys
+  typed before the first welcome are then dropped and said. **✎ compose** is a request, not
+  input: it goes only once every key typed before it is settled (never overtaking keys waiting to
+  be sent; not at all if one of them wasn't, and the page says so). It carries `once`, a name kept
+  while the draft is unchanged; a send cut off by a dropped connection says "Not sure it was sent
+  … Send it again: it won't be typed twice" (against an older daemon, which ignores the name:
+  "Look at the session before sending it again"), and the daemon
+  answers a repeat as the first (waiting for it if it is still going; a failed send is forgotten,
+  so a retry types it; the names that went cross a live upgrade). Requests are never retried by
+  the page. Limits: a page reload forgets what was waiting (it is shown until then); a paste too
+  big for the server (4 MiB) is refused at once, not kept; a session whose status comes only from
+  the output heuristic is guarded by its process, foreground and screen only; a key typed before
+  the page drew the session's first frame carries no token or time (it is typed live as before,
+  refused if it must be replayed); a jump of the daemon's wall clock between a frame and a key
+  misjudges lateness (forward: keys refused until the next frame; backward: not judged late).
+- **[built 2026-11-19, WEB2.4] Predicted echo** (`Predictor` in `web/src/predict.ts`, no DOM;
+  `web/test/predict.mjs`: scenarios and a property test of random worlds — programs that echo,
+  don't, echo upper case or `*`, move the cursor, autosuggest, echo late; links from 0 to 200 ms
+  each way; one to three frames in flight; e2e `predict`). Mosh's speculative local echo, as a
+  layer over the confirmed screen: **it never changes what is sent** (`sendInput` sends first,
+  then tells the predictor, which has no way to send; any error in it only blocks it). *Predicted*:
+  a printable, narrow character (ASCII, Latin, Greek, Cyrillic; Shift at most) at the cursor, and
+  a Backspace that erases what was typed in this epoch at the end of the text (never the prompt,
+  never in the middle of a line). Everything else is a *barrier* (Enter, Tab, arrows, Ctrl/Alt
+  keys, pastes, clicks, focus, a wide or combining character, the last column, where the
+  terminal waits to wrap): a new epoch starts, and the screen's cursor is trusted again only once
+  that key is typed (`Typed`) plus `SETTLE_MS` (80 ms); letters typed meanwhile are held and
+  placed on the first frame after, past the ones it shows echoed already (only keys the daemon
+  said it typed). *Confirmed*: a frame shows the character in its cell with the cursor just after
+  it (a later one confirms those before it, whose cells must match too). *Contradicted*: the
+  cursor anywhere but where the echo so far leaves it (another row, past a cell that holds
+  something else, back): every prediction goes at once, a miss. *Expired*: not confirmed by
+  `ECHO_MS` (200 ms) plus the round trip after its key was typed, or `MAX_MS` (1.5 s) at most:
+  all go, a miss. Predictions freed by a barrier (the letters before an Enter) stay drawn,
+  judged by their cells alone, until confirmed, or until the barrier is typed and settled (then
+  confirmed or gone: so a screen that scrolled never keeps a guess on the new prompt line).
+  *Shown* only when the smoothed key-to-echo time is `ON_MS` (50 ms) or more (off again below
+  `OFF_MS`, 30 ms; measured from confirmations whether shown or not), only once `PROOF` (2)
+  predictions in this epoch were confirmed by a cell that changed (letters and the Backspaces that
+  took them back prove nothing), only where a letter types into a blank cell, and never while the
+  terminal is scrolled back or selecting, dictation is held, keys wait (offline, unanswered) or
+  the cursor is hidden; a new refusal wipes them. So a prompt that doesn't echo never shows a
+  letter: nothing there is ever confirmed. Drawn on the cell's own background, in the
+  foreground colour at 75 %, underlined, with the cursor after them. The alternate screen is
+  allowed (Claude Code, Codex and OpenCode keep a visible cursor at their prompt, under
+  synchronized output, so their echo proves itself; a program that misbehaves just never earns
+  the proof). **Aa → Predict typing: auto / off** (`term.predict`, `localStorage`
+  `ptyro.term.predict`, auto by default), its hint showing the measured echo time; with
+  `ptyro.debug`, `ptyroTerm.predict` (its `stats`, and `force` to draw on a fast link).
+  Limits: a program that hides the cursor and draws its own gets none; inserting in the middle
+  of a line is checked but not drawn; a coincidence (a program printing exactly the predicted
+  letter with the cursor after it, twice) could prove an epoch, and a guess then shows for at
+  most a round trip.
+- **[built 2026-11-19, WEB2.2] Terminal first** (`termFirst`, `strayToTerm` in `app.ts`; the
+  rules are `strayKey`, `hardKey`, `ownKeyboard`, `autoFocus` in `keys.ts`, tested in
+  `web/test/typing.mjs`; e2e `terminalFirst`, `typePhone`). The terminal is the session page's
+  input. **Focus by itself** only with a keyboard of the device's own (no `pointer: coarse`, or a
+  key pressed outside any field since the page loaded: a tablet's keyboard), so a phone's keyboard
+  never pops up unasked: when the page opens (or opens again), when the session becomes typeable
+  (connected, started, restarted), when the window gets the focus back, and when ✎ compose
+  closes. Never from a field, an open sheet or menu (`.scrim`), the page's own text selection, or
+  an open compose box (it waits until they are done). **A key pressed anywhere else** on the page
+  (nothing focused, or a button) goes to the terminal: it takes the focus, then the key, through
+  `Term.takeKey` → the same `onKeydown`/`Typist` path, so the first key isn't lost; not Tab (the
+  way out to the page's buttons), not Enter/Space/Esc on a focused button, not a modifier alone or
+  Cmd, not Ctrl/Alt while page text is selected; never what a field types. So on a session this
+  device may type to, the page's own letter shortcuts (`n`, `/`, `?`, a shell's digits) are the
+  terminal's; SHELLS' `Alt+1`…`Alt+9`, `Alt+0` are not (§23.14: ptyro's before the program's, as
+  in the TUI). **⌨ Type** (under the key row, always in sight, accented while the terminal hasn't
+  the keys) focuses it; while typing it reads **⌨ Done** and puts the keyboard away. No redraw lands
+  mid-press: while a pointer is down anywhere the page waits (`PressGate` in `kit.ts`, at most
+  `HELD_MS` = 1 s; what waited is drawn once, after the release and its click), so a click on ⋯,
+  Allow or ✎ isn't lost to a control drawn anew under the pointer (the focus leaving the terminal,
+  a status event, `loadAll`'s second render). And nothing moves under a pointer about to press:
+  the header puts what arrives after the first draw (the machine's chip once connected, its load
+  average once known, 🔔) next to the title, which gives it room, so the page's own controls (⋯)
+  and the connection dot stay put (that move was the e2e `rename` flake: a click aimed at ⋯ landed
+  on the load average that had just pushed it left); and on a computer nothing moves when the
+  focus does (the pill hides and the page fits the
+  `visualViewport` while typing only on a coarse pointer). **✎ compose** (`session.compose`, was
+  the reply box `session.reply`) opens a box under the terminal, closed by default (no room taken
+  on a phone): a normal textarea, so dictation (OS, Superwhisper) works as anywhere, growing to
+  two fifths of the window; Enter sends (not while an input method composes), Shift+Enter is a
+  new line, Esc or ✕ closes keeping the draft (per session, `app.drafts`; the button shows `•`).
+  Sending is `send_text` with `enter: true`, as before and as `ptyro send` (the daemon pastes a
+  multi-line text, bracketed when the program asked, then presses Enter as a key), after
+  `typist.interject()`; once at a time; it closes the box and the terminal has the keys again.
+  Viewers and ended sessions get no ⌨, ✎ or key row; the row says why (watching, hibernated,
+  ended: restart it). Limits: Tab doesn't leave the focused terminal (it is the program's key):
+  click outside, or ⌨ Done; a phone's keyboard has no Shift+Enter, so a new line in compose
+  there comes from dictation or a paste.
+- **[built 2026-11-19, WEB2.1] Soft keyboards, compositions and dictation** (`Typist` in
+  `keys.ts`; traces and a property test in `web/test/typing.mjs`, CDP IME in `e2e.mjs typing`).
+  The field's text is what is diffed, not the events' data: `Typist` keeps what the session was
+  sent for the field (`sent`, code points) and, on every `input`, sends the difference against the
+  field now (backspaces for the tail that went, then the new characters). So a composed word's
+  letters go as they are typed, Gboard's autocorrect (`teh` → `the`) arrives as two backspaces
+  and `he`, a swipe revision or a backspace inside the word likewise. Backspaces never go below a
+  *floor*: everything before a key from elsewhere (the key row, a hardware key, a paste) or a
+  character a sticky modifier changed. Outside a composition the field is emptied after every
+  change; never during one (that breaks keyboards): back-to-back compositions leave text until the
+  next gap. `compositionend` only marks the end: the final text is read on the next task
+  (`setTimeout 0`, Safari's commit `input` comes after the end), or at once when anything else
+  arrives first. A typed character with no composition (cancelable `beforeinput`, real keydowns
+  such as the iPhone's) goes as a key and never touches the field; one that can't be cancelled is
+  read from the field. **Held text** is shown dim at the cursor (`.term-pending`, ✕ drops it) and
+  sent once: *dictation* — a composition of more than one word or with a newline, an insert of
+  more than a word, of more than `LIVE_MAX` (32) characters or with a newline, or a change that
+  takes back more than a word — is sent at the composition's end, or `SETTLE_MS` (700 ms) after
+  the last change outside one, as **one `Input::Paste`**; text that appears in the field with
+  no `beforeinput` (accessibility insertion, Wispr Flow) is held the same way. A newline is
+  Enter only from an Enter keydown (or a `beforeinput` newline within 150 ms of one); any other is
+  text in a paste, and without bracketed paste the paste's newlines become spaces, so a spoken
+  "new line" never runs a command. Limits: Chrome on Android turns a keyboard's committed lone
+  `\n` into an Enter key event itself, so a voice "new line" sent that way can't be told from
+  Enter; Gboard voice's first partial word may go as keys before the rest is held.
+  **Input methods:** on a computer (`pointer: coarse` false) every composition is held and its
+  final text sent (as keys when short and one word, as a dead key's `é` is), so romaji, pinyin and
+  `´` never reach the session; on a phone a composition with Han, kana, Hangul or full-width text is
+  held, and once one has been, the keyboard is taken for an input method (its compositions held)
+  until a Latin composition commits; the first pinyin word on a phone goes as letters and is then
+  corrected. **Smart punctuation** (typed text only, never dictation or paste): “ ” „ → `"`,
+  ‘ ’ ‚ → `'`; a `—` or `–` within 1.5 s of a typed `-` is the second `-` (`--`, whether or not
+  the keyboard took the first back); `. ` within 1.5 s of a typed space is the second space; a
+  dash with no `-` before it (chosen from the keyboard) stays. **Plain keys (no suggestions)**
+  (Aa, `term.plain`, `localStorage` `ptyro.term.plain`, off by default) makes the field an
+  `<input type="password">` with the password managers' ignore attributes: the one kind of field
+  Gboard, SwiftKey, Samsung and iOS don't predict, correct, compose or (mostly) dictate into. On a
+  Mac a focused password field also turns on secure input, which stops other apps' global hotkeys
+  (a dictation app's) while it has focus.
 - **The key row.** Esc, Tab, sticky Ctrl, Alt and Shift (tap: the next key; tap again: held),
   arrows that repeat while held, Home/End/PgUp/PgDn/Del, Ctrl-C/D/Z/L/R/A/E/W, the punctuation
   a phone keyboard buries, F1–F12, Paste, and Aa (the options). Buttons don't take focus from the
-  terminal, so the keyboard stays up. The reply box (a whole line, dictation-friendly) stays for
-  when the terminal isn't being typed into.
+  terminal, so the keyboard stays up. ✎ compose (WEB2.2, above) is for a long prompt or
+  dictation, written and read over before it is sent.
 - **Mouse.** When the program turned the mouse on (`ScreenModes.mouse`), clicks, drags and the
   wheel go to it as `Input::Mouse` with cell coordinates (hold Shift for the browser's own
   selection); otherwise a drag selects. A full-screen program without mouse gets the wheel as
@@ -5208,8 +5444,10 @@ holding several machines) was not chosen.
 - **Screens and keys** (`conn.rs`): a client's `Subscribe`, `Unsubscribe`, `Ack`, `Input`,
   `Resize` and `Focus` for a mirrored session go over an upstream connection of that client's own
   to the machine (made on first use), so frames, acks, control and sizes work as they do here; it
-  passes back only `Screen`, `Chat` and its own `Clipboard`. A device below `control` watches
-  without typing or sizing, as here. Offline, these are dropped.
+  passes back only `Screen`, `Chat`, `Typed` and its own `Clipboard`. A device below `control` watches
+  without typing or sizing, as here. Offline, these are dropped. Numbered keys (`Keys`, 1.52) go
+  the same way to a machine that numbers input (it settles them); an older machine gets live keys
+  as `Input` and a replay refused; offline or watching, they are refused here, said (§16.4 WEB1.8).
 - **Alerts:** a mirror's `Alert` event is delivered by this daemon's channels (`deliver`:
   terminal, desktop, sinks, web push) under this machine's `notifications.on` and quiet hours; push
   tags are `ptyro-<session id>` on every machine, so a phone paired with both shows one.
@@ -8002,18 +8240,33 @@ fields (`Place.loose`, `Place.slot`, `serde(default)`).
 
 ### 23.14 The web
 
-The web has no splits and no `Alt` it can count on: on macOS the browser types characters, and
-`Cmd`-digit switches tabs. It gets the same things, shaped for a page and a phone:
+The web has no splits, and `Cmd`-digit switches the browser's tabs. It gets the same things, shaped
+for a page and a phone:
 
 - **The session list** gets a SHELLS group above its chats aside. It holds numbered cards with
   their label and state, a `＋` with a menu (new shell, scratch shell, a command), and the empty
   `＋ new shell`.
 - **A shell's page** has the strip at the top (§23.6): `1 2 [3] 4 ＋`, which you tap to switch, and
   swipe left and right on a phone. Its ⋯ menu has rename, move to number…, watch…, adopt…, stop.
-- **Keys on a desktop browser** while the page (not the terminal) has focus: `1`…`9` on the session
-  list open that shell. In the terminal, keys belong to the session, so the strip is the way.
-  Which chord, if any, reaches the page through a focused terminal canvas on Chrome, Safari and
-  Firefox is checked in SH.0, not assumed.
+- **Keys on a desktop browser** ([built 2026-11-19, WEB2]): **`Alt+1`…`Alt+9`, `Alt+0`** show shell
+  1–10 from any page, and while typing in a terminal too, as the TUI's global `M-1`… do: taken
+  before the terminal's own keydown (a capture listener on the window), so the program never sees
+  them, and the next key goes to the new shell's terminal (`goShell` draws the page at once, not at
+  the hashchange that typed keys can overtake). The physical key decides (`e.code` `Digit1`…), so
+  Option on a Mac is Alt with no setting (Option+1 types ¡ and is still shell 1), and so is a
+  layout whose digit row types something else unshifted (French AZERTY on Windows or Linux: Alt+1
+  says `&`, Alt+2 `é`; off a Mac Alt makes no character, AltGr does and is left out); on a Mac, not
+  when Option makes one of the layout's own ASCII characters (a German Mac's Option+5 `[`, a
+  British one's Option+3 `#`, a French one's Option+5 `{`: typed, as `keyOf` sends them); not with
+  Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, not in another field (a
+  chat's box: Option-digit types there), not under a dialog. `[shell] alt_digits = false` (read
+  from the daemon's `status.alt_digits`, 1.52, which every device may read whatever its scope, on
+  connecting and on opening a session's page; from an older daemon with `settings.view` where this
+  device may read the config) leaves them to the program, as in the TUI. The workspace is the TUI's `shells_ws`: the page's session's (a shell's, its
+  worktree's project's), else the list's. `shellDigit` in `keys.ts` (tested in
+  `web/test/typing.mjs`), e2e `altDigits`. The plain `1`…`9` still open a shell on the session list
+  and on a shell's page this device only watches; where it may type, plain digits are the
+  terminal's.
 - `ACTIONS` gains `shells`, `shells.new`, `shells.go`, `shells.move`, `shells.watch`,
   `shells.place`, `shells.scratch`, each in its `docs/parity.md` row.
 

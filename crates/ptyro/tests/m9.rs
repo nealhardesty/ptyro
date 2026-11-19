@@ -1411,7 +1411,8 @@ fn the_web_terminal_types_into_a_real_session() {
         assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8_lossy(&out.stdout).trim().to_owned()
     };
-    assert_eq!(node(&["units"]), "ok");
+    let units = node(&["units"]);
+    assert!(units.starts_with("ok"), "{units}");
     let plan: Value = serde_json::from_str(&node(&["plan"])).unwrap();
     let (count, hex) = (plan["count"].as_u64().unwrap(), plan["hex"].as_str().unwrap().to_owned());
 

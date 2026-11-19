@@ -219,7 +219,7 @@ fn every_cli_command_has_a_tui_path_and_a_web_path_or_a_waiver() {
 #[test]
 fn the_web_apps_actions_are_read_from_its_source() {
     let web = web_actions();
-    for a in ["sessions", "answer", "session.reply", "notifications"] {
+    for a in ["sessions", "answer", "session.compose", "notifications"] {
         assert!(web.contains(a), "{a} in {web:?}");
     }
 }

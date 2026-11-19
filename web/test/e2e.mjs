@@ -148,6 +148,169 @@ const scenarios = {
     await until("the line to arrive", () => ptyro("read", "cli-shell").split("\n").some((l) => l.trim() === "hello-e2e"));
   },
 
+  // A phone's keyboard (WEB2.1): a word's letters arrive while it is still composed, an
+  // autocorrect arrives as a correction, and dictation (a many-word composition, a big insert
+  // with a newline in it) is held, shown, and arrives once as text, its newline pressing nothing.
+  // Real IME operations through the DevTools protocol, into `cat` on a real tty (which echoes
+  // the line as it is edited, and prints it again only when Enter is pressed).
+  async typing() {
+    ptyro("new", "-d", "-n", "typing", "--", "sh", "-c", "cat");
+    const s = await until("the typing session", () => find("typing"));
+    await fresh(`#/s/${s.id}`);
+    await tab.eval(`localStorage.setItem("ptyro.debug", "1")`);
+    await tab.phone();
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
+    if (!(await tab.eval(`matchMedia("(pointer: coarse)").matches`))) throw new Error("the phone emulation has no coarse pointer: the page would take this for a computer");
+    await tab.eval(`document.querySelector(".term-input").focus()`);
+    await sleep(300);
+    const line = () => ptyro("read", "typing").split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    const last = () => line().at(-1) ?? "";
+    const ime = (text) => tab.send("Input.imeSetComposition", { text, selectionStart: [...text].length, selectionEnd: [...text].length });
+    for (const t of ["h", "he", "hel"]) await ime(t);
+    await until("the letters while the word is still composed", () => last() === "hel", 10_000);
+    if (!(await tab.eval(`ptyroTerm.typist.composing`))) throw new Error("the composition ended early");
+    await ime("help");
+    await ime("helpp");
+    await ime("help");
+    await until("the correction", () => last() === "help", 10_000);
+    await tab.send("Input.insertText", { text: "help" });
+    await tab.send("Input.insertText", { text: " " });
+    await until("the space", () => last() === "help", 10_000);
+    // Dictation as a composition: held and shown, nothing sent while it is spoken.
+    await ime("one");
+    await ime("one two");
+    await ime("one two three");
+    await tab.waitFor("the dictation preview", `!document.querySelector(".term-pending").hidden && document.querySelector(".term-pending").textContent.includes("two three")`, 5000);
+    await sleep(400);
+    const mid = last();
+    if (mid !== "help one") throw new Error(`dictation was streamed (only its first word should have gone): ${JSON.stringify(mid)}`);
+    await tab.send("Input.insertText", { text: "one two three" });
+    await until("the dictation, once", () => last() === "help one two three", 10_000);
+    if (!(await tab.eval(`document.querySelector(".term-pending").hidden`))) throw new Error("the preview stayed after the text was sent");
+    // A keyboard extension's insert (Superwhisper's keyboard, a clipboard chip): one paste once it
+    // settles; without bracketed paste, its newline is a space and presses nothing.
+    await tab.send("Input.insertText", { text: " four five\nsix" });
+    await until("the inserted text", () => last() === "help one two three four five six", 10_000);
+    const before = line().filter((l) => l.includes("four five six")).length;
+    if (before !== 1) throw new Error(`a dictated newline pressed Enter: ${JSON.stringify(line().slice(-4))}`);
+    await tab.enter();
+    await until("cat to print the line when Enter is pressed", () => line().filter((l) => l === "help one two three four five six").length === 2, 10_000);
+    if (await tab.eval(`document.querySelector(".term-input").value`) !== "") throw new Error("text was left in the field");
+    // Plain keys: a password field (no predictions, no mic), kept for this device, typing still works.
+    await tab.eval(`ptyroTerm.setPlain(true)`);
+    if (!(await tab.eval(`document.querySelector(".term-input").type === "password" && document.activeElement === document.querySelector(".term-input") && localStorage.getItem("ptyro.term.plain") === "1"`))) throw new Error("plain keys didn't switch the field");
+    await tab.send("Input.insertText", { text: "p" });
+    await tab.type("lain");
+    await until("plain keys' letters", () => last() === "plain", 10_000);
+    await tab.eval(`ptyroTerm.setPlain(false)`);
+    if (!(await tab.eval(`document.querySelector(".term-input").tagName === "TEXTAREA" && localStorage.getItem("ptyro.term.plain") === "0"`))) throw new Error("plain keys didn't switch back");
+    await tab.eval(`localStorage.removeItem("ptyro.debug")`);
+    ptyro("kill", "typing");
+  },
+
+  // Terminal first (WEB2.2), on a computer: the session page opens with the terminal taking the
+  // keys (no click), a key pressed while nothing has the focus goes to it (the first letter too),
+  // ✎ compose sends a multi-line prompt once and gives the keys back, Esc keeps a draft, and an
+  // ended session offers nothing to type with and says why.
+  async terminalFirst() {
+    ptyro("new", "-d", "-n", "first", "--", "sh", "-c", "cat");
+    const s = await until("the session", () => find("first"));
+    await fresh(`#/s/${s.id}`);
+    const lines = () => ptyro("read", "first").split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    // (A tty echoes a line as it is typed and `cat` prints it again at Enter: twice is once.)
+    const twice = (t) => () => lines().filter((l) => l === t).length === 2;
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    if (await tab.eval(`matchMedia("(pointer: coarse)").matches`)) throw new Error("the desktop tab has a coarse pointer");
+    await tab.waitFor("the terminal to take the keys by itself", focused, 10_000);
+    if (await tab.eval(`!!document.querySelector(".compose")`)) throw new Error("the compose box is open by default");
+    await tab.type("first-keys");
+    await tab.enter();
+    await until("keys typed with no click", twice("first-keys"), 10_000);
+    await tab.eval(`document.activeElement.blur()`);
+    await tab.waitFor("the terminal to let the focus go", `!(${focused}) && document.activeElement === document.body`);
+    await tab.type("stray");
+    await tab.enter();
+    await until("keys typed on the page, the first one too", twice("stray"), 10_000);
+    if (!(await tab.eval(focused))) throw new Error("the terminal didn't keep the focus it took");
+
+    // ✎ compose: a multi-line prompt, read over, sent once with Enter (Shift+Enter is a new line).
+    await tab.click(".term-more .compose-btn");
+    await tab.waitFor("the compose box, focused", `document.activeElement === document.querySelector(".compose textarea")`);
+    await tab.send("Input.insertText", { text: "line one" });
+    const shiftEnter = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 8 };
+    await tab.send("Input.dispatchKeyEvent", { type: "keyDown", ...shiftEnter, text: "\r" });
+    await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...shiftEnter });
+    await tab.send("Input.insertText", { text: "line two" });
+    const v = await tab.eval(`document.querySelector(".compose textarea").value`);
+    if (v !== "line one\nline two") throw new Error(`the compose box has ${JSON.stringify(v)}`);
+    await sleep(300);
+    if (lines().some((l) => l.includes("line one"))) throw new Error("the compose box typed into the session before it was sent");
+    await tab.enter();
+    await tab.enter(); // a second Enter on the emptied box sends nothing
+    // (cat's copy of the first line may land in the middle of the tty's echo of the second.)
+    const times = (t) => ptyro("read", "first").split(t).length - 1;
+    await until("the prompt's two lines", () => times("line one") === 2 && times("line two") === 2, 10_000);
+    await tab.waitFor("compose to close and the terminal to have the keys again", `!document.querySelector(".compose") && ${focused}`);
+    await sleep(700);
+    if (times("line one") !== 2 || times("line two") !== 2) throw new Error(`the prompt went more than once: ${JSON.stringify(lines().slice(-8))}`);
+
+    // Esc closes it with the draft kept (marked on the button), and the terminal has the keys.
+    await tab.click(".term-more .compose-btn");
+    await tab.waitFor("the compose box, again", `document.activeElement === document.querySelector(".compose textarea")`);
+    if (await tab.eval(`document.querySelector(".compose textarea").value`) !== "") throw new Error("a sent prompt stayed as a draft");
+    await tab.send("Input.insertText", { text: "kept draft" });
+    await tab.key("Escape", { code: "Escape", vk: 27 });
+    await tab.waitFor("Esc to close it, marked as a draft", `!document.querySelector(".compose") && !!document.querySelector(".compose-btn .dot") && ${focused}`);
+    await tab.click(".term-more .compose-btn");
+    await tab.waitFor("the draft back", `document.querySelector(".compose textarea")?.value === "kept draft"`);
+    if (lines().some((l) => l.includes("kept draft"))) throw new Error("a draft was sent");
+    await tab.key("Escape", { code: "Escape", vk: 27 });
+    await tab.waitFor("the terminal to have the keys", `!document.querySelector(".compose") && ${focused}`);
+
+    // A click on the page while the terminal has the keys isn't lost to the focus moving (⋯ opens
+    // its menu at the first click), and once the menu is closed, keys go to the terminal again.
+    await tab.click(`header button[aria-label="More"]`);
+    await tab.waitFor("the session's menu at the first click", `!!document.querySelector(".menu button")`, 5000);
+    await tab.key("Escape", { code: "Escape", vk: 27 });
+    await tab.waitFor("the menu to close", `!document.querySelector(".scrim")`);
+    await tab.type("after-menu");
+    await tab.enter();
+    await until("keys after the menu", twice("after-menu"), 10_000);
+
+    // Ended: nothing to type with, and the page says why.
+    ptyro("kill", "first");
+    await tab.waitFor("an ended session to offer no typing", `!document.querySelector(".term-more .type, .term-more .compose-btn, .compose, .term-keys") && /ended/.test(document.querySelector(".term-more .sub")?.textContent ?? "")`, 15_000);
+  },
+
+  // Terminal first on a phone: the page never takes the focus by itself (that would pop the
+  // keyboard up unasked), compose takes no room, and ⌨ Type is the way in (⌨ Done the way out).
+  async typePhone() {
+    ptyro("new", "-d", "-n", "phone-type", "--", "sh", "-c", "cat");
+    const s = await until("the session", () => find("phone-type"));
+    await fresh(`#/s/${s.id}`);
+    await tab.phone();
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal and ⌨ Type", `document.querySelector("canvas.term")?.width > 0 && !!document.querySelector(".term-more .type")`);
+    if (!(await tab.eval(`matchMedia("(pointer: coarse)").matches`))) throw new Error("the phone emulation has no coarse pointer");
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    await sleep(1000);
+    if (await tab.eval(focused)) throw new Error("the terminal took the focus on a phone: its keyboard would pop up unasked");
+    if (await tab.eval(`!!document.querySelector(".compose")`)) throw new Error("the compose box takes room on a phone");
+    const tap = async (sel) => {
+      const p = await tab.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+      await tab.fingers([[p], [p]]);
+    };
+    await tap(".term-more .type");
+    await tab.waitFor("⌨ Type to give the terminal the keys", `${focused} && document.querySelector(".term-more .type").textContent.includes("Done")`);
+    await tab.send("Input.insertText", { text: "tapped" });
+    await tab.enter();
+    await until("what was typed after ⌨ Type", () => ptyro("read", "phone-type").split("\n").filter((l) => l.trimEnd() === "tapped").length === 2, 10_000);
+    await tap(".term-more .type");
+    await tab.waitFor("⌨ Done to put the keyboard away", `!(${focused}) && document.querySelector(".term-more .type").textContent.includes("Type")`);
+    ptyro("kill", "phone-type");
+  },
+
   // On a phone: two fingers zoom the terminal (and never the page), two fingers tapped switch
   // between fitted and full size, one finger sideways pans, and the choice is kept.
   async zoom() {
@@ -206,6 +369,156 @@ const scenarios = {
   },
 
   // The server goes away: the app says so, then comes back by itself and still works.
+  // Every key exactly once (WEB2.3): the server goes away mid-typing; keys typed meanwhile wait,
+  // shown as waiting, and land once when it is back. Then the session changes while the server
+  // is away (a command starts in its shell): the keys typed meanwhile aren't sent, the page says
+  // why, shows them, and "Type them now" types them on purpose.
+  async exactlyOnce() {
+    ptyro("new", "-d", "-n", "once", "--", "env", "PS1=$ ", "sh");
+    const s = await until("the shell", () => find("once"));
+    await fresh(`#/s/${s.id}`);
+    const lines = () => ptyro("read", "once").split("\n").map((l) => l.trimEnd());
+    const has = (t) => lines().filter((l) => l.includes(t)).length;
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    await tab.waitFor("the terminal to take the keys", focused, 10_000);
+    await until("the shell's prompt", () => lines().some((l) => /[$#]$/.test(l)), 10_000);
+    await tab.type("echo on");
+    await until("keys typed live", () => has("echo on") === 1, 10_000);
+    await hostOp("down");
+    await tab.waitFor("the page to know it is offline", `!!document.querySelector(".offline")`, 30_000);
+    await tab.type("e-");
+    await tab.enter();
+    await tab.waitFor("the keys shown as waiting", `!document.querySelector(".term-wait").hidden && /3 keys waiting/.test(document.querySelector(".term-wait").textContent)`, 5000);
+    await hostOp("up");
+    // ("echo on", then "e-⏎" while away: `echo one-`, echoed once and printed once.)
+    await until("the offline keys, typed once", () => has("one-") === 2, 20_000);
+    await tab.waitFor("nothing left waiting", `document.querySelector(".term-wait").hidden && document.querySelector(".term-lost").hidden`, 10_000);
+    await sleep(800);
+    if (has("echo one-") !== 1 || has("one-") !== 2) throw new Error(`keys typed more than once: ${JSON.stringify(lines().filter(Boolean).slice(-6))}`);
+
+    // The session changes while the server is away: what is typed meanwhile isn't sent.
+    await hostOp("down");
+    await tab.waitFor("offline again", `!!document.querySelector(".offline")`, 30_000);
+    ptyro("send", "once", "sleep 2");
+    await sleep(300);
+    await tab.type("echo late");
+    await tab.enter();
+    await hostOp("up");
+    await tab.waitFor("the page to say the keys weren't sent, and why", `!document.querySelector(".term-lost").hidden && /10 keys weren't sent: the session changed/.test(document.querySelector(".term-lost").textContent)`, 20_000);
+    await sleep(2500); // sleep 2 is over
+    if (has("echo late")) throw new Error(`refused keys were typed: ${JSON.stringify(lines().filter(Boolean).slice(-6))}`);
+    await tab.eval(`[...document.querySelectorAll(".term-lost button")].find(b => b.textContent === "Show").click()`);
+    // Hidden at first (they may be a password typed where nothing echoes); Reveal shows them.
+    await tab.waitFor("the keys, hidden", `document.querySelector("pre.lost-keys")?.textContent === ${JSON.stringify("••••••••••\n")}`);
+    await tab.eval(`[...document.querySelectorAll(".sheet button")].find(b => b.textContent === "Reveal").click()`);
+    await tab.waitFor("the keys, readable", `document.querySelector("pre.lost-keys")?.textContent === ${JSON.stringify("echo late⏎\n")}`);
+    await tab.eval(`[...document.querySelectorAll(".sheet button")].find(b => b.textContent === "Type them now").click()`);
+    await until("the keys typed on purpose", () => has("late") >= 2 && lines().some((l) => l.trim() === "late"), 10_000);
+    await tab.waitFor("the notice gone", `document.querySelector(".term-lost").hidden && !document.querySelector(".sheet")`);
+    ptyro("kill", "once");
+  },
+
+  // SHELLS' Alt+1…9 (SPEC §23.6), as in the TUI: typing in shell 1's terminal, Alt+2 (a Mac's
+  // Option+2, which says ™: the physical key decides) shows shell 2, whose terminal then has the
+  // keys; Alt+1 (as Windows sends it) goes back. Neither program ever saw an Alt digit.
+  async altDigits() {
+    for (const n of [1, 2]) ptyro("shells", "new", "-d", "--slot", String(n), "-n", `alt-${n}`, "--", "sh", "-c", "cat -v");
+    const one = await until("shell 1", () => find("alt-1"));
+    const two = await until("shell 2", () => find("alt-2"));
+    const read = (name) => ptyro("read", name).split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    // (The tty echoes a line as it is typed and `cat -v` prints it again at Enter: twice is once.
+    // An Alt digit that reached it would show as ^[2, ™ as M-bM-^DM-" or ™.)
+    const twice = (name, t) => () => read(name).filter((l) => l === t).length === 2;
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    const alt = async (key, code, vk) => {
+      const k = { key, code, windowsVirtualKeyCode: vk, modifiers: 1 };
+      await tab.send("Input.dispatchKeyEvent", { type: "keyDown", ...k, text: key });
+      await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+    };
+    await fresh(`#/s/${one.id}`);
+    await tab.waitFor("shell 1's terminal to take the keys", focused, 10_000);
+    await tab.type("in-one");
+    await tab.enter();
+    await until("keys typed in shell 1", twice("alt-1", "in-one"), 10_000);
+    await alt("™", "Digit2", 50);
+    await tab.waitFor("Alt+2 to show shell 2", `location.hash === ${JSON.stringify(`#/s/${two.id}`)}`);
+    await tab.type("in-two");
+    await tab.enter();
+    // (Typed at once: not one key may still go to shell 1, the page left.)
+    try { await until("keys typed in shell 2", twice("alt-2", "in-two"), 10_000); } catch (e) { throw new Error(`${e.message}: shell 1 has ${JSON.stringify(read("alt-1"))}, shell 2 ${JSON.stringify(read("alt-2"))}`); }
+    await alt("1", "Digit1", 49);
+    await tab.waitFor("Alt+1 to show shell 1 again", `location.hash === ${JSON.stringify(`#/s/${one.id}`)}`);
+    await sleep(500);
+    for (const [name, typed] of [["alt-1", "in-one"], ["alt-2", "in-two"]]) {
+      const got = read(name);
+      if (got.join("\n") !== `${typed}\n${typed}`) throw new Error(`${name}'s program saw more than was typed: ${JSON.stringify(got)}`);
+    }
+    for (const n of [1, 2]) ptyro("kill", `alt-${n}`);
+  },
+
+  // Predicted echo (WEB2.4), in a real page against a real shell on a real tty. Here the echo is
+  // quicker than any guess, so auto never draws one (checked); `force` then stands in for a slow
+  // link. Each key and what is drawn after it are read in one synchronous step, before any frame
+  // can arrive. A prompt that doesn't echo (`stty -echo; read`) never shows a letter, and every
+  // key still reaches the session exactly as typed.
+  async predict() {
+    ptyro("new", "-d", "-n", "predict", "--", "env", "PS1=$ ", "sh");
+    const s = await until("the shell", () => find("predict"));
+    await fresh(`#/s/${s.id}`);
+    await tab.eval(`localStorage.setItem("ptyro.debug", "1")`);
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
+    // Connected again after the reload and the screen drawn: until then a key is held (the
+    // predictor rightly guesses nothing while offline), so the round trip couldn't be measured.
+    await tab.waitFor("the page connected, its screen drawn", `ptyroTerm.host.outbox().online && !!ptyroTerm.host.screen() && ptyroTerm.host.canType()`, 15_000);
+    const lines = () => ptyro("read", "predict").split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    const last = () => lines().at(-1) ?? "";
+    await until("the prompt", () => last() === "$", 10_000);
+    const key = (c) => tab.eval(`(() => {
+      const t = ptyroTerm;
+      t.key(${JSON.stringify({ code: { t: "char", c }, mods: 0 })}, false);
+      const o = t.predict.overlay();
+      return { cells: o.cells.map((x) => x.t).join(""), cursor: o.cursor, slow: t.predict.slow, srtt: t.predict.srtt };
+    })()`);
+    const settled = () => tab.waitFor("the predictions confirmed", `ptyroTerm.predict.preds.length === 0`, 5000);
+    for (const c of "ec") { await key(c); await settled(); await sleep(150); }
+    const auto = await key("h");
+    if (auto.srtt === null) throw new Error("the echo's round trip wasn't measured");
+    if (!auto.slow && auto.cells) throw new Error(`a prediction was drawn on a fast link: ${JSON.stringify(auto)}`);
+    await settled();
+    await tab.eval(`ptyroTerm.predict.force = true`);
+    const forced = await key("o");
+    if (forced.cells !== "o" || forced.cursor?.x !== 6) throw new Error(`the guess wasn't drawn at the cursor: ${JSON.stringify(forced)}`);
+    await settled();
+    await until("the letters, typed once", () => last() === "$ echo", 10_000);
+    await tab.type(" hi");
+    await tab.enter();
+    await until("the command ran", () => lines().includes("hi"), 10_000);
+    // A password: nothing typed there is drawn, ever.
+    await tab.type("stty -echo; read x; stty echo; echo got-$x");
+    await tab.enter();
+    await sleep(1200);
+    for (const c of "secret") {
+      const r = await key(c);
+      if (r.cells.trim()) throw new Error(`a letter typed at a prompt that doesn't echo was drawn: ${JSON.stringify(r)}`);
+      await sleep(120);
+    }
+    await sleep(2000);
+    if (!(await tab.eval(`ptyroTerm.predict.preds.length === 0 && ptyroTerm.predict.stats.misses >= 1`))) throw new Error("the unechoed guesses weren't dropped as misses");
+    await tab.enter();
+    await until("every key reached the session as typed", () => lines().includes("got-secret"), 10_000);
+    if (lines().some((l) => l.includes("secret") && !l.includes("got-secret"))) throw new Error(`the password was echoed: ${JSON.stringify(lines().slice(-4))}`);
+    // The option is in Aa, and off draws nothing.
+    await tab.eval(`ptyroTerm.options()`);
+    await tab.waitFor("Predict typing in the terminal's options", `document.body.innerText.includes("Predict typing: auto")`);
+    await tab.eval(`[...document.querySelectorAll(".menu button, .sheet button, button")].find(b => b.textContent.includes("Predict typing: auto")).click()`);
+    if (!(await tab.eval(`ptyroTerm.predict.mode === "off" && localStorage.getItem("ptyro.term.predict") === "off"`))) throw new Error("the option didn't switch off and stay off");
+    const off = await key("x");
+    if (off.cells) throw new Error(`drawn while off: ${JSON.stringify(off)}`);
+    await tab.eval(`(() => { localStorage.removeItem("ptyro.term.predict"); localStorage.removeItem("ptyro.debug"); })()`);
+    ptyro("kill", "predict");
+  },
+
   async offline() {
     await fresh("#/");
     await tab.waitFor("a card", `!!document.querySelector("a.card")`);

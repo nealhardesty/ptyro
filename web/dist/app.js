@@ -5,7 +5,9 @@
 import { Screen, modelLabel } from "./screen.js";
 import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
-import { actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
+import { FEATURE, GIVE_UP_MS, Outbox, RESEND_MS, lostTitle } from "./outbox.js";
+import { autoFocus, hardKey, isMac, ownKeyboard, shellDigit, strayKey } from "./keys.js";
+import { PressGate, actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import { staleMaybeChanged } from "./projects.js";
 import "./settings.js";
@@ -14,14 +16,14 @@ import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
-import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
+import { altDigitsOn, goShell, listWorkspace, readAltDigits, shellStrip, shellsGroup, shellsWorkspace } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
     "sessions": "Every session: what it's doing, and who needs you first",
     "session.open": "A session's live screen",
-    "session.reply": "Type to the session; Enter sends, Shift+Enter starts a new line",
+    "session.compose": "✎ Compose: write a long prompt, or dictate it (the keyboard's mic, macOS dictation, Superwhisper), read it over, and send it as one; Enter sends, Shift+Enter starts a new line, Esc closes and keeps the draft",
     "answer": "Answer what it asks: allow once, always, or deny",
     "host.load": "The load average of the computer ptyro runs on, over 1, 5 and 15 minutes: amber once every CPU is busy, red at twice that ([ui] load)",
     "notifications": "Notifications on this device (a test is sent)",
@@ -199,9 +201,12 @@ function setHostLoad(l) {
 let pushOn = "Notification" in window && Notification.permission === "granted";
 const pushOffered = () => !pushOn;
 /// `back`: true goes to the session list; a string is where it goes instead.
+/// What comes and goes after the page is drawn (the machine's chip once connected, its load once
+/// known, 🔔) sits next to the title, which gives it room: the page's own controls, to its right,
+/// never move under a finger or a pointer that is about to press them.
 function header(title, back, ...extra) {
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, dot, !back && pushOffered() ? h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔") : null);
+    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, !back && pushOffered() ? h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔") : null, ...extra, dot);
 }
 function sessionCard(s) {
     const st = statusOf(s);
@@ -260,48 +265,230 @@ let shell = null;
 function canType(id) {
     return (conn.scope === "control" || conn.scope === "full") && app.sessions.get(id)?.state.t === "running";
 }
+/// Why the session page has nothing to type with (a viewer, an ended session).
+function whyNot(s) {
+    if (conn.state !== "open")
+        return "Connecting…";
+    if (conn.scope !== "control" && conn.scope !== "full")
+        return "Watching: this device may look, not type";
+    if (s.state.t === "dormant")
+        return "Hibernated: resume it to type";
+    if (s.state.t === "starting")
+        return "Starting…";
+    return "It has ended: restart it to type";
+}
+// ── every key exactly once (WEB2.3) ─────────────────────────────────────────────────────────
+/// Each session's outbox (`outbox.ts`): its keys numbered and kept until the daemon settles them.
+/// They live as long as the page, not the terminal, so keys still waiting when you leave a
+/// session's page are sent (or said) all the same.
+const outboxes = new Map();
+/// What each session's page last drew (WEB2.3): its frame's state token, the daemon's clock as
+/// it was made (`at_ms`) and when it came here. Keys carry it, so a key is vouched for only by a
+/// screen its page drew (never a list's newer token) and the daemon can tell when it arrives late.
+const frames = new Map();
+function outboxOf(id) {
+    const had = outboxes.get(id);
+    if (had)
+        return had;
+    let timer = 0;
+    let lost = 0;
+    const o = new Outbox(id, {
+        send: (m) => conn.send(m),
+        now: () => performance.now(),
+        seen: () => {
+            const f = frames.get(id);
+            return f ? { token: f.token, clock: f.at === null ? null : f.at + (performance.now() - f.rx) } : { token: null, clock: null };
+        },
+        changed: () => {
+            if (shell?.id === id)
+                shell.term.showOutbox();
+            // Lost on another page: said there.
+            else if (o.lost.length && o.lost.length !== lost)
+                toast(`${app.sessions.get(id)?.name ?? "A session"}: ${lostTitle(o.lost[o.lost.length - 1])}`);
+            lost = o.lost.length;
+        },
+        check: () => conn.hurry(),
+        later: (ms) => { clearTimeout(timer); timer = window.setTimeout(() => o.tick(), ms); },
+    });
+    outboxes.set(id, o);
+    if (conn.state === "open")
+        o.connected(conn.features.includes(FEATURE));
+    return o;
+}
+// ── terminal first (WEB2.2): the terminal is where you type ────────────────────────────────
+/// A key was pressed outside any field since the page loaded: this device has a keyboard of its
+/// own (a phone with a Bluetooth keyboard, an iPad's), so the terminal may take the focus.
+let keySeen = false;
+const coarse = () => matchMedia("(pointer: coarse)").matches;
+const focusOf = (el) => !el || el === document.body || el === document.documentElement ? "none"
+    : el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? "field" : "control";
+/// The page (not the terminal: its own selection is drawn, not the document's) has text selected.
+const pageSelected = () => { const s = getSelection(); return !!s && !s.isCollapsed && !!s.toString(); };
+/// Give the terminal the focus if the page wants it to and may: a keyboard of the device's own
+/// (a phone's would pop up unasked), nothing else busy (a field, a dialog, a selection, compose).
+function termFirst() {
+    const sh = shell;
+    if (!sh || sh.id !== app.viewing || !sh.term.el.isConnected)
+        return;
+    const can = canType(sh.id);
+    if (can && !sh.could)
+        sh.want = true;
+    sh.could = can;
+    if (!sh.want || !can || sh.composing)
+        return;
+    if (document.activeElement === sh.term.input) {
+        sh.want = false;
+        return;
+    }
+    if (!ownKeyboard(coarse(), keySeen)) {
+        sh.want = false;
+        return;
+    }
+    if (!autoFocus({ canType: can, keyboard: true, focus: focusOf(document.activeElement), dialog: !!document.querySelector(".scrim"), selected: pageSelected() }))
+        return;
+    sh.want = false;
+    sh.term.focus();
+}
+/// A key pressed on the page outside the terminal: on a session this device may type to, it goes
+/// to the terminal (which takes the focus and the key: `strayKey`). True when it was taken.
+function strayToTerm(e) {
+    const focus = focusOf(e.target);
+    if (hardKey(e, focus))
+        keySeen = true;
+    const sh = shell;
+    const r = route();
+    if (!sh || r.view !== "session" || r.id !== sh.id || !canType(sh.id) || !sh.term.el.isConnected)
+        return false;
+    if (document.querySelector(".scrim") || !strayKey(e, focus, pageSelected()))
+        return false;
+    return sh.term.takeKey(e);
+}
+window.addEventListener("focus", (e) => {
+    if (e.target !== window || !shell || shell.id !== app.viewing)
+        return;
+    shell.want = true;
+    termFirst();
+});
 function sessionShell(id) {
     if (shell?.id === id)
         return shell;
     // The terminal of the session left behind: its listeners and its canvas go.
     shell?.term.dispose();
-    const reply = h("textarea", { rows: 2, enterkeyhint: "send", title: tip("session.reply") });
-    reply.value = app.drafts.get(id) ?? "";
-    reply.addEventListener("input", () => app.drafts.set(id, reply.value));
+    const draft = h("textarea", { rows: 3, enterkeyhint: "send", title: tip("session.compose"), "aria-label": "Compose a message to the session", autocapitalize: "sentences" });
+    draft.value = app.drafts.get(id) ?? "";
+    // It grows with what is written, up to two fifths of the window, then scrolls.
+    const grow = () => { draft.style.height = "auto"; if (draft.scrollHeight)
+        draft.style.height = `${Math.min(draft.scrollHeight + 2, Math.round(innerHeight * 0.4))}px`; };
+    draft.addEventListener("input", () => { if (draft.value)
+        app.drafts.set(id, draft.value);
+    else
+        app.drafts.delete(id); grow(); });
+    let sending = false;
+    // The send's name (WEB2.3, `send_text.once`): the same text sent again after a dropped
+    // connection keeps it, so the daemon types it once whatever happened to the first.
+    let once = { text: "", name: "" };
+    const sendBtn = h("button", { class: "send", title: tip("session.compose"), onclick: () => void send() }, "Send");
     const send = async () => {
-        const text = reply.value;
-        if (!text.trim())
+        const text = draft.value;
+        if (sending || !text.trim() || !canType(id))
             return;
+        sending = true;
+        sendBtn.disabled = true;
         try {
-            await conn.request({ t: "send_text", addr: id, text, enter: true, wait_ready_ms: null });
-            if (reply.value === text) {
-                reply.value = "";
+            // Whatever the terminal's keyboard was holding (dictation, a composition) goes first, and
+            // every key typed before it is settled before it goes (WEB2.3): it never overtakes keys
+            // waiting to be sent, and isn't sent after keys that weren't.
+            sh.term.typist.interject();
+            const box = outboxOf(id);
+            if (box.waiting) {
+                const settled = await Promise.race([box.settled(), new Promise((ok) => setTimeout(() => ok(null), GIVE_UP_MS + RESEND_MS))]);
+                if (settled !== true) {
+                    toast(settled === null
+                        ? "Not sent yet: keys typed before it are still waiting. Send it again once they're through."
+                        : "Not sent: keys typed before it weren't sent. Look at the session, then send it again.");
+                    return;
+                }
+            }
+            // The same request as the CLI's `ptyro send`: the daemon pastes a multi-line text (bracketed
+            // when the program asked) and then presses Enter, as a key, after a pause.
+            if (once.text !== text)
+                once = { text, name: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
+            await conn.request({ t: "send_text", addr: id, text, enter: true, wait_ready_ms: null, once: once.name });
+            once = { text: "", name: "" };
+            if (draft.value === text) {
+                draft.value = "";
                 app.drafts.delete(id);
+                grow();
+                sh.closeCompose();
             }
         }
         catch (e) {
-            toast(e.message);
+            const code = e.code;
+            // A daemon that numbers keys (1.52) honours the send's name; an older one types it again.
+            toast(code === "daemon_unavailable" || code === "timeout"
+                ? conn.features.includes(FEATURE)
+                    ? "Not sure it was sent: the connection dropped. Send it again: it won't be typed twice."
+                    : "Not sure it was sent: the connection dropped. Look at the session before sending it again."
+                : conn.state !== "open" ? "Not sent: offline. It reconnects by itself; then send it." : e.message);
+        }
+        finally {
+            sending = false;
+            sendBtn.disabled = false;
         }
     };
-    reply.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        void send();
-    } });
+    draft.addEventListener("keydown", (e) => {
+        // An input method's Enter picks its text (Safari says so only with keyCode 229).
+        if (e.isComposing || e.keyCode === 229)
+            return;
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void send();
+        }
+        else if (e.key === "Escape") {
+            e.preventDefault();
+            sh.closeCompose();
+        }
+    });
     const term = new Term({
         id: () => id,
         screen: () => app.screens.get(id),
         canType: () => canType(id),
         send: (m) => conn.send(m),
+        // (Too big for the server, H2.7: the outbox says so, and never keeps it to send again.)
+        input: (event) => outboxOf(id).type(event),
+        outbox: () => outboxOf(id),
         request: (r) => conn.request(r),
         toast,
         changed: render,
     });
-    shell = {
-        id, reply, term,
+    // Keys still waiting from before, or ones that weren't sent, show on it at once.
+    term.showOutbox();
+    // What its keys do, as this device has them (a phone's keyboard has no Shift+Enter or Esc).
+    const hint = h("p", { class: "compose-hint" }, coarse()
+        ? "⏎ sends. Dictate here (the keyboard's mic, Superwhisper), read it over, then send; a dictated new line stays a new line. ✕ keeps the draft."
+        : "Enter sends · Shift+Enter: a new line · Esc closes, keeping the draft. Dictate here (macOS dictation, Superwhisper, the keyboard's mic), read it over, then send.");
+    const sh = {
+        id, term, draft,
         el: h("div", { class: "session" }),
-        replyRow: h("div", { class: "reply" }, reply, h("button", { class: "send", onclick: () => void send() }, "Send")),
+        compose: h("div", { class: "reply compose" }, draft, h("div", { class: "compose-side" }, sendBtn, h("button", { class: "icon", title: "Close: the draft is kept", "aria-label": "Close compose", onclick: () => sh.closeCompose() }, "✕")), hint),
+        composing: false,
+        want: true,
+        could: false,
+        openCompose: () => {
+            sh.composing = true;
+            render();
+            draft.focus();
+            draft.setSelectionRange(draft.value.length, draft.value.length);
+            grow();
+        },
+        closeCompose: () => {
+            sh.composing = false;
+            sh.want = true;
+            render();
+        },
     };
-    return shell;
+    shell = sh;
+    return sh;
 }
 function sessionView(id) {
     const s = app.sessions.get(id);
@@ -309,8 +496,13 @@ function sessionView(id) {
         return h("div", {}, header("…", true), h("main", {}, h("p", { class: "empty" }, conn.state === "open" ? "No such session." : "Connecting…")));
     const st = statusOf(s);
     const sh = sessionShell(id);
-    sh.reply.placeholder = s.kind === "agent" ? `Reply to ${s.name}…` : "Type a line…";
+    sh.draft.placeholder = s.kind === "agent" ? `Write to ${s.name}…` : "Write a command…";
     const blocked = s.status?.status === "blocked" && s.state.t === "running";
+    const typeable = canType(id);
+    // A key-row button that leaves the focus where it is (the terminal keeps the keyboard up).
+    const stay = (e) => e.preventDefault();
+    const typing = sh.term.typing;
+    const drafted = !!app.drafts.get(id)?.trim();
     patch(sh.el, [
         header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
         h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", statusWord(st), s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", app.screens.get(id)?.title ? ` · ${app.screens.get(id).title}` : "", s.machine ? " · " : "", machineChip(s.name)),
@@ -322,9 +514,18 @@ function sessionView(id) {
         // A shell of SHELLS: its workspace's shells by number, tmux's status line (SPEC §23.14).
         s.loose ? shellStrip(app.sessions.values(), s) : null,
         sh.term.el,
-        canType(id) ? sh.term.keybar : null,
-        h("div", { class: "keys term-more" }, h("button", { title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa"), canType(id) ? null : h("span", { class: "sub" }, "Watching: this device may look, not type")),
-        canType(id) ? sh.replyRow : null,
+        typeable ? sh.term.keybar : null,
+        h("div", { class: "keys term-more" }, 
+        // The way in to typing, always in sight (a phone's keyboard comes up only when asked for);
+        // while typing, the way to put the keyboard away.
+        typeable ? h("button", { class: `type${typing ? "" : " primary"}`, title: tipOf("term.type"), "aria-pressed": String(typing), onpointerdown: stay, onmousedown: stay, onclick: () => { if (sh.term.typing)
+                sh.term.input.blur();
+            else
+                sh.term.focus(); } }, typing ? "⌨ Done" : "⌨ Type") : null, typeable ? h("button", { class: `compose-btn${sh.composing ? " on" : ""}`, title: tip("session.compose"), "aria-expanded": String(sh.composing), onclick: () => { if (sh.composing)
+                sh.closeCompose();
+            else
+                sh.openCompose(); } }, "✎ Compose", drafted && !sh.composing ? h("span", { class: "dot", title: "A draft is waiting" }, " •") : null) : null, typeable ? null : h("span", { class: "sub" }, whyNot(s)), h("button", { class: "aa", title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa")),
+        typeable && sh.composing ? sh.compose : null,
     ].filter((x) => !!x));
     return sh.el;
 }
@@ -333,7 +534,15 @@ function paint() {
         return;
     shell.term.paint();
 }
+// A press holds back drawing the page (`PressGate`): the click lands on the control pressed.
+const presses = new PressGate(() => render());
+window.addEventListener("pointerdown", () => presses.pressed(), true);
+for (const t of ["pointerup", "pointercancel", "blur"])
+    window.addEventListener(t, (e) => { if (t !== "blur" || e.target === window)
+        presses.released(); }, true);
 function render() {
+    if (presses.hold())
+        return;
     if (!token()) {
         root.replaceChildren(pairView());
         return;
@@ -345,7 +554,15 @@ function render() {
     const r = route();
     if (r.view !== "session" || r.id !== app.viewing)
         subscribe(r.view === "session" ? r.id : null);
+    const here = r.view === "session" ? r.id : null;
+    const entered = here !== shownSession;
+    shownSession = here;
     const view = withTabs(r.view, r.view === "session" ? sessionView(r.id) : views.has(r.view) ? views.get(r.view)(r.id ?? "") : listView());
+    // A session page opened (or opened again): its terminal has the keys, once it may.
+    if (entered && shell && shell.id === here)
+        shell.want = true;
+    if (entered && here)
+        void readAltDigits();
     if (conn.state !== "open")
         view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
     if (root.firstChild !== view || root.childNodes.length !== 1)
@@ -360,7 +577,10 @@ function render() {
     if (t)
         view.append(t);
     paint();
+    termFirst();
 }
+/// The session whose page the last render drew (null: another page).
+let shownSession = null;
 function subscribe(id) {
     if (app.viewing) {
         if (shell?.id === app.viewing)
@@ -472,8 +692,26 @@ async function syncPush() {
     }
 }
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
+/// Option on a Mac types the layout's own characters; Alt elsewhere doesn't (keys.ts `shellDigit`).
+const MAC = isMac(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
 conn.listeners.add((msg) => {
+    if (msg.t === "disconnected") {
+        for (const o of outboxes.values())
+            o.disconnected();
+        return;
+    }
+    if (msg.t === "typed") {
+        outboxes.get(msg.session)?.typed(msg);
+        // When each key was typed: its predicted echo is due soon after (WEB2.4).
+        const sh = shell;
+        if (sh && sh.id === msg.session && msg.stream === outboxes.get(msg.session)?.stream)
+            sh.term.typed(msg.upto);
+        return;
+    }
     if (msg.t === "connected") {
+        // What waited to be typed goes first (WEB2.3), numbered as before.
+        for (const o of outboxes.values())
+            o.connected(conn.features.includes(FEATURE));
         // A fresh connection (start-up, reconnect, live upgrade) has no subscriptions: renew the
         // live view's, from a clean screen.
         if (app.viewing) {
@@ -485,6 +723,7 @@ conn.listeners.add((msg) => {
         void refresh();
         void loadAll();
         void syncPush();
+        void readAltDigits();
         setupConnected();
         conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => { });
         return;
@@ -494,6 +733,8 @@ conn.listeners.add((msg) => {
         const s = app.screens.get(f.session);
         if (s) {
             s.apply(f);
+            if (f.state_token)
+                frames.set(f.session, { token: f.state_token, at: typeof f.at_ms === "number" ? f.at_ms : null, rx: performance.now() });
             if (f.session === app.viewing && shell?.id === f.session)
                 shell.term.onFrame();
         }
@@ -562,10 +803,25 @@ ui.fail = (text) => { if (!offerSetup(text))
 ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };
+// SHELLS' Alt+1…9 and Alt+0 (keys.ts `shellDigit`): shell N, from anywhere, the terminal too:
+// taken here, before the terminal's own keydown, so the program never sees it (as in the TUI).
+window.addEventListener("keydown", (e) => {
+    const t = e.target;
+    const n = token() ? shellDigit(e, { focus: focusOf(t), terminal: !!shell && t === shell.term.input, dialog: !!document.querySelector(".scrim"), on: altDigitsOn(), mac: MAC }) : null;
+    if (n == null)
+        return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = route();
+    void goShell(app.sessions.values(), n, shellsWorkspace(r.view === "session" ? app.sessions.get(r.id ?? "") : undefined));
+}, true);
 // Keys, for a desktop: n new task, m new chat, / find, C-g find in every chat, g then s c p m go to a tab, ? this list.
 let goKey = 0;
 document.addEventListener("keydown", (e) => {
     const t = e.target;
+    // On a session this device may type to, a key pressed anywhere goes to its terminal (WEB2.2).
+    if (!e.defaultPrevented && token() && strayToTerm(e))
+        return;
     // C-g: find across every chat (not in a terminal, whose program has the key).
     if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) {
         e.preventDefault();
@@ -588,8 +844,8 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         newTask();
     }
-    // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page (the
-    // terminal, once tapped, has the keys).
+    // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page this device
+    // only watches (where it may type, every key is the terminal's: Alt+N and the strip switch).
     else if (/^[1-9]$/.test(e.key) && (route().view === "list" || (route().view === "session" && app.sessions.get(route().id ?? "")?.loose))) {
         e.preventDefault();
         const here = app.sessions.get(route().id ?? "");
@@ -622,7 +878,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["Alt+1…9", "Shell N of SHELLS, from anywhere, while typing in a terminal too (Option on a Mac; Alt+0: shell 10)"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 takePairCode();

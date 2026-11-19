@@ -47,6 +47,7 @@ Conventions:
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
 | **WIN** | Windows and PowerShell | pwsh sessions as good as bash everywhere; WSL2 checked, bridged and doctored (done). `ptyro.exe` in Windows Terminal and the native daemon on ConPTY were built, then removed 2026-11-18 (owner): on Windows, ptyro runs inside WSL2 (RESEARCH DD3) |
 | **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (built 2026-11-04) |
+| **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -2654,6 +2655,55 @@ chose B (MM1.0); MM1.A stays recorded as the alternative.
   - `machine rm` could revoke its own device there over the link while it is up (keep the
     claimed device's id), so re-pairing doesn't leave a stale `bear` beside `bear-2`.
   - Behind a reverse proxy on loopback every client shares one login lockout.
+
+## WEB2 — Real typing on the web (2026-11-19)
+
+The owner asked for a real terminal typing experience on the web, bulletproof, and working with
+dictation (OS dictation and third-party tools such as Superwhisper). R-UX-46. Today keys go to
+the session as pressed only after a tap on the screen, a phone keyboard's composition reaches it
+a word at a time (only at `compositionend`), and each character waits a round trip to show.
+Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`). **Done 2026-11-19**
+(all four).
+
+- [x] **WEB2.1 Letters as you type them; dictation as one paste** — M. *(Built 2026-11-19: `Typist`
+  in `web/src/keys.ts` diffs the field against what was sent; dictation held at the cursor and
+  pasted once; smart punctuation undone; Aa → Plain keys; 44 keyboard traces, a property test, a
+  CDP IME e2e. SPEC §16.4 WEB1.8 "Soft keyboards".)* While a keyboard composes,
+  the difference between what was sent and the composition now goes at once (backspaces and new
+  letters; autocorrect becomes a correction). Dictation (multi-word or replacing compositions,
+  large commits, text set into the field without key events) is previewed and sent once settled,
+  as `Input::Paste`, so a spoken newline never presses Enter. iOS smart punctuation undone. An
+  opt-in "Plain keys (no suggestions)" that says it turns dictation off. Recorded keyboard traces
+  and a property test.
+- [x] **WEB2.2 Terminal first** — S. *(Built 2026-11-19: with a keyboard of its own the terminal
+  takes the focus on open and on return, keys pressed anywhere go to it, ⌨ Type / ⌨ Done on a
+  phone, ✎ compose replaces the reply box (`session.compose`); e2e `terminalFirst`, `typePhone`.
+  SPEC §16.4 WEB1.8 "Terminal first".)* On the session page the terminal takes the keys (focused on
+  open with a hardware keyboard); the reply box becomes ✎ compose, for long prompts and dictation.
+- [x] **WEB2.3 Every key exactly once** — M. *(Built 2026-11-19: protocol 1.52 `Keys`/`Typed`,
+  numbered per page and session, typed at most once per device and stream (`typed.rs`, carried
+  across live upgrades); "N keys waiting" while offline; a replay typed only within 5 s and while
+  the session's `state_token` is unchanged, else none of it, said, with Show / Type them now;
+  compose's `send_text.once`. `web/test/outbox.mjs` (10 000 random lossy runs),
+  `crates/ptyro/tests/web2.rs`, e2e `exactlyOnce`. SPEC §16.4 WEB1.8 "Every key exactly once".)*
+  Protocol: input batches carry a sequence, the daemon
+  acks and drops duplicates per device and session; keys typed while reconnecting wait as
+  "pending" and are replayed only after a short gap with no change in what the session is waiting
+  for, else dropped and said.
+- [x] **WEB2.4 Predicted echo** — M. *(Built 2026-11-19: `Predictor` in `web/src/predict.ts`,
+  an overlay never part of what is sent; confirmed, contradicted or expired by frames, `Typed`
+  and deadlines; shown only at a 50 ms echo or more and after two confirmations in the epoch, so
+  a password prompt never shows; barriers start epochs, letters typed meanwhile are held and
+  placed; Aa → Predict typing: auto / off. The daemon keeps two or three frames in flight for a
+  client whose acks take 40 / 120 ms (`Inflight`, no protocol change). `web/test/predict.mjs`
+  (scenarios, random worlds), e2e `predict`. SPEC §16.4 WEB1.8 "Predicted echo", §6.5 Pacing.)*
+  Typed text drawn at the cursor at once (dim), confirmed or
+  wiped by the next frames; shown only on a slow link and while predictions prove right. A
+  couple of frames in flight on slow links.
+- [x] *Also (2026-11-19):* `Alt+1`…`Alt+9`, `Alt+0` show SHELLS' shells on the web while typing,
+  as in the TUI (`shellDigit`, e2e `altDigits`; SPEC §23.14); and the e2e `rename` flake fixed in
+  the product: the header's late machine chip and load average no longer push ⋯ from under a
+  pointer, and no redraw lands mid-press (`PressGate`; SPEC §16.4 WEB1.8 "Terminal first").
 
 ## CHAT — Chat (proposed 2026-10-29; open)
 

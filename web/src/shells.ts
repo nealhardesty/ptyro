@@ -1,10 +1,12 @@
 // SHELLS (SPEC §23.14, ROADMAP SH.4): a workspace's numbered terminals on the web. The session
 // list has a SHELLS group (numbered cards, ＋ with a new shell, a scratch shell or a command);
 // a shell's page has the strip (tmux's status line: tap a number, swipe on a phone); its ⋯ menu
-// moves it to another number, watches it, or adopts it into a worktree. The web has no Alt it
-// can count on, so the strip and the digits on the list are its keys.
+// moves it to another number, watches it, or adopts it into a worktree. Its keys: Alt+1…9 and
+// Alt+0 anywhere (Option on a Mac; keys.ts `shellDigit`), as in the TUI, and the plain digits on
+// the list and on a shell this device only watches; a phone taps the strip.
 
-import { data } from "./data.js";
+import { data, liveWorktrees, workspaceOf } from "./data.js";
+import { conn, host } from "./conn.js";
 import { startSession } from "./flow.js";
 import type { Session } from "./screen.js";
 import { shellLabel } from "./shellkit.js";
@@ -14,7 +16,7 @@ import type { Item } from "./kit.js";
 const ACTIONS = {
   "shells": "SHELLS: your numbered terminals that belong to the workspace, not a worktree (any command)",
   "shells.new": "A new shell in SHELLS (or a command: htop, ssh…), in your home directory",
-  "shells.go": "Show shell N of SHELLS: tap its number (on the list, the digit keys 1–9)",
+  "shells.go": "Show shell N of SHELLS: tap its number, or press Alt+1…9 (Option on a Mac; Alt+0 is shell 10), even while typing in a terminal; on the list and a shell you only watch, 1–9 too",
   "shells.scratch": "A scratch shell: a new, empty directory of its own that goes with it",
   "shells.move": "Give this shell another number in SHELLS (one already there swaps)",
   "shells.watch": "Tell me when this shell's command ends, it prints, goes quiet, or shows a line that matches",
@@ -31,6 +33,30 @@ export const tip = actions(ACTIONS);
 /// `main`. Digit N is always shell N of one workspace, never of whichever sorts first.
 let lastWorkspace: string | undefined;
 export const listWorkspace = (): string => lastWorkspace ?? "main";
+
+/// The workspace SHELLS' keys act on from a page (the TUI's `shells_ws`): a session's own (a
+/// shell's, or its worktree's project's), else the list's.
+export function shellsWorkspace(here?: Session): string {
+  if (here?.loose) return here.workspace ?? "main";
+  if (here?.workspace) return here.workspace;
+  const w = here?.worktree ? liveWorktrees().find((x) => x.project_slug === here.project && x.name === here.worktree) : undefined;
+  return w ? workspaceOf(w) : listWorkspace();
+}
+
+/// `[shell] alt_digits` (default on): Alt+1…9 show shells, as in the TUI; off leaves them to the
+/// program in the terminal. Read on connecting and on opening a session's page, from the daemon's
+/// status (1.52: every device may read it, whatever its scope); from an older daemon, from the
+/// config where this device may read it, else the default.
+let altDigits = true;
+export const altDigitsOn = (): boolean => altDigits;
+export async function readAltDigits(): Promise<void> {
+  const st = await conn.request({ t: "status" }).catch(() => null);
+  if (typeof st?.status?.alt_digits === "boolean") { altDigits = st.status.alt_digits; return; }
+  if (conn.scope !== "full") { altDigits = true; return; }
+  const v = await host("settings.view", { scope: "user" }).catch(() => null);
+  const e = (v?.entries as { key: string; value: unknown }[] | undefined)?.find((x) => x.key === "shell.alt_digits");
+  if (v) altDigits = !e || String(e.value) !== "false";
+}
 
 /// A workspace's shells by number (every workspace's with none named).
 export function shellsOf(sessions: Iterable<Session>, workspace?: string): Session[] {
@@ -83,6 +109,9 @@ export async function goShell(sessions: Iterable<Session>, n: number, workspace?
   if (!s) { ui.toast(`Shell ${n} started`); return newLooseShell({ workspace, slot: n }); }
   if (s.lost) await ask({ t: "restart", addr: s.id }, `Shell ${n} started again`);
   go(`#/s/${enc(s.id)}`);
+  // Drawn now, not at the hashchange (which keys typed at once can overtake): the next key after
+  // Alt+2 goes to shell 2's terminal, never still to the one left.
+  ui.render();
 }
 
 /// The ＋ of SHELLS: a shell, a scratch shell, or a command.

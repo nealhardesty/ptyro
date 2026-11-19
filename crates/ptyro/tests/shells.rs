@@ -129,6 +129,7 @@ async fn send(c: &Client, addr: &str, text: &str) {
         text: text.into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     })
     .await
     .unwrap();

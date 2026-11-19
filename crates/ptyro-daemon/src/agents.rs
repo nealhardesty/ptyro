@@ -406,6 +406,8 @@ impl Daemon {
     }
 
     async fn on_transition(self: &Arc<Self>, s: &Arc<Session>, t: &Transition) {
+        // Its state token may have moved with nothing on its screen: its viewers' frames say so.
+        s.bump();
         if t.to.status == AgentStatus::Working {
             let mut m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.last_reply = None;

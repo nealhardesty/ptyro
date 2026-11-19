@@ -398,7 +398,13 @@ pub async fn send(
     let started = now_ms();
     let send_text = |id: SessionId| {
         let left = ready.map(|d| (d.as_millis() as u64).saturating_sub(now_ms() - started));
-        Request::SendText { addr: id.full(), text: text.clone(), enter, wait_ready_ms: left }
+        Request::SendText {
+            addr: id.full(),
+            text: text.clone(),
+            enter,
+            wait_ready_ms: left,
+            once: None,
+        }
     };
     let results =
         futures::future::join_all(infos.iter().map(|info| c.request(send_text(info.id)))).await;
@@ -461,6 +467,7 @@ pub async fn broadcast(
             text: text.clone(),
             enter: !no_enter,
             wait_ready_ms: Some(t.as_millis() as u64),
+            once: None,
         })
     });
     let mut code = 0;
@@ -721,6 +728,7 @@ mod tests {
             lost: false,
             pane: None,
             layout: None,
+            state_token: None,
         };
         let mut r = StatusRecord::new(status, Confidence::High, SignalSource::Hook);
         r.since_ms = since;

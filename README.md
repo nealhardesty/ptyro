@@ -406,6 +406,8 @@ sidebar_detail = "compact"` keeps one line per row.
     key: Esc+). Until then, `Ctrl-Q e` and the digit always works, the hints say so, and the health badge (`Ctrl-Q M`) points at the setting.
     Ghostty, kitty, WezTerm and Alacritty send Alt as they are. `make verify-shells` tells you
     what yours sends. `[shell] alt_digits = false` leaves Alt-digits to the program in the pane.
+    On the web, `Alt+1`…`Alt+9` (Option on a Mac, no setting needed) do the same from any page,
+    while you type in a terminal too.
 - `Ctrl-Q o` **opens the worktree in…** any editor installed here (nvim, vim, hx, VS Code,
   Zed, Cursor, or one of yours under `[editors]`; on macOS an app in Applications counts even
   without its command on `PATH`), the file manager (`finder`, or `files` on Linux), a terminal app
@@ -593,10 +595,10 @@ ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
 
-The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: tap it and type (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, pinch to zoom the text (a wide session opens readable on a phone), scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
+The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: just type (on a computer it has the keys when the page opens; on a phone tap ⌨ Type) (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike; a phone keyboard's letters arrive as you type them and its autocorrect as a correction, dictation arrives as one paste when you pause and a spoken new line never presses Enter, and Aa → Plain keys turns predictions off; on a slow connection what you type shows at once, underlined, until the session echoes it (Aa → Predict typing); ✎ Compose is a box for a long prompt or dictation, read over and sent as one), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, pinch to zoom the text (a wide session opens readable on a phone), scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
 
 The rest of the app: a tab for sessions (blocked ones
-on top, with Allow / Deny, a live view, a reply box, a menu for stop, restart, rename,
+on top, with Allow / Deny, a live view you type into, ✎ compose, a menu for stop, restart, rename,
 scrollback, events…), one for projects and worktrees (start a task in a new worktree, from a PR,
 an issue or a branch; its checkpoints; remove it), and **More**:
 health with its fixes, devices (pair another with a link and a QR code), profiles and logins, the
@@ -789,8 +791,8 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's feed, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
-| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes, the setup checklist; needs Node) |
-| `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, going offline. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it) |
+| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, keys exactly once over a lossy link, predicted echo against random programs and links, QR codes, the setup checklist; needs Node) |
+| `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, predicted echo (and a password prompt never shown), going offline, Alt+1…9 switching shells. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it); `PTYRO_E2E_ONLY="rename keep"` runs only those scenarios (for chasing a flake: run it in a loop) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
 | `make doc` / `make clean` | API docs (warnings fail) / remove build output |

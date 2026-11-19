@@ -146,6 +146,7 @@ async fn send(c: &Client, name: &str, text: &str) {
         text: text.into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     })
     .await
     .unwrap();
@@ -320,6 +321,7 @@ async fn laggy_claude_asks(extra: &str, prompt: &str) -> String {
         text: prompt.into(),
         enter: true,
         wait_ready_ms: Some(30_000),
+        once: None,
     })
     .await
     .unwrap();

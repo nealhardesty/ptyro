@@ -708,7 +708,8 @@ mod tests {
                 addr: "a".into(),
                 text: "x".into(),
                 enter: true,
-                wait_ready_ms: None
+                wait_ready_ms: None,
+                once: None,
             }),
             Scope::Control
         );
