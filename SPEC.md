@@ -2013,8 +2013,10 @@ title alone.
   input line.
 - Answers: `y` / `a` / Esc. Stop: Esc, then `/quit`. The conversation id is learned from
   `SessionStart`.
-- **[unverified]** `Stop`, `PermissionRequest` and `notify` payloads are still uncaptured (Codex
-  login, §20.2), so their mapping follows the docs and the fake agent.
+- **[unverified]** `PermissionRequest`'s payload is still uncaptured, so its mapping follows the
+  docs and the fake agent. `Stop` and `notify` are captured (0.164.0, and 0.167.1 by `make
+  verify-kb`: `crates/ptyro-agents/tests/fixtures/codex-0.167.1/hooks/`, §20.2); the trust hashes
+  still hold on 0.167.1 for the three events that spike installs.
 
 ### 8.5 Gemini CLI **[built M4, removed 2026-11-17]**
 
@@ -5817,12 +5819,66 @@ learn something the hard way.
 - **[verified in binary]** `idle_prompt` notifications are delayed by `messageIdleNotifThresholdMs`
   (default 60 000 ms) ⇒ use `Stop` for "turn ended", not `idle_prompt`.
 - **[docs]** `--resume` does not restore `--settings`, `--mcp-config`, `--plugin-dir`, `--add-dir`.
+  **[verified 2026-11-19, 2.1.328 and 2.1.329; `make verify-kb`]** for `--mcp-config` (the resumed session has no `mcp__ptyro__*` tool without it) and for
+  `--allowedTools` (the same tool call is refused: "Claude requested permissions to use
+  mcp__ptyro__recall, but you haven't granted it yet"): both are passed again on every resume.
 - **[docs]** With `$TMUX` set: 256-colour clamp; OSC 7501 probes tmux; notifications need tmux
   `allow-passthrough`; Shift+Enter needs `extended-keys`. ⇒ ptyro strips `TMUX` from child env.
 - **[docs]** `CLAUDE_CODE_FORCE_SYNC_OUTPUT=1`, `CLAUDE_CODE_NO_FLICKER=1`,
   `CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1` (also disables OSC 7501), `FORCE_HYPERLINK`.
   `DISABLE_TELEMETRY="0"` still counts as *set* (truthiness gotcha).
 - **[docs]** Transcripts: `~/.claude/projects/<sanitized-cwd>/<session-id>.jsonl`; 30-day cleanup.
+- **[verified 2026-11-19, 2.1.328 and 2.1.329; `make verify-kb`] The `Stop` hook and the transcript (KB0.2).** Fixtures:
+  `crates/ptyro-agents/tests/fixtures/claude-2.1.329/hooks/` and `…/transcripts/`.
+  - `Stop` carries `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`,
+    `effort {level}`, `hook_event_name`, `stop_hook_active`, `last_assistant_message`,
+    `background_tasks`, `session_crons`. `SessionStart`, `UserPromptSubmit`, `SessionEnd`,
+    `PreCompact` and `PostCompact` carry `session_id` and `transcript_path` too. Hooks given with
+    `--settings` fire in `-p` mode.
+  - **When `Stop` fires, the file does not yet hold the turn's last assistant line.** In 9 of 9
+    turns measured it was missing at the hook's start and there 14 to 17 ms later (polled every
+    2 ms from a detached process). At `SessionEnd` the file held every turn. So a reader that
+    opens the file inside the hook, or the instant the hook's message arrives, can miss the reply:
+    it must check for `last_assistant_message` and come back (§25.6.1).
+  - **A resumed conversation keeps its id and its file.** `claude --resume <id>` (twice, each a new
+    process) kept `session_id`, wrote to the same path and only appended: the file after is the
+    file before plus new bytes. `SessionStart` then has `source: "resume"` and
+    `seconds_since_last_response`, `context_tokens`, `prompt_cache_likely_expired`,
+    `estimated_cache_write_usd`. (`--fork-session` is the case that makes a new id, §20.8.)
+  - **`/compact` works in `-p` mode** (the prompt `/compact` with `--resume`), keeps the id and
+    appends: no earlier line is rewritten or removed. It fires `PreCompact {trigger,
+    custom_instructions}`, `SessionStart` with `source: "compact"`, and `PostCompact {trigger,
+    compact_summary}`, and **no `Stop`**. What it writes is in §20.8.
+  - **Not verified: a rewind** (Esc Esc, `/rewind`). It needs the TUI, which the spike doesn't
+    drive, and none of this machine's 16 transcripts holds one (their only branch points are
+    parallel tool calls). No `continued-in` line was found either.
+  - Claude Code updated itself from 2.1.328 to 2.1.329 between two runs of the spike, twenty
+    minutes apart: a pinned version is a snapshot, not a promise.
+- **[verified 2026-11-19, 2.1.328 and 2.1.329; `make verify-kb`] MCP tools in a session (KB0.3).**
+  - `--mcp-config '{"mcpServers":{"ptyro":{"type":"stdio","command":…,"args":[…],"env":{…}}}}'`
+    starts the server with that `env` **beside** the servers already configured (a project's
+    `.mcp.json` server stayed; the account's claude.ai connectors connect a moment later and are
+    not yet in `init.mcp_servers`). The tools are named `mcp__ptyro__recall`,
+    `mcp__ptyro__recall_read`, `mcp__ptyro__remember`. `--mcp-config` and `--allowedTools` are
+    session flags in `--help`, not print-mode ones **[help; an interactive session was not
+    driven]**.
+  - Claude first sends `server/discover` (MCP `2026-07-28`) and falls back to `initialize`
+    (`2025-11-25`) when that is answered with an error: `ptyro mcp` must answer an unknown method
+    with an error, not silence.
+  - **`--allowedTools mcp__ptyro__recall …` adds to the rules in force; it replaces nothing.** With
+    a project `.claude/settings.json` holding `permissions.allow: ["Bash(cat:*)"]` and
+    `defaultMode: "acceptEdits"`, the session's `permissionMode` stayed `acceptEdits`, `Write` and
+    `Bash(cat …)` ran unasked, and so did the MCP tool. Without the flag the MCP call is refused in
+    `-p` mode (a prompt in the TUI).
+  - **MCP tools are deferred.** The model is given their names only, and loads one with
+    `ToolSearch` (`select:mcp__ptyro__recall`) before its first call: one extra round trip, once a
+    conversation. `_meta: {"anthropic/alwaysLoad": true}` on a tool puts its description and
+    schema in every session instead.
+  - **The server's `instructions` reach the model**, as a `# MCP Server Instructions` reminder
+    (`## ptyro`, then the text, whole); the model repeated a check word planted at their end.
+  - **Cost, per session, same prompt with and without the server** (three tools with descriptions
+    of the size §25.9 implies, a 95-word `instructions`): **228 tokens deferred** (names and
+    instructions); 558 with `recall` alone always loaded; 1,074 with all three always loaded.
 - **[verified 2026-10-20, 2.1.304, golden fixture `claude-main`]** Claude's default UI is a
   **fullscreen renderer**: alternate screen (1049), SGR mouse with all-motion tracking
   (1003+1006), kitty flags 5, and the prompt pinned to the bottom. Scrolling back through
@@ -5968,7 +6024,60 @@ learn something the hard way.
   access token could not be refreshed…"); ptyro shows it once, as `errored`/`auth`.
 - **[unverified; M7]** Codex's hooks are treated as Claude-compatible for output: ptyro answers a
   PreToolUse with Claude's `permissionDecision: deny` JSON. MCP servers go in as
-  `-c mcp_servers.<name>.command=…`, `.args=[…]`, `.env={…}`.
+  `-c mcp_servers.<name>.command=…`, `.args=[…]`, `.env={…}` (verified below).
+- **[verified 2026-11-19, 0.167.1; `make verify-kb`] Hooks, `notify` and the rollout (KB0.2).** Fixtures:
+  `crates/ptyro-agents/tests/fixtures/codex-0.167.1/hooks/` and `…/transcripts/`.
+  - The `-c hooks.<Event>=[…]` flags with their `hooks.state` trust hashes (§8.4) still run our
+    hooks with no review, on `codex exec` as well as the TUI (`SessionStart`, `UserPromptSubmit`
+    and `Stop` were tried).
+  - `Stop` carries `session_id` (the thread id), `turn_id`, `transcript_path`, `cwd`,
+    `hook_event_name`, `model`, `permission_mode` (`bypassPermissions` under `exec`),
+    `stop_hook_active`, `last_assistant_message`. `SessionStart` has `source`
+    (`startup` | `resume`).
+  - `notify` fires on `exec` too (`client: "codex_exec"`), with `thread-id`, `turn-id`, `cwd`,
+    `input-messages`, `last-assistant-message` and **no transcript path**: the path comes from a
+    hook.
+  - **When `Stop` fires the rollout already holds the turn's reply** (every turn measured, 17 of
+    17): unlike Claude's, it can be read at once.
+  - **`codex exec resume <id>` keeps the thread id and appends to the same rollout**; the earlier
+    bytes are unchanged, and Codex's own context messages are not written a second time.
+  - **Not verified: a compaction.** `exec` has no `/compact`, and this machine holds no rollout
+    with one.
+- **[verified 2026-11-19, 0.167.1; `make verify-kb`] MCP tools in a session (KB0.3).**
+  - `-c mcp_servers.ptyro.command="…"`, `-c 'mcp_servers.ptyro.args=[…]'`, `-c
+    'mcp_servers.ptyro.env={K="v"}'` on `codex exec`: the server is started with that env beside
+    the user's own and its tools are listed. **On a terminal `codex` launch the same flags start
+    it and list its tools** (seen once, by hand, under a pty with no keys sent; not in the script,
+    see the side effects below).
+  - **A call needs an approval unless `-c mcp_servers.ptyro.default_tools_approval_mode="approve"`
+    is given.** Without it, under `exec` (approval policy `never`) the call fails with "MCP tool
+    call requires approval, but approval policy is never"; with it the tool runs unasked. (The key
+    sits beside `enabled_tools` and `disabled_tools` in the server's table.)
+  - **MCP tools are deferred here too.** The model's context has one line a server, in a
+    `Deferred tool namespaces` list: `- mcp__ptyro: ` and **the first 247 characters of the
+    server's `instructions`, then `...`**. The whole `instructions` are joined to each tool's
+    description when the model looks the tool up. So what must be known up front goes in the
+    first sentence.
+  - **Cost: about 66 tokens a session** (the 264 characters of that line; the usage numbers of two
+    runs can't be compared directly, because Codex's own skills list differed between them).
+  - **This model (`gpt-6-luna`) calls every tool through one `exec` custom tool whose input is
+    JavaScript**: `ALL_TOOLS.filter(…)` to find a deferred tool, then `await
+    tools.mcp__ptyro__recall({query: …})`, `tools.apply_patch("*** Begin Patch…")`,
+    `tools.exec_command({cmd: "cat notes.txt"})`, sometimes several in one script. What really ran
+    is named by the rollout's `event_msg` `item_completed` items (§20.8).
+- **[verified 2026-11-19, 0.167.1; `make verify-kb`] Side effects on `config.toml`, found by the spike.**
+  - **`codex exec -s workspace-write` in a repository Codex has no trust entry for appends
+    `[projects."<the main checkout's root>"] trust_level = "trusted"` to the user's `config.toml`**
+    **[observed once: the file's time matched the run to the second; with the flag below, the
+    same run leaves the file alone]**. `-c 'projects={"<root>"={trust_level="trusted"}}'` for
+    the run prevents the write. Read-only `exec` runs never wrote it.
+  - Opening the TUI for the first time appends `[tui] screen_reader_detection_done = true` and
+    `[tui.model_availability_nux]`. With a throwaway `CODEX_HOME` (logged out) the TUI starts no
+    MCP server, so a terminal launch can't be checked without the user's own home.
+  - `codex delete --force <uuid>` removes a thread's rollout without a terminal; without
+    `--force` it refuses ("cannot confirm session deletion without an interactive terminal").
+  - `gpt-5.4-mini` is refused on a ChatGPT login ("not supported when using Codex with a ChatGPT
+    account"); the spike's turns ran on `gpt-6-luna` with `model_reasoning_effort="low"`.
 
 ### 20.3 Gemini CLI
 
@@ -6021,6 +6130,25 @@ are kept as they were found.
   `POST /session/:id/prompt_async {parts}`, `message.part.updated` (text, reasoning, tool parts
   with `state {status, input, output, title}`), `message.updated {info {cost, tokens}}`,
   `session.idle`, `POST /session/:id/abort`. Tested only against the fake.
+
+- **[docs, not run; read 2026-11-19 from opencode.ai/docs (`mcp-servers`, `config`, `server`), as
+  KB0.3 asked; OpenCode is not installed here]** What the knowledge base would need, and how it
+  differs from what §8.6 and §20.8 hold from 1.19.5:
+  - **MCP servers are configuration, not a launch flag.** `{"mcp": {"servers": {"<name>": {"type":
+    "local", "command": ["…", "…"], "environment": {…}, "disabled": false}}}}` in
+    `~/.config/opencode/opencode.json(c)` or a project's `opencode.json(c)` or
+    `.opencode/opencode.json(c)`; configs are merged, the project's over the global one. Tools are
+    named `<server>_<tool>`. The pages read name no environment variable or flag that supplies a
+    config for one launch, so handing OpenCode the tools means writing a file in the user's
+    project or home: **not in KB1** (§25.9).
+  - **A session's messages can be read from its server**: `GET /api/session/{sessionID}/message`
+    (`limit`, `order`, `cursor`, `type` of `user` | `assistant` | `shell` | `compaction`), `GET
+    /api/session` to list, `GET /api/experimental/session/{sessionID}/log` as a durable event log
+    (`after`, `follow`), OpenAPI at `/docs/openapi.json`.
+  - **These paths and the login differ from §8.6's**, which has `/session/…`, `/event` and
+    `OPENCODE_SERVER_PASSWORD` (1.19.5): today's docs put the API under `/api/` and describe
+    pairing (`POST /api/pair`, a session token). ptyro's OpenCode adapter has still not run
+    against a real OpenCode (§8.6); check it against the current release before building on it.
 
 ### 20.5 Terminal & Rust ecosystem
 
@@ -6483,6 +6611,66 @@ here):
   context (`<environment_context>`, the AGENTS.md it read, plugin suggestions) is a `user` message
   too, of other kinds. Titles: `<CODEX_HOME>/session_index.jsonl` lines `{id, thread_name,
   updated_at}`.
+- **Claude Code 2.1.328 and 2.1.329, checked again for the knowledge base** **[verified 2026-11-19, 2.1.328 and 2.1.329; `make verify-kb`]** (the turns
+  the spike made, and this Mac's 16 transcripts of 2.1.296 to 2.1.328 read for their line types
+  only). The description above holds. What is new or was wrong:
+  - **The conversation is still only `user` and `assistant` lines.** The user's own words: a `user`
+    line whose `message.content` is a **string**, without `isMeta` and without `isCompactSummary`,
+    and not one of the wrapped kinds (`<local-command-stdout>`, `<bash-input>`, `<bash-stdout>`,
+    `<task-notification>`, `<system-reminder>`); a slash command is the string starting
+    `<command-name>/name</command-name>`. The assistant's words: `text` blocks. A tool call:
+    a `tool_use` block, its telling input `input.file_path` (`Write`, `Edit`, `Read`),
+    `input.command` (`Bash`), `input.query` (an MCP tool, named `mcp__<server>__<tool>`). Each
+    `assistant` line holds one block; parallel calls are lines sharing a `message.id`. A
+    `thinking` block's text is empty (only a `signature`). No `uuid` appears twice.
+  - **Many more lines are not conversation, and two of them repeat the prompt**:
+    `queue-operation` (`content`) and `last-prompt` hold the user's text again, and
+    `api-request-blob` holds it inside the API message. Also `session-owner` (the account's and
+    organisation's ids), `api-request`, `api-request-shape`, `atis-latch`, `tools-used`, `mode`,
+    `permission-mode`, `cost-state`, `agent-name`, `pr-link`, `relocated`, `worktree-state`,
+    `file-history-snapshot`, `file-history-delta`, and `system` lines (`stop_hook_summary`,
+    `turn_duration`, `away_summary`, `local_command`, `informational`, `compact_boundary`).
+    **`attachment` lines (`session_context`) and `api-request-blob` hold the account's email**,
+    the system prompt and the skill lists: a reader that takes anything but `user` and
+    `assistant` lines stores them.
+  - **A compaction** appends, in this order: a `system` line with `subtype: "compact_boundary"`,
+    `parentUuid: null`, `logicalParentUuid` and `compactMetadata {trigger, preTokens, postTokens,
+    preservedSegment, preservedMessages, …}`; then a `user` line with `isCompactSummary: true` and
+    `isVisibleInTranscriptOnly: true` whose content is one string: "This session is being
+    continued from a previous conversation…", the summary (`Summary:` then nine numbered parts),
+    and closing instructions to the model. For a typed `/compact` there follow an `isMeta`
+    caveat, the `<command-name>/compact</command-name>` line and a `<local-command-stdout>` line
+    with `repeatsCompactSummary: true`. **These lines' timestamps are not in file order** (the
+    summary is stamped after the command that follows it): order is the file's.
+  - **Titles:** `custom-title {customTitle}` and `agent-name {agentName}` are what these
+    versions write; no `ai-title`, `summary` or `continued-in` line was found in any file here.
+    A print-mode session has no title line at all.
+  - **Sub-agents' transcripts are beside the session after all**: `<project folder>/<session
+    id>/subagents/agent-<id>.jsonl` (19 of them here). The main file had no `isSidechain` line.
+- **Codex 0.167.1, checked again for the knowledge base** **[verified 2026-11-19, 0.167.1; `make verify-kb`]** (the spike's own `exec`
+  rollouts; this Mac holds one other rollout, of Codex Desktop 0.148, with a `session_meta` and
+  nothing else):
+  - Lines are `{timestamp, ordinal, type, payload}`. `session_meta` also holds
+    `creator_user_id` and `creator_account_id`. New types beside `response_item` and `event_msg`:
+    `turn_context`, `world_state` (the AGENTS.md text again), `token_usage_record`; and a
+    `response_item` of type `additional_tools` (the tool list).
+  - **The user's own words** are still the `user` messages whose `content_item_kinds` include
+    `user.text`. Codex's own context is `developer` messages (kinds `model.base_instructions`,
+    `host_skills.instructions`, `permissions.instructions`, `tools.deferred_namespaces`,
+    `plugins.recommendations`, `multi_agent.*`) and a `user` message of kinds
+    `agents_md.instructions` and `environments.environment_context`. It is written once, not
+    again on resume.
+  - **The assistant's words** are `assistant` messages' `output_text` (`phase: "final_answer"`;
+    their `content_item_kinds` is `["unknown"]`).
+  - **A tool call's name is no longer telling.** Every call in these rollouts is a
+    `custom_tool_call` named `exec` whose `input` is a JavaScript program (§20.2); no
+    `function_call` appeared. What ran is in the `event_msg` lines of type `item_completed`:
+    `item.type` `CommandExecution` (`command`, `cwd`, `exit_code`, `aggregated_output`),
+    `FileChange` (`changes`: a map from path to `{type: add|…, content}`), `McpToolCall`
+    (`server`, `tool`, `arguments`, `status`, `error`), beside `UserMessage` and `AgentMessage`,
+    which repeat the messages. So a reader takes messages from `response_item` and **tool titles
+    from those three `item_completed` kinds**, and falls back to `function_call` and
+    `custom_tool_call` names when a rollout has none.
 - **Gemini CLI 0.66.0 [S]:** `<GEMINI_CLI_HOME or ~>/.gemini/tmp/<project slug>/chats/session-<time>-<id8>.jsonl`
   (a legacy `.json` is one object with `messages`), the folder's `.project_root` naming the project
   (§22.9). Lines: a metadata record (`sessionId`, `projectHash`, `startTime`, `lastUpdated`, `kind`,
@@ -9718,6 +9906,42 @@ search it through three tools. It runs out of the box, on this computer only, wi
 at ingest, no vector database and no graph. The ideas and what other products do are RESEARCH
 section I and R-KB-01…13; the tasks are ROADMAP KB0…KB5.
 
+**As built, and where the spikes changed the design below** (nothing of the feature is built yet;
+each line names its spike):
+- **KB0.2, transcripts (2026-11-19; `make verify-kb`, Claude Code 2.1.328 and 2.1.329, Codex
+  0.167.1; the facts are §20.1, §20.2 and §20.8):**
+  - **A transcript is not read once at `Stop`.** Claude's file gets the turn's last assistant
+    line about 15 ms *after* the hook fires (Codex's rollout already has it). The reader checks
+    that `Stop`'s `last_assistant_message` is in what it read and comes back if not (§25.6.1,
+    "When").
+  - **One item a conversation holds for both agents**: a resume keeps the id and appends to the
+    same file. A compaction appends too, and fires no `Stop`: its summary is picked up by the
+    next read.
+  - **Codex's tool titles come from the rollout's `event_msg` `item_completed` lines**, not from
+    the tool calls: today's Codex runs every tool through one `exec` call whose input is a
+    JavaScript program (§25.6.1, "Codex"; the design said never to read `event_msg`).
+  - **Claude's non-conversation lines hold the account's email and the system prompt**
+    (`attachment`, `api-request-blob`), and two kinds repeat the prompt (`queue-operation`,
+    `last-prompt`): the reader takes `user` and `assistant` lines and nothing else.
+  - Fixtures for KB1.4's readers: `crates/ptyro-agents/tests/fixtures/claude-2.1.329/` and
+    `codex-0.167.1/` (`transcripts/` with a README, `hooks/`). Still unverified: a rewind in
+    Claude, a compaction in Codex.
+- **KB0.3, tools in a terminal session (same run):**
+  - **The tools are left deferred, and the budget is met only that way**: 228 tokens a session in
+    Claude (three names and the server's instructions), about 66 in Codex (one line). Claude's
+    `alwaysLoad`, which chats' tools use, would cost 1,074 for the three (558 for `recall`
+    alone): the knowledge base's tools don't set it. The price is one tool lookup before the
+    first call of a conversation (§25.9).
+  - **The server's `instructions` carry the feature in both agents, and their first 247
+    characters are all Codex shows up front**: the first sentence says what the knowledge base
+    is and names `recall` (§25.9).
+  - **Claude is given `--allowedTools` with the three names beside `--mcp-config`, both again on
+    every resume**; it adds to the user's rules and mode. **Codex is given
+    `mcp_servers.ptyro.default_tools_approval_mode="approve"`** beside the server's three keys;
+    without it every call asks.
+  - **OpenCode stays out of KB1**: its docs show MCP servers as configuration files only, with no
+    way to give one for a single launch (§20.4).
+
 ### 25.1 Decided by the owner (2026-11-19)
 
 Decided:
@@ -9903,39 +10127,78 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
 
 - **When.** At the end of a turn (`Stop`), at `SessionEnd`, when the session's process exits,
   and once at daemon start for every session whose transcript grew since its cursor.
-- **Where.** The hook's `transcript_path` (Claude **[V]** §20.1, Codex **[V present]** §8.4),
+  - **`Stop` is a signal to read soon, not proof the turn is in the file.** Claude writes the
+    turn's last assistant line 14 to 17 ms after `Stop` fires **[verified 2026-11-19, 2.1.328 and
+    2.1.329, §20.1]**; Codex's rollout has it already **[verified 2026-11-19, 0.167.1]**. The
+    queue carries `(session, transcript path, last_assistant_message)`. A read that doesn't find
+    that reply as the file's last assistant text leaves the cursor where the complete lines end
+    and is tried again after 250 ms, then 2 s; `SessionEnd`, the process's exit and the next
+    turn's `Stop` catch whatever is still missing. A last line with no newline yet is never
+    parsed.
+  - A compaction fires no `Stop` (`PreCompact` and `PostCompact` only, which ptyro doesn't
+    install): its lines are read with the next turn, or at `SessionEnd`.
+- **Where.** The hook's `transcript_path` (Claude and Codex, on `Stop`, `SessionStart` and
+  `UserPromptSubmit` alike **[verified 2026-11-19, §20.1, §20.2]**; Codex's `notify` has none),
   else the path the adapter derives (Claude: `<config dir>/projects/<cwd>/<session id>.jsonl`).
   Only `ptyro-agents` knows a format: `Adapter::transcript(&Session) -> Option<PathBuf>` and
   `Adapter::read_transcript(bytes, from) -> (Vec<Turn>, to)`. The formats are §20.8's; the
   parsers are CHAT5's import (`crates/ptyro-daemon/src/chats/import.rs` before commit `b80632f`),
   moved to the adapters.
-- **Claude.** `user` lines that are yours (not `isMeta`, not a bare `tool_result`; a slash
-  command is kept as `/name args`), `assistant` `text` blocks, and a **tool's title** for each
-  `tool_use` (its name and its one telling input: a path, a command's first 200 characters, a
-  pattern, a URL). Never `thinking`, never a tool's result. A line with **`isCompactSummary`**
-  is kept as a `summary` chunk: it is a summary of the session that Claude already wrote.
-  `custom-title`, `ai-title` and `summary` lines give the item its title. Side chains and
-  sub-agents' own files are not read in KB1.
-- **Codex.** `response_item` messages: the user's own (`content_item_kinds` include
-  `user.text`), the assistant's `output_text`, and a title for each `function_call` and
-  `custom_tool_call`. Never `reasoning`, never `*_output`, never the `event_msg` repeats, never
-  Codex's own context messages. The title is `session_index.jsonl`'s `thread_name`.
+- **Claude** **[the format: verified 2026-11-19, 2.1.328 and 2.1.329, §20.8]**. Only `user` and
+  `assistant` lines are read; every other type is skipped unparsed (they hold the account's
+  email, the system prompt, and the prompt a second time).
+  - `user` lines that are yours: content a string, not `isMeta`, not `isCompactSummary`, not a
+    wrapped kind (`<local-command-stdout>`, `<bash-…>`, `<task-notification>`,
+    `<system-reminder>`); a slash command is kept as `/name args`.
+  - `assistant` `text` blocks, and a **tool's title** for each `tool_use` (its name and its one
+    telling input: a path, a command's first 200 characters, a pattern, a URL, a query). An MCP
+    tool is `mcp__<server>__<tool>`. Never `thinking`, never a tool's result, and not
+    `ToolSearch` (it only loads a tool).
+  - A line with **`isCompactSummary`** is kept as a `summary` chunk: it is a summary of the
+    session that Claude already wrote. Its text is what stands between the opening sentence and
+    the closing "If you need specific details from before compaction…": the rest is said to the
+    model.
+  - `custom-title` gives the item its title (`agent-name` when there is none; `ai-title` and
+    `summary` lines in older files); a session with none takes its first prompt.
+  - The anchor is the line's `uuid` (never repeated). Order is the file's: timestamps around a
+    compaction are not in order.
+  - Side chains and sub-agents' own files (`<session id>/subagents/agent-*.jsonl`, beside the
+    session) are not read in KB1.
+- **Codex** **[the format: verified 2026-11-19, 0.167.1, §20.8]**. `response_item` messages: the
+  user's own (`content_item_kinds` include `user.text`) and the assistant's `output_text`. Never
+  `reasoning`, never `*_output`, never Codex's own context messages (`developer`, and `user`
+  ones of other kinds), `world_state`, `turn_context` or `token_usage_record`.
+  - **A tool's title comes from the `event_msg` lines of type `item_completed`** whose item is a
+    `CommandExecution` (the command's first 200 characters), a `FileChange` (the paths of
+    `changes`, which are also the card's changed files) or an `McpToolCall` (`server.tool` and
+    its telling argument). Today's Codex makes every call through an `exec` tool whose input is a
+    JavaScript program, so the call itself names nothing. A rollout with none of those items
+    (an older Codex) gives a title per `function_call` and `custom_tool_call` instead.
+  - The other `event_msg` lines repeat the messages and are skipped. The anchor is the message's
+    `id`. The title is `session_index.jsonl`'s `thread_name`.
 - **OpenCode and other agents.** No transcript is read (OpenCode: **[unverified]**, §25.18). The
   session still gets an item with its card, from what the daemon knows.
 - **The card** is chunk 0 of every session, rebuilt at each ingest, with no model: the task (the
   first prompt, 500 characters; `SessionInfo.task` when there is no transcript), the outcome
   (the last assistant text, 1,000 characters; else `last_reply`), the files it changed (from
-  `Edit`, `Write` and `apply_patch` titles, at most 30, also in `item.files`), then agent, model,
+  Claude's `Edit` and `Write` titles and Codex's `FileChange` items, at most 30, also in
+  `item.files`), then agent, model,
   project, worktree, branch, start, end and the number of turns. A finished agent's last message
   is usually its own summary, which is why this works without a summariser.
 - **Identity.** One item per conversation (`session://claude/<uuid>`): a resumed conversation
-  carries on in its item. `item.session` is ptyro's session, so a hit can offer **resume**
-  (§25.10).
+  carries on in its item. **[verified 2026-11-19, §20.1, §20.2]** `claude --resume <id>` and
+  `codex exec resume <id>` keep the id and append to the same file, leaving its earlier bytes as
+  they were, so the cursor's offset stays good across a resume and a compaction. (Claude's
+  `--fork-session` is the case with a new id and file: a new item.) `item.session` is ptyro's
+  session, so a hit can offer **resume** (§25.10).
 - **Not sessions.** A chat's engine (its text is in `chat.db` already), a title one-shot and
   `chat find` are never ingested: a session with `chat` set is skipped, and the backfill skips a
   working directory under `<data>/` and any conversation id `chat.db`'s `conv` table knows.
 - **Rewinds.** A transcript that shrank or was replaced (another inode) is read again from the
-  start. Chunks are matched by anchor (a message's uuid), so nothing doubles.
+  start. Chunks are matched by anchor (a message's uuid), so nothing doubles. **[unverified]**
+  what Claude's rewind writes: it needs the TUI, and no transcript here holds one (§20.1). Every
+  file seen only ever grew, so a rewound branch is expected to stay in the file beside the new
+  one; if so, both are kept, which a record should do.
 - **Backfill (KB3).** `ptyro ingest --history` reads what the agents kept before ptyro did:
   each profile's Claude `projects/` and Codex `sessions/` and `archived_sessions/`. It says how
   many conversations it found before it reads any (`--dry-run` stops there). An item's profile
@@ -10152,8 +10415,17 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
 ### 25.9 What agents get
 
 - **Three tools, through `ptyro mcp`**, in every agent session and every chat (KB1; `remember`
-  in KB2). Three and not nine: every tool's description is paid for at the start of every
-  session (RESEARCH I3). Budget: under 400 tokens for all three, measured in KB0.
+  in KB2). Three and not nine: every tool is paid for in every session (RESEARCH I3). Budget:
+  under 400 tokens a session. **Measured in KB0 [verified 2026-11-19, §20.1, §20.2]: 228 in
+  Claude, about 66 in Codex**, because both agents now defer MCP tools: the model is given the
+  tools' names (Claude) or one line a server (Codex) and the server's `instructions`, and loads
+  a tool's description when it first wants it.
+  - **The tools stay deferred.** In Claude, `alwaysLoad` on all three costs 1,074 tokens a
+    session, and 558 on `recall` alone: over the budget for what one lookup saves. (Chats' own
+    tools keep `alwaysLoad`: a chat has few tools and no other way to learn of them.)
+  - A description is therefore written for the moment a model reads it, having chosen the tool:
+    it can afford the query's syntax. What must be known *before* choosing goes in the
+    `instructions`.
   - **`recall(query, project?, kind?, since?, limit?)`** → pointers, not text: for each hit its
     address, kind, title, date, project and a snippet of at most 200 characters. 8 by default,
     20 at most. The query is the search box's.
@@ -10162,19 +10434,31 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   - **`remember(text, title?, tags?, project?, replaces?)`** → writes a note (§25.6.4) and
     answers its address.
   - The server's `instructions` say when to use them, in a paragraph: look before re-deriving
-    something that may have been done before; remember decisions and facts worth keeping.
+    something that may have been done before; remember decisions and facts worth keeping. Both
+    agents show them to the model **[verified 2026-11-19]**: Claude whole, Codex **only their
+    first 247 characters** up front (the rest when a tool is looked up). So the first sentence,
+    within 240 characters, says what the knowledge base is and to search it with `recall`
+    before re-deriving; the paragraph stays under 100 words.
   - In chats these replace `chat_search` and `chat_read` (kept as names for one release);
     `chat_list` stays (§22.10).
 - **How each agent is given them.**
-  - **Claude:** `--mcp-config '{"mcpServers":{"ptyro":{"type":"stdio","command":"<ptyro>","args":["mcp"],"env":{…}}}}'`
-    **[docs; built for M7, removed 2026-11-17]**, beside the user's own servers (no
-    `--strict-mcp-config`), passed again on every resume (Claude doesn't restore it, **[V]**
-    §8.2), and the three tools allowed up front so they never raise a permission prompt
-    (**[spike KB0]**: that `--allowedTools mcp__ptyro__…` adds to the user's rules and doesn't
-    replace them).
-  - **Codex:** `-c mcp_servers.ptyro.command=…`, `.args=["mcp"]`, `.env={…}` **[unverified for a
-    terminal session; chat engines get it in the thread's config, built]**.
-  - **OpenCode:** none in KB1 **[unverified]**.
+  - **Claude** **[verified 2026-11-19, 2.1.328 and 2.1.329, §20.1; an interactive session was
+    not driven, the flags are session flags in `--help`]:** `--mcp-config
+    '{"mcpServers":{"ptyro":{"type":"stdio","command":"<ptyro>","args":["mcp"],"env":{…}}}}'`
+    beside the user's own servers (no `--strict-mcp-config`), and `--allowedTools
+    mcp__ptyro__recall mcp__ptyro__recall_read mcp__ptyro__remember`, which adds to the user's
+    allow rules and leaves their permission mode alone, so the tools never raise a prompt. **Both
+    are passed again on every resume**: Claude restores neither, and without the second the
+    tools are there and refused. `ptyro mcp` answers Claude's first probe (`server/discover`)
+    with an error, as it does any unknown method; Claude then sends `initialize`.
+  - **Codex** **[verified 2026-11-19, 0.167.1, §20.2: `codex exec`, and a terminal launch seen
+    once by hand]:** `-c mcp_servers.ptyro.command="<ptyro>"`, `-c
+    'mcp_servers.ptyro.args=["mcp"]'`, `-c 'mcp_servers.ptyro.env={…}'` and **`-c
+    'mcp_servers.ptyro.default_tools_approval_mode="approve"'`**: without the last, each call
+    asks for approval (and fails where nothing can answer). Chat engines get the same keys in
+    the thread's config (built).
+  - **OpenCode:** none in KB1 **[docs, not run, §20.4]**: its MCP servers are set in config files
+    only, and ptyro writes none into a user's project or home.
   - `kb.tools = false` gives none; `[agents.X] kb = false` gives that agent none and ingests
     none of its sessions.
 - **The wall between profiles.** A caller sees only items of **its own profile** and items with
@@ -10456,14 +10740,17 @@ the same day (§25.1): the defaults stand, a private session is in KB1 (§25.7a)
 stand, and notes stay in ptyro's data folder.
 
 **Unverified** (each belongs to the task that needs it):
-- That Claude's `--allowedTools` for the three tools adds to the user's rules (KB0).
-- Codex's `-c mcp_servers.…` on a terminal session (KB0); OpenCode's MCP configuration and how
-  to read its sessions (its server's API, §8.6) (after KB1).
+- OpenCode's MCP configuration and how to read its sessions: read from its docs only (§20.4),
+  which no longer match what §8.6 was built from; nothing run (after KB1).
+- Claude's `--mcp-config` and `--allowedTools` in an interactive session: shown in `-p` mode and
+  by `--help`, not by driving the TUI (KB1.6 sees it the first time it runs).
+- What a rewind leaves in Claude's transcript, and what a compaction leaves in Codex's rollout
+  (§25.6.1): neither could be made without the agents' TUIs.
 - The cost of the vector scan at 500k chunks on the real model (KB0), and `sqlite-vec`'s state.
 - The 0.3 cosine floor, set on the synthetic model (§21.11), and every weight of §25.8.
 - A `UserPromptSubmit` hook's added context on Claude and Codex (KB5).
-- Whether a resumed Claude conversation keeps its session id in every version (§25.6.1 assumes
-  the hook's `session_id` names the conversation).
+- Whether a resumed conversation keeps its id in *every* version: it does in Claude Code 2.1.329
+  and Codex 0.167.1 (KB0.2); `make verify-kb` says so again for a new one.
 
 **Not here** (later, each with its own decision):
 - **A digest pass**: a model turns finished sessions into notes and checks notes against each

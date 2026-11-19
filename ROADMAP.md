@@ -3872,15 +3872,45 @@ Development section), its README and `docs/` text, and the milestone's version b
         time. If meaning misses 150 ms at 500k, measure §25.8's fallbacks in order (newest
         first with an early stop, a one-bit sketch then rescoring) and write the chosen one into
         §25.8. **S**
-  - [ ] **KB0.2 Transcripts, live** (`make verify-kb`, part 1): against the pinned Claude and
+  - [x] **KB0.2 Transcripts, live** (`make verify-kb`, part 1): against the pinned Claude and
         Codex, that `Stop` carries `transcript_path`, that the file has the turn when the hook
         fires (or how long after), that a resumed conversation keeps its id and its file, and
         what a compaction and a rewind leave in the file. Save real transcripts as fixtures. **S**
+        *(Built 2026-11-19: `scripts/verify-kb.py`, run by `make verify-kb` against Claude Code
+        2.1.328 and 2.1.329 and Codex 0.167.1 with tiny real turns, everything given by flags;
+        it says PASS, FAIL or NOT RUN a claim, 46 passed and 3 not run. Found: `Stop` names the
+        transcript in both; **Claude's file gets the turn's last line about 15 ms after `Stop`
+        fires** (Codex's has it), so §25.6.1's reader checks for the reply and comes back; a
+        resume keeps the id and appends to the same file in both; Claude's `/compact` appends a
+        `compact_boundary` line and the `isCompactSummary` line and fires no `Stop`; Claude's
+        other lines hold the account's email and repeat the prompt; **Codex now makes every tool
+        call through one `exec` call of JavaScript, so its tool titles come from the rollout's
+        `item_completed` events**. Facts in SPEC §20.1, §20.2, §20.8; the design changed in
+        §25.6.1 and §25's "As built". Fixtures, sanitized, with a README each:
+        `crates/ptyro-agents/tests/fixtures/claude-2.1.329/` and `codex-0.167.1/`
+        (`transcripts/`: plain, tools, resumed, compacted or mcp; `hooks/`). **Not run:** a
+        rewind in Claude and a compaction in Codex, which need the agents' TUIs; no
+        multi-turn-in-one-process transcript, the resumed one stands in.)*
   - [ ] **KB0.3 Tools in a terminal session** (`make verify-kb`, part 2): Claude with
         `--mcp-config` beside the user's own servers, re-passed on resume, and `--allowedTools`
         for three tools *adding* to the user's rules; Codex with `-c mcp_servers.ptyro.…`; the
         tokens the three tools' descriptions and the server's `instructions` cost in each. Read
         OpenCode's MCP configuration and session API from its docs (not a gate). **S**
+        *(Built 2026-11-19: the second half of `scripts/verify-kb.py`, with a stand-in stdio MCP
+        server inside the script (three tools named and described as §25.9's). Claude:
+        `--mcp-config` adds the server beside those configured, `--allowedTools
+        mcp__ptyro__recall …` adds to the allow rules and leaves the permission mode, and
+        neither is restored by `--resume`. Codex: the three `-c mcp_servers.ptyro.…` keys start
+        it on `exec` (and on a terminal launch, seen once by hand), and **a fourth,
+        `default_tools_approval_mode="approve"`, is needed** or every call asks. **Both agents
+        defer MCP tools**, so the cost is 228 tokens a session in Claude and about 66 in Codex,
+        inside the 400 budget; with Claude's `alwaysLoad` it would be 1,074, so the tools stay
+        deferred. Both show the server's `instructions`, Codex only their first 247 characters.
+        The spike also found that `codex exec -s workspace-write` writes a project's trust into
+        the user's `config.toml` unless `-c projects={…}` is given, and the script now checks
+        the file is untouched. OpenCode from its docs only (§20.4): MCP by config file, no
+        per-launch way, and an API that no longer matches §8.6. SPEC §20.1, §20.2, §20.4, §25.9,
+        §25.18. **Not run:** Claude's flags in an interactive session (`--help` only).)*
   - [ ] **KB0.4 The comment table**: the extension → comment-marks table of §25.6.3 run over
         this repository and three others of other languages; count what whole-line-only keeps
         and drops, and what the code-switched-off and licence rules catch. **S**
