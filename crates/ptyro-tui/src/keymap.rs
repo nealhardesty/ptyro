@@ -320,6 +320,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a("project.untrust", "Stop trusting this project's scripts"),
     a("project.rename", "Rename this project: its slug, the address of its worktrees and sessions"),
+    a(
+        "project.move",
+        "Its repository moved: point this project at where it is now (keeps its trust, pin, workspaces and worktrees)",
+    ),
     a("project.pin", "Pin this project to a profile (its sessions run as it)"),
     a("project.unpin", "Unpin this project from its profile"),
     a("project.leave", "Take this project out of this workspace (it stays registered)"),

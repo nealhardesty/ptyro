@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 52 };
+pub const PROTO: Version = Version { major: 1, minor: 53 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -578,6 +578,14 @@ pub enum Request {
         path: PathBuf,
         #[serde(default)]
         workspace: Option<String>,
+        /// It is the repository a registered project lost (its main checkout gone): move that
+        /// project here instead of registering another (1.53, the refusal's fix `moved`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        moved: bool,
+        /// Register it as a project of its own even so; that project isn't offered this place
+        /// again (1.53).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        separate: bool,
     },
     ProjectList,
     ProjectGet {
@@ -596,6 +604,13 @@ pub enum Request {
     ProjectRename {
         addr: String,
         name: String,
+    },
+    /// Point a project at where its repository is now (1.53, SPEC §10.1): the same repository,
+    /// moved. It keeps its id (so its trust, pin, workspaces, sessions and worktrees); its
+    /// worktrees are linked to the new place. A project already registered there is folded in.
+    ProjectMove {
+        addr: String,
+        path: PathBuf,
     },
     /// Pin to a profile, or unpin with `None` (SPEC §10.10).
     ProjectPin {
@@ -1219,6 +1234,7 @@ impl Request {
             Request::Remove { .. }
                 | Request::WorktreeRemove { .. }
                 | Request::ProjectRemove { .. }
+                | Request::ProjectAdd { .. }
                 | Request::Shutdown { .. }
         )
     }
@@ -1233,6 +1249,7 @@ impl Request {
             (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
             (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
             (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
+            (Request::ProjectAdd { moved, .. }, A::Moved) => *moved = true,
             (Request::Shutdown { force }, A::Force) => *force = true,
             _ => return None,
         }

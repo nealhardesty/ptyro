@@ -118,6 +118,12 @@ impl Daemon {
         {
             return Ok(None);
         }
+        // A project whose checkout is gone is this repository, moved: offered the move instead
+        // of a second project (SPEC §10.1).
+        if let Some(m) = self.moved_here(&root).await {
+            self.offer_move(&m, &root);
+            return Ok(None);
+        }
         let workspace = match workspace.and_then(|w| self.find_workspace(w).ok()) {
             Some(w) => w.name,
             None => self.last_workspace().await,

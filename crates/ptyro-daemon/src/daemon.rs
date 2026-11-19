@@ -50,6 +50,10 @@ pub struct Daemon {
     pub(crate) shown_workspace: Mutex<Option<String>>,
     /// Repository roots never to register on their own (UX1.5).
     pub(crate) declined: Mutex<std::collections::HashSet<std::path::PathBuf>>,
+    /// Each project's root commits, by id (`moves.rs`): who a repository is, once it has moved.
+    pub(crate) repo_roots: Mutex<HashMap<String, Vec<String>>>,
+    /// (project id, place) a move was declined for: a project added there on its own.
+    pub(crate) not_moved: Mutex<std::collections::HashSet<(String, std::path::PathBuf)>>,
     /// What each stale worktree takes on disk, measured by `gc`: (bytes, partial, when).
     pub(crate) gc_sizes: Mutex<HashMap<String, (u64, bool, std::time::Instant)>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
@@ -196,6 +200,8 @@ impl Daemon {
             views: Mutex::new(BTreeMap::new()),
             shown_workspace: Mutex::new(None),
             declined: Mutex::new(std::collections::HashSet::new()),
+            repo_roots: Mutex::new(HashMap::new()),
+            not_moved: Mutex::new(std::collections::HashSet::new()),
             gc_sizes: Mutex::new(HashMap::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),

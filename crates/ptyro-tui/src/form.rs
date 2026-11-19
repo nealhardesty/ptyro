@@ -24,6 +24,8 @@ pub enum Make {
     Profile(Option<Box<Form>>),
     /// A project, into the chosen workspace.
     ProjectAdd,
+    /// Where this project's (by id) repository is now (SPEC §10.1).
+    ProjectMove(String),
     /// Which workspaces this project (by id) is in.
     ProjectWorkspaces(String),
     /// A shell (or a command) in a workspace's SHELLS.
@@ -803,8 +805,19 @@ impl App {
                     ),
                     None => path.clone().into(),
                 };
-                let req = Request::ProjectAdd { path, workspace: form.opt("workspace") };
+                let choice = form.get("moved");
+                let req = Request::ProjectAdd {
+                    path,
+                    workspace: form.opt("workspace"),
+                    moved: choice == "moved",
+                    separate: choice == "separate",
+                };
                 return self.request(Pending::ProjectAdded(None), req);
+            }
+            Make::ProjectMove(id) => {
+                let path = ptyro_core::config::expand_home(form.get("path").trim());
+                let slug = self.project(&id).map(|p| p.slug.clone()).unwrap_or_default();
+                return self.request(Pending::Moved(slug), Request::ProjectMove { addr: id, path });
             }
             Make::ProjectWorkspaces(id) => {
                 let want: Vec<String> = form
@@ -1102,6 +1115,18 @@ impl App {
                 0,
                 "The workspace it joins (more later: the project's menu → workspaces)",
             ),
+            // `--moved` / `--separate` (SPEC §10.1): asked when it happens, unless said here.
+            Field::choice(
+                "moved",
+                "Is it a moved project?",
+                vec![
+                    ("".into(), "ask me if it looks like one".into()),
+                    ("moved".into(), "yes: move that project here".into()),
+                    ("separate".into(), "no: a project of its own".into()),
+                ],
+                0,
+                "When a project whose directory is gone is this repository: move it here (keeping its trust, pin, workspaces and worktrees), or add this one apart",
+            ),
         ];
         let mut form = Form::new("Add a project", fields, Make::ProjectAdd);
         form.verb = "add";
@@ -1109,6 +1134,25 @@ impl App {
         if !form.get("path").is_empty() {
             form.sel = 1;
         }
+        self.open(form);
+    }
+
+    /// `project.move`: where its repository is now, the place ptyro found filled in. `ptyro
+    /// project move` takes nothing else.
+    pub(crate) fn open_project_move(&mut self, p: &ptyro_core::model::ProjectInfo) {
+        let path = Field::required(
+            "path",
+            "It is now at",
+            "~/src/my-repo",
+            &format!(
+                "Its main checkout (it was at {}). It keeps its trust, pin, workspaces and worktrees; a project registered there is folded in",
+                p.root.display()
+            ),
+        )
+        .with(p.moved_to.as_ref().map(|t| t.display().to_string()).unwrap_or_default());
+        let mut form =
+            Form::new(format!("Move {}", p.slug), vec![path], Make::ProjectMove(p.id.clone()));
+        form.verb = "move";
         self.open(form);
     }
 

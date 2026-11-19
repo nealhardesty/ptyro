@@ -325,6 +325,26 @@ pub struct TrustRow {
     pub approved_ms: u64,
 }
 
+/// A project moved to where its repository is now (SPEC §10.1), maybe folding in a duplicate:
+/// written in one transaction by [`Store::relocate`].
+#[derive(Debug, Clone)]
+pub struct Relocation {
+    /// The project as it is now: its new root.
+    pub project: ProjectInfo,
+    /// Its worktree rows as they are now (paths, states, names), the duplicate's carried ones
+    /// among them.
+    pub worktrees: Vec<WorktreeInfo>,
+    /// The duplicate folded in (its id), forgotten once what it had is carried over.
+    pub absorbed: Option<String>,
+    /// The duplicate's worktree rows that are one of the project's (its main checkout, a
+    /// directory both had): (theirs, ours). Sessions that ran in them follow.
+    pub dropped: Vec<(String, String)>,
+    /// The project's trust after the move (it replaces what it had).
+    pub trust: Vec<TrustRow>,
+    /// Directories that moved, (old, new): sessions that started inside follow.
+    pub moves: Vec<(String, String)>,
+}
+
 /// Everything the daemon keeps in memory about workspaces, projects and worktrees.
 #[derive(Debug, Clone, Default)]
 pub struct Registry {
@@ -714,6 +734,7 @@ impl Store {
                     pin: r.get(5)?,
                     created_ms: r.get::<_, i64>(6)? as u64,
                     last_used_ms: opt_ms(r.get(7)?),
+                    moved_to: None,
                 });
             }
             let mut st = c.prepare(
@@ -807,6 +828,85 @@ impl Store {
             )?;
             Ok(())
         });
+    }
+
+    /// A project moved (and maybe a duplicate folded in), all or nothing: the duplicate's
+    /// sessions, worktrees (removed ones too: history) and trust are the project's first, then
+    /// the duplicate goes (a root path is unique, so before the project takes its place).
+    pub async fn relocate(&self, r: Relocation) -> Result<()> {
+        self.call(move |c| {
+            let tx = c.transaction()?;
+            let id = r.project.id.clone();
+            if let Some(dup) = &r.absorbed {
+                for (from, into) in &r.dropped {
+                    tx.execute("UPDATE session SET worktree_id = ?2 WHERE worktree_id = ?1", params![from, into])?;
+                    tx.execute("DELETE FROM worktree WHERE id = ?1", params![from])?;
+                }
+                tx.execute("UPDATE session SET project_id = ?2 WHERE project_id = ?1", params![dup, id])?;
+                tx.execute(
+                    "UPDATE worktree SET project_id = ?2 WHERE project_id = ?1 AND state = 'removed'",
+                    params![dup, id],
+                )?;
+            }
+            for w in &r.worktrees {
+                tx.execute(
+                    "INSERT INTO worktree (id, project_id, name, path, branch, base, is_root, profile, state,
+                                           created_at, removed_at, last_used_at, title)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                     ON CONFLICT(id) DO UPDATE SET project_id = ?2, name = ?3, path = ?4, branch = ?5,
+                                                   state = ?9, last_used_at = ?12",
+                    params![
+                        w.id,
+                        w.project,
+                        w.name,
+                        w.path.to_string_lossy(),
+                        w.branch,
+                        w.base,
+                        i64::from(w.is_root),
+                        w.profile,
+                        w.state.label(),
+                        w.created_ms as i64,
+                        w.removed_ms.map(|m| m as i64),
+                        w.last_used_ms.map(|m| m as i64),
+                        w.title,
+                    ],
+                )?;
+            }
+            if let Some(dup) = &r.absorbed {
+                tx.execute("DELETE FROM project WHERE id = ?1", params![dup])?;
+            }
+            let p = &r.project;
+            tx.execute(
+                "UPDATE project SET root_path = ?2, default_branch = ?3, remote_url = ?4, profile = ?5,
+                                    last_used_at = ?6 WHERE id = ?1",
+                params![
+                    p.id,
+                    p.root.to_string_lossy(),
+                    p.default_branch,
+                    p.remote_url,
+                    p.pin,
+                    p.last_used_ms.map(|m| m as i64)
+                ],
+            )?;
+            tx.execute("DELETE FROM trust WHERE project_id = ?1", params![id])?;
+            for t in &r.trust {
+                tx.execute(
+                    "INSERT INTO trust (project_id, scope, fingerprint, approved_at) VALUES (?1, ?2, ?3, ?4)",
+                    params![id, t.scope, t.fingerprint, t.approved_ms as i64],
+                )?;
+            }
+            // `old` itself, or below it (never `old-2`): compared as text, so no LIKE escaping.
+            for (old, new) in &r.moves {
+                tx.execute(
+                    "UPDATE session SET cwd = ?2 || substr(cwd, length(?1) + 1)
+                     WHERE cwd = ?1 OR substr(cwd, 1, length(?1) + 1) = ?1 || '/'",
+                    params![old, new],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .await
     }
 
     /// Forget a project; its worktree rows and trust go with it (history stays in `session`).
@@ -1322,6 +1422,7 @@ mod tests {
             pin: Some("work".into()),
             created_ms: 1,
             last_used_ms: None,
+            moved_to: None,
         };
         s.save_project(p.clone());
         let ws = WorkspaceInfo {
