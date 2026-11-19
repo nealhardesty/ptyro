@@ -48,6 +48,7 @@ Conventions:
 | **WIN** | Windows and PowerShell | pwsh sessions as good as bash everywhere; WSL2 checked, bridged and doctored (done). `ptyro.exe` in Windows Terminal and the native daemon on ConPTY were built, then removed 2026-11-18 (owner): on Windows, ptyro runs inside WSL2 (RESEARCH DD3) |
 | **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (built 2026-11-04) |
 | **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
+| **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and (optionally) shell commands, searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest (decided 2026-11-19; open, SPEC §25) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -3833,6 +3834,175 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
+## KB — Knowledge base (decided 2026-11-19; open, nothing built)
+
+*Why:* the owner has long wanted one knowledge base around all of the work done with agents and
+the state of the projects: tracking, history, memory and ingest. Everything that happens in
+ptyro (agent sessions, chats, shells) and anything it is pointed at (`ptyro ingest folder/`)
+becomes searchable in one place, by the owner and by the agents. The design is SPEC §25; what
+other products do, and the project the owner pointed at (`willesq/orchestrator`, read from its
+code), are RESEARCH section I and R-KB-01…13. Builds on CHAT (the search stack: FTS5, the
+model2vec vectors, rank fusion, `ptyro mcp`, the profile wall, the fan-out to machines), M4 (the
+hook relay, which already carries `transcript_path`), SH and WIN1 (shells' command marks), CFG1
+(the settings schema) and MM1 (machines).
+
+Owner decisions (2026-11-19): a second contents database, `kb.db` (the metadata-only rule gets
+this second exception, in `AGENTS.md` and SPEC §14.2); no model call at ingest for now, allowed
+later; features the pare-down removed may come back where this needs them (reading the agents'
+transcripts, `ptyro mcp` in terminal sessions, notes); both consumers are first class, the owner
+searching and the agents recalling; shell output capture is optional and off by default; code in
+three tiers (paths and comments by default, full code on request and by words only); words and
+meaning search together, in SQLite.
+
+Settled the same day (SPEC §25.1): on by default, projects ingested by themselves, shell
+commands recorded (their output not); **a per-session private switch, in KB1**, shown where a
+session is created in all three clients (§25.7a); the names `recall`, `ingest`, `kb` and
+"Library"; notes in ptyro's data folder only, not in the repository.
+
+Every task below is done only when it works in the CLI, the TUI and the web, has its
+`docs/parity.md` rows, its `[kb]` settings schema entries, its `make` targets (named in README's
+Development section), its README and `docs/` text, and the milestone's version bump
+(`make bump`). Each stage is useful without the next.
+
+- [ ] **KB0 Spikes** — results into SPEC §20 and §25 before KB1 starts. **M**
+  - [ ] **KB0.1 Search at size** (`make spike-kb`, `crates/ptyro-store/examples/kb_spike.rs`):
+        500k and 1M synthetic chunks in the §25.4 schema; the cost of a search by words, by
+        meaning (unfiltered, then filtered by profile, project, kind and time from `chunk_vec`'s
+        own columns), and merged with `chat.db`'s lists; the file's size; an ingest's writer
+        time. If meaning misses 150 ms at 500k, measure §25.8's fallbacks in order (newest
+        first with an early stop, a one-bit sketch then rescoring) and write the chosen one into
+        §25.8. **S**
+  - [ ] **KB0.2 Transcripts, live** (`make verify-kb`, part 1): against the pinned Claude and
+        Codex, that `Stop` carries `transcript_path`, that the file has the turn when the hook
+        fires (or how long after), that a resumed conversation keeps its id and its file, and
+        what a compaction and a rewind leave in the file. Save real transcripts as fixtures. **S**
+  - [ ] **KB0.3 Tools in a terminal session** (`make verify-kb`, part 2): Claude with
+        `--mcp-config` beside the user's own servers, re-passed on resume, and `--allowedTools`
+        for three tools *adding* to the user's rules; Codex with `-c mcp_servers.ptyro.…`; the
+        tokens the three tools' descriptions and the server's `instructions` cost in each. Read
+        OpenCode's MCP configuration and session API from its docs (not a gate). **S**
+  - [ ] **KB0.4 The comment table**: the extension → comment-marks table of §25.6.3 run over
+        this repository and three others of other languages; count what whole-line-only keeps
+        and drops, and what the code-switched-off and licence rules catch. **S**
+- [ ] **KB1 A memory that fills itself** (R-KB-01, 02, 03, 05, 09, 10, 11) — the core: agent
+      sessions are ingested as they happen, and found by you and by your agents. **L**
+  - [ ] **KB1.1** `kb.db`: the schema of §25.4, `KbDb` and its writer thread, migrations and the
+        copy aside, `secure_delete`, "can't open" handling with the fix (as `chat.db`'s),
+        `doctor`'s line, `about`'s path, the uninstall plan. **M**
+  - [ ] **KB1.2** The way in (§25.5): gate, read from a cursor, redact, chunk, stamp, write; one
+        transaction an item; unchanged chunks keep their rows; the ingest actor and its queue,
+        low priority, rebuilt from the cursors after a restart and a live upgrade. **M**
+  - [ ] **KB1.3** Redaction (§25.7): the rules moved from `daemon/src/redact.rs` into
+        `ptyro_core::kb::redact` and grown (the profile's secret values, the credential shapes,
+        `kb.redact`), the 25-hit rule, the never list, the corpus test. Titles keep using it. **M**
+  - [ ] **KB1.4** Agent sessions (§25.6.1): `Adapter::transcript` and `read_transcript`; the
+        Claude and Codex parsers (CHAT5's import, from before `b80632f`, moved into
+        `ptyro-agents`); the triggers (`Stop`, `SessionEnd`, exit, daemon start); the card;
+        Claude's compaction summary as a `summary` chunk; rewinds; chat engines and one-shots
+        never ingested; an item for agents with no transcript. Fixtures and the fuzz target. **L**
+  - [ ] **KB1.5** Search (§25.8): the query's new words in `parse_query`; words in both files;
+        meaning in both (`meaning.rs` backfilling `chunk_vec` too, `fuse` over several lists);
+        the ranking; two hits an item and merged neighbours; `KbSearch`, `KbRead`, `KbRecent`;
+        `kb.meaning` with `chat.meaning` as its old name. **L**
+  - [ ] **KB1.6** The golden set (`make kb-eval`, `make kb-eval-real`; §25.16): the corpus, the
+        questions, the must-never rows, the committed numbers, the CI gate. Built with KB1.5,
+        not after it: the weights are set against it. **M**
+  - [ ] **KB1.7** The CLI: `recall`, `kb` (`status`), `kb show`, `kb recent`, `kb forget`
+        (§25.12: really deleted, a tombstone, the bytes test), `--json` for each. **M**
+  - [ ] **KB1.8** The TUI's Library (`C-q L`): Search with its filters and the history when
+        nothing is typed, the hit beside the list, the session reader, `⏎` opens the source, `r`
+        resumes a session, forget; the "history" entry in the session, worktree and project row
+        menus. **L**
+  - [ ] **KB1.9** The web's Library page: the same, its `ACTIONS`, the phone layout, the reader.
+        **L**
+  - [ ] **KB1.10** The agents' tools (§25.9): `recall` and `recall_read` in `ptyro mcp` with the
+        server's `instructions`; given to Claude and Codex terminal sessions (launch and every
+        resume) and to every chat (`chat_search`/`chat_read` as old names); the profile wall
+        (`kb.scope`, with `chat.history_scope` as its old name) and its test on every tool; the
+        fence and the provenance line; never the caller's own session. **M**
+  - [ ] **KB1.11** Settings and switches: the Knowledge section (`enabled`, `sessions`, `tools`,
+        `scope`, `meaning`, `retain_days`, `redact`, `exclude`), `[agents.X] kb`, the project's
+        `[kb] enabled`; the daily retention pass; switched off says so everywhere and offers to
+        switch on. **M**
+  - [ ] **KB1.14** Private sessions (§25.7a; R-KB-14): `new --private` and `shells new
+        --private`, `SpawnSpec.private` and `SessionInfo.private`, the column in `ptyro.db` (kept
+        across a restart, a resume, a daemon restart and a live upgrade; a clone is private),
+        the gate in the way in, `kb.private` as the default, **the Private switch in the TUI's
+        session and shell forms and the web's sheets**, the `◌` mark on rows, in `ls` and in
+        the pane's header, `kb forget <session>` switching it on, and the test that `kb.db`
+        holds no byte of one. **M**
+  - [ ] **KB1.12** Machines (§25.11): the search's fan-out and interleave, a hit read on its
+        machine, the profile by name across a link, the scopes on both ends. **M**
+  - [ ] **KB1.13** Docs: README (what it is, the three commands, what is and isn't stored, how
+        to switch it off), `docs/knowledge.md` (the long form: sources, privacy, the wall,
+        forgetting), `docs/commands.md`, `docs/keys.md`, `docs/config.md`, `docs/parity.md`.
+        **S**
+- [ ] **KB2 Notes** (R-KB-07; supersedes R-ORC-20's decisions log and R-CHAT-16) — what someone
+      wrote down, ranked first. **M**
+  - [ ] **KB2.1** Notes as files (§25.6.4): the folder per profile and project, the optional
+        header, the watcher, `kb sync` reading them, a note's item and chunks. **M**
+  - [ ] **KB2.2** `ptyro kb note` and `kb notes`; the Library's Notes tab in the TUI and the web
+        (new, edit in your editor or in the page, delete); the note form. **M**
+  - [ ] **KB2.3** `remember` for agents: the tool, `replaces` and `_old/`, the limits (8 KiB, 20
+        a session a day), `kb.remember`, the writer stamped by the daemon. **S**
+  - [ ] **KB2.4** Uninstall keeps the notes folder unless `--delete-notes`. **S**
+- [ ] **KB3 Ingest** (R-KB-04, 13) — the owner's `ptyro ingest newProjectFolder/`. **L**
+  - [ ] **KB3.1** Roots (§25.6.3): `ptyro ingest <path>` with every option, `kb ls`, `kb sync`,
+        `kb rm`; listing files through git or the walk; include, exclude, the never list, the
+        size and binary checks, the 50,000 cap; `KbIngest` with its plan, `KbProgress`. **M**
+  - [ ] **KB3.2** The four tiers: paths (with name parts), documents (heading paths), comments
+        (the table of KB0.4, its tests per language family), code (off; windows of 60 lines,
+        words only); `kb.comments`, `kb.code` and the project's own switches. **L**
+  - [ ] **KB3.3** Commits: `ptyro-git`'s log since a head, the first 5,000, then the new ones;
+        `kb.commits`. **S**
+  - [ ] **KB3.4** Projects by themselves (`kb.projects`): a project becomes a root when it is
+        registered and stops being one when it is removed; never a worktree. **S**
+  - [ ] **KB3.5** Staying current: the pass at daemon start, every `kb.sync_every`, and when an
+        agent's turn ends in the project (once in 5 minutes); stat first, then the hash; a
+        missing root; `gc` and mend name one that fails. **M**
+  - [ ] **KB3.6** The history backfill: `ptyro ingest --history` over each profile's Claude and
+        Codex folders, with its count before it reads and `--dry-run`. **M**
+  - [ ] **KB3.7** The Sources tab in the TUI and the web, and the ingest form (every option, the
+        machine pick). **M**
+- [ ] **KB4 Shells** (R-KB-08) — the debatable one, last and switchable. **M**
+  - [ ] **KB4.1** Commands (§25.6.5): from `SessionInfo.command` at `D`, an item per shell and
+        day, the skips, the count for repeats; `kb.shell`, `kb.shell_skip`. **S**
+  - [ ] **KB4.2** Output, off by default: the text between the marks, the head and the tail,
+        never an alternate-screen command or an unrecorded session, `kb.shell_output_days`; the
+        setting's help says it keeps what commands print. **M**
+- [ ] **KB5 Offered at the prompt** (R-KB-06) — off by default. **M**
+  - [ ] **KB5.1** (spike) A `UserPromptSubmit` hook's added context on the real Claude and
+        Codex, and what the user sees of it. **S**
+  - [ ] **KB5.2** The gates of §25.9 and the 150 ms cut-off; at most three dated pointers; the
+        golden set gains prompts that must offer nothing. `kb.inject`. **M**
+
+**Later, each with its own decision** (SPEC §25.18): a model-written digest and a lint of notes
+(R-KB-12; the owner allowed it for later); web pages, PDFs, issues and pull requests as sources;
+OpenCode's sessions and tools; sub-agents' transcripts and tool results; code by meaning;
+merging knowledge across machines (with CHAT6); export.
+
+**Done when (milestone):** on Linux and macOS, with nothing set up beyond `ptyro setup`:
+1. *(KB1)* A Claude session and a Codex session each finish a task. `C-q L` shows both in the
+   history; a search by a word of the task finds each, and by a paraphrase with meaning on;
+   `⏎` opens the transcript at the message and `r` resumes the session. A new session in the
+   same profile, asked "how did we do X last time", calls `recall` with no permission prompt and
+   answers from it; a session in another profile, asked the same, finds nothing. `ptyro kb
+   forget` of one makes it unfindable, and its text is in no byte of `kb.db`. A session
+   started with the form's Private switch on shows `◌`, can `recall`, and is in neither the
+   history nor any search afterwards.
+2. *(KB2)* An agent told "remember that we chose X because Y" writes a note; the file is in the
+   notes folder; the next session's `recall` returns it first; the owner edits it in an editor
+   and the change is found.
+3. *(KB3)* `ptyro ingest ~/some/folder` reads it and says what it read; a heading of one of its
+   documents, a comment in its code and a file name are each found from another project; a new
+   project registered in ptyro is searchable without a command; `ptyro ingest --history` brings
+   in last month's sessions.
+4. *(KB4)* With `kb.shell = "commands"`, "that long ffmpeg line" is found by a word of it; with
+   `"output"`, by a word it printed; with `"off"`, neither is stored.
+5. The same from the web on a phone, and a search from one machine finds a session on another.
+
+---
+
   only for projects the user trusted already.
 - **Editor integrations**: VS Code/Cursor/Zed "open in", plus a VS Code extension that
   shows ptyro sessions for the current folder.
