@@ -789,7 +789,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make catalog-fixtures` | re-record the version table's newest-version replies (npm registry, GitHub releases, Claude's feed, nodejs.org) as test fixtures, and print each newest version: a live check that every source still answers (needs the network; review the diff, then update the versions the test expects) |
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
-| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, QR codes, the setup checklist; needs Node) |
+| `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, keys exactly once over a lossy link, QR codes, the setup checklist; needs Node) |
 | `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, going offline. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |

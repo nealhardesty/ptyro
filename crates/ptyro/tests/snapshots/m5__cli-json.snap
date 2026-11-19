@@ -127,6 +127,7 @@ expression: "Value::Object(all)"
       "state": {
         "t": "string"
       },
+      "state_token": "string",
       "status": {
         "confidence": "string",
         "since_ms": "number",
@@ -242,6 +243,7 @@ expression: "Value::Object(all)"
       "state": {
         "t": "string"
       },
+      "state_token": "string",
       "status": {
         "confidence": "string",
         "since_ms": "number",

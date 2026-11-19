@@ -3,8 +3,9 @@
 // protocol (JSON encoding) over `ptyro serve`'s WebSocket, signed in with a device token from
 // `ptyro pair`. No dependencies, no third-party requests.
 import { Screen, modelLabel } from "./screen.js";
-import { conn, store, token } from "./conn.js";
+import { MAX_SEND, conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
+import { FEATURE, Outbox, lostTitle } from "./outbox.js";
 import { autoFocus, hardKey, ownKeyboard, strayKey } from "./keys.js";
 import { actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
@@ -145,6 +146,9 @@ async function refresh() {
         const r = await conn.request({ t: "list" });
         // A chat's engine belongs to its chat, not to the session list (SPEC §22.2).
         app.sessions = new Map(r.sessions.filter((s) => !s.chat).map((s) => [s.id, s]));
+        for (const s of app.sessions.values())
+            if (s.state_token)
+                tokens.set(s.id, s.state_token);
     }
     catch { /* reconnecting */ }
     render();
@@ -273,6 +277,39 @@ function whyNot(s) {
         return "Starting…";
     return "It has ended: restart it to type";
 }
+// ── every key exactly once (WEB2.3) ─────────────────────────────────────────────────────────
+/// Each session's outbox (`outbox.ts`): its keys numbered and kept until the daemon settles them.
+/// They live as long as the page, not the terminal, so keys still waiting when you leave a
+/// session's page are sent (or said) all the same.
+const outboxes = new Map();
+/// The newest state token seen for each session: a frame's or its info's, whichever came last.
+const tokens = new Map();
+function outboxOf(id) {
+    const had = outboxes.get(id);
+    if (had)
+        return had;
+    let timer = 0;
+    let lost = 0;
+    const o = new Outbox(id, {
+        send: (m) => conn.send(m),
+        now: () => performance.now(),
+        token: () => tokens.get(id) ?? app.sessions.get(id)?.state_token ?? null,
+        changed: () => {
+            if (shell?.id === id)
+                shell.term.showOutbox();
+            // Lost on another page: said there.
+            else if (o.lost.length && o.lost.length !== lost)
+                toast(`${app.sessions.get(id)?.name ?? "A session"}: ${lostTitle(o.lost[o.lost.length - 1])}`);
+            lost = o.lost.length;
+        },
+        check: () => conn.hurry(),
+        later: (ms) => { clearTimeout(timer); timer = window.setTimeout(() => o.tick(), ms); },
+    });
+    outboxes.set(id, o);
+    if (conn.state === "open")
+        o.connected(conn.features.includes(FEATURE));
+    return o;
+}
 // ── terminal first (WEB2.2): the terminal is where you type ────────────────────────────────
 /// A key was pressed outside any field since the page loaded: this device has a keyboard of its
 /// own (a phone with a Bluetooth keyboard, an iPad's), so the terminal may take the focus.
@@ -342,6 +379,9 @@ function sessionShell(id) {
     else
         app.drafts.delete(id); grow(); });
     let sending = false;
+    // The send's name (WEB2.3, `send_text.once`): the same text sent again after a dropped
+    // connection keeps it, so the daemon types it once whatever happened to the first.
+    let once = { text: "", name: "" };
     const sendBtn = h("button", { class: "send", title: tip("session.compose"), onclick: () => void send() }, "Send");
     const send = async () => {
         const text = draft.value;
@@ -354,7 +394,10 @@ function sessionShell(id) {
             sh.term.typist.interject();
             // The same request as the CLI's `ptyro send`: the daemon pastes a multi-line text (bracketed
             // when the program asked) and then presses Enter, as a key, after a pause.
-            await conn.request({ t: "send_text", addr: id, text, enter: true, wait_ready_ms: null });
+            if (once.text !== text)
+                once = { text, name: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` };
+            await conn.request({ t: "send_text", addr: id, text, enter: true, wait_ready_ms: null, once: once.name });
+            once = { text: "", name: "" };
             if (draft.value === text) {
                 draft.value = "";
                 app.drafts.delete(id);
@@ -363,7 +406,10 @@ function sessionShell(id) {
             }
         }
         catch (e) {
-            toast(e.message);
+            const code = e.code;
+            toast(code === "daemon_unavailable" || code === "timeout"
+                ? "Not sure it was sent: the connection dropped. Send it again: it won't be typed twice."
+                : conn.state !== "open" ? "Not sent: offline. It reconnects by itself; then send it." : e.message);
         }
         finally {
             sending = false;
@@ -388,10 +434,22 @@ function sessionShell(id) {
         screen: () => app.screens.get(id),
         canType: () => canType(id),
         send: (m) => conn.send(m),
+        input: (event) => {
+            // Too big for the server (H2.7): said, never kept to be sent again and again.
+            const n = JSON.stringify(event).length;
+            if (n > MAX_SEND / 4 && new TextEncoder().encode(JSON.stringify(event)).length > MAX_SEND - 4096) {
+                toast("Not sent: that paste is too large (over 4 MiB)");
+                return;
+            }
+            outboxOf(id).type(event);
+        },
+        outbox: () => outboxOf(id),
         request: (r) => conn.request(r),
         toast,
         changed: render,
     });
+    // Keys still waiting from before, or ones that weren't sent, show on it at once.
+    term.showOutbox();
     // What its keys do, as this device has them (a phone's keyboard has no Shift+Enter or Esc).
     const hint = h("p", { class: "compose-hint" }, coarse()
         ? "⏎ sends. Dictate here (the keyboard's mic, Superwhisper), read it over, then send; a dictated new line stays a new line. ✕ keeps the draft."
@@ -612,7 +670,19 @@ async function syncPush() {
 }
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
 conn.listeners.add((msg) => {
+    if (msg.t === "disconnected") {
+        for (const o of outboxes.values())
+            o.disconnected();
+        return;
+    }
+    if (msg.t === "typed") {
+        outboxes.get(msg.session)?.typed(msg);
+        return;
+    }
     if (msg.t === "connected") {
+        // What waited to be typed goes first (WEB2.3), numbered as before.
+        for (const o of outboxes.values())
+            o.connected(conn.features.includes(FEATURE));
         // A fresh connection (start-up, reconnect, live upgrade) has no subscriptions: renew the
         // live view's, from a clean screen.
         if (app.viewing) {
@@ -630,6 +700,8 @@ conn.listeners.add((msg) => {
     }
     if (msg.t === "screen") {
         const f = msg.frame;
+        if (f.state_token)
+            tokens.set(f.session, f.state_token);
         const s = app.screens.get(f.session);
         if (s) {
             s.apply(f);
@@ -659,6 +731,8 @@ conn.listeners.add((msg) => {
             return;
         if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {
             app.sessions.set(e.info.id, e.info);
+            if (e.info.state_token)
+                tokens.set(e.info.id, e.info.state_token);
             if (e.t === "session_restarted" && e.info.id === app.viewing) {
                 app.viewing = null;
             }

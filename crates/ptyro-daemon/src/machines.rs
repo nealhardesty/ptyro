@@ -1481,6 +1481,7 @@ mod tests {
             text: "laptop2: keep this".into(),
             enter: true,
             wait_ready_ms: None,
+            once: None,
         };
         let mut v = serde_json::to_value(&req).unwrap();
         strip_value(&mut v, "laptop2");

@@ -218,6 +218,12 @@ pub struct SessionInfo {
     /// Its window's layout, when the window has more than one pane (every pane carries it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<crate::window::WindowLayout>,
+    /// What it waits for, as a token (1.52, WEB2.3): its process, the program in the terminal's
+    /// foreground, the alternate screen, and its status with when that began. Keys a web client
+    /// typed while offline are replayed only while the token is still the one it saw (SPEC §16.4
+    /// WEB1.8, "Every key exactly once"). Opaque: compare it, nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_token: Option<String>,
 }
 
 /// A SHELLS shell's label (SPEC §23.4), the same in the TUI, the CLI and the web: its title,

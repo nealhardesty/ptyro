@@ -2678,7 +2678,13 @@ Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`).
   phone, ✎ compose replaces the reply box (`session.compose`); e2e `terminalFirst`, `typePhone`.
   SPEC §16.4 WEB1.8 "Terminal first".)* On the session page the terminal takes the keys (focused on
   open with a hardware keyboard); the reply box becomes ✎ compose, for long prompts and dictation.
-- [ ] **WEB2.3 Every key exactly once** — M. Protocol: input batches carry a sequence, the daemon
+- [x] **WEB2.3 Every key exactly once** — M. *(Built 2026-11-19: protocol 1.52 `Keys`/`Typed`,
+  numbered per page and session, typed at most once per device and stream (`typed.rs`, carried
+  across live upgrades); "N keys waiting" while offline; a replay typed only within 5 s and while
+  the session's `state_token` is unchanged, else none of it, said, with Show / Type them now;
+  compose's `send_text.once`. `web/test/outbox.mjs` (10 000 random lossy runs),
+  `crates/ptyro/tests/web2.rs`, e2e `exactlyOnce`. SPEC §16.4 WEB1.8 "Every key exactly once".)*
+  Protocol: input batches carry a sequence, the daemon
   acks and drops duplicates per device and session; keys typed while reconnecting wait as
   "pending" and are replayed only after a short gap with no change in what the session is waiting
   for, else dropped and said.

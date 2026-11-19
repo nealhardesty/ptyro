@@ -99,6 +99,8 @@ pub struct Daemon {
     pub(crate) io: crate::session::IoControl,
     /// Some(reason): connections say goodbye and close (an upgrade).
     pub(crate) goodbye: watch::Sender<Option<String>>,
+    /// Named sends (`SendText.once`, WEB2.3): a retry types nothing twice.
+    pub(crate) sends: Mutex<crate::typed::Sends>,
     pub generation: AtomicU32,
     pub(crate) listener_fd: std::sync::atomic::AtomicI32,
     pub(crate) foreground: std::sync::atomic::AtomicBool,
@@ -225,6 +227,7 @@ impl Daemon {
                 parked: Arc::new(AtomicU64::new(0)),
             },
             goodbye: watch::Sender::new(None),
+            sends: Mutex::new(crate::typed::Sends::default()),
             generation: AtomicU32::new(0),
             listener_fd: std::sync::atomic::AtomicI32::new(-1),
             foreground: std::sync::atomic::AtomicBool::new(false),
@@ -330,6 +333,7 @@ impl Daemon {
         if let Some(f) = image.focused.as_deref().and_then(|f| f.parse().ok()) {
             self.set_focused(f);
         }
+        *self.sends.locked() = crate::typed::Sends::from_image(std::mem::take(&mut image.sends));
         for (s, port, password) in std::mem::take(&mut image.sidecars) {
             if let Some(sess) = s.parse().ok().and_then(|i| self.session(i)).filter(|x| x.is_live())
             {
@@ -1255,22 +1259,38 @@ impl Daemon {
                 s.send_bytes(&bytes).await;
                 Ok(Reply::Done)
             }
-            Request::SendText { addr, text, enter, wait_ready_ms } => {
+            Request::SendText { addr, text, enter, wait_ready_ms, once } => {
                 let s = self.resolve(&addr)?;
                 if !s.is_live() {
                     return Err(Error::conflict("session has exited"));
                 }
-                match wait_ready_ms {
-                    Some(t) => self.send_when_ready(&s, &text, enter, t).await?,
-                    None => {
-                        s.send_text(&text, enter).await;
-                        if enter {
-                            s.meta
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .last_prompt_ms = Some(now_ms());
+                let send = || async {
+                    match wait_ready_ms {
+                        Some(t) => self.send_when_ready(&s, &text, enter, t).await?,
+                        None => {
+                            s.send_text(&text, enter).await;
+                            if enter {
+                                s.meta
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .last_prompt_ms = Some(now_ms());
+                            }
                         }
                     }
+                    Ok(())
+                };
+                match once.filter(|n| !n.is_empty() && n.len() <= 128) {
+                    // Named (WEB2.3): a retry of a send that went (or is going) types nothing.
+                    Some(name) => {
+                        let key = (caller.grant.map(|g| g.device), s.id.full(), name);
+                        let cell = self.sends.locked().cell(key.clone(), now_ms());
+                        let r = cell.get_or_init(send).await.clone();
+                        if r.is_err() {
+                            self.sends.locked().forget(&key, &cell);
+                        }
+                        r?;
+                    }
+                    None => send().await?,
                 }
                 Ok(Reply::Done)
             }

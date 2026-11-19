@@ -369,6 +369,52 @@ const scenarios = {
   },
 
   // The server goes away: the app says so, then comes back by itself and still works.
+  // Every key exactly once (WEB2.3): the server goes away mid-typing; keys typed meanwhile wait,
+  // shown as waiting, and land once when it is back. Then the session changes while the server
+  // is away (a command starts in its shell): the keys typed meanwhile aren't sent, the page says
+  // why, shows them, and "Type them now" types them on purpose.
+  async exactlyOnce() {
+    ptyro("new", "-d", "-n", "once", "--", "env", "PS1=$ ", "sh");
+    const s = await until("the shell", () => find("once"));
+    await fresh(`#/s/${s.id}`);
+    const lines = () => ptyro("read", "once").split("\n").map((l) => l.trimEnd());
+    const has = (t) => lines().filter((l) => l.includes(t)).length;
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    await tab.waitFor("the terminal to take the keys", focused, 10_000);
+    await until("the shell's prompt", () => lines().some((l) => /[$#]$/.test(l)), 10_000);
+    await tab.type("echo on");
+    await until("keys typed live", () => has("echo on") === 1, 10_000);
+    await hostOp("down");
+    await tab.waitFor("the page to know it is offline", `!!document.querySelector(".offline")`, 30_000);
+    await tab.type("e-");
+    await tab.enter();
+    await tab.waitFor("the keys shown as waiting", `!document.querySelector(".term-wait").hidden && /3 keys waiting/.test(document.querySelector(".term-wait").textContent)`, 5000);
+    await hostOp("up");
+    // ("echo on", then "e-⏎" while away: `echo one-`, echoed once and printed once.)
+    await until("the offline keys, typed once", () => has("one-") === 2, 20_000);
+    await tab.waitFor("nothing left waiting", `document.querySelector(".term-wait").hidden && document.querySelector(".term-lost").hidden`, 10_000);
+    await sleep(800);
+    if (has("echo one-") !== 1 || has("one-") !== 2) throw new Error(`keys typed more than once: ${JSON.stringify(lines().filter(Boolean).slice(-6))}`);
+
+    // The session changes while the server is away: what is typed meanwhile isn't sent.
+    await hostOp("down");
+    await tab.waitFor("offline again", `!!document.querySelector(".offline")`, 30_000);
+    ptyro("send", "once", "sleep 2");
+    await sleep(300);
+    await tab.type("echo late");
+    await tab.enter();
+    await hostOp("up");
+    await tab.waitFor("the page to say the keys weren't sent, and why", `!document.querySelector(".term-lost").hidden && /10 keys weren't sent: the session changed/.test(document.querySelector(".term-lost").textContent)`, 20_000);
+    await sleep(2500); // sleep 2 is over
+    if (has("echo late")) throw new Error(`refused keys were typed: ${JSON.stringify(lines().filter(Boolean).slice(-6))}`);
+    await tab.eval(`[...document.querySelectorAll(".term-lost button")].find(b => b.textContent === "Show").click()`);
+    await tab.waitFor("the keys, readable", `document.querySelector("pre.lost-keys")?.textContent === ${JSON.stringify("echo late⏎\n")}`);
+    await tab.eval(`[...document.querySelectorAll(".sheet button")].find(b => b.textContent === "Type them now").click()`);
+    await until("the keys typed on purpose", () => has("late") >= 2 && lines().some((l) => l.trim() === "late"), 10_000);
+    await tab.waitFor("the notice gone", `document.querySelector(".term-lost").hidden && !document.querySelector(".sheet")`);
+    ptyro("kill", "once");
+  },
+
   async offline() {
     await fresh("#/");
     await tab.waitFor("a card", `!!document.querySelector("a.card")`);

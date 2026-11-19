@@ -61,6 +61,10 @@ pub struct Image {
     /// The watchdog's running totals (bytes read, frames sent, crashes), so they span upgrades.
     #[serde(default)]
     pub counters: [u64; 3],
+    /// Named sends that went (`SendText.once`, WEB2.3): (device, session, name, when), so a
+    /// retry to the next image types nothing twice.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<(Option<u64>, String, String, u64)>,
 }
 
 /// What the new image got from the old one.
@@ -340,6 +344,7 @@ impl Daemon {
                 .collect(),
             written_ms: now_ms(),
             counters: crate::watchdog::counters(),
+            sends: self.sends.locked().image(),
         };
         let bytes = rmp_serde::to_vec_named(&image).map_err(std::io::Error::other)?;
         let fd = ptyro_pty::handoff::image_file(&self.paths.state, &bytes)?;
@@ -477,6 +482,7 @@ mod tests {
             stale_after_ms: 30_000,
             engine_clocks: [Some(1), None, Some(3)],
             structured: None,
+            typed: crate::typed::StreamsImage::default(),
         };
         Image {
             version: IMAGE_VERSION,
@@ -491,6 +497,7 @@ mod tests {
             sidecars: vec![("0190aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee".into(), 4096, "pw".into())],
             written_ms: 1_700_000_001_000,
             counters: [10, 20, 1],
+            sends: vec![],
         }
     }
 

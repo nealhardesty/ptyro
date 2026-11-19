@@ -336,6 +336,7 @@ async fn an_agent_started_by_hand_in_a_shell_reports_idle_blocked_and_working() 
                 text: text.into(),
                 enter: true,
                 wait_ready_ms: None,
+                once: None,
             })
             .await
             .unwrap();
@@ -847,6 +848,7 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
         text: format!("printf '\\033]7501;state={state}:id=tool\\007'"),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     };
     c.request(report("error")).await.unwrap();
     let s = wait_for(&c, &shell.name, "errored", |s| {
@@ -863,6 +865,7 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
         text: text.into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     };
     c.request(send("sleep 30")).await.unwrap();
     wait_for(&c, &shell.name, "sleep in the foreground", |s| {
@@ -891,6 +894,7 @@ async fn a_quick_terminal_is_one_per_worktree_quiet_and_goes_with_it() {
         text: "exit".into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     })
     .await
     .unwrap();

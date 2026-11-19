@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 51 };
+pub const PROTO: Version = Version { major: 1, minor: 52 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -320,6 +320,11 @@ pub enum Request {
         /// comes once it was typed, or `timeout` (SPEC §8.2 readiness).
         #[serde(default)]
         wait_ready_ms: Option<u64>,
+        /// The client's name for this send (1.52, WEB2.3): the same name again from the same
+        /// device within ten minutes is answered as the first was, and nothing is typed twice
+        /// (a retry after the connection dropped).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        once: Option<String>,
     },
     ReadScreen {
         addr: String,
@@ -1541,6 +1546,20 @@ pub enum ClientMsg {
         session: SessionId,
         event: InputEvent,
     },
+    /// Keys exactly once (1.52, WEB2.3; sent only to a daemon whose `Welcome` lists
+    /// [`FEATURE_INPUT_SEQ`]): input numbered within a client's `stream` (one per page and
+    /// session, from 1, kept across reconnects), so the daemon types each number at most once and
+    /// says how far it got (`ServerMsg::Typed`). `replay`: keys sent again after a reconnect or
+    /// an unanswered wait; the daemon types those it hasn't seen only if the first was typed at
+    /// most [`REPLAY_WINDOW_MS`] ago and every one carries the session's `state_token` as it is
+    /// now, else it refuses them all (SPEC §16.4 WEB1.8, "Every key exactly once").
+    Keys {
+        session: SessionId,
+        stream: String,
+        keys: Vec<SeqKey>,
+        #[serde(default)]
+        replay: bool,
+    },
     /// Honoured only from the controller.
     Resize {
         session: SessionId,
@@ -1565,6 +1584,69 @@ pub enum ClientMsg {
     },
 }
 
+/// One numbered input event of a [`ClientMsg::Keys`] (1.52).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeqKey {
+    /// Its number in its stream: from 1, one more for each event.
+    pub n: u64,
+    pub event: InputEvent,
+    /// A replay's: the session's `state_token` the client had when this was typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// A replay's: how long ago it was typed, in ms.
+    #[serde(default)]
+    pub age_ms: u64,
+}
+
+/// A replay waits at most this long (from its first key being typed) to be typed: older keys are
+/// refused (1.52, WEB2.3), whatever the session.
+pub const REPLAY_WINDOW_MS: u64 = 5_000;
+/// The most events one [`ClientMsg::Keys`] may carry.
+pub const MAX_SEQ_KEYS: usize = 4_096;
+/// The feature a client lists in its `Hello` to number its input, and the daemon lists back
+/// when it can (1.52).
+pub const FEATURE_INPUT_SEQ: &str = "input_seq";
+
+/// A stream's name: 1 to 64 of `A-Z a-z 0-9 - _`.
+pub fn valid_stream(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// Why keys of a [`ClientMsg::Keys`] weren't typed (1.52).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefusedWhy {
+    /// A replay: what the session waits for changed since they were typed.
+    Changed,
+    /// A replay: the first was typed more than [`REPLAY_WINDOW_MS`] ago.
+    Stale,
+    /// A replay: the daemon can't tell whether they were typed already (it lost track of the
+    /// stream), or the session's machine runs a ptyro that can't check.
+    Unknown,
+    /// This device may only watch.
+    Scope,
+    /// The session isn't running (or is a lifecycle script, which is read-only).
+    Ended,
+    /// The session's machine is offline.
+    Offline,
+    /// Malformed: a bad stream name, numbers not rising, too many.
+    Invalid,
+    /// A reason a later daemon has.
+    #[serde(other)]
+    Other,
+}
+
+/// Keys `from..=to` of a stream were not typed and never will be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Refused {
+    pub from: u64,
+    pub to: u64,
+    pub why: RefusedWhy,
+    /// For people.
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScreenFrame {
     pub session: SessionId,
@@ -1573,6 +1655,9 @@ pub struct ScreenFrame {
     /// Discard the cache (and style table) first.
     pub keyframe: bool,
     pub delta: ScreenDelta,
+    /// The session's `state_token` as this frame was made (1.52; `SessionInfo::state_token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1787,6 +1872,16 @@ pub enum ServerMsg {
         reset: bool,
         items: Vec<ptyro_core::chat::ChatItem>,
     },
+    /// Keys of a `stream` (1.52, `ClientMsg::Keys`): every number up to `upto` is settled (typed,
+    /// or refused), and `refused` says which weren't typed, and why: this message's, and those
+    /// of keys it brought again (that answer may have been lost with its connection).
+    Typed {
+        session: SessionId,
+        stream: String,
+        upto: u64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        refused: Vec<Refused>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1937,6 +2032,60 @@ mod tests {
             size: Some(TermSize::new(80, 24)),
             control: true,
         });
+        round_trip(ClientMsg::Keys {
+            session: id,
+            stream: "a-1_B".into(),
+            keys: vec![
+                SeqKey {
+                    n: 4,
+                    event: InputEvent::Paste { text: "y".into() },
+                    token: Some("t".into()),
+                    age_ms: 1200,
+                },
+                SeqKey {
+                    n: 5,
+                    event: InputEvent::Key { key: KeyEvent::new(KeyCode::Enter, Mods(0)) },
+                    token: None,
+                    age_ms: 0,
+                },
+            ],
+            replay: true,
+        });
+    }
+
+    /// The web app's shapes (JSON, fields left out) read; what 1.51 sent still reads the same.
+    #[test]
+    fn numbered_keys_read_as_the_web_app_sends_them() {
+        let id = SessionId::new();
+        let j = format!(
+            r#"{{"t":"keys","session":"{id}","stream":"x","keys":[{{"n":1,"event":{{"t":"paste","text":"hi"}}}}]}}"#
+        );
+        let (m, _): (ClientMsg, _) = decode(j.as_bytes()).unwrap();
+        let ClientMsg::Keys { keys, replay, .. } = m else { panic!("{m:?}") };
+        assert!(!replay);
+        assert_eq!((keys[0].n, keys[0].token.as_deref(), keys[0].age_ms), (1, None, 0));
+        // A frame and a send without the 1.52 fields.
+        let j = format!(
+            r#"{{"t":"screen","frame":{{"session":"{id}","seq":1,"keyframe":true,"delta":{{"rows":[],"styles":[]}}}}}}"#
+        );
+        let (m, _): (ServerMsg, _) = decode(j.as_bytes()).unwrap();
+        assert!(matches!(m, ServerMsg::Screen { frame } if frame.state_token.is_none()));
+        let (m, _): (Request, _) =
+            decode(br#"{"t":"send_text","addr":"a","text":"x","enter":true}"#).unwrap();
+        assert!(matches!(m, Request::SendText { once: None, .. }));
+        // A reason from a later daemon still reads.
+        let r: Refused =
+            serde_json::from_str(r#"{"from":1,"to":2,"why":"brand_new","reason":"r"}"#).unwrap();
+        assert_eq!(r.why, RefusedWhy::Other);
+    }
+
+    #[test]
+    fn stream_names_are_short_and_plain() {
+        assert!(valid_stream("Ab-9_z"));
+        assert!(valid_stream(&"a".repeat(64)));
+        for bad in ["", "a b", "é", "a/b", &"a".repeat(65)] {
+            assert!(!valid_stream(bad), "{bad:?}");
+        }
     }
 
     #[test]
@@ -1966,7 +2115,25 @@ mod tests {
                     title: Some(String::new()),
                     ..ScreenDelta::default()
                 },
+                state_token: Some("00ff00ff00ff00ff".into()),
             },
+        });
+        round_trip(ServerMsg::Typed {
+            session: SessionId::new(),
+            stream: "s1".into(),
+            upto: 9,
+            refused: vec![Refused {
+                from: 7,
+                to: 9,
+                why: RefusedWhy::Changed,
+                reason: "it asked something new".into(),
+            }],
+        });
+        round_trip(ServerMsg::Typed {
+            session: SessionId::new(),
+            stream: "s1".into(),
+            upto: 3,
+            refused: vec![],
         });
         round_trip(ServerMsg::Response {
             id: 1,

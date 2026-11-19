@@ -5367,6 +5367,7 @@ impl App {
                         enter: true,
                         // Each gets it once it's ready (never typed into a dialog).
                         wait_ready_ms: Some(120_000),
+                        once: None,
                     };
                     self.request(Pending::Done(String::new()), req);
                 }
@@ -6096,6 +6097,7 @@ impl App {
                         text: reply,
                         enter: true,
                         wait_ready_ms: None,
+                        once: None,
                     },
                 );
                 self.request(

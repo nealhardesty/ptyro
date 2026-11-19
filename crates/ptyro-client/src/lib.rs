@@ -119,6 +119,8 @@ pub struct Client {
     pub daemon_version: String,
     /// What the daemon's machine calls itself (`Welcome.machine`).
     pub machine: Option<String>,
+    /// The features the daemon agreed to (`Welcome.features`): `zstd`, `input_seq` (1.52).
+    pub features: Vec<String>,
     tx: mpsc::UnboundedSender<ClientMsg>,
     pending: Pending,
     next_id: AtomicU32,
@@ -224,10 +226,14 @@ impl Client {
                 token: opts.token.clone(),
                 via: via.clone(),
             },
-            features: if opts.compress || via.as_deref().is_some_and(|v| v.starts_with("ssh://")) {
-                vec![ptyro_protocol::FEATURE_ZSTD.into()]
-            } else {
-                vec![]
+            features: {
+                // Numbered input is asked for always (1.52): it only says whether the daemon has
+                // it (a daemon mirroring another machine forwards a web client's keys by it).
+                let mut f = vec![ptyro_protocol::FEATURE_INPUT_SEQ.to_owned()];
+                if opts.compress || via.as_deref().is_some_and(|v| v.starts_with("ssh://")) {
+                    f.push(ptyro_protocol::FEATURE_ZSTD.into());
+                }
+                f
             },
         };
         let bytes =
@@ -239,9 +245,9 @@ impl Client {
             .ok_or_else(|| ClientError::Unavailable("daemon closed the connection".into()))??;
         let (msg, _) =
             decode::<ServerMsg>(&reply).map_err(|e| ClientError::Protocol(e.to_string()))?;
-        let (id, daemon_version, machine) = match msg {
-            ServerMsg::Welcome { client_id, daemon_version, machine, .. } => {
-                (client_id, daemon_version, machine)
+        let (id, daemon_version, machine, features) = match msg {
+            ServerMsg::Welcome { client_id, daemon_version, machine, features, .. } => {
+                (client_id, daemon_version, machine, features)
             }
             ServerMsg::Reject { reason, daemon_version } => {
                 return Err(ClientError::Rejected(format!(
@@ -322,6 +328,7 @@ impl Client {
             id,
             daemon_version,
             machine,
+            features,
             tx,
             pending,
             next_id: AtomicU32::new(1),

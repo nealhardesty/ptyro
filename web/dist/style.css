@@ -84,6 +84,12 @@ canvas.term { display: block; touch-action: none; user-select: none; -webkit-use
 .term-sel button { padding: 6px 14px; }
 .term-sel .primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
 .term-badge { position: absolute; right: 12px; top: 8px; z-index: 3; font-size: 12px; padding: 2px 9px; border-radius: 10px; background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); color: var(--muted); pointer-events: none; }
+/* Keys waiting to be sent (WEB2.3): small, at the bottom left; and keys that weren't, said at the top. */
+.term-wait { position: absolute; left: 10px; bottom: 10px; z-index: 3; max-width: calc(100% - 20px); font-size: 12px; padding: 2px 10px; border-radius: 10px; background: color-mix(in srgb, var(--panel) 92%, transparent); border: 1px dashed var(--warn); color: var(--warn); pointer-events: none; }
+.term-lost { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 4; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; font-size: 13px; background: var(--panel); border: 1px solid var(--warn); border-left-width: 4px; border-radius: 10px; box-shadow: 0 4px 16px #0007; }
+.term-lost .t { flex: 1; min-width: 0; }
+.term-lost .x { flex: none; padding: 0 8px; border: 0; background: transparent; color: var(--muted); }
+pre.lost-keys { white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow: auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 /* Typing on a phone: the page fits above its keyboard. (On a computer the terminal has the keys
    whenever the page is open, so the page stays as it is: nothing moves when the focus does.) */
 @media (pointer: coarse) { body.typing .session { height: var(--vvh, 100dvh); min-height: 0; } }

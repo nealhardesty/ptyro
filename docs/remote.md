@@ -334,6 +334,17 @@ program wants it (hold Shift to select instead).
   hold, then drag. The bar copies, selects everything, opens a link, or steps through find
   results. A program that copies to the clipboard (OSC 52) puts it on yours, or offers a Copy
   button when the browser wants a tap.
+- **Every key exactly once.** If the connection drops while you type (Wi-Fi to cellular, the
+  screen locked, the server or the daemon restarting), what you type meanwhile waits, and the
+  screen says "3 keys waiting". When the connection is back they go, each exactly once, even if
+  some had already arrived. They go only if you were away at most 5 seconds and nothing changed in
+  the session meanwhile: no new question or permission prompt, no command started or finished, the
+  same program on the screen. Otherwise none of them is typed (a `y⏎` meant for one question never
+  answers the next), and the screen says so: "4 keys weren't sent: the session changed while you
+  were away". **Show** lists them (⏎ is Enter, ⌫ Backspace, ^C Ctrl-C) to copy, or to type again
+  on purpose once you have looked. ✎ Compose is safe to send again too: if the connection dropped
+  mid-send, the page says it isn't sure it was sent, and sending again never types it twice.
+  (An older ptyro, before protocol 1.52, can't check this: keys typed offline are dropped and said, as before.)
 - **Below `control`** the screen is still live and you can scroll, select and copy, but nothing
   you type reaches the session.
 
@@ -377,6 +388,7 @@ through their protocol for a chat's agent.
 | The pairing link read off a screen, scrollback or recording | It is a code, not the token: claimed once, within 10 minutes, then worthless. `ptyro pair` reports who claimed it and from where; failed claims count toward the lockout. During those minutes it *is* a credential, so prefer a plain terminal. |
 | Token guessing | 256-bit tokens and codes; 10 failed logins or pairing claims from one address lock it out for 10 minutes, at most 4 logins from one address are in flight at once, and the server takes at most 256 connections. |
 | A stale notification or link approving a newer prompt | Every answer names the prompt it was shown (its `since`); if the agent asks something else by then, the answer is refused ("that prompt changed") instead of approving it. Approve/deny links carry it too. |
+| Keys typed while offline answering a prompt that appeared meanwhile, or typed twice | Keys are numbered: the daemon types each number at most once. Keys sent again after a reconnect carry what the session was waiting for when they were typed; the daemon types them only within 5 seconds and if that is still so, else none of them, and the page says so. Numbering changes nothing about who may type: every message is checked against the device's scope. |
 | A paired phone changing the machine | The config file, profiles, the login service, and the daemon's restart need a `full` device (`POST /api/host` checks that with the daemon, which is the authority on scopes). A `control` device can type, answer and stop what it started; it can't start any command, write the config or pair a device. |
 | A lost phone | `ptyro devices revoke ID`: immediate, and live connections close. |
 | A browser posing as a local client | The server rewrites every Hello to `kind: web` with its real origin; the daemon holds web clients to their device's scope. |

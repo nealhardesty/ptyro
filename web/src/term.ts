@@ -12,6 +12,8 @@ import { ordered } from "./grid.js";
 import { MOD, MOUSE, Sticky, Typist, keyInput, mouseInput, pasteInput } from "./keys.js";
 import type { Hold, KeyCode, KeyEvent } from "./keys.js";
 import { actions, form, h, menu, sheet } from "./kit.js";
+import { describe, lostTitle } from "./outbox.js";
+import type { Outbox } from "./outbox.js";
 import type { Item, Sheet } from "./kit.js";
 import type { Cell, Cursor, Screen, Style } from "./screen.js";
 
@@ -30,6 +32,7 @@ const ACTIONS = {
   "term.zoom": "Zoom the text: pinch (or Ctrl and the wheel); tap with two fingers to switch between fitting the width and full size",
   "term.find": "Find text in the session's history and screen; ↑ and ↓ go to the previous and next",
   "term.link": "Open the link under the pointer (Ctrl or Cmd and click, or select it and tap Open)",
+  "term.waiting": "Keys typed while the connection is down wait here and go once it is back, each exactly once; if it was down more than 5 seconds, or the session changed meanwhile (a new question, a command started or finished), they are not sent and you are told, with a way to see them and type them again",
 } as const;
 export const tip = actions(ACTIONS);
 
@@ -46,6 +49,11 @@ export interface Host {
   /// This device may type into the session (scope `control` or more, and it is running).
   canType(): boolean;
   send(msg: object): void;
+  /// An input event for the session: numbered, kept until it is settled, sent again after a
+  /// reconnect (WEB2.3, `outbox.ts`).
+  input(event: object): void;
+  /// Its keys waiting to be sent, and those that weren't.
+  outbox(): Outbox;
   request(req: object): Promise<any>;
   toast(text: string): void;
   /// The page's own lines changed (the pill, ⌨ Type, ✎ compose): draw it again.
@@ -65,6 +73,10 @@ export class Term {
   private live: HTMLButtonElement;
   private bar: HTMLElement;
   private badge: HTMLElement;
+  /// Keys waiting to be sent, and the last that weren't (WEB2.3).
+  private waitEl: HTMLElement;
+  private lostEl: HTMLElement;
+  private lostText: HTMLElement;
   readonly sticky = new Sticky();
   private stickyBtns = new Map<number, HTMLElement>();
 
@@ -133,7 +145,15 @@ export class Term {
     this.bar.hidden = true;
     this.badge = h("div", { class: "term-badge" });
     this.badge.hidden = true;
-    this.el = h("div", { class: "term-box" }, this.wrap, this.input, this.pending, this.live, this.bar, this.badge);
+    this.waitEl = h("div", { class: "term-wait", role: "status", "aria-live": "polite", title: tip("term.waiting") });
+    this.waitEl.hidden = true;
+    this.lostText = h("span", { class: "t" });
+    const keep = (e: Event) => e.preventDefault();
+    this.lostEl = h("div", { class: "term-lost", role: "alert" }, this.lostText,
+      h("button", { class: "small", onpointerdown: keep, onclick: () => this.showLost() }, "Show"),
+      h("button", { class: "x", "aria-label": "Dismiss", title: "Dismiss", onpointerdown: keep, onclick: () => { this.host.outbox().dismiss(); this.focus(); } }, "✕"));
+    this.lostEl.hidden = true;
+    this.el = h("div", { class: "term-box" }, this.wrap, this.input, this.pending, this.live, this.bar, this.badge, this.waitEl, this.lostEl);
     if (store.get("debug", "") || (() => { try { return localStorage.getItem("ptyro.debug"); } catch { return null; } })()) (window as unknown as { ptyroTerm?: Term }).ptyroTerm = this;
     this.keybar = this.buildKeybar();
     this.selectionBar();
@@ -329,7 +349,7 @@ export class Term {
       // A full-screen program has no scrollback of its own to show: the wheel is its.
       if (s.modes.mouse && this.mouseApp && this.host.canType()) {
         const at = { col: Math.floor(s.size.cols / 2), row: Math.floor(s.size.rows / 2) };
-        for (let i = 0; i < Math.abs(rows); i++) this.host.send({ t: "input", session: this.host.id(), event: mouseInput(rows < 0 ? MOUSE.scrollUp : MOUSE.scrollDown, at.col, at.row) });
+        for (let i = 0; i < Math.abs(rows); i++) this.host.input(mouseInput(rows < 0 ? MOUSE.scrollUp : MOUSE.scrollDown, at.col, at.row));
       } else if (this.host.canType()) {
         for (let i = 0; i < Math.abs(rows); i++) this.key({ code: { t: rows < 0 ? "up" : "down" }, mods: 0 }, false);
       }
@@ -457,7 +477,52 @@ export class Term {
   // ── typing ───────────────────────────────────────────────────────────────────────────────
 
   private sendInput(event: object): void {
-    this.host.send({ t: "input", session: this.host.id(), event });
+    this.host.input(event);
+  }
+
+  // ── keys waiting, and keys not sent (WEB2.3) ──────────────────────────────────────────────
+
+  /// Draw what the outbox holds: "3 keys waiting" while keys wait (offline, or unanswered for a
+  /// moment), and the last keys that weren't sent, with why, Show and ✕.
+  showOutbox(): void {
+    const o = this.host.outbox();
+    const n = o.waiting;
+    const show = o.shown;
+    this.waitEl.hidden = !show;
+    if (show) {
+      const text = `${n} ${n === 1 ? "key" : "keys"} waiting${o.online ? "…" : " · offline: sent when it's back, if nothing changed"}`;
+      if (this.waitEl.textContent !== text) this.waitEl.textContent = text;
+    }
+    const l = o.lost[o.lost.length - 1];
+    this.lostEl.hidden = !l;
+    if (l) {
+      const title = lostTitle(l);
+      if (this.lostText.textContent !== title) this.lostText.textContent = title;
+    }
+  }
+
+  /// The keys that weren't sent, readable, to copy or type again on purpose.
+  private showLost(): void {
+    const o = this.host.outbox();
+    if (!o.lost.length) return;
+    const text = o.lost.map((l) => describe(l.events)).join("");
+    const pre = h("pre", { class: "lost-keys" }, text);
+    const s: Sheet = sheet("Keys not sent", [
+      h("p", {}, ...o.lost.map((l) => h("span", { class: "lost-why" }, lostTitle(l), " "))),
+      pre,
+      h("p", { class: "compose-hint" }, "⏎ is Enter, ⌫ Backspace, ⎋ Esc, ^C Ctrl-C. Look at the session before typing them again."),
+    ], [
+      h("button", { onclick: () => { void this.toClipboard(text, "Copied"); } }, "Copy"),
+      this.host.canType() ? h("button", { class: "primary", onclick: () => {
+        const events = o.lost.flatMap((l) => l.events);
+        o.dismiss();
+        s.close();
+        this.typist.interject();
+        for (const e of events) this.sendInput(e);
+        this.focus();
+      } }, "Type them now") : null,
+      h("button", { onclick: () => { o.dismiss(); s.close(); } }, "Forget them"),
+    ]);
   }
 
   /// One key to the session (the key row's, a scroll's), with the sticky modifiers on the key row

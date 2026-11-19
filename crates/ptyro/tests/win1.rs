@@ -71,6 +71,7 @@ async fn send(c: &Client, name: &str, text: &str) {
         text: text.into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     };
     c.request(req).await.unwrap();
 }

@@ -129,6 +129,7 @@ async fn raw_bytes_wait_for_a_prompt_being_typed() {
         text: "first".into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     });
     let raw = async {
         // Inside the pause between the text and its Enter.

@@ -19,7 +19,8 @@ export interface Delta {
   cursor?: Cursor;
   title?: string;
 }
-export interface Frame { session: string; seq: number; keyframe: boolean; delta: Delta }
+/// `state_token` (1.52): what the session waited for as the frame was made (WEB2.3).
+export interface Frame { session: string; seq: number; keyframe: boolean; delta: Delta; state_token?: string | null }
 export interface StatusRecord { status: string; kind?: string; detail?: string; since_ms: number; source: string }
 export interface Attention { kind: string; since_ms: number; text: string }
 /// A model's id shortened for a title or a card: `claude-opus-5-5` → `opus 5.5`,
@@ -87,6 +88,8 @@ export interface Session {
   profile?: string;
   command?: { text?: string | null; exit?: number | null; ended_ms?: number | null } | null;
   turns?: number;
+  /// What it waits for, as a token (1.52): keys typed offline are replayed only while it holds.
+  state_token?: string | null;
 }
 export type Outcome = { t: "ok"; reply: any } | { t: "err"; error: { code: string; message: string; fix?: unknown } };
 

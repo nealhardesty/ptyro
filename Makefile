@@ -194,6 +194,7 @@ icons: ## Render the web app's favicon, PWA and apple-touch icons from docs/logo
 web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/config.mjs units
 	node web/test/term.mjs units
+	node web/test/outbox.mjs
 	node web/test/qr.mjs
 	node web/test/kit.mjs
 	node web/test/machine.mjs

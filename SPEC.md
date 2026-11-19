@@ -836,6 +836,7 @@ Push messages have no id.
 | `Unsubscribe { session }` | |
 | `Ack { session, seq }` | client finished painting up to `seq` (flow control) |
 | `Input { session, event }` | `Key`/`Mouse`/`Paste`/`Focus`/`RawBytes` (§5.5) |
+| `Keys { session, stream, keys: [SeqKey{n, event, token?, age_ms}], replay }` | 1.52: numbered input, each `n` typed at most once; a `replay` only while the session waits for what it did (§16.4 WEB1.8, "Every key exactly once"); only to a daemon whose `Welcome` lists `input_seq` |
 | `Resize { session, size }` | only honoured from the controller |
 | `WatchEvents { filter }` | subscribe to the domain event stream |
 | `Ping` | keepalive (remote transports) |
@@ -865,6 +866,7 @@ Push messages have no id.
 | `Screen(ScreenFrame)` | keyframe or delta for a subscribed session |
 | `Event(DomainEvent)` | `SessionCreated/Updated/StatusChanged/Exited/Removed`, `AttentionChanged`, `Notification`, `WorktreeChanged`, `ProjectChanged`, `RunChanged`, `ConfigReloaded`, `ControllerChanged`, `Bell`, `Clipboard{text}` (controller only) |
 | `Goodbye { reason }` | daemon shutting down / upgrading (clients reconnect) |
+| `Typed { session, stream, upto, refused: [Refused{from, to, why, reason}] }` | 1.52: every `Keys` number up to `upto` is settled; `refused` names those not typed (`changed`, `stale`, `unknown`, `scope`, `ended`, `offline`, `invalid`) |
 
 **[built M2] Protocol 1.1** (minor bump, additive):
 - Requests: `Resolve`, `Restart`, `ReadScrollback`, `SaveView`, `LoadView`, `History`.
@@ -1110,6 +1112,24 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 - One edge: a project pad's editor session still running in a 0.0.9 daemon that hands off to
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
+
+**[built 2026-11-19] Protocol 1.52** (additive; WEB2.3, every key exactly once, §16.4 WEB1.8):
+`ClientMsg::Keys{session, stream, keys: [SeqKey{n, event, token, age_ms}], replay}` and
+`ServerMsg::Typed{session, stream, upto, refused: [Refused{from, to, why, reason}]}`; the feature
+`input_seq` (`FEATURE_INPUT_SEQ`: a client lists it in `Hello`, the daemon lists it back in
+`Welcome` when it numbers input; `ptyro-client` always asks, and keeps `Welcome.features`);
+`SessionInfo.state_token` and `ScreenFrame.state_token` (16 hex digits, opaque);
+`Request::SendText.once` (a name: the same name from the same device and session within ten
+minutes types nothing twice); the constants `REPLAY_WINDOW_MS` (5000) and `MAX_SEQ_KEYS` (4096).
+The handoff image's sessions gain `typed` (the stream table) and the image `sends` (named sends
+that went), both skipped when empty, so the committed fixture is unchanged. Compatibility: a 1.51
+daemon doesn't list `input_seq`, so the web app sends plain `Input` as before (and says keys
+typed offline weren't sent, as it did); a 1.51 web app never sends `Keys` and never gets `Typed`;
+an older daemon ignores `once` and the tokens. A mirroring daemon forwards `Keys` to a session's
+machine when that machine's `Welcome` listed `input_seq` and its `Typed` back
+(`relay_upstream`); to an older machine it sends live keys as `Input` (acknowledged once handed
+to that connection) and refuses a replay (`unknown`: it can't be checked there); an offline machine
+is `offline`. A watcher (scope below `control`) is told `scope`, where `Input` was dropped silently.
 
 **[built 2026-11-19] Protocol 1.51** (additive): `Request::GcKeep{worktree}` → `Reply::Notes`
 (§10.8, Keep it), full scope, routed to the worktree's machine. A 1.50 daemon answers it
@@ -4847,7 +4867,8 @@ is "the web is up when the daemon is".
   expiry. Tokens are `ptd_` + 32 bytes from `/dev/urandom` (no fallback), checked in constant
   time against every record; an unclaimed record has no token and never authenticates.
 - **Scopes:** `read` < `approve` < `control` < `full`, enforced in `handle_as`
-  (`devices::needed`; unknown requests need `full`) and on `Input` (control). A device never
+  (`devices::needed`; unknown requests need `full`) and on `Input` and `Keys` (control; WEB2.3's
+  numbering and replays change nothing about who may type, every message is checked). A device never
   takes control or resizes a session. Revocation bumps an epoch, and the device's live
   connections get `Goodbye{"this device was revoked"}`. Approve-or-higher actions on a session
   are recorded as `remote` events with the device's name.
@@ -5020,6 +5041,59 @@ emulator, no WASM.
   decides), and Cmd stays the browser's (copy, paste). Paste is `Input::Paste` (bracketed by the
   daemon when the program asked); focus in and out is `Input::Focus` when it asked for that.
   Needs `control` scope and a running session; below it the page is a viewer (and says so).
+- **[built 2026-11-19, WEB2.3] Every key exactly once** (`web/src/outbox.ts`, tested by
+  `web/test/outbox.mjs` with 10 000 random runs over a lossy network; the daemon's side is
+  `crates/ptyro-daemon/src/typed.rs` and `conn.rs` `keys`; `crates/ptyro/tests/web2.rs`; e2e
+  `exactlyOnce`). **Numbered.** Against a daemon whose `Welcome` lists `input_seq` (1.52), every
+  input event of the terminal (keys, pastes, dictation's paste, clicks) goes as
+  `ClientMsg::Keys`, numbered from 1 in a *stream*: 24 random hex digits made per page load and
+  session, kept across reconnects (`Outbox`, one per session, living as long as the page, so keys
+  waiting when you leave a session's page are still sent or said). The daemon keeps, per session,
+  device and stream, the highest number settled (typed or refused) and the last
+  `MAX_REFUSALS` (8) refusals; a number at or below it is never typed again, so a copy is
+  dropped. Everything is answered with `Typed{upto, refused}`; nothing is typed or settled once
+  the daemon has begun a live upgrade (no answer: the client sends again to the next image), and
+  the table crosses the upgrade in the handoff image. Memory: 64 streams per session, each
+  forgotten after 10 minutes unused; forgetting one raises the session's *floor*, and a stream the
+  daemon doesn't know may replay only keys typed after the floor (a new session's floor is its
+  start: nothing could have been typed before it). **Pending.** A key is kept until settled.
+  While the connection is down, or a key is unanswered for `WAIT_MS` (1.2 s), the terminal says
+  "N keys waiting" (`.term-wait`, `role=status`, bottom left), the connection is asked whether it
+  is alive (`conn.check`, a 4 s `status`), and a closed one retries within 0.4 s instead of its
+  grown backoff (`conn.hurry`). Clicks, drags, the wheel and focus are never kept: they are aimed
+  at a screen as it was. **Replay, exactly.** On reconnect (and after `RESEND_MS`, 2.5 s, of no
+  answer on an open connection) every unsettled key goes again, numbered as before, as one
+  `replay` carrying for each key the session's `state_token` the page had when it was typed (the
+  newest of its last frame's and its last info's) and how long ago that was. The daemon drops the
+  ones it settled already (saying again any refusal among them: an answer lost with its
+  connection). The rest are typed, in order, only if all hold: none of the ones it brought again
+  was refused; the stream is known or provably new; the first was typed at most
+  `REPLAY_WINDOW_MS` (5 s) ago; and every one carries the token the session has *now*. Otherwise
+  none is typed (a batch is typed whole or not at all) and they are settled as refused. The
+  **state token** is FNV-1a (stable across builds and upgrades) over the session's process id and
+  whether it runs, the terminal's foreground process group (a command started or ended in a
+  shell), the alternate screen, and its status with the time that status began (a new permission
+  prompt, a question, a turn that ended or began, each is a new `since`), but not a status that is
+  only the output heuristic's guess (§9.3: the keys' own echo moves it), nor attention (looking
+  clears it), nor the status's detail. Keys behind an unanswered replay wait for its answer; when
+  keys are refused, every key after them still waiting is dropped with them ("they came after keys
+  that weren't sent": half a command is worse than none); offline past the window, keys never sent
+  are dropped at once (they can't be typed) and so is whatever is typed until the connection is
+  back. Keys that went may have been typed, so they are asked about, never assumed lost. No answer
+  at all for `GIVE_UP_MS` (15 s) on an open connection: dropped and said honestly ("may not have
+  been sent"). **Said.** Dropped keys are kept as *lost*: the terminal shows "4 keys weren't sent:
+  the session changed while you were away (it asked something new, or started or finished
+  something)." (`.term-lost`, `role=alert`), with **Show** (a sheet with the keys readable: text
+  as typed, ⏎ ⌫ ⎋ ← ^C; **Copy**, **Type them now** to send them on purpose, **Forget them**) and ✕;
+  on another page, a toast. **Older daemons** (no `input_seq`): plain `Input`, as before; keys
+  typed before the first welcome are then dropped and said. **✎ compose** is a request, not
+  input: it carries `once`, a name kept while the draft is unchanged; a send cut off by a dropped
+  connection says "Not sure it was sent … Send it again: it won't be typed twice", and the daemon
+  answers a repeat as the first (waiting for it if it is still going; a failed send is forgotten,
+  so a retry types it; the names that went cross a live upgrade). Requests are never retried by
+  the page. Limits: a page reload forgets what was waiting (it is shown until then); a paste too
+  big for the server (4 MiB) is refused at once, not kept; a session whose status comes only from
+  the output heuristic is guarded by its process, foreground and screen only.
 - **[built 2026-11-19, WEB2.2] Terminal first** (`termFirst`, `strayToTerm` in `app.ts`; the
   rules are `strayKey`, `hardKey`, `ownKeyboard`, `autoFocus` in `keys.ts`, tested in
   `web/test/typing.mjs`; e2e `terminalFirst`, `typePhone`). The terminal is the session page's
@@ -5278,8 +5352,10 @@ holding several machines) was not chosen.
 - **Screens and keys** (`conn.rs`): a client's `Subscribe`, `Unsubscribe`, `Ack`, `Input`,
   `Resize` and `Focus` for a mirrored session go over an upstream connection of that client's own
   to the machine (made on first use), so frames, acks, control and sizes work as they do here; it
-  passes back only `Screen`, `Chat` and its own `Clipboard`. A device below `control` watches
-  without typing or sizing, as here. Offline, these are dropped.
+  passes back only `Screen`, `Chat`, `Typed` and its own `Clipboard`. A device below `control` watches
+  without typing or sizing, as here. Offline, these are dropped. Numbered keys (`Keys`, 1.52) go
+  the same way to a machine that numbers input (it settles them); an older machine gets live keys
+  as `Input` and a replay refused; offline or watching, they are refused here, said (§16.4 WEB1.8).
 - **Alerts:** a mirror's `Alert` event is delivered by this daemon's channels (`deliver`:
   terminal, desktop, sinks, web push) under this machine's `notifications.on` and quiet hours; push
   tags are `ptyro-<session id>` on every machine, so a phone paired with both shows one.

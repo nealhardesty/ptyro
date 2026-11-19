@@ -33,6 +33,7 @@ mod setup;
 mod shells;
 mod sidecar;
 mod structured;
+mod typed;
 mod usage;
 mod watchdog;
 mod web;

@@ -105,6 +105,25 @@ async fn until_state(c: &Client, name: &str, want: MachineState) -> MachineInfo 
     }
 }
 
+/// The `Typed` answer settling `upto` for a session's numbered keys: its refusals.
+async fn typed(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<ServerMsg>,
+    id: ptyro_core::SessionId,
+    upto: u64,
+) -> Vec<ptyro_protocol::Refused> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match tokio::time::timeout(Duration::from_millis(500), events.recv()).await {
+            Ok(Some(ServerMsg::Typed { session, upto: u, refused, .. }))
+                if session == id && u >= upto =>
+            {
+                return refused;
+            }
+            _ => assert!(Instant::now() < deadline, "no Typed {upto} for {id}"),
+        }
+    }
+}
+
 async fn listed(c: &Client) -> Vec<SessionInfo> {
     match c.request(Request::List).await.unwrap() {
         Reply::Sessions { sessions } => sessions,
@@ -205,6 +224,7 @@ async fn another_machines_workspaces_sit_beside_ours_and_work_from_here() {
         text: "typed-from-laptop1".into(),
         enter: true,
         wait_ready_ms: None,
+        once: None,
     })
     .await
     .unwrap();
@@ -255,6 +275,27 @@ async fn another_machines_workspaces_sit_beside_ours_and_work_from_here() {
     })
     .unwrap();
     until_screen(&there, "fix-flaky-test", "keys-over-the-upstream").await;
+    // Numbered keys (WEB2.3) go there too, are settled there, and its answer comes back; a copy
+    // sent again is answered and not typed twice.
+    let numbered = |n: u64, text: &str, replay: bool| ClientMsg::Keys {
+        session: laptop2_session.id,
+        stream: "mm1".into(),
+        keys: vec![ptyro_protocol::SeqKey {
+            n,
+            event: ptyro_core::input::InputEvent::Paste { text: text.into() },
+            token: None,
+            age_ms: 0,
+        }],
+        replay,
+    };
+    here.send(numbered(1, "numbered-over-the-upstream\r", false)).unwrap();
+    assert!(typed(&mut events, laptop2_session.id, 1).await.is_empty());
+    until_screen(&there, "fix-flaky-test", "numbered-over-the-upstream").await;
+    here.send(numbered(1, "numbered-over-the-upstream\r", false)).unwrap();
+    assert!(typed(&mut events, laptop2_session.id, 1).await.is_empty());
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let s = screen(&there, "fix-flaky-test").await.unwrap();
+    assert_eq!(s.matches("numbered-over-the-upstream").count(), 2, "echoed and run once:\n{s}");
 
     // Hidden here: gone from our lists, untouched there; shown again: back.
     here.request(Request::MachineHide {
@@ -287,10 +328,15 @@ async fn another_machines_workspaces_sit_beside_ours_and_work_from_here() {
             text: "x".into(),
             enter: false,
             wait_ready_ms: None,
+            once: None,
         })
         .await
         .unwrap_err();
     assert!(refused.message.contains("laptop2 is offline"), "{}", refused.message);
+    // Numbered keys for it are refused here, and said.
+    here.send(numbered(2, "x", false)).unwrap();
+    let no = typed(&mut events, laptop2_session.id, 2).await;
+    assert_eq!(no[0].why, ptyro_protocol::RefusedWhy::Offline, "{no:?}");
 
     // Back: it reconnects by itself (the retry key makes it now, not after the backoff).
     t.there.restart().unwrap();
