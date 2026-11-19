@@ -16,7 +16,7 @@ import type { Item, Sheet } from "./kit.js";
 import type { Cell, Cursor, Screen, Style } from "./screen.js";
 
 const ACTIONS = {
-  "term.type": "Type straight into the session: every key goes to it as you press it",
+  "term.type": "Type straight into the session: every key goes to it as you press it. With a keyboard just type (the terminal has the keys when the page opens); on a phone tap ⌨ Type or the screen",
   "term.keys": "Keys a phone's keyboard lacks: Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows, F-keys",
   "term.scroll": "Scroll back through the session's history: the wheel, or drag",
   "term.select": "Select text: long-press and drag, or drag with a mouse; double-click a word, triple-click a line",
@@ -48,7 +48,7 @@ export interface Host {
   send(msg: object): void;
   request(req: object): Promise<any>;
   toast(text: string): void;
-  /// The page's own lines changed (the pill, the reply box): draw it again.
+  /// The page's own lines changed (the pill, ⌨ Type, ✎ compose): draw it again.
   changed(): void;
 }
 
@@ -534,6 +534,18 @@ export class Term {
     this.input.focus({ preventScroll: true });
   }
 
+  /// A key pressed on the page while the terminal didn't have the focus (WEB2.2, `strayKey`):
+  /// the terminal takes the focus and then the key, the way a key typed into it goes (`Typist`),
+  /// so the first key isn't lost. A key it doesn't send (a dead key, an input method's) is left
+  /// to the browser, which now delivers what it types to the terminal's field.
+  takeKey(e: KeyboardEvent): boolean {
+    if (!this.host.canType()) return false;
+    this.focus();
+    if (document.activeElement !== this.input) return false;
+    this.onKeydown(e);
+    return true;
+  }
+
   private setKeyboard(): void {
     // `none` keeps the keys (a hardware keyboard) without the on-screen one in the way.
     this.input.setAttribute("inputmode", this.keyboard ? "text" : "none");
@@ -548,7 +560,7 @@ export class Term {
       document.body.classList.add("typing");
       this.fitViewport();
       this.schedule(true);
-      this.host.changed();
+      this.changedAfterPress();
     });
     inp.addEventListener("blur", () => {
       // What the keyboard had waiting goes before the session hears the focus is gone.
@@ -559,7 +571,7 @@ export class Term {
       document.body.classList.remove("typing");
       document.documentElement.style.removeProperty("--vvh");
       this.schedule(true);
-      this.host.changed();
+      this.changedAfterPress();
     });
     inp.addEventListener("keydown", (e) => this.onKeydown(e as KeyboardEvent));
     // Soft keyboards, input methods and dictation (keys.ts `Typist`): typed text goes as keys at
@@ -595,8 +607,32 @@ export class Term {
     });
   }
 
+  /// A pointer is down somewhere on the page (a press that may take the focus from the field).
+  private pressed = false;
+
+  /// The page around is drawn again (the focus came or went). When a press took the focus (a
+  /// click on the header's ⋯, on Allow, on ✎ compose), only once it is released: drawn at once,
+  /// the control under the pointer would be a new one and the click would be lost.
+  private changedAfterPress(): void {
+    if (!this.pressed) { this.host.changed(); return; }
+    const go = () => {
+      window.removeEventListener("pointerup", go, true);
+      window.removeEventListener("pointercancel", go, true);
+      // (After the click, which the same release dispatches.)
+      setTimeout(() => this.host.changed(), 0);
+    };
+    window.addEventListener("pointerup", go, true);
+    window.addEventListener("pointercancel", go, true);
+  }
+
   private wire(): void {
     // Listeners on the window and an observer outlive this terminal unless `dispose` takes them off.
+    const down = () => { this.pressed = true; };
+    const up = () => { this.pressed = false; };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    this.offs.push(() => { window.removeEventListener("pointerdown", down, true); window.removeEventListener("pointerup", up, true); window.removeEventListener("pointercancel", up, true); });
     const onVv = () => { if (this.typing) { this.fitViewport(); this.followCursorNow(); } this.resizeSession(); };
     const onWin = () => { this.schedule(true); this.resizeSession(); };
     window.visualViewport?.addEventListener("resize", onVv);

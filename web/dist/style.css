@@ -84,15 +84,27 @@ canvas.term { display: block; touch-action: none; user-select: none; -webkit-use
 .term-sel button { padding: 6px 14px; }
 .term-sel .primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
 .term-badge { position: absolute; right: 12px; top: 8px; z-index: 3; font-size: 12px; padding: 2px 9px; border-radius: 10px; background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); color: var(--muted); pointer-events: none; }
-body.typing .session { height: var(--vvh, 100dvh); min-height: 0; }
-body.typing .reply { display: none; }
+/* Typing on a phone: the page fits above its keyboard. (On a computer the terminal has the keys
+   whenever the page is open, so the page stays as it is: nothing moves when the focus does.) */
+@media (pointer: coarse) { body.typing .session { height: var(--vvh, 100dvh); min-height: 0; } }
+/* Typing on a phone: the soft keyboard has the room, so an open compose box steps aside (not on a computer). */
+@media (pointer: coarse) { body.typing .session .compose { display: none; } }
 .term-copy { position: fixed; left: -9999px; top: 0; opacity: 0; }
-body.typing .session > .pill, body.typing .session > .revive { display: none; }
+@media (pointer: coarse) { body.typing .session > .pill, body.typing .session > .revive { display: none; } }
 .term-keys button { min-width: 38px; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
 .term-keys button.mod.on { border-color: var(--accent); color: var(--accent); }
 .term-keys button.mod.lock { background: var(--accent); color: #fff; }
 .term-more { justify-content: flex-end; align-items: center; padding-top: 0; border-top: 0; }
 .term-more .sub { margin-right: auto; font-size: 12px; color: var(--muted); }
+.term-more .aa { margin-left: auto; }
+.term-more .type { min-width: 0; }
+.term-more .type.primary { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.term-more .compose-btn.on { border-color: var(--accent); color: var(--accent); }
+.term-more .compose-btn .dot { color: var(--accent); font-weight: 700; }
+.compose { flex-wrap: wrap; align-items: flex-end; }
+.reply.compose textarea { min-height: 4.2em; max-height: 40vh; overflow-y: auto; font-size: 16px; }
+.compose-side { display: flex; flex-direction: column; gap: 6px; }
+.compose-hint { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--muted); }
 .keys { display: flex; gap: 6px; padding: 6px 8px; overflow-x: auto; border-top: 1px solid var(--line); }
 .keys button { padding: 6px 10px; min-width: 40px; }
 .keys button.on { border-color: var(--accent); }

@@ -5,6 +5,7 @@
 import { Screen, modelLabel } from "./screen.js";
 import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
+import { autoFocus, hardKey, ownKeyboard, strayKey } from "./keys.js";
 import { actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import { staleMaybeChanged } from "./projects.js";
@@ -21,7 +22,7 @@ import { apply as showMachine, offlineText } from "./machine.js";
 const ACTIONS = {
     "sessions": "Every session: what it's doing, and who needs you first",
     "session.open": "A session's live screen",
-    "session.reply": "Type to the session; Enter sends, Shift+Enter starts a new line",
+    "session.compose": "✎ Compose: write a long prompt, or dictate it (the keyboard's mic, macOS dictation, Superwhisper), read it over, and send it as one; Enter sends, Shift+Enter starts a new line, Esc closes and keeps the draft",
     "answer": "Answer what it asks: allow once, always, or deny",
     "host.load": "The load average of the computer ptyro runs on, over 1, 5 and 15 minutes: amber once every CPU is busy, red at twice that ([ui] load)",
     "notifications": "Notifications on this device (a test is sent)",
@@ -260,33 +261,128 @@ let shell = null;
 function canType(id) {
     return (conn.scope === "control" || conn.scope === "full") && app.sessions.get(id)?.state.t === "running";
 }
+/// Why the session page has nothing to type with (a viewer, an ended session).
+function whyNot(s) {
+    if (conn.state !== "open")
+        return "Connecting…";
+    if (conn.scope !== "control" && conn.scope !== "full")
+        return "Watching: this device may look, not type";
+    if (s.state.t === "dormant")
+        return "Hibernated: resume it to type";
+    if (s.state.t === "starting")
+        return "Starting…";
+    return "It has ended: restart it to type";
+}
+// ── terminal first (WEB2.2): the terminal is where you type ────────────────────────────────
+/// A key was pressed outside any field since the page loaded: this device has a keyboard of its
+/// own (a phone with a Bluetooth keyboard, an iPad's), so the terminal may take the focus.
+let keySeen = false;
+const coarse = () => matchMedia("(pointer: coarse)").matches;
+const focusOf = (el) => !el || el === document.body || el === document.documentElement ? "none"
+    : el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) ? "field" : "control";
+/// The page (not the terminal: its own selection is drawn, not the document's) has text selected.
+const pageSelected = () => { const s = getSelection(); return !!s && !s.isCollapsed && !!s.toString(); };
+/// Give the terminal the focus if the page wants it to and may: a keyboard of the device's own
+/// (a phone's would pop up unasked), nothing else busy (a field, a dialog, a selection, compose).
+function termFirst() {
+    const sh = shell;
+    if (!sh || sh.id !== app.viewing || !sh.term.el.isConnected)
+        return;
+    const can = canType(sh.id);
+    if (can && !sh.could)
+        sh.want = true;
+    sh.could = can;
+    if (!sh.want || !can || sh.composing)
+        return;
+    if (document.activeElement === sh.term.input) {
+        sh.want = false;
+        return;
+    }
+    if (!ownKeyboard(coarse(), keySeen)) {
+        sh.want = false;
+        return;
+    }
+    if (!autoFocus({ canType: can, keyboard: true, focus: focusOf(document.activeElement), dialog: !!document.querySelector(".scrim"), selected: pageSelected() }))
+        return;
+    sh.want = false;
+    sh.term.focus();
+}
+/// A key pressed on the page outside the terminal: on a session this device may type to, it goes
+/// to the terminal (which takes the focus and the key: `strayKey`). True when it was taken.
+function strayToTerm(e) {
+    const focus = focusOf(e.target);
+    if (hardKey(e, focus))
+        keySeen = true;
+    const sh = shell;
+    const r = route();
+    if (!sh || r.view !== "session" || r.id !== sh.id || !canType(sh.id) || !sh.term.el.isConnected)
+        return false;
+    if (document.querySelector(".scrim") || !strayKey(e, focus, pageSelected()))
+        return false;
+    return sh.term.takeKey(e);
+}
+window.addEventListener("focus", (e) => {
+    if (e.target !== window || !shell || shell.id !== app.viewing)
+        return;
+    shell.want = true;
+    termFirst();
+});
 function sessionShell(id) {
     if (shell?.id === id)
         return shell;
     // The terminal of the session left behind: its listeners and its canvas go.
     shell?.term.dispose();
-    const reply = h("textarea", { rows: 2, enterkeyhint: "send", title: tip("session.reply") });
-    reply.value = app.drafts.get(id) ?? "";
-    reply.addEventListener("input", () => app.drafts.set(id, reply.value));
+    const draft = h("textarea", { rows: 3, enterkeyhint: "send", title: tip("session.compose"), "aria-label": "Compose a message to the session", autocapitalize: "sentences" });
+    draft.value = app.drafts.get(id) ?? "";
+    // It grows with what is written, up to two fifths of the window, then scrolls.
+    const grow = () => { draft.style.height = "auto"; if (draft.scrollHeight)
+        draft.style.height = `${Math.min(draft.scrollHeight + 2, Math.round(innerHeight * 0.4))}px`; };
+    draft.addEventListener("input", () => { if (draft.value)
+        app.drafts.set(id, draft.value);
+    else
+        app.drafts.delete(id); grow(); });
+    let sending = false;
+    const sendBtn = h("button", { class: "send", title: tip("session.compose"), onclick: () => void send() }, "Send");
     const send = async () => {
-        const text = reply.value;
-        if (!text.trim())
+        const text = draft.value;
+        if (sending || !text.trim() || !canType(id))
             return;
+        sending = true;
+        sendBtn.disabled = true;
         try {
+            // Whatever the terminal's keyboard was holding (dictation, a composition) goes first.
+            sh.term.typist.interject();
+            // The same request as the CLI's `ptyro send`: the daemon pastes a multi-line text (bracketed
+            // when the program asked) and then presses Enter, as a key, after a pause.
             await conn.request({ t: "send_text", addr: id, text, enter: true, wait_ready_ms: null });
-            if (reply.value === text) {
-                reply.value = "";
+            if (draft.value === text) {
+                draft.value = "";
                 app.drafts.delete(id);
+                grow();
+                sh.closeCompose();
             }
         }
         catch (e) {
             toast(e.message);
         }
+        finally {
+            sending = false;
+            sendBtn.disabled = false;
+        }
     };
-    reply.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-        e.preventDefault();
-        void send();
-    } });
+    draft.addEventListener("keydown", (e) => {
+        // An input method's Enter picks its text (Safari says so only with keyCode 229).
+        if (e.isComposing || e.keyCode === 229)
+            return;
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void send();
+        }
+        else if (e.key === "Escape") {
+            e.preventDefault();
+            sh.closeCompose();
+        }
+    });
     const term = new Term({
         id: () => id,
         screen: () => app.screens.get(id),
@@ -296,12 +392,32 @@ function sessionShell(id) {
         toast,
         changed: render,
     });
-    shell = {
-        id, reply, term,
+    // What its keys do, as this device has them (a phone's keyboard has no Shift+Enter or Esc).
+    const hint = h("p", { class: "compose-hint" }, coarse()
+        ? "⏎ sends. Dictate here (the keyboard's mic, Superwhisper), read it over, then send; a dictated new line stays a new line. ✕ keeps the draft."
+        : "Enter sends · Shift+Enter: a new line · Esc closes, keeping the draft. Dictate here (macOS dictation, Superwhisper, the keyboard's mic), read it over, then send.");
+    const sh = {
+        id, term, draft,
         el: h("div", { class: "session" }),
-        replyRow: h("div", { class: "reply" }, reply, h("button", { class: "send", onclick: () => void send() }, "Send")),
+        compose: h("div", { class: "reply compose" }, draft, h("div", { class: "compose-side" }, sendBtn, h("button", { class: "icon", title: "Close: the draft is kept", "aria-label": "Close compose", onclick: () => sh.closeCompose() }, "✕")), hint),
+        composing: false,
+        want: true,
+        could: false,
+        openCompose: () => {
+            sh.composing = true;
+            render();
+            draft.focus();
+            draft.setSelectionRange(draft.value.length, draft.value.length);
+            grow();
+        },
+        closeCompose: () => {
+            sh.composing = false;
+            sh.want = true;
+            render();
+        },
     };
-    return shell;
+    shell = sh;
+    return sh;
 }
 function sessionView(id) {
     const s = app.sessions.get(id);
@@ -309,8 +425,13 @@ function sessionView(id) {
         return h("div", {}, header("…", true), h("main", {}, h("p", { class: "empty" }, conn.state === "open" ? "No such session." : "Connecting…")));
     const st = statusOf(s);
     const sh = sessionShell(id);
-    sh.reply.placeholder = s.kind === "agent" ? `Reply to ${s.name}…` : "Type a line…";
+    sh.draft.placeholder = s.kind === "agent" ? `Write to ${s.name}…` : "Write a command…";
     const blocked = s.status?.status === "blocked" && s.state.t === "running";
+    const typeable = canType(id);
+    // A key-row button that leaves the focus where it is (the terminal keeps the keyboard up).
+    const stay = (e) => e.preventDefault();
+    const typing = sh.term.typing;
+    const drafted = !!app.drafts.get(id)?.trim();
     patch(sh.el, [
         header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
         h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", statusWord(st), s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", app.screens.get(id)?.title ? ` · ${app.screens.get(id).title}` : "", s.machine ? " · " : "", machineChip(s.name)),
@@ -322,9 +443,18 @@ function sessionView(id) {
         // A shell of SHELLS: its workspace's shells by number, tmux's status line (SPEC §23.14).
         s.loose ? shellStrip(app.sessions.values(), s) : null,
         sh.term.el,
-        canType(id) ? sh.term.keybar : null,
-        h("div", { class: "keys term-more" }, h("button", { title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa"), canType(id) ? null : h("span", { class: "sub" }, "Watching: this device may look, not type")),
-        canType(id) ? sh.replyRow : null,
+        typeable ? sh.term.keybar : null,
+        h("div", { class: "keys term-more" }, 
+        // The way in to typing, always in sight (a phone's keyboard comes up only when asked for);
+        // while typing, the way to put the keyboard away.
+        typeable ? h("button", { class: `type${typing ? "" : " primary"}`, title: tipOf("term.type"), "aria-pressed": String(typing), onpointerdown: stay, onmousedown: stay, onclick: () => { if (sh.term.typing)
+                sh.term.input.blur();
+            else
+                sh.term.focus(); } }, typing ? "⌨ Done" : "⌨ Type") : null, typeable ? h("button", { class: `compose-btn${sh.composing ? " on" : ""}`, title: tip("session.compose"), "aria-expanded": String(sh.composing), onclick: () => { if (sh.composing)
+                sh.closeCompose();
+            else
+                sh.openCompose(); } }, "✎ Compose", drafted && !sh.composing ? h("span", { class: "dot", title: "A draft is waiting" }, " •") : null) : null, typeable ? null : h("span", { class: "sub" }, whyNot(s)), h("button", { class: "aa", title: tipOf("term.options"), onclick: () => sh.term.options() }, "Aa")),
+        typeable && sh.composing ? sh.compose : null,
     ].filter((x) => !!x));
     return sh.el;
 }
@@ -345,7 +475,13 @@ function render() {
     const r = route();
     if (r.view !== "session" || r.id !== app.viewing)
         subscribe(r.view === "session" ? r.id : null);
+    const here = r.view === "session" ? r.id : null;
+    const entered = here !== shownSession;
+    shownSession = here;
     const view = withTabs(r.view, r.view === "session" ? sessionView(r.id) : views.has(r.view) ? views.get(r.view)(r.id ?? "") : listView());
+    // A session page opened (or opened again): its terminal has the keys, once it may.
+    if (entered && shell && shell.id === here)
+        shell.want = true;
     if (conn.state !== "open")
         view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
     if (root.firstChild !== view || root.childNodes.length !== 1)
@@ -360,7 +496,10 @@ function render() {
     if (t)
         view.append(t);
     paint();
+    termFirst();
 }
+/// The session whose page the last render drew (null: another page).
+let shownSession = null;
 function subscribe(id) {
     if (app.viewing) {
         if (shell?.id === app.viewing)
@@ -566,6 +705,9 @@ ui.forget = () => { void forget(); };
 let goKey = 0;
 document.addEventListener("keydown", (e) => {
     const t = e.target;
+    // On a session this device may type to, a key pressed anywhere goes to its terminal (WEB2.2).
+    if (!e.defaultPrevented && token() && strayToTerm(e))
+        return;
     // C-g: find across every chat (not in a terminal, whose program has the key).
     if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) {
         e.preventDefault();
@@ -588,8 +730,8 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         newTask();
     }
-    // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page (the
-    // terminal, once tapped, has the keys).
+    // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page this device
+    // only watches (where it may type, every key is the terminal's: the strip above it switches).
     else if (/^[1-9]$/.test(e.key) && (route().view === "list" || (route().view === "session" && app.sessions.get(route().id ?? "")?.loose))) {
         e.preventDefault();
         const here = app.sessions.get(route().id ?? "");
@@ -622,7 +764,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list and a shell's page)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 takePairCode();

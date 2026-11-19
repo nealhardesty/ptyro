@@ -5020,6 +5020,37 @@ emulator, no WASM.
   decides), and Cmd stays the browser's (copy, paste). Paste is `Input::Paste` (bracketed by the
   daemon when the program asked); focus in and out is `Input::Focus` when it asked for that.
   Needs `control` scope and a running session; below it the page is a viewer (and says so).
+- **[built 2026-11-19, WEB2.2] Terminal first** (`termFirst`, `strayToTerm` in `app.ts`; the
+  rules are `strayKey`, `hardKey`, `ownKeyboard`, `autoFocus` in `keys.ts`, tested in
+  `web/test/typing.mjs`; e2e `terminalFirst`, `typePhone`). The terminal is the session page's
+  input. **Focus by itself** only with a keyboard of the device's own (no `pointer: coarse`, or a
+  key pressed outside any field since the page loaded: a tablet's keyboard), so a phone's keyboard
+  never pops up unasked: when the page opens (or opens again), when the session becomes typeable
+  (connected, started, restarted), when the window gets the focus back, and when ✎ compose
+  closes. Never from a field, an open sheet or menu (`.scrim`), the page's own text selection, or
+  an open compose box (it waits until they are done). **A key pressed anywhere else** on the page
+  (nothing focused, or a button) goes to the terminal: it takes the focus, then the key, through
+  `Term.takeKey` → the same `onKeydown`/`Typist` path, so the first key isn't lost; not Tab (the
+  way out to the page's buttons), not Enter/Space/Esc on a focused button, not a modifier alone or
+  Cmd, not Ctrl/Alt while page text is selected; never what a field types. So on a session this
+  device may type to, the page's own letter shortcuts (`n`, `/`, `?`, a shell's digits) are the
+  terminal's. **⌨ Type** (under the key row, always in sight, accented while the terminal hasn't
+  the keys) focuses it; while typing it reads **⌨ Done** and puts the keyboard away. Focus coming
+  or going redraws the page only once a press is released (`changedAfterPress`), so the first
+  click on ⋯, Allow or ✎ while typing isn't lost to a control drawn anew under the pointer; and on
+  a computer nothing moves when the focus does (the pill hides and the page fits the
+  `visualViewport` while typing only on a coarse pointer). **✎ compose** (`session.compose`, was
+  the reply box `session.reply`) opens a box under the terminal, closed by default (no room taken
+  on a phone): a normal textarea, so dictation (OS, Superwhisper) works as anywhere, growing to
+  two fifths of the window; Enter sends (not while an input method composes), Shift+Enter is a
+  new line, Esc or ✕ closes keeping the draft (per session, `app.drafts`; the button shows `•`).
+  Sending is `send_text` with `enter: true`, as before and as `ptyro send` (the daemon pastes a
+  multi-line text, bracketed when the program asked, then presses Enter as a key), after
+  `typist.interject()`; once at a time; it closes the box and the terminal has the keys again.
+  Viewers and ended sessions get no ⌨, ✎ or key row; the row says why (watching, hibernated,
+  ended: restart it). Limits: Tab doesn't leave the focused terminal (it is the program's key):
+  click outside, or ⌨ Done; a phone's keyboard has no Shift+Enter, so a new line in compose
+  there comes from dictation or a paste.
 - **[built 2026-11-19, WEB2.1] Soft keyboards, compositions and dictation** (`Typist` in
   `keys.ts`; traces and a property test in `web/test/typing.mjs`, CDP IME in `e2e.mjs typing`).
   The field's text is what is diffed, not the events' data: `Typist` keeps what the session was
@@ -5062,8 +5093,8 @@ emulator, no WASM.
 - **The key row.** Esc, Tab, sticky Ctrl, Alt and Shift (tap: the next key; tap again: held),
   arrows that repeat while held, Home/End/PgUp/PgDn/Del, Ctrl-C/D/Z/L/R/A/E/W, the punctuation
   a phone keyboard buries, F1–F12, Paste, and Aa (the options). Buttons don't take focus from the
-  terminal, so the keyboard stays up. The reply box (a whole line, dictation-friendly) stays for
-  when the terminal isn't being typed into.
+  terminal, so the keyboard stays up. ✎ compose (WEB2.2, above) is for a long prompt or
+  dictation, written and read over before it is sent.
 - **Mouse.** When the program turned the mouse on (`ScreenModes.mouse`), clicks, drags and the
   wheel go to it as `Input::Mouse` with cell coordinates (hold Shift for the browser's own
   selection); otherwise a drag selects. A full-screen program without mouse gets the wheel as

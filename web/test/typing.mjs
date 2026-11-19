@@ -20,7 +20,7 @@
 //   ["blur"]
 // Between steps no time passes and no timer runs unless a wait says so (the same task).
 import assert from "node:assert/strict";
-import { MOD, Typist, SETTLE_MS, LIVE_MAX, dictated, straighten, multiword, hasCJK } from "../dist/keys.js";
+import { MOD, Typist, SETTLE_MS, LIVE_MAX, dictated, straighten, multiword, hasCJK, strayKey, hardKey, ownKeyboard, autoFocus } from "../dist/keys.js";
 
 const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: () => false, ...o });
 
@@ -312,7 +312,46 @@ export function units() {
   j.run([["cs"], ["cu", "にほ"]]);
   assert.deepEqual(j.r.out, []);
   assert.deepEqual(j.r.previews.at(-1), ["にほ", "ime"]);
+  terminalFirst();
   let runs = 0;
   for (let seed = 1; seed <= 400; seed++) { property(seed, true); property(seed * 7919, false); runs += 2; }
   return { traces: traces.length, runs };
+}
+
+/// WEB2.2: which keys pressed outside the terminal it takes, and when it takes the focus itself.
+function terminalFirst() {
+  // From the page itself: letters, Enter, Esc, arrows, Ctrl combinations; not Tab (the way out),
+  // a modifier alone or Cmd (the browser's).
+  for (const k of ["a", "Z", "1", " ", "Enter", "Escape", "ArrowUp", "Backspace", "F5", "é", "Dead", "Unidentified"]) assert.equal(strayKey(dom(k), "none"), true, k);
+  assert.equal(strayKey(dom("c", { ctrlKey: true }), "none"), true, "Ctrl-C interrupts");
+  for (const k of ["Tab", "Shift", "Control", "Alt", "Meta", "CapsLock"]) assert.equal(strayKey(dom(k), "none"), false, k);
+  assert.equal(strayKey(dom("Tab", { shiftKey: true }), "none"), false);
+  assert.equal(strayKey(dom("c", { metaKey: true }), "none"), false, "Cmd-C copies");
+  assert.equal(strayKey(dom("r", { metaKey: true }), "control"), false, "Cmd-R reloads");
+  // From a focused button: it keeps the keys that press it; letters still go.
+  for (const k of ["Enter", " ", "Escape", "Tab"]) assert.equal(strayKey(dom(k), "control"), false, k);
+  for (const k of ["a", "ArrowLeft", "Backspace"]) assert.equal(strayKey(dom(k), "control"), true, k);
+  // A field keeps everything.
+  for (const k of ["a", "Enter", "Escape"]) assert.equal(strayKey(dom(k), "field"), false, k);
+  // Text selected on the page: Ctrl-C and Alt combinations are about it; letters still type.
+  assert.equal(strayKey(dom("c", { ctrlKey: true }), "none", true), false);
+  assert.equal(strayKey(dom("b", { altKey: true }), "none", true), false);
+  assert.equal(strayKey(dom("x"), "none", true), true);
+  // A key outside any field is a keyboard of the device's own; a soft keyboard's are in a field.
+  assert.equal(hardKey(dom("a"), "none"), true);
+  assert.equal(hardKey(dom("a"), "control"), true);
+  assert.equal(hardKey(dom("a"), "field"), false);
+  assert.equal(hardKey(dom("Unidentified", { keyCode: 229 }), "none"), false);
+  assert.equal(hardKey(dom("Shift"), "none"), false);
+  assert.equal(ownKeyboard(false, false), true, "a computer");
+  assert.equal(ownKeyboard(true, false), false, "a phone: its keyboard would pop up");
+  assert.equal(ownKeyboard(true, true), true, "a tablet with a keyboard");
+  const free = { canType: true, keyboard: true, focus: "none", dialog: false, selected: false };
+  assert.equal(autoFocus(free), true);
+  assert.equal(autoFocus({ ...free, focus: "control" }), true, "from a button the page focused");
+  assert.equal(autoFocus({ ...free, focus: "field" }), false, "never from a field");
+  assert.equal(autoFocus({ ...free, dialog: true }), false, "never under a dialog");
+  assert.equal(autoFocus({ ...free, selected: true }), false, "never from a selection");
+  assert.equal(autoFocus({ ...free, keyboard: false }), false, "never pops a phone's keyboard");
+  assert.equal(autoFocus({ ...free, canType: false }), false, "a viewer, an ended session");
 }

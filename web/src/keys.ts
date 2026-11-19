@@ -487,3 +487,37 @@ export class Typist {
     return straighten(d);
   }
 }
+
+// ── terminal first (WEB2.2) ─────────────────────────────────────────────────────────────────
+
+/// What has the focus when a key is pressed outside the terminal: nothing (the page itself), a
+/// control (a button, a link), or a field that takes text of its own.
+export type Focus = "none" | "control" | "field";
+
+/// A key pressed on the page of a session this device may type to, outside the terminal, goes to
+/// the terminal: it takes the focus, then the key, so the first key isn't lost. Not what a field
+/// is typing; not Tab (it moves between the page's controls, so the keyboard can leave); not
+/// Enter, Space or Esc on a focused button (they press it); not a modifier alone (the key it
+/// modifies decides); not Cmd (the browser's); not Ctrl or Alt while the page has text selected
+/// (copying it).
+export function strayKey(e: DomKey, focus: Focus, selected = false): boolean {
+  if (focus === "field" || e.metaKey || MODIFIER_KEYS.has(e.key) || e.key === "Tab") return false;
+  if (focus === "control" && (e.key === "Enter" || e.key === " " || e.key === "Spacebar" || e.key === "Escape")) return false;
+  if (selected && (e.ctrlKey || e.altKey)) return false;
+  return true;
+}
+
+/// A key pressed outside any field came from a keyboard of the device's own: an on-screen
+/// keyboard is only up while a field has the focus.
+export const hardKey = (e: DomKey, focus: Focus): boolean => focus !== "field" && !composing(e) && e.key !== "Unidentified" && !MODIFIER_KEYS.has(e.key);
+
+/// This device has a keyboard of its own: a computer (no coarse pointer), or a phone or tablet
+/// that pressed a key outside any field (a Bluetooth keyboard, an iPad's).
+export const ownKeyboard = (coarse: boolean, keySeen: boolean): boolean => !coarse || keySeen;
+
+/// The terminal takes the focus by itself (the page opening, the window coming back): only with a
+/// keyboard of the device's own (a phone's would pop up unasked), when this device may type, and
+/// never from a field, an open dialog or menu, or a selection the person is making.
+export function autoFocus(o: { canType: boolean; keyboard: boolean; focus: Focus; dialog: boolean; selected: boolean }): boolean {
+  return o.canType && o.keyboard && o.focus !== "field" && !o.dialog && !o.selected;
+}

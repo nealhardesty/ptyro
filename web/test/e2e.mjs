@@ -209,6 +209,108 @@ const scenarios = {
     ptyro("kill", "typing");
   },
 
+  // Terminal first (WEB2.2), on a computer: the session page opens with the terminal taking the
+  // keys (no click), a key pressed while nothing has the focus goes to it (the first letter too),
+  // ✎ compose sends a multi-line prompt once and gives the keys back, Esc keeps a draft, and an
+  // ended session offers nothing to type with and says why.
+  async terminalFirst() {
+    ptyro("new", "-d", "-n", "first", "--", "sh", "-c", "cat");
+    const s = await until("the session", () => find("first"));
+    await fresh(`#/s/${s.id}`);
+    const lines = () => ptyro("read", "first").split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    // (A tty echoes a line as it is typed and `cat` prints it again at Enter: twice is once.)
+    const twice = (t) => () => lines().filter((l) => l === t).length === 2;
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    if (await tab.eval(`matchMedia("(pointer: coarse)").matches`)) throw new Error("the desktop tab has a coarse pointer");
+    await tab.waitFor("the terminal to take the keys by itself", focused, 10_000);
+    if (await tab.eval(`!!document.querySelector(".compose")`)) throw new Error("the compose box is open by default");
+    await tab.type("first-keys");
+    await tab.enter();
+    await until("keys typed with no click", twice("first-keys"), 10_000);
+    await tab.eval(`document.activeElement.blur()`);
+    await tab.waitFor("the terminal to let the focus go", `!(${focused}) && document.activeElement === document.body`);
+    await tab.type("stray");
+    await tab.enter();
+    await until("keys typed on the page, the first one too", twice("stray"), 10_000);
+    if (!(await tab.eval(focused))) throw new Error("the terminal didn't keep the focus it took");
+
+    // ✎ compose: a multi-line prompt, read over, sent once with Enter (Shift+Enter is a new line).
+    await tab.click(".term-more .compose-btn");
+    await tab.waitFor("the compose box, focused", `document.activeElement === document.querySelector(".compose textarea")`);
+    await tab.send("Input.insertText", { text: "line one" });
+    const shiftEnter = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: 8 };
+    await tab.send("Input.dispatchKeyEvent", { type: "keyDown", ...shiftEnter, text: "\r" });
+    await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...shiftEnter });
+    await tab.send("Input.insertText", { text: "line two" });
+    const v = await tab.eval(`document.querySelector(".compose textarea").value`);
+    if (v !== "line one\nline two") throw new Error(`the compose box has ${JSON.stringify(v)}`);
+    await sleep(300);
+    if (lines().some((l) => l.includes("line one"))) throw new Error("the compose box typed into the session before it was sent");
+    await tab.enter();
+    await tab.enter(); // a second Enter on the emptied box sends nothing
+    // (cat's copy of the first line may land in the middle of the tty's echo of the second.)
+    const times = (t) => ptyro("read", "first").split(t).length - 1;
+    await until("the prompt's two lines", () => times("line one") === 2 && times("line two") === 2, 10_000);
+    await tab.waitFor("compose to close and the terminal to have the keys again", `!document.querySelector(".compose") && ${focused}`);
+    await sleep(700);
+    if (times("line one") !== 2 || times("line two") !== 2) throw new Error(`the prompt went more than once: ${JSON.stringify(lines().slice(-8))}`);
+
+    // Esc closes it with the draft kept (marked on the button), and the terminal has the keys.
+    await tab.click(".term-more .compose-btn");
+    await tab.waitFor("the compose box, again", `document.activeElement === document.querySelector(".compose textarea")`);
+    if (await tab.eval(`document.querySelector(".compose textarea").value`) !== "") throw new Error("a sent prompt stayed as a draft");
+    await tab.send("Input.insertText", { text: "kept draft" });
+    await tab.key("Escape", { code: "Escape", vk: 27 });
+    await tab.waitFor("Esc to close it, marked as a draft", `!document.querySelector(".compose") && !!document.querySelector(".compose-btn .dot") && ${focused}`);
+    await tab.click(".term-more .compose-btn");
+    await tab.waitFor("the draft back", `document.querySelector(".compose textarea")?.value === "kept draft"`);
+    if (lines().some((l) => l.includes("kept draft"))) throw new Error("a draft was sent");
+    await tab.key("Escape", { code: "Escape", vk: 27 });
+    await tab.waitFor("the terminal to have the keys", `!document.querySelector(".compose") && ${focused}`);
+
+    // A click on the page while the terminal has the keys isn't lost to the focus moving (⋯ opens
+    // its menu at the first click), and once the menu is closed, keys go to the terminal again.
+    await tab.click(`header button[aria-label="More"]`);
+    await tab.waitFor("the session's menu at the first click", `!!document.querySelector(".menu button")`, 5000);
+    await tab.key("Escape", { code: "Escape", vk: 27 });
+    await tab.waitFor("the menu to close", `!document.querySelector(".scrim")`);
+    await tab.type("after-menu");
+    await tab.enter();
+    await until("keys after the menu", twice("after-menu"), 10_000);
+
+    // Ended: nothing to type with, and the page says why.
+    ptyro("kill", "first");
+    await tab.waitFor("an ended session to offer no typing", `!document.querySelector(".term-more .type, .term-more .compose-btn, .compose, .term-keys") && /ended/.test(document.querySelector(".term-more .sub")?.textContent ?? "")`, 15_000);
+  },
+
+  // Terminal first on a phone: the page never takes the focus by itself (that would pop the
+  // keyboard up unasked), compose takes no room, and ⌨ Type is the way in (⌨ Done the way out).
+  async typePhone() {
+    ptyro("new", "-d", "-n", "phone-type", "--", "sh", "-c", "cat");
+    const s = await until("the session", () => find("phone-type"));
+    await fresh(`#/s/${s.id}`);
+    await tab.phone();
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal and ⌨ Type", `document.querySelector("canvas.term")?.width > 0 && !!document.querySelector(".term-more .type")`);
+    if (!(await tab.eval(`matchMedia("(pointer: coarse)").matches`))) throw new Error("the phone emulation has no coarse pointer");
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    await sleep(1000);
+    if (await tab.eval(focused)) throw new Error("the terminal took the focus on a phone: its keyboard would pop up unasked");
+    if (await tab.eval(`!!document.querySelector(".compose")`)) throw new Error("the compose box takes room on a phone");
+    const tap = async (sel) => {
+      const p = await tab.eval(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()`);
+      await tab.fingers([[p], [p]]);
+    };
+    await tap(".term-more .type");
+    await tab.waitFor("⌨ Type to give the terminal the keys", `${focused} && document.querySelector(".term-more .type").textContent.includes("Done")`);
+    await tab.send("Input.insertText", { text: "tapped" });
+    await tab.enter();
+    await until("what was typed after ⌨ Type", () => ptyro("read", "phone-type").split("\n").filter((l) => l.trimEnd() === "tapped").length === 2, 10_000);
+    await tap(".term-more .type");
+    await tab.waitFor("⌨ Done to put the keyboard away", `!(${focused}) && document.querySelector(".term-more .type").textContent.includes("Type")`);
+    ptyro("kill", "phone-type");
+  },
+
   // On a phone: two fingers zoom the terminal (and never the page), two fingers tapped switch
   // between fitted and full size, one finger sideways pans, and the choice is kept.
   async zoom() {

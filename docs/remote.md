@@ -284,8 +284,9 @@ notifications on; a test notification arrives. The 🔔 goes once they are on.
 
 - **The list.** Blocked agents are at the top, with Allow / Deny right on the card.
 - **A session.** Its live screen is drawn from the daemon's own frames, at the session's size:
-  your phone never resizes it. There's a reply box (Enter sends), keys (Esc, Tab, arrows, ⏎,
-  ^C), and the permission card with its context.
+  your phone never resizes it. It is a terminal you type straight into (on a phone tap ⌨ Type),
+  with keys (Esc, Tab, arrows, ⏎, ^C), ✎ Compose for a long prompt or dictation, and the
+  permission card with its context.
 - **Notifications** for a blocked agent have Allow / Deny buttons on platforms that show actions
   (Android, desktop Chrome). Tapping one answers without opening the app.
 - **"Offline: reconnecting…"** means the page (kept on the phone) can't reach the server. Opened
@@ -294,8 +295,11 @@ notifications on; a test notification arrives. The 🔔 goes once they are on.
 
 ### A terminal in the browser
 
-With a device of `control` scope or more, the session page's screen takes keys: tap it (or click
-it) and type. It is the daemon's own terminal, so `vim`, `htop`, `claude` and your shell behave as
+With a device of `control` scope or more, the session page's screen takes keys. On a computer
+just type: the terminal has the keys when the page opens and when you come back to the window,
+and a key pressed anywhere on the page goes to it (Tab still moves between the buttons). On a
+phone tap **⌨ Type** (or the screen) to bring the keyboard up, and **⌨ Done** to put it away; the
+page never pops the keyboard up by itself. It is the daemon's own terminal, so `vim`, `htop`, `claude` and your shell behave as
 they do in the TUI: arrows, Ctrl and Alt combinations, F-keys, bracketed paste, the mouse when the
 program wants it (hold Shift to select instead).
 
@@ -311,6 +315,11 @@ program wants it (hold Shift to select instead).
   **Aa → Plain keys (no suggestions)** makes the keyboard send exactly what you press, with no
   predictions or autocorrect. It also turns dictation (the mic) off on most keyboards. On a Mac
   it stops other apps' hotkeys while the terminal has focus.
+- **✎ Compose** opens a box under the screen for a long prompt: write it (or dictate it, with
+  the keyboard's mic, macOS dictation or Superwhisper: it is an ordinary text box), read it over,
+  and send it as one. Enter sends, Shift+Enter is a new line, Esc or ✕ closes it and keeps the
+  draft (✎ shows a dot). Sending works like `ptyro send`: a multi-line prompt arrives as one paste,
+  then Enter.
 - **Dictation** (the keyboard's mic, iOS or macOS dictation, Superwhisper, Wispr Flow) shows dim at
   the cursor while you speak, then goes to the session once you pause, as one paste. A spoken "new
   line" never presses Enter (without bracketed paste it becomes a space). Tap ✕ to drop it.

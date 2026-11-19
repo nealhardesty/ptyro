@@ -2673,7 +2673,10 @@ Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`).
   as `Input::Paste`, so a spoken newline never presses Enter. iOS smart punctuation undone. An
   opt-in "Plain keys (no suggestions)" that says it turns dictation off. Recorded keyboard traces
   and a property test.
-- [ ] **WEB2.2 Terminal first** — S. On the session page the terminal takes the keys (focused on
+- [x] **WEB2.2 Terminal first** — S. *(Built 2026-11-19: with a keyboard of its own the terminal
+  takes the focus on open and on return, keys pressed anywhere go to it, ⌨ Type / ⌨ Done on a
+  phone, ✎ compose replaces the reply box (`session.compose`); e2e `terminalFirst`, `typePhone`.
+  SPEC §16.4 WEB1.8 "Terminal first".)* On the session page the terminal takes the keys (focused on
   open with a hardware keyboard); the reply box becomes ✎ compose, for long prompts and dictation.
 - [ ] **WEB2.3 Every key exactly once** — M. Protocol: input batches carry a sequence, the daemon
   acks and drops duplicates per device and session; keys typed while reconnecting wait as
