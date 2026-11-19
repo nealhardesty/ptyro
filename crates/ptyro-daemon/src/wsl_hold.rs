@@ -325,20 +325,32 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")] // it reads /proc
     fn the_marker_finds_the_loop_and_only_ours() {
+        /// The loop is ended however the test ends: one left running would hold the marker
+        /// for the next attempt.
+        struct Ends(std::process::Child);
+        impl Drop for Ends {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
         let mark = marker(999_999, "42");
-        let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", &format!("{mark} sleep 30")])
-            .spawn()
-            .unwrap();
-        // A loaded machine may take a while to start it: look until it shows (or 5 s).
+        let child = Ends(
+            std::process::Command::new("/bin/sh")
+                .args(["-c", &format!("{mark} sleep 30")])
+                .spawn()
+                .unwrap(),
+        );
+        let id = child.0.id();
+        // A loaded machine may take a while to start it, and `sh` forks the child that becomes
+        // `sleep`: until that child execs, it still has `sh`'s command line (the marker too). So
+        // look until only the loop holds it (or 5 s).
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while with_marker(&mark).is_empty() && std::time::Instant::now() < deadline {
+        while with_marker(&mark) != vec![id] && std::time::Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
-        assert_eq!(with_marker(&mark), vec![child.id()]);
+        assert_eq!(with_marker(&mark), vec![id]);
         assert!(with_marker(&marker(999_999, "43")).is_empty());
-        let _ = child.kill();
-        let _ = child.wait();
     }
 
     #[test]
