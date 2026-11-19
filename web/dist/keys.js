@@ -117,3 +117,379 @@ export class Sticky {
     has(m) { return !!(this.mods & m); }
     locked(m) { return !!(this.lock & m); }
 }
+// ── Typing: soft keyboards, compositions and dictation (ROADMAP WEB2.1) ──────────────────────
+//
+// A phone's keyboard composes the word being typed (Gboard, SwiftKey, Samsung, iOS predictive):
+// the text sits in the hidden field as a composition the keyboard rewrites at will. `Typist`
+// keeps a mirror of what the session has been sent for the field's text and, at every change,
+// sends the difference: backspaces for what went and the new letters, so letters arrive as they
+// are typed and an autocorrect becomes a correction. Dictation is different: it revises whole
+// phrases as you speak, so it is held (shown as a preview) and sent once, settled, as one paste,
+// and a spoken "new line" can never press Enter. No DOM here: the page hands it the events and
+// the field's text, and a test hands it recorded keyboards' events (web/test/term.mjs).
+/// Longer single inserts (code points) than this are dictation or a keyboard's clipboard chip.
+export const LIVE_MAX = 32;
+/// Held text that hasn't changed for this long (ms) is sent (dictation outside a composition).
+export const SETTLE_MS = 700;
+/// A newline that comes this soon (ms) after an Enter keydown is that Enter.
+const TAP_MS = 150;
+/// Smart punctuation rewrites what was typed this recently (ms): `--` → `—`, two spaces → `. `.
+const SMART_MS = 1500;
+const cps = (s) => [...s];
+/// Two or more words: `\S\s+\S` (a trailing space after one word is still one word).
+export const multiword = (s) => /\S\s+\S/u.test(s);
+const NEWLINE = /[\r\n\u2028\u2029]/;
+/// Han, kana, Hangul, Bopomofo, CJK punctuation and full-width forms: an input method's text.
+export const hasCJK = (s) => /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\u3000-\u303f\uff00-\uffef]/u.test(s);
+/// iOS smart quotes back to what was typed. (Primes, guillemets and CJK brackets are left.)
+export const straighten = (s) => s.replace(/[\u201c\u201d\u201e]/g, '"').replace(/[\u2018\u2019\u201a]/g, "'");
+/// What a paste of dictated text becomes: without bracketed paste a newline would press Enter,
+/// so newlines become spaces and trailing ones go.
+export const dictated = (text, bracketed) => bracketed ? text.replace(/\r\n?|[\u2028\u2029]/g, "\n") : text.replace(/\s*[\r\n\u2028\u2029][\s]*$/u, "").replace(/[ \t]*(?:\r\n?|[\n\u2028\u2029])[ \t\r\n\u2028\u2029]*/g, " ");
+const prefix = (a, b) => {
+    let p = 0;
+    while (p < a.length && p < b.length && a[p] === b[p])
+        p++;
+    return p;
+};
+const BS = { code: { t: "backspace" }, mods: 0 };
+const ch = (c) => (c === "\t" ? { code: { t: "tab" }, mods: 0 } : { code: { t: "char", c }, mods: 0 });
+/// A character a line editor would take as typed text (no controls; a tab is the Tab key).
+const printable = (c) => c === "\t" || !/^[\u0000-\u001f\u007f]$/u.test(c);
+export class Typist {
+    h;
+    /// The field's text as the session has it (code points), since the field was last emptied.
+    sent = [];
+    /// How many of `sent` can't be taken back: something else went to the session after them (a
+    /// key from the row, a paste) or they went changed (a sticky modifier). Backspaces stop here.
+    floor = 0;
+    hold = null;
+    /// When the held text last changed.
+    changed = 0;
+    composing = false;
+    /// The field's length when the composition started: its text is what came after.
+    compStart = 0;
+    /// A composition ended; its final text is read once the browser has finished with the field.
+    ending = false;
+    /// A `beforeinput` announced the next change (an `input` without one is an insertion).
+    announced = false;
+    lastDown = { t: -1e9, enter: false };
+    /// What was typed outside the field lately, for undoing smart punctuation (`\b`: a backspace,
+    /// `synth`: from the keyboard's own editing, not a Backspace key).
+    recent = [];
+    /// This keyboard is an input method (it has composed CJK text): its compositions are held.
+    cjk = false;
+    constructor(h) {
+        this.h = h;
+    }
+    /// Something is waiting: held text, or a composition's end to read.
+    get busy() { return !!this.hold || this.ending; }
+    /// A keydown. True when it was sent as a key (the page then cancels it).
+    keydown(e) {
+        const now = this.h.now();
+        this.lastDown = { t: now, enter: e.key === "Enter" || e.keyCode === 13 };
+        const st = this.h.sticky();
+        const k = keyOf(e, st);
+        if (!k)
+            return false;
+        this.settle();
+        const mods = k.mods & ~st;
+        if (k.code.t === "char" && !((k.mods | st) & (MOD.CTRL | MOD.ALT | MOD.SUPER))) {
+            // The physical key typed it (an iPhone's keyboard sends real keydowns too).
+            for (const c of cps(this.smart(k.code.c)))
+                this.h.key({ code: { t: "char", c }, mods }, true);
+            this.note(k.code.c);
+        }
+        else {
+            this.h.key({ code: k.code, mods }, true);
+            if (k.code.t === "backspace")
+                this.note("\b");
+            else
+                this.recent = [];
+        }
+        return true;
+    }
+    /// A `beforeinput`. True when it was handled here (the page then cancels it). A change let
+    /// through reaches the field, and `input` reads it from there.
+    beforeinput(type, data, isComposing, cancelable = true) {
+        this.announced = true;
+        if (isComposing || this.composing)
+            return false;
+        // Safari's composition commits, pastes (the paste event has them) and anything that can't
+        // be cancelled: let the field have them and read the difference.
+        if (!cancelable || /Composition|^insertFrom/.test(type))
+            return false;
+        // Safari puts a replacement's text in its dataTransfer: when even that is missing, the field has it.
+        if (data === null && (type === "insertText" || type === "insertReplacementText"))
+            return false;
+        // The composition that just ended is settled before what comes after it.
+        if (this.ending)
+            this.finalize();
+        const now = this.h.now();
+        const d = data ?? "";
+        switch (type) {
+            case "insertText":
+            case "insertReplacementText":
+            case "insertLineBreak":
+            case "insertParagraph": {
+                const text = type === "insertText" || type === "insertReplacementText" ? d : "\n";
+                if (!text)
+                    return true;
+                if (/^(\r\n?|\n)$/.test(text) && this.lastDown.enter && now - this.lastDown.t < TAP_MS && !this.hold) {
+                    this.settle();
+                    this.h.key({ code: { t: "enter" }, mods: 0 }, true);
+                    this.recent = [];
+                    return true;
+                }
+                // Dictation, a keyboard extension's insert, the clipboard chip, a newline no Enter key
+                // made: into the field, where the keyboard can still revise it, held, then one paste.
+                if (NEWLINE.test(text) || multiword(text) || cps(text).length > LIVE_MAX) {
+                    if (!this.hold)
+                        this.settle();
+                    return false;
+                }
+                // More dictation while dictation is held, unless a key was pressed for it.
+                if (this.hold && !this.composing && now - this.lastDown.t > TAP_MS)
+                    return false;
+                this.settle();
+                const out = this.smart(text);
+                for (const c of cps(out))
+                    if (printable(c))
+                        this.h.key(ch(c), true);
+                for (const c of cps(text))
+                    this.note(c);
+                return true;
+            }
+            case "deleteContentBackward":
+            case "deleteWordBackward":
+            case "deleteContentForward":
+                this.settle();
+                this.h.key(inputKeys(type, null)[0], true);
+                if (type === "deleteContentBackward")
+                    this.note("\b", true);
+                else
+                    this.recent = [];
+                return true;
+            default:
+                // Formatting, undo and the like mean nothing to a terminal.
+                return true;
+        }
+    }
+    compositionstart() {
+        // (Composing first: the last composition's end is read, but the field isn't emptied under
+        // the keyboard that is starting a new one.)
+        const was = this.composing;
+        this.composing = true;
+        if (this.ending)
+            this.finalize();
+        if (!was) {
+            this.sync(true);
+            if (this.hold)
+                this.flush();
+            this.compStart = this.sent.length;
+        }
+    }
+    compositionend() {
+        this.composing = false;
+        this.ending = true;
+        this.h.later(0);
+    }
+    /// An `input`: the field changed. Read it and send (or hold) the difference.
+    input(isComposing = false) {
+        if (isComposing && !this.composing) {
+            this.composing = true;
+            this.compStart = this.sent.length;
+        }
+        const announced = this.announced;
+        this.announced = false;
+        this.sync(announced);
+        if (!this.composing && !this.ending && !this.hold)
+            this.reset();
+    }
+    /// A paste, a key from the row: whatever is waiting goes first, then this.
+    interject() {
+        this.settle();
+        this.recent = [];
+    }
+    /// Before a key that doesn't go through the field: a composition's end is read, held text is
+    /// sent (not an input method's, mid-composition: it is still composing), and what the field
+    /// holds can't be taken back after it.
+    settle() {
+        if (this.ending)
+            this.finalize();
+        this.sync(true);
+        if (!(this.composing && this.hold?.why === "ime"))
+            this.flush();
+        if (this.composing)
+            this.floor = this.sent.length;
+        else
+            this.reset();
+    }
+    /// The field lost focus: send what waits.
+    blur() {
+        if (this.ending)
+            this.finalize();
+        this.flush();
+        if (!this.composing)
+            this.reset();
+    }
+    /// Don't send the held text (the preview's ✕).
+    discard() {
+        if (!this.hold)
+            return;
+        this.hold.discard = true;
+        this.h.preview(null, null);
+        if (!this.composing && !this.ending) {
+            this.flush();
+            this.reset();
+        }
+    }
+    /// A timer asked for with `later`.
+    tick() {
+        if (this.ending)
+            this.finalize();
+        if (this.hold && !this.composing && !this.ending) {
+            const left = this.changed + SETTLE_MS - this.h.now();
+            if (left > 0) {
+                this.h.later(left);
+                return;
+            }
+            this.flush();
+            this.reset();
+        }
+    }
+    /// A composition's final text: its difference goes, held text is sent, the field emptied.
+    finalize() {
+        this.ending = false;
+        this.sync(true, true);
+        if (this.hold) {
+            // A computer's input method commits: what it composed was CJK, or it wasn't.
+            if (this.hold.why === "ime") {
+                const t = this.h.value();
+                this.cjk = hasCJK(t) || (this.cjk && !/\p{Script=Latin}/u.test(t));
+            }
+            this.flush();
+        }
+        if (!this.composing)
+            this.reset();
+    }
+    /// The difference between what the session has and the field: `from`, where they part (never
+    /// below the floor), what to take back and what to add.
+    diff(v) {
+        const p = Math.max(prefix(this.sent, v), this.floor);
+        return { p, dels: this.sent.length - p, ins: v.slice(p) };
+    }
+    sync(announced, ended = false) {
+        const v = cps(this.h.value());
+        if (v.length === this.sent.length && prefix(this.sent, v) === v.length)
+            return;
+        const { dels, ins, p } = this.diff(v);
+        const inComp = this.composing || this.ending || ended;
+        if (!this.hold) {
+            const comp = inComp ? v.slice(Math.min(this.compStart, v.length)).join("") : null;
+            const why = this.classify(this.sent.slice(p).join(""), ins.join(""), comp, announced || inComp);
+            if (why)
+                this.hold = { why, discard: false };
+        }
+        if (this.hold) {
+            this.changed = this.h.now();
+            if (!this.hold.discard)
+                this.h.preview(ins.join("") || null, this.hold.why);
+            if (!inComp)
+                this.h.later(SETTLE_MS);
+            return;
+        }
+        for (let i = 0; i < dels; i++)
+            this.h.key(BS, false);
+        const st = this.h.sticky();
+        const smart = !(inComp && this.cjk);
+        for (const c of ins)
+            if (printable(c))
+                this.h.key(ch(smart ? straighten(c) : c), true);
+        this.sent = v;
+        if (v.length < this.floor)
+            this.floor = v.length;
+        // A sticky modifier changed what was sent: those characters can't be corrected.
+        if (st && ins.length)
+            this.floor = v.length;
+    }
+    classify(removed, added, comp, announced) {
+        if (comp !== null) {
+            if (!this.h.soft() || this.cjk || hasCJK(comp))
+                return "ime";
+            if (multiword(comp) || NEWLINE.test(comp))
+                return "dictation";
+        }
+        if (NEWLINE.test(added) || multiword(added) || multiword(removed) || cps(added).length > LIVE_MAX)
+            return "dictation";
+        if (!announced)
+            return "inserted";
+        return null;
+    }
+    /// Send the held text: backspaces for what it revised, then one paste (an input method's
+    /// short commit goes as keys).
+    flush() {
+        const hold = this.hold;
+        if (!hold)
+            return;
+        this.hold = null;
+        this.h.preview(null, null);
+        const v = cps(this.h.value());
+        if (!hold.discard) {
+            const { dels, ins } = this.diff(v);
+            const text = ins.join("");
+            for (let i = 0; i < dels; i++)
+                this.h.key(BS, false);
+            if (hold.why === "ime" && !NEWLINE.test(text) && !multiword(text) && ins.length <= LIVE_MAX) {
+                for (const c of ins)
+                    if (printable(c))
+                        this.h.key(ch(c), true);
+                this.sent = v;
+                if (this.h.sticky() && ins.length)
+                    this.floor = v.length;
+                return;
+            }
+            const out = dictated(text, this.h.bracketed());
+            if (out)
+                this.h.paste(out);
+        }
+        this.sent = v;
+        this.floor = v.length;
+    }
+    /// Empty the field: what is in it has been sent, and the next text starts afresh.
+    reset() {
+        if (this.h.value() !== "")
+            this.h.clear();
+        this.sent = [];
+        this.floor = 0;
+        this.compStart = 0;
+    }
+    note(c, synth = false) {
+        this.recent.push({ c, t: this.h.now(), synth });
+        if (this.recent.length > 4)
+            this.recent.shift();
+    }
+    /// What a keyboard's smart punctuation typed, as typed: `—` or `–` right after a `-` is the
+    /// second `-` (`--`); `. ` right after a space is the second space; curly quotes are straight.
+    /// The keyboard may first take back what it replaces (a backspace of its own, `synth`), or
+    /// not (the field it saw was empty): both end as what was typed.
+    smart(d) {
+        const now = this.h.now();
+        const r = this.recent.filter((x) => now - x.t < SMART_MS);
+        const last = r[r.length - 1], prev = r[r.length - 2];
+        const undid = (c) => last?.c === "\b" && last.synth && prev?.c === c;
+        if (d === "\u2014" || d === "\u2013") {
+            if (undid("-"))
+                return "--";
+            if (last?.c === "-")
+                return "-";
+        }
+        if (d === ". ") {
+            if (undid(" "))
+                return "  ";
+            if (last?.c === " ")
+                return " ";
+        }
+        return straighten(d);
+    }
+}

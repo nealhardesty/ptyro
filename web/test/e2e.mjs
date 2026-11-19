@@ -148,6 +148,67 @@ const scenarios = {
     await until("the line to arrive", () => ptyro("read", "cli-shell").split("\n").some((l) => l.trim() === "hello-e2e"));
   },
 
+  // A phone's keyboard (WEB2.1): a word's letters arrive while it is still composed, an
+  // autocorrect arrives as a correction, and dictation (a many-word composition, a big insert
+  // with a newline in it) is held, shown, and arrives once as text, its newline pressing nothing.
+  // Real IME operations through the DevTools protocol, into `cat` on a real tty (which echoes
+  // the line as it is edited, and prints it again only when Enter is pressed).
+  async typing() {
+    ptyro("new", "-d", "-n", "typing", "--", "sh", "-c", "cat");
+    const s = await until("the typing session", () => find("typing"));
+    await fresh(`#/s/${s.id}`);
+    await tab.eval(`localStorage.setItem("ptyro.debug", "1")`);
+    await tab.phone();
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
+    if (!(await tab.eval(`matchMedia("(pointer: coarse)").matches`))) throw new Error("the phone emulation has no coarse pointer: the page would take this for a computer");
+    await tab.eval(`document.querySelector(".term-input").focus()`);
+    await sleep(300);
+    const line = () => ptyro("read", "typing").split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    const last = () => line().at(-1) ?? "";
+    const ime = (text) => tab.send("Input.imeSetComposition", { text, selectionStart: [...text].length, selectionEnd: [...text].length });
+    for (const t of ["h", "he", "hel"]) await ime(t);
+    await until("the letters while the word is still composed", () => last() === "hel", 10_000);
+    if (!(await tab.eval(`ptyroTerm.typist.composing`))) throw new Error("the composition ended early");
+    await ime("help");
+    await ime("helpp");
+    await ime("help");
+    await until("the correction", () => last() === "help", 10_000);
+    await tab.send("Input.insertText", { text: "help" });
+    await tab.send("Input.insertText", { text: " " });
+    await until("the space", () => last() === "help", 10_000);
+    // Dictation as a composition: held and shown, nothing sent while it is spoken.
+    await ime("one");
+    await ime("one two");
+    await ime("one two three");
+    await tab.waitFor("the dictation preview", `!document.querySelector(".term-pending").hidden && document.querySelector(".term-pending").textContent.includes("two three")`, 5000);
+    await sleep(400);
+    const mid = last();
+    if (mid !== "help one") throw new Error(`dictation was streamed (only its first word should have gone): ${JSON.stringify(mid)}`);
+    await tab.send("Input.insertText", { text: "one two three" });
+    await until("the dictation, once", () => last() === "help one two three", 10_000);
+    if (!(await tab.eval(`document.querySelector(".term-pending").hidden`))) throw new Error("the preview stayed after the text was sent");
+    // A keyboard extension's insert (Superwhisper's keyboard, a clipboard chip): one paste once it
+    // settles; without bracketed paste, its newline is a space and presses nothing.
+    await tab.send("Input.insertText", { text: " four five\nsix" });
+    await until("the inserted text", () => last() === "help one two three four five six", 10_000);
+    const before = line().filter((l) => l.includes("four five six")).length;
+    if (before !== 1) throw new Error(`a dictated newline pressed Enter: ${JSON.stringify(line().slice(-4))}`);
+    await tab.enter();
+    await until("cat to print the line when Enter is pressed", () => line().filter((l) => l === "help one two three four five six").length === 2, 10_000);
+    if (await tab.eval(`document.querySelector(".term-input").value`) !== "") throw new Error("text was left in the field");
+    // Plain keys: a password field (no predictions, no mic), kept for this device, typing still works.
+    await tab.eval(`ptyroTerm.setPlain(true)`);
+    if (!(await tab.eval(`document.querySelector(".term-input").type === "password" && document.activeElement === document.querySelector(".term-input") && localStorage.getItem("ptyro.term.plain") === "1"`))) throw new Error("plain keys didn't switch the field");
+    await tab.send("Input.insertText", { text: "p" });
+    await tab.type("lain");
+    await until("plain keys' letters", () => last() === "plain", 10_000);
+    await tab.eval(`ptyroTerm.setPlain(false)`);
+    if (!(await tab.eval(`document.querySelector(".term-input").tagName === "TEXTAREA" && localStorage.getItem("ptyro.term.plain") === "0"`))) throw new Error("plain keys didn't switch back");
+    await tab.eval(`localStorage.removeItem("ptyro.debug")`);
+    ptyro("kill", "typing");
+  },
+
   // On a phone: two fingers zoom the terminal (and never the page), two fingers tapped switch
   // between fitted and full size, one finger sideways pans, and the choice is kept.
   async zoom() {

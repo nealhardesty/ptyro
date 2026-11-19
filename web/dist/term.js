@@ -7,7 +7,7 @@
 import { css, F } from "./color.js";
 import { READABLE_PX, cellAt, clampPx, docOf, findIn, fitCells, fitPx, fitted, lastUsed, maxOffset, pinchZoom, selText, span, splitPan, urlAt, windowOf, wordAt } from "./grid.js";
 import { ordered } from "./grid.js";
-import { MOD, MOUSE, Sticky, inputKeys, keyInput, keyOf, mouseInput, pasteInput } from "./keys.js";
+import { MOD, MOUSE, Sticky, Typist, keyInput, mouseInput, pasteInput } from "./keys.js";
 import { actions, form, h, menu, sheet } from "./kit.js";
 const ACTIONS = {
     "term.type": "Type straight into the session: every key goes to it as you press it",
@@ -18,7 +18,9 @@ const ACTIONS = {
     "term.paste": "Paste this device's clipboard into the session",
     "term.mouse": "Send clicks, drags and the wheel to the program, when it asks for the mouse (hold Shift to select instead)",
     "term.resize": "Make the session this screen's size (for everyone attached; the last to type decides)",
-    "term.options": "Terminal options: text size, fit, follow the cursor, the keyboard",
+    "term.options": "Terminal options: text size, fit, follow the cursor, the keyboard, plain keys",
+    "term.plain": "Plain keys: the keyboard sends letters exactly as pressed, with no suggestions or autocorrect; most keyboards then hide the microphone too, so dictation is off",
+    "term.dictation": "Dictated text waits here, dim, until you pause; then it goes to the session as one paste (a spoken new line never presses Enter). ✕ drops it",
     "term.zoom": "Zoom the text: pinch (or Ctrl and the wheel); tap with two fingers to switch between fitting the width and full size",
     "term.find": "Find text in the session's history and screen; ↑ and ↓ go to the previous and next",
     "term.link": "Open the link under the pointer (Ctrl or Cmd and click, or select it and tap Open)",
@@ -42,6 +44,8 @@ export class Term {
     el;
     wrap;
     canvas;
+    /// The hidden field that takes the keys: a textarea, or with plain keys a password input
+    /// (the one kind of field keyboards don't predict, correct or dictate into).
     input;
     keybar;
     live;
@@ -56,6 +60,7 @@ export class Term {
     mouseApp = store.get("mouse", "1") === "1";
     match = false;
     keyboard = store.get("keyboard", "1") === "1";
+    plain = store.get("plain", "0") === "1";
     typing = false;
     origSize = null;
     /// Scrolled back: the frozen document and how many rows up from the bottom the window is.
@@ -76,20 +81,45 @@ export class Term {
     /// What painting costs, for the spike (SPEC §20) and anyone measuring on their own phone:
     /// `localStorage["ptyro.debug"] = "1"` then `ptyroTerm.stats` in the console.
     stats = { paints: 0, rows: 0, ms: 0, worst: 0, full: 0 };
-    composing = false;
     fling = 0;
+    /// Soft keyboards, compositions and dictation: what the field's changes send (keys.ts).
+    typist;
+    typeTimer = 0;
+    /// Held text (dictation, an input method's composition), dim at the cursor until it is sent.
+    pending;
+    pendingText;
     constructor(host) {
         this.host = host;
         this.canvas = h("canvas", { class: "term", title: tip("term.type") });
         this.wrap = h("div", { class: "term-wrap" }, this.canvas);
-        this.input = h("textarea", { class: "term-input", rows: 1, autocapitalize: "off", autocomplete: "off", autocorrect: "off", spellcheck: "false", "aria-label": "Type into the session", enterkeyhint: "enter" });
+        this.input = this.makeInput();
+        this.pendingText = h("span", { class: "t" });
+        this.pending = h("div", { class: "term-pending", title: tip("term.dictation") }, this.pendingText, h("button", { class: "x", title: "Don't send this", "aria-label": "Don't send this", onpointerdown: (e) => e.preventDefault(), onclick: () => { this.typist.discard(); this.focus(); } }, "✕"));
+        this.pending.hidden = true;
+        this.typist = new Typist({
+            value: () => this.input.value,
+            clear: () => { this.input.value = ""; },
+            key: (k, sticky) => this.sendKey(k, sticky),
+            paste: (t) => { if (this.host.canType()) {
+                if (this.doc)
+                    this.goLive();
+                this.sendInput(pasteInput(t));
+            } },
+            preview: (t, why) => this.showPending(t, why),
+            sticky: () => this.sticky.mods,
+            bracketed: () => !!this.host.screen()?.modes.bracketed_paste,
+            // A phone's or tablet's own keyboard: its compositions are the word being typed.
+            soft: () => matchMedia("(pointer: coarse)").matches,
+            now: () => performance.now(),
+            later: (ms) => { clearTimeout(this.typeTimer); this.typeTimer = window.setTimeout(() => this.typist.tick(), ms); },
+        });
         this.live = h("button", { class: "term-live", title: tip("term.scroll"), onclick: () => this.goLive() }, "↓ Live");
         this.live.hidden = true;
         this.bar = h("div", { class: "term-sel" });
         this.bar.hidden = true;
         this.badge = h("div", { class: "term-badge" });
         this.badge.hidden = true;
-        this.el = h("div", { class: "term-box" }, this.wrap, this.input, this.live, this.bar, this.badge);
+        this.el = h("div", { class: "term-box" }, this.wrap, this.input, this.pending, this.live, this.bar, this.badge);
         if (store.get("debug", "") || (() => { try {
             return localStorage.getItem("ptyro.debug");
         }
@@ -108,6 +138,7 @@ export class Term {
     /// This terminal is no longer shown: release the session and everything it hooked up.
     dispose() {
         this.release();
+        clearTimeout(this.typeTimer);
         for (const off of this.offs.splice(0))
             off();
         this.clip.sheet?.close();
@@ -197,6 +228,7 @@ export class Term {
             this.drawRow(ctx, v, y, row, sp, y === cur ? v.cursor : null);
         }
         this.followCursor(v, cw, ch);
+        this.placePending();
         this.updateChrome();
         const took = performance.now() - t0;
         this.stats.paints++;
@@ -453,8 +485,10 @@ export class Term {
             return;
         try {
             const t = await navigator.clipboard.readText();
-            if (t)
+            if (t) {
+                this.typist.interject();
                 this.sendInput(pasteInput(t));
+            }
         }
         catch {
             this.host.toast("This browser won't hand over the clipboard: paste with Ctrl+V or Cmd+V while the terminal has focus");
@@ -464,21 +498,79 @@ export class Term {
     sendInput(event) {
         this.host.send({ t: "input", session: this.host.id(), event });
     }
-    /// One key to the session, with the sticky modifiers on the key row spent on it.
+    /// One key to the session (the key row's, a scroll's), with the sticky modifiers on the key row
+    /// spent on it. Whatever the keyboard has waiting (a composition, dictation) goes first.
     key(k, fromRow = true) {
+        if (!this.host.canType())
+            return;
+        this.typist.interject();
+        this.sendKey(k, true);
+        if (fromRow)
+            navigator.vibrate?.(4);
+    }
+    /// A key as it is: `sticky` adds the key row's sticky modifiers (and spends a one-shot one).
+    sendKey(k, sticky) {
         if (!this.host.canType())
             return;
         if (this.doc)
             this.goLive();
         this.looking = false;
-        const mods = k.mods | this.sticky.mods;
+        const mods = k.mods | (sticky ? this.sticky.mods : 0);
         this.sendInput(keyInput({ code: k.code, mods }));
-        if (this.sticky.one) {
+        if (sticky && this.sticky.one) {
             this.sticky.spent();
             this.paintSticky();
         }
-        if (fromRow)
-            navigator.vibrate?.(4);
+    }
+    /// The hidden field. Plain keys is a password input: Gboard, SwiftKey, Samsung and iOS then
+    /// stop predicting, correcting and composing (and most hide the microphone). The password
+    /// managers' attributes keep them from offering to fill or save it.
+    makeInput() {
+        const a = { class: "term-input", autocapitalize: "off", autocorrect: "off", spellcheck: "false", "aria-label": "Type into the session", enterkeyhint: "enter" };
+        const inp = this.plain
+            ? h("input", { ...a, type: "password", autocomplete: "off", "data-lpignore": "true", "data-1p-ignore": "true", "data-bwignore": "true", "data-form-type": "other" })
+            : h("textarea", { ...a, rows: 1, autocomplete: "off" });
+        this.wireInput(inp);
+        return inp;
+    }
+    setPlain(on) {
+        this.plain = on;
+        store.set("plain", on ? "1" : "0");
+        const was = this.typing, old = this.input;
+        if (was)
+            old.blur();
+        this.input = this.makeInput();
+        old.replaceWith(this.input);
+        this.setKeyboard();
+        if (was)
+            this.focus();
+    }
+    /// Show held text near the cursor (below it, or above when the box ends there).
+    showPending(text, why) {
+        const p = this.pending;
+        p.hidden = !text;
+        if (!text)
+            return;
+        p.classList.toggle("ime", why === "ime");
+        this.pendingText.textContent = text;
+        this.placePending();
+    }
+    placePending() {
+        const p = this.pending, v = this.view();
+        if (p.hidden)
+            return;
+        const box = this.el.getBoundingClientRect(), c = this.canvas.getBoundingClientRect();
+        const { cw, ch } = this.geo;
+        const cur = v?.cursor;
+        const pw = p.offsetWidth, ph = p.offsetHeight;
+        let left = 8, top = box.height - ph - 8;
+        if (cur && cw) {
+            left = c.left - box.left + cur.x * cw;
+            const below = c.top - box.top + (cur.y + 1) * ch + 2;
+            top = below + ph <= box.height - 4 ? below : c.top - box.top + cur.y * ch - ph - 2;
+        }
+        p.style.left = `${Math.max(4, Math.min(left, box.width - pw - 4))}px`;
+        p.style.top = `${Math.max(4, Math.min(top, box.height - ph - 4))}px`;
     }
     focus() {
         if (!this.host.canType())
@@ -489,8 +581,8 @@ export class Term {
         // `none` keeps the keys (a hardware keyboard) without the on-screen one in the way.
         this.input.setAttribute("inputmode", this.keyboard ? "text" : "none");
     }
-    wire() {
-        const inp = this.input;
+    /// The field's own events (it is made again when plain keys is switched).
+    wireInput(inp) {
         inp.addEventListener("focus", () => {
             this.typing = true;
             const s = this.host.screen();
@@ -502,6 +594,9 @@ export class Term {
             this.host.changed();
         });
         inp.addEventListener("blur", () => {
+            // What the keyboard had waiting goes before the session hears the focus is gone.
+            if (this.host.canType())
+                this.typist.blur();
             this.typing = false;
             const s = this.host.screen();
             if (s?.modes.focus_events)
@@ -512,32 +607,44 @@ export class Term {
             this.host.changed();
         });
         inp.addEventListener("keydown", (e) => this.onKeydown(e));
-        inp.addEventListener("beforeinput", (e) => {
-            // Soft keyboards and IMEs report text here; physical keys were handled in keydown.
-            if (this.composing || e.isComposing)
+        // Soft keyboards, input methods and dictation (keys.ts `Typist`): typed text goes as keys at
+        // once, a composition's changes as they happen, dictation held and then pasted. Physical
+        // keys were handled in keydown.
+        inp.addEventListener("beforeinput", (ev) => {
+            const e = ev;
+            if (!this.host.canType()) {
+                e.preventDefault();
                 return;
-            const keys = inputKeys(e.inputType, e.data ?? inp.value, this.sticky.mods);
-            if (e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop")
+            }
+            const data = e.data ?? (e.dataTransfer?.getData("text/plain") || null);
+            if (this.typist.beforeinput(e.inputType, data, e.isComposing, e.cancelable))
+                e.preventDefault();
+        });
+        inp.addEventListener("compositionstart", () => { if (this.host.canType())
+            this.typist.compositionstart(); });
+        inp.addEventListener("compositionend", () => { if (this.host.canType())
+            this.typist.compositionend(); });
+        // Every change to the field, whoever made it (a keyboard, dictation, an accessibility tool
+        // that sets the text): nothing is left in it unsent.
+        inp.addEventListener("input", (ev) => {
+            if (!this.host.canType()) {
+                if (!ev.isComposing)
+                    inp.value = "";
                 return;
-            e.preventDefault();
-            for (const k of keys)
-                this.key(k, false);
-            inp.value = "";
+            }
+            this.typist.input(ev.isComposing);
         });
-        inp.addEventListener("compositionstart", () => { this.composing = true; });
-        inp.addEventListener("compositionend", (e) => {
-            this.composing = false;
-            for (const k of inputKeys("insertText", e.data, this.sticky.mods))
-                this.key(k, false);
-            inp.value = "";
-        });
-        inp.addEventListener("paste", (e) => {
+        inp.addEventListener("paste", (ev) => {
+            const e = ev;
             e.preventDefault();
             const t = e.clipboardData?.getData("text/plain") ?? "";
-            if (t && this.host.canType())
+            if (t && this.host.canType()) {
+                this.typist.interject();
                 this.sendInput(pasteInput(t));
+            }
         });
-        inp.addEventListener("copy", (e) => {
+        inp.addEventListener("copy", (ev) => {
+            const e = ev;
             const t = this.selectedText();
             if (!t)
                 return;
@@ -545,6 +652,8 @@ export class Term {
             e.clipboardData?.setData("text/plain", t);
             this.host.toast(`Copied ${t.length} characters`);
         });
+    }
+    wire() {
         // Listeners on the window and an observer outlive this terminal unless `dispose` takes them off.
         const onVv = () => { if (this.typing) {
             this.fitViewport();
@@ -660,11 +769,8 @@ export class Term {
             void this.scrollBy(Math.max(1, (this.host.screen()?.size.rows ?? 24) - 2));
             return;
         }
-        const k = keyOf(e, this.sticky.mods);
-        if (!k)
-            return;
-        e.preventDefault();
-        this.key({ code: k.code, mods: k.mods & ~this.sticky.mods }, false);
+        if (this.typist.keydown(e))
+            e.preventDefault();
     }
     // ── the pointer ──────────────────────────────────────────────────────────────────────────
     touch = null;
@@ -1212,6 +1318,7 @@ export class Term {
                     this.input.blur();
                     this.focus();
                 } } },
+            can && { label: `Plain keys (no suggestions): ${on(this.plain)}`, hint: "Letters go exactly as pressed: no predictions or autocorrect. Also turns dictation (the mic) off on most keyboards", title: tip("term.plain"), run: () => this.setPlain(!this.plain) },
             can && { label: `Mouse to the program: ${on(this.mouseApp)}`, hint: "Clicks and the wheel, when it asks for them", title: tip("term.mouse"), run: () => { this.mouseApp = !this.mouseApp; store.set("mouse", this.mouseApp ? "1" : "0"); } },
             can && { label: this.match ? "Stop resizing the session" : "Resize the session to this screen", hint: "Everyone attached sees the new size; the last to type decides", title: tip("term.resize"), run: () => this.setMatch(!this.match) },
             { label: "Find in the history…", hint: this.query ? `Last: ${this.query}` : "The text of the session and what scrolled off", title: tip("term.find"), run: () => { form("Find", [{ key: "q", label: "Text", value: this.query, required: true }], "Find", async (v) => { await this.find(String(v.q), -1); }); } },

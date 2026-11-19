@@ -302,8 +302,18 @@ program wants it (hold Shift to select instead).
 - **On a phone**, the row under the screen has Esc, Tab, Ctrl, Alt and ⇧ (tap one for the next key,
   tap again to hold it), arrows (hold to repeat), Home/End/PgUp/PgDn, Ctrl-C/D/Z/L/R, punctuation,
   F1–F12 and Paste. **Aa** has text size, fit or 1:1, the on-screen keyboard on or off (off keeps a
-  hardware keyboard's keys without covering the screen), find, and *Resize the session to this
-  screen* (everyone attached sees the new size; whoever types last decides).
+  hardware keyboard's keys without covering the screen), *Plain keys*, find, and *Resize the session
+  to this screen* (everyone attached sees the new size; whoever types last decides).
+- **A phone's keyboard.** Letters arrive as you type them, even while the keyboard is still
+  composing the word, and an autocorrect arrives as a correction (backspaces, then the right
+  word). Curly quotes, `--` turned into a dash and the double-space full stop come out as you typed
+  them. Chinese, Japanese and Korean input methods send the converted text, not the romaji.
+  **Aa → Plain keys (no suggestions)** makes the keyboard send exactly what you press, with no
+  predictions or autocorrect. It also turns dictation (the mic) off on most keyboards. On a Mac
+  it stops other apps' hotkeys while the terminal has focus.
+- **Dictation** (the keyboard's mic, iOS or macOS dictation, Superwhisper, Wispr Flow) shows dim at
+  the cursor while you speak, then goes to the session once you pause, as one paste. A spoken "new
+  line" never presses Enter (without bracketed paste it becomes a space). Tap ✕ to drop it.
 - **Zoom.** Pinch the screen to make the text bigger or smaller (pinch all the way in to fit the
   whole width); drag sideways or up and down to move around; tap with two fingers to switch
   between fitted and full size. On a computer, Ctrl and the wheel, or a trackpad pinch. A wide

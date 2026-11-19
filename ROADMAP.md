@@ -2663,7 +2663,10 @@ the session as pressed only after a tap on the screen, a phone keyboard's compos
 a word at a time (only at `compositionend`), and each character waits a round trip to show.
 Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`).
 
-- [ ] **WEB2.1 Letters as you type them; dictation as one paste** — M. While a keyboard composes,
+- [x] **WEB2.1 Letters as you type them; dictation as one paste** — M. *(Built 2026-11-19: `Typist`
+  in `web/src/keys.ts` diffs the field against what was sent; dictation held at the cursor and
+  pasted once; smart punctuation undone; Aa → Plain keys; 44 keyboard traces, a property test, a
+  CDP IME e2e. SPEC §16.4 WEB1.8 "Soft keyboards".)* While a keyboard composes,
   the difference between what was sent and the composition now goes at once (backspaces and new
   letters; autocorrect becomes a correction). Dictation (multi-word or replacing compositions,
   large commits, text set into the field without key events) is previewed and sent once settled,

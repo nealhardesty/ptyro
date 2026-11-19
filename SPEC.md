@@ -5020,6 +5020,45 @@ emulator, no WASM.
   decides), and Cmd stays the browser's (copy, paste). Paste is `Input::Paste` (bracketed by the
   daemon when the program asked); focus in and out is `Input::Focus` when it asked for that.
   Needs `control` scope and a running session; below it the page is a viewer (and says so).
+- **[built 2026-11-19, WEB2.1] Soft keyboards, compositions and dictation** (`Typist` in
+  `keys.ts`; traces and a property test in `web/test/typing.mjs`, CDP IME in `e2e.mjs typing`).
+  The field's text is what is diffed, not the events' data: `Typist` keeps what the session was
+  sent for the field (`sent`, code points) and, on every `input`, sends the difference against the
+  field now (backspaces for the tail that went, then the new characters). So a composed word's
+  letters go as they are typed, Gboard's autocorrect (`teh` → `the`) arrives as two backspaces
+  and `he`, a swipe revision or a backspace inside the word likewise. Backspaces never go below a
+  *floor*: everything before a key from elsewhere (the key row, a hardware key, a paste) or a
+  character a sticky modifier changed. Outside a composition the field is emptied after every
+  change; never during one (that breaks keyboards): back-to-back compositions leave text until the
+  next gap. `compositionend` only marks the end: the final text is read on the next task
+  (`setTimeout 0`, Safari's commit `input` comes after the end), or at once when anything else
+  arrives first. A typed character with no composition (cancelable `beforeinput`, real keydowns
+  such as the iPhone's) goes as a key and never touches the field; one that can't be cancelled is
+  read from the field. **Held text** is shown dim at the cursor (`.term-pending`, ✕ drops it) and
+  sent once: *dictation* — a composition of more than one word or with a newline, an insert of
+  more than a word, of more than `LIVE_MAX` (32) characters or with a newline, or a change that
+  takes back more than a word — is sent at the composition's end, or `SETTLE_MS` (700 ms) after
+  the last change outside one, as **one `Input::Paste`**; text that appears in the field with
+  no `beforeinput` (accessibility insertion, Wispr Flow) is held the same way. A newline is
+  Enter only from an Enter keydown (or a `beforeinput` newline within 150 ms of one); any other is
+  text in a paste, and without bracketed paste the paste's newlines become spaces, so a spoken
+  "new line" never runs a command. Limits: Chrome on Android turns a keyboard's committed lone
+  `\n` into an Enter key event itself, so a voice "new line" sent that way can't be told from
+  Enter; Gboard voice's first partial word may go as keys before the rest is held.
+  **Input methods:** on a computer (`pointer: coarse` false) every composition is held and its
+  final text sent (as keys when short and one word, as a dead key's `é` is), so romaji, pinyin and
+  `´` never reach the session; on a phone a composition with Han, kana, Hangul or full-width text is
+  held, and once one has been, the keyboard is taken for an input method (its compositions held)
+  until a Latin composition commits; the first pinyin word on a phone goes as letters and is then
+  corrected. **Smart punctuation** (typed text only, never dictation or paste): “ ” „ → `"`,
+  ‘ ’ ‚ → `'`; a `—` or `–` within 1.5 s of a typed `-` is the second `-` (`--`, whether or not
+  the keyboard took the first back); `. ` within 1.5 s of a typed space is the second space; a
+  dash with no `-` before it (chosen from the keyboard) stays. **Plain keys (no suggestions)**
+  (Aa, `term.plain`, `localStorage` `ptyro.term.plain`, off by default) makes the field an
+  `<input type="password">` with the password managers' ignore attributes: the one kind of field
+  Gboard, SwiftKey, Samsung and iOS don't predict, correct, compose or (mostly) dictate into. On a
+  Mac a focused password field also turns on secure input, which stops other apps' global hotkeys
+  (a dictation app's) while it has focus.
 - **The key row.** Esc, Tab, sticky Ctrl, Alt and Shift (tap: the next key; tap again: held),
   arrows that repeat while held, Home/End/PgUp/PgDn/Del, Ctrl-C/D/Z/L/R/A/E/W, the punctuation
   a phone keyboard buries, F1–F12, Paste, and Aa (the options). Buttons don't take focus from the
