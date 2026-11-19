@@ -25,6 +25,7 @@ const ACTIONS = {
     "worktree.open": "Open the worktree in an editor installed on the computer, its file manager, a terminal app there, or a new shell",
     "worktree.rename": "Rename the worktree: its name is its address (its branch and directory stay), its title is what people read",
     "worktree.gc": "Stale worktrees: merged, abandoned or missing; remove them or keep them",
+    "worktree.keep": "Keep a stale worktree: clean-up leaves it be until it is unused for another worktrees.stale_days, or its branch moves on",
     "workspace.switch": "Show one workspace's projects, or all of them",
     "workspace.new": "A new workspace",
     "workspace.set": "A workspace's profile and how it notifies",
@@ -387,11 +388,19 @@ function gcView() {
     const scratch = gc.get("")?.scratch ?? [];
     const total = (entries ?? []).reduce((t, e) => t + (e.bytes ?? 0), 0);
     const done = (msg) => async (req) => { await ask(req, msg); gc.reload(""); };
+    // Kept from clean-up (`ptyro gc --keep-wt`): the daemon says until when.
+    const keep = async (worktree) => {
+        const r = await ask({ t: "gc_keep", worktree });
+        if (!r)
+            return;
+        showNotes("Kept", r.notes ?? []);
+        gc.reload("");
+    };
     const body = pending(gc, "", "Looking for stale worktrees…") ?? (entries.length
         ? h("div", { class: "rows" }, ...entries.map((e) => row(e.worktree.title || e.worktree.name, `${e.worktree.project_slug} · ${e.reasons.join(", ")}`, sizeOf(e), {
             onclick: () => menu(e.worktree.title || e.worktree.name, [
                 { title: tip("worktree.remove"), label: "Remove…", hint: "It refuses to lose work, saying what", danger: true, run: () => remove(e.worktree) },
-                { label: "Keep it", hint: "Leave it as it is; worktrees.stale_days (Settings → worktrees) says when one counts as stale", run: () => ui.toast("Kept") },
+                { title: tip("worktree.keep"), label: "Keep it", hint: "Clean-up leaves it be until it is unused for another worktrees.stale_days, or its branch moves on", run: () => keep(e.worktree.id) },
                 { label: "Open", run: () => go(`#/wt/${enc(e.worktree.id)}`) },
             ])
         })))

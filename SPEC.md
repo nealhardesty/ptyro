@@ -1111,6 +1111,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-19] Protocol 1.51** (additive): `Request::GcKeep{worktree}` → `Reply::Notes`
+(§10.8, Keep it), full scope, routed to the worktree's machine. A 1.50 daemon answers it
+"unsupported request": an older daemon's clean-up keeps nothing, as before. gc's reasons gain
+"branch squash-merged into BASE" (a reason is text; doctor counts it as merged).
+
 **[built 2026-11-18] Protocol 1.50** (additive): quick new is back (owner, 2026-11-18: it was
 removed by mistake in 1.45). `last_launch` leaves `RETIRED_REQUESTS`; `Request::LastLaunch`,
 `Reply::LastLaunch`, `LastLaunch` and `SpawnSpec.again` return as they were in 1.26 (§11.2,
@@ -2649,9 +2654,27 @@ branches, no sessions for N days.
   cleans up"; ⏎ in `M` opens `worktree.gc`, and a worktree removed asks the doctor
   again) and the web's Health page ("Clean up"), where the Projects tab's 🧹 also counts them
   (`🧹3`).
-- `ptyro gc` asks per stale worktree: `r` remove, ⏎ keep (a refusal over unsaved work prints
-  `ptyro wt rm NAME --force` beside it). The TUI's `G` picker's ⏎ removes (asked); the web's clean-up
-  offers Remove…, Keep it and Open.
+- `ptyro gc` asks per stale worktree: `r` remove, `k` keep it, ⏎ not now (a refusal over unsaved
+  work prints `ptyro wt rm NAME --force` beside it). The TUI's `G` picker's ⏎ removes (asked) and
+  `C-k` keeps the one under the cursor (the list goes on without it); the web's clean-up offers
+  Remove…, Keep it and Open.
+- **[built 2026-11-19] Squash-merged** (protocol 1.51): a pull request's "Squash and merge" (or a
+  rebase) never makes the branch an ancestor of the base, so after the PR poller went (2026-11-17)
+  gc missed them for `stale_days`. Now a branch with commits of its own whose merge into the base
+  would change nothing (`Git::changes_in`: `git merge-tree --write-tree BASE TIP` gives the base's
+  own tree; git 2.38+, else no) is "branch squash-merged into BASE". Against the base as this
+  repository last fetched it (every `wt new` fetches it; gc fetches nothing). **Unpushed** in
+  `wt rm` follows: commits on no remote whose changes are in the base lose nothing (GitHub deletes
+  a merged PR's branch, and a pruning fetch then leaves them on no remote), so they don't refuse
+  a removal. Uncommitted and untracked work still does. The branch itself stays (rule 4).
+- **[built 2026-11-19] Keep it** (protocol 1.51, `Request::GcKeep{worktree}` → `Notes`, full
+  scope): "Keep it" was a toast that kept nothing, so the same worktrees came back on every visit
+  and Health kept warning. Now the daemon remembers (`kept.rs`, kv `gc_kept`: worktree id →
+  `{at_ms, tip}`; a removed worktree's goes with it): gc counts a kept worktree as unused only
+  `stale_days` after it was kept, and as merged only once its branch's tip is no longer the one
+  kept. A directory that is gone is always reported. The main checkout is refused ("never cleaned
+  up"). Every client: `ptyro gc --keep-wt WT` (repeatable) and `k` when gc asks; the TUI's `C-k`
+  in the clean-up list (then the health badge looks again); the web's Keep it (`worktree.keep`).
 
 **[built UX1.12, removed 2026-11-17] Archive and restore** (`wt archive`, `wt restore`,
 `wt archives`, `wt archive-rm`, `[worktrees] archive_purge_days`): removed; a worktree is removed,
@@ -3000,9 +3023,11 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   keeps the outer terminal's own selection in most terminals.
 - **Themes** `ptyro-dark`, `ptyro-light`, `high-contrast` (`ui.theme`, a pick of the three; one
   it doesn't know, such as a theme of your own, is `ptyro-dark`, and `ptyro doctor` sets it).
-  Themes of your own (`[themes.<name>]`), `theme.next`, the palette's theme lines and the
-  settings panel's live preview were removed on 2026-11-17 (pare-down): three built-ins cover
-  dark, light and contrast. `NO_COLOR` makes chrome monochrome, with emphasis by attributes. Every
+  Themes of your own (`[themes.<name>]`), `theme.next` and the settings panel's live preview
+  were removed on 2026-11-17 (pare-down): three built-ins cover dark, light and contrast.
+  **[built 2026-11-19]** The palette's theme lines are back (removed with them, though the
+  pare-down hadn't decided that): `theme ptyro-light` switches at once and, unlike before, keeps
+  it (writes `ui.theme`, as the panel does). `NO_COLOR` makes chrome monochrome, with emphasis by attributes. Every
   colour, chrome and session content alike, is **downsampled** to what the outer terminal shows
   (truecolor / 256 / 16, detected from `COLORTERM`, `TERM` and `TERM_PROGRAM`).
 - **Reconnect:** if the daemon goes away, the TUI shows RECONNECTING, retries every 250 ms for
@@ -4939,6 +4964,14 @@ embedded with `include_bytes!`, with no dependencies or third-party requests.
   `Urgency: high` for blocked and errored.
 - **Housekeeping:** a 404/410 drops the subscription. Pushes follow the notifier's filters (kind
   in `notifications.on`, mutes, quiet hours, coalescing) and run in the background.
+- **[built 2026-11-19] Kept on, on every connect** (`syncPush`, `web/src/app.ts`): with the
+  browser's permission already granted, the app makes this device's subscription again when it
+  is missing (Forget this device unsubscribes, but the permission stays, so a device paired again
+  had no push and no 🔔 to say so) or was made for another VAPID key, and sends it with
+  `push_subscribe` (idempotent: one endpoint, one device), which also covers a device revoked and
+  paired again. It asks nothing; without the permission the 🔔 on top-level pages offers it. The
+  🔔 shows while this device has no subscription the daemon took, not merely while the permission
+  isn't granted.
 
 **[built WEB1] The web client is first class** (§1.3): everything the CLI does, it does, each
 control a named action in an `ACTIONS` table (its tooltip) that `docs/parity.md` and `make parity`

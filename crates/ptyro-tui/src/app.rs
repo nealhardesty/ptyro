@@ -238,7 +238,7 @@ pub enum Purpose {
     /// This workspace's profile, or how it notifies.
     WorkspaceProfile,
     WorkspaceNotify,
-    /// A stale worktree to clean up (remove).
+    /// A stale worktree to clean up: ⏎ removes it, `C-k` keeps it from clean-up.
     Gc,
     /// The existing branch a new worktree checks out (UX1.10).
     Branch(Wizard),
@@ -501,6 +501,8 @@ pub enum Pending {
     PaletteScripts(String),
     /// Stale worktrees, for the clean-up picker.
     Gc,
+    /// A worktree kept from clean-up: said, and the health badge looks again.
+    GcKept,
     /// The project's branches, for the wizard (UX1.10).
     Branches(Box<Wizard>),
     /// The repositories for the first run, and for home (UX1.19).
@@ -2055,6 +2057,10 @@ impl App {
             (Pending::Done(_), Ok(Reply::Notes { notes })) => {
                 self.toast(notes.join(" · "));
             }
+            (Pending::GcKept, Ok(Reply::Notes { notes })) => {
+                self.toast(notes.join(" · "));
+                self.health_again();
+            }
             (Pending::Quit, Ok(_)) => self.quit = Some(AttachEnd::Stopped),
             (Pending::Quit, Err(e)) => {
                 self.quitting = false;
@@ -2146,7 +2152,7 @@ impl App {
                     }));
                     self.overlay = Some(Overlay::Picker {
                         palette: Palette::new(
-                            "Stale worktrees, biggest first   ⏎ remove (asks first; refuses if work would be lost) · Esc keeps them; worktrees.stale_days says when one is stale",
+                            "Stale worktrees, biggest first   ⏎ remove (asks first; refuses if work would be lost) · C-k keep it (not offered again until it changes) · Esc: not now",
                             items,
                         ),
                         purpose: Purpose::Gc,
@@ -4588,6 +4594,19 @@ impl App {
                 });
             }
         }
+        // The built-in themes: one pick switches and keeps it (`ui.theme`).
+        for t in crate::theme::BUILTIN {
+            items.push(Item {
+                label: format!("theme {t}"),
+                detail: if *t == self.theme_name {
+                    "the theme in use".into()
+                } else {
+                    "switch to it (kept as ui.theme)".into()
+                },
+                key: None,
+                target: Target::Theme((*t).into()),
+            });
+        }
         // Every setting, to find it by what it does (CFG1.1).
         for s in ptyro_core::settings::settings(ptyro_core::settings::Scope::User)
             .filter(|s| !s.key.contains('*'))
@@ -4664,6 +4683,18 @@ impl App {
                 self.task_key(key, text, name, naming, wizard)
             }
             Overlay::Form(form) => self.form_key(form, key),
+            // The clean-up list's C-k: keep that worktree; the list goes on without it.
+            Overlay::Picker { mut palette, purpose: Purpose::Gc }
+                if key.code == KeyCode::Char { c: 'k' } && key.mods.has(Mods::CTRL) =>
+            {
+                if let Some(Target::Worktree(id)) = palette.selected_target().cloned() {
+                    self.request(Pending::GcKept, Request::GcKeep { worktree: id.clone() });
+                    palette.retain(|it| it.target != Target::Worktree(id.clone()));
+                }
+                if !palette.filtered.is_empty() {
+                    self.overlay = Some(Overlay::Picker { palette, purpose: Purpose::Gc });
+                }
+            }
             Overlay::Picker { mut palette, purpose } => match palette.key(key) {
                 Picked::Stay => self.overlay = Some(Overlay::Picker { palette, purpose }),
                 Picked::Close => {}
@@ -5112,6 +5143,14 @@ impl App {
             (Target::RunScript(wt, name), _) => self.run_script(wt, Some(name)),
             (Target::Session(id), _) => self.pick(id),
             (Target::Setting(key), _) => self.open_settings(Some(&key)),
+            (Target::Theme(name), _) => {
+                let done = if no_color() {
+                    format!("theme {name} kept as ui.theme; NO_COLOR is set, so there is no colour")
+                } else {
+                    format!("theme {name} (kept as ui.theme)")
+                };
+                self.set_config("ui.theme", &name, &done);
+            }
             (Target::NewShell, _) => self.spawn(Vec::new(), None, None),
             _ => {}
         }
@@ -7731,6 +7770,76 @@ mod tests {
         w.branch = Some("ptyro/feat".into());
         app.worktrees.push(w.clone());
         w
+    }
+
+    /// The palette lists the built-in themes; one pick switches to it and keeps it in the
+    /// config (`ui.theme`), as the settings panel would.
+    #[test]
+    fn a_theme_picked_in_the_palette_is_switched_to_and_kept() {
+        let home = tempfile::tempdir().unwrap();
+        let h = home.path().to_path_buf();
+        let paths = Paths::resolve(|k| (k == "PTYRO_HOME").then(|| h.clone())).unwrap();
+        let connect = ConnectOptions::new(paths.clone(), ptyro_protocol::ClientKind::Tui);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut app =
+            App::new(Options::default(), connect, paths.clone(), Config::default(), false, area);
+        app.open_palette();
+        let Some(Overlay::Picker { palette, .. }) = &app.overlay else { panic!("the palette") };
+        let themes: Vec<(&str, &str)> = (0..palette.filtered.len())
+            .map(|i| palette.item(i))
+            .filter(|it| matches!(it.target, Target::Theme(_)))
+            .map(|it| (it.label.as_str(), it.detail.as_str()))
+            .collect();
+        assert_eq!(
+            themes,
+            [
+                ("theme ptyro-dark", "the theme in use"),
+                ("theme ptyro-light", "switch to it (kept as ui.theme)"),
+                ("theme high-contrast", "switch to it (kept as ui.theme)"),
+            ]
+        );
+        app.overlay = None;
+        app.picked(Target::Theme("ptyro-light".into()), Purpose::Palette);
+        assert_eq!(app.theme_name, "ptyro-light", "switched at once");
+        let file = std::fs::read_to_string(Config::path(&paths)).unwrap();
+        assert!(file.contains("theme = \"ptyro-light\""), "kept: {file}");
+        assert!(app.toast.as_ref().unwrap().text.starts_with("theme ptyro-light"));
+    }
+
+    /// The clean-up list's C-k keeps the worktree under the cursor (SPEC §10.8): it is asked of
+    /// the daemon and leaves the list, which stays open for the rest; the last one closes it.
+    #[test]
+    fn clean_up_keeps_a_worktree_with_c_k() {
+        let mut app = app();
+        with_project(&mut app);
+        let a = feature(&mut app);
+        let mut b = a.clone();
+        (b.id, b.name) = ("p1-old".into(), "old".into());
+        app.worktrees.push(b.clone());
+        let entry = |w: &WorktreeInfo| ptyro_core::model::GcEntry {
+            worktree: w.clone(),
+            reasons: vec!["no sessions for 30 days".into()],
+            bytes: None,
+            bytes_partial: false,
+        };
+        let entries = vec![entry(&a), entry(&b)];
+        app.on_reply(AppMsg::Reply(Pending::Gc, Ok(Reply::Gc { entries, scratch: Vec::new() })));
+        let Some(Overlay::Picker { palette, purpose: Purpose::Gc }) = &app.overlay else {
+            panic!("the clean-up list")
+        };
+        assert!(palette.title.contains("C-k keep it"), "{}", palette.title);
+        while app.rx.try_recv().is_ok() {}
+        key(&mut app, KeyCode::Char { c: 'k' }, Mods(Mods::CTRL));
+        // Not connected here, so the request comes back refused: it was asked, for `a`.
+        assert!(matches!(app.rx.try_recv(), Ok(AppMsg::Reply(Pending::GcKept, _))));
+        let Some(Overlay::Picker { palette, purpose: Purpose::Gc }) = &app.overlay else {
+            panic!("the list stays open for the rest")
+        };
+        let left: Vec<&Target> =
+            (0..palette.filtered.len()).map(|i| &palette.item(i).target).collect();
+        assert_eq!(left, [&Target::Worktree(b.id.clone())]);
+        key(&mut app, KeyCode::Char { c: 'k' }, Mods(Mods::CTRL));
+        assert!(app.overlay.is_none(), "the last one kept closes it");
     }
 
     /// Worktrees and projects are renamed from their row menu (SPEC §2.3), with the session

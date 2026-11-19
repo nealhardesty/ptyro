@@ -1,7 +1,7 @@
 //! Reading a diff (a checkpoint's, SPEC §15.3) into files, hunks and lines, and the small
-//! questions pair mode and `gc` ask: a snapshot of the working tree, whether it is dirty, whether
-//! one commit is an ancestor of another. Everything shells out to git, like the rest of this
-//! crate.
+//! questions `gc` and checkpoints ask: a snapshot of the working tree, whether it is dirty,
+//! whether one commit is an ancestor of another, whether a branch's changes are in another
+//! already. Everything shells out to git, like the rest of this crate.
 
 use std::path::Path;
 
@@ -24,6 +24,21 @@ impl Git {
 
     pub fn is_ancestor(&self, path: &Path, a: &str, b: &str) -> bool {
         self.ok(path, &["merge-base", "--is-ancestor", "--end-of-options", a, b])
+    }
+
+    /// Whether merging `tip` into `base` would change nothing: its changes are in `base` already,
+    /// however they got there (a squash merge or a rebase, which ancestry never sees). Asked of
+    /// `git merge-tree --write-tree` (git 2.38+), which touches no checkout; an older git, or a
+    /// merge that conflicts, says no.
+    pub fn changes_in(&self, path: &Path, tip: &str, base: &str) -> bool {
+        if self.check_rev_arg("base", base).is_err() || self.check_rev_arg("tip", tip).is_err() {
+            return false;
+        }
+        let tree = format!("{base}^{{tree}}");
+        let tree = self.run(path, &["rev-parse", "--verify", "--quiet", "--end-of-options", &tree]);
+        let merged = self.run(path, &["merge-tree", "--write-tree", "--no-messages", base, tip]);
+        let (Ok(merged), Ok(tree)) = (merged, tree) else { return false };
+        merged.lines().next().is_some_and(|t| t.trim() == tree.trim())
     }
 
     /// Whether the checkout has uncommitted or untracked changes.

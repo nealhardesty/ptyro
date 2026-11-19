@@ -684,6 +684,7 @@ impl Daemon {
         }
         self.drop_worktree(wt.clone());
         self.forget_launch(&wt.id).await;
+        self.forget_kept(&wt.id).await;
         notes.insert(0, format!("removed {}", wt.qualified()));
         Ok(Reply::Removed { notes })
     }
@@ -859,9 +860,11 @@ impl Daemon {
         }
     }
 
-    /// Stale worktrees (SPEC §10.8): gone from disk, branch merged, or
-    /// unused for a while; a locked one is being kept, so only its missing directory counts.
-    /// Each comes with what it takes on disk, the biggest first.
+    /// Stale worktrees (SPEC §10.8): gone from disk, branch merged (squash-merged too), or
+    /// unused for a while; a locked one is being kept, so only its missing directory counts. One
+    /// kept from clean-up (`kept.rs`) is unused again only `stale_days` after it was kept, and
+    /// merged again only once its branch moves on. Each comes with what it takes on disk, the
+    /// biggest first.
     pub(crate) async fn gc(self: &Arc<Self>) -> Result<Reply, Error> {
         let stale_days = self.config().worktrees.stale_days;
         let worktrees: Vec<WorktreeInfo> = {
@@ -876,14 +879,20 @@ impl Daemon {
             } else if w.locked {
                 continue;
             }
+            let kept = self.kept_of(&w.id);
             if let (Some(b), Some(p)) = (&w.branch, self.project_by_id(&w.project))
                 && w.path.exists()
             {
                 let (root, b, base) = (p.root.clone(), b.clone(), w.base.clone());
+                let kept_tip = kept.as_ref().and_then(|k| k.tip.clone());
                 let merged = blocking(move || {
                     let git = Git::new();
                     let tip = git.rev(&root, &format!("refs/heads/{b}"))?;
                     let base = base.filter(|x| git.ref_exists(&root, x))?;
+                    // Kept as it is: not offered again until the branch moves.
+                    if kept_tip.as_deref() == Some(tip.as_str()) {
+                        return None;
+                    }
                     // Merged: it has commits of its own (it moved from where its reflog says it
                     // was made), and they are in the base. (Before, this asked for commits that
                     // weren't in the base *and* were: never both, so it never said merged.)
@@ -893,15 +902,22 @@ impl Daemon {
                         .lines()
                         .last()
                         .map(str::to_owned)?;
-                    (made != tip && git.is_ancestor(&root, &tip, &base)).then_some(base)
+                    if made == tip {
+                        return None;
+                    }
+                    if git.is_ancestor(&root, &tip, &base) {
+                        return Some(format!("branch merged into {base}"));
+                    }
+                    // A pull request's "Squash and merge" (or a rebase) is never an ancestor,
+                    // but what the branch changed is in the base.
+                    git.changes_in(&root, &tip, &base)
+                        .then(|| format!("branch squash-merged into {base}"))
                 })
                 .await?;
-                if let Some(base) = merged {
-                    reasons.push(format!("branch merged into {base}"));
-                }
+                reasons.extend(merged);
             }
             let has_sessions = !self.sessions_in(&w.id).is_empty();
-            let last = w.last_used_ms.unwrap_or(w.created_ms);
+            let last = w.last_used_ms.unwrap_or(w.created_ms).max(kept.map_or(0, |k| k.at_ms));
             let days = now_ms().saturating_sub(last) / 86_400_000;
             if !has_sessions && days >= u64::from(stale_days) {
                 reasons.push(format!("no sessions for {days} days"));
@@ -1093,6 +1109,9 @@ impl Daemon {
             }
             Request::WorktreeRename { addr, name } => self.rename_worktree(&addr, &name).await,
             Request::Gc => self.gc().await,
+            Request::GcKeep { worktree } => {
+                Ok(Reply::Notes { notes: vec![self.keep_worktree(&worktree).await?] })
+            }
             other => Err(Error::invalid(format!("unsupported request {other:?}"))),
         }
     }

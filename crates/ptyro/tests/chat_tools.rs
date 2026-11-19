@@ -188,6 +188,15 @@ fn the_presets_old_settings_load_and_are_reported() {
     let out = w.cli(&["chat", "fork", "c:abcd"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("retry and edit replace the last turn"), "{err}");
+    // Retitling is rename's now: said, never a chat asking an agent "retitle c:abcd t".
+    let out = w.cli(&["chat", "retitle", "c:abcd", "t"]);
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("`chat retitle` was removed")
+            && err.contains("`ptyro chat rename CHAT TITLE`"),
+        "{err}"
+    );
     assert!(w.json(&["chat", "ls", "--json"]).as_array().unwrap().len() == 1, "no chat made");
 }
 

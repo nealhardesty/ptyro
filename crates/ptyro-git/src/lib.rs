@@ -696,6 +696,15 @@ impl Git {
             let out = self.run(path, &args)?;
             s.unpushed = lines(&out).map(str::to_owned).collect();
         }
+        // Squash-merged (and its pushed branch deleted, as a pull request's merge does): the
+        // commits are nowhere else, but what they changed is in the base, so nothing is lost.
+        if !s.unpushed.is_empty()
+            && let (Some(b), Some(head)) = (base, self.rev(path, "HEAD"))
+            && self.ref_exists(path, b)
+            && self.changes_in(path, &head, b)
+        {
+            s.unpushed.clear();
+        }
         // Ignored files and folders (folders as one entry): what only this directory holds.
         s.ignored = self
             .run(path, &["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"])

@@ -566,3 +566,33 @@ fn worktrees_added_at_once_all_arrive() {
     }
     assert_eq!(f.git.worktree_list(&f.root).unwrap().len(), 41);
 }
+
+/// A branch squash-merged into the base (as a pull request's "Squash and merge" does) is never
+/// an ancestor of it, but its changes are in it; one with changes of its own is not.
+#[test]
+fn a_squash_merged_branch_has_its_changes_in_the_base() {
+    let f = fixture();
+    let wt = f.base.join("wt");
+    let source = Source::NewBranch { branch: "ptyro/s".into(), base: "main".into() };
+    f.git.worktree_add(&f.root, &wt, &source).unwrap();
+    commit(&f, &wt, "a.txt", "a");
+    commit(&f, &wt, "b.txt", "b");
+    let tip = f.git.rev(&wt, "HEAD").unwrap();
+    assert!(!f.git.changes_in(&f.root, &tip, "main"), "not merged yet");
+    // Squash it into main, then main moves on with a change of its own.
+    f.git.run(&f.root, &["merge", "-q", "--squash", "ptyro/s"]).unwrap();
+    f.git.run(&f.root, &["commit", "-q", "-m", "squashed"]).unwrap();
+    commit(&f, &f.root, "c.txt", "c");
+    assert!(!f.git.is_ancestor(&f.root, &tip, "main"), "a squash is never an ancestor");
+    assert!(f.git.changes_in(&f.root, &tip, "main"), "but its changes are there");
+    // Removing it loses nothing, though its commits are on no remote.
+    let s = f.git.safety(&wt, Some("ptyro/s"), Some("main")).unwrap();
+    assert!(s.unpushed.is_empty(), "{:?}", s.unpushed);
+    // More work on the branch afterwards is not in main, and would be lost.
+    commit(&f, &wt, "d.txt", "d");
+    let tip = f.git.rev(&wt, "HEAD").unwrap();
+    assert!(!f.git.changes_in(&f.root, &tip, "main"));
+    let s = f.git.safety(&wt, Some("ptyro/s"), Some("main")).unwrap();
+    assert_eq!(s.unpushed.len(), 3, "all its commits, the squashed ones too: {:?}", s.unpushed);
+    assert!(!f.git.changes_in(&f.root, &tip, "-main"), "never an option");
+}

@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 50 };
+pub const PROTO: Version = Version { major: 1, minor: 51 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -686,6 +686,11 @@ pub enum Request {
     },
     /// Stale worktrees (never removes anything).
     Gc,
+    /// Keep a stale worktree (an address) from clean-up (1.51, SPEC §10.8): `Gc` leaves it out
+    /// until it is unused for another `stale_days`, or its branch moves on. Replies `Notes`.
+    GcKeep {
+        worktree: String,
+    },
     /// A project's branches a worktree could check out (UX1.10): local ones not checked out
     /// anywhere, then the main remote's without a local branch.
     Branches {

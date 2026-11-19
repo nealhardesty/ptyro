@@ -16,6 +16,7 @@ mod engine;
 mod github;
 mod guard;
 mod handoff;
+mod kept;
 mod launch;
 mod listen;
 mod load;
@@ -376,6 +377,7 @@ async fn serve(
     daemon.load_devices().await;
     daemon.load_used_links().await;
     daemon.load_last_launch().await;
+    daemon.load_kept().await;
     daemon.start_machines().await;
     daemon.load_declined().await;
     daemon.start_serve_supervisor();

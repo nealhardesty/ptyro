@@ -411,6 +411,29 @@ const scenarios = {
       ptyro("project", "rename", before.project, "repo");
     }
   },
+
+  // Clean up (SPEC §10.8): a worktree squash-merged into main is listed; Keep it keeps it (the
+  // daemon remembers), so it leaves the list and `ptyro gc` no longer offers it.
+  async keep() {
+    const wts = () => JSON.parse(ptyro("wt", "ls", "--json"));
+    const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: { ...process.env, ...E.env }, encoding: "utf8" });
+    ptyro("wt", "new", "e2e-keep", "-p", "repo", "--no-fetch", "--no-setup");
+    const w = await until("the new worktree", () => wts().find((x) => x.name === "e2e-keep" && x.state === "ready"));
+    writeFileSync(join(w.path, "kept.txt"), "kept\n");
+    git(w.path, "add", "kept.txt");
+    git(w.path, "commit", "-qm", "kept");
+    git(E.repo, "merge", "-q", "--squash", w.branch);
+    git(E.repo, "commit", "-qm", "e2e-keep (squashed)");
+    const listed = (name) => `[...document.querySelectorAll(".rows .row")].some(r => r.innerText.includes(${JSON.stringify(name)}))`;
+    await fresh("#/gc");
+    await tab.waitFor("the squash-merged worktree", `${listed("e2e-keep")} && document.body.innerText.includes("squash-merged")`, 30_000);
+    await tab.eval(`[...document.querySelectorAll(".rows .row")].find(r => r.innerText.includes("e2e-keep")).click()`);
+    await tab.waitFor("its menu", `!!document.querySelector(".menu button")`);
+    await tab.eval(`[...document.querySelectorAll(".menu button")].find(b => b.innerText.startsWith("Keep it")).click()`);
+    await tab.waitFor("it to leave the list", `!${listed("e2e-keep")}`, 15_000);
+    const stale = JSON.parse(ptyro("gc", "--json"));
+    if (stale.some((e) => e.worktree.name === "e2e-keep")) throw new Error(`still offered: ${JSON.stringify(stale)}`);
+  },
 };
 
 let failed = 0;

@@ -25,7 +25,7 @@ Don't know the next key? Pause after the prefix: a menu of the keys that follow 
 (`[ui] which_key_delay`, 400 ms; `0` turns it off). `.` (after the prefix, or in the sidebar, or a
 right-click on a row) lists everything you can do with that session, worktree or project.
 `Ctrl-Q ?` lists every binding as it is configured right now. `Ctrl-Q :` (or `Ctrl-Q C-p`) opens the palette, which runs any
-action by name.
+action by name, finds any setting, and switches the theme (`theme ptyro-light`; kept as `ui.theme`).
 
 ## After the prefix
 
@@ -71,7 +71,7 @@ action by name.
 | `M` | mend: what the health badge (`⚕` in the status bar) found, each with its fix |
 | `U` | set up agents and tools: the setup checklist (Agents, Tools, Already here). `Space` ticks, `⏎` installs what's ticked in a split (live output, sudo's prompt there, then the logins), `s` not now. The first run opens with the same checklist at its top |
 | `^` | update: your agents and ptyro itself, when newer versions are out (looked for once a day), in a split. It shows each update's command and asks first; ptyro's own is checked against its SHA256SUMS, the daemon upgrades live, and every open TUI restarts into the new ptyro with its view kept |
-| `G` | clean up: stale worktrees (merged, gone or unused), biggest on disk first; `⏎` removes one, after a yes (it refuses to lose work, saying what it would lose: `y` removes it anyway, `n` keeps it). The health badge says when there are some |
+| `G` | clean up: stale worktrees (merged or squash-merged, gone or unused), biggest on disk first; `⏎` removes one, after a yes (it refuses to lose work, saying what it would lose: `y` removes it anyway, `n` keeps it); `C-k` keeps one: it isn't offered again until it is unused for another `worktrees.stale_days`, or its branch moves on. The health badge says when there are some |
 | `I` | about ptyro: its version and protocol, the repository and where to report a problem (links: `⏎` opens, `y` copies), where config, data, logs and the socket live, whether the daemon and the web app run (`U` switches a daemon of another version to this one), the tools found, and `c` copies all of it for a bug report |
 | `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |

@@ -79,7 +79,7 @@ impl ProgressLook {
 }
 
 /// `[ui] sidebar_detail`: the lines under each session row (what it wants, what it's on, its
-/// task and last reply, a shell's command).
+/// last reply, a shell's command).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SidebarDetail {

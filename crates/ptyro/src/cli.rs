@@ -483,8 +483,8 @@ async fn dispatch(
         Some(Cmd::Ws { cmd }) => crate::projects::ws(&ctx, cmd).await,
         Some(Cmd::Wt { cmd }) => crate::projects::wt(&ctx, cmd).await,
         Some(Cmd::Profile { cmd }) => crate::profiles::run(&ctx, cmd).await,
-        Some(Cmd::Gc { dry_run, json, scratch }) => {
-            crate::projects::gc(&ctx, dry_run, json, scratch).await
+        Some(Cmd::Gc { dry_run, json, scratch, keep_wt }) => {
+            crate::projects::gc(&ctx, dry_run, json, scratch, keep_wt).await
         }
         Some(Cmd::Status { session, explain, json }) => {
             crate::agents::status(&ctx, session, explain, json).await

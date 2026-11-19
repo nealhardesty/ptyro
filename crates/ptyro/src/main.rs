@@ -94,7 +94,15 @@ where
     if let Some(e) = removed_command(&argv) {
         return Err(Cli::command().error(ErrorKind::InvalidSubcommand, e));
     }
-    let cli = Cli::try_parse_from(&argv)?;
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(cli) => cli,
+        // A part of a command that was removed (`ptyro wt archive`, `new --verify`): said, with
+        // what to use. Only once clap refused it, so it never stands in for what parses.
+        Err(e) => match removed_part(&argv) {
+            Some(said) => return Err(Cli::command().error(ErrorKind::InvalidSubcommand, said)),
+            None => return Err(e),
+        },
+    };
     if cli.cmd.is_some() || cli.task.len() < 2 {
         return Ok(cli);
     }
@@ -194,6 +202,118 @@ const REMOVED_COMMANDS: &[(&[&str], &str, &str)] = &[
         "on Windows, run ptyro inside WSL",
     ),
 ];
+
+/// Subcommands and flags that were removed (the pare-down, 2026-11-17) from commands that stay:
+/// the commands they belonged to, what they were (`--flag` for a flag, anywhere after the
+/// command), what they did, and what to use instead ("" for nothing).
+const REMOVED_PARTS: &[(&[&str], &[&str], &str, &str)] = &[
+    (
+        &["wt", "worktree"],
+        &["retitle"],
+        "it is part of rename now",
+        "`ptyro wt rename WT --title TITLE`",
+    ),
+    (
+        &["wt", "worktree"],
+        &["archive"],
+        "archiving a worktree",
+        "`ptyro wt rm WT` removes one (it refuses to lose work)",
+    ),
+    (
+        &["wt", "worktree"],
+        &["restore", "archives", "archive-rm"],
+        "worktree archives",
+        "`ptyro doctor` lists the ones archived before, with the git commands that bring one back",
+    ),
+    (
+        &["wt", "worktree"],
+        &["finish", "integrate", "commit", "log"],
+        "landing a worktree's work",
+        "git is yours: commit, merge and push in the worktree (`ptyro wt open WT -e shell`)",
+    ),
+    (
+        &["wt", "worktree"],
+        &["diff"],
+        "the worktree diff",
+        "`ptyro checkpoint diff` shows what an agent changed, turn by turn",
+    ),
+    (
+        &["wt", "worktree"],
+        &["lock", "unlock"],
+        "locking a worktree",
+        "`ptyro gc --keep-wt WT` keeps one from clean-up, and `wt rm` refuses to lose work",
+    ),
+    (&["wt", "worktree"], &["pair", "unpair"], "pair mode", ""),
+    (
+        &["wt", "worktree"],
+        &["rename-branch"],
+        "renaming a worktree's branch",
+        "`git branch -m NEW` in the worktree",
+    ),
+    (
+        &["project", "projects"],
+        &["discover"],
+        "finding repositories under a folder",
+        "`ptyro project add DIR` adds one, and `ptyro setup` asks where yours are",
+    ),
+    (&["project", "projects"], &["suggest"], "suggested lifecycle scripts", ""),
+    (&["project", "projects"], &["line-endings"], "the line-endings check", ""),
+    (
+        &["new", "wt", "worktree"],
+        &["--take-changes"],
+        "it carried your checkout's uncommitted changes into the new worktree",
+        "commit them on a branch and check that out: `ptyro wt new --branch B --existing`",
+    ),
+    (&["new"], &["--verify"], "verified-done checks", ""),
+    (&["new"], &["--structured"], "structured sessions (an agent in chat view)", "`ptyro chat`"),
+    (&["new"], &["--lead", "--lead-agent", "--max-workers"], "lead agents", ""),
+    (&["new"], &["--unqueued"], "the review queue", ""),
+    (
+        &["chat"],
+        &["--preset", "--tools", "--compare"],
+        "tool presets and comparing agents",
+        "every chat searches the web and reads the folders you give it (`--folder DIR`)",
+    ),
+];
+
+/// The error for a removed subcommand or flag of a command that stays (`ptyro wt archive x`,
+/// `ptyro new --verify`), when the command line has one.
+fn removed_part(argv: &[std::ffi::OsString]) -> Option<String> {
+    let words: Vec<String> =
+        argv.iter().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    // The command: the first word that isn't a global flag (or `--remote`'s value).
+    let mut rest = words.iter().enumerate();
+    let (at, command) = loop {
+        match rest.next()? {
+            (_, w) if w == "--remote" => {
+                rest.next();
+            }
+            (_, w) if w.starts_with('-') => {}
+            (i, w) => break (i, w.as_str()),
+        }
+    };
+    let after = &words[at + 1..];
+    let sub = after.iter().find(|w| !w.starts_with('-')).map(String::as_str);
+    let (parts, what, instead) =
+        REMOVED_PARTS.iter().find_map(|(commands, parts, what, instead)| {
+            if !commands.contains(&command) {
+                return None;
+            }
+            let hit = parts.iter().find(|p| match p.strip_prefix("--") {
+                Some(_) => after.iter().any(|w| w == *p || w.starts_with(&format!("{p}="))),
+                None => sub == Some(**p),
+            })?;
+            Some((*hit, *what, *instead))
+        })?;
+    // A flag is named with its subcommand (`wt new --take-changes`); `new` has none (its first
+    // word is a task).
+    let named = match sub.filter(|_| parts.starts_with("--") && command != "new") {
+        Some(sub) => format!("{command} {sub} {parts}"),
+        None => format!("{command} {parts}"),
+    };
+    let instead = if instead.is_empty() { "nothing replaces it" } else { instead };
+    Some(format!("`ptyro {named}` was removed on 2026-11-17 ({what}): {instead}"))
+}
 
 /// The error for a removed command (`ptyro init`), when the command line names one, whatever
 /// follows it (`ptyro inbox --json`, `ptyro pad add -`).
@@ -670,6 +790,10 @@ enum Cmd {
         /// Only scratch shells' directories left behind (SHELLS); with --json, those as JSON
         #[arg(long)]
         scratch: bool,
+        /// Keep this stale worktree: gc leaves it out until it is unused for another
+        /// `worktrees.stale_days`, or its branch moves on (repeatable)
+        #[arg(long = "keep-wt", value_name = "WT", add = ArgValueCandidates::new(complete::worktrees))]
+        keep_wt: Vec<String>,
     },
     /// Show, check or edit the configuration (~/.config/ptyro/config.toml)
     Config {
@@ -1392,6 +1516,58 @@ mod tests {
         assert_eq!(said(&["ptyro", "setup"]), None);
         assert_eq!(said(&["ptyro", "chat", "new", "backup"]), None, "only the command word");
         assert_eq!(said(&["ptyro"]), None);
+    }
+
+    /// Removed subcommands and flags of commands that stay say so and name what to use, but only
+    /// where clap refuses the line: what parses is never taken for them.
+    #[test]
+    fn a_removed_subcommand_or_flag_says_what_to_use() {
+        // clap's whole command tree wants more stack than a test thread has, in a debug build.
+        std::thread::Builder::new()
+            .stack_size(32 << 20)
+            .spawn(|| {
+                let err = |argv: &[&str]| match super::parse_cli(argv) {
+                    Err(e) => e.to_string(),
+                    Ok(_) => panic!("{argv:?} parsed"),
+                };
+                let e = err(&["ptyro", "wt", "retitle", "x", "t"]);
+                assert!(
+                    e.contains("`ptyro wt retitle` was removed")
+                        && e.contains("wt rename WT --title"),
+                    "{e}"
+                );
+                let e = err(&["ptyro", "--remote", "box", "worktree", "archive", "x"]);
+                assert!(e.contains("`ptyro worktree archive`") && e.contains("wt rm"), "{e}");
+                assert!(err(&["ptyro", "wt", "lock", "x"]).contains("gc --keep-wt"));
+                assert!(err(&["ptyro", "wt", "pair", "x"]).contains("nothing replaces it"));
+                assert!(err(&["ptyro", "project", "discover"]).contains("`ptyro project add DIR`"));
+                let e = err(&["ptyro", "wt", "new", "x", "--take-changes"]);
+                assert!(
+                    e.contains("`ptyro wt new --take-changes`") && e.contains("--existing"),
+                    "{e}"
+                );
+                let e = err(&["ptyro", "new", "fix it", "--verify=cargo test"]);
+                assert!(e.contains("`ptyro new --verify` was removed"), "{e}");
+                assert!(
+                    err(&["ptyro", "chat", "new", "--preset", "none", "hi"])
+                        .contains("`--folder DIR`")
+                );
+                // Mistyped, not removed: clap's own words.
+                let e = err(&["ptyro", "wt", "rename", "x", "--titel", "y"]);
+                assert!(!e.contains("was removed"), "{e}");
+                // The same words where they parse are what they say.
+                assert!(super::parse_cli(["ptyro", "send", "s", "wt", "archive"]).is_ok());
+                assert!(
+                    super::parse_cli(["ptyro", "new", "-d", "--", "sh", "-c", "echo --verify"])
+                        .is_ok()
+                );
+                assert!(
+                    super::parse_cli(["ptyro", "gc", "--keep-wt", "x", "--keep-wt", "y"]).is_ok()
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]
