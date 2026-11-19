@@ -44,6 +44,44 @@ export function patch(parent, kids) {
         parent.insertBefore(k, at);
     }
 }
+/// How long a press holds the page back at most (a long press, a drag that never ends).
+export const HELD_MS = 1000;
+/// A press in progress (a pointer down anywhere) holds back drawing the page again: drawn now,
+/// the control under the pointer would be a new one and the click on it lost (the release lands
+/// on another element). What waited is drawn once, after the release and its click, or once the
+/// press has been held HELD_MS.
+export class PressGate {
+    draw;
+    now;
+    down = 0;
+    waiting = false;
+    timer;
+    constructor(draw, now = () => Date.now()) {
+        this.draw = draw;
+        this.now = now;
+    }
+    pressed() { this.down = this.now(); }
+    released() {
+        this.down = 0;
+        if (!this.waiting)
+            return;
+        clearTimeout(this.timer);
+        this.waiting = false;
+        // (After the click, which the same release dispatches.)
+        this.timer = setTimeout(this.draw, 0);
+    }
+    /// True when a draw must wait (it happens later by itself).
+    hold() {
+        const held = this.now() - this.down;
+        if (!this.down || held >= HELD_MS)
+            return false;
+        if (!this.waiting) {
+            this.waiting = true;
+            this.timer = setTimeout(() => { this.waiting = false; this.draw(); }, HELD_MS - held);
+        }
+        return true;
+    }
+}
 // ── actions: the controls, by name, and their tooltips ────────────────────────────────────
 const tips = {};
 /// Register a module's `ACTIONS` and get its typed `tip`. The Web column of docs/parity.md names

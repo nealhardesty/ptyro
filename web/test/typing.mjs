@@ -20,7 +20,7 @@
 //   ["blur"]
 // Between steps no time passes and no timer runs unless a wait says so (the same task).
 import assert from "node:assert/strict";
-import { MOD, Typist, SETTLE_MS, LIVE_MAX, dictated, straighten, multiword, hasCJK, strayKey, hardKey, ownKeyboard, autoFocus } from "../dist/keys.js";
+import { MOD, Typist, SETTLE_MS, LIVE_MAX, dictated, straighten, multiword, hasCJK, strayKey, hardKey, ownKeyboard, autoFocus, shellDigit, keyOf } from "../dist/keys.js";
 
 const dom = (key, o = {}) => ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: () => false, ...o });
 
@@ -313,6 +313,7 @@ export function units() {
   assert.deepEqual(j.r.out, []);
   assert.deepEqual(j.r.previews.at(-1), ["にほ", "ime"]);
   terminalFirst();
+  altDigits();
   let runs = 0;
   for (let seed = 1; seed <= 400; seed++) { property(seed, true); property(seed * 7919, false); runs += 2; }
   return { traces: traces.length, runs };
@@ -354,4 +355,33 @@ function terminalFirst() {
   assert.equal(autoFocus({ ...free, selected: true }), false, "never from a selection");
   assert.equal(autoFocus({ ...free, keyboard: false }), false, "never pops a phone's keyboard");
   assert.equal(autoFocus({ ...free, canType: false }), false, "a viewer, an ended session");
+}
+
+/// SHELLS' Alt+1…9, Alt+0: shell N, decided by the physical key, before the terminal sees it.
+function altDigits() {
+  const term = { focus: "field", terminal: true, dialog: false, on: true };
+  const alt = (key, code, o = {}) => dom(key, { altKey: true, code, ...o });
+  // Windows and Linux: Alt+1 says "1"; a Mac's Option+1 says "¡", Option+0 "º".
+  assert.equal(shellDigit(alt("1", "Digit1"), term), 1);
+  assert.equal(shellDigit(alt("¡", "Digit1"), term), 1, "Option+1 on a Mac");
+  assert.equal(shellDigit(alt("ª", "Digit9"), term), 9);
+  assert.equal(shellDigit(alt("º", "Digit0"), term), 10, "Alt+0 is shell 10");
+  // From the page, a button, the terminal: all of them. Not another field, a dialog, or switched off.
+  for (const focus of ["none", "control"]) assert.equal(shellDigit(alt("2", "Digit2"), { ...term, focus, terminal: false }), 2, focus);
+  assert.equal(shellDigit(alt("¡", "Digit1"), { ...term, terminal: false }), null, "a chat's box types ¡");
+  assert.equal(shellDigit(alt("1", "Digit1"), { ...term, dialog: true }), null);
+  assert.equal(shellDigit(alt("1", "Digit1"), { ...term, on: false }), null, "[shell] alt_digits off: the program's");
+  // The layout's own characters type (German Mac Option+5 `[`, British Option+3 `#`), as keyOf sends them.
+  assert.equal(shellDigit(alt("[", "Digit5"), term), null);
+  assert.equal(shellDigit(alt("#", "Digit3"), term), null);
+  assert.deepEqual(keyOf(alt("[", "Digit5")), { code: { t: "char", c: "[" }, mods: 0 });
+  // Other modifiers, other keys, a plain digit: not a shell.
+  assert.equal(shellDigit(alt("1", "Digit1", { ctrlKey: true }), term), null, "AltGr on Windows is Ctrl+Alt");
+  assert.equal(shellDigit(alt("!", "Digit1", { shiftKey: true }), term), null);
+  assert.equal(shellDigit(alt("1", "Digit1", { metaKey: true }), term), null);
+  assert.equal(shellDigit(alt("¹", "Digit1", { getModifierState: (k) => k === "AltGraph" }), term), null);
+  assert.equal(shellDigit(alt("1", "Numpad1"), term), null);
+  assert.equal(shellDigit(alt("å", "KeyA"), term), null);
+  assert.equal(shellDigit(dom("1", { code: "Digit1" }), term), null, "a plain digit is typed");
+  assert.equal(shellDigit(alt("1", "Digit1", { isComposing: true }), term), null);
 }

@@ -59,7 +59,8 @@ export interface Host {
   outbox(): Outbox;
   request(req: object): Promise<any>;
   toast(text: string): void;
-  /// The page's own lines changed (the pill, ⌨ Type, ✎ compose): draw it again.
+  /// The page's own lines changed (the pill, ⌨ Type, ✎ compose): draw it again (held back while a
+  /// press is down, `PressGate`: a click on ⋯ that took the focus from the field isn't lost).
   changed(): void;
 }
 
@@ -707,7 +708,7 @@ export class Term {
       document.body.classList.add("typing");
       this.fitViewport();
       this.schedule(true);
-      this.changedAfterPress();
+      this.host.changed();
     });
     inp.addEventListener("blur", () => {
       // What the keyboard had waiting goes before the session hears the focus is gone.
@@ -718,7 +719,7 @@ export class Term {
       document.body.classList.remove("typing");
       document.documentElement.style.removeProperty("--vvh");
       this.schedule(true);
-      this.changedAfterPress();
+      this.host.changed();
     });
     inp.addEventListener("keydown", (e) => this.onKeydown(e as KeyboardEvent));
     // Soft keyboards, input methods and dictation (keys.ts `Typist`): typed text goes as keys at
@@ -754,32 +755,8 @@ export class Term {
     });
   }
 
-  /// A pointer is down somewhere on the page (a press that may take the focus from the field).
-  private pressed = false;
-
-  /// The page around is drawn again (the focus came or went). When a press took the focus (a
-  /// click on the header's ⋯, on Allow, on ✎ compose), only once it is released: drawn at once,
-  /// the control under the pointer would be a new one and the click would be lost.
-  private changedAfterPress(): void {
-    if (!this.pressed) { this.host.changed(); return; }
-    const go = () => {
-      window.removeEventListener("pointerup", go, true);
-      window.removeEventListener("pointercancel", go, true);
-      // (After the click, which the same release dispatches.)
-      setTimeout(() => this.host.changed(), 0);
-    };
-    window.addEventListener("pointerup", go, true);
-    window.addEventListener("pointercancel", go, true);
-  }
-
   private wire(): void {
     // Listeners on the window and an observer outlive this terminal unless `dispose` takes them off.
-    const down = () => { this.pressed = true; };
-    const up = () => { this.pressed = false; };
-    window.addEventListener("pointerdown", down, true);
-    window.addEventListener("pointerup", up, true);
-    window.addEventListener("pointercancel", up, true);
-    this.offs.push(() => { window.removeEventListener("pointerdown", down, true); window.removeEventListener("pointerup", up, true); window.removeEventListener("pointercancel", up, true); });
     const onVv = () => { if (this.typing) { this.fitViewport(); this.followCursorNow(); } this.resizeSession(); };
     const onWin = () => { this.schedule(true); this.resizeSession(); };
     window.visualViewport?.addEventListener("resize", onVv);

@@ -168,5 +168,27 @@ store.set("k", "v");
   assert.equal(confirmsKill("full", null), true, "unread: asks");
   assert.equal(confirmsKill("control", [{ key: "ui.confirm_kill", value: false }]), true);
 }
+// A press holds back drawing the page: what waited is drawn once, after the release (and its
+// click), or once the press has been held HELD_MS; with no press it draws at once.
+{
+  const { PressGate, HELD_MS } = await import("../dist/kit.js");
+  let now = 1000, drawn = 0;
+  const g = new PressGate(() => drawn++, () => now);
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  assert.equal(g.hold(), false, "no press: draw now");
+  g.pressed();
+  assert.equal(g.hold(), true);
+  assert.equal(g.hold(), true, "a second draw waits with the first");
+  g.released();
+  assert.equal(drawn, 0, "not before the click");
+  await tick();
+  assert.equal(drawn, 1, "once, after the release");
+  assert.equal(g.hold(), false);
+  g.pressed(); g.released(); await tick();
+  assert.equal(drawn, 1, "a press with nothing waiting draws nothing");
+  g.pressed();
+  now += HELD_MS;
+  assert.equal(g.hold(), false, "held too long: draws");
+}
 console.log("ok");
 process.exit(0);

@@ -406,6 +406,8 @@ sidebar_detail = "compact"` keeps one line per row.
     key: Esc+). Until then, `Ctrl-Q e` and the digit always works, the hints say so, and the health badge (`Ctrl-Q M`) points at the setting.
     Ghostty, kitty, WezTerm and Alacritty send Alt as they are. `make verify-shells` tells you
     what yours sends. `[shell] alt_digits = false` leaves Alt-digits to the program in the pane.
+    On the web, `Alt+1`…`Alt+9` (Option on a Mac, no setting needed) do the same from any page,
+    while you type in a terminal too.
 - `Ctrl-Q o` **opens the worktree in…** any editor installed here (nvim, vim, hx, VS Code,
   Zed, Cursor, or one of yours under `[editors]`; on macOS an app in Applications counts even
   without its command on `PATH`), the file manager (`finder`, or `files` on Linux), a terminal app
@@ -790,7 +792,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make msrv` | type-check with the oldest compiler `rust-version` promises (installs it) |
 | `make icons` | render the web app's favicon, PWA (including maskable) and apple-touch icons from `docs/logos/ptyro-icon.svg` (needs `rsvg-convert`) |
 | `make web-test` | the web app's logic tests that need no daemon (settings, terminal keys and selection, keys exactly once over a lossy link, predicted echo against random programs and links, QR codes, the setup checklist; needs Node) |
-| `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, predicted echo (and a password prompt never shown), going offline. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it) |
+| `make web-e2e` | the web app in a real headless Chrome, driven from Node over the DevTools protocol (no packages): the session list, a new task, answering a permission prompt, the settings panel with undo, typing into the terminal, predicted echo (and a password prompt never shown), going offline, Alt+1…9 switching shells. Skips without Chrome unless `PTYRO_REQUIRE_BROWSER=1` (CI sets it); `PTYRO_E2E_ONLY="rename keep"` runs only those scenarios (for chasing a flake: run it in a loop) |
 | `make tools` / `make deny` | install cargo-deny / license, advisory and source checks |
 | `make parity` (or `make tui-parity`) | check that every CLI command has a TUI path and a web path, or a waiver, in [`docs/parity.md`](docs/parity.md); a gap fails it (`STRICT=0` / `WEB_STRICT=0` only list TUI / web gaps) |
 | `make doc` / `make clean` | API docs (warnings fail) / remove build output |

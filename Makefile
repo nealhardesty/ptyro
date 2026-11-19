@@ -205,7 +205,7 @@ web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/assets.mjs
 	node web/test/setup.mjs
 
-web-e2e: ## The web app in a real headless Chrome (needs Node and Chrome; PTYRO_REQUIRE_BROWSER=1 fails instead of skipping)
+web-e2e: ## The web app in a real headless Chrome (needs Node and Chrome; PTYRO_REQUIRE_BROWSER=1 fails instead of skipping; PTYRO_E2E_ONLY="rename keep" runs only those)
 	$(CARGO) test -p ptyro --test web_e2e -- --nocapture
 
 web-check: ## Check that the committed web/dist matches web/src (CI)

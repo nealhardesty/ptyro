@@ -5154,11 +5154,18 @@ emulator, no WASM.
   way out to the page's buttons), not Enter/Space/Esc on a focused button, not a modifier alone or
   Cmd, not Ctrl/Alt while page text is selected; never what a field types. So on a session this
   device may type to, the page's own letter shortcuts (`n`, `/`, `?`, a shell's digits) are the
-  terminal's. **⌨ Type** (under the key row, always in sight, accented while the terminal hasn't
-  the keys) focuses it; while typing it reads **⌨ Done** and puts the keyboard away. Focus coming
-  or going redraws the page only once a press is released (`changedAfterPress`), so the first
-  click on ⋯, Allow or ✎ while typing isn't lost to a control drawn anew under the pointer; and on
-  a computer nothing moves when the focus does (the pill hides and the page fits the
+  terminal's; SHELLS' `Alt+1`…`Alt+9`, `Alt+0` are not (§23.14: ptyro's before the program's, as
+  in the TUI). **⌨ Type** (under the key row, always in sight, accented while the terminal hasn't
+  the keys) focuses it; while typing it reads **⌨ Done** and puts the keyboard away. No redraw lands
+  mid-press: while a pointer is down anywhere the page waits (`PressGate` in `kit.ts`, at most
+  `HELD_MS` = 1 s; what waited is drawn once, after the release and its click), so a click on ⋯,
+  Allow or ✎ isn't lost to a control drawn anew under the pointer (the focus leaving the terminal,
+  a status event, `loadAll`'s second render). And nothing moves under a pointer about to press:
+  the header puts what arrives after the first draw (the machine's chip once connected, its load
+  average once known, 🔔) next to the title, which gives it room, so the page's own controls (⋯)
+  and the connection dot stay put (that move was the e2e `rename` flake: a click aimed at ⋯ landed
+  on the load average that had just pushed it left); and on a computer nothing moves when the
+  focus does (the pill hides and the page fits the
   `visualViewport` while typing only on a coarse pointer). **✎ compose** (`session.compose`, was
   the reply box `session.reply`) opens a box under the terminal, closed by default (no room taken
   on a phone): a normal textarea, so dictation (OS, Superwhisper) works as anywhere, growing to
@@ -8194,18 +8201,30 @@ fields (`Place.loose`, `Place.slot`, `serde(default)`).
 
 ### 23.14 The web
 
-The web has no splits and no `Alt` it can count on: on macOS the browser types characters, and
-`Cmd`-digit switches tabs. It gets the same things, shaped for a page and a phone:
+The web has no splits, and `Cmd`-digit switches the browser's tabs. It gets the same things, shaped
+for a page and a phone:
 
 - **The session list** gets a SHELLS group above its chats aside. It holds numbered cards with
   their label and state, a `＋` with a menu (new shell, scratch shell, a command), and the empty
   `＋ new shell`.
 - **A shell's page** has the strip at the top (§23.6): `1 2 [3] 4 ＋`, which you tap to switch, and
   swipe left and right on a phone. Its ⋯ menu has rename, move to number…, watch…, adopt…, stop.
-- **Keys on a desktop browser** while the page (not the terminal) has focus: `1`…`9` on the session
-  list open that shell. In the terminal, keys belong to the session, so the strip is the way.
-  Which chord, if any, reaches the page through a focused terminal canvas on Chrome, Safari and
-  Firefox is checked in SH.0, not assumed.
+- **Keys on a desktop browser** ([built 2026-11-19, WEB2]): **`Alt+1`…`Alt+9`, `Alt+0`** show shell
+  1–10 from any page, and while typing in a terminal too, as the TUI's global `M-1`… do: taken
+  before the terminal's own keydown (a capture listener on the window), so the program never sees
+  them, and the next key goes to the new shell's terminal (`goShell` draws the page at once, not at
+  the hashchange that typed keys can overtake). The physical key decides (`e.code` `Digit1`…), so
+  Option on a Mac is Alt with no setting (Option+1 types ¡ and is still shell 1); not when Option
+  makes one of the layout's own ASCII characters (a German Mac's Option+5 `[`, a British one's
+  Option+3 `#`: typed, as `keyOf` sends them), not with Ctrl (AltGr on Windows), Shift, Cmd or
+  AltGr, not while composing, not in another field (a chat's box: Option-digit types there), not
+  under a dialog. `[shell] alt_digits = false` (read with `settings.view` on connecting and on
+  opening a session's page, where this device may read the config) leaves them to the program, as
+  in the TUI. The workspace is the TUI's `shells_ws`: the page's session's (a shell's, its
+  worktree's project's), else the list's. `shellDigit` in `keys.ts` (tested in
+  `web/test/typing.mjs`), e2e `altDigits`. The plain `1`…`9` still open a shell on the session list
+  and on a shell's page this device only watches; where it may type, plain digits are the
+  terminal's.
 - `ACTIONS` gains `shells`, `shells.new`, `shells.go`, `shells.move`, `shells.watch`,
   `shells.place`, `shells.scratch`, each in its `docs/parity.md` row.
 

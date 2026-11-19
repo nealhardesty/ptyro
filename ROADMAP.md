@@ -2700,6 +2700,10 @@ Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`). *
   Typed text drawn at the cursor at once (dim), confirmed or
   wiped by the next frames; shown only on a slow link and while predictions prove right. A
   couple of frames in flight on slow links.
+- [x] *Also (2026-11-19):* `Alt+1`…`Alt+9`, `Alt+0` show SHELLS' shells on the web while typing,
+  as in the TUI (`shellDigit`, e2e `altDigits`; SPEC §23.14); and the e2e `rename` flake fixed in
+  the product: the header's late machine chip and load average no longer push ⋯ from under a
+  pointer, and no redraw lands mid-press (`PressGate`; SPEC §16.4 WEB1.8 "Terminal first").
 
 ## CHAT — Chat (proposed 2026-10-29; open)
 

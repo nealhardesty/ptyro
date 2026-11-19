@@ -6,8 +6,8 @@ import { Screen, modelLabel } from "./screen.js";
 import { MAX_SEND, conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { FEATURE, Outbox, lostTitle } from "./outbox.js";
-import { autoFocus, hardKey, ownKeyboard, strayKey } from "./keys.js";
-import { actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
+import { autoFocus, hardKey, ownKeyboard, shellDigit, strayKey } from "./keys.js";
+import { PressGate, actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import { staleMaybeChanged } from "./projects.js";
 import "./settings.js";
@@ -16,7 +16,7 @@ import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
 import { offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
-import { goShell, listWorkspace, shellStrip, shellsGroup } from "./shells.js";
+import { altDigitsOn, goShell, listWorkspace, readAltDigits, shellStrip, shellsGroup, shellsWorkspace } from "./shells.js";
 import { apply as showMachine, offlineText } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
@@ -204,9 +204,12 @@ function setHostLoad(l) {
 let pushOn = "Notification" in window && Notification.permission === "granted";
 const pushOffered = () => !pushOn;
 /// `back`: true goes to the session list; a string is where it goes instead.
+/// What comes and goes after the page is drawn (the machine's chip once connected, its load once
+/// known, 🔔) sits next to the title, which gives it room: the page's own controls, to its right,
+/// never move under a finger or a pointer that is about to press them.
 function header(title, back, ...extra) {
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
-    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), ...extra, conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, dot, !back && pushOffered() ? h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔") : null);
+    return h("header", {}, back ? h("a", { class: "back", href: typeof back === "string" ? back : "#/", "aria-label": "Back" }, "‹") : h("img", { class: "logo", src: "/icon.svg", alt: "" }), h("h1", {}, title), conn.machine || hostLoad ? h("span", { class: "machine", title: machineTitle() }, conn.machine, loadSpan()) : null, !back && pushOffered() ? h("button", { class: "icon", title: tip("notifications"), onclick: () => void enablePush() }, "🔔") : null, ...extra, dot);
 }
 function sessionCard(s) {
     const st = statusOf(s);
@@ -521,7 +524,15 @@ function paint() {
         return;
     shell.term.paint();
 }
+// A press holds back drawing the page (`PressGate`): the click lands on the control pressed.
+const presses = new PressGate(() => render());
+window.addEventListener("pointerdown", () => presses.pressed(), true);
+for (const t of ["pointerup", "pointercancel", "blur"])
+    window.addEventListener(t, (e) => { if (t !== "blur" || e.target === window)
+        presses.released(); }, true);
 function render() {
+    if (presses.hold())
+        return;
     if (!token()) {
         root.replaceChildren(pairView());
         return;
@@ -540,6 +551,8 @@ function render() {
     // A session page opened (or opened again): its terminal has the keys, once it may.
     if (entered && shell && shell.id === here)
         shell.want = true;
+    if (entered && here)
+        void readAltDigits();
     if (conn.state !== "open")
         view.prepend(h("div", { class: "offline", role: "status" }, offlineText(conn.state, location.hostname)));
     if (root.firstChild !== view || root.childNodes.length !== 1)
@@ -698,6 +711,7 @@ conn.listeners.add((msg) => {
         void refresh();
         void loadAll();
         void syncPush();
+        void readAltDigits();
         setupConnected();
         conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => { });
         return;
@@ -779,6 +793,18 @@ ui.fail = (text) => { if (!offerSetup(text))
 ui.header = header;
 ui.push = () => void enablePush();
 ui.forget = () => { void forget(); };
+// SHELLS' Alt+1…9 and Alt+0 (keys.ts `shellDigit`): shell N, from anywhere, the terminal too:
+// taken here, before the terminal's own keydown, so the program never sees it (as in the TUI).
+window.addEventListener("keydown", (e) => {
+    const t = e.target;
+    const n = token() ? shellDigit(e, { focus: focusOf(t), terminal: !!shell && t === shell.term.input, dialog: !!document.querySelector(".scrim"), on: altDigitsOn() }) : null;
+    if (n == null)
+        return;
+    e.preventDefault();
+    e.stopPropagation();
+    const r = route();
+    void goShell(app.sessions.values(), n, shellsWorkspace(r.view === "session" ? app.sessions.get(r.id ?? "") : undefined));
+}, true);
 // Keys, for a desktop: n new task, m new chat, / find, C-g find in every chat, g then s c p m go to a tab, ? this list.
 let goKey = 0;
 document.addEventListener("keydown", (e) => {
@@ -809,7 +835,7 @@ document.addEventListener("keydown", (e) => {
         newTask();
     }
     // SHELLS (SPEC §23.14): a digit shows that shell, on the list and on a shell's page this device
-    // only watches (where it may type, every key is the terminal's: the strip above it switches).
+    // only watches (where it may type, every key is the terminal's: Alt+N and the strip switch).
     else if (/^[1-9]$/.test(e.key) && (route().view === "list" || (route().view === "session" && app.sessions.get(route().id ?? "")?.loose))) {
         e.preventDefault();
         const here = app.sessions.get(route().id ?? "");
@@ -842,7 +868,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["Alt+1…9", "Shell N of SHELLS, from anywhere, while typing in a terminal too (Option on a Mac; Alt+0: shell 10)"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 takePairCode();

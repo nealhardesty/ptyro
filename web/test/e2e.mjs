@@ -415,6 +415,44 @@ const scenarios = {
     ptyro("kill", "once");
   },
 
+  // SHELLS' Alt+1…9 (SPEC §23.6), as in the TUI: typing in shell 1's terminal, Alt+2 (a Mac's
+  // Option+2, which says ™: the physical key decides) shows shell 2, whose terminal then has the
+  // keys; Alt+1 (as Windows sends it) goes back. Neither program ever saw an Alt digit.
+  async altDigits() {
+    for (const n of [1, 2]) ptyro("shells", "new", "-d", "--slot", String(n), "-n", `alt-${n}`, "--", "sh", "-c", "cat -v");
+    const one = await until("shell 1", () => find("alt-1"));
+    const two = await until("shell 2", () => find("alt-2"));
+    const read = (name) => ptyro("read", name).split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    // (The tty echoes a line as it is typed and `cat -v` prints it again at Enter: twice is once.
+    // An Alt digit that reached it would show as ^[2, ™ as M-bM-^DM-" or ™.)
+    const twice = (name, t) => () => read(name).filter((l) => l === t).length === 2;
+    const focused = `document.activeElement === document.querySelector(".term-input")`;
+    const alt = async (key, code, vk) => {
+      const k = { key, code, windowsVirtualKeyCode: vk, modifiers: 1 };
+      await tab.send("Input.dispatchKeyEvent", { type: "keyDown", ...k, text: key });
+      await tab.send("Input.dispatchKeyEvent", { type: "keyUp", ...k });
+    };
+    await fresh(`#/s/${one.id}`);
+    await tab.waitFor("shell 1's terminal to take the keys", focused, 10_000);
+    await tab.type("in-one");
+    await tab.enter();
+    await until("keys typed in shell 1", twice("alt-1", "in-one"), 10_000);
+    await alt("™", "Digit2", 50);
+    await tab.waitFor("Alt+2 to show shell 2", `location.hash === ${JSON.stringify(`#/s/${two.id}`)}`);
+    await tab.type("in-two");
+    await tab.enter();
+    // (Typed at once: not one key may still go to shell 1, the page left.)
+    try { await until("keys typed in shell 2", twice("alt-2", "in-two"), 10_000); } catch (e) { throw new Error(`${e.message}: shell 1 has ${JSON.stringify(read("alt-1"))}, shell 2 ${JSON.stringify(read("alt-2"))}`); }
+    await alt("1", "Digit1", 49);
+    await tab.waitFor("Alt+1 to show shell 1 again", `location.hash === ${JSON.stringify(`#/s/${one.id}`)}`);
+    await sleep(500);
+    for (const [name, typed] of [["alt-1", "in-one"], ["alt-2", "in-two"]]) {
+      const got = read(name);
+      if (got.join("\n") !== `${typed}\n${typed}`) throw new Error(`${name}'s program saw more than was typed: ${JSON.stringify(got)}`);
+    }
+    for (const n of [1, 2]) ptyro("kill", `alt-${n}`);
+  },
+
   // Predicted echo (WEB2.4), in a real page against a real shell on a real tty. Here the echo is
   // quicker than any guess, so auto never draws one (checked); `force` then stands in for a slow
   // link. Each key and what is drawn after it are read in one synchronous step, before any frame
