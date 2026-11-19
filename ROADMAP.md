@@ -3865,13 +3865,28 @@ Development section), its README and `docs/` text, and the milestone's version b
 (`make bump`). Each stage is useful without the next.
 
 - [ ] **KB0 Spikes** — results into SPEC §20 and §25 before KB1 starts. **M**
-  - [ ] **KB0.1 Search at size** (`make spike-kb`, `crates/ptyro-store/examples/kb_spike.rs`):
+  - [x] **KB0.1 Search at size** (`make spike-kb`, `crates/ptyro-store/examples/kb_spike.rs`):
         500k and 1M synthetic chunks in the §25.4 schema; the cost of a search by words, by
         meaning (unfiltered, then filtered by profile, project, kind and time from `chunk_vec`'s
         own columns), and merged with `chat.db`'s lists; the file's size; an ingest's writer
         time. If meaning misses 150 ms at 500k, measure §25.8's fallbacks in order (newest
         first with an early stop, a one-bit sketch then rescoring) and write the chosen one into
         §25.8. **S**
+        *(Built 2026-11-19: `crates/ptyro-store/examples/kb_spike.rs`, run by `make spike-kb`
+        (`CHUNKS=1000000` for the larger run; about 2 and 4 minutes on an M4 Pro), fills a
+        throwaway file in §25.4's schema with a mix of kinds over three profiles, twelve
+        projects and two years, and a second file standing in for `chat.db`. **The budget is
+        met at 500k with no fallback** (merged search 86 ms, 90 at the 95th percentile, as
+        chat does each part; 156 and 165 at 1M, a miss). Two changes that were not on the
+        list make both sizes pass (41 and 71 ms) and go to KB1.5: the words query in two
+        steps, and a cosine with eight running sums. The column filters save little (the scan
+        is mostly SQLite walking rows), newest-first is rejected (slower, and it loses the
+        best hits), the one-bit sketch works (13 ms, full recall on the synthetic model) and
+        waits. One query misses: a single very common word (108 ms by words at the 95th
+        percentile). Also found: forgetting leaves the words in FTS5's index unless its own
+        `secure-delete` is on (1.7 ms a deleted chunk), for KB1.1; and `kb.db` is 516 MB at
+        500k, half the estimate. SPEC §25.4, §25.8's table, §25.12, §25.16, and §25's "As
+        built".)*
   - [x] **KB0.2 Transcripts, live** (`make verify-kb`, part 1): against the pinned Claude and
         Codex, that `Stop` carries `transcript_path`, that the file has the turn when the hook
         fires (or how long after), that a resumed conversation keeps its id and its file, and
@@ -3911,14 +3926,27 @@ Development section), its README and `docs/` text, and the milestone's version b
         the file is untouched. OpenCode from its docs only (§20.4): MCP by config file, no
         per-launch way, and an API that no longer matches §8.6. SPEC §20.1, §20.2, §20.4, §25.9,
         §25.18. **Not run:** Claude's flags in an interactive session (`--help` only).)*
-  - [ ] **KB0.4 The comment table**: the extension → comment-marks table of §25.6.3 run over
+  - [x] **KB0.4 The comment table**: the extension → comment-marks table of §25.6.3 run over
         this repository and three others of other languages; count what whole-line-only keeps
         and drops, and what the code-switched-off and licence rules catch. **S**
+        *(Built 2026-11-19, as the product's code: `ptyro_core::kb::comments`
+        (`crates/ptyro-core/src/kb/comments.rs`: `marks`, the table; `judge`, every block with
+        its verdict; `extract`, the kept ones, each with its lines, its text and the line of
+        code it is about). 15 tests in `comments/tests.rs`: each language family, each trap,
+        and 10 MB of each shape that could go quadratic. `make spike-kb-comments
+        ARGS="<folder>…"` (`crates/ptyro-core/examples/kb_comments.rs`) counts and samples; run
+        over this repository, AzerothCore (C++, SQL), `golang.org/x/tools`, Python's standard
+        library, and three smaller ones in JavaScript, TypeScript and shell: 65% to 97% of the
+        blocks are kept, trailing comments (never read) are 1% to 19% of comment lines. The
+        rules changed: the code rule as designed dropped prose and was rewritten, "licence"
+        alone is no licence header, the prose floor is three words and 12 letters, and tools'
+        directives are a fourth rule. SPEC §25.6.3.)*
 - [ ] **KB1 A memory that fills itself** (R-KB-01, 02, 03, 05, 09, 10, 11) — the core: agent
       sessions are ingested as they happen, and found by you and by your agents. **L**
   - [ ] **KB1.1** `kb.db`: the schema of §25.4, `KbDb` and its writer thread, migrations and the
-        copy aside, `secure_delete`, "can't open" handling with the fix (as `chat.db`'s),
-        `doctor`'s line, `about`'s path, the uninstall plan. **M**
+        copy aside, `secure_delete` **and FTS5's own `secure-delete` option** (KB0.1: without
+        it a forgotten word stays in the index, §25.12), "can't open" handling with the fix (as
+        `chat.db`'s), `doctor`'s line, `about`'s path, the uninstall plan. **M**
   - [ ] **KB1.2** The way in (§25.5): gate, read from a cursor, redact, chunk, stamp, write; one
         transaction an item; unchanged chunks keep their rows; the ingest actor and its queue,
         low priority, rebuilt from the cursors after a restart and a live upgrade. **M**
@@ -3933,7 +3961,9 @@ Development section), its README and `docs/` text, and the milestone's version b
   - [ ] **KB1.5** Search (§25.8): the query's new words in `parse_query`; words in both files;
         meaning in both (`meaning.rs` backfilling `chunk_vec` too, `fuse` over several lists);
         the ranking; two hits an item and merged neighbours; `KbSearch`, `KbRead`, `KbRecent`;
-        `kb.meaning` with `chat.meaning` as its old name. **L**
+        `kb.meaning` with `chat.meaning` as its old name. From KB0.1 (§25.8's table): the words
+        query in two steps (`ORDER BY rank LIMIT`, then a snippet for each kept row), and
+        `ptyro_meaning::score` with eight running sums; `kb_spike.rs` has both. **L**
   - [ ] **KB1.6** The golden set (`make kb-eval`, `make kb-eval-real`; §25.16): the corpus, the
         questions, the must-never rows, the committed numbers, the CI gate. Built with KB1.5,
         not after it: the weights are set against it. **M**
@@ -3981,7 +4011,8 @@ Development section), its README and `docs/` text, and the milestone's version b
         `kb rm`; listing files through git or the walk; include, exclude, the never list, the
         size and binary checks, the 50,000 cap; `KbIngest` with its plan, `KbProgress`. **M**
   - [ ] **KB3.2** The four tiers: paths (with name parts), documents (heading paths), comments
-        (the table of KB0.4, its tests per language family), code (off; windows of 60 lines,
+        (`ptyro_core::kb::comments::extract`, built and tested in KB0.4; a block that many
+        files of a root repeat is stored once, §25.6.3), code (off; windows of 60 lines,
         words only); `kb.comments`, `kb.code` and the project's own switches. **L**
   - [ ] **KB3.3** Commits: `ptyro-git`'s log since a head, the first 5,000, then the new ones;
         `kb.commits`. **S**

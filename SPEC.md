@@ -9941,6 +9941,31 @@ each line names its spike):
     without it every call asks.
   - **OpenCode stays out of KB1**: its docs show MCP servers as configuration files only, with no
     way to give one for a single launch (§20.4).
+- **KB0.1, search at size (2026-11-19; `make spike-kb`, 500k and 1M synthetic chunks in §25.4's
+  schema, an M4 Pro; the numbers are §25.8's table):**
+  - **The budget is met at 500k chunks with none of §25.8's fallbacks**: the merged search
+    takes 86 ms (90 at the 95th percentile) done exactly as chat does each part. At a million
+    it takes 156 (165), and misses.
+  - **KB1.5 builds two things that were not on the list, and both sizes then pass** (41 and
+    71 ms): the words query in two steps (the index ranks, then snippets for the rows kept),
+    and a cosine with eight running sums in `ptyro_meaning::score`. Neither changes a result.
+  - **The column filters are not a fallback**: a filter that leaves 2% of the vectors still
+    costs 40% of the scan, which is mostly SQLite walking the rows. **Newest first with an
+    early stop is rejected** (slower than the whole scan, and it lost a quarter to three
+    fifths of the best ten). **The one-bit sketch works** (13 ms, every one of the best ten
+    found) and is kept for later: its recall is unverified on the real model.
+  - **One query misses the budget and nothing here fixes it**: a single word that a large
+    part of all chunks hold (17 ms at the median, 108 at the 95th percentile, by words alone).
+  - **Forgetting needs FTS5's own `secure-delete`**: with `PRAGMA secure_delete` alone a
+    forgotten word was still in the file's bytes, in the words' index (§25.12). It costs the
+    writer 1.7 ms a deleted chunk.
+  - **`kb.db` is half the size estimated**: 516 MB at 500k chunks (§25.4).
+- **KB0.4, the comment table (2026-11-19; `ptyro_core::kb::comments`, `make
+  spike-kb-comments`):** built as product code and run over seven bodies of code.
+  Whole-line-only keeps 65% to 97% of the blocks as prose; three of the design's
+  rules were wrong as written (the code rule dropped prose, "licence" alone dropped module
+  comments, 20 characters dropped one-line documentation) and a fourth was missing (tools'
+  directives). §25.6.3 has the rules as built and the numbers.
 
 ### 25.1 Decided by the owner (2026-11-19)
 
@@ -10074,7 +10099,8 @@ CREATE TABLE chunk (
   UNIQUE(item, idx));
 CREATE VIRTUAL TABLE chunk_fts USING fts5(text, heading, content='chunk', content_rowid='seq',
                                           tokenize='porter unicode61 remove_diacritics 2');
--- insert/update/delete triggers keep chunk_fts in step, as node_fts's do
+-- insert/update/delete triggers keep chunk_fts in step, as node_fts's do; and FTS5's own
+-- 'secure-delete' option is on, so that a forgotten chunk's words leave the index (§25.12)
 CREATE TABLE chunk_vec (              -- only prose: card, user, assistant, summary, text, comment, message
   seq INTEGER PRIMARY KEY REFERENCES chunk(seq) ON DELETE CASCADE,
   item TEXT NOT NULL, kind TEXT NOT NULL, profile TEXT, project TEXT, at_ms INTEGER NOT NULL,
@@ -10090,9 +10116,14 @@ CREATE TABLE chunk_vec (              -- only prose: card, user, assistant, summ
 - **Notes** are files: `<data>/kb/notes/<profile>/<project slug or _global>/<slug>.md` (0600,
   folders 0700). The folder says whose a note is and what it is about; the file needs nothing
   but its text (§25.6.4).
-- **Size** [estimate, from chat's measured 200 MB of rows and index and 26 MB of vectors per
-  100k messages, §20.8, §22.10]: about 1.1 GB at 500k chunks. `ptyro kb status` shows it, and
-  `kb.retain_days` bounds the part that grows (§25.12).
+- **Size** [measured, KB0.1, `make spike-kb`, 2026-11-19, synthetic text]: **516 MB at 500k
+  chunks and 1.03 GB at a million**, about 1 KB a chunk and in a straight line. (The estimate
+  from chat's numbers was 1.1 GB at 500k: chat's rows are whole messages, and a third of the
+  knowledge base's are tool titles of 45 characters.) At 500k: 292 MB of rows (198 MB of it
+  the chunks' own text), 28 MB of their indexes, 98 MB for the words' index, and 99 MB of
+  vectors for the 58% of chunks that are prose (342 B each: the 260 B vector and its filter
+  columns). A real corpus with longer messages is larger in proportion to its text.
+  `ptyro kb status` shows it, and `kb.retain_days` bounds the part that grows (§25.12).
 
 ### 25.5 One way in
 
@@ -10233,20 +10264,91 @@ knowledge base, because it was never in it: delete the chat.
   | **Comments** | `comment` chunks of source files | on (`kb.comments`) | words and meaning |
   | **Code** | `code` chunks: windows of 60 lines | **off** (`kb.code`, `ingest --code`) | words only |
 
-- **Comments, by simple rules.** No parser per language: a table from file extension to comment
-  marks (`//` and `/* */` for the C family, Rust, Go, Java, JS/TS, Swift, Kotlin, C#, PHP, Zig,
-  Dart; `#` for Python, Ruby, shells, YAML, TOML, Make, Docker, Terraform, Elixir, R; `--` for
-  SQL, Lua, Haskell; `"""`/`'''` docstrings for Python; `<!-- -->` for HTML, XML, Vue, Svelte;
-  `;` for Lisps and INI; `%` for TeX and Erlang; `(* *)` for the ML family).
-  - **Only whole-line comments and blocks that start a line.** A trailing comment is dropped,
-    and so is every `//` inside a string (`"http://…"`), with no string parsing.
-  - A run of comment lines is one block. It is kept when it has at least 20 characters of prose
-    and doesn't look like code switched off (half its lines ending in `;`, `{`, `}` or `)`) or a
-    licence header (the file's first block naming a copyright, a licence or SPDX).
-  - Each block is stored with **the first line of code after it** (200 characters), as its
-    `heading`: the hit shows what the comment is about, and `anchor` is its lines.
-  - It will miss odd cases (a comment mark a language uses for something else). That is accepted
-    for search; a real parser can replace the table without changing the schema.
+- **Comments, by simple rules** (`ptyro_core::kb::comments`, **built and measured in KB0.4,
+  2026-11-19**; `make spike-kb-comments` runs it over any folder). No parser per language: a
+  table from a file's name to its language's comment marks, and one pass over the lines (linear:
+  10 MB in about a second in a debug build, whatever is in it).
+  - **The table, as built.** `//` and `/* */`: C, C++, Objective-C, Go, Java, JavaScript and
+    TypeScript (with `.mjs .cjs .jsx .tsx .mts .cts`), C#, Zig, Groovy, Gradle, Protobuf, SCSS,
+    Less, JSONC, GLSL, Verilog; the same with blocks that nest: Rust, Swift, Kotlin, Scala,
+    Dart, D. `/* */` alone: CSS. `#`: shells, YAML, TOML, Make, CMake, Docker, Elixir, R, Perl,
+    Tcl, Awk, Nim, Crystal, GraphQL, `.properties`, `.conf`; with docstrings: Python; with
+    `=begin`/`=end`: Ruby; with `//` and `/* */`: PHP, Terraform and HCL; with `/* */`: Nix;
+    with `<# #>`: PowerShell; with `#= =#`: Julia. `--`: Ada, VHDL; with `/* */`: SQL; with
+    `--[[ ]]`: Lua; with `{- -}` (nesting): Haskell, Elm, PureScript. `<!-- -->`: HTML, XML;
+    with `//` and `/* */`: Vue, Svelte, Astro. `;`: the Lisps; `;` and `#`: INI. `%`: TeX,
+    Erlang. `(* *)` (nesting): OCaml, and with `//` F#. A file is also known by its whole name
+    (`Makefile`, `Dockerfile` and `Dockerfile.*`, `CMakeLists.txt`, `Justfile`, `Gemfile`,
+    `Rakefile`…), and one with no extension by its `#!` line. **Markdown and the other
+    documents are not in the table**: a `#` there is a heading, and they are the Documents tier.
+  - **Only whole-line comments and blocks that start a line.** A trailing comment is not read,
+    and so neither is a `//` or `#` inside a string on a line of code (`"http://…"`,
+    `echo "# no"`), with no string parsing. `#!` on the first line and `#[…]` are never
+    comments; MySQL's `/*!40101 … */` is a statement. The one exception to "no string parsing"
+    is Python's triple quotes, which have to be followed: a docstring is a triple-quoted string
+    that opens a module, a class or a function (the line of code above it ends in `:`), and any
+    other one is stepped over, so that a `#` line or a closing `"""` inside it is not misread.
+  - **A run of comment lines is one block**, whatever marks its lines carry; a blank line ends
+    it. The marks go (`///`, `//!`, the `*` that leads a block's lines), and so does a line that
+    is only a rule (`-----`). A block comment that never closes is treated as code and the scan
+    goes on (a broken file doesn't become one comment).
+  - **Each block is stored with the line of code it is about** (200 characters), as its
+    `heading`, and `anchor` is its lines (`L120-L161`): the first line of code after it, or for
+    a docstring the `def` or `class` line above it. A comment followed by a blank line and then
+    another comment has none.
+  - **Four rules drop a block**, in this order (the thresholds were SPEC's first guesses,
+    changed by what the survey below showed):
+    1. **A tool's directive**: every line starts as one (`eslint-…`, `@ts-…`, `noqa`,
+       `type: ignore`, `go:build` and Go's other `go:x`, `+build`, `shellcheck …`, `NOLINT…`,
+       `-*- … -*-`, `<reference …>`, `clang-format off`…). *New*: these were 1.9% of Go's blocks.
+    2. **A licence header**: the block starts before the file's first line of code and names
+       one (`copyright`, `SPDX-License`, `licensed under`, `all rights reserved`, `permission is
+       hereby granted`, `governed by a`, `public license`…). *Changed*: the word "licence" alone
+       dropped the opening comments of files that are about licences (3 in this repository);
+       and every block before the first line of code is looked at, not the first alone.
+    3. **Code switched off**: more than half of the lines at the comment's margin read as code.
+       A line reads as code when it ends in `{` or `}`; ends in `;` and holds a call or an
+       operator and fewer than four plain words; ends in `)` or `]` and *starts* as code does
+       (`name(`, `a.b`, `return`); is `name = value`; or is a shell command (a known first
+       word, then a flag, a path or a variable). What is between backticks is not looked at,
+       lines further in than the margin and lines between ``` fences are examples and are not
+       judged, and a documentation comment (`///`, `//!`, `/** */`, a docstring) is never code
+       switched off. *Changed*: "half its lines ending in `;`, `{`, `}` or `)`" dropped prose,
+       not code: in this repository 10 of its 12 catches were sentences that end in a
+       semicolon or a bracket, and in Go and Python it dropped comments that end by naming a
+       call ("Handle len(slice)").
+    4. **Too short**: fewer than three words or fewer than 12 letters in them; a word all in
+       capitals is a label and is not counted. *Changed* from 20 characters: that dropped
+       one-line documentation that says something ("Rename a workspace", on the command it
+       documents). A script that writes no spaces counts a word for every two characters.
+  - **What it keeps and drops, measured** (2026-11-19, on this machine; blocks, and the share of
+    all comment lines that are trailing comments and so never read):
+
+    | Code | Files | Blocks | Kept | Licence | Directive | Code off | Short | Trailing |
+    |---|---|---|---|---|---|---|---|---|
+    | this repository (Rust, TypeScript) | 355 | 10,377 | 97.2% | 0 | 3 | 3 | 2.7% | 1% |
+    | AzerothCore (C++, SQL) | 9,558 | 80,945 | 64.8% | 2.4% | 0.1% | 0.8% | 31.9% | 17% |
+    | `golang.org/x/tools` 0.52 (Go) | 1,308 | 13,950 | 82.2% | 7.5% | 1.9% | 1.3% | 7.1% | 13% |
+    | Python 3.15's standard library | 2,223 | 54,357 | 88.3% | 0.3% | 0.1% | 0.6% | 10.6% | 19% |
+    | a JavaScript site | 57 | 2,046 | 83.4% | 0 | 0 | 0 | 16.6% | 10% |
+    | a TypeScript extension | 101 | 769 | 95.3% | 0 | 0 | 0 | 4.7% | 4% |
+    | shell and PowerShell scripts | 211 | 493 | 81.3% | 0.2% | 0 | 7.5% | 11.0% | 1% |
+
+    The kept text is 15% of this repository's source bytes (1.05 MB of 7.0), 23% of the Go
+    code's, 13% of Python's and 4% of the C++ and SQL's. Read by eye, 25 to 40 kept blocks of
+    each: prose a person would look for, with these exceptions.
+  - **Wrongly kept, seen:** boilerplate that many files repeat (a SQL dump's "Dumping data for
+    table…", "DB update 2026_02_06_02 -> 2026_02_06_03"), `@file`/`@author` headers, labels
+    that carry an id ("55440 - Glyph of Healing Wave"), a shell command whose first word the
+    rule doesn't know. **Wrongly dropped, seen:** trailing comments (1% to 19% of comment
+    lines); a description that shares its block with the licence; a one-line formula
+    (`IKM = HKDF(…)`); a two-word section label. **Not read, by construction** (not met in the
+    survey): a `#` line inside a shell here-document is taken for a comment; JSX's
+    `{/* … */}` and Elixir's `@doc """…"""` are not; nor are files of languages the table
+    lacks (`.bat`, `.vim`, assembly).
+  - KB3 should **store a block that many files of a root repeat only once** (it is the largest
+    source of noise that was found), and may skip generated files. Both are accepted for
+    search; a real parser can replace the table without changing the schema.
 - **Commits** (`kb.commits`, on): in a git root, the default branch's history, newest 5,000 at
   first and only the new ones after (`root.head`). One item a commit: a `message` chunk (subject
   and body, words and meaning) and a `path` chunk (the files it changed, at most 50, words). Its
@@ -10399,15 +10501,69 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   (`meaning.rs`) is generalised over the two tables. Paths, code, tool titles, commands and
   output get no vector: the model is trained on prose and averages word vectors, which adds
   nothing for identifiers, and they are the bulk of the rows.
-- **Cost, and the plan when it grows.** Chat measured 45 ms to scan 100k vectors (§22.10). A
-  heavy year could be a million chunks. Budget: **`recall` answers in 150 ms at the 95th
-  percentile with 500k chunks and meaning on** (§25.16; KB0 measures it before anything is
-  built). In order, if it doesn't: the column filters above (most searches are one profile and
-  often one project); scanning the newest 200k first and stopping when the page is full of hits
-  well above the floor; a coarse first pass over a one-bit sketch of each vector, rescoring the
-  best 2,000; and only then an extension with a real index (`sqlite-vec`, whose state is
-  **[unverified]**, RESEARCH I). Core SQLite has no vector type; ptyro's vectors are blobs in an
-  ordinary table.
+- **Cost, measured** [KB0.1, `make spike-kb`, 2026-11-19: an M4 Pro, macOS, SQLite 3.54.1, the
+  synthetic model at the real one's size, 61 queries a row; median / 95th percentile, in ms,
+  each with its hits' rows fetched]. The budget is **`recall` answers in 150 ms at the 95th
+  percentile with 500k chunks and meaning on** (§25.16). A heavy year could be a million.
+
+  | | 500k chunks, 289k vectors | 1M chunks, 579k vectors |
+  |---|---|---|
+  | By words, a query with a telling word in it | 3 / 6 | 4 / 9 |
+  | By words, one very common word and nothing else | 17 / 108 | 36 / 217 |
+  | By meaning, the exact scan as chat's code does it | 72 / 74 | 147 / 153 |
+  | … one profile (66% of the vectors) | 60 / 62 | 122 / 126 |
+  | … one profile and one project (8%) | 34 / 37 | 71 / 73 |
+  | … the last 30 days (4%) | 27 / 29 | 56 / 59 |
+  | … unfiltered, with a cosine in eight running sums | 39 / 41 | 80 / 83 |
+  | … and `PRAGMA mmap_size` on the reading connection | 30 / 32 | 60 / 63 |
+  | Newest 200k first, stopping on a full page of strong hits | 47 / 49 | 77 / 80 |
+  | A one-bit sketch of each vector, the best 2,000 rescored | 13 / 14 | 24 / 26 |
+  | **The merged search**, each part as chat does it | **86 / 90** | **156 / 165** |
+  | **The merged search**, as KB1.5 builds it (below) | **41 / 42** | **71 / 75** |
+  | The merged search with the sketch | 22 / 24 | 32 / 35 |
+
+  The merged search is words and meaning in `kb.db`, the same two in a 100k-chunk file standing
+  in for `chat.db`, one after the other, the fusion, and a page of ten fetched. Embedding the
+  query is a microsecond.
+  - **The budget is met at 500k chunks with nothing new, and missed at a million.** With the two
+    changes below it is met at both, with room.
+  - **KB1.5 builds these two; neither changes what is found:**
+    1. **The words query in two steps**: `SELECT rowid FROM chunk_fts WHERE chunk_fts MATCH ?
+       ORDER BY rank LIMIT ?` (the index ranks, with `bm25(1.0, 2.0)` set as the table's
+       rank), then the snippet and the row for each of the 40 kept. Chat's one statement
+       (the match, the joins, `snippet()` and `ORDER BY` together) makes a snippet of every
+       match before it sorts: 44 / 158 ms where two steps take 17 / 108 on a common word, and
+       93 / 319 against 36 / 217 at a million. On a query with few matches the one statement
+       is 1 to 2 ms faster, which doesn't matter. A filter on the item (one profile) joins in
+       the first step and costs nothing measurable.
+    2. **`ptyro_meaning::score` with eight running sums** instead of one. A sum of floats
+       can't be reordered by the compiler, so the plain loop adds 256 products one after the
+       other; eight sums are one SIMD register. The same cosine but for its last bits, and
+       the scan goes from 72 to 39 ms. Chat's search gains the same.
+    - `PRAGMA mmap_size` on the connection that reads is a third, optional step (39 → 30 ms):
+      what is left after it is SQLite stepping through 342-byte rows, 24 of the 30 ms.
+  - **The column filters are right, and are not a fallback.** They need no join, as designed,
+    but they save less than they remove: a filter that leaves 2% of the vectors still costs
+    40% of the scan, because every row is still walked. An index on `chunk_vec`'s columns was
+    not tried.
+  - **Newest first with an early stop: rejected.** Walking the table backwards for 200k rows is
+    slower than reading all 289k forwards (47 ms against 30), and where it stopped early it
+    returned 76% of the true best ten at 500k and 39% at a million.
+  - **The one-bit sketch: works, and waits.** The sign of each dimension, 32 bytes a vector in
+    a narrow table of its own (66 B a row, 19 MB at 500k), compared by Hamming distance, then
+    the nearest 2,000 scored exactly: 13 ms, and every one of the true best ten returned (610
+    of 610; 608 of 610 under a profile filter). **That recall is on the synthetic model**,
+    whose random vectors are the case sign bits suit best: unverified on `potion-base-8M`
+    (§25.18). It is the next step when vectors pass a million or KB5's hook needs the time,
+    measured on the real model first; then `sqlite-vec` (state **[unverified]**, RESEARCH I).
+    Core SQLite has no vector type; ptyro's vectors are blobs in an ordinary table.
+  - **One kind of query misses the budget, and nothing above fixes it**: a single word that a
+    large part of all chunks hold, with no other word. FTS5 scores every match before it can
+    name the best, so the cost follows the number of matches: 17 ms at the median of the
+    20 commonest words (a word in 7% of the chunks), 108 ms for the commonest of them, and
+    59 / 166 ms merged. A common word beside a
+    telling one costs nothing (3 / 6 ms). Not tried: looking up the word's document count
+    first (`fts5vocab`) and answering such a query by meaning alone.
 - **Not built in KB1:** a trigram index (substring search in code, CJK), a reranking model, a
   code-trained embedding model (it would need a larger download and the ONNX runtime the project
   chose against in CHAT5, §22.10).
@@ -10586,6 +10742,20 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
   not left in freed pages. The item stays as a **tombstone** (its URI and `forgotten_at`, no
   text), so a later sync or backfill doesn't bring it back. Forgetting a note deletes its file.
   Forgetting by `--query` lists what it will delete and asks.
+  - **The words' index needs its own switch** [measured, KB0.1]. `PRAGMA secure_delete` zeroes
+    the rows' pages, but FTS5 only marks a deleted row in a new segment and keeps its words in
+    the old ones until they are merged: a word that only the forgotten item held was **still
+    in the file's bytes** after the delete and a checkpoint. With FTS5's `secure-delete`
+    option on (`INSERT INTO chunk_fts(chunk_fts, rank) VALUES('secure-delete', 1)`, kept in
+    the file; SQLite 3.42 or later, the bundled one is 3.54.1) it was nowhere. KB1.1 sets it
+    in the schema, for every delete and not only a forget: a chunk that a re-read replaced
+    may belong to an item that is forgotten later.
+  - **What it costs**: 1.7 ms of the writer's time a deleted chunk at 500k chunks, 2.0 at a
+    million, against 0.015 without it (165 ms to forget a session of 100 chunks; the
+    checkpoint after is 3 ms). A session's ingest only appends and pays nothing. A re-read
+    file pays for the chunks that changed. **Removing a root deletes in batches, off any
+    request** (a root of 50,000 chunks is about a minute and a half of the writer's time),
+    saying how far it is.
 - **Removing a root** drops its items, with no tombstones: ingest it again and it is back.
   Removing a project from ptyro removes its root; the sessions that ran in it stay.
 - **Removing a session from ptyro** (`rm`) doesn't remove its item: the history is the point.
@@ -10685,9 +10855,18 @@ No new dependency is needed: `regex`, `sha2`, `notify` and `rusqlite` are in the
 
 ### 25.16 Budgets and testing
 
-**Budgets** (targets; KB0 measures the first, the benches of §18.3 the rest):
+**Budgets** (targets; KB0.1 measured the first two on 2026-11-19, `make spike-kb`, §25.8's
+table; the benches of §18.3 the rest):
 - `recall`: 150 ms at the 95th percentile, 500k chunks, meaning on; 50 ms by words alone.
+  **Measured: 42 ms and 6 ms** as KB1.5 is to build it (90 ms and 5 ms done as chat does it),
+  and 75 ms and 10 ms at a million chunks. **One kind of query misses both**: a single word
+  that a large part of all chunks hold, 108 ms by words alone and 166 ms merged at the 95th
+  percentile (17 and 59 ms at the median).
 - A turn's ingest: under 50 ms of the writer's time per 100 chunks, and none of the session's.
+  **Measured: 2.5 ms** (6 at the 95th percentile, 17 at worst) with one transaction an item,
+  rows and the words' index; their 51 vectors, written later, 0.1 ms. The same at a million.
+- Forgetting an item: no budget was set. **Measured: 165 ms per 100 chunks** with FTS5's
+  `secure-delete` (§25.12), which is the writer's time and nobody's wait.
 - A sync pass that finds nothing changed: under 200 ms per 10,000 files (stat only).
 - Idle: no work between passes; the model is in memory only while used (30 MB, dropped after 5
   idle minutes, as now).
@@ -10708,8 +10887,11 @@ No new dependency is needed: `regex`, `sha2`, `notify` and `rusqlite` are in the
   live upgrade; `kb forget` of an ordinary session makes it private and nothing more arrives.
 - **The wall:** a session of profile A calls every tool and every filter and never sees an item
   of profile B, on this machine and through a link.
-- **Comments:** a file per language family with the comments expected, including the traps (a
-  URL in a string, a `#` in a shell string, code switched off, a licence header).
+- **Comments** (built in KB0.4, `crates/ptyro-core/src/kb/comments/tests.rs`): each language
+  family with the comments expected, including the traps (a URL in a string, a `#` in a shell
+  string, `#[derive]` and `#!`, code switched off and prose that looks like it, a licence
+  header, docstrings and the strings that are not, nested and unterminated blocks, CRLF, bytes
+  that are not UTF-8), and 10 MB of each shape that could make the scan quadratic.
 - **End to end** (`crates/ptyro/tests/kb1.rs` … `kb5.rs`, with the fake agent, no real agent
   installed): the fake agent writes a transcript and fires `Stop`; `ptyro recall` finds the turn;
   the TUI's Library opens it; the fake agent's `recall` tool call returns it; a note it
@@ -10721,8 +10903,12 @@ No new dependency is needed: `regex`, `sha2`, `notify` and `rusqlite` are in the
   alone and with meaning (the synthetic model in CI; `make kb-eval-real` with the real one).
   The numbers are committed; CI fails when one drops by more than two points. Every ranking
   change in §25.8 is made against it.
-- **`make spike-kb`** (KB0): 500k and 1M synthetic chunks, the search's cost by words, by
-  meaning with each filter, and each fallback of §25.8. **`make verify-kb`**: against the real
+- **`make spike-kb`** (KB0.1, built: `crates/ptyro-store/examples/kb_spike.rs`; `CHUNKS=1000000`
+  for the larger run): 500k and 1M synthetic chunks, the search's cost by words, by meaning
+  with each filter, each fallback of §25.8 with its recall, the merged search, the file's
+  size by part, an ingest, and a forget with a look through the file's bytes for what was
+  forgotten. **`make spike-kb-comments`** (KB0.4): the comment table over any folder, with
+  counts by rule and a sample of each. **`make verify-kb`**: against the real
   agents, that each is handed the tools and that a real transcript parses.
 
 ### 25.17 Order of building
@@ -10746,7 +10932,10 @@ stand, and notes stay in ptyro's data folder.
   by `--help`, not by driving the TUI (KB1.6 sees it the first time it runs).
 - What a rewind leaves in Claude's transcript, and what a compaction leaves in Codex's rollout
   (§25.6.1): neither could be made without the agents' TUIs.
-- The cost of the vector scan at 500k chunks on the real model (KB0), and `sqlite-vec`'s state.
+- **The one-bit sketch's recall on the real model** (§25.8): measured on the synthetic one
+  only, whose random vectors suit it best. (The scan's *cost* is measured: it is the same
+  arithmetic whatever the vectors hold.) `sqlite-vec`'s state, which nothing needs yet.
+- How large `kb.db` is with real text: §25.4's sizes are for made-up chunks of assumed lengths.
 - The 0.3 cosine floor, set on the synthetic model (§21.11), and every weight of §25.8.
 - A `UserPromptSubmit` hook's added context on Claude and Codex (KB5).
 - Whether a resumed conversation keeps its id in *every* version: it does in Claude Code 2.1.329
