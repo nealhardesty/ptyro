@@ -415,6 +415,66 @@ const scenarios = {
     ptyro("kill", "once");
   },
 
+  // Predicted echo (WEB2.4), in a real page against a real shell on a real tty. Here the echo is
+  // quicker than any guess, so auto never draws one (checked); `force` then stands in for a slow
+  // link. Each key and what is drawn after it are read in one synchronous step, before any frame
+  // can arrive. A prompt that doesn't echo (`stty -echo; read`) never shows a letter, and every
+  // key still reaches the session exactly as typed.
+  async predict() {
+    ptyro("new", "-d", "-n", "predict", "--", "env", "PS1=$ ", "sh");
+    const s = await until("the shell", () => find("predict"));
+    await fresh(`#/s/${s.id}`);
+    await tab.eval(`localStorage.setItem("ptyro.debug", "1")`);
+    await tab.send("Page.reload");
+    await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
+    const lines = () => ptyro("read", "predict").split("\n").map((l) => l.trimEnd()).filter(Boolean);
+    const last = () => lines().at(-1) ?? "";
+    await until("the prompt", () => last() === "$", 10_000);
+    const key = (c) => tab.eval(`(() => {
+      const t = ptyroTerm;
+      t.key(${JSON.stringify({ code: { t: "char", c }, mods: 0 })}, false);
+      const o = t.predict.overlay();
+      return { cells: o.cells.map((x) => x.t).join(""), cursor: o.cursor, slow: t.predict.slow, srtt: t.predict.srtt };
+    })()`);
+    const settled = () => tab.waitFor("the predictions confirmed", `ptyroTerm.predict.preds.length === 0`, 5000);
+    for (const c of "ec") { await key(c); await settled(); await sleep(150); }
+    const auto = await key("h");
+    if (auto.srtt === null) throw new Error("the echo's round trip wasn't measured");
+    if (!auto.slow && auto.cells) throw new Error(`a prediction was drawn on a fast link: ${JSON.stringify(auto)}`);
+    await settled();
+    await tab.eval(`ptyroTerm.predict.force = true`);
+    const forced = await key("o");
+    if (forced.cells !== "o" || forced.cursor?.x !== 6) throw new Error(`the guess wasn't drawn at the cursor: ${JSON.stringify(forced)}`);
+    await settled();
+    await until("the letters, typed once", () => last() === "$ echo", 10_000);
+    await tab.type(" hi");
+    await tab.enter();
+    await until("the command ran", () => lines().includes("hi"), 10_000);
+    // A password: nothing typed there is drawn, ever.
+    await tab.type("stty -echo; read x; stty echo; echo got-$x");
+    await tab.enter();
+    await sleep(1200);
+    for (const c of "secret") {
+      const r = await key(c);
+      if (r.cells.trim()) throw new Error(`a letter typed at a prompt that doesn't echo was drawn: ${JSON.stringify(r)}`);
+      await sleep(120);
+    }
+    await sleep(2000);
+    if (!(await tab.eval(`ptyroTerm.predict.preds.length === 0 && ptyroTerm.predict.stats.misses >= 1`))) throw new Error("the unechoed guesses weren't dropped as misses");
+    await tab.enter();
+    await until("every key reached the session as typed", () => lines().includes("got-secret"), 10_000);
+    if (lines().some((l) => l.includes("secret") && !l.includes("got-secret"))) throw new Error(`the password was echoed: ${JSON.stringify(lines().slice(-4))}`);
+    // The option is in Aa, and off draws nothing.
+    await tab.eval(`ptyroTerm.options()`);
+    await tab.waitFor("Predict typing in the terminal's options", `document.body.innerText.includes("Predict typing: auto")`);
+    await tab.eval(`[...document.querySelectorAll(".menu button, .sheet button, button")].find(b => b.textContent.includes("Predict typing: auto")).click()`);
+    if (!(await tab.eval(`ptyroTerm.predict.mode === "off" && localStorage.getItem("ptyro.term.predict") === "off"`))) throw new Error("the option didn't switch off and stay off");
+    const off = await key("x");
+    if (off.cells) throw new Error(`drawn while off: ${JSON.stringify(off)}`);
+    await tab.eval(`(() => { localStorage.removeItem("ptyro.term.predict"); localStorage.removeItem("ptyro.debug"); })()`);
+    ptyro("kill", "predict");
+  },
+
   async offline() {
     await fresh("#/");
     await tab.waitFor("a card", `!!document.querySelector("a.card")`);

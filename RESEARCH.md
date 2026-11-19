@@ -728,6 +728,7 @@ Parallel Code (MIT, Electron/SolidJS), FleetCode, ChatML — confirm commoditisa
 #### C17. mosh / Eternal Terminal
 - mosh stuck at 1.4.0 (2022) in 2026 distros [S]; ET 6.2.8 [S].
 - **Gap:** roaming + **predictive echo**. **Ideas:** make M9.1 reconnect-transparent (sequence-numbered stream, resend frame diff) (R-REM-10); optional predictive echo for the remote input line; document mosh/ET as a transport fallback.
+- 2026-11-19: predictive echo built for the web terminal (WEB2.4, R-UX-46), taking mosh's ideas, not its code: an overlay confirmed or wiped by the next frames, epochs restarted by keys that move the cursor, shown only above an echo-time threshold and once an epoch has confirmations [V, ptyro's own simulation and e2e]. What it adds over mosh: it learns when each key was typed from the daemon's `Typed` acks (WEB2.3) instead of an echo-ack state, holds letters typed after an Enter and places them once the screen has caught up, and needs two confirmations with a changed cell, so letters erased again never prove a prompt that doesn't echo [V]. Claude Code 2.1.304 keeps a visible cursor at its prompt in the alternate screen under synchronized output (fixture `claude-main.100x30.ptylog`), so its echo can be predicted [V].
 
 #### C18. Browser/terminal sharing — ttyd, tmate, sshx, upterm
 - **ttyd** (MIT, ≈12.5k★, C/libuv + xterm.js WebGL2; sixel, ZMODEM, basic auth, TLS) [V].
@@ -3427,7 +3428,7 @@ ship themselves, in order:
 | R-REM-13 | **Workspaces on other machines (daemon federation)**: a daemon registers remote workspaces that sit in the sidebar beside local ones, tied to their machine, offline when it is; `serve`, the TUI and the CLI all reach them through the local daemon | owner (2026-10-27) | MM1.B | L | ★★★ | → MM1.B, **built 2026-10-27** [V tests/mm1.rs]: symmetric, mirror, ssh or paired token, full scope, follow all workspaces, all stacked in the sidebar |
 | R-REM-14 | **Pinch to zoom the web terminal**, anchored under the fingers, with an automatic default that never fits a wide session into unreadable text on a phone | owner (2026-10-29); mobile terminals (Termius, Blink) zoom the font with a pinch [U] | WEB1 | S | ★★ | → WEB1.10, **built 2026-10-29** [V web_e2e `zoom`] |
 | R-REM-09 | **Share links**: `ptyro share <session> [--readonly\|--steer] [--ttl 1h] [--allow github:alice]` (upterm-style forge-key auth); status-aware sharing | upterm, sshx, Warp Oz, Happy multiplayer | M9 | M | ★★ | new |
-| R-REM-10 | Reconnect-transparent remote TUI (sequence-numbered stream, resend frame diff); optional predictive echo; document mosh/ET as transport | mosh, ET, sshx | M9.1 | M | ★★ | new |
+| R-REM-10 | Reconnect-transparent remote TUI (sequence-numbered stream, resend frame diff); optional predictive echo; document mosh/ET as transport | mosh, ET, sshx | M9.1 | M | ★★ | new (the web terminal has both: WEB2.3, WEB2.4, 2026-11-19) |
 
 #### Notifications (R-NOT)
 

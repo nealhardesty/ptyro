@@ -10,6 +10,7 @@ import { ordered } from "./grid.js";
 import { MOD, MOUSE, Sticky, Typist, keyInput, mouseInput, pasteInput } from "./keys.js";
 import { actions, form, h, menu, sheet } from "./kit.js";
 import { describe, lostTitle } from "./outbox.js";
+import { Predictor } from "./predict.js";
 const ACTIONS = {
     "term.type": "Type straight into the session: every key goes to it as you press it. With a keyboard just type (the terminal has the keys when the page opens); on a phone tap ⌨ Type or the screen",
     "term.keys": "Keys a phone's keyboard lacks: Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows, F-keys",
@@ -19,12 +20,13 @@ const ACTIONS = {
     "term.paste": "Paste this device's clipboard into the session",
     "term.mouse": "Send clicks, drags and the wheel to the program, when it asks for the mouse (hold Shift to select instead)",
     "term.resize": "Make the session this screen's size (for everyone attached; the last to type decides)",
-    "term.options": "Terminal options: text size, fit, follow the cursor, the keyboard, plain keys",
+    "term.options": "Terminal options: text size, fit, follow the cursor, the keyboard, plain keys, predicted typing",
     "term.plain": "Plain keys: the keyboard sends letters exactly as pressed, with no suggestions or autocorrect; most keyboards then hide the microphone too, so dictation is off",
     "term.dictation": "Dictated text waits here, dim, until you pause; then it goes to the session as one paste (a spoken new line never presses Enter). ✕ drops it",
     "term.zoom": "Zoom the text: pinch (or Ctrl and the wheel); tap with two fingers to switch between fitting the width and full size",
     "term.find": "Find text in the session's history and screen; ↑ and ↓ go to the previous and next",
     "term.link": "Open the link under the pointer (Ctrl or Cmd and click, or select it and tap Open)",
+    "term.predict": "Predict typing: on a slow connection what you type shows at once, underlined, until the session's own echo confirms it; a wrong guess vanishes at once. Auto shows it only while the echo is slow and only after the session has echoed what you typed (so a password never shows); off never. It never changes what is sent",
     "term.waiting": "Keys typed while the connection is down wait here and go once it is back, each exactly once; if it was down more than 5 seconds, or the session changed meanwhile (a new question, a command started or finished), they are not sent and you are told, with a way to see them and type them again",
 };
 export const tip = actions(ACTIONS);
@@ -94,6 +96,14 @@ export class Term {
     /// Held text (dictation, an input method's composition), dim at the cursor until it is sent.
     pending;
     pendingText;
+    /// Held text is showing: nothing is predicted while it waits.
+    held = false;
+    /// Predicted echo (WEB2.4, `predict.ts`): typed text drawn at once on a slow link, a layer over
+    /// the confirmed screen; never part of what is sent.
+    predict;
+    predictTimer = 0;
+    /// The outbox's lost keys as last seen: a new refusal wipes the predictions.
+    lostSeen = 0;
     constructor(host) {
         this.host = host;
         this.canvas = h("canvas", { class: "term", title: tip("term.type") });
@@ -102,6 +112,11 @@ export class Term {
         this.pendingText = h("span", { class: "t" });
         this.pending = h("div", { class: "term-pending", title: tip("term.dictation") }, this.pendingText, h("button", { class: "x", title: "Don't send this", "aria-label": "Don't send this", onpointerdown: (e) => e.preventDefault(), onclick: () => { this.typist.discard(); this.focus(); } }, "✕"));
         this.pending.hidden = true;
+        this.predict = new Predictor({
+            now: () => performance.now(),
+            later: (ms) => { clearTimeout(this.predictTimer); this.predictTimer = window.setTimeout(() => this.guard(() => this.predict.tick(this.look())), ms); },
+        });
+        this.predict.mode = store.get("predict", "auto") === "off" ? "off" : "auto";
         this.typist = new Typist({
             value: () => this.input.value,
             clear: () => { this.input.value = ""; },
@@ -151,6 +166,7 @@ export class Term {
     dispose() {
         this.release();
         clearTimeout(this.typeTimer);
+        clearTimeout(this.predictTimer);
         for (const off of this.offs.splice(0))
             off();
         this.clip.sheet?.close();
@@ -172,12 +188,54 @@ export class Term {
     }
     /// A frame arrived for this session.
     onFrame() {
+        // Predictions are judged against every frame, shown or not.
+        const look = this.look();
+        if (look)
+            this.guard(() => this.predict.frame(look));
         if (this.doc) {
             this.stale = true;
             this.updateChrome();
             return;
         }
         this.schedule();
+    }
+    // ── predicted echo (WEB2.4) ──────────────────────────────────────────────────────────────
+    /// The live screen as the predictor reads it.
+    look() {
+        const s = this.host.screen();
+        if (!s)
+            return null;
+        return {
+            cols: s.size.cols, rows: s.size.rows, cursor: s.cursor, alt: s.modes.alt_screen,
+            cell: (x, y) => { const c = s.rows[y]?.[x]; return !c ? " " : c.spacer ? "" : c.t || " "; },
+        };
+    }
+    /// Predictions can't be shown now: scrolled back or selecting, dictation held, keys waiting.
+    blocked() {
+        const o = this.host.outbox();
+        return !this.host.canType() || !!this.doc || !!this.sel || this.held || !o.online || o.shown;
+    }
+    /// Run a step of the predictor; a mistake in it must never get in the way of typing.
+    guard(step) {
+        try {
+            if (step())
+                this.schedule();
+        }
+        catch (e) {
+            console.warn("predicted echo", e);
+            try {
+                this.predict.block();
+            }
+            catch { /* nothing */ }
+            this.schedule();
+        }
+    }
+    /// The daemon typed this session's keys up to `upto` (WEB2.3's `Typed`).
+    typed(upto) { this.guard(() => this.predict.acked(upto)); }
+    setPredict(mode) {
+        this.predict.mode = mode;
+        store.set("predict", mode);
+        this.guard(() => this.predict.block());
     }
     schedule(full = false) {
         if (full)
@@ -225,19 +283,31 @@ export class Term {
         }
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.textBaseline = "top";
-        const cur = v.cursor && v.cursor.y < rows ? v.cursor.y : -1;
-        const curKey = cur >= 0 ? `${cur}:${v.cursor.x}:${this.typing}` : "";
+        // Predicted echo (WEB2.4): its cells over the screen's, and the cursor after them.
+        const ov = this.doc ? null : this.predict.overlay(this.blocked());
+        const preds = new Map();
+        for (const c of ov?.cells ?? []) {
+            const r = preds.get(c.y);
+            if (r)
+                r.push(c);
+            else
+                preds.set(c.y, [c]);
+        }
+        const vc = ov?.cursor && v.cursor ? { ...v.cursor, x: ov.cursor.x, y: ov.cursor.y } : v.cursor;
+        const cur = vc && vc.y < rows ? vc.y : -1;
+        const curKey = cur >= 0 ? `${cur}:${vc.x}:${this.typing}` : "";
         let drawnRows = 0;
         for (let y = 0; y < rows; y++) {
             const row = v.rows[y] ?? [];
             const sp = this.sel ? span(this.sel, v.top + y, s.size.cols) : null;
-            const sk = (sp ? sp.join(",") : "") + (y === cur ? `|${curKey}` : "");
+            const pr = preds.get(y);
+            const sk = (sp ? sp.join(",") : "") + (y === cur ? `|${curKey}` : "") + (pr ? `|p${pr.map((c) => `${c.x}:${c.t}`).join("\u0000")}` : "");
             if (this.drawn[y] === row && this.drawnSel[y] === sk)
                 continue;
             this.drawn[y] = row;
             this.drawnSel[y] = sk;
             drawnRows++;
-            this.drawRow(ctx, v, y, row, sp, y === cur ? v.cursor : null);
+            this.drawRow(ctx, v, y, row, sp, y === cur ? vc : null, pr);
         }
         this.followCursor(v, cw, ch);
         this.placePending();
@@ -250,7 +320,7 @@ export class Term {
             this.stats.full++;
         this.stats.rows += drawnRows;
     }
-    drawRow(ctx, v, y, row, sp, cursor) {
+    drawRow(ctx, v, y, row, sp, cursor, preds) {
         const { cw, ch, px, cols, fg: FG, bg: BG } = this.geo;
         ctx.globalAlpha = 1;
         ctx.fillStyle = BG;
@@ -279,6 +349,22 @@ export class Term {
                 ctx.fillRect(x * cw, y * ch + ch - 2, cw * width, 1);
             if (flags & F.STRIKE)
                 ctx.fillRect(x * cw, y * ch + ch / 2, cw * width, 1);
+            ctx.globalAlpha = 1;
+        }
+        // Predictions: on the cell's own background, a little faint and underlined, so a guess
+        // never looks like the session's own text.
+        for (const p of preds ?? []) {
+            const st = v.styles.get(row[p.x]?.s ?? -1) ?? {};
+            ctx.fillStyle = st.flags && st.flags & F.INVERSE ? css(st.fg, FG) : css(st.bg, BG);
+            ctx.fillRect(p.x * cw, y * ch, cw + 0.5, ch);
+            if (p.t === " ")
+                continue;
+            ctx.font = `${px}px ${FAMILY}`;
+            ctx.fillStyle = FG;
+            ctx.globalAlpha = 0.75;
+            ctx.fillText(p.t, p.x * cw, y * ch + (ch - px) / 2);
+            ctx.globalAlpha = 0.5;
+            ctx.fillRect(p.x * cw, y * ch + ch - 2, cw, 1);
             ctx.globalAlpha = 1;
         }
         if (sp) {
@@ -507,8 +593,11 @@ export class Term {
         }
     }
     // ── typing ───────────────────────────────────────────────────────────────────────────────
+    /// Every input event goes here: sent first, exactly as it is; only then does the predictor
+    /// hear of it (WEB2.4), and nothing it does can change or stop what went.
     sendInput(event) {
-        this.host.input(event);
+        const n = this.host.input(event);
+        this.guard(() => this.predict.key(event, n ?? null, this.look(), this.blocked()));
     }
     // ── keys waiting, and keys not sent (WEB2.3) ──────────────────────────────────────────────
     /// Draw what the outbox holds: "3 keys waiting" while keys wait (offline, or unanswered for a
@@ -517,6 +606,10 @@ export class Term {
         const o = this.host.outbox();
         const n = o.waiting;
         const show = o.shown;
+        // Keys waiting (offline, unanswered) or refused: no guess about them stays on the screen.
+        if (show || !o.online || o.lost.length !== this.lostSeen)
+            this.guard(() => this.predict.block());
+        this.lostSeen = o.lost.length;
         this.waitEl.hidden = !show;
         if (show) {
             const text = `${n} ${n === 1 ? "key" : "keys"} waiting${o.online ? "…" : " · offline: sent when it's back, if nothing changed"}`;
@@ -607,6 +700,9 @@ export class Term {
     showPending(text, why) {
         const p = this.pending;
         p.hidden = !text;
+        this.held = !!text;
+        if (text)
+            this.guard(() => this.predict.block());
         if (!text)
             return;
         p.classList.toggle("ime", why === "ime");
@@ -1415,6 +1511,7 @@ export class Term {
                     this.focus();
                 } } },
             can && { label: `Plain keys (no suggestions): ${on(this.plain)}`, hint: "Letters go exactly as pressed: no predictions or autocorrect. Also turns dictation (the mic) off on most keyboards", title: tip("term.plain"), run: () => this.setPlain(!this.plain) },
+            can && { label: `Predict typing: ${this.predict.mode}`, hint: this.predict.mode === "off" ? "Never: each letter shows once the session echoes it" : `On a slow connection, letters show at once, underlined, until the session echoes them${this.predict.srtt !== null ? ` · echo here: ${Math.round(this.predict.srtt)} ms${this.predict.slow ? ", predicting" : ""}` : ""}`, title: tip("term.predict"), run: () => this.setPredict(this.predict.mode === "off" ? "auto" : "off") },
             can && { label: `Mouse to the program: ${on(this.mouseApp)}`, hint: "Clicks and the wheel, when it asks for them", title: tip("term.mouse"), run: () => { this.mouseApp = !this.mouseApp; store.set("mouse", this.mouseApp ? "1" : "0"); } },
             can && { label: this.match ? "Stop resizing the session" : "Resize the session to this screen", hint: "Everyone attached sees the new size; the last to type decides", title: tip("term.resize"), run: () => this.setMatch(!this.match) },
             { label: "Find in the history…", hint: this.query ? `Last: ${this.query}` : "The text of the session and what scrolled off", title: tip("term.find"), run: () => { form("Find", [{ key: "q", label: "Text", value: this.query, required: true }], "Find", async (v) => { await this.find(String(v.q), -1); }); } },

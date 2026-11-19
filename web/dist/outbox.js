@@ -65,20 +65,21 @@ export class Outbox {
             return false;
         return !this.online || this.io.now() - this.queue[0].at >= WAIT_MS;
     }
-    /// An input event typed into the session.
+    /// An input event typed into the session. Its number, when it has one (WEB2.4's predictions
+    /// learn from `Typed` when it was typed); null for an older daemon's plain input, or when dropped.
     type(event) {
         if (this.mode === "plain") {
             // An older daemon: as before (dropped while offline, and the page says so).
             this.io.send({ t: "input", session: this.session, event });
-            return;
+            return null;
         }
         if (positional(event) && (!this.online || this.mode !== "numbered"))
-            return;
+            return null;
         const now = this.io.now();
         const k = { n: this.next++, event, token: this.io.token(), at: now, sent: null, went: false };
         if (this.closed) {
             this.lose([k], "after", "keys before them weren't sent");
-            return;
+            return null;
         }
         this.queue.push(k);
         if (this.online && this.mode === "numbered" && !this.replayTo) {
@@ -91,6 +92,7 @@ export class Outbox {
             this.io.check();
         this.io.later(this.online ? WAIT_MS : 250);
         this.io.changed();
+        return k.n;
     }
     /// A welcome: `numbered` when it lists the feature. What waits goes again now.
     connected(numbered) {

@@ -1401,7 +1401,15 @@ struct StyleDef { id: u32, fg: Color, bg: Color, ul: Option<Color>,
   can't drift from the daemon's emulator.
 - **Pacing:** the hub sends at most one frame per session per client per tick (default 8 ms,
   configurable), and holds at most **one unacked frame** per session per client. A slow client
-  simply receives fewer, larger deltas — never an unbounded queue.
+  simply receives fewer, larger deltas — never an unbounded queue. **[built 2026-11-19, WEB2.4]**
+  A client far away gets two or three: the daemon measures, per subscription, the smoothed time
+  from a frame to its ack (`Inflight` in `conn.rs`; no protocol change, so every client gets it);
+  at 40 ms or more two frames may be unacked, at 120 ms or more three (`Inflight::MAX`), so a
+  change made while a frame crosses a slow link is sent at once instead of a round trip later
+  (in the predicted-echo simulation, 66 % fewer expired guesses at 100 ms each way). Each delta
+  is still from the frame sent before it (the client applies them in order); a client nearby (a
+  terminal, a LAN: acks in a few ms, plus the web app's `requestAnimationFrame`) and one that
+  never acks (no measurement) keep one, and nothing ever exceeds three.
 - **Synchronized output:** while the child has an open DEC 2026 batch, frames are held (bounded by
   the processor's timeout) so clients never paint half-drawn Claude/Neovim screens.
 - Optional `zstd` compression for frames > 8 KiB on remote transports (feature `"zstd"`).
@@ -5094,6 +5102,44 @@ emulator, no WASM.
   the page. Limits: a page reload forgets what was waiting (it is shown until then); a paste too
   big for the server (4 MiB) is refused at once, not kept; a session whose status comes only from
   the output heuristic is guarded by its process, foreground and screen only.
+- **[built 2026-11-19, WEB2.4] Predicted echo** (`Predictor` in `web/src/predict.ts`, no DOM;
+  `web/test/predict.mjs`: scenarios and a property test of random worlds — programs that echo,
+  don't, echo upper case or `*`, move the cursor, autosuggest, echo late; links from 0 to 200 ms
+  each way; one to three frames in flight; e2e `predict`). Mosh's speculative local echo, as a
+  layer over the confirmed screen: **it never changes what is sent** (`sendInput` sends first,
+  then tells the predictor, which has no way to send; any error in it only blocks it). *Predicted*:
+  a printable, narrow character (ASCII, Latin, Greek, Cyrillic; Shift at most) at the cursor, and
+  a Backspace that erases what was typed in this epoch at the end of the text (never the prompt,
+  never in the middle of a line). Everything else is a *barrier* (Enter, Tab, arrows, Ctrl/Alt
+  keys, pastes, clicks, focus, a wide or combining character, the last column, where the
+  terminal waits to wrap): a new epoch starts, and the screen's cursor is trusted again only once
+  that key is typed (`Typed`) plus `SETTLE_MS` (80 ms); letters typed meanwhile are held and
+  placed on the first frame after, past the ones it shows echoed already (only keys the daemon
+  said it typed). *Confirmed*: a frame shows the character in its cell with the cursor just after
+  it (a later one confirms those before it, whose cells must match too). *Contradicted*: the
+  cursor anywhere but where the echo so far leaves it (another row, past a cell that holds
+  something else, back): every prediction goes at once, a miss. *Expired*: not confirmed by
+  `ECHO_MS` (200 ms) plus the round trip after its key was typed, or `MAX_MS` (1.5 s) at most:
+  all go, a miss. Predictions freed by a barrier (the letters before an Enter) stay drawn,
+  judged by their cells alone, until confirmed, or until the barrier is typed and settled (then
+  confirmed or gone: so a screen that scrolled never keeps a guess on the new prompt line).
+  *Shown* only when the smoothed key-to-echo time is `ON_MS` (50 ms) or more (off again below
+  `OFF_MS`, 30 ms; measured from confirmations whether shown or not), only once `PROOF` (2)
+  predictions in this epoch were confirmed by a cell that changed (letters and the Backspaces that
+  took them back prove nothing), only where a letter types into a blank cell, and never while the
+  terminal is scrolled back or selecting, dictation is held, keys wait (offline, unanswered) or
+  the cursor is hidden; a new refusal wipes them. So a prompt that doesn't echo never shows a
+  letter: nothing there is ever confirmed. Drawn on the cell's own background, in the
+  foreground colour at 75 %, underlined, with the cursor after them. The alternate screen is
+  allowed (Claude Code, Codex and OpenCode keep a visible cursor at their prompt, under
+  synchronized output, so their echo proves itself; a program that misbehaves just never earns
+  the proof). **Aa → Predict typing: auto / off** (`term.predict`, `localStorage`
+  `ptyro.term.predict`, auto by default), its hint showing the measured echo time; with
+  `ptyro.debug`, `ptyroTerm.predict` (its `stats`, and `force` to draw on a fast link).
+  Limits: a program that hides the cursor and draws its own gets none; inserting in the middle
+  of a line is checked but not drawn; a coincidence (a program printing exactly the predicted
+  letter with the cursor after it, twice) could prove an epoch, and a guess then shows for at
+  most a round trip.
 - **[built 2026-11-19, WEB2.2] Terminal first** (`termFirst`, `strayToTerm` in `app.ts`; the
   rules are `strayKey`, `hardKey`, `ownKeyboard`, `autoFocus` in `keys.ts`, tested in
   `web/test/typing.mjs`; e2e `terminalFirst`, `typePhone`). The terminal is the session page's

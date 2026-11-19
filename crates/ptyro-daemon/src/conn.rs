@@ -2,10 +2,10 @@
 //! acks, input routing, controller tracking (SPEC §5.8) and event delivery.
 
 use ptyro_core::sync::MutexExt;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{SinkExt, StreamExt};
 use ptyro_core::now_ms;
@@ -857,9 +857,61 @@ impl Conn {
     }
 }
 
-/// Send frames for one session to one client: a keyframe first, then deltas, at most one frame
-/// in flight (the client acks), at most one per `daemon.frame_interval_ms`. A slow client simply gets
-/// fewer, bigger deltas; the session never waits for it.
+/// Frames sent to a client and not acked yet, and how long its acks take (WEB2.4). A client
+/// whose acks come back quickly (a terminal on this computer, a LAN) has one frame in flight, as
+/// always; one far away (a phone on cellular, 100–300 ms) gets two or three, so a change made
+/// while a frame is on its way isn't held back a whole round trip before it is even sent. Still
+/// bounded: a client that stops acking gets at most `MAX` frames, then nothing until it acks.
+#[derive(Debug, Default)]
+struct Inflight {
+    sent: VecDeque<(u64, Instant)>,
+    /// The smoothed time from a frame to its ack.
+    srtt: Option<Duration>,
+}
+
+impl Inflight {
+    const MAX: usize = 3;
+    /// Acks this slow get a second frame in flight…
+    const TWO: Duration = Duration::from_millis(40);
+    /// …and this slow, a third.
+    const THREE: Duration = Duration::from_millis(120);
+
+    fn window(&self) -> usize {
+        match self.srtt {
+            Some(r) if r >= Self::THREE => Self::MAX,
+            Some(r) if r >= Self::TWO => 2,
+            _ => 1,
+        }
+    }
+
+    fn full(&self) -> bool {
+        self.sent.len() >= self.window()
+    }
+
+    fn sent(&mut self, seq: u64, at: Instant) {
+        self.sent.push_back((seq, at));
+    }
+
+    /// The client has every frame up to `upto`: the newest of them says how long acks take.
+    fn acked(&mut self, upto: u64, now: Instant) {
+        let mut took = None;
+        while let Some(&(seq, at)) = self.sent.front() {
+            if seq > upto {
+                break;
+            }
+            took = Some(now.saturating_duration_since(at));
+            self.sent.pop_front();
+        }
+        if let Some(t) = took {
+            self.srtt = Some(self.srtt.map_or(t, |s| (s * 3 + t) / 4));
+        }
+    }
+}
+
+/// Send frames for one session to one client: a keyframe first, then deltas, at most one per
+/// `daemon.frame_interval_ms`, with one frame in flight until the client acks it (two or three
+/// for a client far away: `Inflight`). A slow client simply gets fewer, bigger deltas; the
+/// session never waits for it.
 async fn stream_frames(
     session: Arc<Session>,
     out: mpsc::Sender<ServerMsg>,
@@ -869,7 +921,15 @@ async fn stream_frames(
     let mut changed = session.changed.subscribe();
     let mut styles = StyleTable::default();
     let mut sent: Option<u64> = None;
+    let mut flight = Inflight::default();
     loop {
+        flight.acked(*acks.borrow_and_update(), Instant::now());
+        if flight.full() {
+            if acks.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
         changed.borrow_and_update();
         let frame = {
             let mut term = session.term.locked();
@@ -878,6 +938,7 @@ async fn stream_frames(
             if sent == Some(seq) {
                 None
             } else {
+                // Each delta is from the frame sent before it: the client applies them in order.
                 let delta = term.tracker.build(&term.emu, sent, &mut styles);
                 // Damage that changed nothing: no frame, nothing to ack.
                 (sent.is_none() || !delta.is_empty()).then(|| ScreenFrame {
@@ -899,15 +960,15 @@ async fn stream_frames(
                 return;
             }
             sent = Some(seq);
-            let paced = tokio::time::sleep(interval);
-            if acks.wait_for(|a| *a >= seq).await.is_err() {
-                return;
-            }
-            paced.await;
+            flight.sent(seq, Instant::now());
+            tokio::time::sleep(interval).await;
             continue;
         }
-        if changed.changed().await.is_err() {
-            return;
+        let waiting = !flight.sent.is_empty();
+        tokio::select! {
+            r = changed.changed() => if r.is_err() { return; },
+            // (An ack is a sample of how far away the client is, taken as it comes.)
+            r = acks.changed(), if waiting => if r.is_err() { return; },
         }
     }
 }
@@ -1127,6 +1188,49 @@ async fn forward_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frames_in_flight_follow_how_far_away_the_client_is() {
+        let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
+        let mut f = Inflight::default();
+        assert_eq!(f.window(), 1, "one in flight until acks are measured");
+        f.sent(1, ms(0));
+        assert!(f.full());
+        // A terminal nearby: acks in a few ms, one frame in flight, as before.
+        f.acked(1, ms(5));
+        assert_eq!((f.window(), f.full()), (1, false));
+        for i in 2..20 {
+            f.sent(i, ms(i * 10));
+            f.acked(i, ms(i * 10 + 15));
+        }
+        assert_eq!(f.window(), 1, "{:?}", f.srtt);
+        // A phone on cellular: two, then three.
+        for i in 20..40 {
+            f.sent(i, ms(i * 1000));
+            f.acked(i, ms(i * 1000 + 80));
+        }
+        assert_eq!(f.window(), 2, "{:?}", f.srtt);
+        for i in 40..60 {
+            f.sent(i, ms(i * 1000));
+            f.acked(i, ms(i * 1000 + 250));
+        }
+        assert_eq!(f.window(), Inflight::MAX, "{:?}", f.srtt);
+        // Never more than three, whatever the client does: one that stops acking gets no more.
+        for i in 60..63 {
+            assert!(!f.full());
+            f.sent(i, ms(70_000));
+        }
+        assert!(f.full());
+        // One ack covers every frame up to it.
+        f.acked(61, ms(70_300));
+        assert_eq!(f.sent.len(), 1);
+        f.acked(1000, ms(70_400));
+        assert!(f.sent.is_empty());
+        // An old ack (a reconnect's) changes nothing.
+        f.acked(3, ms(80_000));
+        assert_eq!(f.window(), Inflight::MAX);
+    }
 
     #[test]
     fn a_long_chat_is_sent_in_frames_that_fit() {

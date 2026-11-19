@@ -306,7 +306,7 @@ program wants it (hold Shift to select instead).
 - **On a phone**, the row under the screen has Esc, Tab, Ctrl, Alt and ⇧ (tap one for the next key,
   tap again to hold it), arrows (hold to repeat), Home/End/PgUp/PgDn, Ctrl-C/D/Z/L/R, punctuation,
   F1–F12 and Paste. **Aa** has text size, fit or 1:1, the on-screen keyboard on or off (off keeps a
-  hardware keyboard's keys without covering the screen), *Plain keys*, find, and *Resize the session
+  hardware keyboard's keys without covering the screen), *Plain keys*, *Predict typing*, find, and *Resize the session
   to this screen* (everyone attached sees the new size; whoever types last decides).
 - **A phone's keyboard.** Letters arrive as you type them, even while the keyboard is still
   composing the word, and an autocorrect arrives as a correction (backspaces, then the right
@@ -345,6 +345,16 @@ program wants it (hold Shift to select instead).
   on purpose once you have looked. ✎ Compose is safe to send again too: if the connection dropped
   mid-send, the page says it isn't sure it was sent, and sending again never types it twice.
   (An older ptyro, before protocol 1.52, can't check this: keys typed offline are dropped and said, as before.)
+- **Predicted typing.** On a slow connection (cellular, a VPN across the world) each letter
+  would wait a round trip before it shows. Instead, what you type shows at once, faint and
+  underlined, and turns into the session's own text when its echo arrives; a wrong guess (the
+  program printed something else, or moved the cursor) disappears with the very next screen
+  update. It only switches on when the echo is slow (over about 50 ms; never on a LAN), only
+  after the session has echoed at least two of the letters you just typed, and starts over after
+  Enter, Tab, an arrow or a Ctrl key, so a password prompt (which echoes nothing) never shows
+  what you type. It is only drawn on your screen: what is sent is exactly what you type.
+  **Aa → Predict typing: auto / off** (kept on this device). Programs that hide the cursor and
+  draw their own get no predictions.
 - **Below `control`** the screen is still live and you can scroll, select and copy, but nothing
   you type reaches the session.
 

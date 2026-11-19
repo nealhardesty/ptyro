@@ -47,6 +47,7 @@ Conventions:
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
 | **WIN** | Windows and PowerShell | pwsh sessions as good as bash everywhere; WSL2 checked, bridged and doctored (done). `ptyro.exe` in Windows Terminal and the native daemon on ConPTY were built, then removed 2026-11-18 (owner): on Windows, ptyro runs inside WSL2 (RESEARCH DD3) |
 | **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (built 2026-11-04) |
+| **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -2661,7 +2662,8 @@ The owner asked for a real terminal typing experience on the web, bulletproof, a
 dictation (OS dictation and third-party tools such as Superwhisper). R-UX-46. Today keys go to
 the session as pressed only after a tap on the screen, a phone keyboard's composition reaches it
 a word at a time (only at `compositionend`), and each character waits a round trip to show.
-Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`).
+Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`). **Done 2026-11-19**
+(all four).
 
 - [x] **WEB2.1 Letters as you type them; dictation as one paste** — M. *(Built 2026-11-19: `Typist`
   in `web/src/keys.ts` diffs the field against what was sent; dictation held at the cursor and
@@ -2688,7 +2690,14 @@ Built in order, each on the one before (`web/src/term.ts`, `web/src/keys.ts`).
   acks and drops duplicates per device and session; keys typed while reconnecting wait as
   "pending" and are replayed only after a short gap with no change in what the session is waiting
   for, else dropped and said.
-- [ ] **WEB2.4 Predicted echo** — M. Typed text drawn at the cursor at once (dim), confirmed or
+- [x] **WEB2.4 Predicted echo** — M. *(Built 2026-11-19: `Predictor` in `web/src/predict.ts`,
+  an overlay never part of what is sent; confirmed, contradicted or expired by frames, `Typed`
+  and deadlines; shown only at a 50 ms echo or more and after two confirmations in the epoch, so
+  a password prompt never shows; barriers start epochs, letters typed meanwhile are held and
+  placed; Aa → Predict typing: auto / off. The daemon keeps two or three frames in flight for a
+  client whose acks take 40 / 120 ms (`Inflight`, no protocol change). `web/test/predict.mjs`
+  (scenarios, random worlds), e2e `predict`. SPEC §16.4 WEB1.8 "Predicted echo", §6.5 Pacing.)*
+  Typed text drawn at the cursor at once (dim), confirmed or
   wiped by the next frames; shown only on a slow link and while predictions prove right. A
   couple of frames in flight on slow links.
 

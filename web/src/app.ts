@@ -458,8 +458,8 @@ function sessionShell(id: string): Shell {
     input: (event) => {
       // Too big for the server (H2.7): said, never kept to be sent again and again.
       const n = JSON.stringify(event).length;
-      if (n > MAX_SEND / 4 && new TextEncoder().encode(JSON.stringify(event)).length > MAX_SEND - 4096) { toast("Not sent: that paste is too large (over 4 MiB)"); return; }
-      outboxOf(id).type(event);
+      if (n > MAX_SEND / 4 && new TextEncoder().encode(JSON.stringify(event)).length > MAX_SEND - 4096) { toast("Not sent: that paste is too large (over 4 MiB)"); return null; }
+      return outboxOf(id).type(event);
     },
     outbox: () => outboxOf(id),
     request: (r) => conn.request(r),
@@ -694,6 +694,9 @@ conn.listeners.add((msg) => {
   }
   if (msg.t === "typed") {
     outboxes.get(msg.session)?.typed(msg);
+    // When each key was typed: its predicted echo is due soon after (WEB2.4).
+    const sh = shell;
+    if (sh && sh.id === msg.session && msg.stream === outboxes.get(msg.session)?.stream) sh.term.typed(msg.upto);
     return;
   }
   if (msg.t === "connected") {
