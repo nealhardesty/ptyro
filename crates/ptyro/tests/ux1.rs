@@ -594,6 +594,84 @@ async fn gc_measures_stale_worktrees() {
     assert!(entries.iter().all(|e| e.worktree.name != "fresh"), "{entries:?}");
 }
 
+/// A pull request's "Squash and merge" is never an ancestor of the base, but `gc` sees its changes
+/// are in it; removing it loses nothing, though its commits are on no remote. "Keep it"
+/// (`gc --keep-wt`) takes a worktree out of clean-up, across a restart, until its branch moves
+/// on (SPEC §10.8).
+#[tokio::test]
+async fn gc_sees_squash_merges_and_leaves_kept_worktrees_be() {
+    let mut w = World::new("exec sleep 60");
+    let dir = repo(&w, "myrepo");
+    let origin = w.home().join("origin.git");
+    git(&w.home(), &w.home(), &["init", "-q", "--bare", &origin.to_string_lossy()]);
+    git(&w.home(), &dir, &["remote", "add", "origin", &origin.to_string_lossy()]);
+    git(&w.home(), &dir, &["push", "-q", "origin", "HEAD:main"]);
+    let c = w.d.client().await.unwrap();
+    let mut made = Vec::new();
+    for name in ["squashed", "kept"] {
+        let spec = ptyro_core::model::WorktreeSpec {
+            project: dir.to_string_lossy().into_owned(),
+            name: Some(name.into()),
+            fetch: Some(false),
+            ..Default::default()
+        };
+        let Reply::WorktreeCreated { info, .. } =
+            c.request(Request::WorktreeNew { spec }).await.unwrap()
+        else {
+            panic!()
+        };
+        for f in ["a", "b"] {
+            std::fs::write(info.path.join(format!("{name}-{f}.txt")), f).unwrap();
+            git(&w.home(), &info.path, &["add", "."]);
+            git(&w.home(), &info.path, &["commit", "-qm", f]);
+        }
+        let branch = info.branch.clone().unwrap();
+        git(&w.home(), &dir, &["merge", "-q", "--squash", &branch]);
+        git(&w.home(), &dir, &["commit", "-qm", &format!("{name} (squashed)")]);
+        made.push(info);
+    }
+    git(&w.home(), &dir, &["push", "-q", "origin", "HEAD:main"]);
+    let reasons = |entries: &[ptyro_core::model::GcEntry], name: &str| {
+        entries.iter().find(|e| e.worktree.name == name).map(|e| e.reasons.join("; "))
+    };
+    let entries = gc_entries(&c).await;
+    for name in ["squashed", "kept"] {
+        let why = reasons(&entries, name).unwrap_or_else(|| panic!("{name}: {entries:?}"));
+        assert!(why.contains("squash-merged into origin/main"), "{name}: {why}");
+    }
+    // Kept: said until when, and out of the list, after a restart too.
+    let out = w.d.cmd().args(["gc", "--keep-wt", "myrepo/kept"]).output().unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && said.contains("kept myrepo/kept"), "{said}");
+    assert!(said.contains("another 14 days"), "{said}");
+    assert_eq!(reasons(&gc_entries(&c).await, "kept"), None);
+    drop(c);
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    let entries = gc_entries(&c).await;
+    assert_eq!(reasons(&entries, "kept"), None, "{entries:?}");
+    assert!(reasons(&entries, "squashed").is_some(), "only what was kept: {entries:?}");
+    // Its branch moves on and is squashed again: offered again.
+    let kept = &made[1];
+    std::fs::write(kept.path.join("kept-c.txt"), "c").unwrap();
+    git(&w.home(), &kept.path, &["add", "."]);
+    git(&w.home(), &kept.path, &["commit", "-qm", "c"]);
+    git(&w.home(), &dir, &["merge", "-q", "--squash", kept.branch.as_deref().unwrap()]);
+    git(&w.home(), &dir, &["commit", "-qm", "kept again (squashed)"]);
+    git(&w.home(), &dir, &["push", "-q", "origin", "HEAD:main"]);
+    let why = reasons(&gc_entries(&c).await, "kept").expect("its branch moved on");
+    assert!(why.contains("squash-merged"), "{why}");
+    // The main checkout is never cleaned up, so never kept.
+    let e = c.request(Request::GcKeep { worktree: "myrepo/@root".into() }).await.unwrap_err();
+    assert!(e.message.contains("never cleaned up"), "{}", e.message);
+    // Squashed, never pushed: removing it loses nothing, so it isn't refused.
+    let req = Request::WorktreeRemove { addr: made[0].id.clone(), opts: Default::default() };
+    match c.request(req).await {
+        Ok(Reply::Removed { .. }) => {}
+        other => panic!("removing a squash-merged worktree: {other:?}"),
+    }
+}
+
 fn git_out(w: &World, dir: &std::path::Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
         .arg("-C")

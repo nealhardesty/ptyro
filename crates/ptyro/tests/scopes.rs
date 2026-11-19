@@ -204,6 +204,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"worktree_run","addr":a,"script":null,"size":null}), FULL, false),
         s(json!({"t":"worktree_rename","addr":a,"name":"x"}), FULL, false),
         s(json!({"t":"gc"}), FULL, false),
+        s(json!({"t":"gc_keep","worktree":a}), FULL, false),
         s(json!({"t":"profile_env","name":a}), FULL, false),
         s(json!({"t":"profile_rename","old":a,"new":"x"}), FULL, false),
         s(json!({"t":"profile_resolve","spec":spawn_spec(json!({}))}), FULL, false),

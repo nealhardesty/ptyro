@@ -870,7 +870,7 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
 }
 
 /// The lines under a session's first line (UX1.2), starting at column `lead`: what it wants,
-/// what it's on, its task and last reply, or a shell's command. `wide` lets the long ones wrap
+/// what it's on, its last reply, or a shell's command. `wide` lets the long ones wrap
 /// once, for the row in focus.
 /// What a quick terminal's line says it's doing: the command running (`cargo test`, `vim`),
 /// else the last one and how it went (`✓ make` / `✗ make`), else nothing.

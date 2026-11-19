@@ -630,7 +630,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.theme", "interface", pick(THEMES), "The terminal screen's colour scheme. NO_COLOR in the environment turns colour off whatever this says.").also("color colour dark light appearance theme contrast"),
     s("ui.sidebar", "interface", Kind::Bool, "Show the session list down the side (`\\` toggles it)."),
     s("ui.sidebar_width", "interface", int(12, 120), "How wide the sidebar is.").unit("columns"),
-    s("ui.sidebar_detail", "interface", pick(DETAIL), "How much each session row says under its first line (its task, what it is on, its last reply)."),
+    s("ui.sidebar_detail", "interface", pick(DETAIL), "How much each session row says under its first line: what it wants from you, what it is on, its last reply, a shell's command."),
     s("ui.status_bar", "interface", Kind::Bool, "Show the status bar along the bottom."),
     s("ui.clock", "interface", Kind::Bool, "Show the time in the status bar."),
     s("ui.load", "interface", Kind::Bool, "Show the load average of the computer ptyro runs on (1, 5 and 15 minutes) in the status bar and the web app's header. It turns amber once it passes the number of CPUs.").also("cpu busy uptime system"),

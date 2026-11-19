@@ -42,6 +42,8 @@ pub enum Target {
     Fix(usize),
     /// Palette: this configuration option, in the settings panel (CFG1.1).
     Setting(String),
+    /// Palette: switch to this built-in theme, and keep it (`ui.theme`).
+    Theme(String),
     /// Palette: open this chat (SPEC §22.12).
     Chat(String),
 }
@@ -112,6 +114,17 @@ impl Palette {
 
     pub fn item(&self, i: usize) -> &Item {
         &self.items[self.filtered[i]]
+    }
+
+    /// What ⏎ would pick now.
+    pub fn selected_target(&self) -> Option<&Target> {
+        self.filtered.get(self.selected).map(|&i| &self.items[i].target)
+    }
+
+    /// Only the items `keep` says; the selection stays where it was, or on the last one.
+    pub fn retain(&mut self, keep: impl Fn(&Item) -> bool) {
+        self.items.retain(keep);
+        self.refilter();
     }
 
     fn refilter(&mut self) {

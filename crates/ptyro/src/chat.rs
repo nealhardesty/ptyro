@@ -562,6 +562,7 @@ fn removed(words: &[String]) -> Result<(), Error> {
         "compare" | "pick" => "a chat has one agent: `chat set --agent` switches it",
         "import" => "chats imported before stay, as ordinary chats",
         "presets" => "every chat searches the web and reads the folders you give it",
+        "retitle" => "it is part of rename now: `ptyro chat rename CHAT TITLE`",
         _ => return Ok(()),
     };
     Err(Error::invalid(format!(

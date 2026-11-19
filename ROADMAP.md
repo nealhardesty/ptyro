@@ -41,7 +41,7 @@ Conventions:
 | **CFG1** | One configuration panel | Every option editable in the TUI, on the web and with `ptyro config set`, from one schema; new options must join it (done) |
 | **NOTE1** | The scratchpad | One persistent notepad file for everywhere: a key opens it, `PTYRO_SCRATCHPAD` finds it, items become tasks, the web edits it (done; removed 2026-11-17) |
 | **UX2** | Found in use | Small things the owner's own scratchpad caught while using ptyro: an About screen, a sidebar that shows a pushed worktree as done (done) |
-| **UX3** | Daily flow | Full-sized panels and splits only on request (you choose what fills one: a clone, a shell, any session; the split something new covers is kept), quick new (`C-n`, the worktree's agent; removed 2026-11-17 by mistake, back 2026-11-18), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About (done) |
+| **UX3** | Daily flow | Full-sized panels and splits only on request (you choose what fills one: a clone, a shell, any session; the split something new covers is kept), quick new (`C-n`, the worktree's agent; removed 2026-11-17 by mistake, back 2026-11-18), created means shown, `!` a new shell and the quick terminal a worktree's, usage limits in About, and what the pare-down cut by accident back (squash-merged and kept worktrees in clean-up, push after pairing again, the palette's themes; done) |
 | **H2** | Second hardening review | A review of the whole codebase by nine independent readers: ~150 findings verified and fixed; locks, the release pipeline and uninstall done; the rest listed here |
 | **MM1** | Many machines | Every laptop's agents from one place: other machines' workspaces beside yours in one sidebar, one CLI and one phone app (done) |
 | **CHAT** | Chat | A quick, general chat on your registered agents: many chats, forks and threads, recent chats in the sidebar and a full searchable history (keyword, then smart), web search out of the box, in every workspace including linked machines' (proposed; sync across machines is CHAT6) |
@@ -2259,6 +2259,25 @@ rules as everywhere: CLI, TUI and web, with the parity row.
 The owner asked for the smoothest, most obvious daily loop (RESEARCH R-UX-34…37). CLI, TUI and
 web, with the parity rows.
 
+- [x] **UX3.9 What the pare-down cut by accident, back** — M. *From an audit of v0.0.70 → v0.0.87
+  (owner, 2026-11-19: "clone was a pretty useful shortcut and I'm worried we cut out a bunch of
+  other useful ease of use facilities").* Every surface diffed against the decisions in
+  `docs/review-2026-11/pare-down.md`; the gaps they didn't decide, fixed:
+  - `gc` sees **squash-merged** worktrees (`Git::changes_in`), which went unseen once the PR
+    poller was removed, and `wt rm` no longer refuses one whose commits are on no remote but
+    whose changes are in the base (SPEC §10.8).
+  - **Keep it** keeps (protocol 1.51 `GcKeep`): the web's was a toast, so the same worktrees came
+    back and Health kept warning. `ptyro gc` `k` and `--keep-wt WT`, the TUI's `C-k` in the
+    clean-up list, the web's Keep it (`worktree.keep`).
+  - The web **🔔 and push** survive pairing again: the subscription is made again on connect
+    when the permission is there, and the 🔔 follows the subscription, not the permission.
+  - The web's **quick-new label** ("+ codex@work") is right after a reload again (restoring quick
+    new missed `loadAll`'s lookup).
+  - The palette's **theme lines** are back, and keep the pick (`ui.theme`).
+  - Removed **subcommands and flags** of kept commands (`wt retitle`, `wt archive`, `wt finish`,
+    `project discover`, `new --take-changes`, `chat new --preset`…) say what to use, as removed
+    commands do; `chat retitle` no longer becomes a chat asking an agent "retitle …".
+  - `ui.sidebar_detail`'s help no longer names the task line, gone since v0.0.71.
 - [x] **UX3.8 You choose what fills a split; picks stay in the split; the kept split is back** —
   M. *R-UX-34, from the owner, 2026-11-18; amends UX3.1.* `v` / `s` ask what goes in the new pane
   (⏎ the clone, `+ new shell` beside an agent, or any session not on screen); a session you pick

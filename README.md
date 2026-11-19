@@ -450,8 +450,9 @@ ptyro makes and removes worktrees; committing, pushing and merging are yours, wi
 `ptyro wt rm` refuses to remove a worktree with running sessions, uncommitted or unpushed work,
 or stashes, lists exactly what would be lost, and offers to remove it anyway (`--force`), or you
 commit and push first. The checkout goes, build output (`target/`, `node_modules/`) with it, so
-disk comes back. `ptyro gc` (`Ctrl-Q G`) lists the stale ones, biggest on disk first, to remove
-or keep; the health badge (`⚕`, and Health on the web) reminds you when there are some, with how
+disk comes back. `ptyro gc` (`Ctrl-Q G`) lists the stale ones (merged, squash-merged on GitHub
+too, gone, or unused), biggest on disk first, to remove or keep (a kept one isn't offered again
+until it changes); the health badge (`⚕`, and Health on the web) reminds you when there are some, with how
 much disk they take. ptyro also reads
 setup config written for Conductor, Superset, the Codex app, Claude Desktop, Cursor and Copilot.
 Details: [`docs/config.md`](docs/config.md).

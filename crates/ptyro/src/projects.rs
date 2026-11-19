@@ -1052,22 +1052,57 @@ async fn open(ctx: &Ctx, c: Client, addr: String, editor: Option<String>) -> Res
     Ok(0)
 }
 
-/// Whether to remove one stale worktree: `r` removes it, anything else keeps it; `false`
-/// without a terminal.
-fn ask_remove(what: &str) -> bool {
+/// What to do with one stale worktree, asked.
+enum GcAnswer {
+    Remove,
+    /// Keep it from clean-up (`GcKeep`): not offered again until something changes.
+    Keep,
+    /// Leave it for now: offered again next time.
+    Skip,
+}
+
+/// What to do with one stale worktree: `r` removes it, `k` keeps it from clean-up, anything else
+/// leaves it for now; left for now without a terminal.
+fn ask_remove(what: &str) -> GcAnswer {
     use std::io::{BufRead, IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
-        return false;
+        return GcAnswer::Skip;
     }
-    eprint!("{what}: r remove · ⏎ keep (worktrees.stale_days says when one is stale) ");
+    eprint!("{what}: r remove · k keep it (not offered again until it changes) · ⏎ not now ");
     let _ = std::io::stderr().flush();
     let mut line = String::new();
     let _ = std::io::stdin().lock().read_line(&mut line);
-    matches!(line.trim(), "r" | "R")
+    match line.trim() {
+        "r" | "R" => GcAnswer::Remove,
+        "k" | "K" => GcAnswer::Keep,
+        _ => GcAnswer::Skip,
+    }
 }
 
-pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Result<i32, Error> {
+/// Keep one worktree from clean-up, saying what that means.
+async fn gc_keep(c: &ptyro_client::Client, worktree: String) -> Result<(), Error> {
+    match c.request(Request::GcKeep { worktree }).await? {
+        Reply::Notes { notes } => notes.iter().for_each(|n| eprintln!("{n}")),
+        other => return Err(unexpected(other)),
+    }
+    Ok(())
+}
+
+pub async fn gc(
+    ctx: &Ctx,
+    dry_run: bool,
+    json: bool,
+    only_scratch: bool,
+    keep: Vec<String>,
+) -> Result<i32, Error> {
     let c = ctx.connect(false).await.map_err(no_daemon)?;
+    // `--keep-wt`: keep those, and nothing else.
+    if !keep.is_empty() {
+        for w in keep {
+            gc_keep(&c, w).await?;
+        }
+        return Ok(0);
+    }
     let Reply::Gc { entries, scratch } = c.request(Request::Gc).await? else {
         return Err(Error::internal("unexpected reply"));
     };
@@ -1119,8 +1154,15 @@ pub async fn gc(ctx: &Ctx, dry_run: bool, json: bool, only_scratch: bool) -> Res
     for e in entries {
         let w = e.worktree;
         // Removing refuses when work would be lost.
-        if !ask_remove(&w.qualified()) {
-            continue;
+        match ask_remove(&w.qualified()) {
+            GcAnswer::Remove => {}
+            GcAnswer::Keep => {
+                if let Err(e) = gc_keep(&c, w.id.clone()).await {
+                    eprintln!("  {}", e.message);
+                }
+                continue;
+            }
+            GcAnswer::Skip => continue,
         }
         let req = Request::WorktreeRemove { addr: w.id.clone(), opts: RemoveOpts::default() };
         match c.request(req).await {

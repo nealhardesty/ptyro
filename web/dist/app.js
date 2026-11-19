@@ -191,9 +191,13 @@ function setHostLoad(l) {
         chip.querySelector(".load")?.replaceWith(loadSpan() ?? "");
     }
 }
-/// Notifications aren't on for this device yet: a top-level page offers them (More → This device
-/// always has them, and their test).
-const pushOffered = () => !("Notification" in window) || Notification.permission !== "granted";
+/// This device gets push notifications: it has a subscription the daemon knows (`syncPush`, on
+/// every connect). Until then a top-level page offers them (More → This device always has them,
+/// and their test). Not the browser's permission alone: a device that forgot its pairing keeps the
+/// permission but lost its subscription. Until the first sync, the permission says (no 🔔 flashing
+/// up on every load of a device that has them).
+let pushOn = "Notification" in window && Notification.permission === "granted";
+const pushOffered = () => !pushOn;
 /// `back`: true goes to the session list; a string is where it goes instead.
 function header(title, back, ...extra) {
     const dot = h("span", { class: `dot ${conn.state}`, title: conn.state });
@@ -425,10 +429,46 @@ async function enablePush() {
         sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
         await conn.request({ t: "push_subscribe", sub: { endpoint: sub.endpoint, p256dh: b64u(sub.getKey("p256dh")), auth: b64u(sub.getKey("auth")) } });
         await conn.request({ t: "push_test" });
+        setPushOn(true);
         toast("Notifications on — a test is on its way.");
     }
     catch (e) {
         toast(`Notifications: ${e.message}`);
+    }
+}
+function setPushOn(on) {
+    if (pushOn === on)
+        return;
+    pushOn = on;
+    render();
+}
+/// On every connect: with notifications already allowed, this device's subscription is made again
+/// if it is missing (paired again after Forget) or for another key (the daemon's changed), and
+/// told to the daemon (which may have lost it: a device revoked and paired again). Asks nothing:
+/// without the permission, the 🔔 offers it.
+async function syncPush() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !isSecureContext || !("Notification" in window) || Notification.permission !== "granted") {
+        setPushOn(false);
+        return;
+    }
+    try {
+        const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((ok) => setTimeout(() => ok(undefined), 5000))]);
+        if (!reg) {
+            setPushOn(false);
+            return;
+        }
+        const { key } = await conn.request({ t: "push_key" });
+        let sub = await reg.pushManager.getSubscription();
+        if (sub && b64u(sub.options.applicationServerKey) !== key.replace(/=+$/, "")) {
+            await sub.unsubscribe();
+            sub = null;
+        }
+        sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+        await conn.request({ t: "push_subscribe", sub: { endpoint: sub.endpoint, p256dh: b64u(sub.getKey("p256dh")), auth: b64u(sub.getKey("auth")) } });
+        setPushOn(true);
+    }
+    catch {
+        setPushOn(false);
     }
 }
 // ── wiring ──────────────────────────────────────────────────────────────────────────────────
@@ -444,6 +484,7 @@ conn.listeners.add((msg) => {
         }
         void refresh();
         void loadAll();
+        void syncPush();
         setupConnected();
         conn.request({ t: "status" }).then((r) => setHostLoad(r.status?.load ?? null), () => { });
         return;

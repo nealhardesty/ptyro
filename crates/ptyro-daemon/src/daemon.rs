@@ -80,6 +80,8 @@ pub struct Daemon {
     pub(crate) used_links: Mutex<HashMap<String, u64>>,
     /// The agent each worktree last started, by worktree id (UX3.7, `again.rs`).
     pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
+    /// Worktrees kept from clean-up, by worktree id (`kept.rs`).
+    pub(crate) kept: Mutex<HashMap<String, crate::kept::Kept>>,
     /// Usage per (profile, agent).
     pub(crate) usage: Mutex<HashMap<(String, String), ptyro_core::status::Usage>>,
     pub(crate) codex_usage: Mutex<std::collections::HashSet<String>>,
@@ -208,6 +210,7 @@ impl Daemon {
             last_notified: Mutex::new(HashMap::new()),
             used_links: Mutex::new(HashMap::new()),
             last_launch: Mutex::new(HashMap::new()),
+            kept: Mutex::new(HashMap::new()),
             usage: Mutex::new(HashMap::new()),
             codex_usage: Mutex::new(std::collections::HashSet::new()),
             sidecars: Mutex::new(HashMap::new()),

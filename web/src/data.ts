@@ -76,6 +76,10 @@ export async function loadAll(): Promise<void> {
   if (ws.status === "fulfilled") data.workspaces = byId<Workspace>(ws.value.workspaces);
   if (ag.status === "fulfilled") { data.agents = ag.value.agents; data.defaultAgent = ag.value.default; }
   ui.render();
+  // What quick new starts in each worktree ("+ codex@work", "Another …"): asked after the first
+  // render, so the page doesn't wait on it; until then the buttons name the default agent.
+  await Promise.allSettled(liveWorktrees().filter((w) => w.state === "ready").map((w) => refreshLaunch(w.id)));
+  ui.render();
 }
 
 /// Keep up with a domain event; true when it was one of ours.
