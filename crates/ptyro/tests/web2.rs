@@ -629,22 +629,27 @@ async fn keys_a_session_doesnt_read_are_refused_not_said_typed() {
     let id = v["id"].as_str().or_else(|| v["session"]["id"].as_str()).expect("an id").to_owned();
     w.wait_lines("stuck", "it to be ready", |l| l.iter().any(|x| x == "ready"));
     let mut p = Phone::new(serve.port, &token, true).await;
+    // How much a terminal's input buffer holds differs by system (a few KiB on macOS, far more
+    // on Linux): keys go round after round until the session's queue is full, then one more.
     let per = ptyro_protocol::MAX_SEQ_KEYS as u64;
-    let rounds = 4;
-    for r in 0..rounds {
+    let (mut overflow, mut upto, mut sent) = (None, 0, 0);
+    for r in 0..64 {
         let keys: Vec<(u64, Value)> = (r * per + 1..=(r + 1) * per).map(|n| (n, ch('x'))).collect();
         p.send(live(&id, "o1", &keys)).await;
-    }
-    let mut overflow = None;
-    let mut upto = 0;
-    while upto < rounds * per {
-        let m = p.typed("o1", upto + 1).await;
-        upto = m["upto"].as_u64().unwrap();
-        if let Some(r) = m["refused"].as_array().and_then(|a| a.first()) {
-            overflow.get_or_insert_with(|| r.clone());
+        sent = (r + 1) * per;
+        while upto < sent {
+            let m = p.typed("o1", upto + 1).await;
+            upto = m["upto"].as_u64().unwrap();
+            if let Some(r) = m["refused"].as_array().and_then(|a| a.first()) {
+                overflow.get_or_insert_with(|| r.clone());
+            }
+        }
+        if overflow.is_some() {
+            break;
         }
     }
-    let r = overflow.expect("keys the session couldn't take were refused, not said typed");
+    let r =
+        overflow.unwrap_or_else(|| panic!("{sent} keys, and none refused: the queue never filled"));
     assert_eq!(r["why"], "overflow", "{r}");
     assert!(r["from"].as_u64().unwrap() > 1, "the first keys went: {r}");
 }
