@@ -278,7 +278,15 @@ pub async fn run(ctx: &Ctx) -> Result<i32, Error> {
         }
         let answer = ask.line("  register which? (1,3-5, all, none)", "none");
         for i in pick(&answer, repos.len().min(40)) {
-            match c.request(Request::ProjectAdd { path: repos[i].clone(), workspace: None }).await {
+            match c
+                .request(Request::ProjectAdd {
+                    path: repos[i].clone(),
+                    workspace: None,
+                    moved: false,
+                    separate: false,
+                })
+                .await
+            {
                 Ok(Reply::Project { info, notes }) => {
                     eprintln!("  + {} ({})", info.slug, info.pin.as_deref().unwrap_or("default"));
                     for n in notes {

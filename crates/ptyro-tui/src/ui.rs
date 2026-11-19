@@ -568,6 +568,11 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                     spans.push(Span::raw(" "));
                     spans.push(b);
                 }
+                // Its main checkout is gone (SPEC §10.1); `→?` when ptyro found where it went.
+                if app.project_missing(id) {
+                    let mark = if p.moved_to.is_some() { " missing →?" } else { " missing" };
+                    spans.push(Span::styled(mark, fg(app, t.error)));
+                }
                 Line::from(spans)
             }
             Row::Worktree(id) => {

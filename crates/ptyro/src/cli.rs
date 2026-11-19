@@ -589,6 +589,7 @@ pub fn said(e: &Error) -> String {
         Again::StopSessions => "--stop-sessions".to_owned(),
         Again::Stop => "--stop".to_owned(),
         Again::Release => "--release".to_owned(),
+        Again::Moved => "--moved".to_owned(),
     };
     format!("{} (again with `{flag}`: {})", e.message, f.label.to_lowercase())
 }

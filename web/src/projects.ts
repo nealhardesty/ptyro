@@ -22,6 +22,7 @@ const ACTIONS = {
   "project.config": "The project's configuration, and where each value comes from",
   "project.pin": "Pin the project to a profile (its account)",
   "project.rename": "Rename the project: its address, which finds its worktrees and sessions (project/name)",
+  "project.move": "Its repository moved: point the project at where it is now; it keeps its trust, pin, workspaces and worktrees (a project registered there is folded in)",
   "worktree.new": "A new worktree in this project, with an agent in it if you like",
   "worktree.show": "A worktree's page: its status, its sessions and what to do next",
   "worktree.remove": "Remove the worktree (it refuses to lose work, saying what it would lose)",
@@ -95,8 +96,10 @@ function projectsView(): HTMLElement {
         h("a", { class: "proj-name", href: `#/proj/${enc(p.id)}`, title: tip("project.show") }, wsLabel(p.slug)),
         machineChip(p.slug),
         p.pin ? badge(p.pin, "info") : null,
+        projectMissing(p) ? badge("missing", "warn") : null,
         h("span", { class: "spacer" }),
-        h("button", { class: "small", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "＋ Task")),
+        projectMissing(p) ? null : h("button", { class: "small", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "＋ Task")),
+      movedBanner(p),
       h("div", { class: "rows" }, ...wts.map(worktreeRow)));
   }) : [h("div", { class: "empty" }, h("p", {}, wsFilter ? `No projects in ${wsFilter}.` : "No projects yet."), h("button", { class: "primary", onclick: addProject }, "Add a project"))];
   return h("div", {}, ui.header("Projects", false,
@@ -117,12 +120,17 @@ function addProject(): void {
   if (!wss.includes("main")) wss.unshift("main");
   const ws = h("select", {}, ...wss.map((n) => h("option", { value: n }, n)));
   ws.value = wss.includes(wsFilter) ? wsFilter : "main";
+  // `--moved` / `--separate`: what to do when a project whose directory is gone is this
+  // repository, moved (SPEC §10.1). Asked when it happens, unless said here.
+  const moved = h("select", {}, h("option", { value: "" }, "Ask me"), h("option", { value: "moved" }, "Move that project here"), h("option", { value: "separate" }, "Add it as a project of its own"));
   const add = async (p: string) => {
-    const r = await ask({ t: "project_add", path: p, workspace: ws.value || null });
+    if (!isFull(p)) { ui.toast(RELATIVE); return; }
+    const r = await ask({ t: "project_add", path: p, workspace: ws.value || null, moved: moved.value === "moved", separate: moved.value === "separate" });
     if (r) { s.close(); for (const n of r.notes ?? []) ui.toast(n); go(`#/proj/${enc(r.info.id)}`); }
   };
   const s = sheet("Add a project", [
     h("label", { class: "field" }, h("span", {}, "Add to the workspace"), ws),
+    h("label", { class: "field" }, h("span", {}, "If a project whose directory is gone is this repository, moved"), moved),
     h("p", { class: "intro" }, "Repositories found on this computer:"), list,
     h("label", { class: "field" }, h("span", {}, "Or a path"), path),
   ], [h("button", { onclick: () => s.close() }, "Cancel"), h("button", { class: "primary", onclick: () => path.value.trim() && void add(path.value.trim()) }, "Add")]);
@@ -164,9 +172,64 @@ function renameProject(p: Project): void {
   });
 }
 
+// ── a repository that moved (SPEC §10.1) ─────────────────────────────────────────────────
+
+/// Its main checkout is gone (its @root missing), or ptyro found where it went.
+export const projectMissing = (p: Project): boolean => !!p.moved_to || liveWorktrees().some((w) => w.project === p.id && w.is_root && w.state === "missing");
+
+/// The project registered at the place `p` moved to, if any: moving folds it in.
+const registeredAt = (p: Project): Project | undefined => p.moved_to ? [...data.projects.values()].find((d) => d.id !== p.id && d.root === p.moved_to) : undefined;
+
+/// A project ptyro found moved: said once (called before the event is applied); the Projects
+/// tab and its page offer the move.
+export function moveMaybeSpotted(e: any): void {
+  if (e.t !== "project_updated" || !e.info?.moved_to || data.projects.get(e.info.id)?.moved_to === e.info.moved_to) return;
+  ui.toast(`${e.info.slug} seems to have moved to ${e.info.moved_to}: its page offers the move`);
+}
+
+/// A path typed here: the web has no folder of its own for a relative one to start from (the
+/// CLI and the TUI start from theirs), so it is refused, saying how to write it.
+const RELATIVE = "A full path is needed, like /Users/me/src/app or ~/src/app: the web has no current folder for a relative one to start from";
+const isFull = (path: string): boolean => /^(\/|~(\/|$))/.test(path.trim());
+function fullPath(path: string): string {
+  if (!isFull(path)) throw new Error(RELATIVE);
+  return path.trim();
+}
+
+/// Move it: the notes say what followed (worktrees linked, a duplicate folded in).
+export async function moveProjectTo(p: Project, path: string): Promise<boolean> {
+  const r = await ask<{ info: Project; notes?: string[] }>({ t: "project_move", addr: p.id, path });
+  if (!r) return false;
+  for (const n of r.notes?.length ? r.notes : [`Moved ${p.slug}`]) ui.toast(n);
+  return true;
+}
+
+/// `project.move`: where its repository is now, the place ptyro found filled in.
+export function moveProject(p: Project): void {
+  form(`Move ${p.slug}`, [{ key: "path", label: "It is now at", value: p.moved_to ?? "", placeholder: "/path/to/the/repository", required: true, hint: `Its main checkout (it was at ${p.root}). It keeps its trust, pin, workspaces and worktrees, and its worktrees are linked to the new place; a project registered there is folded in. Another repository, or a copy (the old one still there), is refused.` }], "Move", async (v) => {
+    const r = await conn.request({ t: "project_move", addr: p.id, path: fullPath(String(v.path)) });
+    for (const n of r?.notes?.length ? r.notes : [`Moved ${p.slug}`]) ui.toast(n);
+  });
+}
+
+/// What a project whose directory is gone offers: the move ptyro found (folding in a project
+/// registered there), saying where it went, keeping a place apart, or forgetting it.
+function movedBanner(p: Project): HTMLElement | null {
+  if (!projectMissing(p)) return null;
+  const into = registeredAt(p);
+  return h("div", { class: "banner warn moved" },
+    p.moved_to
+      ? `${p.slug}'s directory (${p.root}) is gone; it seems to have moved to ${p.moved_to}${into ? `, registered again there as ${into.slug}: moving folds ${into.slug} into ${p.slug}` : ""}. `
+      : `${p.slug}'s directory (${p.root}) is gone. `,
+    p.moved_to ? h("button", { class: "small primary", title: tip("project.move"), onclick: () => void moveProjectTo(p, p.moved_to!) }, "Move it there") : null,
+    h("button", { class: "small", title: tip("project.move"), onclick: () => moveProject(p) }, p.moved_to ? "Somewhere else…" : "Moved it? Say where…"),
+    p.moved_to && !into ? h("button", { class: "small", title: tip("project.add"), onclick: async () => { const r = await ask({ t: "project_add", path: p.moved_to, workspace: null, moved: false, separate: true }, "Added as a project of its own"); if (r) go(`#/proj/${enc(r.info.id)}`); } }, "It's another project") : null,
+    h("button", { class: "small", title: tip("project.remove"), onclick: () => removeProject(p) }, "Forget it"));
+}
+
 // Asks as the CLI's `project rm` and the TUI do (ptyro_core::removal); running sessions in it
 // refuse with a way through, "Let them go" (SPEC §6.6), which `ask` offers.
-function removeProject(p: Project): void {
+export function removeProject(p: Project): void {
   confirm(`Forget project ${p.slug}?`, "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.", "Forget it", async () => {
     // Its notes say what stays on disk, and any session let go under a new name.
     const r = await ask<{ notes?: string[] }>({ t: "project_remove", addr: p.id, release: false });
@@ -180,15 +243,21 @@ function projectView(id: string): HTMLElement {
   const scripts = projectScripts.get(id);
   const wts = liveWorktrees().filter((w) => w.project === p.id);
   const ws = [...data.workspaces.values()];
+  const missing = projectMissing(p);
+  const move: Item = { title: tip("project.move"), label: "Move…", hint: missing ? "Its directory is gone: where is it now?" : "Its repository moved: where it is now", run: () => moveProject(p) };
   return h("div", {}, ui.header(p.slug, "#/p", h("button", { class: "icon", "aria-label": "More", onclick: () => menu(p.slug, [
+    // One whose directory is gone leads with finding it, then forgetting it (SPEC §10.1).
+    ...(missing ? [move, { title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) }] : []),
     { title: tip("project.config"), label: "Configuration", hint: "And where each value comes from", run: async () => { const r = await ask({ t: "project_config", addr: p.id }); if (r) textSheet(`${p.slug}: configuration`, r.text); } },
     { title: tip("project.rename"), label: "Rename…", run: () => renameProject(p) },
+    ...(missing ? [] : [move]),
     { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
     { title: tip("workspace.member"), label: "Workspaces…", run: () => projectWorkspaces(p) },
-    { title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) },
+    ...(missing ? [] : [{ title: tip("project.remove"), label: "Forget this project", danger: true, run: () => removeProject(p) }]),
   ]) }, "⋯")),
   h("main", { class: "stack", title: tip("project.show") },
-    facts([["Path", p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]),
+    movedBanner(p),
+    facts([["Path", missing ? `${p.root} (gone)` : p.root], ["Default branch", p.default_branch], ["Remote", p.remote_url], ["Pinned to", p.pin], ["Workspaces", ws.filter((w) => w.projects.includes(p.id)).map((w) => w.name).join(", ")]]),
     bar(h("button", { class: "primary", title: tip("worktree.new"), onclick: () => newTask(`p:${p.id}`) }, "New task"),
       ...((r) => r ? [h("button", { title: tipOf("session.again"), onclick: () => void startAgain(r) }, againWords(r)), h("button", { title: tipOf("shell.new"), onclick: () => void newShell(r) }, "New shell")] : [])(wts.find((w) => w.is_root)),
       h("button", { title: tipOf("shell.here"), onclick: () => void openQuickShell(wts.find((w) => w.is_root), p.root) }, "Quick shell")),

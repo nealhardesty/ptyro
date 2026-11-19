@@ -596,3 +596,91 @@ fn a_squash_merged_branch_has_its_changes_in_the_base() {
     assert_eq!(s.unpushed.len(), 3, "all its commits, the squashed ones too: {:?}", s.unpushed);
     assert!(!f.git.changes_in(&f.root, &tip, "-main"), "never an option");
 }
+
+/// Two checkouts of one history share their root commits, wherever they live; an unrelated
+/// repository shares none; a repository with no commits has none.
+#[test]
+fn root_commits_tell_one_history_from_another() {
+    let f = fixture();
+    let ours = f.git.root_commits(&f.root).unwrap();
+    assert_eq!(ours.len(), 1, "{ours:?}");
+    commit(&f, &f.root, "more.txt", "more");
+    assert_eq!(f.git.root_commits(&f.root).unwrap(), ours, "new commits keep the root");
+    // A clone (or a copy, or the same repository moved) has the same root.
+    f.git.run(&f.base, &["clone", "-q", "remote.git", "clone"]).unwrap();
+    assert_eq!(f.git.root_commits(&f.base.join("clone")).unwrap(), ours);
+    // An orphan branch adds a root; one in common is enough to tell.
+    f.git.run(&f.root, &["checkout", "-q", "--orphan", "pages"]).unwrap();
+    f.git.run(&f.root, &["commit", "-q", "-m", "pages"]).unwrap();
+    let both = f.git.root_commits(&f.root).unwrap();
+    assert_eq!(both.len(), 2);
+    assert!(both.contains(&ours[0]));
+    // Another repository: nothing in common.
+    f.git.run(&f.base, &["init", "-q", "other"]).unwrap();
+    let other = f.base.join("other");
+    assert_eq!(f.git.root_commits(&other).unwrap(), Vec::<String>::new(), "no commits yet");
+    commit(&f, &other, "x", "x");
+    let theirs = f.git.root_commits(&other).unwrap();
+    assert_eq!(theirs.len(), 1);
+    assert!(!both.contains(&theirs[0]));
+}
+
+/// The repository moved (`mv`) with one worktree inside it and one outside: git in both is
+/// broken until `worktree repair` runs from the new place, then both work, their work intact.
+/// The records (`linked`) and the `.git` files (`gitfile_target`) say where things were.
+#[test]
+fn worktrees_work_again_after_their_repository_moved() {
+    let f = fixture();
+    let outside = f.base.join("wts/feat");
+    let inside = f.root.join(".ptyro/worktrees/fix");
+    for (wt, b) in [(&outside, "feat"), (&inside, "fix")] {
+        let src = Source::NewBranch { branch: b.into(), base: "main".into() };
+        f.git.worktree_add(&f.root, wt, &src).unwrap();
+        std::fs::write(
+            f.git.git_dir(wt).unwrap().join("ptyro.json"),
+            format!(r#"{{"id":"w-{b}","project":"p1","name":"{b}"}}"#),
+        )
+        .unwrap();
+    }
+    std::fs::write(outside.join("work.txt"), "unsaved\n").unwrap();
+    commit(&f, &inside, "fix.txt", "fixed");
+    let before = f.git.linked(&f.root);
+    assert_eq!(before.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["feat", "fix"]);
+    assert_eq!(before[0].path.as_deref(), Some(outside.as_path()));
+    assert_eq!(
+        (before[0].project.as_deref(), before[0].worktree.as_deref()),
+        (Some("p1"), Some("w-feat"))
+    );
+
+    let moved = f.base.join("elsewhere/repo");
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    std::fs::rename(&f.root, &moved).unwrap();
+    let inside_now = moved.join(".ptyro/worktrees/fix");
+    assert!(f.git.status(&outside, None).is_err(), "its .git file points at the old place");
+    assert!(f.git.status(&inside_now, None).is_err());
+    assert_eq!(gitfile_target(&outside), Some(f.root.join(".git/worktrees/feat")));
+    // The moved repository's records still name the old places.
+    let records = f.git.linked(&moved);
+    assert_eq!(records[1].path.as_deref(), Some(inside.as_path()));
+    assert!(!f.git.belongs(&outside, &moved));
+
+    f.git.worktree_repair(&moved, &outside).unwrap();
+    f.git.worktree_repair(&moved, &inside_now).unwrap();
+    assert!(f.git.belongs(&outside, &moved) && f.git.belongs(&inside_now, &moved));
+    let s = f.git.status(&outside, Some("main")).unwrap();
+    assert_eq!((s.branch.as_deref(), s.untracked), (Some("feat"), 1), "its work is there");
+    assert_eq!(f.git.status(&inside_now, Some("main")).unwrap().base_ahead, 1);
+    assert_eq!(f.git.linked(&moved)[1].path.as_deref(), Some(inside_now.as_path()));
+    let list = f.git.worktree_list(&moved).unwrap();
+    assert_eq!(list.len(), 3);
+    assert!(list.iter().all(|e| !e.prunable), "{list:?}");
+    assert_eq!(f.git.root_commits(&moved).unwrap().len(), 1);
+    // A main checkout has no `.git` file to follow; a repair from an unrelated repository fails.
+    assert_eq!(gitfile_target(&moved), None);
+    f.git.run(&f.base, &["init", "-q", "other"]).unwrap();
+    assert!(
+        f.git.worktree_repair(&f.base.join("other"), &outside).is_err()
+            || f.git.belongs(&outside, &moved)
+    );
+    assert!(f.git.belongs(&outside, &moved), "never taken by another repository");
+}

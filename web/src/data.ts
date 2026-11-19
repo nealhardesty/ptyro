@@ -4,7 +4,7 @@
 import { conn } from "./conn.js";
 import { ui } from "./kit.js";
 
-export interface Project { id: string; slug: string; root: string; default_branch?: string | null; remote_url?: string | null; pin?: string | null; created_ms: number; last_used_ms?: number | null }
+export interface Project { id: string; slug: string; root: string; default_branch?: string | null; remote_url?: string | null; pin?: string | null; created_ms: number; last_used_ms?: number | null; moved_to?: string | null }
 export interface RepoStatus { branch?: string | null; head?: string | null; ahead?: number; behind?: number; staged?: number; unstaged?: number; untracked?: number; conflicted?: number; insertions?: number; deletions?: number; upstream?: string | null; unpushed?: number | null; pushed?: boolean; [k: string]: any }
 export interface Worktree {
   id: string; project: string; project_slug: string; name: string; path: string; branch?: string | null; base?: string | null;

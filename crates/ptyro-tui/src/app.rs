@@ -487,6 +487,8 @@ pub enum Pending {
     /// A project forgotten (`ProjectRemove`): running sessions in it are offered a way out.
     Forget(String),
     ProjectAdded(Option<AfterAdd>),
+    /// A project moved to where its repository is now (SPEC §10.1): its slug.
+    Moved(String),
     Discovered(Option<AfterAdd>),
     Scripts(String),
     /// Check the project's scripts are trusted before creating a worktree.
@@ -588,6 +590,17 @@ pub enum Then {
 /// An offer to run a TUI action.
 pub(crate) fn run_offer(label: &str, action: &'static str) -> Offer {
     Offer { label: label.into(), then: Then::Run(Command { action, arg: None }) }
+}
+
+/// The move ptyro found for a project whose main checkout is gone (SPEC §10.1).
+pub(crate) fn move_offer(id: &str, slug: &str, to: &std::path::Path) -> Offer {
+    Offer {
+        label: "move it there".into(),
+        then: Then::Send(
+            Box::new(Request::ProjectMove { addr: id.to_owned(), path: to.to_path_buf() }),
+            format!("moved {slug} to {}", to.display()),
+        ),
+    }
 }
 
 /// An offer to run a session action on that session, whatever is selected when it's taken.
@@ -1693,6 +1706,15 @@ impl App {
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
             DomainEvent::ProjectUpdated { info } => {
+                // Found where its repository is now (SPEC §10.1): said once, the move one key away.
+                let was = self.project(&info.id).and_then(|p| p.moved_to.clone());
+                if let Some(to) = info.moved_to.clone().filter(|to| was.as_ref() != Some(to)) {
+                    self.toast_offer(
+                        format!("{} seems to have moved to {}", info.slug, to.display()),
+                        false,
+                        move_offer(&info.id, &info.slug, &to),
+                    );
+                }
                 upsert_by(&mut self.projects, info, |p| p.id.clone())
             }
             DomainEvent::ProjectRemoved { id } => self.projects.retain(|p| p.id != id),
@@ -2176,6 +2198,10 @@ impl App {
                         action: Confirmed::KeepPin(info.id.clone()),
                     });
                 }
+            }
+            (Pending::Moved(_), Ok(Reply::Project { info, notes })) => {
+                upsert_by(&mut self.projects, info, |p| p.id.clone());
+                self.toast(notes.join(" · "));
             }
             (Pending::FirstRunRepos, Ok(Reply::Paths { paths })) => self.first_run_repos(paths),
             (Pending::Home, Ok(Reply::Paths { paths })) => self.show_home(paths),
@@ -3542,6 +3568,18 @@ impl App {
                 None
             }
             Row::Worktree(_) => with("session.new", "start a task here"),
+            // Its main checkout is gone (SPEC §10.1): find it, or forget it.
+            Row::Project(id) if self.project_missing(&id) => {
+                let p = self.project(&id)?;
+                let what = match &p.moved_to {
+                    Some(to) => format!("moved to {}? ", to.display()),
+                    None => "its directory is gone: ".into(),
+                };
+                Some(format!(
+                    "{what}{}",
+                    with("row.menu", "move it, or forget it").unwrap_or_default()
+                ))
+            }
             Row::Project(_) => with("worktree.new", "new worktree"),
             Row::Shells(_) => Some(match with("shells.new", "a new shell") {
                 Some(l) => format!("⏎ fold · {l} · {} jumps", self.shells_jump_hint()),
@@ -3596,7 +3634,7 @@ impl App {
         };
         match action {
             "project.remove" | "project.rename" | "project.untrust" | "project.pin"
-            | "project.unpin" | "project.leave" | "project.workspaces" => {
+            | "project.unpin" | "project.leave" | "project.workspaces" | "project.move" => {
                 let Some(p) = project.and_then(|p| self.project(&p).cloned()) else {
                     self.pick_project(None);
                     return;
@@ -3631,6 +3669,7 @@ impl App {
                         Request::ProjectPin { addr: p.id, profile: None },
                     ),
                     "project.workspaces" => self.open_project_workspaces(&p),
+                    "project.move" => self.open_project_move(&p),
                     "project.leave" => self.request(
                         Pending::Done(format!("{} left {}", p.slug, self.workspace)),
                         Request::WorkspaceMember {
@@ -3809,6 +3848,15 @@ impl App {
                 }
                 v
             }
+            // One whose main checkout is gone leads with finding it, or forgetting it (SPEC §10.1).
+            Row::Project(id) if self.project_missing(id) => vec![
+                "project.move",
+                "project.remove",
+                "project.show",
+                "project.workspaces",
+                "project.leave",
+                "project.rename",
+            ],
             Row::Project(_) => vec![
                 "session.new",
                 "session.again",
@@ -3821,6 +3869,9 @@ impl App {
                 "project.rename",
                 "script.pick",
                 "worktree.open",
+                "project.move",
+                "project.leave",
+                "project.remove",
             ],
             // A quick terminal (UX1.25): show or hide it, and what a shell offers.
             Row::Quick(id) => {
@@ -4405,6 +4456,16 @@ impl App {
             }
         }
         self.context_hint = None;
+    }
+
+    /// Its main checkout is gone (its `@root` missing), or ptyro found it moved (SPEC §10.1).
+    pub(crate) fn project_missing(&self, project: &str) -> bool {
+        self.project(project).is_some_and(|p| p.moved_to.is_some())
+            || self.worktrees.iter().any(|w| {
+                w.project == project
+                    && w.is_root
+                    && w.state == ptyro_core::model::WorktreeState::Missing
+            })
     }
 
     pub(crate) fn root_of(&self, project: &str) -> Option<String> {
@@ -5087,7 +5148,10 @@ impl App {
                     _ => None,
                 };
                 let workspace = Some(self.workspace.clone());
-                self.request(Pending::ProjectAdded(then), Request::ProjectAdd { path, workspace });
+                self.request(
+                    Pending::ProjectAdded(then),
+                    Request::ProjectAdd { path, workspace, moved: false, separate: false },
+                );
             }
             (Target::NewProjectPath, _) => self.open_project_form(None),
             (Target::AddProject, Purpose::Target(w)) => {
@@ -7903,6 +7967,88 @@ mod tests {
         assert!(app.prompt_check(&kind, "my_web").is_err());
         assert_eq!(kind.fit("My Web_2"), "my-web-2");
         assert_eq!(kind.tidy("my_web").as_deref(), Some("my-web"));
+    }
+
+    /// A project's row menu offers moving it, taking it out of this workspace and forgetting it
+    /// (`project.move`, `project.leave`, `project.remove`, once palette-only). One whose main
+    /// checkout is gone is marked in the sidebar, its hint says so, and its menu leads with
+    /// finding it, then forgetting it (SPEC §10.1).
+    #[test]
+    fn a_project_moves_and_a_missing_one_says_so() {
+        let mut app = app();
+        with_project(&mut app);
+        let menu = app.row_actions(&Row::Project("p1".into()));
+        for a in ["project.move", "project.leave", "project.remove"] {
+            assert!(menu.contains(&a), "{a} in {menu:?}");
+            assert!(keymap::spec(a).is_some(), "{a} is in the palette");
+        }
+        assert!(!app.project_missing("p1"));
+        assert!(!screen(&app).contains("missing"));
+
+        // Its main checkout is gone.
+        app.worktrees[0].state = ptyro_core::model::WorktreeState::Missing;
+        assert!(app.project_missing("p1"));
+        let menu = app.row_actions(&Row::Project("p1".into()));
+        assert_eq!(&menu[..2], ["project.move", "project.remove"], "{menu:?}");
+        assert!(!menu.contains(&"worktree.new"), "nothing starts where there's nothing");
+        let shown = screen(&app);
+        assert!(shown.contains("myrepo missing"), "{shown}");
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let i = rows.iter().position(|r| *r == Row::Project("p1".into())).unwrap();
+        app.set_sel(&rows, i);
+        let hint = app.context_hint().unwrap();
+        assert!(
+            hint.contains("its directory is gone") && hint.contains("move it, or forget it"),
+            "{hint}"
+        );
+
+        // ptyro found where it went: said once, the move one key away, and on its row.
+        let mut found = project("p1", "myrepo");
+        found.moved_to = Some("/Volumes/X/dev/myrepo".into());
+        app.on_event(DomainEvent::ProjectUpdated { info: found.clone() });
+        let t = app.toast.as_ref().expect("said");
+        assert!(
+            t.text.starts_with("myrepo seems to have moved to /Volumes/X/dev/myrepo"),
+            "{}",
+            t.text
+        );
+        assert!(matches!(
+            &t.offer,
+            Some(Offer { then: Then::Send(req, _), .. })
+                if matches!(&**req, Request::ProjectMove { addr, path } if addr == "p1" && path == std::path::Path::new("/Volumes/X/dev/myrepo"))
+        ));
+        app.toast = None;
+        app.on_event(DomainEvent::ProjectUpdated { info: found });
+        assert!(app.toast.is_none(), "said once");
+        assert!(screen(&app).contains("myrepo missing →?"));
+        assert!(app.context_hint().unwrap().starts_with("moved to /Volumes/X/dev/myrepo? "));
+
+        // `project.move`: the form, the place found filled in; ⏎ sends the move.
+        app.run(&Command { action: "project.move", arg: None });
+        let Some(Overlay::Form(f)) = &app.overlay else { panic!("the move form") };
+        assert_eq!(f.make, crate::form::Make::ProjectMove("p1".into()));
+        assert_eq!(f.get("path"), "/Volumes/X/dev/myrepo");
+        while app.rx.try_recv().is_ok() {}
+        typed(&mut app, "\n");
+        assert!(app.overlay.is_none(), "sent");
+        assert!(
+            matches!(app.rx.try_recv(), Ok(AppMsg::Reply(Pending::Moved(s), _)) if s == "myrepo")
+        );
+
+        // The doctor's finding opens the same form.
+        let check = crate::health::Check {
+            section: "projects".into(),
+            name: "myrepo".into(),
+            level: "warn".into(),
+            text: "myrepo's directory (/r/myrepo) is gone: if you moved it, `ptyro project move myrepo NEWPATH`".into(),
+        };
+        let f = crate::health::finding(&check).unwrap();
+        assert_eq!(
+            f.fix,
+            Some(crate::health::Fix::Move("myrepo".into())),
+            "never NEWPATH run as is"
+        );
     }
 
     /// Renaming something mirrored from another machine (MM1.B) types and checks the name it

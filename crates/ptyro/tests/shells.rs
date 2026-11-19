@@ -195,7 +195,14 @@ async fn a_loose_shell_is_never_placed_and_sessions_outside_projects_join() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
 
     // Started inside a project's checkout, a loose shell stays in SHELLS.
     let s = shell(&c, &code, None).await;
@@ -236,7 +243,14 @@ async fn sessions_that_lose_their_place_join_and_removal_stays_safe() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let spec = SpawnSpec { cwd: code.clone(), ..SpawnSpec::default() };
     let s = try_spawn(&c, spec).await.unwrap();
     assert!(s.worktree.is_some());
@@ -248,7 +262,14 @@ async fn sessions_that_lose_their_place_join_and_removal_stays_safe() {
 
     // A worktree with a loose shell standing in it isn't removed from under it.
     let code2 = repo(&w, "code2");
-    c.request(Request::ProjectAdd { path: code2.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code2.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let r = c
         .request(Request::WorktreeNew {
             spec: ptyro_core::model::WorktreeSpec {
@@ -274,7 +295,14 @@ async fn set_loose_and_adopt() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let spec = SpawnSpec { cwd: code.clone(), ..SpawnSpec::default() };
     let s = try_spawn(&c, spec).await.unwrap();
     let wt = s.worktree.clone().unwrap();
@@ -507,7 +535,14 @@ async fn stop_sessions_stops_a_loose_shell_in_the_worktree() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let r = c
         .request(Request::WorktreeNew {
             spec: ptyro_core::model::WorktreeSpec {
@@ -571,7 +606,14 @@ async fn a_scratch_directory_in_use_is_never_a_leftover_and_empty_ones_go() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let spec = SpawnSpec { cwd: w.home(), scratch: true, ..SpawnSpec::default() };
     let s = try_spawn(&c, spec).await.unwrap();
     std::fs::write(s.cwd.join("work.txt"), "mine\n").unwrap();
@@ -624,7 +666,14 @@ async fn a_split_is_a_copy_in_the_same_window() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let one = shell(&c, &w.home(), None).await;
     ready(&c, &one).await;
     // It stands inside a worktree: the copy must still be a shell of SHELLS, there.
@@ -727,7 +776,14 @@ async fn a_pane_of_a_window_stays_when_its_directory_becomes_a_project() {
     let w = World::new("");
     let c = w.d.client().await.unwrap();
     let code = repo(&w, "code");
-    c.request(Request::ProjectAdd { path: code.clone(), workspace: None }).await.unwrap();
+    c.request(Request::ProjectAdd {
+        path: code.clone(),
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     // Started outside every project: it lands in SHELLS, unpinned.
     let out = w.dir("out");
     let spec = SpawnSpec { cwd: out, size: Some(TermSize::new(100, 30)), ..SpawnSpec::default() };

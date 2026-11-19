@@ -4,13 +4,14 @@
 
 import { conn, host, store } from "./conn.js";
 import { aboutDoc, aboutText, data } from "./data.js";
-import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, fixOf, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, ui, views, webHref } from "./kit.js";
+import { actions, NAME_HINT, ago, ask, badge, bar, Cache, confirm, download, enc, errText, facts, fixOf, form, go, h, menu, pending, poll, profileChoices, row, section, sheet, textSheet, tipOf, ui, views, webHref } from "./kit.js";
 import type { Item, Sheet } from "./kit.js";
 import { qrMatrix } from "./qr.js";
 import { adminSteps, bannerWants, isHere, linkedBehind, moveOffer, movesOf, moveWords, noAgent, retryOf, runningAgent, selfUpdate, setupLabel, setupOffer, SetupLog, updateOffer, viaWords, waitsForAdmin, webSteps } from "./setupkit.js";
 import type { MoveOffer } from "./setupkit.js";
 import type { UpdateOffer } from "./setupkit.js";
 import { allSessions } from "./sessions.js";
+import { moveProject, moveProjectTo, removeProject } from "./projects.js";
 
 const ACTIONS = {
   "more": "Everything beyond the lists: health, devices, profiles, the config, the daemon",
@@ -160,6 +161,14 @@ function fixesFor(c: any): Item[] {
   if (c.section === "terminal" && c.name === "windows terminal" && c.level !== "ok") out.push({ label: "Change ptyro's prefix", hint: "Or remove the binding in Windows Terminal", run: () => go("#/settings/interface") });
   if (c.section === "wsl" && c.name === "network") out.push({ label: "Change who can reach it", hint: "Tailscale reaches a phone through WSL", run: () => go("#/settings/remote") });
   if (c.section === "worktrees" && c.name === "stale" && c.level !== "ok") out.push({ label: "Clean up", hint: "Remove or keep each", run: () => go("#/gc") });
+  // A project whose directory is gone (SPEC §10.1): the move ptyro found, else where it went.
+  const moved = c.section === "projects" ? c.data?.move : undefined;
+  const proj = moved ? data.projects.get(moved.project) : undefined;
+  if (moved && proj) {
+    if (moved.path) out.push({ title: tipOf("project.move"), label: `Move ${moved.slug} to ${moved.path}`, hint: moved.into ? `Folds ${moved.into} into ${moved.slug}` : "It keeps its trust, pin, workspaces and worktrees", run: async () => { if (await moveProjectTo(proj, moved.path)) health.reload(""); } });
+    else out.push({ title: tipOf("project.move"), label: `Moved ${moved.slug}? Say where…`, hint: "It keeps its trust, pin, workspaces and worktrees", run: () => moveProject(proj) });
+    out.push({ title: tipOf("project.remove"), label: `Forget ${moved.slug}`, hint: "Its worktrees stay on disk", run: () => removeProject(proj) });
+  }
   // Newer versions (BOOT5): the update, with its command; and looking again now.
   const upd = updateOffer(c);
   const own = upd && selfUpdate(upd);
@@ -781,7 +790,7 @@ function setupView(rest: string): HTMLElement {
       bar(h("button", { onclick: () => void detectProfiles(), disabled: conn.scope !== "full" }, "Find my accounts"))),
     section("Your repositories", pending(discovered, "", "Looking…") ?? (repos.length ? h("div", { class: "stack-in" },
       ...repos.map((p) => { const c = h("input", { type: "checkbox" }); c.checked = setupPicks.has(p); c.addEventListener("change", () => { if (c.checked) setupPicks.add(p); else setupPicks.delete(p); }); return h("label", { class: "field check" }, c, h("span", {}, p.split("/").pop() ?? p), h("small", {}, p)); }),
-      bar(h("button", { class: "primary", onclick: async () => { const n = setupPicks.size; for (const p of setupPicks) await ask({ t: "project_add", path: p, workspace: null }); setupPicks = new Set(); discovered.reload(""); ui.toast(`Added ${n}`); } }, "Add the ticked ones")))
+      bar(h("button", { class: "primary", onclick: async () => { const n = setupPicks.size; for (const p of setupPicks) await ask({ t: "project_add", path: p, workspace: null, moved: false, separate: false }); setupPicks = new Set(); discovered.reload(""); ui.toast(`Added ${n}`); } }, "Add the ticked ones")))
       : h("p", { class: "sub" }, data.projects.size ? "Everything found is added already." : "None found under your discover roots: add one by its path on the Projects tab."))),
     bar(h("button", { class: "primary", onclick: () => go("#/") }, "Done"))));
 }

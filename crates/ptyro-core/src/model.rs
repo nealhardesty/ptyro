@@ -76,6 +76,10 @@ pub struct ProjectInfo {
     pub created_ms: u64,
     #[serde(default)]
     pub last_used_ms: Option<u64>,
+    /// Its main checkout is gone, and the same repository was found here: it seems to have moved
+    /// (1.53, SPEC §10.1). `ProjectMove` takes it there; never stored, the daemon looks again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

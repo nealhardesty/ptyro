@@ -233,7 +233,12 @@ pub async fn serve(daemon: Arc<Daemon>, stream: crate::listen::Stream, pid: Opti
         sizes: HashMap::new(),
         interest,
         outer: client.outer,
-        caller: crate::guard::Caller { pid, kind: Some(client.kind), grant },
+        caller: crate::guard::Caller {
+            pid,
+            kind: Some(client.kind),
+            grant,
+            minor: Some(u32::from(proto.minor)),
+        },
         placed: None,
         link,
         upstreams: HashMap::new(),

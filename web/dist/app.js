@@ -9,7 +9,7 @@ import { FEATURE, GIVE_UP_MS, Outbox, RESEND_MS, lostTitle } from "./outbox.js";
 import { autoFocus, hardKey, isMac, ownKeyboard, shellDigit, strayKey } from "./keys.js";
 import { PressGate, actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
-import { staleMaybeChanged } from "./projects.js";
+import { moveMaybeSpotted, staleMaybeChanged } from "./projects.js";
 import "./settings.js";
 import "./panel.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
@@ -753,6 +753,7 @@ conn.listeners.add((msg) => {
             return;
         }
         staleMaybeChanged(e);
+        moveMaybeSpotted(e);
         if (onEvent(e)) {
             render();
             return;

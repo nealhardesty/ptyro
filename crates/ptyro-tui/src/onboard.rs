@@ -408,7 +408,12 @@ impl App {
             let workspace = Some(self.workspace.clone());
             self.request(
                 Pending::Done(String::new()),
-                Request::ProjectAdd { path: path.clone(), workspace },
+                Request::ProjectAdd {
+                    path: path.clone(),
+                    workspace,
+                    moved: false,
+                    separate: false,
+                },
             );
         }
         let did = match (profiles.len(), repos.len()) {
@@ -489,7 +494,7 @@ impl App {
                 let workspace = Some(self.workspace.clone());
                 self.request(
                     Pending::ProjectAdded(Some(AfterAdd::Run("session.new"))),
-                    Request::ProjectAdd { path, workspace },
+                    Request::ProjectAdd { path, workspace, moved: false, separate: false },
                 );
             }
             other => self.picked(other, Purpose::Palette),

@@ -24,6 +24,14 @@ pub enum ProjectCmd {
         /// Add it to this workspace (default: the one the TUI showed last)
         #[arg(short, long, add = ArgValueCandidates::new(crate::complete::workspaces))]
         workspace: Option<String>,
+        /// It is the repository a registered project lost (its directory gone): move that
+        /// project here instead, as `project move` does (asked when it's seen)
+        #[arg(long, conflicts_with = "separate")]
+        moved: bool,
+        /// Register it as a project of its own even when a project whose directory is gone
+        /// seems to be it, moved; that project isn't offered this place again
+        #[arg(long)]
+        separate: bool,
     },
     /// List projects
     Ls {
@@ -78,6 +86,18 @@ pub enum ProjectCmd {
         #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
         project: String,
         new: String,
+    },
+    /// Point a project at where its repository is now, after you moved it (`mv`, another
+    /// disk): it keeps its trust, pin, workspaces, sessions and worktrees, and its worktrees are
+    /// linked to the new place. Refused for another repository, or for a copy (the old one still
+    /// there). A project registered at PATH already is folded into it
+    #[command(visible_alias = "relocate")]
+    Move {
+        #[arg(add = ArgValueCandidates::new(crate::complete::projects))]
+        project: String,
+        /// Where the repository is now (its main checkout)
+        #[arg(value_hint = clap::ValueHint::DirPath)]
+        path: PathBuf,
     },
     /// Pin the project to a profile: its sessions run under it
     Pin {
@@ -306,6 +326,24 @@ fn print_json<T: serde::Serialize>(v: &T) {
     println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
 }
 
+/// `  (gone: it seems to have moved to …)` after a project whose main checkout is missing, with
+/// the command that moves it (SPEC §10.1).
+fn gone(p: &ProjectInfo, worktrees: &[WorktreeInfo]) -> String {
+    let missing = worktrees
+        .iter()
+        .any(|w| w.project == p.id && w.is_root && w.state == WorktreeState::Missing);
+    match (&p.moved_to, missing) {
+        (Some(to), _) => format!(
+            "  (gone: it seems to have moved to {}; `ptyro project move {} {}`)",
+            to.display(),
+            p.slug,
+            to.display()
+        ),
+        (None, true) => format!("  (gone: moved it? `ptyro project move {} NEWPATH`)", p.slug),
+        (None, false) => String::new(),
+    }
+}
+
 fn notes(n: &[String]) {
     for l in n {
         eprintln!("  {l}");
@@ -353,19 +391,51 @@ fn status_line(w: &WorktreeInfo) -> String {
 pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
     let c = client(ctx).await?;
     match cmd {
-        ProjectCmd::Add { path, workspace } => {
+        ProjectCmd::Add { path, workspace, moved, separate } => {
             let path = match path {
                 Some(p) => ptyro_core::os::canonicalize(&p)
                     .map_err(|e| Error::invalid(format!("{}: {e}", p.display())))?,
                 None => current_dir()?,
             };
-            let Reply::Project { info, notes: n } =
-                c.request(Request::ProjectAdd { path, workspace }).await?
-            else {
+            let req = Request::ProjectAdd { path: path.clone(), workspace, moved, separate };
+            let reply = match c.request(req.clone()).await {
+                // A project whose directory is gone is this repository, moved (SPEC §10.1): the
+                // refusal's way through, asked here as the TUI and the web ask it.
+                Err(e) if fixed_by(&e, &Again::Moved) => {
+                    let label = e.fix.as_ref().map_or("", |f| f.label.as_str());
+                    if !confirm(&format!("{} {label}?", e.message)) {
+                        eprintln!("{}", e.message);
+                        eprintln!(
+                            "  to move it: `ptyro project add {p} --moved`\n  to keep them apart: `ptyro project add {p} --separate`",
+                            p = path.display()
+                        );
+                        return Ok(ErrorCode::Conflict.exit_code());
+                    }
+                    let again = req.with_fix(&Again::Moved);
+                    c.request(again.ok_or_else(|| Error::internal("no way through"))?).await?
+                }
+                other => other?,
+            };
+            let Reply::Project { info, notes: n } = reply else {
                 return Err(Error::internal("unexpected reply"));
             };
             println!("{}", info.slug);
             eprintln!("project {} at {}", info.slug, info.root.display());
+            notes(&n);
+            Ok(0)
+        }
+        ProjectCmd::Move { project, path } => {
+            // Absolute, as the daemon (elsewhere) needs it, and resolved as it names folders
+            // (`~/external` → `/Volumes/…`); one that isn't here may be on the project's
+            // machine (MM1.B): the daemon there says whether it exists.
+            let path = if path.is_relative() { current_dir()?.join(path) } else { path };
+            let path = ptyro_core::os::canonicalize(&path).unwrap_or(path);
+            let Reply::Project { info, notes: n } =
+                c.request(Request::ProjectMove { addr: addr_here(project)?, path }).await?
+            else {
+                return Err(Error::internal("unexpected reply"));
+            };
+            println!("{}", info.slug);
             notes(&n);
             Ok(0)
         }
@@ -385,12 +455,13 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
             for p in &projects {
                 let n = worktrees.iter().filter(|w| w.project == p.id && !w.is_root).count();
                 println!(
-                    "{:<20} {:<10} {:<12} {:>3}  {}",
+                    "{:<20} {:<10} {:<12} {:>3}  {}{}",
                     truncate(&p.slug, 20),
                     p.pin.as_deref().unwrap_or("-"),
                     truncate(p.default_branch.as_deref().unwrap_or("-"), 12),
                     n,
-                    p.root.display()
+                    p.root.display(),
+                    gone(p, &worktrees)
                 );
             }
             Ok(0)
@@ -448,7 +519,7 @@ pub async fn project(ctx: &Ctx, cmd: ProjectCmd) -> Result<i32, Error> {
                 );
                 return Ok(0);
             }
-            println!("{}  {}", info.slug, info.root.display());
+            println!("{}  {}{}", info.slug, info.root.display(), gone(&info, &worktrees));
             println!("  default branch  {}", info.default_branch.as_deref().unwrap_or("-"));
             println!("  remote          {}", info.remote_url.as_deref().unwrap_or("-"));
             println!("  pinned to       {}", info.pin.as_deref().unwrap_or("- (not pinned)"));

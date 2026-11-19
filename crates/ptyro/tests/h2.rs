@@ -81,6 +81,8 @@ async fn a_removed_workspace_s_projects_go_to_main() {
     let add = |p: &std::path::Path, ws: &str| Request::ProjectAdd {
         path: p.to_owned(),
         workspace: Some(ws.into()),
+        moved: false,
+        separate: false,
     };
     let id = |r: Reply| match r {
         Reply::Project { info, .. } => info.id,

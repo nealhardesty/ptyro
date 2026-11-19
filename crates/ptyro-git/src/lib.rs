@@ -824,6 +824,115 @@ impl Git {
         std::fs::write(path, new)?;
         Ok(())
     }
+
+    // ── a repository that moved (SPEC §10.1) ──────────────────────────────────
+
+    /// The root commits of HEAD and every local branch, sorted: what two checkouts of one
+    /// history share, wherever they are. Empty for a repository with no commits yet.
+    pub fn root_commits(&self, root: &Path) -> Result<Vec<String>> {
+        let mut args = vec!["rev-list", "--max-parents=0", "--branches"];
+        if self.rev(root, "HEAD").is_some() {
+            args.push("HEAD");
+        }
+        let out = self.run(root, &args)?;
+        let mut v: Vec<String> = lines(&out).map(str::to_owned).collect();
+        v.sort();
+        v.dedup();
+        Ok(v)
+    }
+
+    /// The linked worktrees the repository's own records list (`<common dir>/worktrees/*`),
+    /// whether or not their checkouts are where those records say. Read from the files: git
+    /// itself drops what it can't find (`worktree list` marks it prunable).
+    pub fn linked(&self, root: &Path) -> Vec<Linked> {
+        let Ok(common) = self.common_dir(root) else { return Vec::new() };
+        let Ok(entries) = std::fs::read_dir(common.join("worktrees")) else { return Vec::new() };
+        let mut v: Vec<Linked> = entries
+            .filter_map(std::result::Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| {
+                let admin = e.path();
+                // `gitdir` names the checkout's `.git` file: absolute, or relative to here
+                // (`worktree.useRelativePaths`).
+                let path = std::fs::read_to_string(admin.join("gitdir")).ok().map(|t| {
+                    let p = PathBuf::from(t.trim());
+                    let p = if p.is_absolute() { p } else { normalize(&admin.join(p)) };
+                    if p.file_name().is_some_and(|n| n == ".git") {
+                        p.parent().map_or(p.clone(), Path::to_path_buf)
+                    } else {
+                        p
+                    }
+                });
+                let marker = std::fs::read_to_string(admin.join("ptyro.json"))
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+                let field =
+                    |k: &str| marker.as_ref().and_then(|m| m[k].as_str()).map(str::to_owned);
+                Linked {
+                    name: e.file_name().to_string_lossy().into_owned(),
+                    path,
+                    project: field("project"),
+                    worktree: field("id"),
+                }
+            })
+            .collect();
+        v.sort_by(|a, b| a.name.cmp(&b.name));
+        v
+    }
+
+    /// `git worktree repair PATH`, run from the main checkout `root`: after the repository, the
+    /// worktree or both moved, the worktree's `.git` file and the repository's record of it
+    /// point at each other again (git 2.30+ for both moved). Nothing else is touched.
+    pub fn worktree_repair(&self, root: &Path, path: &Path) -> Result<()> {
+        let p = path.to_string_lossy();
+        let turn = self.turn(root);
+        let _turn = wait_turn(&turn);
+        self.run(root, &["worktree", "repair", "--", &p]).map(drop)
+    }
+
+    /// Whether `path` is a checkout of the repository whose main checkout is `root`: git, run
+    /// there, finds that repository.
+    pub fn belongs(&self, path: &Path, root: &Path) -> bool {
+        match (self.common_dir(path), self.common_dir(root)) {
+            (Ok(a), Ok(b)) => same_path(&a, &b),
+            _ => false,
+        }
+    }
+}
+
+/// One linked worktree in a repository's own records (`<common dir>/worktrees/<name>`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Linked {
+    /// Its directory there: git's name for it.
+    pub name: String,
+    /// Where the repository last knew its checkout to be.
+    pub path: Option<PathBuf>,
+    /// The project ptyro made it for (its `ptyro.json` marker), and its worktree id.
+    pub project: Option<String>,
+    pub worktree: Option<String>,
+}
+
+/// `..` and `.` taken out, without looking at the disk (the place may be gone).
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// The repository record a linked worktree's `.git` file points at (`gitdir: …`), as written:
+/// it may be gone. `None` for a main checkout (a `.git` directory) or no checkout at all.
+pub fn gitfile_target(checkout: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(checkout.join(".git")).ok()?;
+    let target = PathBuf::from(text.lines().next()?.strip_prefix("gitdir:")?.trim());
+    Some(if target.is_absolute() { target } else { normalize(&checkout.join(target)) })
 }
 
 pub fn parse_worktree_list(out: &str) -> Vec<WorktreeEntry> {

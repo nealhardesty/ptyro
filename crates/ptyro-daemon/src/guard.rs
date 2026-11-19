@@ -22,12 +22,19 @@ pub struct Caller {
     pub kind: Option<ClientKind>,
     /// A paired device and its scope (M9.2); `None` for local clients.
     pub grant: Option<crate::devices::Grant>,
+    /// The protocol minor version the client speaks (`None`: one inside the daemon).
+    pub minor: Option<u32>,
 }
 
 impl Caller {
     /// Another machine's daemon mirroring this one (MM1.B), over ssh or with its token.
     pub fn is_link(&self) -> bool {
         self.kind == Some(ClientKind::Machine) || self.grant.is_some_and(|g| g.machine)
+    }
+
+    /// The client is older than protocol 1.`minor`: it knows nothing that version added.
+    pub fn older_than(&self, minor: u32) -> bool {
+        self.minor.is_some_and(|m| m < minor)
     }
 }
 
@@ -111,25 +118,10 @@ impl Daemon {
         // No agent answers for a person or extends what is trusted. These defaults stop an
         // agent's mistake or a casual prompt injection, not code set on getting around them
         // (SPEC §17).
+        if let Some(why) = for_a_person(req) {
+            return refuse(why);
+        }
         match req {
-            Request::Answer { .. } => refuse("permission prompts are answered by a person"),
-            // A token minted here would leave through the agent's output.
-            Request::DevicePair { .. }
-            | Request::DeviceRevoke { .. }
-            | Request::PushSubscribe { .. }
-            | Request::PushUnsubscribe { .. } => {
-                refuse("devices are paired and managed by a person")
-            }
-            Request::ProjectTrust { .. }
-            | Request::WorktreeNew { spec: WorktreeSpec { trust: Some(_), .. } } => {
-                refuse("repository scripts are trusted by a person")
-            }
-            Request::Upgrade { binary: Some(_) } => {
-                refuse("the daemon is upgraded to another binary by a person")
-            }
-            Request::SelfUpdate | Request::MachineUpdate { .. } => {
-                refuse("ptyro is updated by a person")
-            }
             // Keys typed into a dialog answer it (Claude's preselects "Yes"): a blocked
             // session's prompt is answered with `answer`, by a person.
             Request::SendText { addr, .. } | Request::SendBytes { addr, .. }
@@ -141,5 +133,55 @@ impl Daemon {
             }
             _ => Ok(()),
         }
+    }
+}
+
+/// What only a person asks for, whatever the session (`None`: an agent may ask too).
+fn for_a_person(req: &Request) -> Option<&'static str> {
+    match req {
+        Request::Answer { .. } => Some("permission prompts are answered by a person"),
+        // A token minted here would leave through the agent's output.
+        Request::DevicePair { .. }
+        | Request::DeviceRevoke { .. }
+        | Request::PushSubscribe { .. }
+        | Request::PushUnsubscribe { .. } => Some("devices are paired and managed by a person"),
+        Request::ProjectTrust { .. }
+        | Request::WorktreeNew { spec: WorktreeSpec { trust: Some(_), .. } } => {
+            Some("repository scripts are trusted by a person")
+        }
+        // Where a project's repository is, and folding one project into another (SPEC §10.1).
+        Request::ProjectMove { .. } | Request::ProjectAdd { moved: true, .. } => {
+            Some("projects are moved by a person")
+        }
+        Request::Upgrade { binary: Some(_) } => {
+            Some("the daemon is upgraded to another binary by a person")
+        }
+        Request::SelfUpdate | Request::MachineUpdate { .. } => Some("ptyro is updated by a person"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An agent may add a project, never move one or fold one into another; nor trust, pair,
+    /// answer or update.
+    #[test]
+    fn agents_never_move_projects() {
+        let add = |moved: bool| Request::ProjectAdd {
+            path: "/r".into(),
+            workspace: None,
+            moved,
+            separate: false,
+        };
+        let mv = Request::ProjectMove { addr: "app".into(), path: "/new/app".into() };
+        assert_eq!(for_a_person(&mv), Some("projects are moved by a person"));
+        assert_eq!(for_a_person(&add(true)), Some("projects are moved by a person"));
+        assert_eq!(for_a_person(&add(false)), None);
+        let trust = Request::ProjectTrust { addr: "app".into(), fingerprint: "f".into() };
+        assert_eq!(for_a_person(&trust), Some("repository scripts are trusted by a person"));
+        assert_eq!(for_a_person(&Request::SelfUpdate), Some("ptyro is updated by a person"));
+        assert_eq!(for_a_person(&Request::ProjectList), None);
     }
 }

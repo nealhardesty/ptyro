@@ -747,6 +747,51 @@ const scenarios = {
     const stale = JSON.parse(ptyro("gc", "--json"));
     if (stale.some((e) => e.worktree.name === "e2e-keep")) throw new Error(`still offered: ${JSON.stringify(stale)}`);
   },
+
+  // A repository moved (SPEC §10.1): its project's page says its directory is gone, and ⋯ →
+  // Move… (the place ptyro found filled in, else typed) points it at the new place; the banner
+  // goes. The project keeps its id.
+  async move() {
+    const git = (cwd, ...args) => execFileSync("git", args, { cwd, env: { ...process.env, ...E.env }, encoding: "utf8" });
+    const home = E.env.HOME;
+    const from = join(home, "e2e-move", "was", "mvapp");
+    const to = join(home, "e2e-move", "now", "mvapp");
+    rmSync(join(home, "e2e-move"), { recursive: true, force: true });
+    mkdirSync(from, { recursive: true });
+    mkdirSync(join(home, "e2e-move", "now"), { recursive: true });
+    git(from, "init", "-q", "-b", "main");
+    git(from, "remote", "add", "origin", "https://example.com/e2e/mvapp.git");
+    git(from, "commit", "-q", "--allow-empty", "-m", "init");
+    const show = () => JSON.parse(ptyro("project", "show", "mvapp", "--json")).project;
+    ptyro("project", "add", from);
+    const id = show().id;
+    try {
+      execFileSync("mv", [from, to]);
+      // Adding the new place spots the move (and refuses: it asks, and there's no terminal).
+      try { ptyro("project", "add", to); } catch { /* refused, offering the move */ }
+      await fresh(`#/proj/${encodeURIComponent(id)}`);
+      await tab.waitFor("the banner saying it's gone", `!!document.querySelector(".banner.moved") && document.querySelector(".banner.moved").innerText.includes("is gone")`, 30_000);
+      await tab.click('header button[aria-label="More"]');
+      await tab.waitFor("its menu", `!!document.querySelector(".menu button")`);
+      // Missing: the menu leads with Move…, then Forget.
+      const first = await tab.eval(`[...document.querySelectorAll(".menu button")].map(b => b.innerText.split(String.fromCharCode(10))[0]).slice(0, 2).join("|")`);
+      if (first !== "Move…|Forget this project") throw new Error(`the menu leads with ${first}`);
+      await tab.eval(`[...document.querySelectorAll(".menu button")].find(b => b.innerText.startsWith("Move…")).click()`);
+      await tab.waitFor("the move form", `!!document.querySelector(".sheet") && document.querySelector(".sheet").innerText.includes("Move mvapp")`);
+      // A relative path: the web has no folder for it to start from, so it says how to write it.
+      await tab.eval(`(() => { const i = document.querySelector(".sheet input"); i.value = "now/mvapp"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+      await tab.click(".sheet-foot .primary");
+      await tab.waitFor("the relative path refused", `!!document.querySelector(".sheet .form-err") && document.querySelector(".sheet .form-err").innerText.includes("A full path is needed")`);
+      if (!show().root.endsWith("/was/mvapp")) throw new Error(`moved by a relative path: ${JSON.stringify(show())}`);
+      await tab.eval(`(() => { const i = document.querySelector(".sheet input"); i.value = ${JSON.stringify(to)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+      await tab.click(".sheet-foot .primary");
+      const p = await until("the move", () => { const p = show(); return p.root.endsWith("/now/mvapp") ? p : null; });
+      if (p.id !== id) throw new Error(`another project: ${JSON.stringify(p)}`);
+      await tab.waitFor("the banner to go", `!document.querySelector(".banner.moved")`, 15_000);
+    } finally {
+      try { ptyro("project", "rm", "mvapp", "--yes", "--release"); } catch { /* gone already */ }
+    }
+  },
 };
 
 let failed = 0;

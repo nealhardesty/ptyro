@@ -228,7 +228,12 @@ async fn the_repository_you_are_in_registers_itself_and_undo_sticks() {
     .await
     .unwrap();
     let added = match c
-        .request(Request::ProjectAdd { path: dir.clone(), workspace: None })
+        .request(Request::ProjectAdd {
+            path: dir.clone(),
+            workspace: None,
+            moved: false,
+            separate: false,
+        })
         .await
         .unwrap()
     {
