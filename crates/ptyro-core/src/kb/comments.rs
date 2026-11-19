@@ -134,8 +134,6 @@ static BY_EXTENSION: &[(&[&str], &Marks)] = &[
             "properties",
             "conf",
             "dockerfile",
-            "gitignore",
-            "env",
         ],
         &HASH,
     ),
