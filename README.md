@@ -574,6 +574,14 @@ chats itself (`[chat] history_tool`), only those of its own profile unless `hist
 otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
 
+**The knowledge base** is being built (ROADMAP KB): one memory of your work, for you and your
+agents to search. So far ptyro only keeps its file, `kb.db`, beside `chat.db`, and nothing
+fills it yet. `ptyro doctor` checks it and says what it holds, `ptyro about` names it, and
+`ptyro uninstall` lists it. It stays on this computer. Settings → Knowledge (`[kb]` in the
+config): `enabled = false` switches it off, `redact` adds your own patterns to what is
+redacted before anything is kept (keys, tokens and passwords already are), and `exclude` adds
+paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind never are).
+
 **Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
 yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it) downloads
 a small model once (model2vec `potion-base-8M`, 31 MB, MIT) and reads every chat in the background,
@@ -810,7 +818,8 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make spike-kb-comments` (`ARGS="<folder>…"`, `SAMPLE=…`) | ROADMAP KB0.4: the comment table (SPEC §25.6.3) run over real code, read-only: files by extension, comment blocks kept and dropped by each rule (licence headers, tools' directives, code switched off, too short), and a sample of each to judge by eye |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
-| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of ten targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |
+| `make bench-kb-redact` | ROADMAP KB1.3: how long the knowledge base's redaction takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file before anything is kept) |
+| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan) / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
 | `make compat` (`VTTEST=…`) | headless compatibility sweep → a table for `docs/compat.md` |
 | `make bench` / `make criterion` | emulator parse speed, daemon throughput, idle CPU, key latency (Linux) / micro-benchmarks (`target/criterion`) |

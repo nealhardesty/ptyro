@@ -20,9 +20,9 @@ completions), and `--dry-run` only says so.
 
 It stops the daemon and every session, then removes:
 
-- **ptyro's directories**: config, data (history, chats, managed profiles and the agent
-  logins in them; notes left from the old scratchpad, `scratchpad.md`, are named in the
-  plan), state, and the runtime directory, wherever `ptyro daemon status` says they are
+- **ptyro's directories**: config, data (history, chats, the knowledge base's `kb.db`, managed
+  profiles and the agent logins in them; the plan names `chat.db` and `kb.db` with their
+  sizes, and notes left from the old scratchpad, `scratchpad.md`), state, and the runtime directory, wherever `ptyro daemon status` says they are
   (`PTYRO_HOME`, `XDG_*`), with their sizes;
 - **its worktrees**, through `git worktree remove` so the repository forgets them (the branches
   stay). Each is checked with git, not the daemon's last look: uncommitted changes are listed and

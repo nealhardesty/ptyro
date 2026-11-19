@@ -277,7 +277,7 @@ ptyro follows the XDG directories:
 | Path | Holds |
 |---|---|
 | `~/.config/ptyro/` | `config.toml` |
-| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `chat.db` (your chats) |
+| `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log` (recordings), `chat.db` (your chats), `kb.db` (the knowledge base) |
 | `~/.local/state/ptyro/` | logs, `crashes/`, `versions.json` (the agents' newest versions, as last looked up) |
 | `$XDG_RUNTIME_DIR/ptyro/` | the daemon's socket (without `XDG_RUNTIME_DIR`, as on macOS: `$TMPDIR/ptyro-<uid>/`; a path too long for a socket falls back to `/tmp/ptyro-<uid>-<hash>/`) |
 

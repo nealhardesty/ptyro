@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open, nothing built)
+## KB — Knowledge base (decided 2026-11-19; open: the spikes and the store, the way in and redaction are built, KB0 and KB1.1 to KB1.3; nothing a person can use yet)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -3943,16 +3943,62 @@ Development section), its README and `docs/` text, and the milestone's version b
         directives are a fourth rule. SPEC §25.6.3.)*
 - [ ] **KB1 A memory that fills itself** (R-KB-01, 02, 03, 05, 09, 10, 11) — the core: agent
       sessions are ingested as they happen, and found by you and by your agents. **L**
-  - [ ] **KB1.1** `kb.db`: the schema of §25.4, `KbDb` and its writer thread, migrations and the
+  - [x] **KB1.1** `kb.db`: the schema of §25.4, `KbDb` and its writer thread, migrations and the
         copy aside, `secure_delete` **and FTS5's own `secure-delete` option** (KB0.1: without
         it a forgotten word stays in the index, §25.12), "can't open" handling with the fix (as
         `chat.db`'s), `doctor`'s line, `about`'s path, the uninstall plan. **M**
-  - [ ] **KB1.2** The way in (§25.5): gate, read from a cursor, redact, chunk, stamp, write; one
+        *(Built 2026-11-19: `crates/ptyro-store/src/kb.rs`: migration 1 is §25.4's schema as
+        the spike proved it, with the update trigger, the rank and FTS5's `secure-delete`;
+        `KbDb` on its own writer thread, 0600, WAL, `secure_delete`, the copy aside and the
+        refusal of a newer schema through the store's `prepare`. Its API: `write` (a `Plan`),
+        `item`, `item_by_uri`, `ids`, `chunks`, `list`, `cursors`, `set_cursor`, `tombstoned`,
+        the roots' rows, `forget`, `delete_item`, `remove_root`, `expire`, `expire_chunks`
+        (every delete 200 chunks a writer job), `checkpoint`, `status`, `doctor`, `flush`.
+        The types are `ptyro_core::kb::{KbItem, KbChunk, KbRoot, …}`. The daemon opens it at
+        start when `[kb] enabled` (`kb.enabled`, in a new Knowledge section of the settings),
+        runs without it and says why with the fix (`Daemon::kb_db`), and waits for its writer
+        before a live upgrade's exec. `ptyro doctor`'s line (`DaemonDoctor.kb`), `ptyro
+        about`'s `knowledge` place, the uninstall plan's `knowledge` line, `docs/uninstall.md`,
+        `docs/config.md`. Tests: 11 in `kb/tests.rs` (open, a newer schema untouched, write and
+        rewrite, a transcript in pieces, the history's filters, **forgetting: no byte of the
+        text in any file**, a replaced chunk the same, roots, retention, two property tests),
+        `crates/ptyro/tests/kb1.rs` (the daemon's file, doctor, about, uninstall, a live
+        upgrade, off, a file that is no database). Not built: the search SQL (KB1.5), the
+        notes folder in `about` and uninstall (KB2), a tombstone for a URI with no item
+        (KB1.14). SPEC §25.4, §25.12, §14.1.)*
+  - [x] **KB1.2** The way in (§25.5): gate, read from a cursor, redact, chunk, stamp, write; one
         transaction an item; unchanged chunks keep their rows; the ingest actor and its queue,
         low priority, rebuilt from the cursors after a restart and a live upgrade. **M**
-  - [ ] **KB1.3** Redaction (§25.7): the rules moved from `daemon/src/redact.rs` into
+        *(Built 2026-11-19: `ptyro_core::kb::ingest`: `gate` (on, the agent, the project, an
+        unrecorded or private session, a tombstone, the never list, too big) gives a `Passed`,
+        and `plan(passed, source, stamp, redactor)` is the only maker of the `Plan` that
+        `KbDb::write` takes, so no source can skip the gate, redaction or the daemon's stamp.
+        `ptyro_core::kb::chunk`: `split` (1,200 aimed, 2,000 the limit; paragraph, sentence,
+        word), `markdown` (heading paths and slugs, fences, underlined headings), `plain`,
+        `message` (parts keep their anchor). The write keeps every unchanged chunk's row
+        wherever it moved, and an appended piece replaces by anchor, which is what makes a
+        piece read twice write nothing. `crates/ptyro-daemon/src/kb.rs`: the queue and its
+        actor (eight jobs, then 50 ms), `kb_gate`, `kb_ingest`, the refused sources with their
+        reasons. Its one job is a source already in memory, queued by tests only: **KB1.4 adds
+        the transcript job and the rebuild from `KbDb::cursors`**. Tests: the gate's order,
+        the cutters (also 4 MB of each awkward shape), the plan, the store's two property
+        tests (a transcript in pieces at any cuts between turns, each maybe twice; a document
+        twice and changed), four daemon tests, and the fuzz target `kb`. SPEC §25.5, §25.16.)*
+  - [x] **KB1.3** Redaction (§25.7): the rules moved from `daemon/src/redact.rs` into
         `ptyro_core::kb::redact` and grown (the profile's secret values, the credential shapes,
         `kb.redact`), the 25-hit rule, the never list, the corpus test. Titles keep using it. **M**
+        *(Built 2026-11-19: `ptyro_core::kb::redact`: `Redactor` (the profile's values, PEM
+        blocks, one expression for tokens, JWTs, `Bearer`, a secret key's value in `=`, `:` and
+        JSON forms, a URL's password and long mixed runs, then `kb.redact`'s patterns);
+        `Redactor::strict` is what a chat's titler is sent, with the stricter rules titles had
+        (`crates/ptyro-daemon/src/redact.rs` now only calls it). The knowledge base's rules
+        leave what merely looks like a secret: a git SHA, a UUID, `max_tokens=4096`, `token =
+        get_token()`, "the bearer of". `ingest::Never` is §25.7's list and `kb.exclude`'s globs;
+        the 25-hit rule refuses a file whole and leaves out a single message of a conversation.
+        Settings `kb.redact` (checked when the config loads) and `kb.exclude`. Tests: the
+        corpus in prose, JSON, shell, YAML and code with no credential surviving, the
+        look-alikes unchanged, PEM whole and cut off, the 25-hit rule, the never list; `make
+        bench-kb-redact`: 4.7 ms for 1 MiB. SPEC §25.7.)*
   - [ ] **KB1.4** Agent sessions (§25.6.1): `Adapter::transcript` and `read_transcript`; the
         Claude and Codex parsers (CHAT5's import, from before `b80632f`, moved into
         `ptyro-agents`); the triggers (`Stop`, `SessionEnd`, exit, daemon start); the card;

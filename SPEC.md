@@ -4416,7 +4416,7 @@ they were, untouched; `ptyro doctor` says so, and `[scratchpad]` in a config is 
 | Kind | Path | Contents |
 |---|---|---|
 | config | `~/.config/ptyro/` | `config.toml` |
-| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `chat.db` (§22.4), `kb.db` and `kb/notes/` (§25.4, proposed), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
+| data | `~/.local/share/ptyro/` | `ptyro.db`, `worktrees/`, `sessions/<id>/pty.log`, `chat.db` (§22.4), `kb.db` (§25.4), `kb/notes/` (§25.4, proposed: KB2), `integrations/`, `profiles/<name>/<agent>/` (managed profile dirs, `0700`) |
 | state | `~/.local/state/ptyro/` | `daemon.lock`, `daemon.log*`, `daemon.prev` |
 | runtime | Linux `$XDG_RUNTIME_DIR/ptyro/`; macOS `$TMPDIR/ptyro-<uid>/`; `PTYRO_HOME/run/` | `ptyro.sock` |
 
@@ -9897,7 +9897,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; details proposed; nothing built]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in and redaction (KB1.1 to KB1.3); the rest proposed]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -9906,8 +9906,40 @@ search it through three tools. It runs out of the box, on this computer only, wi
 at ingest, no vector database and no graph. The ideas and what other products do are RESEARCH
 section I and R-KB-01…13; the tasks are ROADMAP KB0…KB5.
 
-**As built, and where the spikes changed the design below** (nothing of the feature is built yet;
-each line names its spike):
+**As built, and where building and the spikes changed the design below** (each line names its
+task; nothing a person can use is built yet: there is no source, no search and no command until
+KB1.4, KB1.5 and KB1.7):
+- **KB1.1 `kb.db`, KB1.2 the way in, KB1.3 redaction (2026-11-19; `ptyro_store::kb`,
+  `ptyro_core::kb::{ingest, chunk, redact}`, `crates/ptyro-daemon/src/kb.rs`):**
+  - **Nothing reaches `kb.db` but a `Plan`, and nothing makes a `Plan` but `ingest::plan`,
+    which takes proof that the gate was asked** (a `Passed`, which only `ingest::gate` makes).
+    The writer and the profile come in a `Stamp` the daemon fills; a source carries none (§25.5).
+  - **A source is either all of its item or more of it** (`Source::append`). A whole one
+    replaces the item's chunks, keeping every row whose kind, anchor, heading, text and meta
+    are unchanged *wherever it now stands* (so a paragraph put in at the top of a file rewrites
+    one row, not all of them). An appended one follows the item's chunks, and a chunk whose
+    anchor the item already has stands in for that row in place: that is what makes a
+    transcript piece read twice, a re-read after a rewind, and a session's card sent again
+    with every piece write nothing twice (§25.5 step 6).
+  - **`item.hash` is of what is stored, not of what was read**: the title, the path, the files
+    and every chunk after redaction and cutting. So a new redaction pattern or a changed
+    cutter rewrites an item at its next read, and a secret's bytes are never hashed into the
+    file. An appended item has no hash (§25.4).
+  - **Redaction for the knowledge base is less eager than the title redactor it grew from**:
+    that one redacted any 32 characters of mixed letters and digits (every git SHA), the
+    value of any key with `token` in it (`max_tokens=4096`) and any word after "bearer". The
+    knowledge base's rules leave those; the titler's text, which leaves the machine, keeps the
+    old strictness through the same code (`Redactor::strict`, §25.7).
+  - **The 25-hit rule is a file's, a note's and a commit's; in a conversation it is each
+    message's**: a turn with more than 25 hits is left out and the session is kept (§25.7).
+  - **Forgetting also removes the copies set aside before a migration** (`kb.db.bak-v<N>`),
+    which hold what the file held then (§25.12).
+  - **`secure_delete` covers a rewrite too**: measured, a chunk rewritten in place or replaced
+    by a file's re-read leaves no byte of its old text in the file after a checkpoint (§25.16).
+  - **A profile whose secrets can't be read keeps its sources out** until they can: redaction
+    by the profile's exact values can't be skipped (§25.5).
+  - **Settings so far**: `kb.enabled`, `kb.redact`, `kb.exclude`. `kb.max_file` is the constant
+    1 MiB until KB1.11.
 - **KB0.2, transcripts (2026-11-19; `make verify-kb`, Claude Code 2.1.328 and 2.1.329, Codex
   0.167.1; the facts are §20.1, §20.2 and §20.8):**
   - **A transcript is not read once at `Stop`.** Claude's file gets the turn's last assistant
@@ -10049,8 +10081,11 @@ A chat is not an item; a hit in one keeps its chat address (`7f3k/01JB…`, §22
 forgotten item's pages are zeroed, §25.12), migrations embedded and counted by `user_version`,
 copied aside before a migration, and **its own writer thread** (`KbDb`), apart from the metadata
 store's and chat's: an ingest never delays a status write or a chat's answer. Opened when the
-daemon starts and `[kb] enabled`. If it can't be opened the daemon runs, the Library and
-`recall` say why in one line and offer the fix, exactly as chats do (§22.4, `StoreError::fix`).
+daemon starts and `[kb] enabled` (and at its first use, when it is switched on later). If it
+can't be opened the daemon runs, the Library and `recall` say why in one line and offer the
+fix, exactly as chats do (§22.4, `StoreError::fix`; `Daemon::kb_db`), and a file from a newer
+ptyro is refused untouched. **Built (KB1.1): `crates/ptyro-store/src/kb.rs`**, migration 1 as
+below.
 
 ```sql
 CREATE TABLE meta (key TEXT PRIMARY KEY, value);     -- machine_id (chat.db's, so origins agree), notes
@@ -10077,7 +10112,7 @@ CREATE TABLE item (
   session TEXT,                       -- ptyro's session id, when a ptyro session made it
   writer TEXT NOT NULL,               -- user | agent | file | import | ptyro (set by the daemon, never by a caller)
   files JSON,                         -- a session's touched files, a commit's changed files
-  hash TEXT,                          -- SHA-256 of what was read
+  hash TEXT,                          -- SHA-256 of what is stored (title, path, files, chunks); NULL when appended to
   cursor JSON,                        -- where reading stopped: {dev, ino, size, offset} or {mtime, size}
   chunks INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER, ended_at INTEGER, ingested_at INTEGER,
@@ -10099,13 +10134,25 @@ CREATE TABLE chunk (
   UNIQUE(item, idx));
 CREATE VIRTUAL TABLE chunk_fts USING fts5(text, heading, content='chunk', content_rowid='seq',
                                           tokenize='porter unicode61 remove_diacritics 2');
--- insert/update/delete triggers keep chunk_fts in step, as node_fts's do; and FTS5's own
--- 'secure-delete' option is on, so that a forgotten chunk's words leave the index (§25.12)
+-- insert/update/delete triggers keep chunk_fts in step, as node_fts's do (the update one fires
+-- on text and heading only, so moving a chunk costs the index nothing); its rank is
+-- bm25(1.0, 2.0), a heading's match at twice the text's; and FTS5's own 'secure-delete' option
+-- is on, so that a forgotten chunk's words leave the index (§25.12)
 CREATE TABLE chunk_vec (              -- only prose: card, user, assistant, summary, text, comment, message
   seq INTEGER PRIMARY KEY REFERENCES chunk(seq) ON DELETE CASCADE,
   item TEXT NOT NULL, kind TEXT NOT NULL, profile TEXT, project TEXT, at_ms INTEGER NOT NULL,
   model TEXT NOT NULL, vec BLOB NOT NULL);           -- int8 with an f32 scale, 260 B (§22.10)
+-- a chunk whose text changes loses its vector (a trigger), and is embedded again
 ```
+
+- **`meta.machine_id` is `chat.db`'s** whenever that file is open (the daemon hands it over at
+  each open, and it is stored), so both files name one machine alike; without `chat.db` the
+  file keeps its own.
+- **The connection sets `secure_delete` at every open** (it is not kept in the file), and it is
+  the only connection that writes. `ptyro doctor` checks both switches.
+- **No index on `chunk(item, anchor)`.** An appended piece finds the rows of its anchors by one
+  pass over the item's chunks: an index would cost every chunk about 70 bytes for the sake of
+  a re-read.
 
 - **`chunk_vec` carries its own filter columns** (profile, project, kind, time), so the scan
   never joins: chat's first version joined and took 160 ms where 45 ms was possible (§22.10).
@@ -10128,7 +10175,11 @@ CREATE TABLE chunk_vec (              -- only prose: card, user, assistant, summ
 ### 25.5 One way in
 
 Every source goes through one function (`ptyro_core::kb::ingest` plans, `KbDb` writes), so that
-redaction, identity and provenance can't be skipped by a new source:
+redaction, identity and provenance can't be skipped by a new source. **Built (KB1.2)**: the
+types hold it. `KbDb::write` takes a `Plan`; only `ingest::plan(passed, source, stamp,
+redactor)` makes one; and its first argument is a `Passed`, which only `ingest::gate` gives.
+A `Source` is what was read (kind, URI, title, body, cursor, times); a `Stamp` is what the
+daemon knows of it. In the daemon the gate is one function, `Daemon::kb_gate`.
 
 1. **Gate.** Is the knowledge base on, and this source, for this agent and project? Is the
    session unrecorded (§7.6), the URI forgotten (a tombstone), the file on the never list or too
@@ -10139,18 +10190,49 @@ redaction, identity and provenance can't be skipped by a new source:
 4. **Chunk** by the item's kind (§25.6). A chunk aims at 1,200 characters and never passes
    2,000; it is cut at a paragraph, then a sentence, then a word. No overlap: a document's chunk
    carries its heading path instead, and a message cut in parts keeps its anchor.
+   - *As built* (`ptyro_core::kb::chunk`): text of up to 1,500 characters stays whole. Else
+     the cut is the last paragraph break between 600 and 1,200 characters, else the first one
+     up to 2,000 (a paragraph is kept whole when it can be), then the same for a sentence's
+     end or a line's, then a word's; text with no space is cut at 2,000.
+   - **Markdown** (`chunk::markdown`): cut at `#` headings and at `===`/`---` underlines of a
+     line that stands alone, never inside a code fence; a `---` header at the top is text.
+     Each chunk's `heading` is the path (`SPEC.md › 22. Chats › 22.4 Storage`), its `anchor`
+     the heading's slug as GitHub links it (`224-storage`, repeats numbered). A heading's own
+     line is not text: its words are in the path of everything under it.
+   - **Messages** (`chunk::message`): a turn is one chunk unless it is long; its parts share
+     its anchor. A body can also be given as parts already made (comments, commands): they
+     are redacted one by one and cut only if too long.
 5. **Stamp**: kind, URI, root, project, workspace, worktree, branch, profile, agent, model,
    session, writer, origin, times. **`writer` comes from who called**, as the daemon knows it
    (the hook's session, the MCP caller's pid's session as chat's tools do it §22.10, a client's
    device): a tool can't claim to be you.
 6. **Write** in one transaction per item: chunks whose text is unchanged keep their row (and
-   their vector); the rest are replaced. `item.hash` unchanged means nothing is written at all.
+   their vector); the rest are replaced. `item.hash` unchanged means nothing is written at all
+   (but a cursor that moved).
+   - **A whole source** (a file, a note, a commit): the item's chunks become the plan's. A row
+     is kept when its kind, anchor, heading, text and meta are the plan's, wherever it now
+     stands; the others are deleted, the new ones inserted.
+   - **An appended source** (a transcript read on from its cursor; `Source::append`): its
+     chunks go after the item's. Chunks whose anchor the item already has take those rows'
+     places (the same text is left alone; other text is rewritten in place and loses its
+     vector). **A piece must hold all the chunks of each of its anchors**, which a reader that
+     parses whole lines does by itself. What a piece doesn't say of the item (its title, its
+     model) stays; its times widen.
+   - A forgotten URI is refused by the writer too, whatever the gate was told.
 7. **Embed** later, by the meaning task (§25.8), when meaning search is on.
 
 The ingest actor (`crates/ptyro-daemon/src/kb.rs`) takes work from a queue at low priority, in
 batches with a pause between, the way chat's embedding backfill does. **Nothing here is on a
 session's hot path** (§4.3): a hook only enqueues `(session, transcript path)`, and the queue is
 rebuilt from the cursors after a restart or a live upgrade, so nothing crosses the exec.
+- *As built (KB1.2)*: eight jobs, then 50 ms. The only job so far is a source already in memory
+  (`Job::Prepared`, queued by nothing but tests): KB1.4 adds the transcript to read, and asks
+  `kb_gate` before it reads. The redactor is the user's patterns, compiled once for each change
+  of `kb.redact`, with the secrets of the source's profile; planning runs off the async
+  threads. **If that profile's secrets can't be read the source is not kept**, and is found
+  again from its cursor.
+- What the gate or the rules refused is kept in memory, the newest hundred, each with its
+  reason (`Daemon::kb_skipped`), for `ptyro kb status` (KB1.7).
 
 ### 25.6 Sources
 
@@ -10422,11 +10504,41 @@ Redaction runs inside the ingest function, before chunking, so no source can ski
     the value in `password=`, `token=`, `secret=`, `api_key=` and their `:` and JSON forms, and
     the password in a URL (`https://user:…@`);
   - your own patterns, `kb.redact` (regexes).
+- **The rules as built** (KB1.3; one expression walked once, then your patterns):
+  - **Token shapes**: `sk-`, `sk_live_`, `rk_live_`, `ghp_`, `gho_`, `ghs_`, `ghu_`, `ghr_`,
+    `github_pat_`, `glpat-`, `xox[abposr]-`, `AKIA`, `ASIA`, `AIza`, of 16 characters or more
+    with a digit in them; a JWT (`eyJ….eyJ….…`); a PEM block of any kind, and one that is cut
+    off (its header and the base64 under it).
+  - **The word after `Bearer`** when it has a digit or a capital in it or is 20 characters
+    long: "the bearer of bad news" stays.
+  - **A key's value** when the key *ends* in `password`, `passwd`, `secret`, `token`,
+    `api_key`, `access_key` or `private_key` (so `GITHUB_TOKEN`, `aws_secret_access_key`,
+    `X-Api-Key`; not `max_tokens` or `token_count`). A quoted value always goes. A bare one
+    after `=` with no spaces goes unless it is code or a name handed on (`get_token()`,
+    `self.password`, `token=token`, `None`); a bare one after `:` or a spaced `=` goes only
+    when it looks like a secret (six characters with a letter and a digit, or twenty).
+  - **A URL's password** (`scheme://user:…@`).
+  - **A run of 32 or more letters and digits** that has a mixed part of 16 or more and is not
+    all hexadecimal (a git SHA, a checksum, a UUID stay), not inline `base64,` data, and not
+    part of a path.
+  - **Never touched**: `<secret:NAME>`, `<redacted>`, and what stands for a value (`$TOKEN`,
+    `${{ secrets.X }}`, `<your token>`, `{token}`, `%s`). Redacting twice changes nothing.
+  - **What a chat's titler is sent** (`Redactor::strict`, the same code) keeps the stricter
+    rules it had: any long mixed run, any key with the word anywhere in it, any word after
+    `Bearer`. It leaves the machine; nobody reads it.
+  - **Cost** [measured 2026-11-19, `make bench-kb-redact`, an M4 Pro]: 4.7 ms for 1 MiB of
+    ordinary text and code (63 ms in a debug build).
 - **A file with more than 25 hits is skipped whole**: it is probably a keystore or a fixture of
-  credentials, and its path is named in `ptyro kb status`.
+  credentials, and its path is named in `ptyro kb status`. *As built*: so is a note and a
+  commit. **In a conversation the rule is each message's**: a turn with more than 25 hits is
+  left out and the session around it is kept (a session is not lost for one pasted `.env`).
 - **The never list**, which no `--include` overrides: `.env*`, `*.pem`, `*.key`, `*.p12`,
   `*.pfx`, `*.kdbx`, `id_rsa*`, `id_ed25519*`, `.npmrc`, `.netrc`, `.pgpass`, `credentials*`,
   `secrets.*`, and anything under `.ssh/`, `.aws/`, `.gnupg/`, `.git/`. `kb.exclude` adds to it.
+  *As built* (`ingest::Never`): a pattern with no `/` is tried on every part of a path, so it
+  names a file or a folder with all that is in it; one with a `/` is tried on the path's end
+  and on each folder above it. `*` is anything but a `/`, `**` anything, `?` one character;
+  case doesn't matter.
 - **Never ingested at all:** a private session (§25.7a); an unrecorded session (logins, §7.6,
   §24.4); an incognito chat (never on disk, §22.9); a chat's engine; a session of an agent with
   `kb = false`; anything in a project with `[kb] enabled = false`; a URI with a tombstone.
@@ -10710,7 +10822,11 @@ shows its text.
 
 **Settings:** a **Knowledge** section in both panels (§25.13). **`ptyro doctor`:** a `kb.db`
 line (opens, version, `integrity_check`, FTS5 present, sizes, items by kind, vectors N of M),
-each root's last read and error, files skipped and why (§25.12).
+each root's last read and error, files skipped and why (§25.12). *Built (KB1.1)*: one line,
+`knowledge base: 12 sessions, 3 files in 840 piece(s), nothing forgotten, 1.2 MB in …/kb.db
+(schema 1)`, from `DaemonDoctor.kb` (`quick_check`, FTS5, and both secure-delete switches,
+each a problem when it fails); `off`, or why the file can't be opened with the fix. Vectors,
+roots and skipped files join it with KB1.5, KB3 and KB1.7.
 
 ### 25.11 Many machines
 
@@ -10756,6 +10872,14 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
     file pays for the chunks that changed. **Removing a root deletes in batches, off any
     request** (a root of 50,000 chunks is about a minute and a half of the writer's time),
     saying how far it is.
+  - *As built (KB1.1, `KbDb::forget`)*: the tombstone is written first (the title, the files,
+    the hash and the cursor go with it), so the item is out of every list at once; its chunks
+    then go **200 a writer job** (`DELETE_BATCH`), other writes between; then the checkpoint.
+    A root's removal, an item's deletion and retention delete the same way.
+  - **The copies set aside before a migration go too** (`kb.db.bak-v<N>`): they hold what the
+    file held then, and nothing else would ever delete it from them.
+  - **Not built: forgetting a URI that has no item yet** (a session nothing was read of). It
+    needs a tombstone made from the URI alone; KB1.14's `kb forget <session>` adds it.
 - **Removing a root** drops its items, with no tombstones: ingest it again and it is back.
   Removing a project from ptyro removes its root; the sessions that ran in it stay.
 - **Removing a session from ptyro** (`rm`) doesn't remove its item: the history is the point.
@@ -10767,18 +10891,25 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
   Library and the commands say it is off and offer to switch it on. What is stored stays.
 - **Live upgrade and restart.** The writer closes before the exec and reopens after, as chat's
   does. The queue is rebuilt from the cursors. A half-written item is one transaction, so it is
-  whole or absent.
+  whole or absent. *Built (KB1.1)*: the upgrade waits for the writer's queue to empty
+  (`kb_flush`, beside the store's flush), the file closes with the exec (SQLite opens it
+  close-on-exec), and the new image opens it at its start.
 - **`ptyro gc`** names roots that have been missing for 30 days and offers `kb rm`.
 - **Uninstall** (§14.5): the plan lists `kb.db` and the notes folder with their sizes and the
   number of notes. **Notes are your writing: uninstall leaves `<data>/kb/notes/` in place**
-  unless `--delete-notes`, as it leaves your repositories.
-- **`ptyro about`** names `kb.db` and the notes folder among the paths.
+  unless `--delete-notes`, as it leaves your repositories. *Built (KB1.1)*: the `knowledge`
+  line with `kb.db`'s size (`Plan.knowledge`); it goes with the data directory. The notes
+  folder is KB2's.
+- **`ptyro about`** names `kb.db` and the notes folder among the paths. *Built (KB1.1)*: the
+  `knowledge` place (`kb.db`); the notes folder with KB2.
 
 ### 25.13 Configuration
 
 `[kb]` in the user config; every key is in the settings schema
 (`crates/ptyro-core/src/settings.rs`, a new **Knowledge** section) and so in the TUI's and the
-web's panels and `ptyro config set` (§13.7).
+web's panels and `ptyro config set` (§13.7). **Built so far (KB1.1, KB1.3): `enabled`, `redact`
+(a pattern that isn't a regex is refused when the file loads) and `exclude`**; the rest come
+with the tasks that read them (KB1.11).
 
 ```toml
 [kb]
@@ -10840,12 +10971,12 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 
 | Crate | What it gains |
 |---|---|
-| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card |
-| `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget |
+| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`**; it now depends on `regex` |
+| `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (all but the search SQL)** |
 | `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments |
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes |
-| `ptyro-daemon` | `kb.rs` (the ingest actor and queue), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables; the fan-out beside chat's in `machines.rs` |
+| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables; the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
 | `ptyro-protocol` | the messages of §25.14 |
 | `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms |
@@ -10877,11 +11008,28 @@ table; the benches of §18.3 the rest):
   (`crates/ptyro-agents/tests/fixtures/`), with the expected turns; a fuzz target
   (`kb_transcript`) proves they never panic on any bytes.
 - **Idempotence** (a property test): ingesting any source twice, or in pieces at any cut
-  points, gives the same rows as ingesting it once.
+  points, gives the same rows as ingesting it once. *Built* (`crates/ptyro-store/src/kb/tests.rs`,
+  proptest): a transcript in pieces cut between any of its turns, each piece possibly read
+  twice, against the transcript at once; a document twice, then changed, against a new file
+  given only the second text.
 - **Redaction:** a corpus of made-up credentials in every shape of §25.7, in prose, JSON, shell
   and code; none survives into `chunk.text`. The 25-hit rule and the never list each have a test.
+  *Built* (`crates/ptyro-core/src/kb/redact/tests.rs`, `ingest.rs`): the corpus also in YAML;
+  **the look-alikes that must stay** (a git SHA, a SHA-256, a UUID, inline base64 data, "the
+  bearer of", `token = get_token()`, `max_tokens=4096`, `password: &str`, `$TOKEN`, a long
+  test name); the titler's stricter rules; and 1 MiB timed.
 - **Forgetting:** after `forget` and a checkpoint, the item's text is found nowhere in the
   bytes of `kb.db`, its WAL or its index; a sync and a backfill afterwards don't bring it back.
+  *Built* (`forgetting_leaves_no_byte_of_the_text`): a session of 250 chunks among thirty other
+  items, with a word of its own in its text, its heading, its title, its files and a chunk
+  that was rewritten; every file in the folder is read for each word; a write of the URI
+  afterwards is refused. A replaced chunk of a re-read file has its own test.
+- **The way in never panics** (`make fuzz-smoke`, target `kb`; `fuzz/fuzz_targets/kb.rs`):
+  redaction, the never list, the cutters and the plan on any bytes; no chunk passes 2,000
+  characters, a cutter loses nothing but white space, and the same source gives the same plan.
+- **The file** (`crates/ptyro/tests/kb1.rs`): made private at the daemon's start; named by
+  `doctor`, `about` and the uninstall plan; open again after a live upgrade; not made while
+  switched off; one that is no database is a reason with its fix while the daemon runs.
 - **Private:** a private agent session and a private shell run a turn and commands; `kb.db`
   has no row and no byte of them, across a session restart, a resume, a daemon restart and a
   live upgrade; `kb forget` of an ordinary session makes it private and nothing more arrives.
