@@ -95,6 +95,10 @@ function addProject() {
     // repository, moved (SPEC §10.1). Asked when it happens, unless said here.
     const moved = h("select", {}, h("option", { value: "" }, "Ask me"), h("option", { value: "moved" }, "Move that project here"), h("option", { value: "separate" }, "Add it as a project of its own"));
     const add = async (p) => {
+        if (!isFull(p)) {
+            ui.toast(RELATIVE);
+            return;
+        }
         const r = await ask({ t: "project_add", path: p, workspace: ws.value || null, moved: moved.value === "moved", separate: moved.value === "separate" });
         if (r) {
             s.close();
@@ -158,6 +162,15 @@ export function moveMaybeSpotted(e) {
         return;
     ui.toast(`${e.info.slug} seems to have moved to ${e.info.moved_to}: its page offers the move`);
 }
+/// A path typed here: the web has no folder of its own for a relative one to start from (the
+/// CLI and the TUI start from theirs), so it is refused, saying how to write it.
+const RELATIVE = "A full path is needed, like /Users/me/src/app or ~/src/app: the web has no current folder for a relative one to start from";
+const isFull = (path) => /^(\/|~(\/|$))/.test(path.trim());
+function fullPath(path) {
+    if (!isFull(path))
+        throw new Error(RELATIVE);
+    return path.trim();
+}
 /// Move it: the notes say what followed (worktrees linked, a duplicate folded in).
 export async function moveProjectTo(p, path) {
     const r = await ask({ t: "project_move", addr: p.id, path });
@@ -170,7 +183,7 @@ export async function moveProjectTo(p, path) {
 /// `project.move`: where its repository is now, the place ptyro found filled in.
 export function moveProject(p) {
     form(`Move ${p.slug}`, [{ key: "path", label: "It is now at", value: p.moved_to ?? "", placeholder: "/path/to/the/repository", required: true, hint: `Its main checkout (it was at ${p.root}). It keeps its trust, pin, workspaces and worktrees, and its worktrees are linked to the new place; a project registered there is folded in. Another repository, or a copy (the old one still there), is refused.` }], "Move", async (v) => {
-        const r = await conn.request({ t: "project_move", addr: p.id, path: String(v.path).trim() });
+        const r = await conn.request({ t: "project_move", addr: p.id, path: fullPath(String(v.path)) });
         for (const n of r?.notes?.length ? r.notes : [`Moved ${p.slug}`])
             ui.toast(n);
     });

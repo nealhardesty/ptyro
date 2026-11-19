@@ -778,6 +778,11 @@ const scenarios = {
       if (first !== "Move…|Forget this project") throw new Error(`the menu leads with ${first}`);
       await tab.eval(`[...document.querySelectorAll(".menu button")].find(b => b.innerText.startsWith("Move…")).click()`);
       await tab.waitFor("the move form", `!!document.querySelector(".sheet") && document.querySelector(".sheet").innerText.includes("Move mvapp")`);
+      // A relative path: the web has no folder for it to start from, so it says how to write it.
+      await tab.eval(`(() => { const i = document.querySelector(".sheet input"); i.value = "now/mvapp"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+      await tab.click(".sheet-foot .primary");
+      await tab.waitFor("the relative path refused", `!!document.querySelector(".sheet .form-err") && document.querySelector(".sheet .form-err").innerText.includes("A full path is needed")`);
+      if (!show().root.endsWith("/was/mvapp")) throw new Error(`moved by a relative path: ${JSON.stringify(show())}`);
       await tab.eval(`(() => { const i = document.querySelector(".sheet input"); i.value = ${JSON.stringify(to)}; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
       await tab.click(".sheet-foot .primary");
       const p = await until("the move", () => { const p = show(); return p.root.endsWith("/now/mvapp") ? p : null; });

@@ -831,7 +831,8 @@ impl Store {
     }
 
     /// A project moved (and maybe a duplicate folded in), all or nothing: the duplicate's
-    /// sessions, worktrees (removed ones too: history) and trust are the project's first, then
+    /// sessions, worktrees (removed ones too: history), workspace memberships and trust are the
+    /// project's first, then
     /// the duplicate goes (a root path is unique, so before the project takes its place).
     pub async fn relocate(&self, r: Relocation) -> Result<()> {
         self.call(move |c| {
@@ -873,6 +874,14 @@ impl Store {
                 )?;
             }
             if let Some(dup) = &r.absorbed {
+                // Its workspace memberships are the project's, in its place in each list; where
+                // the project is a member already, the project's own stays. Here, not by a later
+                // save: the delete below would take them with it.
+                tx.execute(
+                    "UPDATE OR IGNORE workspace_project SET project_id = ?2 WHERE project_id = ?1",
+                    params![dup, id],
+                )?;
+                tx.execute("DELETE FROM workspace_project WHERE project_id = ?1", params![dup])?;
                 tx.execute("DELETE FROM project WHERE id = ?1", params![dup])?;
             }
             let p = &r.project;
@@ -1489,6 +1498,63 @@ mod tests {
             "cascades"
         );
         assert_eq!(reg.workspaces[0].projects, Vec::<String>::new());
+    }
+
+    /// Folding a duplicate in keeps its workspace memberships in the same transaction (a crash
+    /// right after loses none): in its place where the project wasn't a member, the project's
+    /// own where it was.
+    #[tokio::test]
+    async fn relocating_carries_the_duplicates_workspaces() {
+        let s = Store::open_in_memory().unwrap();
+        let project = |id: &str, slug: &str, root: &str| ProjectInfo {
+            machine: None,
+            id: id.into(),
+            slug: slug.into(),
+            root: root.into(),
+            default_branch: None,
+            remote_url: None,
+            pin: None,
+            created_ms: 1,
+            last_used_ms: None,
+            moved_to: None,
+        };
+        let (app, dup, lib) = (
+            project("p1", "app", "/old/app"),
+            project("p2", "app-2", "/new/app"),
+            project("p3", "lib", "/lib"),
+        );
+        for p in [&app, &dup, &lib] {
+            s.save_project(p.clone());
+        }
+        let ws = |id: &str, projects: &[&str]| WorkspaceInfo {
+            machine: None,
+            id: id.into(),
+            name: id.into(),
+            profile: "default".into(),
+            notify: "all".into(),
+            projects: projects.iter().map(|p| (*p).to_owned()).collect(),
+            created_ms: 1,
+        };
+        s.save_workspace(ws("side", &["p3", "p2"]));
+        s.save_workspace(ws("both", &["p2", "p1", "p3"]));
+        s.save_workspace(ws("main", &["p1"]));
+        s.relocate(Relocation {
+            project: ProjectInfo { root: "/new/app".into(), ..app.clone() },
+            worktrees: Vec::new(),
+            absorbed: Some("p2".into()),
+            dropped: Vec::new(),
+            trust: Vec::new(),
+            moves: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let reg = s.load_registry().await.unwrap();
+        let members =
+            |name: &str| reg.workspaces.iter().find(|w| w.name == name).unwrap().projects.clone();
+        assert_eq!(members("side"), ["p3", "p1"], "in its place");
+        assert_eq!(members("both"), ["p1", "p3"], "a member already: once");
+        assert_eq!(members("main"), ["p1"]);
+        assert_eq!(reg.projects.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().len(), 2);
     }
 
     #[tokio::test]

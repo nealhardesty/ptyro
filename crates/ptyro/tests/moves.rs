@@ -491,3 +491,269 @@ async fn an_existing_duplicate_is_folded_in() {
     let p = project(&c, "app").await;
     assert_eq!(p.moved_to, None, "declined: {p:?}");
 }
+
+/// The root worktree of `slug`, refreshed until it is noticed missing (which looks for moves),
+/// then a moment for that look to finish.
+async fn noticed_gone(c: &Client, slug: &str) {
+    let root = worktrees(c, slug).await.into_iter().find(|x| x.is_root).unwrap();
+    until("its checkout noticed gone", async || {
+        c.request(Request::WorktreeRefresh { addr: root.id.clone() }).await.unwrap();
+        let now = worktrees(c, slug).await.into_iter().find(|x| x.is_root).unwrap();
+        (now.state == WorktreeState::Missing).then_some(())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+}
+
+/// Two clones of one repository, both registered on purpose (the second beside the first while
+/// the first was there): one deleted is never offered the other as where it moved, either way
+/// round. The same history or remote is what any clone has; only a project registered after a
+/// checkout went can be it, moved.
+#[tokio::test]
+async fn a_clone_kept_on_purpose_is_never_offered_as_a_move() {
+    let w = World::new();
+    let h = w.home();
+    for name in ["app", "lib"] {
+        let first = w.repo(name);
+        w.ok(&["project", "add", s(&first)]);
+        std::fs::create_dir_all(h.join("work")).unwrap();
+        w.git(&h, &["clone", "-q", &format!("{name}.git"), &format!("work/{name}")]);
+        w.ok(&["project", "add", s(&h.join("work").join(name))]);
+    }
+    let c = w.d.client().await.unwrap();
+    assert_eq!(projects(&c).await.len(), 4, "two of each");
+    // Their root commits recorded (in the background): the same history, not only the remote.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+    // The newer clone deleted: the older one is no move of it.
+    std::fs::remove_dir_all(h.join("work/app")).unwrap();
+    noticed_gone(&c, "app-2").await;
+    assert_eq!(project(&c, "app-2").await.moved_to, None, "the older clone isn't where it went");
+    // The older one deleted: the newer clone, registered while it was there, is no move of it.
+    std::fs::remove_dir_all(h.join("lib")).unwrap();
+    noticed_gone(&c, "lib").await;
+    assert_eq!(project(&c, "lib").await.moved_to, None, "the newer clone isn't where it went");
+    assert!(!w.ok(&["project", "ls"]).contains("seems to have moved"));
+    // Said by the person, it moves: the explicit move still takes the history as proof.
+    let out = w.ok(&["project", "move", "lib", s(&h.join("work/lib"))]);
+    assert!(out.contains("lib-2 (registered there on its own) is folded into lib"), "{out}");
+}
+
+/// `project add --moved` never registers: with no project gone missing that is the repository it
+/// is refused, saying how to point a project there and which ones are gone; at a project's own
+/// place too.
+#[tokio::test]
+async fn add_moved_with_nothing_to_move_is_refused() {
+    let w = World::new();
+    let h = w.home();
+    let app = w.repo("app");
+    let other = w.repo("other");
+    w.ok(&["project", "add", s(&app)]);
+    std::fs::remove_dir_all(&app).unwrap();
+    let c = w.d.client().await.unwrap();
+    let out = w.fails(&["project", "add", s(&other), "--moved"]);
+    assert!(out.contains("nothing was moved or added"), "{out}");
+    assert!(out.contains("ptyro project move PROJECT"), "{out}");
+    assert!(out.contains(&format!("Gone: app (was at {})", app.display())), "{out}");
+    assert_eq!(projects(&c).await.len(), 1, "nothing registered");
+    let lib = w.repo("lib");
+    w.ok(&["project", "add", s(&lib)]);
+    let out = w.fails(&["project", "add", s(&lib), "--moved"]);
+    assert!(out.contains("is project lib already"), "{out}");
+    let _ = h;
+}
+
+/// A client before 1.53 knows no `moved` fix: the refusal itself names the commands.
+#[tokio::test]
+async fn an_older_client_is_told_the_commands() {
+    use futures::{SinkExt, StreamExt};
+    use ptyro_protocol::{
+        ClientInfo, ClientKind, ClientMsg, Encoding, Outcome, PROTO, ServerMsg, Version, decode,
+        encode, framing,
+    };
+    let w = World::new();
+    let h = w.home();
+    let root = w.repo("app");
+    w.ok(&["project", "add", s(&root)]);
+    let moved = h.join("work/app");
+    mv(&root, &moved);
+
+    let mut opts = ptyro_client::ConnectOptions::new(w.d.paths.clone(), ClientKind::Test);
+    opts.autospawn = false;
+    let stream = ptyro_client::connect_raw(&opts).await.unwrap();
+    let mut framed = tokio_util::codec::Framed::new(stream, framing());
+    let hello = ClientMsg::Hello {
+        proto: Version { major: PROTO.major, minor: 52 },
+        client: ClientInfo {
+            kind: ClientKind::Test,
+            version: "0.0.89".into(),
+            pid: 1,
+            outer: None,
+            token: None,
+            via: None,
+        },
+        features: vec![],
+    };
+    framed.send(encode(&hello, Encoding::Json).unwrap()).await.unwrap();
+    let req = ClientMsg::Request {
+        id: 7,
+        req: Request::ProjectAdd {
+            path: moved.clone(),
+            workspace: None,
+            moved: false,
+            separate: false,
+        },
+    };
+    framed.send(encode(&req, Encoding::Json).unwrap()).await.unwrap();
+    let error = loop {
+        let bytes = tokio::time::timeout(WAIT, framed.next()).await.unwrap().unwrap().unwrap();
+        if let Ok((ServerMsg::Response { id: 7, outcome }, _)) = decode::<ServerMsg>(&bytes) {
+            match outcome {
+                Outcome::Err { error } => break error,
+                other => panic!("{other:?}"),
+            }
+        }
+    };
+    let m = moved.display();
+    assert!(error.message.contains("it seems app moved there"), "{}", error.message);
+    assert!(
+        error.message.contains(&format!("`ptyro project move app {m}`"))
+            && error.message.contains(&format!("`ptyro project add {m} --separate`")),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.fix, None, "it knows no such fix");
+    // A client of this version is offered the fix, and the message names no command.
+    let c = w.d.client().await.unwrap();
+    let e = c
+        .request(Request::ProjectAdd {
+            path: moved.clone(),
+            workspace: None,
+            moved: false,
+            separate: false,
+        })
+        .await
+        .unwrap_err();
+    assert!(e.fix.is_some() && !e.message.contains("ptyro project move"), "{}", e.message);
+}
+
+/// An offer for a place that isn't a project survives a restart (kept as metadata), and is
+/// still dropped once it no longer holds.
+#[tokio::test]
+async fn an_offer_survives_a_restart() {
+    let mut w = World::new();
+    let h = w.home();
+    let root = w.repo("app");
+    w.ok(&["project", "add", s(&root)]);
+    let moved = h.join("work/app");
+    mv(&root, &moved);
+    w.fails(&["project", "add", s(&moved)]);
+    let c = w.d.client().await.unwrap();
+    until("offered", async || project(&c, "app").await.moved_to).await;
+    drop(c);
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    let to = until("offered after the restart", async || project(&c, "app").await.moved_to).await;
+    assert_eq!(to, moved);
+    assert!(w.ok(&["project", "ls"]).contains("seems to have moved to"));
+    // Back where it was: the offer goes, and stays gone after another restart.
+    mv(&moved, &root);
+    let root_wt = worktrees(&c, "app").await.into_iter().find(|x| x.is_root).unwrap();
+    c.request(Request::WorktreeRefresh { addr: root_wt.id }).await.unwrap();
+    until("the offer gone", async || project(&c, "app").await.moved_to.is_none().then_some(()))
+        .await;
+    drop(c);
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(project(&c, "app").await.moved_to, None);
+}
+
+/// "It's another project" (`--separate`) keeps every project gone missing from that place, not
+/// only the one ptyro would have offered it first: none is offered to fold the new project in.
+#[tokio::test]
+async fn kept_apart_is_kept_apart_from_every_missing_project() {
+    let w = World::new();
+    let h = w.home();
+    let first = w.repo("app");
+    w.ok(&["project", "add", s(&first)]);
+    std::fs::create_dir_all(h.join("b")).unwrap();
+    w.git(&h, &["clone", "-q", "app.git", "b/app"]);
+    w.ok(&["project", "add", s(&h.join("b/app"))]);
+    let c = w.d.client().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    std::fs::remove_dir_all(&first).unwrap();
+    std::fs::remove_dir_all(h.join("b/app")).unwrap();
+    std::fs::create_dir_all(h.join("x")).unwrap();
+    w.git(&h, &["clone", "-q", "app.git", "x/app"]);
+    let out = w.ok(&["project", "add", s(&h.join("x/app")), "--separate"]);
+    assert!(out.contains("app-3"), "{out}");
+    noticed_gone(&c, "app").await;
+    noticed_gone(&c, "app-2").await;
+    for slug in ["app", "app-2"] {
+        assert_eq!(project(&c, slug).await.moved_to, None, "{slug} kept apart from it");
+    }
+}
+
+/// When folding a duplicate in, what the original had wins, trust included (owner,
+/// 2026-11-19): the duplicate's newer approval of other scripts doesn't replace the original's.
+#[tokio::test]
+async fn the_originals_trust_wins_over_a_duplicates() {
+    let w = World::new();
+    let h = w.home();
+    let root = w.repo("app");
+    w.ok(&["project", "add", s(&root)]);
+    w.ok(&["project", "trust", "app", "--yes"]);
+    let new_root = h.join("work/app");
+    mv(&root, &new_root);
+    std::fs::create_dir_all(&root).unwrap();
+    w.ok(&["project", "add", s(&new_root)]);
+    std::fs::remove_dir(&root).unwrap();
+    std::fs::write(
+        new_root.join(".ptyro.toml"),
+        "[scripts]\nshell = \"bash\"\nsetup = \"echo other\"\n",
+    )
+    .unwrap();
+    w.ok(&["project", "trust", "app-2", "--yes"]);
+    assert!(trusted(&w, "app-2"));
+    let out = w.ok(&["project", "move", "app", s(&new_root)]);
+    assert!(out.contains("app-2 (registered there on its own) is folded into app"), "{out}");
+    assert!(!out.contains("its trust"), "{out}");
+    assert!(!trusted(&w, "app"), "app's own approval (of the scripts it had) stands");
+}
+
+/// The database failing after git linked the worktrees to the new place: the refusal says which
+/// were linked, the project is where it was, and moving it again finishes the move.
+#[tokio::test]
+async fn a_failed_database_write_says_what_git_did() {
+    let w = World::new();
+    let h = w.home();
+    let root = w.repo("app");
+    w.ok(&["project", "add", s(&root)]);
+    let c = w.d.client().await.unwrap();
+    let feat = new_wt(&c, "app", "feat").await;
+    let new_root = h.join("work/app");
+    mv(&root, &new_root);
+
+    let db = rusqlite::Connection::open(w.d.paths.data.join("ptyro.db")).unwrap();
+    db.busy_timeout(Duration::from_secs(10)).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER test_no_move BEFORE UPDATE OF root_path ON project
+         BEGIN SELECT RAISE(ABORT, 'the disk is full (a test)'); END;",
+    )
+    .unwrap();
+    let out = w.fails(&["project", "move", "app", s(&new_root)]);
+    assert!(out.contains("the disk is full (a test)"), "{out}");
+    assert!(!out.contains("nothing was changed"), "{out}");
+    assert!(out.contains("git already linked 1 worktree") && out.contains("app/feat"), "{out}");
+    assert!(out.contains("Move app there again to finish"), "{out}");
+    assert_eq!(project(&c, "app").await.root, root, "the project is where it was");
+    assert!(w.git(&feat.path, &["status", "--short", "--branch"]).contains("feat"), "linked");
+
+    db.execute_batch("DROP TRIGGER test_no_move;").unwrap();
+    let out = w.ok(&["project", "move", "app", s(&new_root)]);
+    assert!(out.contains(&format!("moved app to {}", new_root.display())), "{out}");
+    assert_eq!(project(&c, "app").await.root, new_root);
+    let wts = worktrees(&c, "app").await;
+    assert!(wts.iter().all(|x| x.state == WorktreeState::Ready), "{wts:?}");
+}

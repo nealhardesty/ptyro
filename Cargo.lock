@@ -2333,6 +2333,7 @@ dependencies = [
  "qrcode",
  "rcgen",
  "regex",
+ "rusqlite",
  "rustix",
  "rustls",
  "serde",

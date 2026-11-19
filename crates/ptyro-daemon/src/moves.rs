@@ -32,6 +32,10 @@ use crate::worktrees::blocking;
 const ROOTS: &str = "repo:roots";
 /// kv: `[project id, place]` pairs a move was declined for (added there as its own project).
 const NOT_MOVED: &str = "move:declined";
+/// kv: project id → where and when its checkout was last seen ([`Seen`]).
+const SEEN: &str = "repo:seen";
+/// kv: project id → the place it seems to have moved to (`moved_to`): an offer survives a restart.
+const OFFERED: &str = "move:offered";
 
 /// What ptyro can tell about a repository from its main checkout.
 #[derive(Debug, Clone, Default)]
@@ -141,13 +145,108 @@ fn one_repository(a: &Facts, b: &Facts) -> bool {
     }
 }
 
-/// The old place looks like a drive that isn't mounted (nothing of it is left above where drives
-/// are mounted): its project may well come back, so no move is offered.
-pub(crate) fn unmounted(root: &Path) -> bool {
-    let Some(left) = root.ancestors().skip(1).find(|d| d.exists()) else { return false };
-    let mounts = ["/", "/Volumes", "/media", "/mnt", "/run/media"];
-    mounts.iter().any(|m| left == Path::new(m))
-        || left.parent().is_some_and(|p| p == Path::new("/media") || p == Path::new("/run/media"))
+/// What the drive checks ask of the file system (a fake one in the tests).
+pub(crate) trait Disk {
+    /// The device `path` is on, following symlinks; `None`: nothing is there.
+    fn device(&self, path: &Path) -> Option<u64>;
+    /// Whether `path` is a directory with nothing in it.
+    fn empty(&self, path: &Path) -> bool;
+}
+
+/// The real file system.
+pub(crate) struct RealDisk;
+
+impl Disk for RealDisk {
+    fn device(&self, path: &Path) -> Option<u64> {
+        let meta = std::fs::metadata(path).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some(meta.dev())
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = meta;
+            Some(0)
+        }
+    }
+    fn empty(&self, path: &Path) -> bool {
+        std::fs::read_dir(path).is_ok_and(|mut d| d.next().is_none())
+    }
+}
+
+/// Where a checkout was last seen: when, and the mount point of the drive it was on (kv
+/// `repo:seen`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Seen {
+    pub ms: u64,
+    pub mount: PathBuf,
+}
+
+/// The mount point of the drive `path` is on: its highest ancestor on the same device.
+pub(crate) fn mount_of(path: &Path, disk: &dyn Disk) -> Option<PathBuf> {
+    let dev = disk.device(path)?;
+    let mut top = path;
+    for a in path.ancestors().skip(1) {
+        if disk.device(a) != Some(dev) {
+            break;
+        }
+        top = a;
+    }
+    Some(top.to_path_buf())
+}
+
+/// Whether a drive is mounted at `dir` now: it is on another device than its parent (`/` always
+/// is). A mount point left behind (an empty directory) is on its parent's.
+fn mounted_at(dir: &Path, disk: &dyn Disk) -> bool {
+    match (disk.device(dir), dir.parent()) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(a), Some(p)) => disk.device(p).is_some_and(|b| b != a),
+    }
+}
+
+/// Where drives are mounted: `/` (`/data`), `/mnt`, `/Volumes`, `/media`, `/run/media` and the
+/// per-user directories inside the last two.
+fn where_drives_mount(dir: &Path) -> bool {
+    ["/", "/Volumes", "/media", "/mnt", "/run/media"].iter().any(|m| dir == Path::new(m))
+        || dir.parent().is_some_and(|p| p == Path::new("/media") || p == Path::new("/run/media"))
+}
+
+/// The old place `root` was on a drive that isn't mounted now: its project may well come back, so
+/// no move is offered on its own. `mount`: the mount point its drive had when its checkout was
+/// last seen; no drive mounted there now (gone, or an empty directory left behind, as after an
+/// unclean eject or an fstab mount that didn't happen) is unmounted. Never seen by this ptyro:
+/// nothing of it left above where drives mount, or only an empty directory there that isn't a
+/// mount point.
+pub(crate) fn unmounted(root: &Path, mount: Option<&Path>, disk: &dyn Disk) -> bool {
+    if let Some(m) = mount.filter(|m| ptyro_core::os::path_starts_with(root, m)) {
+        return !mounted_at(m, disk);
+    }
+    let Some(left) = root.ancestors().skip(1).find(|d| disk.device(d).is_some()) else {
+        return false;
+    };
+    where_drives_mount(left)
+        || (disk.empty(left)
+            && !mounted_at(left, disk)
+            && left.parent().is_some_and(where_drives_mount))
+}
+
+/// `new` is `old` on its drive mounted again under another name (`/Volumes/EXT 1/dev/app` for
+/// `/Volumes/EXT/dev/app`, as macOS mounts a drive whose mount point was left behind; `EXT1` as
+/// udisks does): the same drive, not a move.
+pub(crate) fn remounted(old: &Path, new: &Path) -> bool {
+    let (a, b): (Vec<_>, Vec<_>) = (old.components().collect(), new.components().collect());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut differ = (0..a.len()).filter(|&i| a[i] != b[i]);
+    let (Some(i), None) = (differ.next(), differ.next()) else { return false };
+    let parent: PathBuf = a[..i].iter().collect();
+    let (x, y) = (a[i].as_os_str().to_string_lossy(), b[i].as_os_str().to_string_lossy());
+    let number = y.strip_prefix(&*x).map(|rest| rest.strip_prefix(' ').unwrap_or(rest));
+    number.is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()))
+        && where_drives_mount(&parent)
 }
 
 /// `<parent>/<leaf>.worktrees`, where `[worktrees] location = "sibling"` puts them.
@@ -176,6 +275,26 @@ fn rebased(path: &Path, old: &Path, new: &Path) -> Option<PathBuf> {
         .map(|rest| if rest.as_os_str().is_empty() { new.to_path_buf() } else { new.join(rest) })
 }
 
+/// The move's database write failed (SPEC §10.1). git's link repairs ran before it: the message
+/// says which worktrees were linked to the new place already, and that the move, run again,
+/// finishes (what is linked already is left as it is).
+fn store_failed(error: &str, p: &ProjectInfo, to: &Path, repaired: &[String]) -> String {
+    let mut text =
+        format!("ptyro's database: {error}. {} still points at {}", p.slug, p.root.display());
+    if repaired.is_empty() {
+        text.push_str(": nothing was changed");
+    } else {
+        text.push_str(&format!(
+            ", but git already linked {} to {}: {}. Move {} there again to finish",
+            plural(repaired.len(), "worktree", "worktrees"),
+            to.display(),
+            repaired.join(", "),
+            p.slug
+        ));
+    }
+    text
+}
+
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
@@ -195,6 +314,46 @@ impl Daemon {
         {
             *self.not_moved.locked() = list.into_iter().collect();
         }
+        if let Ok(Some(v)) = store.kv_get(SEEN.into()).await
+            && let Ok(map) = serde_json::from_value::<HashMap<String, Seen>>(v)
+        {
+            *self.repo_seen.locked() = map;
+        }
+        // The offers made before the restart: the look at start keeps the ones still true.
+        if let Ok(Some(v)) = store.kv_get(OFFERED.into()).await
+            && let Ok(map) = serde_json::from_value::<HashMap<String, PathBuf>>(v)
+        {
+            let mut reg = self.registry.locked();
+            for p in reg.projects.iter_mut().filter(|p| p.machine.is_none()) {
+                if let Some(to) = map.get(&p.id) {
+                    p.moved_to = Some(to.clone());
+                }
+            }
+        }
+    }
+
+    fn save_seen(&self) {
+        let map = self.repo_seen.locked().clone();
+        self.save_kv(SEEN, serde_json::to_value(map).unwrap_or_default());
+    }
+
+    /// The offers there are now (`moved_to`), kept for a restart.
+    fn save_offered(&self) {
+        let map: HashMap<String, PathBuf> = {
+            let reg = self.registry.locked();
+            reg.projects
+                .iter()
+                .filter(|p| p.machine.is_none())
+                .filter_map(|p| Some((p.id.clone(), p.moved_to.clone()?)))
+                .collect()
+        };
+        self.save_kv(OFFERED, serde_json::to_value(map).unwrap_or_default());
+    }
+
+    /// Something that changes what a look for moves would find happened: a look already under
+    /// way changes nothing when it finishes.
+    fn moves_changed(&self) {
+        self.moves_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     fn save_roots(&self) {
@@ -222,6 +381,32 @@ impl Daemon {
         });
     }
 
+    /// Every checkout that is there now is seen (when, and on which drive), before the request
+    /// that registers a project answers: a clone registered beside a checkout that is there is
+    /// then never taken for it, moved, however soon after that checkout goes.
+    pub(crate) fn see_checkouts(&self) {
+        let roots: Vec<(String, PathBuf)> = {
+            let reg = self.registry.locked();
+            reg.projects
+                .iter()
+                .filter(|p| p.machine.is_none())
+                .map(|p| (p.id.clone(), p.root.clone()))
+                .collect()
+        };
+        let now = ptyro_core::now_ms();
+        let seen: Vec<(String, Seen)> = roots
+            .into_iter()
+            .filter(|(_, root)| root.join(".git").exists())
+            .filter_map(|(id, root)| {
+                Some((id, Seen { ms: now, mount: mount_of(&root, &RealDisk)? }))
+            })
+            .collect();
+        if !seen.is_empty() {
+            self.repo_seen.locked().extend(seen);
+            self.save_seen();
+        }
+    }
+
     /// A project forgotten: what was kept about it goes too.
     pub(crate) fn forget_moves(&self, id: &str) {
         if self.repo_roots.locked().remove(id).is_some() {
@@ -232,6 +417,10 @@ impl Daemon {
         if self.not_moved.locked().len() != before {
             self.save_not_moved();
         }
+        if self.repo_seen.locked().remove(id).is_some() {
+            self.save_seen();
+        }
+        self.save_offered();
     }
 
     /// At start: record the root commits of every project there is no record of yet (one at a
@@ -287,13 +476,21 @@ impl Daemon {
         if let Some(to) = &info.moved_to {
             tracing::info!(project = %info.slug, to = %to.display(), "seems to have moved");
         }
+        self.save_offered();
         let _ = self.events.send(DomainEvent::ProjectUpdated { info });
     }
 
     /// The project whose main checkout is gone that `root` (a repository's main checkout, not a
     /// project) seems to be, moved. The best proof wins, then the one used last.
     pub(crate) async fn moved_here(&self, root: &Path) -> Option<ProjectInfo> {
-        let (missing, worktrees, roots, declined) = {
+        self.all_moved_here(root).await.into_iter().next()
+    }
+
+    /// Every project whose main checkout is gone that `root` seems to be, moved, the best first.
+    /// None whose drive isn't mounted, none declined there, none for a drive mounted again
+    /// under another name.
+    pub(crate) async fn all_moved_here(&self, root: &Path) -> Vec<ProjectInfo> {
+        let (missing, worktrees, roots, declined, seen) = {
             let reg = self.registry.locked();
             let missing: Vec<ProjectInfo> =
                 reg.projects.iter().filter(|p| p.machine.is_none()).cloned().collect();
@@ -302,23 +499,32 @@ impl Daemon {
                 reg.worktrees.clone(),
                 self.repo_roots.locked().clone(),
                 self.not_moved.locked().clone(),
+                self.repo_seen.locked().clone(),
             )
         };
         if missing.is_empty() {
-            return None;
+            return Vec::new();
         }
         let root = root.to_path_buf();
         blocking(move || {
             let missing: Vec<ProjectInfo> = missing
                 .into_iter()
-                .filter(|p| !p.root.is_dir() && !unmounted(&p.root))
+                .filter(|p| {
+                    !p.root.is_dir()
+                        && !unmounted(
+                            &p.root,
+                            seen.get(&p.id).map(|s| s.mount.as_path()),
+                            &RealDisk,
+                        )
+                        && !remounted(&p.root, &root)
+                })
                 .filter(|p| !declined.contains(&(p.id.clone(), root.clone())))
                 .collect();
             if missing.is_empty() {
-                return None;
+                return Vec::new();
             }
             let facts = Facts::of(&Git::new(), &root);
-            missing
+            let mut found: Vec<(Proof, u64, ProjectInfo)> = missing
                 .into_iter()
                 .filter_map(|p| {
                     let recorded = roots.get(&p.id).cloned().unwrap_or_default();
@@ -329,25 +535,28 @@ impl Daemon {
                         _ => None,
                     }
                 })
-                .max_by_key(|(proof, used, _)| (*proof, *used))
-                .map(|(_, _, p)| p)
+                .collect();
+            found.sort_by_key(|(proof, used, _)| std::cmp::Reverse((*proof, *used)));
+            found.into_iter().map(|(_, _, p)| p).collect()
         })
         .await
-        .ok()
-        .flatten()
+        .unwrap_or_default()
     }
 
     /// Offer the move: `p` seems to be at `root` now (every client shows it on `p`).
     pub(crate) fn offer_move(&self, p: &ProjectInfo, root: &Path) {
+        self.moves_changed();
         self.set_moved_to(&p.id, Some(root.to_path_buf()));
     }
 
     /// A move was declined: `p` isn't offered `root` again.
     pub(crate) fn decline_move(&self, p: &ProjectInfo, root: &Path) {
+        self.moves_changed();
         if self.not_moved.locked().insert((p.id.clone(), root.to_path_buf())) {
             self.save_not_moved();
         }
-        if p.moved_to.as_deref().is_some_and(|t| ptyro_core::os::same_path(t, root)) {
+        let offered = self.project_by_id(&p.id).and_then(|p| p.moved_to);
+        if offered.is_some_and(|t| ptyro_core::os::same_path(&t, root)) {
             self.set_moved_to(&p.id, None);
         }
     }
@@ -360,9 +569,11 @@ impl Daemon {
     /// For every project whose main checkout is gone: a project registered since that is its
     /// repository (the duplicate auto-registration made before 1.53), or the place offered
     /// earlier while it still holds that repository. One whose checkout is back, or whose drive
-    /// isn't mounted, is offered nothing.
+    /// isn't mounted, is offered nothing. A checkout that is there is seen: when, and on which
+    /// drive.
     pub(crate) async fn spot_moves(self: &Arc<Self>) {
-        let (projects, worktrees, roots, declined) = {
+        let generation = self.moves_gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let (projects, worktrees, roots, declined, seen) = {
             let reg = self.registry.locked();
             let projects: Vec<ProjectInfo> =
                 reg.projects.iter().filter(|p| p.machine.is_none()).cloned().collect();
@@ -371,12 +582,22 @@ impl Daemon {
                 reg.worktrees.clone(),
                 self.repo_roots.locked().clone(),
                 self.not_moved.locked().clone(),
+                self.repo_seen.locked().clone(),
             )
         };
-        let Ok(changes) = blocking(move || {
+        let Ok((changes, now_seen)) = blocking(move || {
             let git = Git::new();
+            let now = ptyro_core::now_ms();
             let (missing, present): (Vec<_>, Vec<_>) =
                 projects.into_iter().partition(|p| !p.root.is_dir());
+            // Seen: its checkout (not merely a directory) is there.
+            let now_seen: Vec<(String, Seen)> = present
+                .iter()
+                .filter(|p| p.root.join(".git").exists())
+                .filter_map(|p| {
+                    Some((p.id.clone(), Seen { ms: now, mount: mount_of(&p.root, &RealDisk)? }))
+                })
+                .collect();
             // One whose checkout is back is offered nothing.
             let mut changes: Vec<(String, Option<PathBuf>)> = present
                 .iter()
@@ -384,7 +605,7 @@ impl Daemon {
                 .map(|p| (p.id.clone(), None))
                 .collect();
             if missing.is_empty() {
-                return changes;
+                return (changes, now_seen);
             }
             // The registered ones as their records say: no history walk for each.
             let mut known: Vec<(ProjectInfo, Facts)> = Vec::new();
@@ -401,17 +622,25 @@ impl Daemon {
             }
             for m in &missing {
                 let recorded = roots.get(&m.id).cloned().unwrap_or_default();
-                let allowed = |to: &Path| !declined.contains(&(m.id.clone(), to.to_path_buf()));
-                let want = if unmounted(&m.root) {
+                let last = seen.get(&m.id);
+                let allowed = |to: &Path| {
+                    !declined.contains(&(m.id.clone(), to.to_path_buf())) && !remounted(&m.root, to)
+                };
+                // Registered after its checkout was last seen (else after it was registered,
+                // for one this ptyro never saw): one registered while it was there is a clone
+                // of its own, kept on purpose.
+                let since = m.created_ms.max(last.map_or(0, |s| s.ms));
+                let want = if unmounted(&m.root, last.map(|s| s.mount.as_path()), &RealDisk) {
                     None
                 } else if let Some((_, d)) = known
                     .iter()
                     .filter(|(d, _)| allowed(&d.root))
                     .filter_map(|(d, f)| match same_repository(m, &recorded, &worktrees, f) {
-                        // The remote alone: only a project registered after this one (two
-                        // clones of one remote, both registered, are two projects).
-                        Same::Yes(Proof::Remote) if d.created_ms < m.created_ms => None,
-                        Same::Yes(proof) => Some((proof, d)),
+                        // Its own records: the very repository.
+                        Same::Yes(Proof::Records) => Some((Proof::Records, d)),
+                        // The same history or remote: any clone has them. Only a project
+                        // registered since this one's checkout went can be it, moved.
+                        Same::Yes(proof) if d.created_ms > since => Some((proof, d)),
                         _ => None,
                     })
                     .max_by_key(|(proof, d)| (*proof, d.created_ms))
@@ -433,12 +662,30 @@ impl Daemon {
                     changes.push((m.id.clone(), want));
                 }
             }
-            changes
+            (changes, now_seen)
         })
         .await
         else {
             return;
         };
+        self.apply_spot(generation, changes, now_seen);
+    }
+
+    /// What a look for moves found, unless something newer happened while it looked (a move,
+    /// an offer, a decline, a newer look): then that one's word stands.
+    fn apply_spot(
+        &self,
+        generation: u64,
+        changes: Vec<(String, Option<PathBuf>)>,
+        now_seen: Vec<(String, Seen)>,
+    ) {
+        if self.moves_gen.load(std::sync::atomic::Ordering::SeqCst) != generation {
+            return;
+        }
+        if !now_seen.is_empty() {
+            self.repo_seen.locked().extend(now_seen);
+            self.save_seen();
+        }
         for (id, to) in changes {
             self.set_moved_to(&id, to);
         }
@@ -558,7 +805,15 @@ impl Daemon {
                 )));
             }
         }
-        if unmounted(&p.root) {
+        let last_mount = self.repo_seen.locked().get(&p.id).map(|s| s.mount.clone());
+        if remounted(&p.root, &new.root) {
+            notes.push(format!(
+                "{} looks like the drive {} was on, mounted again under another name: once it is back where it was, move {} back",
+                new.root.display(),
+                p.root.display(),
+                p.slug
+            ));
+        } else if unmounted(&p.root, last_mount.as_deref(), &RealDisk) {
             notes.push(format!(
                 "{} was on a drive that isn't mounted: if it comes back, that copy is no longer {}'s",
                 p.root.display(),
@@ -735,16 +990,12 @@ impl Daemon {
                 let reg = self.registry.locked();
                 reg.trust.iter().filter(|t| t.project == d.id).cloned().collect()
             };
-            // Each scope's newer approval: the one given for the repository as it is now.
+            // What it had wins (owner, 2026-11-19): only a scope it has no approval for at all
+            // takes the duplicate's.
             for t in theirs {
-                let t = TrustRow { project: p.id.clone(), ..t };
-                match trust.iter_mut().find(|o| o.scope == t.scope) {
-                    Some(o) if t.approved_ms > o.approved_ms => *o = t,
-                    Some(_) => {}
-                    None => {
-                        trust.push(t);
-                        gained.push("its trust".to_owned());
-                    }
+                if !trust.iter().any(|o| o.scope == t.scope) {
+                    trust.push(TrustRow { project: p.id.clone(), ..t });
+                    gained.push("its trust".to_owned());
                 }
             }
         }
@@ -790,7 +1041,7 @@ impl Daemon {
                 })
                 .await
                 .map_err(|e| {
-                    Error::internal(format!("ptyro's database: {e}; nothing was changed"))
+                    Error::internal(store_failed(&e.to_string(), &p, &new.root, &repaired))
                 })?;
         }
         let old_ids: Vec<String> =
@@ -819,6 +1070,9 @@ impl Daemon {
                 }
             }
         }
+        // A look for moves under way saw it as it was.
+        self.moves_changed();
+        self.save_offered();
         if let Some(d) = &dup {
             let _ = self.events.send(DomainEvent::ProjectRemoved { id: d.id.clone() });
             for (from, _) in &dropped {
@@ -1026,11 +1280,147 @@ mod tests {
         assert_eq!(sibling(old), Some(PathBuf::from("/a/woa.worktrees")));
     }
 
+    /// A file system made up: each directory there, its device, and whether it's empty.
+    struct Fake(HashMap<PathBuf, (u64, bool)>);
+
+    impl Fake {
+        fn new(dirs: &[(&str, u64, bool)]) -> Self {
+            Fake(dirs.iter().map(|(p, d, e)| (PathBuf::from(p), (*d, *e))).collect())
+        }
+    }
+
+    impl Disk for Fake {
+        fn device(&self, path: &Path) -> Option<u64> {
+            self.0.get(path).map(|(d, _)| *d)
+        }
+        fn empty(&self, path: &Path) -> bool {
+            self.0.get(path).is_some_and(|(_, e)| *e)
+        }
+    }
+
+    /// Unmounted is told by the drive: no drive mounted where the checkout's drive was (gone,
+    /// or a mount point left behind on its parent's device) is unmounted; a drive there whose
+    /// checkout is gone is a candidate for a move. The owner's: `/Volumes/WALRUS_EXTERNAL` left
+    /// behind by an unclean eject, the drive at `/Volumes/WALRUS_EXTERNAL 1`.
     #[test]
-    fn a_drive_that_isnt_mounted_is_told_from_a_move() {
-        assert!(unmounted(Path::new("/Volumes/NOT-A-DRIVE-ptyro-test/dev/woa")));
-        assert!(unmounted(Path::new("/media/someone/NOT-A-DRIVE-ptyro-test/woa")));
+    fn a_drive_that_isnt_mounted_is_told_by_its_device() {
+        let root = Path::new("/Volumes/WALRUS_EXTERNAL/dev/app");
+        let ext = Some(Path::new("/Volumes/WALRUS_EXTERNAL"));
+        let base = [("/", 1, false), ("/Volumes", 1, false), ("/Users", 1, false)];
+        let with = |more: &[(&str, u64, bool)]| {
+            Fake::new(&base.iter().chain(more.iter()).copied().collect::<Vec<_>>())
+        };
+        // Mounted, the checkout gone from it: a move.
+        let fs = with(&[
+            ("/Volumes/WALRUS_EXTERNAL", 7, false),
+            ("/Volumes/WALRUS_EXTERNAL/dev", 7, false),
+        ]);
+        assert!(!unmounted(root, ext, &fs));
+        // Ejected cleanly: its mount point is gone.
+        assert!(unmounted(root, ext, &with(&[])));
+        // Ejected uncleanly: an empty directory left behind, on its parent's device.
+        let fs = with(&[
+            ("/Volumes/WALRUS_EXTERNAL", 1, true),
+            ("/Volumes/WALRUS_EXTERNAL 1", 8, false),
+        ]);
+        assert!(unmounted(root, ext, &fs), "a mount point left behind");
+        // An fstab mount that didn't happen: /mnt/data, /data are empty directories.
+        let fs = with(&[("/mnt", 1, false), ("/mnt/data", 1, true), ("/data", 1, true)]);
+        assert!(unmounted(Path::new("/mnt/data/src/app"), Some(Path::new("/mnt/data")), &fs));
+        assert!(unmounted(Path::new("/data/src/app"), Some(Path::new("/data")), &fs));
+        // On the system's own drive: `/` is always mounted.
+        assert!(!unmounted(Path::new("/Users/me/dev/app"), Some(Path::new("/")), &with(&[])));
+
+        // Never seen by this ptyro: by what is left.
+        assert!(unmounted(root, None, &with(&[])), "nothing left above /Volumes");
+        let fs = with(&[("/Volumes/WALRUS_EXTERNAL", 1, true)]);
+        assert!(unmounted(root, None, &fs), "an empty mount point left behind");
+        let fs = with(&[("/mnt", 1, false), ("/mnt/data", 1, true), ("/data", 1, true)]);
+        assert!(unmounted(Path::new("/mnt/data/src/app"), None, &fs));
+        assert!(unmounted(Path::new("/data/src/app"), None, &fs));
+        assert!(unmounted(
+            Path::new("/media/me/NOT-A-DRIVE/woa"),
+            None,
+            &with(&[("/media", 1, false)])
+        ));
+        let fs = with(&[("/Users/me", 1, false), ("/Users/me/dev", 1, true)]);
+        assert!(
+            !unmounted(Path::new("/Users/me/dev/app"), None, &fs),
+            "a folder emptied by the move is no mount point"
+        );
+        let fs = with(&[
+            ("/Volumes/WALRUS_EXTERNAL", 7, false),
+            ("/Volumes/WALRUS_EXTERNAL/dev", 7, false),
+        ]);
+        assert!(!unmounted(root, None, &fs), "mounted, the checkout gone");
+
+        // Where it was seen: the drive's mount point.
+        let fs = with(&[
+            ("/Volumes/WALRUS_EXTERNAL", 7, false),
+            ("/Volumes/WALRUS_EXTERNAL/dev", 7, false),
+            ("/Volumes/WALRUS_EXTERNAL/dev/app", 7, false),
+        ]);
+        assert_eq!(mount_of(root, &fs), Some(PathBuf::from("/Volumes/WALRUS_EXTERNAL")));
+        let fs = with(&[("/Users/me", 1, false), ("/Users/me/app", 1, false)]);
+        assert_eq!(mount_of(Path::new("/Users/me/app"), &fs), Some(PathBuf::from("/")));
+        assert_eq!(mount_of(Path::new("/nowhere"), &fs), None);
+
+        // The real file system: a temporary directory's drive is mounted.
         let tmp = tempfile::tempdir().unwrap();
-        assert!(!unmounted(&tmp.path().join("gone/woa")), "its parent is still there");
+        let m = mount_of(tmp.path(), &RealDisk).unwrap();
+        assert!(!unmounted(&tmp.path().join("gone/woa"), Some(&m), &RealDisk));
+    }
+
+    /// A drive mounted again under another name is the same drive, not a move.
+    #[test]
+    fn a_drive_mounted_again_under_another_name_is_no_move() {
+        let r = |a: &str, b: &str| remounted(Path::new(a), Path::new(b));
+        assert!(r("/Volumes/WALRUS_EXTERNAL/dev/app", "/Volumes/WALRUS_EXTERNAL 1/dev/app"));
+        assert!(r("/Volumes/EXT/app", "/Volumes/EXT 12/app"));
+        assert!(r("/media/me/EXT/app", "/media/me/EXT1/app"), "udisks' way");
+        assert!(r("/run/media/me/EXT/app", "/run/media/me/EXT2/app"));
+        assert!(!r("/Volumes/EXT/dev/app", "/Volumes/OTHER/dev/app"), "another drive");
+        assert!(!r("/Volumes/EXT/dev/app", "/Volumes/EXT 1/work/app"), "moved on it too");
+        assert!(!r("/Users/me/app", "/Users/me/app 2"), "not where drives mount");
+        assert!(!r("/Users/me/dev/app", "/Users/me/dev2/app"));
+        assert!(!r("/Volumes/EXT/app", "/Volumes/EXT/app"));
+        assert!(!r("/Volumes/EXT/app", "/Volumes/EXT backup/app"));
+    }
+
+    /// The database failing after git linked worktrees says so, and how to finish.
+    #[test]
+    fn a_failed_database_write_says_what_git_changed() {
+        let p = project("/old/woa", None);
+        let to = Path::new("/new/woa");
+        let none = store_failed("disk full", &p, to, &[]);
+        assert!(none.contains("disk full") && none.contains("nothing was changed"), "{none}");
+        let some = store_failed("disk full", &p, to, &["woa/feat".into(), "woa/fix".into()]);
+        assert!(!some.contains("nothing was changed"), "{some}");
+        assert!(
+            some.contains("woa still points at /old/woa")
+                && some.contains("git already linked 2 worktrees to /new/woa: woa/feat, woa/fix")
+                && some.contains("Move woa there again to finish"),
+            "{some}"
+        );
+    }
+
+    /// A look for moves that finishes after a move, an offer, a decline or a newer look changes
+    /// nothing: what it saw is stale.
+    #[tokio::test]
+    async fn a_stale_look_for_moves_changes_nothing() {
+        let reg = ptyro_store::Registry {
+            projects: vec![project("/old/woa", None)],
+            ..ptyro_store::Registry::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let d = crate::daemon::test_daemon(dir.path(), reg);
+        let started = d.moves_gen.load(std::sync::atomic::Ordering::SeqCst);
+        let p = d.project_by_id("p1").unwrap();
+        d.decline_move(&p, Path::new("/new/woa"));
+        d.apply_spot(started, vec![("p1".into(), Some("/new/woa".into()))], Vec::new());
+        assert_eq!(d.project_by_id("p1").unwrap().moved_to, None, "declined meanwhile");
+        let now = d.moves_gen.load(std::sync::atomic::Ordering::SeqCst);
+        d.apply_spot(now, vec![("p1".into(), Some("/new/woa".into()))], Vec::new());
+        assert_eq!(d.project_by_id("p1").unwrap().moved_to, Some("/new/woa".into()), "current");
     }
 }

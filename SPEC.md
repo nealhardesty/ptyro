@@ -1116,8 +1116,9 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
 
 **[built 2026-11-19] Protocol 1.53** (additive; UX3.10, a repository that moved, §10.1):
 `Request::ProjectMove{addr, path}` → `Reply::Project{info, notes}`, full scope, routed by `addr`
-to the project's machine; `ProjectInfo.moved_to` (skipped when empty; never stored: the daemon
-looks again) says its main checkout is gone and the same repository was found there;
+to the project's machine; `ProjectInfo.moved_to` (skipped when empty; not a column: kept in kv
+`move:offered` so an offer survives a restart, and looked at again at start) says its main
+checkout is gone and the same repository was found there;
 `Request::ProjectAdd` gains `moved` (move that project here instead of registering) and
 `separate` (register it apart; that project isn't offered this place again), both skipped when
 false; `Again::Moved` (wire `"fix": "moved"`, label "Move P here"), the fix of `ProjectAdd`'s
@@ -1126,10 +1127,14 @@ is `fixable`). Watchers hear `ProjectUpdated` when `moved_to` is set or cleared,
 `ProjectUpdated`, a `WorktreeUpdated` per worktree, `ProjectRemoved` and `WorktreeRemoved` for a
 duplicate folded in, `WorkspaceUpdated` and `SessionUpdated` for what followed. Compatibility: a
 1.52 daemon answers `ProjectMove` "unsupported request" and ignores `moved`/`separate` (it
-registers the duplicate, as before); a 1.52 client ignores `moved_to` and reads the unknown fix
-as none (the refusal's message still says what to do). The store keeps two kv keys,
-`repo:roots` (project id → root commits) and `move:declined` (`[project id, place]`); no
-migration.
+registers the duplicate, as before: accepted, a 1.53 client can't tell); a 1.52 client ignores
+`moved_to`, and its `ProjectAdd` refusal comes without the fix (it knows none) and with the
+commands in its message (`ptyro project move P PATH`, `ptyro project add PATH --separate`; the
+daemon knows the client's version from its Hello). `ProjectMove` and `ProjectAdd{moved}` are
+refused to agents (§17: moving projects is the person's call). The store keeps four kv keys,
+`repo:roots` (project id → root commits), `repo:seen` (project id → `{ms, mount}`: when its
+checkout was last seen, and its drive's mount point), `move:offered` (project id → place) and
+`move:declined` (`[project id, place]`); no migration.
 
 **[built 2026-11-19] Protocol 1.52** (additive; WEB2.3, every key exactly once, §16.4 WEB1.8):
 `ClientMsg::Keys{session, stream, keys: [SeqKey{n, event, token, age_ms, typed_ms, heard}], replay}`
@@ -2460,30 +2465,48 @@ modes and other-workspace badges.
     anything else (ptyro's worktrees directory) stayed. Every worktree whose directory exists
     and whose git doesn't reach the new repository is repaired with `git worktree repair PATH`
     run from the new root (git 2.30+), then checked (`Git::belongs`); one git can't repair is
-    reported with where its files are, one not found stays `missing`. Sessions keep running
+    reported with where its files are, one not found stays `missing`. (git 2.31 is needed
+    before that already: `main_root`'s `--path-format`.) Sessions keep running
     where they started (the reply counts them); a session's start directory (`cwd`, what a
     restart uses) under a moved directory follows, in memory and in history. Watches move,
-    statuses refresh. The database is written in one transaction (`Store::relocate`). Nothing
-    is deleted, ever: git's link repairs are the only writes outside ptyro's database.
+    statuses refresh. The database is written in one transaction (`Store::relocate`), after
+    the repairs: if that write fails, the refusal says the project still points at its old
+    place and which worktrees git linked to the new one already, and that moving it again
+    finishes it (what is linked is left as it is). Nothing is deleted, ever: git's link repairs
+    are the only writes outside ptyro's database. `PATH` relative is the CLI's and the TUI's
+    current folder; the web, with none, refuses one, saying to write it in full (or from `~`).
   - **Folding in a duplicate**: a project registered at `PATH` already (auto-registration's
     `app-2` before 1.53) is folded in: the original's id, slug and settings stay and win; it
     gains what only the duplicate had: its linked worktrees (renamed `-2` on a name clash; one
     with the same directory as one of the original's is that one), its sessions (live and in
     history; its `@root`'s go to the original's), its workspace memberships (in its place in
-    each list), its pin when the original has none, and its trust (per scope, the newer
-    approval: the one given for the repository as it is now). Then it is forgotten without
-    being declined, so nothing stops the moved project from being found there.
-  - **Spotting a move**: a local project whose root is gone (its drive merely unmounted —
-    nothing left above `/Volumes`, `/media`, `/mnt`, `/run/media` or `/` — is offered nothing)
-    gets `ProjectInfo.moved_to` when ptyro finds its repository: auto-registration meeting it
-    (a session started or `cd`ed there) registers nothing and offers the move instead; a project
-    registered since that is its repository is offered as the place, folding it in (by the
-    remote alone, only one registered after it: two clones of one remote, both registered, are
-    two projects). Looked for at start, when a project is added or forgotten, and when a main
-    checkout goes or comes back. `project add` of such a repository is refused with the fix
-    `moved` ("Move P here", the CLI asks at a terminal, else names `--moved` and `--separate`);
-    `--separate` registers it apart and that project is not offered that place again (kv
-    `move:declined`). Every client offers it: the TUI marks the row `missing` (`missing →?`
+    each list; written in the same transaction), its pin when the original has none, and its
+    trust only for a scope the original has no approval for at all: the original wins on
+    conflicts, trust included (owner, 2026-11-19). Then it is forgotten without being declined,
+    so nothing stops the moved project from being found there.
+  - **Spotting a move**: a local project whose root is gone gets `ProjectInfo.moved_to` when
+    ptyro finds its repository, unless its drive isn't mounted: while a checkout is there ptyro
+    keeps when it saw it and its drive's mount point (its highest ancestor on the same device;
+    kv `repo:seen`, at every look and before `project add` answers). No drive mounted at that
+    mount point now (gone, or a directory left behind on its parent's device: an unclean eject's
+    `/Volumes/EXT`, an fstab `/mnt/data` that didn't mount) is unmounted, and offered nothing;
+    for a checkout this ptyro never saw: nothing left above `/Volumes`, `/media`, `/mnt`,
+    `/run/media` or `/`, or only an empty directory there that isn't a mount point. A place that
+    is the same path on the drive mounted again under another name (`/Volumes/EXT 1/…`, udisks'
+    `EXT1`) is never offered (an explicit move there is allowed, with a note). Auto-registration
+    meeting the repository (a session started or `cd`ed there) registers nothing and offers the
+    move instead; a project registered elsewhere is offered as the place, folding it in, when
+    its own records prove it is the very repository, or, on the history or remote alone (any
+    clone has them), only when it was registered after the missing one's checkout was last
+    seen (for one never seen, after the missing one was registered): a clone registered while
+    the other checkout was there is a project of its own, kept on purpose, never offered either
+    way round. Looked for at start, when a project is added or forgotten, and when a main
+    checkout goes or comes back; a look that finishes after a newer look, a move, an offer or a
+    decline changes nothing. `project add` of such a repository is refused with the fix `moved`
+    ("Move P here", the CLI asks at a terminal, else names `--moved` and `--separate`);
+    `--separate` registers it apart and no project gone missing that is that repository is
+    offered that place again (kv `move:declined`); `--moved` with no such project is refused
+    (never registers), naming `project move` and the projects that are gone. Every client offers it: the TUI marks the row `missing` (`missing →?`
     once found), its hint and row menu lead with move, then forget, and a toast offers the move
     on `toast.act`; the web's Projects tab and project page show a banner (Move it there,
     Somewhere else…, It's another project, Forget it) and a toast; `project ls`/`show` say

@@ -517,6 +517,16 @@ mod tests {
         )
     }
 
+    /// A relative path is the TUI's (as the CLI's is the shell's), `~` the home folder.
+    #[test]
+    fn typed_paths_are_where_the_tui_runs() {
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(typed_path(" src/app "), here.join("src/app"));
+        assert_eq!(typed_path("/abs/app"), std::path::PathBuf::from("/abs/app"));
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert_eq!(typed_path("~/src/app"), home.join("src/app"));
+    }
+
     #[test]
     fn enter_creates_from_any_field_once_whats_needed_is_there() {
         let mut f = form();
@@ -797,14 +807,7 @@ impl App {
         match form.make.clone() {
             Make::Cli(base) => return self.run_cli(&form.cli_args(&base)),
             Make::ProjectAdd => {
-                let path = form.get("path").trim().to_owned();
-                let path = match path.strip_prefix("~/") {
-                    Some(rest) => std::env::var_os("HOME").map_or_else(
-                        || path.clone().into(),
-                        |h| std::path::PathBuf::from(h).join(rest),
-                    ),
-                    None => path.clone().into(),
-                };
+                let path = typed_path(&form.get("path"));
                 let choice = form.get("moved");
                 let req = Request::ProjectAdd {
                     path,
@@ -815,7 +818,7 @@ impl App {
                 return self.request(Pending::ProjectAdded(None), req);
             }
             Make::ProjectMove(id) => {
-                let path = ptyro_core::config::expand_home(form.get("path").trim());
+                let path = typed_path(&form.get("path"));
                 let slug = self.project(&id).map(|p| p.slug.clone()).unwrap_or_default();
                 return self.request(Pending::Moved(slug), Request::ProjectMove { addr: id, path });
             }
@@ -966,6 +969,18 @@ impl App {
 }
 
 /// `ptyro profile new …` with every field that was filled in.
+/// A path typed into a form, as the CLI takes it: `~` is the home folder, and a relative one is
+/// relative to where the TUI runs (never the daemon's own folder).
+fn typed_path(text: &str) -> std::path::PathBuf {
+    let path = ptyro_core::config::expand_home(text.trim());
+    if path.is_relative()
+        && let Ok(here) = std::env::current_dir()
+    {
+        return here.join(path);
+    }
+    path
+}
+
 pub fn profile_new_args(form: &Form) -> Vec<String> {
     form.cli_args(&["profile".to_owned(), "new".to_owned()])
 }

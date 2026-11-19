@@ -54,6 +54,12 @@ pub struct Daemon {
     pub(crate) repo_roots: Mutex<HashMap<String, Vec<String>>>,
     /// (project id, place) a move was declined for: a project added there on its own.
     pub(crate) not_moved: Mutex<std::collections::HashSet<(String, std::path::PathBuf)>>,
+    /// Where and when each project's checkout was last seen (`moves.rs`): whether a drive that
+    /// isn't there is unmounted, and whether a clone was registered before it went.
+    pub(crate) repo_seen: Mutex<HashMap<String, crate::moves::Seen>>,
+    /// Bumped by every look for moves and every move, offer and decline: a look that finished
+    /// after something newer happened changes nothing (`moves.rs`).
+    pub(crate) moves_gen: std::sync::atomic::AtomicU64,
     /// What each stale worktree takes on disk, measured by `gc`: (bytes, partial, when).
     pub(crate) gc_sizes: Mutex<HashMap<String, (u64, bool, std::time::Instant)>>,
     /// Workspaces, projects, worktrees and trust (SPEC §14.2), mirrored to the store.
@@ -202,6 +208,8 @@ impl Daemon {
             declined: Mutex::new(std::collections::HashSet::new()),
             repo_roots: Mutex::new(HashMap::new()),
             not_moved: Mutex::new(std::collections::HashSet::new()),
+            repo_seen: Mutex::new(HashMap::new()),
+            moves_gen: std::sync::atomic::AtomicU64::new(0),
             gc_sizes: Mutex::new(HashMap::new()),
             registry: Mutex::new(registry),
             secrets: Mutex::new(HashMap::new()),
@@ -1482,7 +1490,7 @@ impl Daemon {
             Request::Mute { target, minutes, unmute } => self.mute(&target, minutes, unmute).await,
             Request::Usage => Ok(self.usage_list()),
             Request::NotifyTest => self.notify_test().await,
-            other => self.handle_registry(other).await,
+            other => self.handle_registry(other, caller).await,
         }
     }
 
@@ -1680,6 +1688,7 @@ mod tests {
             "codex \x2d-version",            // another program
             "ptyro \x2d-version`",           // a shell command to try over ssh
             "daemon restart \x2d-hibernate", // an upgrade's finding: the TUI and web offer it
+            "add {new} \x2d-separate`",      // only a client before 1.53 reads it (no fix)
         ];
         let flag = |l: &str| {
             let b = l.as_bytes();
