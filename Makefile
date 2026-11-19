@@ -24,7 +24,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-wsl test-wsl tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -140,6 +140,12 @@ spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, a
 
 spike-chat-meaning: ## CHAT5: meaning search's cost over NODES (default 100000) chat messages: embedding, the backfill, a search's scan, the vectors' size (synthetic model, no download)
 	NODES=$${NODES:-100000} $(CARGO) run --profile local -p ptyro-store --example chat_meaning_spike
+
+spike-kb: ## KB0.1: the knowledge base's search at size, over CHUNKS (default 500000; also run 1000000) synthetic chunks in SPEC §25.4's schema: by words, by meaning with each filter, the fallbacks and their recall, the merged search, the file's size, ingest and forget (synthetic model, no download; about 2 minutes and 600 MB of temporary disk)
+	CHUNKS=$${CHUNKS:-500000} $(CARGO) run --profile local -p ptyro-store --example kb_spike
+
+spike-kb-comments: ## KB0.4: run the comment table (SPEC §25.6.3) over real code, read-only: ARGS="<folder>…" (default: this repository); counts what is kept and what each rule drops, with SAMPLE (default 8) of each to judge by eye
+	$(CARGO) run -q -p ptyro-core --example kb_comments -- $(or $(ARGS),.)
 
 spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
 	python3 scripts/spike-chat.py $(ARGS)
