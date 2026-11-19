@@ -1,0 +1,9 @@
+{
+  "session_id": "6992c0ad-dafa-428e-8e80-8de66de55326",
+  "transcript_path": "/home/u/.claude/projects/-home-u-proj/6992c0ad-dafa-428e-8e80-8de66de55326.jsonl",
+  "cwd": "/home/u/proj",
+  "prompt_id": "e36f0aef-5716-41d9-8e03-3fb5c777e5f1",
+  "permission_mode": "acceptEdits",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do these four things in order. 1: write the file notes.txt containing the single line hello. 2: run the shell command `cat notes.txt`. 3: call the recall tool with the query 'retry policy'. 4: reply with only the knowledge base's check word (the ptyro server's instructions gave you one), or NONE if you were given none."
+}

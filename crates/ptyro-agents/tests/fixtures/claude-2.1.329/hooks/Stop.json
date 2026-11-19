@@ -1,0 +1,15 @@
+{
+  "session_id": "6992c0ad-dafa-428e-8e80-8de66de55326",
+  "transcript_path": "/home/u/.claude/projects/-home-u-proj/6992c0ad-dafa-428e-8e80-8de66de55326.jsonl",
+  "cwd": "/home/u/proj",
+  "prompt_id": "e36f0aef-5716-41d9-8e03-3fb5c777e5f1",
+  "permission_mode": "acceptEdits",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "stop_hook_active": false,
+  "last_assistant_message": "QUOKKA-58",
+  "background_tasks": [],
+  "session_crons": []
+}

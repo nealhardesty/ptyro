@@ -1,0 +1,9 @@
+{
+  "session_id": "6992c0ad-dafa-428e-8e80-8de66de55326",
+  "transcript_path": "/home/u/.claude/projects/-home-u-proj/6992c0ad-dafa-428e-8e80-8de66de55326.jsonl",
+  "cwd": "/home/u/proj",
+  "prompt_id": "9763fd29-52d3-4308-9fe4-042cf1b95dd3",
+  "hook_event_name": "PreCompact",
+  "trigger": "manual",
+  "custom_instructions": null
+}
