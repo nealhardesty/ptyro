@@ -468,6 +468,9 @@ const scenarios = {
     await tab.eval(`localStorage.setItem("ptyro.debug", "1")`);
     await tab.send("Page.reload");
     await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
+    // Connected again after the reload and the screen drawn: until then a key is held (the
+    // predictor rightly guesses nothing while offline), so the round trip couldn't be measured.
+    await tab.waitFor("the page connected, its screen drawn", `ptyroTerm.host.outbox().online && !!ptyroTerm.host.screen() && ptyroTerm.host.canType()`, 15_000);
     const lines = () => ptyro("read", "predict").split("\n").map((l) => l.trimEnd()).filter(Boolean);
     const last = () => lines().at(-1) ?? "";
     await until("the prompt", () => last() === "$", 10_000);
