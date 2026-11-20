@@ -1,6 +1,7 @@
 # ptyro logo
 
-The burst of coloured agents around a terminal prompt. Use the dark set on dark or colourful
+A robot with a terminal prompt for a face, its four arms holding four coloured tasks (on trial;
+concept 143, "Tentabot Big: Panes", from the `docs/logos` branch). Use the dark set on dark or colourful
 pages and the `-on-white` set on white or light ones (its logo has a solid white background).
 
 <img src="ptyro-logo.png" alt="ptyro logo" width="480"> <img src="ptyro-icon.png" alt="ptyro icon" width="120">
