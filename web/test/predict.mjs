@@ -215,6 +215,25 @@ test("on a slow link, an echoing shell's letters show at once after two are conf
   assert.deepEqual(w.violations, []);
 });
 
+test("a clock that moves between two reads (a slow machine) still measures the round trip", () => {
+  // performance.now() advances between reads on a busy machine; a guess placed as a key is
+  // typed is never "late" for it (that once left the round trip unmeasured, nothing ever drawn).
+  const w = world({ up: 100, down: 100 });
+  let tick = 0;
+  w.p = new Predictor({ now: () => w.now + (tick += 0.1), later: (ms) => { w.timer = w.now + ms; } });
+  w.p.mode = "auto";
+  w.run(300);
+  w.text("ab");
+  w.run(600);
+  assert.notEqual(w.p.srtt, null, "the round trip was measured");
+  assert.ok(w.p.slow, `srtt ${w.p.srtt}`);
+  w.text("cd");
+  assert.equal(w.overlay().cells.length, 2, "and the guesses show");
+  w.run(600);
+  assert.equal(w.serverText(0), "$ abcd");
+  assert.deepEqual(w.violations, []);
+});
+
 test("on a fast link nothing is drawn (the echo is as quick)", () => {
   const w = world({ up: 3, down: 3 });
   w.run(50);

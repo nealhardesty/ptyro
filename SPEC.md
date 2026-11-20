@@ -5284,6 +5284,11 @@ emulator, no WASM.
   of a line is checked but not drawn; a coincidence (a program printing exactly the predicted
   letter with the cursor after it, twice) could prove an epoch, and a guess then shows for at
   most a round trip.
+  **[fixed 2026-11-19, v0.0.90]** A guess placed as its key is typed is never "late" (only letters
+  held since a barrier are, and their round trip isn't measured). It was decided by comparing two
+  reads of the clock a moment apart, which differ on a busy machine: every guess there counted as
+  late, the round trip was never measured, and nothing was ever drawn. Caught by the browser e2e
+  on CI; `E2E_THROTTLE=6 PTYRO_E2E_ONLY=predict make web-e2e` reproduces a slow machine.
 - **[built 2026-11-19, WEB2.2] Terminal first** (`termFirst`, `strayToTerm` in `app.ts`; the
   rules are `strayKey`, `hardKey`, `ownKeyboard`, `autoFocus` in `keys.ts`, tested in
   `web/test/typing.mjs`; e2e `terminalFirst`, `typePhone`). The terminal is the session page's
