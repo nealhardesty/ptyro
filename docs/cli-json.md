@@ -171,14 +171,18 @@ Not pinned by the snapshot yet; new fields may be added.
   `session`, `chat`, `note`, `doc`, `comment`, `code`, `path`, `commit` or `command`; `part`
   what the piece is (`card`, `user`, `assistant`, `tool`, `summary`…). In `snippet` each match
   stands between the characters U+0002 and U+0003. `project` and `workspace` are ids, the
-  `_name`s what they are called now. `how` is `words`, `meaning` or `both`.
+  `_name`s what they are called now. `how` is `words`, `meaning` or `both`. A hit of a linked
+  machine has `machine` (its name) and its `addr` under it (`laptop2:k:7f3k/12`); its ids and
+  names are that machine's. The list is still only the hits: a machine that didn't answer is
+  said on stderr.
 - `ptyro kb show REF --json` → `{item: KbListed, chunks: [{seq, item, idx, kind, anchor?,
   heading?, text, meta?, at_ms}], at?, stale}`. `at`: the piece the address named; `stale`: it
   named one the item no longer has.
 - `ptyro kb recent --json` → `[KbListed]`, newest first: `{addr, item: {id, uri, kind, title?,
   project?, workspace?, worktree?, branch?, profile?, agent?, model?, session?, writer, files,
   chunks, started_ms?, ended_ms?, ingested_ms?, origin, …}, project_name?, workspace_name?}`.
-  `item.session` is the ptyro session it happened in.
+  `item.session` is the ptyro session it happened in. With `--machine`, each `addr` has the
+  machine in front.
 - `ptyro kb [status] --json` → `{enabled, sessions, retain_days, error?, path, bytes, kinds:
   [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued, skipped: [{uri, why,
   at_ms}]}`. Answered when the knowledge base is off too (`enabled: false`).

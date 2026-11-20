@@ -4140,8 +4140,24 @@ Development section), its README and `docs/` text, and the milestone's version b
         paging past 100 items, machines (KB1.12); KB3's backfill action is `kb.backfill`, since
         `kb.history` is the row's history. SPEC §6.4, §25 "As built", §25.10, §25.14, §25.15;
         `docs/keys.md`, `docs/parity.md`, README.)*
-  - [ ] **KB1.9** The web's Library page: the same, its `ACTIONS`, the phone layout, the reader.
+  - [x] **KB1.9** The web's Library page: the same, its `ACTIONS`, the phone layout, the reader.
         **L**
+        *(Built 2026-11-19: `web/src/library.ts` and `web/src/libkit.ts` (its logic with no
+        DOM). More → Library is two pages, a phone's two steps. The list: the search box (hits
+        from 3 letters, the match marked, `≈` by meaning, why it was by words alone, the
+        machines left out, `by:meaning` while off offering the switch), the filters as picks
+        (kind, of those kept; project; since; the machine once one is linked), and with
+        nothing typed the history by this device's days, `Older…` bringing the next 50. The
+        reader (`#/library/k/<address>`): the piece with three neighbours each side, then All
+        of it; a find box that counts the pieces holding the text and steps between them; Its
+        session (a dormant one resumed); ⋯ to copy its address or its text and Forget…, which
+        asks in the daemon's words. History (`kb.history`) in a session's, a worktree's and a
+        project's ⋯ menu. It asks again on `kb_updated` and no longer polls; switched off, it
+        says so and switches on. The action names are the TUI's. Tests:
+        `web/test/library.mjs` (in `make web-test`) and `web_e2e`'s `library`, at a phone's
+        width, whose fake agent now keeps a transcript. Not built: the hit beside the list on
+        a wide screen, the Notes and Sources tabs (KB2, KB3). SPEC §25 "As built", §25.10,
+        §25.15; `docs/parity.md`, `docs/knowledge.md`, README.)*
   - [x] **KB1.10** The agents' tools (§25.9): `recall` and `recall_read` in `ptyro mcp` with the
         server's `instructions`; given to Claude and Codex terminal sessions (launch and every
         resume) and to every chat (`chat_search`/`chat_read` as old names); the profile wall
@@ -4244,12 +4260,34 @@ Development section), its README and `docs/` text, and the milestone's version b
         restart and offered again comes back not private. SPEC §6.4, §11.5a, §14, §25 "As
         built", §25.7a, §25.13, §25.14; `docs/commands.md`, `docs/config.md`,
         `docs/parity.md`, README.)*
-  - [ ] **KB1.12** Machines (§25.11): the search's fan-out and interleave, a hit read on its
+  - [x] **KB1.12** Machines (§25.11): the search's fan-out and interleave, a hit read on its
         machine, the profile by name across a link, the scopes on both ends. **M**
-  - [ ] **KB1.13** Docs: README (what it is, the three commands, what is and isn't stored, how
+        *(Built 2026-11-19, protocol 1.56: `crates/ptyro-daemon/src/kb/machines.rs` and
+        `kb/requests.rs`. `KbSearch.machines` asks every linked machine too, all at once, 5
+        seconds each, and interleaves the lists as chat search does; a far hit has its
+        machine and an address under it (`laptop2:k:7f3k/12`); **a machine that doesn't
+        answer is named in the answer** (`KbHits.left_out`), not only logged. One machine by
+        `KbSearch.machine` or the query's `machine:` (`here`: this one). `KbRead` and
+        `KbForget` of a far address happen there, `KbRecent.machine` is its history. The wall:
+        a model's request goes on with its profile by name (`profile`), a workspace-walled one
+        never goes, and an agent's `recall` asks other machines only with `machines: true`.
+        The requests stay unrouted by the general rule, which would pass the wall. Clients:
+        `recall --machine M | --here`, `kb recent --machine M`, the Library's machine filter
+        in the TUI and on the web. Tests: `crates/ptyro/tests/kb_machines.rs` (two daemons),
+        the TUI's filter test, `take_machine`, the messages. Not built: a merged history, `kb
+        status` of another machine. Unverified: going to a far hit's session from the
+        Library; a link over a real network. SPEC §6.4, §25 "As built", §25.11, §25.14.)*
+  - [x] **KB1.13** Docs: README (what it is, the three commands, what is and isn't stored, how
         to switch it off), `docs/knowledge.md` (the long form: sources, privacy, the wall,
         forgetting), `docs/commands.md`, `docs/keys.md`, `docs/config.md`, `docs/parity.md`.
         **S**
+        *(Built 2026-11-19: `docs/knowledge.md` (what is kept and what never is, private
+        sessions, searching, the Library, the agents' tools and the wall, every switch,
+        retention, forgetting, linked machines); README's section gained the web's Library
+        and linked machines and points to it; `docs/commands.md`, `docs/cli-json.md`,
+        `docs/keys.md` and `docs/parity.md` have the machine flags and the web's cells; SPEC
+        §25's head says what KB1 did not build, and each section that describes KB2 to KB5
+        says it is the design.)*
 - [ ] **KB2 Notes** (R-KB-07; supersedes R-ORC-20's decisions log and R-CHAT-16) — what someone
       wrote down, ranked first. **M**
   - [ ] **KB2.1** Notes as files (§25.6.4): the folder per profile and project, the optional

@@ -223,9 +223,9 @@ narrow for both, the list is alone and a hit shows more of its text).
 
 | Key | Does |
 |---|---|
-| `/` (or `i`) | type in the search box: words (all must match), `"a phrase"`, `prefix*`, `-word`, `before:30d`, `agent:codex`, `by:meaning`. Hits come as you type, from 3 letters. `⏎` or `↓` goes to the hits, `Esc` empties the box (the history again), `C-u` clears it |
+| `/` (or `i`) | type in the search box: words (all must match), `"a phrase"`, `prefix*`, `-word`, `before:30d`, `agent:codex`, `machine:laptop2`, `by:meaning`. Hits come as you type, from 3 letters. `⏎` or `↓` goes to the hits, `Esc` empties the box (the history again), `C-u` clears it |
 | `j` / `k`, `↓` / `↑`, `PgDn` / `PgUp`, `g` / `G` | move (the wheel too; a click selects) |
-| `Tab` | the filters: kind, project, since. `←` / `→` (or `Tab`) move among them, `⏎` picks from a list, `Backspace` clears one, `Esc` goes back to the list |
+| `Tab` | the filters: kind, project, since, and with linked machines the machine (`any`: a search asks every one that is up, and the history is this computer's; `here`: this computer only; or one of them). `←` / `→` (or `Tab`) move among them, `⏎` picks from a list, `Backspace` clears one, `Esc` goes back to the list |
 | `⏎` | open it: a chat's hit in the chat, at that message (`Esc` there comes back); anything else in **the reader** |
 | `r` | go to the session it happened in (a dormant one is resumed; an exited one is shown, where `⏎` restarts it). `` Ctrl-Q ` `` comes back to the Library |
 | `y` / `Y` | copy its address (`k:7f3k/12`) / its text |
@@ -238,6 +238,9 @@ narrow for both, the list is alone and a hit shows more of its text).
 opened: `j` / `k`, `PgUp` / `PgDn`, `Space`, `g` / `G` and the wheel scroll, `/` finds in it
 (`n` / `N` the next one and the one before), `r`, `y`, `Y` and `d` as in the list, `Esc` goes
 back to the list.
+
+**With linked machines**, a hit of another machine has its name on its row, and is read,
+gone to (`r`) and forgotten there; a machine that didn't answer is named under the hits.
 
 **Switched off** (`[kb] enabled = false`), the Library says so and `⏎` switches it on. The
 actions (`kb.open`, `kb.search`, `kb.recent`, `kb.history`, `kb.show`, `kb.forget`, `kb.status`,

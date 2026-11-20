@@ -585,6 +585,7 @@ beside it). It stays on this computer.
 ```sh
 ptyro recall retry policy            # search everything kept, and your chats
 ptyro recall flaky test kind:session since:30d -p myrepo
+ptyro recall retry policy --here     # this computer only (linked machines are searched too, otherwise)
 ptyro kb show k:7f3k/12              # a hit with what was said around it (k:7f3k: all of it)
 ptyro kb recent                      # the history, by day
 ptyro kb                             # on or off, what it holds, what was not kept and why
@@ -616,8 +617,24 @@ reader (the stored conversation, read only; `/` finds in it). `r` goes to the se
 happened in, resuming it if it sleeps; `y` copies its address, `Y` its text; `d` forgets it
 (it asks first); `s` shows how the knowledge base stands. A session's, a worktree's and a
 project's menu (`.`) have `kb.history`: the Library with only that one's. It follows what is
-kept as it happens. Switched off, it says so, and `⏎` switches it on. On the web it is More →
-Library (its first part; the rest is being built).
+kept as it happens. Switched off, it says so, and `⏎` switches it on.
+
+**On the web it is More → Library**, made for a phone: the search box, the same filters as
+picks, the history by day (**Older…** brings more); a tap opens the reader, which shows the
+piece with what was said around it, then **All of it**, with a box to find in it, **Its
+session** (resumed if it sleeps) and ⋯ to copy its address or its text and to **Forget…** it. A
+session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
+happens, and switched off it offers to switch it on.
+
+**With linked machines** (`ptyro machine add`), each keeps its own knowledge base and nothing
+is copied. A search asks every one that is up and mixes the answers, each hit with its machine
+and an address under it (`laptop2:k:7f3k/12`, which `kb show` reads there); `--here` is this
+computer only, `--machine laptop2` (or `machine:laptop2` in the box) that one only, and the
+Library has a machine filter. A machine that is down is named under the answer. An agent's
+`recall` asks other machines only when it says so, and each answers within the same wall
+between profiles.
+
+The long form, with what is and is never kept, is [`docs/knowledge.md`](docs/knowledge.md).
 
 What it keeps is yours to bound. Settings → Knowledge (`[kb]` in the config): `enabled = false`
 switches it off (no session is read and nothing is searched; what was kept stays in the file
@@ -820,6 +837,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
+| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |

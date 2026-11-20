@@ -139,16 +139,16 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 
 What ptyro keeps of your work, on this computer only: every Claude Code and Codex session as
 it happens (what you asked, what the agent answered, one line a tool it ran). Your chats are
-searched beside it.
+searched beside it. The long form is [`knowledge.md`](knowledge.md).
 
 | Command | What it does |
 |---|---|
-| `ptyro recall QUERY… [-p PROJECT] [-k KIND,…] [--since AGE] [--before AGE] [--meaning\|--words] [-l N] [--json]` | search everything kept, and your chats: words (all must match), `"a phrase"`, `prefix*` (3 letters), `-word`, and in the query `kind:session`, `project:NAME`, `since:7d`, `before:30d`, `agent:codex`, `workspace:work`, `file:PATH`, `wrote:you\|agent`, `by:meaning`. Each hit: its address (`k:7f3k/12`; a chat's is `c:7f3k/node`), what it is, where and when, and the text around the match (`≈`: found by meaning). What is of the project you are in ranks higher. In a pipe, one hit a line; `--json` is the list of hits |
+| `ptyro recall QUERY… [-p PROJECT] [-k KIND,…] [--since AGE] [--before AGE] [--machine MACHINE\|--here] [--meaning\|--words] [-l N] [--json]` | search everything kept, and your chats: words (all must match), `"a phrase"`, `prefix*` (3 letters), `-word`, and in the query `kind:session`, `project:NAME`, `since:7d`, `before:30d`, `agent:codex`, `workspace:work`, `file:PATH`, `wrote:you\|agent`, `by:meaning`. Each hit: its address (`k:7f3k/12`; a chat's is `c:7f3k/node`), what it is, where and when, and the text around the match (`≈`: found by meaning). What is of the project you are in ranks higher. In a pipe, one hit a line; `--json` is the list of hits. **Every linked machine that is up is searched too**, its hits under its name (`laptop2:k:7f3k/12`) and mixed with this computer's; `--here` is this computer only, `--machine laptop2` (or `machine:laptop2` in the query) that one only. A machine that didn't answer is named on stderr (`(not searched: laptop2 is offline since 10:02)`) and the search still answers |
 | `ptyro kb [status] [--json]` | whether it is on, what it holds by kind, the file and its size, how much can be found by meaning, how long sessions are kept, how many were forgotten, and what was not kept and why (a forgotten session, an agent or a project kept out, a file too big) |
-| `ptyro kb show REF [--context N] [--json]` / `show REF --open` | open what a search found: `k:7f3k/12` is that piece with N pieces each side (2), `k:7f3k` the whole item / `--open`: its source instead, a session in the TUI (resumed when it can be), a chat in its view |
-| `ptyro kb recent [-k KIND,…] [-p PROJECT] [-l N] [--json]` | the history: what was kept, newest first, by day (UTC) |
+| `ptyro kb show REF [--context N] [--json]` / `show REF --open` | open what a search found: `k:7f3k/12` is that piece with N pieces each side (2), `k:7f3k` the whole item; a linked machine's (`laptop2:k:7f3k/12`) is read there / `--open`: its source instead, a session in the TUI (resumed when it can be), a chat in its view |
+| `ptyro kb recent [-k KIND,…] [-p PROJECT] [--machine MACHINE] [-l N] [--json]` | the history: what was kept, newest first, by day (UTC); `--machine`: a linked machine's instead of this computer's |
 | `ptyro kb forget --session SESSION [-y] [--json]` | forget everything kept of a session and make it private: nothing more of it is kept, and that can't be switched off again. It asks first |
-| `ptyro kb forget REF… \| --query QUERY [-y] [--json]` | delete items and their text for good; nothing of them is kept again (a forgotten session's later turns are not read). It says what will go and asks unless `-y`. An agent can't forget |
+| `ptyro kb forget REF… \| --query QUERY [-y] [--json]` | delete items and their text for good; nothing of them is kept again (a forgotten session's later turns are not read). It says what will go and asks unless `-y`. A linked machine's item (`laptop2:k:7f3k`) is forgotten there. An agent can't forget |
 
 ## Scripting
 
