@@ -928,3 +928,31 @@ async fn an_unchanged_document_that_changes_hands_is_stamped_again() {
     assert_eq!((item.root.as_deref(), item.profile.as_deref()), (Some("r2"), Some("acme")));
     assert_eq!(db.write(of("r2", Some("acme"))).await.unwrap().outcome, Outcome::Unchanged);
 }
+
+/// Another program writing to the file for a moment (a second connection: a backup, another
+/// daemon's start) makes a write here wait for it, never fail: a write that began by reading
+/// was refused at once, whatever the busy timeout, and what it carried was lost.
+#[tokio::test]
+async fn a_write_waits_for_another_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("kb.db");
+    let db = KbDb::open(&path, None).unwrap();
+    db.write(doc("file:///a.md", "# A\n\nthe first")).await.unwrap();
+    let other = Connection::open(&path).unwrap();
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let held = std::time::Duration::from_millis(300);
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(held);
+        other.execute_batch("COMMIT").unwrap();
+        other
+    });
+    let asked = std::time::Instant::now();
+    let w = db.write(doc("file:///b.md", "# B\n\nthe second")).await;
+    assert!(w.is_ok(), "refused after {:?}: {:?}", asked.elapsed(), w.err());
+    assert!(asked.elapsed() >= held, "it did not wait: {:?}", asked.elapsed());
+    db.put_vecs("m".into(), Vec::new()).await.unwrap();
+    db.write(doc("file:///c.md", "# C\n\nthe third")).await.unwrap();
+    let other = holder.join().unwrap();
+    let n: i64 = other.query_row("SELECT count(*) FROM item", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 3);
+}

@@ -349,6 +349,10 @@ impl KbDb {
 
     fn start(mut conn: Connection, path: PathBuf, origin: Option<&str>) -> Result<Self> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // Every transaction here writes, and says so when it begins: one that begins by
+        // reading is refused at once when another connection holds the file's write lock
+        // (SQLite can't wait for it then), whatever the timeout above.
+        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
