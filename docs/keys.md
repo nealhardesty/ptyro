@@ -151,7 +151,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
-| `.` | everything you can do with this row (a session, worktree or project), with the keys. A project's: new task, worktree or shell, trust, workspaces, rename, scripts, open, **move** (`project.move`: its repository moved; where it is now), **leave** (`project.leave`: out of this workspace) and **forget** (`project.remove`). A project whose directory is gone shows `missing` in the sidebar (`missing →?` when ptyro found where it went, and a toast offers the move on `u`); its menu leads with move, then forget |
+| `.` | everything you can do with this row (a session, worktree or project), with the keys. A project's: new task, worktree or shell, trust, workspaces, rename, scripts, open, **move** (`project.move`: its repository moved; where it is now), **leave** (`project.leave`: out of this workspace) and **forget** (`project.remove`), and its history in the Library (`kb.history`). A project whose directory is gone shows `missing` in the sidebar (`missing →?` when ptyro found where it went, and a toast offers the move on `u`); its menu leads with move, then forget |
 | `!` | a new shell in this worktree, full sized |
 | `c` | a new shell in SHELLS, in the selected row's directory (on a SHELLS heading: that workspace's) |
 | `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
