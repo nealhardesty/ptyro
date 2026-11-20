@@ -603,8 +603,10 @@ pub struct Kb {
     pub sessions: bool,
     /// New sessions start private: nothing of them is kept (§25.7a).
     pub private: bool,
-    /// Agents are given the tools that search it (`recall`, `recall_read`; §25.9).
+    /// Agents are given its tools (`recall`, `recall_read`, and `remember`; §25.9).
     pub tools: bool,
+    /// Agents may write notes (the `remember` tool, §25.6.4).
+    pub remember: bool,
     /// What an agent may see of it (the wall, §25.9): `profile` (its own account's, and what is
     /// nobody's), `workspace` (of those, its workspace's) or `all`. `[chat] history_scope` is
     /// its old name.
@@ -625,6 +627,7 @@ impl Default for Kb {
             sessions: true,
             private: false,
             tools: true,
+            remember: true,
             scope: "profile".into(),
             retain_days: 0,
             max_file: "1MiB".into(),

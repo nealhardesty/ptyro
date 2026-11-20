@@ -44,7 +44,7 @@ fn registry(root: &std::path::Path) -> Registry {
 }
 
 /// A session of `claude` under `work` in project `p1`, said at `at_ms`.
-fn session(uri: &str, said: &str, at_ms: u64) -> Prepared {
+pub(crate) fn session(uri: &str, said: &str, at_ms: u64) -> Prepared {
     let mut p = prepared(
         ItemKind::Session,
         uri,
@@ -79,13 +79,13 @@ fn doc(uri: &str) -> Prepared {
     )
 }
 
-fn daemon(t: &tempfile::TempDir, config: &str) -> Arc<Daemon> {
+pub(crate) fn daemon(t: &tempfile::TempDir, config: &str) -> Arc<Daemon> {
     let d = crate::daemon::test_daemon(t.path(), registry(t.path()));
     set_config(&d, config);
     d
 }
 
-async fn ask(d: &Daemon, req: Request) -> Result<Reply, ptyro_core::Error> {
+pub(crate) async fn ask(d: &Arc<Daemon>, req: Request) -> Result<Reply, ptyro_core::Error> {
     d.handle_kb(req, Caller::default()).await
 }
 
@@ -100,10 +100,11 @@ fn recent_all() -> Request {
         before_ms: None,
         limit: None,
         machine: None,
+        writer: None,
     }
 }
 
-fn search(query: &str) -> Request {
+pub(crate) fn search(query: &str) -> Request {
     Request::KbSearch {
         query: query.into(),
         project: None,
@@ -118,7 +119,7 @@ fn search(query: &str) -> Request {
     }
 }
 
-async fn uris(d: &Daemon, query: &str) -> Vec<String> {
+async fn uris(d: &Arc<Daemon>, query: &str) -> Vec<String> {
     match ask(d, search(query)).await.unwrap() {
         Reply::KbHits { hits, .. } => hits.into_iter().filter_map(|h| h.uri).collect(),
         r => panic!("{r:?}"),
@@ -206,6 +207,7 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
         before_ms,
         limit,
         machine: None,
+        writer: None,
     };
     let Reply::KbItems { items } = ask(&d, recent(None, Some(1))).await.unwrap() else { panic!() };
     assert_eq!(items.len(), 1);
@@ -258,6 +260,7 @@ async fn the_history_of_a_session_or_a_worktree_and_the_news_of_a_change() {
         before_ms: None,
         limit: None,
         machine: None,
+        writer: None,
     };
     let c2 = "ptyro-session://claude/c2";
     assert_eq!(uris(ask(&d, of(Some(c2), None, None)).await.unwrap()), ["session://claude/c2"]);

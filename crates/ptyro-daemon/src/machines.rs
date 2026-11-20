@@ -245,6 +245,11 @@ fn here_only(req: &Request) -> bool {
             | KbRecent { .. }
             | KbForget { .. }
             | KbStatus
+            // Notes are written and listed on the machine asked (SPEC §25.11).
+            | KbNote { .. }
+            | KbNotes { .. }
+            | KbNoteRead { .. }
+            | KbSync
             | Shutdown { .. }
             | Upgrade { .. }
             | DevicePair { .. }

@@ -1107,6 +1107,8 @@ impl Daemon {
                     | Request::ChatList { .. }
                     | Request::KbSearch { .. }
                     | Request::KbRead { .. }
+                    // (`remember`: a new note, which `handle_kb` stamps as the chat's agent's.)
+                    | Request::KbNote { addr: None, .. }
             )
         {
             return Err(Error::new(
@@ -1172,7 +1174,11 @@ impl Daemon {
             | Request::KbRead { .. }
             | Request::KbRecent { .. }
             | Request::KbForget { .. }
-            | Request::KbStatus) => self.handle_kb(req, caller).await,
+            | Request::KbStatus
+            | Request::KbNote { .. }
+            | Request::KbNotes { .. }
+            | Request::KbNoteRead { .. }
+            | Request::KbSync) => self.handle_kb(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,

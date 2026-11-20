@@ -53,10 +53,11 @@ impl KbScope {
         }
     }
 
-    fn sees(&self, i: &KbItem) -> bool {
+    pub(super) fn sees(&self, i: &KbItem) -> bool {
         self.profile.as_ref().is_none_or(|p| i.profile.as_ref().is_none_or(|ip| ip == p))
             && self.workspace.as_ref().is_none_or(|w| i.workspace.as_ref() == Some(w))
-            && (self.session.is_none() || i.session != self.session)
+            // (Its own session's item is never shown to it; a note it wrote there is.)
+            && (self.session.is_none() || i.session != self.session || i.kind == ItemKind::Note)
     }
 }
 
@@ -67,6 +68,8 @@ pub(crate) struct Of {
     pub session: Option<String>,
     pub worktree: Option<String>,
     pub since_ms: Option<u64>,
+    /// Only what you wrote, or what agents did (1.57).
+    pub writer: Option<Writer>,
 }
 
 /// What a hit is in the lists: the file, the item (or chat), the chunk (or message).
@@ -402,6 +405,7 @@ impl Daemon {
                 profile: scope.and_then(|s| s.profile.clone()),
                 session: of.session,
                 worktree: of.worktree,
+                writer: of.writer,
                 since_ms: of.since_ms,
                 before_ms,
                 limit: if narrowed { 0 } else { limit },

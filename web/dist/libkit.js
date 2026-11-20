@@ -1,6 +1,7 @@
 // The Library's logic with no DOM in it (web/test/library.mjs runs it): what the list asks the
 // daemon for, the days of the history, the words a hit matched and where they are in a text,
-// an address's parts, and the daemon's question before it forgets.
+// an address's parts, the daemon's question before it forgets, and the notes: what their list
+// asks, how they are grouped, and what a new one sends.
 /// A search starts at this many characters (a shorter prefix matches everything), as the TUI's
 /// Library and the chat list do; fewer is the history.
 export const MIN_QUERY = 3;
@@ -12,7 +13,11 @@ export const KINDS = {
 };
 /// How far back `since` may look: what the pick offers.
 export const SINCE = [["1d", "The last day"], ["7d", "The last week"], ["30d", "The last 30 days"], ["90d", "The last 90 days"], ["365d", "The last year"]];
-export const noFilters = () => ({ query: "", kind: "", project: "", since: "", machine: "", of: null });
+export const noFilters = () => ({ query: "", kind: "", project: "", since: "", wrote: "", machine: "", of: null });
+/// Who wrote it, as the pick offers it.
+export const WROTE = [["you", "You"], ["agent", "Your agents"]];
+/// `wrote`'s word as the writer a request names.
+const writer = (wrote) => (wrote ? { writer: wrote === "you" ? "user" : "agent" } : {});
 /// The query is one to search for (else the list is the history).
 export const searching = (q) => [...q.trim()].length >= MIN_QUERY;
 /// What the list asks the daemon for: the search, or (nothing typed) the history, under the
@@ -21,7 +26,7 @@ export const searching = (q) => [...q.trim()].length >= MIN_QUERY;
 export function request(f, now, before) {
     const project = f.project || null;
     if (searching(f.query)) {
-        const query = f.query.trim() + (f.since ? ` since:${f.since}` : "");
+        const query = f.query.trim() + (f.since ? ` since:${f.since}` : "") + (f.wrote ? ` wrote:${f.wrote}` : "");
         // A search asks every linked machine that is up too, unless one is picked. Within a row's
         // history it asks for more: only that row's are kept of what is found.
         return { t: "kb_search", query, project, kinds: f.kind ? [f.kind] : [], limit: f.of ? 100 : 30, machines: !f.machine, ...(f.machine ? { machine: f.machine } : {}) };
@@ -35,8 +40,33 @@ export function request(f, now, before) {
         ...(f.since ? { since_ms: now - parseInt(f.since, 10) * 86_400_000 } : {}),
         ...(before ? { before_ms: before } : {}),
         ...far,
+        ...writer(f.wrote),
     };
 }
+// ── notes (SPEC §25.6.4) ────────────────────────────────────────────────────────────────────
+/// What the notes' list asks: all of them, or a project's, or one writer's.
+export function notesRequest(f) {
+    return { t: "kb_notes", ...(f.project ? { project: f.project } : {}), ...writer(f.wrote) };
+}
+/// The notes under what they are about: the ones about no project first, then each project's by
+/// its name; within one, as they came (newest first).
+export function byProject(items) {
+    const groups = new Map();
+    for (const i of items) {
+        const name = i.project_name ?? "";
+        groups.set(name, [...(groups.get(name) ?? []), i]);
+    }
+    return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, list]) => [name || "Global (about no project)", list]);
+}
+/// Tags as they are typed: `db, decision` or `#db #decision`.
+export const tagsOf = (text) => text.split(/[,\s]+/).map((t) => t.replace(/^#/, "")).filter(Boolean);
+/// A new note, from the form's values: its text, and only what was filled in.
+export function noteRequest(v) {
+    const tags = tagsOf(v.tags ?? "");
+    return { t: "kb_note", text: v.text, ...(v.title ? { title: v.title } : {}), ...(v.project ? { project: v.project } : {}), ...(v.profile ? { profile: v.profile } : {}), ...(tags.length ? { tags } : {}) };
+}
+/// Who wrote an item, in a word: `you`, or the agent.
+export const wroteBy = (i) => (i.writer === "user" ? "you" : i.agent ?? i.writer ?? "");
 /// The kinds the kind filter offers: sessions and chats, and whatever else is kept.
 export function kindsOffered(held) {
     const kept = new Set(held.filter((k) => k.items > 0).map((k) => k.kind));

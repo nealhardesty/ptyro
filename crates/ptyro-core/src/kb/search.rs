@@ -203,6 +203,9 @@ pub struct KbStatusInfo {
     pub path: String,
     /// The file and its write-ahead log.
     pub bytes: u64,
+    /// The notes folder (§25.6.4): Markdown files, yours to edit. Empty: a daemon from
+    /// before notes.
+    pub notes: String,
     /// Items and their pieces by kind, forgotten ones left out.
     pub kinds: Vec<KbCount>,
     /// Pieces that can be found by meaning.
@@ -253,6 +256,9 @@ impl KbStatusInfo {
         }
         if !s.sessions {
             out.push("  agent sessions are not kept (`kb.sessions` is off)".into());
+        }
+        if !s.notes.is_empty() {
+            out.push(format!("  notes are Markdown files in {}: edit them with anything", s.notes));
         }
         out.push(match s.retain_days {
             0 => "  sessions are kept for good (`kb.retain_days` sets how long)".to_owned(),

@@ -136,6 +136,8 @@ pub fn needed(req: &Request) -> Scope {
         | KbSearch { .. }
         | KbRead { .. }
         | KbRecent { .. }
+        | KbNotes { .. }
+        | KbNoteRead { .. }
         | KbStatus => Scope::Read,
         ChatNew { .. }
         | ChatTask { .. }
@@ -146,7 +148,10 @@ pub fn needed(req: &Request) -> Scope {
         | ChatAnswer { .. }
         | ChatStop { .. }
         | ChatUpdate { .. }
-        | ChatDelete { .. } => Scope::Control,
+        | ChatDelete { .. }
+        // Writing a note and reading the notes folder again (SPEC §25.11).
+        | KbNote { .. }
+        | KbSync => Scope::Control,
         List
         | Get { .. }
         | ReadScreen { .. }

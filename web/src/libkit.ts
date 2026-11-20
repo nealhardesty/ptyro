@@ -1,6 +1,7 @@
 // The Library's logic with no DOM in it (web/test/library.mjs runs it): what the list asks the
 // daemon for, the days of the history, the words a hit matched and where they are in a text,
-// an address's parts, and the daemon's question before it forgets.
+// an address's parts, the daemon's question before it forgets, and the notes: what their list
+// asks, how they are grouped, and what a new one sends.
 
 /// A search starts at this many characters (a shorter prefix matches everything), as the TUI's
 /// Library and the chat list do; fewer is the history.
@@ -18,10 +19,15 @@ export const SINCE: [string, string][] = [["1d", "The last day"], ["7d", "The la
 /// A row's history: only what was kept of this session or worktree.
 export interface Of { t: "session" | "worktree"; id: string; name: string }
 /// The search box and the filters. `machine`: "" every machine, "here" this computer, else a
-/// linked machine's name.
-export interface Filters { query: string; kind: string; project: string; since: string; machine: string; of: Of | null }
+/// linked machine's name. `wrote`: "" anyone, "you", or "agent".
+export interface Filters { query: string; kind: string; project: string; since: string; wrote: string; machine: string; of: Of | null }
 
-export const noFilters = (): Filters => ({ query: "", kind: "", project: "", since: "", machine: "", of: null });
+export const noFilters = (): Filters => ({ query: "", kind: "", project: "", since: "", wrote: "", machine: "", of: null });
+
+/// Who wrote it, as the pick offers it.
+export const WROTE: [string, string][] = [["you", "You"], ["agent", "Your agents"]];
+/// `wrote`'s word as the writer a request names.
+const writer = (wrote: string): { writer?: string } => (wrote ? { writer: wrote === "you" ? "user" : "agent" } : {});
 
 /// The query is one to search for (else the list is the history).
 export const searching = (q: string): boolean => [...q.trim()].length >= MIN_QUERY;
@@ -32,7 +38,7 @@ export const searching = (q: string): boolean => [...q.trim()].length >= MIN_QUE
 export function request(f: Filters, now: number, before?: number): Record<string, unknown> | null {
   const project = f.project || null;
   if (searching(f.query)) {
-    const query = f.query.trim() + (f.since ? ` since:${f.since}` : "");
+    const query = f.query.trim() + (f.since ? ` since:${f.since}` : "") + (f.wrote ? ` wrote:${f.wrote}` : "");
     // A search asks every linked machine that is up too, unless one is picked. Within a row's
     // history it asks for more: only that row's are kept of what is found.
     return { t: "kb_search", query, project, kinds: f.kind ? [f.kind] : [], limit: f.of ? 100 : 30, machines: !f.machine, ...(f.machine ? { machine: f.machine } : {}) };
@@ -45,8 +51,39 @@ export function request(f: Filters, now: number, before?: number): Record<string
     ...(f.since ? { since_ms: now - parseInt(f.since, 10) * 86_400_000 } : {}),
     ...(before ? { before_ms: before } : {}),
     ...far,
+    ...writer(f.wrote),
   };
 }
+
+// ── notes (SPEC §25.6.4) ────────────────────────────────────────────────────────────────────
+
+/// What the notes' list asks: all of them, or a project's, or one writer's.
+export function notesRequest(f: { project: string; wrote: string }): Record<string, unknown> {
+  return { t: "kb_notes", ...(f.project ? { project: f.project } : {}), ...writer(f.wrote) };
+}
+
+/// The notes under what they are about: the ones about no project first, then each project's by
+/// its name; within one, as they came (newest first).
+export function byProject<T extends { project_name?: string | null }>(items: T[]): [string, T[]][] {
+  const groups = new Map<string, T[]>();
+  for (const i of items) {
+    const name = i.project_name ?? "";
+    groups.set(name, [...(groups.get(name) ?? []), i]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([name, list]): [string, T[]] => [name || "Global (about no project)", list]);
+}
+
+/// Tags as they are typed: `db, decision` or `#db #decision`.
+export const tagsOf = (text: string): string[] => text.split(/[,\s]+/).map((t) => t.replace(/^#/, "")).filter(Boolean);
+
+/// A new note, from the form's values: its text, and only what was filled in.
+export function noteRequest(v: { text: string; title?: string; project?: string; profile?: string; tags?: string }): Record<string, unknown> {
+  const tags = tagsOf(v.tags ?? "");
+  return { t: "kb_note", text: v.text, ...(v.title ? { title: v.title } : {}), ...(v.project ? { project: v.project } : {}), ...(v.profile ? { profile: v.profile } : {}), ...(tags.length ? { tags } : {}) };
+}
+
+/// Who wrote an item, in a word: `you`, or the agent.
+export const wroteBy = (i: { writer?: string | null; agent?: string | null }): string => (i.writer === "user" ? "you" : i.agent ?? i.writer ?? "");
 
 /// The kinds the kind filter offers: sessions and chats, and whatever else is kept.
 export function kindsOffered(held: { kind: string; items: number }[]): string[] {

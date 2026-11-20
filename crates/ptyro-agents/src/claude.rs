@@ -87,8 +87,10 @@ impl Claude {
             let servers = json!({ "mcpServers": { "ptyro": {
                 "type": "stdio", "command": ctx.ptyro, "args": ["mcp"], "env": env,
             } } });
-            let allowed: Vec<String> =
-                crate::adapter::KB_TOOLS.iter().map(|t| format!("mcp__ptyro__{t}")).collect();
+            let allowed: Vec<String> = crate::adapter::kb_tools(ctx.remember)
+                .iter()
+                .map(|t| format!("mcp__ptyro__{t}"))
+                .collect();
             plan.argv.extend([
                 "--mcp-config".into(),
                 servers.to_string(),
@@ -453,6 +455,7 @@ mod tests {
             agent_home: None,
             project_root: None,
             kb: None,
+            remember: false,
         }
     }
 
@@ -480,6 +483,13 @@ mod tests {
             // Beside the user's own servers and rules: nothing that replaces them.
             assert!(!a.iter().any(|x| x == "--strict-mcp-config" || x == "--permission-mode"));
         }
+        // With `remember` (`kb.remember`): allowed too, and `ptyro mcp` is told to offer it.
+        let a = Claude.resume(&LaunchCtx { remember: true, ..with }, "c1").unwrap().argv;
+        let at = a.iter().position(|x| x == "--allowedTools").expect("--allowedTools");
+        assert_eq!(a[at + 1], "mcp__ptyro__recall,mcp__ptyro__recall_read,mcp__ptyro__remember");
+        let at = a.iter().position(|x| x == "--mcp-config").expect("--mcp-config");
+        let cfg: Value = serde_json::from_str(&a[at + 1]).unwrap();
+        assert_eq!(cfg["mcpServers"]["ptyro"]["env"]["PTYRO_KB_REMEMBER"], "1");
         let none = ctx(&def, vec!["claude".into()]);
         for plan in [Claude.launch(&none).unwrap(), Claude.resume(&none, "c1").unwrap()] {
             assert!(!plan.argv.iter().any(|x| x == "--mcp-config" || x == "--allowedTools"));

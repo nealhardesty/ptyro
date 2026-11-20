@@ -480,6 +480,7 @@ mod tests {
             agent_home: Some(dir.path().to_path_buf()),
             project_root: Some(Path::new("/repo")),
             kb: None,
+            remember: false,
         };
         assert!(!Codex.launch(&ctx).unwrap().argv.iter().any(|x| x.starts_with("mcp_servers.")));
         // The knowledge base's tools (SPEC §25.9): at the launch and on a resume, and with the

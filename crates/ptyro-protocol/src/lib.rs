@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 56 };
+pub const PROTO: Version = Version { major: 1, minor: 57 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -1005,6 +1005,9 @@ pub enum Request {
         /// A linked machine's history instead of this one's (1.56).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+        /// Only what you wrote (`user`), or what agents did (`agent`; 1.57).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        writer: Option<ptyro_core::kb::Writer>,
     },
     /// Forget items for good (1.53, SPEC §25.12): their text is deleted and zeroed, and their
     /// URIs are never kept again. `addrs` (addresses or ids), or every item `query` finds (its
@@ -1026,6 +1029,49 @@ pub enum Request {
     /// What the knowledge base holds and how it stands (1.53); answered when it is off too.
     /// → `KbStatus`.
     KbStatus,
+    /// Write a note (1.57, SPEC §25.6.4): a Markdown file in the notes folder, indexed at once.
+    /// Who wrote it is the daemon's word, never the request's: a caller inside an agent's
+    /// session (its `remember` tool) writes as that agent, under its own profile, within the
+    /// limits (8 KiB, 20 a session a day, `kb.remember`); anyone else writes as you.
+    ///
+    /// `text` is the note; `title` goes above it as its heading. `project`: what it is about
+    /// (a project's name, id or a path in it; `_global`: none; absent: none for you, the
+    /// session's project for an agent). `profile`: whose agents may see it (absent: every
+    /// profile's; an agent's note is always its own profile's). `replaces`: the note this one
+    /// takes the place of (an address), which is moved to `_old/` and out of search.
+    ///
+    /// `addr`: write an existing note again instead (you only): `text` is then the whole
+    /// file, header and all, and nothing else is read. → `KbNoted`.
+    KbNote {
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaces: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        addr: Option<String>,
+    },
+    /// The notes (1.57), newest first: all of them, or a project's (`_global`: those about
+    /// none), or one writer's. → `KbItems`.
+    KbNotes {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        writer: Option<ptyro_core::kb::Writer>,
+    },
+    /// A note's file as it is, for editing (1.57). → `KbNoteText`.
+    KbNoteRead {
+        addr: String,
+    },
+    /// Read the notes folder again now (1.57): what was written, changed or deleted by hand
+    /// is found (the daemon also watches the folder). → `KbSynced`.
+    KbSync,
     /// Ask your chats a question: an incognito chat whose agent has only the chat history tools
     /// answers it, citing `c:7f3k/node` (SPEC §22.10).
     ChatFind {
@@ -1574,6 +1620,24 @@ pub enum Reply {
     /// The knowledge base's state (1.53).
     KbStatus {
         status: ptyro_core::kb::search::KbStatusInfo,
+    },
+    /// A note was written (1.57): its item, and its file.
+    KbNoted {
+        item: ptyro_core::kb::search::KbListed,
+        path: String,
+    },
+    /// A note's file (1.57): its item, its whole text (header and all) and where it is.
+    KbNoteText {
+        item: ptyro_core::kb::search::KbListed,
+        text: String,
+        path: String,
+    },
+    /// The notes folder was read again (1.57): how many notes it holds, how many of them
+    /// were new or changed, and how many that were kept are gone.
+    KbSynced {
+        notes: u32,
+        changed: u32,
+        removed: u32,
     },
     Devices {
         devices: Vec<DeviceInfo>,
@@ -2276,7 +2340,23 @@ mod tests {
             before_ms: Some(9),
             limit: None,
             machine: Some("laptop2".into()),
+            writer: Some(Writer::User),
         });
+        round_trip(Request::KbNote {
+            text: "we chose X because Y".into(),
+            title: Some("X".into()),
+            project: Some("web".into()),
+            profile: Some("work".into()),
+            tags: vec!["decision".into()],
+            replaces: Some("k:7f3k".into()),
+            addr: None,
+        });
+        round_trip(Request::KbNotes {
+            project: Some("_global".into()),
+            writer: Some(Writer::Agent),
+        });
+        round_trip(Request::KbNoteRead { addr: "k:7f3k".into() });
+        round_trip(Request::KbSync);
         round_trip(ServerMsg::Event {
             event: DomainEvent::KbUpdated { kinds: vec![ItemKind::Session] },
         });
@@ -2368,6 +2448,13 @@ mod tests {
             at: Some(1),
             stale: false,
         });
+        round_trip(Reply::KbNoted { item: listed.clone(), path: "/data/kb/notes/x.md".into() });
+        round_trip(Reply::KbNoteText {
+            item: listed.clone(),
+            text: "# X\n".into(),
+            path: "/data/kb/notes/x.md".into(),
+        });
+        round_trip(Reply::KbSynced { notes: 3, changed: 1, removed: 0 });
         round_trip(Reply::KbItems { items: vec![listed] });
         round_trip(Reply::KbForgotten { items: 1, chunks: 3 });
         round_trip(Reply::KbStatus {
@@ -2378,6 +2465,7 @@ mod tests {
                 error: None,
                 path: "/data/kb.db".into(),
                 bytes: 4096,
+                notes: "/data/kb/notes".into(),
                 kinds: vec![KbCount { kind: ItemKind::Session, items: 1, chunks: 3 }],
                 vectors: 2,
                 meaning: Some("meaning search: off".into()),
@@ -2408,6 +2496,13 @@ mod tests {
         assert!(matches!(m, Request::KbForget { confirmed: false, query: None, .. }));
         let (m, _): (Request, _) = decode(br#"{"t":"kb_status"}"#).unwrap();
         assert_eq!(m, Request::KbStatus);
+        // A note is its text; everything else has a default.
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_note","text":"x"}"#).unwrap();
+        assert!(
+            matches!(m, Request::KbNote { title: None, project: None, profile: None, replaces: None, addr: None, ref tags, .. } if tags.is_empty())
+        );
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_notes"}"#).unwrap();
+        assert_eq!(m, Request::KbNotes { project: None, writer: None });
         // A status from a daemon that says less still reads.
         let (m, _): (Reply, _) =
             decode(br#"{"t":"kb_status","status":{"enabled":false}}"#).unwrap();

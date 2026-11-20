@@ -6,6 +6,9 @@
 //! renderer). `r` goes to the session it happened in, `d` forgets (the daemon asks first, in
 //! its words), `s` shows how the knowledge base stands.
 //!
+//! Two tabs (`1`, `2`; KB2): **Search**, and **Notes**, the notes by project (`n` writes one
+//! through the note form, `⏎` edits one in your editor, `x` deletes it). Sources is KB3's.
+//!
 //! It is one of the chat panel's shapes (`ChatPanel::Library`), so the keys, the mouse, `` ` ``
 //! back and forth and Esc from a chat opened here work as they do for the chat list. What it
 //! shows is asked of the daemon (`KbSearch`, `KbRecent`, `KbRead`, `KbStatus`) and asked again
@@ -19,7 +22,7 @@ use ptyro_core::chats::{MARK_OFF, MARK_ON};
 use ptyro_core::input::{KeyCode, KeyEvent, Mods};
 use ptyro_core::kb::card::minute;
 use ptyro_core::kb::search::{HitKind, KbHit, KbListed, KbStatusInfo, pieces};
-use ptyro_core::kb::{ChunkKind, ItemKind, KbChunk};
+use ptyro_core::kb::{ChunkKind, ItemKind, KbChunk, Writer};
 use ptyro_core::session::ProcessState;
 use ptyro_core::{ErrorCode, now_ms};
 use ptyro_protocol::{Reply, Request};
@@ -45,14 +48,34 @@ const TWO_COLUMNS: u16 = 80;
 const PAGE: usize = 10;
 
 /// What the Library's menu (`row.menu`) offers.
-pub(crate) const ACTIONS: &[&str] =
-    &["kb.search", "kb.recent", "kb.show", "kb.forget", "kb.status", "kb.open"];
+pub(crate) const ACTIONS: &[&str] = &[
+    "kb.search",
+    "kb.recent",
+    "kb.notes",
+    "kb.note",
+    "kb.show",
+    "kb.forget",
+    "kb.sync",
+    "kb.status",
+    "kb.open",
+];
+
+/// The Library's tabs (Sources comes with KB3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Tab {
+    /// The search box, and with nothing typed the history.
+    #[default]
+    Search,
+    /// The notes, by project.
+    Notes,
+}
 
 /// Asks are numbered, so an answer to an older one (the query has moved on) is dropped.
 static NEXT_ASK: AtomicU64 = AtomicU64::new(1);
 
 /// The Library's state.
 pub struct Library {
+    pub tab: Tab,
     pub query: String,
     /// Typing into the search box.
     pub typing: bool,
@@ -60,6 +83,8 @@ pub struct Library {
     /// (id, what it is called).
     pub project: Option<(String, String)>,
     pub since: Option<&'static str>,
+    /// Only what you wrote, or what agents did.
+    pub wrote: Option<Writer>,
     /// Only this machine's: `here` (this computer) or a linked machine's name. `None`: a
     /// search asks every linked machine too (SPEC §25.11); the history is this computer's.
     pub machine: Option<String>,
@@ -135,16 +160,28 @@ pub enum Filter {
     Kind,
     Project,
     Since,
+    /// Who wrote it: you, or an agent.
+    Wrote,
     Machine,
 }
 
 impl Filter {
-    const ALL: [Self; 4] = [Self::Kind, Self::Project, Self::Since, Self::Machine];
-
-    /// The filters shown: the machine only where other machines are linked.
-    fn shown(machines: bool) -> &'static [Self] {
-        if machines { &Self::ALL } else { &Self::ALL[..3] }
+    /// The filters a tab shows: the notes have a project and a writer; the machine only
+    /// where other machines are linked.
+    fn shown(tab: Tab, machines: bool) -> &'static [Self] {
+        const ALL: [Filter; 5] =
+            [Filter::Kind, Filter::Project, Filter::Since, Filter::Wrote, Filter::Machine];
+        match tab {
+            Tab::Notes => &[Self::Project, Self::Wrote],
+            Tab::Search if machines => &ALL,
+            Tab::Search => &ALL[..4],
+        }
     }
+}
+
+/// `wrote:`'s word for a writer.
+fn wrote_word(w: Writer) -> &'static str {
+    if w == Writer::User { "you" } else { "agent" }
 }
 
 /// How far back `since` may look: what the pick offers.
@@ -177,11 +214,13 @@ pub struct Reader {
 impl Library {
     fn new() -> Self {
         Self {
+            tab: Tab::Search,
             query: String::new(),
             typing: false,
             kind: None,
             project: None,
             since: None,
+            wrote: None,
             machine: None,
             left_out: Vec::new(),
             of: None,
@@ -223,6 +262,20 @@ impl Library {
         }
     }
 
+    /// The selected row is a note of this computer's: its item's address. (`⏎` edits it.)
+    fn selected_note(&self) -> Option<String> {
+        match &self.rows {
+            Rows::Hits(h) => h
+                .get(self.sel)
+                .filter(|h| h.kind == HitKind::Note && h.machine.is_none())
+                .map(|h| h.addr.split_once('/').map_or(h.addr.as_str(), |(i, _)| i).to_owned()),
+            Rows::History(i) => i
+                .get(self.sel)
+                .filter(|i| i.item.kind == ItemKind::Note && i.addr.starts_with("k:"))
+                .map(|i| i.addr.clone()),
+        }
+    }
+
     /// The selected row is a chat's (it lives in `chat.db`: opened and deleted as a chat).
     fn selected_chat(&self) -> Option<&KbHit> {
         match &self.rows {
@@ -236,10 +289,16 @@ impl Library {
     /// history of chats, which the knowledge base has none of.
     fn request(&self, here: Option<String>) -> Option<Request> {
         let project = self.project.as_ref().map(|(id, _)| id.clone());
+        if self.tab == Tab::Notes {
+            return Some(Request::KbNotes { project, writer: self.wrote });
+        }
         if self.searching() {
             let mut query = self.query.trim().to_owned();
             if let Some(s) = self.since {
                 query.push_str(&format!(" since:{s}"));
+            }
+            if let Some(w) = self.wrote {
+                query.push_str(&format!(" wrote:{}", wrote_word(w)));
             }
             // A row's history keeps only its own of what is found: ask for more.
             let limit = if self.of.is_some() { ptyro_core::kb::search::MAX_LIMIT } else { 30 };
@@ -280,6 +339,7 @@ impl Library {
             before_ms: None,
             limit: Some(ptyro_core::kb::search::MAX_LIMIT),
             machine: self.machine.clone().filter(|m| m != "here"),
+            writer: self.wrote,
         })
     }
 
@@ -468,16 +528,27 @@ impl App {
             // `C-q L` again closes it, as the chat list's key does.
             "kb.open" if self.library().is_some() && self.focus == Focus::Pane => self.close_chat(),
             "kb.open" => self.show_library(|_| {}),
-            "kb.search" => self.show_library(|l| {
-                (l.typing, l.chip, l.reader, l.show_status) = (true, None, None, false);
-            }),
+            "kb.search" => {
+                let moved = self.library().is_some_and(|l| l.tab != Tab::Search);
+                self.show_library(|l| {
+                    (l.typing, l.chip, l.reader, l.show_status) = (true, None, None, false);
+                    l.tab = Tab::Search;
+                });
+                if moved {
+                    self.library_ask();
+                }
+            }
             "kb.recent" => {
                 self.show_library(|l| {
                     (l.typing, l.reader, l.show_status) = (false, None, false);
+                    l.tab = Tab::Search;
                     l.query.clear();
                 });
                 self.library_ask();
             }
+            "kb.notes" => self.library_tab(Tab::Notes),
+            "kb.note" => self.open_note_form(),
+            "kb.sync" => self.request(Pending::KbSynced, Request::KbSync),
             "kb.status" => {
                 self.show_library(|l| (l.show_status, l.reader, l.typing) = (true, None, false));
                 self.request(Pending::KbStatus, Request::KbStatus);
@@ -512,6 +583,29 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Show the Library on `tab`.
+    fn library_tab(&mut self, tab: Tab) {
+        self.show_library(|l| {
+            (l.typing, l.reader, l.show_status, l.chip) = (false, None, false, None);
+            (l.tab, l.sel, l.of, l.loading) = (tab, 0, None, true);
+            l.of_items.clear();
+            l.rows = Rows::History(Vec::new());
+            if tab == Tab::Notes {
+                l.query.clear();
+            }
+        });
+        self.library_ask();
+    }
+
+    /// `kb.sync` answered: said as the command says it.
+    pub(crate) fn library_synced(&mut self, notes: u32, changed: u32, removed: u32) {
+        self.toast(format!(
+            "{notes} note{} in the folder: {changed} read again, {removed} gone",
+            if notes == 1 { "" } else { "s" }
+        ));
+        self.library_news();
     }
 
     /// An address typed for `kb.show` or `kb.forget`.
@@ -566,6 +660,7 @@ impl App {
         }
         self.show_library(|l| {
             (l.of, l.project, l.kind, l.since) = (of, project, None, None);
+            (l.tab, l.wrote) = (Tab::Search, None);
             (l.typing, l.reader, l.show_status, l.chip) = (false, None, false, None);
             l.of_items.clear();
             l.query.clear();
@@ -607,7 +702,11 @@ impl App {
         (l.loading, l.note, l.words_only) = (false, None, None);
         l.left_out.clear();
         match res {
-            Ok(Reply::KbItems { items }) => {
+            Ok(Reply::KbItems { mut items }) => {
+                // The notes by project, the ones about none first (within one, newest first).
+                if l.tab == Tab::Notes {
+                    items.sort_by(|a, b| a.project_name.cmp(&b.project_name));
+                }
                 if l.of.is_some() {
                     l.of_items = items.iter().map(|i| i.item.id.clone()).collect();
                 }
@@ -707,11 +806,15 @@ impl App {
         }
     }
 
-    /// `⏎`: the selected row's source. A chat at its message; anything else in the reader.
+    /// `⏎`: the selected row's source. A chat at its message; a note in your editor (the
+    /// command that edits one, in a split); anything else in the reader.
     fn library_open(&mut self) {
         let Some(l) = self.library() else { return };
         if let Some(h) = l.selected_chat().cloned() {
             return self.open_chat_at(&h.item, h.node.as_deref());
+        }
+        if let Some(addr) = l.selected_note() {
+            return self.run_cli(&["kb".into(), "show".into(), addr, "--open".into()]);
         }
         if let Some((addr, _)) = l.selected() {
             self.read_item(&addr);
@@ -879,6 +982,10 @@ impl App {
             Filter::Since => {
                 ("No older than", SINCE.iter().map(|(v, what)| row(v, what)).collect())
             }
+            Filter::Wrote => (
+                "Only what was written by",
+                vec![row("you", "your notes"), row("agent", "what your agents wrote and did")],
+            ),
             Filter::Machine => {
                 let mut rows = vec![row("here", "this computer only")];
                 rows.extend(self.machines.iter().map(|m| row(&m.name, m.state.label())));
@@ -905,6 +1012,13 @@ impl App {
             Filter::Kind => l.kind = HitKind::parse(value),
             Filter::Project => l.project = project,
             Filter::Since => l.since = SINCE.iter().map(|(v, _)| *v).find(|v| *v == value),
+            Filter::Wrote => {
+                l.wrote = match value {
+                    "you" => Some(Writer::User),
+                    "agent" => Some(Writer::Agent),
+                    _ => None,
+                }
+            }
             Filter::Machine => l.machine = Some(value.to_owned()).filter(|v| v != "any"),
         }
         l.sel = 0;
@@ -1026,7 +1140,7 @@ impl App {
         }
         // On the filters: ←/→ and Tab move, ⏎ picks, Backspace clears, Esc goes back.
         if let Some(f) = l.chip {
-            let shown = Filter::shown(!self.machines.is_empty());
+            let shown = Filter::shown(l.tab, !self.machines.is_empty());
             let at = shown.iter().position(|x| *x == f).unwrap_or(0);
             let (mut pick, mut cleared) = (false, false);
             match (key.code, ch) {
@@ -1042,6 +1156,7 @@ impl App {
                         Filter::Kind => l.kind = None,
                         Filter::Project => l.project = None,
                         Filter::Since => l.since = None,
+                        Filter::Wrote => l.wrote = None,
                         Filter::Machine => l.machine = None,
                     }
                     cleared = true;
@@ -1062,8 +1177,19 @@ impl App {
         let mut act = None;
         match (key.code, ch) {
             (KeyCode::Esc, _) | (_, Some('q')) => return,
+            // The tabs. Searching the notes is the search, for notes.
+            (_, Some('1')) if l.tab != Tab::Search => act = Some('1'),
+            (_, Some('2')) if l.tab != Tab::Notes => act = Some('2'),
+            (_, Some('/' | 'i')) if l.tab == Tab::Notes => {
+                l.kind = Some(HitKind::Note);
+                act = Some('/');
+            }
+            (_, Some('n')) => act = Some('n'),
+            (_, Some('x')) if l.tab == Tab::Notes => act = Some('d'),
             (_, Some('/' | 'i')) => l.typing = true,
-            (KeyCode::Tab, _) => l.chip = Some(Filter::Kind),
+            (KeyCode::Tab, _) => {
+                l.chip = Filter::shown(l.tab, !self.machines.is_empty()).first().copied();
+            }
             (KeyCode::Down, _) | (_, Some('j')) => l.sel = (l.sel + 1).min(last),
             (KeyCode::Up, _) | (_, Some('k')) => l.sel = l.sel.saturating_sub(1),
             (KeyCode::PageDown, _) => l.sel = (l.sel + PAGE).min(last),
@@ -1119,6 +1245,15 @@ impl App {
             Some('r') => self.library_resume(),
             Some('d') => self.library_forget(),
             Some('a') => self.library_ask(),
+            Some('1') => self.library_tab(Tab::Search),
+            Some('2') => self.library_tab(Tab::Notes),
+            Some('/') => {
+                self.library_tab(Tab::Search);
+                if let Some(l) = self.library_mut() {
+                    l.typing = true;
+                }
+            }
+            Some('n') => self.open_note_form(),
             _ => {}
         }
         if let Some((text, what)) = copy {
@@ -1138,7 +1273,7 @@ impl App {
             return;
         }
         l.query.push_str(&text.replace('\n', " "));
-        (l.typing, l.chip, l.sel) = (true, None, 0);
+        (l.typing, l.chip, l.sel, l.tab) = (true, None, 0, Tab::Search);
         self.library_ask();
     }
 
@@ -1180,8 +1315,17 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     if let Some(r) = &l.reader {
         return draw_reader(app, f, area, r);
     }
-    // The title, with how much is kept.
+    // The title, the tabs, and how much is kept.
     let mut head = vec![Span::styled(" Library ", fg(app, t.accent).add_modifier(Modifier::BOLD))];
+    for (tab, label) in [(Tab::Search, " 1 Search "), (Tab::Notes, " 2 Notes ")] {
+        let st = if l.tab == tab {
+            fg(app, t.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+        } else {
+            dim
+        };
+        head.push(Span::styled(label, st));
+    }
+    head.push(Span::raw(" "));
     if let Some(s) = l.status.as_ref().filter(|s| s.enabled && s.error.is_none()) {
         let mut held: Vec<String> = s
             .kinds
@@ -1198,8 +1342,17 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     if l.off() || l.status.as_ref().is_some_and(|s| s.error.is_some()) {
         return draw_off(app, f, area, l);
     }
-    // The search box.
-    let box_line = if l.typing || !l.query.is_empty() {
+    // The search box; over the notes, where they are.
+    let box_line = if l.tab == Tab::Notes {
+        let folder = l.status.as_ref().map(|s| s.notes.as_str()).filter(|n| !n.is_empty());
+        Line::styled(
+            match folder {
+                Some(f) => format!(" notes are Markdown files in {f}: yours and your agents'"),
+                None => " notes: what you and your agents wrote down".to_owned(),
+            },
+            dim,
+        )
+    } else if l.typing || !l.query.is_empty() {
         Line::from(vec![
             Span::styled(" / ", fg(app, t.accent)),
             Span::styled(
@@ -1224,14 +1377,18 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
         }
         Span::styled(text, st)
     };
-    let mut chips = vec![
-        chip(Filter::Kind, "kind", l.kind.map(|k| k.as_str().to_owned())),
-        chip(Filter::Project, "project", l.project.as_ref().map(|(_, name)| name.clone())),
-        chip(Filter::Since, "since", l.since.map(str::to_owned)),
-    ];
-    if !app.machines.is_empty() {
-        chips.push(chip(Filter::Machine, "machine", l.machine.clone()));
-    }
+    let mut chips: Vec<Span<'static>> = Filter::shown(l.tab, !app.machines.is_empty())
+        .iter()
+        .map(|f| match f {
+            Filter::Kind => chip(*f, "kind", l.kind.map(|k| k.as_str().to_owned())),
+            Filter::Project => {
+                chip(*f, "project", l.project.as_ref().map(|(_, name)| name.clone()))
+            }
+            Filter::Since => chip(*f, "since", l.since.map(str::to_owned)),
+            Filter::Wrote => chip(*f, "wrote", l.wrote.map(|w| wrote_word(w).to_owned())),
+            Filter::Machine => chip(*f, "machine", l.machine.clone()),
+        })
+        .collect();
     if let Some(of) = &l.of {
         chips.push(Span::styled(format!(" only {} ", of.label()), fg(app, t.accent)));
     }
@@ -1241,9 +1398,13 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
         "⏎ or ↓ the list · Esc clears · C-u empties the box".to_owned()
     } else if l.chip.is_some() {
         "←/→ or Tab the filters · ⏎ pick · Backspace clear · Esc the list".to_owned()
+    } else if l.tab == Tab::Notes {
+        let mut keys = vec!["n new note", "⏎ edit in your editor", "x delete", "/ search them"];
+        keys.extend(["Tab filters", "j/k move", "y address", "Y text", "1 Search", "Esc"]);
+        keys.join(" · ")
     } else {
         let mut keys = vec!["/ search", "Tab filters", "j/k move", "⏎ open", "r its session"];
-        keys.extend(["y address", "Y text", "d forget"]);
+        keys.extend(["y address", "Y text", "d forget", "n new note", "2 Notes"]);
         keys.push(if l.show_status { "s the list" } else { "s status" });
         if l.of.is_some() {
             keys.push("Backspace everything");
@@ -1419,13 +1580,18 @@ fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library, alone: bool)
     match &l.rows {
         _ if l.loading => say(&mut out, "Looking…"),
         Rows::History(items) => {
+            let notes = l.tab == Tab::Notes;
             if items.is_empty() && l.note.is_none() {
-                let filtered = l.kind.is_some()
-                    || l.project.is_some()
-                    || l.since.is_some()
-                    || l.machine.is_some();
+                // (The notes have two filters; the others are the search's.)
+                let filtered = l.project.is_some()
+                    || l.wrote.is_some()
+                    || (!notes && (l.kind.is_some() || l.since.is_some() || l.machine.is_some()));
                 let none = match (&l.of, filtered) {
                     (Some(of), _) => format!("nothing is kept of {}", of.label()),
+                    (None, true) if notes => "no note matches these filters".to_owned(),
+                    (None, false) if notes => {
+                        "no notes yet: n writes one, and your agents write them with their `remember` tool".to_owned()
+                    }
                     (None, true) => "nothing kept matches these filters".to_owned(),
                     (None, false) => {
                         "nothing is kept yet: agent sessions are, as they happen".to_owned()
@@ -1439,7 +1605,12 @@ fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library, alone: bool)
             let now = crate::clock::local_ms(now_ms());
             let mut last = String::new();
             for (i, it) in items.iter().enumerate() {
-                let d = day(crate::clock::local_ms(at(it)), now);
+                // The history is by day; the notes are by what they are about.
+                let d = match (&it.project_name, notes) {
+                    (Some(p), true) => p.clone(),
+                    (None, true) => "global (about no project)".to_owned(),
+                    (_, false) => day(crate::clock::local_ms(at(it)), now),
+                };
                 if d != last {
                     out.push((
                         Line::styled(format!(" {d}"), dim.add_modifier(Modifier::BOLD)),
@@ -1450,12 +1621,19 @@ fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library, alone: bool)
                 if i == l.sel {
                     sel_line = out.len();
                 }
-                let time = when(at(it)).get(11..).unwrap_or_default().to_owned();
+                let time = if notes {
+                    crate::ui::ago(at(it))
+                } else {
+                    when(at(it)).get(11..).unwrap_or_default().to_owned()
+                };
                 out.push((first(it.item.kind.as_str(), title(it), time, i == l.sel), Some(i)));
-                let mut about: Vec<String> = [it.project_name.clone(), it.item.agent.clone()]
-                    .into_iter()
-                    .flatten()
-                    .collect();
+                let project = it.project_name.clone().filter(|_| !notes);
+                // (Who wrote a note: you, or the agent.)
+                let by = it.item.agent.clone().or_else(|| {
+                    (it.item.writer == Writer::User && it.item.kind == ItemKind::Note)
+                        .then(|| "you".to_owned())
+                });
+                let mut about: Vec<String> = [project, by].into_iter().flatten().collect();
                 about.push(pieces(u64::from(it.item.chunks)));
                 out.push((Line::styled(format!("{INDENT}{}", about.join(" · ")), dim), Some(i)));
             }

@@ -488,6 +488,8 @@ pub enum Pending {
     KbResume,
     KbStatus,
     KbForgotten,
+    /// `kb.sync`: the notes folder was read again.
+    KbSynced,
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
     /// What quick-new would start in the context's worktree (UX3.2), for its label.
@@ -1962,6 +1964,9 @@ impl App {
             (Pending::KbResume, Ok(Reply::KbDoc { item, .. })) => self.library_resumed(&item),
             (Pending::KbForgotten, Ok(Reply::KbForgotten { items, chunks })) => {
                 self.library_forgot(items, chunks)
+            }
+            (Pending::KbSynced, Ok(Reply::KbSynced { notes, changed, removed })) => {
+                self.library_synced(notes, changed, removed)
             }
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
                 match std::fs::write(&path, text) {

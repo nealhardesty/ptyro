@@ -385,6 +385,9 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .kb-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .kb-filters select { flex: 1 1 7em; min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
 .kb-filters .small.on { color: var(--accent); }
+/* Its tabs (Search, Notes), and a note being edited. */
+.kb-tabs { display: flex; gap: 6px; } .kb-tabs .small { flex: 1 1 0; } .kb-tabs .small.on { color: var(--accent); border-color: var(--accent); }
+textarea.kb-note { width: 100%; box-sizing: border-box; min-height: 45vh; padding: 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .library h3.day { margin: 8px 4px 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .library .row .snippet { padding: 0; }
 .library mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; }

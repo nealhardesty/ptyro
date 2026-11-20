@@ -11,7 +11,8 @@ use std::process::Output;
 use std::time::{Duration, Instant};
 
 use ptyro_client::Client;
-use ptyro_core::kb::search::{KbHit, KbListed};
+use ptyro_core::kb::Writer;
+use ptyro_core::kb::search::{HitKind, KbHit, KbListed};
 use ptyro_core::model::{MachineState, MachineTransport};
 use ptyro_core::session::{SessionInfo, SpawnSpec};
 use ptyro_core::{ErrorCode, TermSize};
@@ -285,6 +286,7 @@ async fn a_search_finds_another_machines_sessions_reads_them_there_and_keeps_the
         before_ms: None,
         limit: None,
         machine: Some("laptop2".into()),
+        writer: None,
     };
     let Reply::KbItems { items } = here.request(recent).await.unwrap() else { panic!() };
     assert_eq!(items.len(), 2, "{items:#?}");
@@ -344,6 +346,30 @@ async fn a_search_finds_another_machines_sessions_reads_them_there_and_keeps_the
     let (hits, _) = search(&there, "zqfarword", false, None).await.unwrap();
     assert!(hits.iter().all(|h| !h.item_session(&fw)) && !hits.is_empty(), "{hits:#?}");
     assert!(read(&here, &far_work.addr).await.is_err());
+
+    // Notes (KB2) are each machine's own: one written on laptop2 is found from here as
+    // anything there is, read there, behind the same wall, and forgotten there, which deletes
+    // its file on that machine.
+    let o = far.cli(&["kb", "note", "zqfarnote lives on laptop2", "--profile", "work"]);
+    assert!(o.status.success(), "{o:?}");
+    let file = far.d.home.path().join("data/kb/notes/work/_global/zqfarnote-lives-on-laptop2.md");
+    assert!(file.exists());
+    let (hits, _) = search(&here, "zqfarnote", true, None).await.unwrap();
+    assert_eq!(hits.len(), 1, "{hits:#?}");
+    let note = &hits[0];
+    assert_eq!(
+        (note.kind, note.machine.as_deref(), note.writer),
+        (HitKind::Note, Some("laptop2"), Some(Writer::User))
+    );
+    let (item, text) = read(&here, &note.addr).await.unwrap();
+    assert!(text.contains("zqfarnote lives on laptop2"), "{text}");
+    let q = serde_json::json!({ "query": "zqfarnote", "machines": true });
+    let said = near.mcp(&here, "nh", "recall", q).await;
+    assert!(said.contains("nothing found"), "another profile's, there too: {said}");
+    let o = near.cli(&["kb", "forget", &item.addr, "--yes"]);
+    assert!(o.status.success(), "{o:?}");
+    assert!(!file.exists(), "forgotten there: its file is deleted on laptop2");
+    assert!(search(&here, "zqfarnote", true, None).await.unwrap().0.is_empty());
 
     // laptop2 goes down: the search is still an answer, and names it; asked for by name, it
     // is the error.

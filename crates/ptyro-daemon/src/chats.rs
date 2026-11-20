@@ -1194,6 +1194,11 @@ impl Daemon {
         s.meta.locked().place.chat.clone()
     }
 
+    /// Whether a chat is incognito (one that isn't known is not).
+    pub(crate) async fn chat_incognito(&self, chat: &str) -> bool {
+        self.rec_get(chat).await.ok().flatten().is_some_and(|c| c.incognito)
+    }
+
     /// What a chat's history tools may see (`[chat] history_scope`): its profile's chats, its
     /// workspace's, or all; never an incognito one, nor itself.
     async fn history_scope(&self, chat: &str) -> Result<HistoryScope, Error> {
@@ -1768,12 +1773,16 @@ impl Daemon {
             });
             if kb {
                 server["env"]["PTYRO_KB_TOOLS"] = "1".into();
+                if config.kb.remember {
+                    server["env"][ptyro_agents::adapter::KB_REMEMBER_ENV] = "1".into();
+                }
             }
             server
         });
         let extra = ChatLaunch {
             incognito: info.incognito,
             kb: kb && history.is_some(),
+            remember: config.kb.remember,
             history,
             system: (info.tools == FIND_TOOLS).then_some(FIND_PROMPT),
             folders: info.folders.clone(),
@@ -2719,6 +2728,8 @@ struct ChatLaunch {
     history: Option<serde_json::Value>,
     /// That server has the knowledge base's tools too (SPEC §25.9).
     kb: bool,
+    /// And among them the one that writes a note (`kb.remember`).
+    remember: bool,
     /// Instead of the chat system prompt (`chat find`'s).
     system: Option<&'static str>,
     /// The chat's own folders (CHAT4).
@@ -2849,7 +2860,8 @@ fn tools_launch(
                 allowed.extend(HISTORY_TOOLS.map(str::to_owned));
             }
             if extra.kb {
-                allowed.extend(ptyro_agents::adapter::KB_TOOLS.map(|t| format!("mcp__ptyro__{t}")));
+                let tools = ptyro_agents::adapter::kb_tools(extra.remember);
+                allowed.extend(tools.iter().map(|t| format!("mcp__ptyro__{t}")));
             }
             let mut v = vec!["--tools".to_owned(), tools.join(",")];
             if !allowed.is_empty() {
@@ -3117,6 +3129,16 @@ mod tests {
             k[3].ends_with("mcp__ptyro__chat_list,mcp__ptyro__recall,mcp__ptyro__recall_read"),
             "{k:?}"
         );
+        // And the one that writes a note, unless `kb.remember` is off.
+        let (k, _) = tools_launch(
+            "stream-json",
+            &read,
+            dir,
+            vec![],
+            &[],
+            &ChatLaunch { remember: true, ..with_kb },
+        );
+        assert!(k[3].ends_with("mcp__ptyro__recall_read,mcp__ptyro__remember"), "{k:?}");
         let cfg = &a[a.iter().position(|x| x == "--mcp-config").unwrap() + 1];
         assert_eq!(std::path::Path::new(cfg), dir.join("mcp.json"));
         assert!(std::fs::read_to_string(cfg).unwrap().contains("/bin/ptyro"));

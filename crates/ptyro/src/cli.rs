@@ -439,6 +439,7 @@ async fn dispatch(
             keep_config,
             keep_data,
             keep_binary,
+            delete_notes,
             purge_refs,
             json,
         }) => {
@@ -450,6 +451,7 @@ async fn dispatch(
                 keep_data,
                 keep_binary,
                 purge_refs,
+                delete_notes,
             };
             crate::uninstall::run(&ctx, opts, json).await
         }

@@ -56,18 +56,34 @@ pub struct LaunchCtx<'a> {
     /// `ptyro mcp` is told with the session's id. `None`: no tools (`kb.tools`, the agent's
     /// `kb = false`, the knowledge base off).
     pub kb: Option<&'a Path>,
+    /// With them, the tool that writes a note (`remember`; `kb.remember`).
+    pub remember: bool,
 }
 
-/// The knowledge base's tools (SPEC §25.9), as `ptyro mcp` names them.
-pub const KB_TOOLS: [&str; 2] = ["recall", "recall_read"];
+/// The knowledge base's tools (SPEC §25.9), as `ptyro mcp` names them: the two that read,
+/// then `remember`, which writes a note.
+pub const KB_TOOLS: [&str; 3] = ["recall", "recall_read", "remember"];
 
-/// The environment `ptyro mcp` is started with in a session: which session, which daemon.
+/// The tools a session is given: all of them, or without `remember` (`kb.remember = false`).
+pub fn kb_tools(remember: bool) -> &'static [&'static str] {
+    if remember { &KB_TOOLS } else { &KB_TOOLS[..2] }
+}
+
+/// What tells `ptyro mcp` to offer `remember` (the daemon refuses it anyway when it may not).
+pub const KB_REMEMBER_ENV: &str = "PTYRO_KB_REMEMBER";
+
+/// The environment `ptyro mcp` is started with in a session: which session, which daemon,
+/// and whether it may write notes.
 /// (Who is asking is the kernel's word, never this: the daemon places the caller's process.)
-pub fn kb_env(ctx: &LaunchCtx<'_>, socket: &Path) -> [(&'static str, String); 2] {
-    [
+pub fn kb_env(ctx: &LaunchCtx<'_>, socket: &Path) -> Vec<(&'static str, String)> {
+    let mut env = vec![
         ("PTYRO_SESSION_ID", ctx.session.to_owned()),
         ("PTYRO_SOCKET", socket.to_string_lossy().into_owned()),
-    ]
+    ];
+    if ctx.remember {
+        env.push((KB_REMEMBER_ENV, "1".to_owned()));
+    }
+    env
 }
 
 /// A side channel the daemon runs next to the session.

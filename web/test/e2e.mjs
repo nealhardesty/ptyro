@@ -117,7 +117,7 @@ const scenarios = {
     const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
     await tab.waitFor("the search box", `!!document.querySelector("input.search")`);
     await tab.waitFor("the history, under its day", `${rowWith("zqlibrary")} && document.querySelector("main.library h3.day")?.textContent === "Today"`);
-    await tab.waitFor("the filters: the kinds that are kept", `[...(document.querySelector('.kb-filters select[aria-label="Kind"]')?.options ?? [])].map((o) => o.value).join() === ",session,chat" && document.querySelectorAll(".kb-filters select").length === 3`);
+    await tab.waitFor("the filters: the kinds that are kept", `[...(document.querySelector('.kb-filters select[aria-label="Kind"]')?.options ?? [])].map((o) => o.value).join() === ",session,chat" && document.querySelectorAll(".kb-filters select").length === 4`);
     // Kept while the page is open: shown without a reload (the daemon's `kb_updated`).
     ptyro("new", "-d", "-n", "lib2", "--agent", "claude");
     ptyro("send", "lib2", "edit other.txt zqsecond", "--wait-ready");
@@ -162,6 +162,59 @@ const scenarios = {
     await tab.waitFor("only that session's", `location.hash === "#/library" && ${rowWith("zqsecond")} && [...document.querySelectorAll(".kb-filters button")].some((b) => b.textContent.startsWith("Only session lib2"))`);
     ptyro("kill", "lib1");
     ptyro("kill", "lib2");
+  },
+
+  // The Library's notes (KB2): a note the command wrote is listed under what it is about; New
+  // note (every option) writes one; a tap opens it to edit in the page, Save writes its file
+  // and the change is found; ⋯ → Delete…, asked in the daemon's words, deletes the file.
+  async notes() {
+    const recalled = (word) => JSON.parse(ptyro("recall", "--json", "--here", word));
+    const rowWith = (word) => `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes(${JSON.stringify(word)}))`;
+    const press = (label) => tab.eval(`[...document.querySelectorAll("main.library button, .sheet button")].find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
+    const fill = (sel, text) => tab.eval(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); b.value = ${JSON.stringify(text)}; b.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    ptyro("kb", "note", "zqwebnote from the command", "--title", "Web one");
+    await fresh("#/library");
+    await tab.phone();
+    const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
+    await tab.waitFor("the tabs", `document.querySelectorAll(".kb-tabs button").length === 2`);
+    await press("Notes");
+    await tab.waitFor("the note, under what it is about", `location.hash === "#/library/notes" && ${rowWith("Web one")} && document.querySelector("main.library h3.day")?.textContent === "Global (about no project)"`);
+    await tab.waitFor("who wrote it", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("you ·"))`);
+    await fits("the notes");
+    // New note: every option the command takes, as a pick where the answers are known.
+    await press("New note");
+    await tab.waitFor("the form", `document.querySelector(".sheet h2")?.textContent === "New note" && document.querySelectorAll(".sheet select").length === 2 && !!document.querySelector(".sheet textarea")`);
+    const labels = await tab.eval(`[...document.querySelectorAll(".sheet label.field > span")].map((s) => s.textContent).join()`);
+    if (labels !== "Note,Title,About,Seen by,Tags") throw new Error(`the form's fields: ${labels}`);
+    await fill(".sheet textarea", "zqformnote we chose the page because it is here");
+    await tab.eval(`(() => { const [title, tags] = document.querySelectorAll(".sheet input:not([type=checkbox])"); title.value = "From the page"; tags.value = "web, decision"; })()`);
+    await tab.click(".sheet-foot .primary");
+    await until("the note to be kept", () => recalled("zqformnote").length > 0);
+    const made = recalled("zqformnote")[0];
+    if (made.kind !== "note" || made.writer !== "user" || made.title !== "From the page") throw new Error(`kept as ${JSON.stringify(made)}`);
+    if (recalled("decision").length !== 1) throw new Error("its tags are not found");
+    await tab.waitFor("it in the list", rowWith("From the page"));
+    // A tap: its file, in the page. Save writes it, and the change is found.
+    await tab.eval(`[...document.querySelectorAll("main.library .rows .row")].find((r) => r.textContent.includes("From the page")).click()`);
+    await tab.waitFor("the note's file", `location.hash.startsWith("#/library/note/") && (document.querySelector("textarea.kb-note")?.value ?? "").includes("by: you") && document.querySelector("textarea.kb-note").value.includes("zqformnote")`);
+    await fits("the note");
+    const text = await tab.eval(`document.querySelector("textarea.kb-note").value`);
+    await fill("textarea.kb-note", text.replace("zqformnote", "zqpageedit"));
+    await press("Save");
+    await until("the edit to be found", () => recalled("zqpageedit").length > 0);
+    if (recalled("zqformnote").length) throw new Error("the old words are still found");
+    // ⋯ → Delete…: the daemon says the file goes.
+    await tab.click(`header button[aria-label="More"]`);
+    await tab.waitFor("the note's menu", `[...document.querySelectorAll(".sheet .menu button")].some((b) => b.textContent.startsWith("Delete…"))`);
+    await press("Delete…");
+    await tab.waitFor("the question, in the daemon's words", `document.querySelector(".sheet h2")?.textContent.startsWith("Forget 1 item: note") && [...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("A note's file is deleted"))`);
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Forget").click()`);
+    await until("it to be gone", () => recalled("zqpageedit").length === 0);
+    await tab.waitFor("the notes again, without it", `location.hash === "#/library/notes" && ${rowWith("Web one")} && !${rowWith("From the page")}`);
+    // Who wrote it, as a filter of the search too.
+    await press("Search");
+    await tab.waitFor("the search's filters", `location.hash === "#/library" && !!document.querySelector('.kb-filters select[aria-label="Wrote"]')`);
+    ptyro("kb", "forget", recalled("zqwebnote")[0].addr.split("/")[0], "--yes");
   },
 
   // A switch writes the config file (comments kept), Undo restores it, a bad number is refused

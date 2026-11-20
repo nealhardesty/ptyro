@@ -392,6 +392,18 @@ pub const ACTIONS: &[ActionSpec] = &[
         "The knowledge base in the Library: on or off, what it holds, what was not kept and why",
     ),
     a("kb.enable", "Switch the knowledge base on: agent sessions are kept from then on"),
+    a(
+        "kb.notes",
+        "The Library's notes: what you and your agents wrote down, by project (n writes one, ⏎ edits one in your editor, x deletes it)",
+    ),
+    a(
+        "kb.note",
+        "Write a note (a decision, a fact, a how-to): its text or your editor, its title, the project it is about, whose agents may see it, its tags",
+    ),
+    a(
+        "kb.sync",
+        "Read the notes folder again now: what you wrote, changed or deleted there by hand is found",
+    ),
     a("nav.collapse", "Sidebar: fold the selected workspace, project or worktree"),
     a("nav.expand", "Sidebar: unfold the selected workspace, project or worktree"),
 ];

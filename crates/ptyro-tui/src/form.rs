@@ -1038,6 +1038,59 @@ impl App {
         self.open(form);
     }
 
+    /// `kb.note`: a note, with everything `ptyro kb note` takes (SPEC §25.10).
+    pub(crate) fn open_note_form(&mut self) {
+        // The project you are in, when there is one; a note about none is global.
+        let here = self.context().0.and_then(|p| self.project(&p).map(|p| p.slug.clone()));
+        let mut projects = vec![(String::new(), "no project (a global note)".to_owned())];
+        projects.extend(
+            self.projects
+                .iter()
+                .filter(|p| p.machine.is_none())
+                .map(|p| (p.slug.clone(), p.slug.clone())),
+        );
+        let at = here.and_then(|h| projects.iter().position(|p| p.0 == h)).unwrap_or(0);
+        let fields = vec![
+            Field::text(
+                "text",
+                "Note",
+                "(empty: write it in your editor)",
+                "What to keep: a decision and its reason, a fact, a how-to. Markdown",
+            )
+            .arg(Arg::Pos),
+            Field::text(
+                "title",
+                "Title",
+                "(its first line)",
+                "Its heading, and what lists call it",
+            )
+            .arg(Arg::Flag("--title")),
+            Field::choice("project", "About", projects, at, "The project it is about")
+                .arg(Arg::Flag("--project")),
+            Field::choice(
+                "profile",
+                "Seen by",
+                self.profile_options("every profile's agents"),
+                0,
+                "Whose agents may find it with recall (you always see every note)",
+            )
+            .arg(Arg::Flag("--profile")),
+            Field::text("tags", "Tags", "db, decision", "Words to find it by, comma separated")
+                .arg(Arg::Each("--tag")),
+            Field::yes_no(
+                "edit",
+                "In your editor",
+                false,
+                "Open your editor on it before it is kept ($VISUAL, $EDITOR)",
+            )
+            .arg(Arg::Switch("--edit")),
+        ];
+        let mut form =
+            Form::new("Write a note", fields, Make::Cli(vec!["kb".into(), "note".into()]));
+        form.verb = "keep";
+        self.open(form);
+    }
+
     /// `machine.add`: another machine whose workspaces show here.
     pub(crate) fn open_machine_form(&mut self) {
         let fields = vec![

@@ -5,14 +5,18 @@
 // with what was said around it, then all of it, with a find box, the way to the session it
 // happened in, copying and forgetting. On a phone the list and the reader are two steps.
 //
+// Two tabs (KB2): Search, and Notes (`#/library/notes`): the notes by project, New note (every
+// option the command takes), a tap edits one in the page (`#/library/note/<address>`: its file
+// as it is, Save, Delete…). Sources comes with KB3.
+//
 // What it shows is asked of the daemon (`kb_search`, `kb_recent`, `kb_read`, `kb_status`), and
 // asked again when the daemon says the knowledge base changed (`kb_updated`).
 
 import { conn, host } from "./conn.js";
 import { data, can } from "./data.js";
-import { Cache, actions, ago, ask, badge, bar, confirm, enc, errText, facts, go, h, menu, pending, row, safeDecode, sheet, tipOf, ui, views } from "./kit.js";
+import { Cache, actions, ago, ask, badge, bar, confirm, enc, errText, facts, form, go, h, menu, pending, profileChoices, row, safeDecode, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
-import { PAGE, SINCE, bytes, clock, conversation, day, forgetAddr, found, kindsOffered, lit, matched, noFilters, plural, question, request, searching, snippetParts, split, when } from "./libkit.js";
+import { PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, plural, question, request, searching, snippetParts, split, when, wroteBy } from "./libkit.js";
 import type { Filters, Of, Part } from "./libkit.js";
 
 const ACTIONS = {
@@ -24,15 +28,18 @@ const ACTIONS = {
   "kb.forget": "Forget it: its text is deleted for good, and nothing of it is kept again (the computer says what will go, and asks first)",
   "kb.status": "How the knowledge base stands: on or off, what it holds, its size, how long sessions are kept, what was not kept and why",
   "kb.enable": "Switch the knowledge base on: agent sessions are kept from then on",
+  "kb.notes": "The notes: what you and your agents wrote down, by project. A tap opens one to edit; ⋯ deletes it. They are Markdown files in ptyro's notes folder on the computer",
+  "kb.note": "Write a note (a decision, a fact, a how-to): its text, its title, the project it is about, whose agents may see it, its tags. Every search and every agent's recall finds notes first",
+  "kb.sync": "Read the notes folder again now: what was written, changed or deleted there by hand is found (the computer also watches the folder)",
 } as const;
 const tip = actions(ACTIONS);
 
 interface Hit { addr: string; item: string; node?: string | null; kind: string; part: string; title?: string | null; snippet: string; at_ms: number; project_name?: string | null; agent?: string | null; machine?: string | null; how: string }
-interface Item { id: string; uri: string; kind: string; title?: string | null; rel?: string | null; agent?: string | null; session?: string | null; chunks: number; started_ms?: number | null; ended_ms?: number | null; ingested_ms?: number | null }
+interface Item { id: string; uri: string; kind: string; title?: string | null; rel?: string | null; agent?: string | null; writer?: string | null; session?: string | null; chunks: number; started_ms?: number | null; ended_ms?: number | null; ingested_ms?: number | null }
 interface Listed { addr: string; item: Item; project_name?: string | null }
 interface Chunk { idx: number; kind: string; heading?: string | null; text: string }
 interface Doc { item: Listed; chunks: Chunk[]; at?: number | null; stale?: boolean }
-interface Status { enabled: boolean; sessions: boolean; retain_days: number; error?: string | null; path: string; bytes: number; kinds: { kind: string; items: number; chunks: number }[]; vectors: number; meaning?: string | null; forgotten: number; queued: number; skipped: { uri: string; why: string; at_ms: number }[] }
+interface Status { enabled: boolean; sessions: boolean; retain_days: number; error?: string | null; path: string; notes?: string; bytes: number; kinds: { kind: string; items: number; chunks: number }[]; vectors: number; meaning?: string | null; forgotten: number; queued: number; skipped: { uri: string; why: string; at_ms: number }[] }
 /// What the list holds: hits, the history, or what the daemon said instead of answering.
 type Rows =
   | { t: "hits"; hits: Hit[]; wordsOnly: string; leftOut: string[] }
@@ -73,6 +80,11 @@ const lists = new Cache<Rows>(async (key) => {
 
 /// An item or a piece of one, by what was asked.
 const docs = new Cache<Doc>(async (key) => await conn.request(JSON.parse(key)) as Doc);
+
+/// The notes, by what was asked; and a note's file, by its address.
+const notes = new Cache<Listed[]>(async (key) => (await conn.request(JSON.parse(key))).items as Listed[]);
+interface NoteFile { item: Listed; text: string; path: string }
+const files = new Cache<NoteFile>(async (addr) => await conn.request({ t: "kb_note_read", addr }) as NoteFile);
 
 const about = (...parts: (string | null | undefined)[]): string => parts.filter(Boolean).join(" · ");
 const titleOf = (i: Listed): string => (i.item.title ?? i.item.rel ?? i.item.uri).replace(/\n/g, " ");
@@ -116,6 +128,7 @@ function filters(s: Status): HTMLElement {
     pick("Kind", f.kind, "Every kind", kindsOffered(s.kinds).map((k): [string, string] => [k, k]), (v) => { f.kind = v; }),
     pick("Project", f.project, "Every project", projects, (v) => { f.project = v; }),
     pick("Since", f.since, "Any time", SINCE, (v) => { f.since = v; }),
+    pick("Wrote", f.wrote, "Anyone wrote", WROTE, (v) => { f.wrote = v; }),
     machines.length || f.machine ? pick("Machine", f.machine, "Every machine", [["here", "This computer"], ...machines.map((m): [string, string] => [m, m])], (v) => { f.machine = v; }) : null,
     f.of ? h("button", { class: "small on", title: tip("kb.history"), onclick: () => { f.of = null; ui.render(); } }, `Only ${f.of.t} ${f.of.name} ✕`) : null);
 }
@@ -149,7 +162,7 @@ function historyRows(items: Listed[], s: Status): Child[] {
   const f = state.f;
   if (!items.length) {
     const none = f.of ? `Nothing is kept of ${f.of.t} ${f.of.name}.`
-      : f.kind || f.project || f.since || f.machine ? "Nothing kept matches these filters."
+      : f.kind || f.project || f.since || f.wrote || f.machine ? "Nothing kept matches these filters."
       : "Nothing is kept yet. Agent sessions are, as they happen: what you asked, what the agent answered and what it ran.";
     return [h("p", { class: "empty" }, none), s.sessions ? null : h("p", { class: "sub" }, "Agent sessions are not kept (Settings → Knowledge → sessions is off).")];
   }
@@ -161,7 +174,7 @@ function historyRows(items: Listed[], s: Status): Child[] {
     const d = day(at, now);
     if (d !== last) { out.push(h("h3", { class: "day" }, d)); last = d; }
     out.push(h("div", { title: tip("kb.show") }, row(h("span", {}, badge(i.item.kind), " ", titleOf(i)),
-      about(clock(at), i.project_name, i.item.agent, plural(i.item.chunks, "piece")), null, { onclick: () => open(i.addr) })));
+      about(clock(at), i.project_name, i.item.kind === "note" ? wroteBy(i.item) : i.item.agent, plural(i.item.chunks, "piece")), null, { onclick: () => open(i.addr) })));
   }
   return out;
 }
@@ -218,6 +231,7 @@ function showStatus(s: Status): void {
     ["It is", s.enabled ? "on" : "off"],
     ["Kept", s.kinds.length ? s.kinds.map((k) => `${plural(k.items, k.kind)} (${plural(k.chunks, "piece")})`).join(", ") : "nothing yet"],
     ["In", `${s.path} (${bytes(s.bytes)})`],
+    ["Notes", s.notes ? `Markdown files in ${s.notes}` : null],
     ["By meaning", s.vectors ? `${s.vectors} of ${plural(pieces, "piece")}` : null],
     ["Meaning search", s.meaning ?? null],
     ["Agent sessions", s.sessions ? null : "not kept (Knowledge → sessions is off)"],
@@ -257,6 +271,7 @@ function listView(): HTMLElement {
     if (findBox.value.trim() !== state.typed && document.activeElement !== findBox) findBox.value = state.typed;
     const kept = s.kinds.length ? s.kinds.map((k) => plural(k.items, k.kind)).join(", ") : "nothing kept yet";
     body = offBody(s) ?? [
+      tabs("search"),
       findBox,
       filters(s),
       h("p", { class: "sub" }, h("button", { class: "small", title: tip("kb.status"), onclick: () => showStatus(s) }, about(kept, bytes(s.bytes), s.queued ? `${s.queued} waiting to be read` : null))),
@@ -264,6 +279,112 @@ function listView(): HTMLElement {
     ];
   }
   return h("div", {}, ui.header("Library", "#/more"), h("main", { class: "stack library", title: tip("kb.open") }, ...body));
+}
+
+/// The tabs, under the header.
+function tabs(on: "search" | "notes"): HTMLElement {
+  const tab = (id: string, label: string, hash: string, title: string): HTMLElement =>
+    h("button", { class: `small${on === id ? " on" : ""}`, title, "aria-pressed": String(on === id), onclick: () => go(hash) }, label);
+  return h("div", { class: "kb-tabs" }, tab("search", "Search", "#/library", tip("kb.search")), tab("notes", "Notes", "#/library/notes", tip("kb.notes")));
+}
+
+// ── notes ───────────────────────────────────────────────────────────────────────────────────
+
+const localProjects = (): [string, string][] => [...data.projects.values()].filter((p) => !(p as { machine?: string | null }).machine).map((p): [string, string] => [p.id, p.slug]);
+
+/// What changed in the notes is asked for again, wherever it shows.
+function notesChanged(): void {
+  home.refresh(""); notes.reload(); files.reload(); lists.reload(); docs.reload();
+}
+
+/// `kb.note`: everything `ptyro kb note` takes. `project`: the one to start on.
+async function newNote(project = ""): Promise<void> {
+  let list: any[] = [];
+  try { list = (await conn.request({ t: "profile_list" })).profiles ?? []; } catch { /* `default` is always there */ }
+  const profiles = profileChoices(list, null);
+  if (!profiles.some(([v]) => v === "default")) profiles.unshift(["default", "default"]);
+  form("New note", [
+    { key: "text", label: "Note", type: "textarea", rows: 6, required: true, placeholder: "We chose X because Y", hint: "A decision and its reason, a fact, a how-to. Markdown" },
+    { key: "title", label: "Title", placeholder: "its first line", hint: "Its heading, and what lists call it" },
+    { key: "project", label: "About", type: "select", options: [["", "No project (a global note)"], ...localProjects()], value: project, hint: "The project it is about" },
+    { key: "profile", label: "Seen by", type: "select", options: [["", "Every profile's agents"], ...profiles], value: "", hint: "Whose agents may find it with recall (you always see every note)" },
+    { key: "tags", label: "Tags", placeholder: "db, decision", hint: "Words to find it by" },
+  ], "Keep", async (v) => {
+    const r = await conn.request(noteRequest(v as { text: string }));
+    ui.toast(`Noted: ${titleOf(r.item as Listed)}`);
+    notesChanged();
+    if (location.hash !== "#/library/notes") go("#/library/notes");
+    ui.render();
+  });
+}
+
+async function syncNotes(): Promise<void> {
+  const r = await ask<{ notes: number; changed: number; removed: number }>({ t: "kb_sync" });
+  if (!r) return;
+  ui.toast(`${plural(r.notes, "note")} in the folder: ${r.changed} read again, ${r.removed} gone`);
+  notesChanged();
+}
+
+function notesView(): HTMLElement {
+  const wait = pending(home, "");
+  const s = home.get("");
+  let body: Child[];
+  if (wait || !s) body = [wait];
+  else {
+    const f = state.f;
+    const key = JSON.stringify(notesRequest(f));
+    const waitList = pending(notes, key);
+    const list = notes.get(key);
+    const rows: Child[] = waitList || !list ? [waitList]
+      : !list.length ? [h("p", { class: "empty" }, f.project || f.wrote ? "No note matches these filters." : "No notes yet. Write one here; your agents write them with their remember tool. Every search finds notes first.")]
+      : byProject(list).flatMap(([name, group]): Child[] => [h("h3", { class: "day" }, name),
+        ...group.map((i) => row(h("span", {}, badge("note"), " ", titleOf(i)), about(wroteBy(i.item), `${ago(when(i.item))} ago`), null, { href: `#/library/note/${enc(i.addr)}` }))]);
+    body = offBody(s) ?? [
+      tabs("notes"),
+      h("div", { class: "kb-filters", title: tip("kb.notes") },
+        pick("Project", f.project, "Every project", localProjects(), (v) => { f.project = v; }),
+        pick("Wrote", f.wrote, "Anyone wrote", WROTE, (v) => { f.wrote = v; })),
+      bar(can("control") ? h("button", { class: "primary", title: tip("kb.note"), onclick: () => void newNote(f.project) }, "New note") : null,
+        can("control") ? h("button", { class: "small", title: tip("kb.sync"), onclick: () => void syncNotes() }, "Read the folder again") : null),
+      h("div", { class: "rows", title: tip("kb.notes") }, ...rows),
+    ];
+  }
+  return h("div", {}, ui.header("Library", "#/more"), h("main", { class: "stack library", title: tip("kb.notes") }, ...body));
+}
+
+/// The text being edited, and the note it is of (kept while the page redraws).
+const draft = { of: "", text: "" };
+
+/// A note, edited in the page: its file as it is (its header too), Save, and ⋯.
+function noteView(addr: string): HTMLElement {
+  const wait = pending(files, addr);
+  const n = files.get(addr);
+  if (wait || !n) return h("div", {}, ui.header("Note", "#/library/notes"), h("main", { class: "stack library" }, wait));
+  const i = n.item;
+  if (draft.of !== addr) [draft.of, draft.text] = [addr, n.text];
+  const box = h("textarea", { class: "kb-note", rows: 16, "aria-label": "The note", spellcheck: "false", autocapitalize: "off", title: tip("kb.notes") });
+  box.value = draft.text;
+  box.readOnly = !can("control");
+  box.addEventListener("input", () => { draft.text = box.value; });
+  const save = async (): Promise<void> => {
+    if (!box.value.trim()) { ui.toast("An empty note is not saved: ⋯ → Delete… removes it"); return; }
+    const r = await ask({ t: "kb_note", addr: i.item.id, text: box.value }, "Saved");
+    if (!r) return;
+    draft.of = "";
+    notesChanged();
+  };
+  const more = (): void => void menu(titleOf(i), [
+    { title: tip("kb.show"), label: "Read it", hint: "As it is kept and found", run: () => open(i.addr) },
+    { title: tip("kb.show"), label: "Copy its address", hint: i.addr, run: () => copy(i.addr, "its address") },
+    can("full") && { title: tip("kb.forget"), label: "Delete…", danger: true, hint: "Its file is deleted", run: () => forget(i, "#/library/notes") },
+  ]);
+  return h("div", {},
+    ui.header(titleOf(i), "#/library/notes", h("button", { class: "icon", "aria-label": "More", title: tip("kb.notes"), onclick: more }, "⋯")),
+    h("main", { class: "stack library", title: tip("kb.notes") },
+      h("p", { class: "sub" }, about("note", i.project_name ?? "global", `written by ${wroteBy(i.item)}`, new Date(when(i.item)).toLocaleString(), i.addr)),
+      box,
+      bar(can("control") ? h("button", { class: "primary", title: tip("kb.notes"), onclick: () => void save() }, "Save") : h("span", { class: "sub" }, "read only"),
+        h("span", { class: "sub" }, n.path))));
 }
 
 /// `kb.history`: the Library with only what was kept of a session or a worktree (`of`), or of
@@ -308,12 +429,12 @@ async function toSession(i: Listed): Promise<void> {
 }
 
 /// Forget an item: the daemon says what will go, in the words every client uses, and asks.
-async function forget(i: Listed): Promise<void> {
+async function forget(i: Listed, then = "#/library"): Promise<void> {
   const req = { t: "kb_forget", addrs: [forgetAddr(i)], confirmed: false };
   const gone = (r: { items: number; chunks: number }): void => {
     ui.toast(`Forgot ${plural(r.items, "item")} (${plural(r.chunks, "piece")}): deleted for good, and never kept again`);
-    home.refresh(""); lists.reload(); docs.reload();
-    go("#/library");
+    notesChanged();
+    go(then);
   };
   try {
     gone(await conn.request(req));
@@ -350,6 +471,7 @@ function readerView(addr: string): HTMLElement {
   }
   const more = (): void => void menu(titleOf(i), [
     i.item.kind === "session" && { title: tip("kb.show"), label: "Go to its session", hint: "Resumed when it is hibernated", run: () => toSession(i) },
+    i.item.kind === "note" && i.addr.startsWith("k:") && { title: tip("kb.notes"), label: "Edit it", hint: "Its file, in the page", run: () => go(`#/library/note/${enc(i.addr)}`) },
     { title: tip("kb.show"), label: "Copy its address", hint: i.addr, run: () => copy(shown === null ? i.addr : `${i.addr}/${shown}`, "its address") },
     { title: tip("kb.show"), label: "Copy its text", hint: whole ? "All of it" : "The pieces shown", run: () => copy(d.chunks.map((c) => (c.kind === "user" ? `› ${c.text}` : c.text)).join("\n\n"), "its text") },
     can("full") && { title: tip("kb.forget"), label: "Forget…", danger: true, hint: "Deleted for good, and never kept again", run: () => forget(i) },
@@ -357,12 +479,13 @@ function readerView(addr: string): HTMLElement {
   return h("div", {},
     ui.header(titleOf(i), "#/library", h("button", { class: "icon", "aria-label": "More", title: tip("kb.show"), onclick: more }, "⋯")),
     h("main", { class: "stack library reader", title: tip("kb.show") },
-      h("p", { class: "sub" }, about(i.item.kind, i.project_name, i.item.agent, new Date(when(i.item)).toLocaleString(), plural(i.item.chunks, "piece"), i.addr), " · read only"),
+      h("p", { class: "sub" }, about(i.item.kind, i.project_name, i.item.kind === "note" ? `written by ${wroteBy(i.item)}` : i.item.agent, new Date(when(i.item)).toLocaleString(), plural(i.item.chunks, "piece"), i.addr), " · read only"),
       bar(inBox,
         hits.length ? h("span", { class: "sub" }, `${(state.foundAt % hits.length) + 1}/${hits.length}`) : state.find ? h("span", { class: "sub" }, "not in it") : null,
         hits.length > 1 ? h("button", { class: "small", "aria-label": "The one before", onclick: () => step(-1) }, "↑") : null,
         hits.length > 1 ? h("button", { class: "small", "aria-label": "The next", onclick: () => step(1) }, "↓") : null,
-        i.item.kind === "session" ? h("button", { class: "small", title: tip("kb.show"), onclick: () => void toSession(i) }, "Its session") : null),
+        i.item.kind === "session" ? h("button", { class: "small", title: tip("kb.show"), onclick: () => void toSession(i) }, "Its session") : null,
+        i.item.kind === "note" && i.addr.startsWith("k:") ? h("button", { class: "small", title: tip("kb.notes"), onclick: () => go(`#/library/note/${enc(i.addr)}`) }, "Edit") : null),
       d.stale ? h("p", { class: "sub" }, "It was read again since: that piece is gone, so here it is from its start.") : null,
       !whole && (d.chunks[0]?.idx ?? 0) > 0 ? all("Earlier: all of it") : null,
       ...d.chunks.map((c) => h("div", { class: `kb-piece k-${c.kind}${c.idx === shown ? " at" : ""}` },
@@ -381,6 +504,9 @@ conn.listeners.add((msg: any) => {
   if (key) lists.refresh(key);
   const m = /^#\/library\/k\/(.+)$/.exec(location.hash);
   if (m) docs.refresh(docKey(safeDecode(m[1])));
+  if (location.hash === "#/library/notes") notes.refresh(JSON.stringify(notesRequest(state.f)));
 });
 
-views.set("library", (rest) => (rest.startsWith("k/") ? readerView(safeDecode(rest.slice(2))) : listView()));
+views.set("library", (rest) => (rest.startsWith("k/") ? readerView(safeDecode(rest.slice(2)))
+  : rest.startsWith("note/") ? noteView(safeDecode(rest.slice(5)))
+  : rest === "notes" ? notesView() : listView()));

@@ -143,12 +143,15 @@ searched beside it. The long form is [`knowledge.md`](knowledge.md).
 
 | Command | What it does |
 |---|---|
-| `ptyro recall QUERY… [-p PROJECT] [-k KIND,…] [--since AGE] [--before AGE] [--machine MACHINE\|--here] [--meaning\|--words] [-l N] [--json]` | search everything kept, and your chats: words (all must match), `"a phrase"`, `prefix*` (3 letters), `-word`, and in the query `kind:session`, `project:NAME`, `since:7d`, `before:30d`, `agent:codex`, `workspace:work`, `file:PATH`, `wrote:you\|agent`, `by:meaning`. Each hit: its address (`k:7f3k/12`; a chat's is `c:7f3k/node`), what it is, where and when, and the text around the match (`≈`: found by meaning). What is of the project you are in ranks higher. In a pipe, one hit a line; `--json` is the list of hits. **Every linked machine that is up is searched too**, its hits under its name (`laptop2:k:7f3k/12`) and mixed with this computer's; `--here` is this computer only, `--machine laptop2` (or `machine:laptop2` in the query) that one only. A machine that didn't answer is named on stderr (`(not searched: laptop2 is offline since 10:02)`) and the search still answers |
+| `ptyro recall QUERY… [-p PROJECT] [-k KIND,…] [--since AGE] [--before AGE] [--wrote you\|agent] [--machine MACHINE\|--here] [--meaning\|--words] [-l N] [--json]` | search everything kept, and your chats: words (all must match), `"a phrase"`, `prefix*` (3 letters), `-word`, and in the query `kind:session`, `project:NAME`, `since:7d`, `before:30d`, `agent:codex`, `workspace:work`, `file:PATH`, `wrote:you\|agent`, `by:meaning`. Each hit: its address (`k:7f3k/12`; a chat's is `c:7f3k/node`), what it is, where and when, and the text around the match (`≈`: found by meaning). What is of the project you are in ranks higher. In a pipe, one hit a line; `--json` is the list of hits. **Every linked machine that is up is searched too**, its hits under its name (`laptop2:k:7f3k/12`) and mixed with this computer's; `--here` is this computer only, `--machine laptop2` (or `machine:laptop2` in the query) that one only. A machine that didn't answer is named on stderr (`(not searched: laptop2 is offline since 10:02)`) and the search still answers |
 | `ptyro kb [status] [--json]` | whether it is on, what it holds by kind, the file and its size, how much can be found by meaning, how long sessions are kept, how many were forgotten, and what was not kept and why (a forgotten session, an agent or a project kept out, a file too big) |
-| `ptyro kb show REF [--context N] [--json]` / `show REF --open` | open what a search found: `k:7f3k/12` is that piece with N pieces each side (2), `k:7f3k` the whole item; a linked machine's (`laptop2:k:7f3k/12`) is read there / `--open`: its source instead, a session in the TUI (resumed when it can be), a chat in its view |
-| `ptyro kb recent [-k KIND,…] [-p PROJECT] [--machine MACHINE] [-l N] [--json]` | the history: what was kept, newest first, by day (UTC); `--machine`: a linked machine's instead of this computer's |
+| `ptyro kb show REF [--context N] [--json]` / `show REF --open` | open what a search found: `k:7f3k/12` is that piece with N pieces each side (2), `k:7f3k` the whole item; a linked machine's (`laptop2:k:7f3k/12`) is read there / `--open`: its source instead, a session in the TUI (resumed when it can be), a chat in its view, a note in your editor (written back when you changed it) |
+| `ptyro kb recent [-k KIND,…] [-p PROJECT] [--wrote you\|agent] [--machine MACHINE] [-l N] [--json]` | the history: what was kept, newest first, by day (UTC); `--machine`: a linked machine's instead of this computer's; `--wrote`: only what you wrote, or what agents did |
+| `ptyro kb note [TEXT…\|-] [--title TITLE] [-p PROJECT] [--profile PROFILE] [--tag TAG]… [--edit] [--json]` | write a note: a Markdown file in the notes folder (`<data>/kb/notes/`), found first by every search and every agent's `recall`. No text (or `--edit`): your editor opens; `-`: the text from stdin. `-p`: the project it is about (default: none, a global note). `--profile`: only that profile's agents see it (default: every profile's). It prints the note's address and its file. Inside an agent's session it is that agent's note, as its `remember` tool writes it |
+| `ptyro kb notes [-p PROJECT] [--wrote you\|agent] [--json]` | the notes, by project (`-p _global`: the ones about none), each with its address, who wrote it and when |
+| `ptyro kb sync [--json]` | read the notes folder again now: what you wrote, changed or deleted there by hand is found (the daemon also watches the folder) |
 | `ptyro kb forget --session SESSION [-y] [--json]` | forget everything kept of a session and make it private: nothing more of it is kept, and that can't be switched off again. It asks first |
-| `ptyro kb forget REF… \| --query QUERY [-y] [--json]` | delete items and their text for good; nothing of them is kept again (a forgotten session's later turns are not read). It says what will go and asks unless `-y`. A linked machine's item (`laptop2:k:7f3k`) is forgotten there. An agent can't forget |
+| `ptyro kb forget REF… \| --query QUERY [-y] [--json]` | delete items and their text for good; nothing of them is kept again (a forgotten session's later turns are not read). Forgetting a note deletes its file. It says what will go and asks unless `-y`. A linked machine's item (`laptop2:k:7f3k`) is forgotten there. An agent can't forget |
 
 ## Scripting
 
@@ -194,7 +197,7 @@ searched beside it. The long form is [`knowledge.md`](knowledge.md).
 | Command | Does |
 |---|---|
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |
-| `ptyro mcp` | the MCP server an agent is started with: the knowledge base's tools (`recall`, `recall_read`) for a session, the chat history tools for a chat (started for it; you never run it) |
+| `ptyro mcp` | the MCP server an agent is started with: the knowledge base's tools (`recall`, `recall_read`, and `remember` unless `[kb] remember = false`) for a session, the chat history tools for a chat (started for it; you never run it) |
 
 ## Remote and phone
 
@@ -229,7 +232,7 @@ See [`remote.md`](remote.md).
 | `ptyro daemon stop\|restart [--hibernate] [--force]` | stop it; `--hibernate` brings resumable agents back dormant |
 | `ptyro daemon upgrade [--binary PATH] [--json]` | switch the running daemon to a new binary without stopping sessions; exits 1 if it rolled back |
 | `ptyro daemon install-service\|uninstall-service [--dry-run]` | start the daemon at login (systemd user unit / launchd agent) |
-| `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
+| `ptyro uninstall [--dry-run] [--yes] [--delete-work] [--keep-config] [--keep-data] [--keep-binary] [--delete-notes] [--purge-refs] [--json]` | take ptyro off this computer: shows what goes and what stays, asks (typing `delete` when worktrees have uncommitted work), stops the daemon, removes worktrees, directories, the login service, shell lines and the binary installed by hand ([`docs/uninstall.md`](uninstall.md)) |
 
 ## Exit codes
 

@@ -12,7 +12,6 @@ use ptyro_core::kb::search::{
     HitKind, KbCount, KbHit, KbListed, KbSearch, KbSkipped, KbStatusInfo, LIMIT, MAX_LIMIT,
 };
 use ptyro_core::kb::{ItemKind, KbItem};
-use ptyro_core::session::SessionKind;
 use ptyro_core::sync::MutexExt;
 use ptyro_core::{Error, ErrorCode, lookup};
 use ptyro_protocol::{Reply, Request};
@@ -32,13 +31,7 @@ impl Daemon {
     /// device, a plain shell), and for an agent's session what `kb.scope` lets its profile
     /// and workspace see, without its own session and chat.
     pub(crate) fn kb_caller_scope(&self, caller: crate::guard::Caller) -> Option<KbScope> {
-        if caller.grant.is_some() || caller.is_link() {
-            return None;
-        }
-        let s = self.session_of_pid(caller.pid?)?;
-        if s.kind() != SessionKind::Agent {
-            return None;
-        }
+        let s = self.kb_agent(caller)?;
         let place = s.meta.locked().place.clone();
         let workspace = self.kb_workspace_id(place.workspace.as_deref());
         let mut scope = KbScope::of(&self.config().kb.scope, &place.profile, workspace.as_deref());
@@ -66,7 +59,11 @@ impl Daemon {
     }
 
     /// Items as a list shows them: each with its handle and its place's names.
-    async fn kb_listed(&self, db: &KbDb, items: Vec<KbItem>) -> Result<Vec<KbListed>, Error> {
+    pub(super) async fn kb_listed(
+        &self,
+        db: &KbDb,
+        items: Vec<KbItem>,
+    ) -> Result<Vec<KbListed>, Error> {
         let ids = db.ids().await.map_err(store_err)?;
         Ok(items
             .into_iter()
@@ -84,7 +81,7 @@ impl Daemon {
     }
 
     pub(crate) async fn handle_kb(
-        &self,
+        self: &std::sync::Arc<Self>,
         req: Request,
         caller: crate::guard::Caller,
     ) -> Result<Reply, Error> {
@@ -234,6 +231,7 @@ impl Daemon {
                 before_ms,
                 limit,
                 machine,
+                writer,
             } => {
                 // A linked machine's history, asked for by name: you may, a model may not
                 // (its wall is its profile here, and a history has no profile to be given).
@@ -253,6 +251,7 @@ impl Daemon {
                         before_ms,
                         limit,
                         machine: None,
+                        writer,
                     };
                     return match self.kb_far(&m, req).await? {
                         Reply::KbItems { mut items } => {
@@ -264,7 +263,7 @@ impl Daemon {
                         other => Err(Error::internal(format!("{m} answered {other:?}"))),
                     };
                 }
-                let of = super::search::Of { session, worktree, since_ms };
+                let of = super::search::Of { session, worktree, since_ms, writer };
                 let items = self
                     .kb_recent(kinds, project, of, before_ms, limit.unwrap_or(0), scope)
                     .await?;
@@ -292,13 +291,28 @@ impl Daemon {
                 self.kb_forget(addrs, query, confirmed).await
             }
             Request::KbStatus => Ok(Reply::KbStatus { status: self.kb_status().await }),
+            Request::KbNote { text, title, project, profile, tags, replaces, addr } => {
+                let ask =
+                    super::notes::NoteAsk { text, title, project, profile, tags, replaces, addr };
+                self.kb_note(ask, caller, scope).await
+            }
+            Request::KbNotes { project, writer } => {
+                let items = self.kb_notes(project, writer, scope).await?;
+                let db = self.kb_db()?;
+                Ok(Reply::KbItems { items: self.kb_listed(&db, items).await? })
+            }
+            Request::KbNoteRead { addr } => self.kb_note_read(&addr, scope).await,
+            Request::KbSync => {
+                let (notes, changed, removed) = self.kb_notes_sync().await?;
+                Ok(Reply::KbSynced { notes, changed, removed })
+            }
             other => Err(Error::internal(format!("not a knowledge base request: {other:?}"))),
         }
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 impl Daemon {
     /// `KbForget` (§25.12): the items the addresses name and those the query finds. Unless
@@ -370,12 +384,23 @@ impl Daemon {
                     } else {
                         ""
                     },
-                    ptyro_core::removal::KB
+                    // A note is its file: that goes.
+                    if items.iter().all(|i| i.kind == ItemKind::Note) {
+                        ptyro_core::removal::KB_NOTE.to_owned()
+                    } else if items.iter().any(|i| i.kind == ItemKind::Note) {
+                        format!("{} {}", ptyro_core::removal::KB, ptyro_core::removal::KB_NOTE)
+                    } else {
+                        ptyro_core::removal::KB.to_owned()
+                    }
                 ),
             ));
         }
         let mut chunks = 0;
         for item in &items {
+            if item.kind == ItemKind::Note {
+                chunks += self.kb_note_forget(&db, item).await?;
+                continue;
+            }
             chunks += db.forget(item.id.clone()).await.map_err(store_err)?.unwrap_or(0);
             tracing::info!("knowledge base: {} forgotten", item.uri);
         }
@@ -436,6 +461,7 @@ impl Daemon {
             sessions: config.kb.sessions,
             retain_days: config.kb.retain_days,
             path: path.display().to_string(),
+            notes: self.kb_notes_dir().display().to_string(),
             bytes: std::fs::metadata(&path).map_or(0, |m| m.len()),
             queued: *self.kb.pending.borrow() as u64,
             skipped: self

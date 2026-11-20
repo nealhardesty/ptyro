@@ -248,11 +248,14 @@ fn nothing_typed_is_the_history_by_day_with_the_selected_one_beside_it() {
     let shown = screen(app);
     for want in [
         " Library ",
+        " 1 Search ",
+        " 2 Notes ",
         "2 sessions · 4.0 KiB",
         "/ search what was kept, and your chats",
         "kind: any",
         "project: any",
         "since: any",
+        "wrote: any",
         " Today",
         " Yesterday",
         "session  retry policy for the feeder ",
@@ -263,7 +266,9 @@ fn nothing_typed_is_the_history_by_day_with_the_selected_one_beside_it() {
         "k:7F3K · session://claude/7F3K",
         "Task: make the feeder retry",
         "add a retry policy to the feeder",
-        "/ search · Tab filters · j/k move · ⏎ open · r its session · y address · Y text · d forget · s status · Esc",
+        // (The keys, on as many lines as they need.)
+        "/ search · Tab filters · j/k move · ⏎ open · r its session · y address · Y text · d forget",
+        "s status · Esc",
     ] {
         assert!(shown.contains(want), "{want:?} in\n{shown}");
     }
@@ -293,6 +298,7 @@ fn what_is_asked_follows_the_box_and_the_filters() {
             before_ms: None,
             limit: Some(100),
             machine: None,
+            writer: None,
         })
     );
     // Two letters are not a search yet.
@@ -712,12 +718,40 @@ fn tab_reaches_the_filters_and_each_is_a_pick() {
     for want in ["kind: session", "project: feeder", "since: 7d"] {
         assert!(shown.contains(want), "{want:?} in\n{shown}");
     }
-    // Backspace clears the one it is on; `any` clears by the pick; Tab past the last one is
-    // the list again.
+    // Backspace clears the one it is on; `any` clears by the pick.
     press(app, "<BS>");
     assert_eq!(lib(app).since, None);
     app.picked(Target::Path("any".into()), Purpose::Library(Filter::Kind));
     assert_eq!(lib(app).kind, None);
+    // Who wrote it: you, or an agent. The history is asked for that writer's; a search says
+    // it in the query's own word.
+    press(app, "<Tab>");
+    assert_eq!(lib(app).chip, Some(Filter::Wrote));
+    press(app, "<Enter>");
+    let Some(Overlay::Picker { palette, purpose: Purpose::Library(Filter::Wrote) }) = &app.overlay
+    else {
+        panic!("a pick")
+    };
+    let offered: Vec<&str> = (0..3).map(|i| palette.item(i).label.as_str()).collect();
+    assert_eq!(offered, ["any", "you", "agent"]);
+    press(app, "you<Enter>");
+    assert_eq!(lib(app).wrote, Some(Writer::User));
+    assert!(screen(app).contains("wrote: you"));
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbRecent { writer: Some(Writer::User), .. })
+    ));
+    lib_mut(app).query = "retry".into();
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbSearch { query, .. }) if query == "retry wrote:you"
+    ));
+    lib_mut(app).query.clear();
+    app.picked(Target::Path("agent".into()), Purpose::Library(Filter::Wrote));
+    assert_eq!(lib(app).wrote, Some(Writer::Agent));
+    press(app, "<BS>");
+    assert_eq!(lib(app).wrote, None);
+    // Tab past the last one is the list again.
     press(app, "<Tab>");
     assert_eq!(lib(app).chip, None);
     // Chats have no history here: said, not asked.
@@ -932,9 +966,9 @@ fn with_a_linked_machine_the_search_asks_them_all_and_a_filter_picks_one() {
     let mut t = t();
     let app = &mut t.app;
     opened(app);
-    // No machine linked: three filters, and Tab past the third is the list.
+    // No machine linked: four filters, and Tab past the fourth is the list.
     assert!(!screen(app).contains("machine:"));
-    press(app, "<Tab><Tab><Tab><Tab>");
+    press(app, "<Tab><Tab><Tab><Tab><Tab>");
     assert_eq!(lib(app).chip, None);
     app.machines.push(
         serde_json::from_value(json!({
@@ -965,8 +999,8 @@ fn with_a_linked_machine_the_search_asks_them_all_and_a_filter_picks_one() {
         asked(app).iter().any(|p| matches!(p, Pending::KbPreview(a) if a == "laptop2:k:9H5N/2"))
     );
     assert_eq!(lib(app).selected(), Some(("laptop2:k:9H5N/2".into(), "laptop2:k:9H5N".into())));
-    // The fourth filter: this computer, or one machine.
-    press(app, "<Tab><Tab><Tab><Tab>");
+    // The fifth filter: this computer, or one machine.
+    press(app, "<Tab><Tab><Tab><Tab><Tab>");
     assert_eq!(lib(app).chip, Some(Filter::Machine));
     press(app, "<Enter>");
     let Some(Overlay::Picker { palette, purpose: Purpose::Library(Filter::Machine) }) =
@@ -1003,4 +1037,194 @@ fn with_a_linked_machine_the_search_asks_them_all_and_a_filter_picks_one() {
 
 fn lib_mut(app: &mut App) -> &mut Library {
     app.library_mut().expect("the Library is shown")
+}
+
+/// A note as a list has it: yours unless an agent's, about `project` (`None`: global).
+fn note(handle: &str, title: &str, project: Option<&str>, agent: Option<&str>) -> KbListed {
+    serde_json::from_value(json!({
+        "addr": format!("k:{handle}"),
+        "project_name": project,
+        "item": {
+            "id": format!("01JB000000000000000000{handle}"),
+            "uri": format!("note://_all/{}/{handle}", project.unwrap_or("_global")),
+            "kind": "note", "title": title, "project": project.map(|_| "p1"), "agent": agent,
+            "writer": if agent.is_some() { "agent" } else { "user" }, "chunks": 1,
+            "ended_ms": now_ms() - 3 * 86_400_000, "origin": "m1",
+        },
+    }))
+    .unwrap()
+}
+
+/// KB2 (SPEC §25.10): the Notes tab. The notes by what they are about, each with who wrote
+/// it; `n` opens the note form with every option the command takes; `⏎` edits the note in
+/// your editor (the command, in a split); `x` deletes it through the daemon's question; `/`
+/// searches the notes.
+#[test]
+fn the_notes_tab_lists_by_project_and_writes_edits_and_deletes() {
+    let mut t = t();
+    let app = &mut t.app;
+    app.projects = vec![
+        serde_json::from_value(
+            json!({"id": "p1", "slug": "feeder", "root": "/r/feeder", "created_ms": 0}),
+        )
+        .unwrap(),
+    ];
+    opened(app);
+    let mut st = status(true);
+    st.notes = "/d/kb/notes".into();
+    reply(app, Pending::KbStatus, Reply::KbStatus { status: st });
+    asked(app);
+    press(app, "2");
+    assert_eq!(lib(app).tab, Tab::Notes);
+    assert_eq!(lib(app).request(None), Some(Request::KbNotes { project: None, writer: None }));
+    assert!(screen(app).contains("Looking…"));
+    let n = lib(app).asked;
+    // (As the daemon lists them, newest first: the panel puts them under what they are about.)
+    let items = vec![
+        note("AAAA", "Hopper jams", Some("feeder"), Some("claude@work")),
+        note("BBBB", "We deploy with make ship", None, None),
+        note("CCCC", "Belt tension", Some("feeder"), None),
+    ];
+    reply(app, Pending::KbRows(n), Reply::KbItems { items });
+    let shown = screen(app);
+    for want in [
+        " 2 Notes ",
+        "notes are Markdown files in /d/kb/notes",
+        "project: any",
+        "wrote: any",
+        " global (about no project)",
+        "note     We deploy with make ship ",
+        "you · 1 piece",
+        " feeder",
+        "note     Hopper jams ",
+        "claude@work · 1 piece",
+        "n new note · ⏎ edit in your editor · x delete · / search them",
+    ] {
+        assert!(shown.contains(want), "{want:?} in\n{shown}");
+    }
+    assert!(!shown.contains("kind: any") && !shown.contains("since: any"), "{shown}");
+    let order: Vec<usize> = ["We deploy", "Hopper jams", "Belt tension"]
+        .iter()
+        .map(|t| shown.find(t).unwrap())
+        .collect();
+    assert!(order[0] < order[1] && order[1] < order[2], "{shown}");
+    // The selected one's text is asked for, as in the history.
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbPreview(a) if a == "k:BBBB")));
+
+    // Its two filters: the project, and who wrote it.
+    press(app, "<Tab>");
+    assert_eq!(lib(app).chip, Some(Filter::Project));
+    press(app, "<Tab><Enter>agent<Enter>");
+    assert_eq!(
+        lib(app).request(None),
+        Some(Request::KbNotes { project: None, writer: Some(Writer::Agent) })
+    );
+    press(app, "<BS><Tab>");
+    assert_eq!((lib(app).wrote, lib(app).chip), (None, None));
+
+    // `n`: the note form, every option, the project you are in already picked when there is one.
+    press(app, "n");
+    let Some(Overlay::Form(form)) = &app.overlay else { panic!("the note form") };
+    assert_eq!(form.title, "Write a note");
+    let keys: Vec<&str> = form.fields.iter().map(|f| f.key.as_str()).collect();
+    assert_eq!(keys, ["text", "title", "project", "profile", "tags", "edit"]);
+    let mut form = form.clone();
+    let base = vec!["kb".to_owned(), "note".to_owned()];
+    assert_eq!(form.cli_args(&base), ["kb", "note"], "nothing typed: your editor");
+    for (key, value) in [("text", "we chose X because Y"), ("title", "X"), ("tags", "db, decision")]
+    {
+        let f = form.fields.iter_mut().find(|f| f.key == key).unwrap();
+        *f = f.clone().with(value);
+    }
+    for (key, pick) in [("project", "feeder"), ("edit", "yes")] {
+        let f = form.fields.iter_mut().find(|f| f.key == key).unwrap();
+        let crate::form::Kind::Choice { options, sel } = &mut f.kind else { panic!("a pick") };
+        *sel = options.iter().position(|o| o.0 == pick).unwrap();
+    }
+    assert_eq!(
+        form.cli_args(&base),
+        [
+            "kb",
+            "note",
+            "we chose X because Y",
+            "--title",
+            "X",
+            "--project",
+            "feeder",
+            "--tag",
+            "db",
+            "--tag",
+            "decision",
+            "--edit"
+        ]
+    );
+    press(app, "<Esc>");
+
+    // `⏎`: the note in your editor, by the command that edits one.
+    press(app, "j<Enter>");
+    assert_eq!(
+        app.last_cli.as_deref(),
+        Some(&["kb", "show", "k:AAAA", "--open"].map(str::to_owned)[..])
+    );
+    // `x`: forgotten, which for a note deletes its file; the daemon asks in its words.
+    press(app, "x");
+    let sent = asked(app);
+    assert!(
+        sent.iter().any(|p| matches!(p, Pending::Confirm(req, _)
+            if matches!(&**req, Request::KbForget { addrs, confirmed: false, .. } if addrs == &["k:AAAA".to_owned()]))),
+        "{sent:?}"
+    );
+
+    // `/`: the search, for notes; `1` and `2` go between the tabs.
+    press(app, "/");
+    assert_eq!(
+        (lib(app).tab, lib(app).kind, lib(app).typing),
+        (Tab::Search, Some(HitKind::Note), true)
+    );
+    press(app, "<Esc>2");
+    assert_eq!(lib(app).tab, Tab::Notes);
+    press(app, "1");
+    assert_eq!(lib(app).tab, Tab::Search);
+    assert!(matches!(lib(app).request(None), Some(Request::KbRecent { .. })));
+
+    // No notes yet: how one is written.
+    press(app, "2");
+    let n = lib(app).asked;
+    reply(app, Pending::KbRows(n), Reply::KbItems { items: Vec::new() });
+    assert!(screen(app).contains("no notes yet: n writes one"), "{}", screen(app));
+}
+
+/// The actions: `kb.notes` opens the Library on its notes, `kb.note` the form, `kb.sync`
+/// reads the folder again and says what it found; a note found by a search is edited by `⏎`.
+#[test]
+fn the_note_actions_and_a_notes_hit() {
+    let mut t = t();
+    let app = &mut t.app;
+    run(app, "kb.notes");
+    assert_eq!(lib(app).tab, Tab::Notes);
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbRows(_))));
+    run(app, "kb.note");
+    assert!(matches!(&app.overlay, Some(Overlay::Form(f)) if f.title == "Write a note"));
+    press(app, "<Esc>");
+    run(app, "kb.sync");
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbSynced)));
+    reply(app, Pending::KbSynced, Reply::KbSynced { notes: 3, changed: 1, removed: 0 });
+    assert_eq!(toast(app), "3 notes in the folder: 1 read again, 0 gone");
+    for action in ["kb.notes", "kb.note", "kb.sync"] {
+        assert!(ACTIONS.contains(&action), "{action} is in the Library's menu");
+        assert!(crate::keymap::ACTIONS.iter().any(|a| a.id == action), "{action} has its words");
+    }
+    // `kb.search` is the Search tab again.
+    run(app, "kb.search");
+    assert_eq!((lib(app).tab, lib(app).typing), (Tab::Search, true));
+    press(app, "<Esc>");
+    let mut found = hit("AAAA", 0, "Hopper jams", &format!("the {MARK_ON}hopper{MARK_OFF} jams"));
+    found.kind = HitKind::Note;
+    searched(app, "hopper", vec![found], None);
+    assert!(screen(app).contains("note     Hopper jams "));
+    press(app, "<Enter>");
+    assert_eq!(
+        app.last_cli.as_deref(),
+        Some(&["kb", "show", "k:AAAA", "--open"].map(str::to_owned)[..])
+    );
 }

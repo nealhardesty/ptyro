@@ -3,7 +3,7 @@
 // are in a text, an address's parts, what forgetting names, and the daemon's question.
 //   node web/test/library.mjs
 import assert from "node:assert/strict";
-import { PAGE, clock, conversation, day, forgetAddr, found, kindsOffered, lit, matched, noFilters, question, request, searching, snippetParts, split, when } from "../dist/libkit.js";
+import { PAGE, byProject, clock, conversation, day, forgetAddr, found, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, question, request, searching, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
 
 const DAY = 86_400_000;
 const f = (o = {}) => ({ ...noFilters(), ...o });
@@ -35,6 +35,32 @@ assert.deepEqual(request(f({ query: "retry", machine: "laptop2" }), 0),
 assert.equal(request(f({ query: "retry", machine: "here" }), 0).machine, "here");
 assert.equal(request(f({ query: "retry", kind: "chat" }), 0).t, "kb_search", "chats are searched");
 assert.equal(request(f({ query: "retry", of: { t: "session", id: "s1", name: "x" } }), 0).limit, 100);
+// Who wrote it: the history asks for that writer's; a search says it in the query's own word.
+assert.equal(request(f({ wrote: "you" }), 0).writer, "user");
+assert.equal(request(f({ wrote: "agent" }), 0).writer, "agent");
+assert.ok(!("writer" in request(f(), 0)));
+assert.equal(request(f({ query: "retry", since: "7d", wrote: "agent" }), 0).query, "retry since:7d wrote:agent");
+
+// ── notes ───────────────────────────────────────────────────────────────────────────────────
+assert.deepEqual(notesRequest(f()), { t: "kb_notes" });
+assert.deepEqual(notesRequest(f({ project: "p1", wrote: "you" })), { t: "kb_notes", project: "p1", writer: "user" });
+{
+  // By what they are about: the ones about nothing first, then each project's, as they came.
+  const n = (title, project_name) => ({ title, project_name });
+  const groups = byProject([n("a", "web"), n("b", null), n("c", "feeder"), n("d", "web"), n("e")]);
+  assert.deepEqual(groups.map(([name, list]) => [name, list.map((i) => i.title).join("")]),
+    [["Global (about no project)", "be"], ["feeder", "c"], ["web", "ad"]]);
+  assert.deepEqual(byProject([]), []);
+}
+assert.deepEqual(tagsOf(" db, decision  #api,, "), ["db", "decision", "api"]);
+assert.deepEqual(tagsOf(""), []);
+// A new note sends its text, and only what was filled in.
+assert.deepEqual(noteRequest({ text: "we chose X" }), { t: "kb_note", text: "we chose X" });
+assert.deepEqual(noteRequest({ text: "x", title: "X", project: "p1", profile: "work", tags: "db decision" }),
+  { t: "kb_note", text: "x", title: "X", project: "p1", profile: "work", tags: ["db", "decision"] });
+assert.equal(wroteBy({ writer: "user", agent: null }), "you");
+assert.equal(wroteBy({ writer: "agent", agent: "claude@work" }), "claude@work");
+assert.equal(wroteBy({ writer: "agent" }), "agent");
 
 // ── the kinds on offer ──────────────────────────────────────────────────────────────────────
 assert.deepEqual(kindsOffered([]), ["session", "chat"], "nothing that isn't kept yet");

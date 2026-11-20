@@ -482,6 +482,7 @@ impl Daemon {
                     config.kb.enabled && config.kb.tools && !self.kb_agent_off(Some(&a.name));
                 let ctx = ptyro_agents::LaunchCtx {
                     kb: kb_tools.then_some(self.paths.socket.as_path()),
+                    remember: config.kb.remember,
                     agent: &a.name,
                     def: &def,
                     base_argv: base,

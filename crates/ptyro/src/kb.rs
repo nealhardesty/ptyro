@@ -1,5 +1,6 @@
 //! `ptyro recall` and `ptyro kb` (SPEC §25.10): the knowledge base from the command line. Search
-//! it, open what a search found, see the history, forget, and see how it stands.
+//! it, open what a search found, see the history, write and list notes, forget, and see how it
+//! stands.
 
 use std::io::IsTerminal;
 
@@ -8,7 +9,7 @@ use clap_complete::ArgValueCandidates;
 use ptyro_core::chats::{MARK_OFF, MARK_ON};
 use ptyro_core::kb::card::minute;
 use ptyro_core::kb::search::{HitKind, KbHit, KbListed, KbStatusInfo, pieces};
-use ptyro_core::kb::{ItemKind, KbChunk};
+use ptyro_core::kb::{ItemKind, KbChunk, Writer};
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 use serde_json::json;
@@ -50,6 +51,10 @@ pub struct RecallArgs {
     /// This computer only: linked machines aren't asked
     #[arg(long)]
     here: bool,
+    /// Only what you wrote (`you`), or what agents did (`agent`); the query's `wrote:` says
+    /// the same
+    #[arg(long, value_name = "WHO", value_parser = ["you", "agent"])]
+    wrote: Option<String>,
     /// At most N (100 at most)
     #[arg(short, long, default_value_t = 20)]
     limit: u32,
@@ -87,6 +92,7 @@ impl RecallArgs {
                 "--before" => self.before = Some(value()?),
                 "--machine" => self.machine = Some(value()?),
                 "--here" => self.here = true,
+                "--wrote" => self.wrote = Some(value()?),
                 "-l" | "--limit" => {
                     let v = value()?;
                     self.limit = v.parse().map_err(|_| {
@@ -126,7 +132,7 @@ pub enum KbCmd {
         #[arg(long, value_name = "N")]
         context: Option<u32>,
         /// Open its source instead: a session in the TUI (resumed if it can be), a chat in
-        /// its view
+        /// its view, a note in your editor
         #[arg(long, conflicts_with_all = ["context", "json"])]
         open: bool,
         #[arg(long)]
@@ -143,9 +149,55 @@ pub enum KbCmd {
         /// A linked machine's history instead of this computer's
         #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
         machine: Option<String>,
+        /// Only what you wrote (`you`), or what agents did (`agent`)
+        #[arg(long, value_name = "WHO", value_parser = ["you", "agent"])]
+        wrote: Option<String>,
         /// At most N (100 at most)
         #[arg(short, long, default_value_t = 20)]
         limit: u32,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Write a note: a decision, a fact, a how-to, as a Markdown file in ptyro's notes folder
+    /// that every search and every agent's `recall` finds first. With no text (or `--edit`)
+    /// it opens your editor; `-` reads the text from stdin
+    Note {
+        /// The note. Its first heading (`# …`), else its first line, is its title
+        #[arg(value_name = "TEXT")]
+        text: Vec<String>,
+        /// Its title, put above the text as its heading
+        #[arg(long, value_name = "TITLE")]
+        title: Option<String>,
+        /// The project it is about (default: none, a global note)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
+        project: Option<String>,
+        /// Only this profile's agents may see it (default: every profile's)
+        #[arg(long, add = ArgValueCandidates::new(complete::profiles))]
+        profile: Option<String>,
+        /// A tag, found by search (several: `--tag db --tag decision`)
+        #[arg(long, value_name = "TAG")]
+        tag: Vec<String>,
+        /// Write it in your editor ($VISUAL, $EDITOR), starting from the text given
+        #[arg(long)]
+        edit: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// The notes, by project: each with its address, who wrote it and when. `kb show REF
+    /// --open` edits one in your editor; `kb forget REF` deletes one
+    Notes {
+        /// Only this project's (`_global`: the ones about no project)
+        #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
+        project: Option<String>,
+        /// Only what you wrote (`you`), or what agents did (`agent`)
+        #[arg(long, value_name = "WHO", value_parser = ["you", "agent"])]
+        wrote: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read the notes folder again now: what you wrote, changed or deleted there with
+    /// anything else is found (ptyro also watches the folder, so this is rarely needed)
+    Sync {
         #[arg(long)]
         json: bool,
     },
@@ -184,6 +236,11 @@ fn kinds<T: Copy>(
         })?);
     }
     Ok(out)
+}
+
+/// `--wrote`'s word as the writer it names.
+fn wrote(who: Option<&str>) -> Option<Writer> {
+    who.map(|w| if w == "you" { Writer::User } else { Writer::Agent })
 }
 
 /// The knowledge base is off: on a terminal, offer to switch it on (in your config, as the
@@ -252,7 +309,7 @@ pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
     if query.trim().is_empty() {
         return Err(Error::invalid("say what to look for (words, \"a phrase\", prefix*)"));
     }
-    for (word, value) in [("since", &a.since), ("before", &a.before)] {
+    for (word, value) in [("since", &a.since), ("before", &a.before), ("wrote", &a.wrote)] {
         if let Some(v) = value {
             query.push_str(&format!(" {word}:{v}"));
         }
@@ -340,7 +397,27 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
         KbCmd::Status { json } => status(ctx, json).await,
         KbCmd::Show { addr, open: true, .. } => open(ctx, &addr).await,
         KbCmd::Show { addr, context, json, .. } => show(ctx, addr, context, json).await,
-        KbCmd::Recent { kind, project, machine, limit, json } => {
+        KbCmd::Note { text, title, project, profile, tag, edit, json } => {
+            note(ctx, text, title, project, profile, tag, edit, json).await
+        }
+        KbCmd::Notes { project, wrote: who, json } => notes(ctx, project, who, json).await,
+        KbCmd::Sync { json } => {
+            let c = ctx.connect(true).await?;
+            let (notes, changed, removed) = match ask(ctx, &c, Request::KbSync).await? {
+                Reply::KbSynced { notes, changed, removed } => (notes, changed, removed),
+                r => return Err(unexpected(r)),
+            };
+            if json {
+                println!("{}", json!({ "notes": notes, "changed": changed, "removed": removed }));
+            } else {
+                println!(
+                    "{notes} note{} in the folder: {changed} read again, {removed} gone",
+                    if notes == 1 { "" } else { "s" }
+                );
+            }
+            Ok(0)
+        }
+        KbCmd::Recent { kind, project, machine, wrote: who, limit, json } => {
             let kinds = kinds(kind.as_deref(), ItemKind::parse, ItemKind::ALL, ItemKind::as_str)?;
             let c = ctx.connect(true).await?;
             let req = Request::KbRecent {
@@ -352,6 +429,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
                 before_ms: None,
                 limit: Some(limit),
                 machine,
+                writer: wrote(who.as_deref()),
             };
             let items = match ask(ctx, &c, req).await? {
                 Reply::KbItems { items } => items,
@@ -488,6 +566,7 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
             crate::cli::attach(ctx, c, Some(info), false, false).await
         }
         (ItemKind::Session, None) => Err(gone()),
+        (ItemKind::Note, _) => edit_note(ctx, &c, &item.addr).await,
         (kind, _) => Err(Error::invalid(format!(
             "a {kind} has nothing to open from here yet: `ptyro kb show {}` shows what is kept of it",
             item.addr
@@ -580,6 +659,163 @@ async fn forget(
         if more {
             eprintln!("the search may find more: run it again");
         }
+    }
+    Ok(0)
+}
+
+/// Who wrote an item, as a list says it: `you`, or the agent.
+fn by(i: &KbListed) -> String {
+    match (i.item.writer, i.item.agent.as_deref()) {
+        (Writer::User, _) => "you".into(),
+        (_, Some(agent)) => agent.to_owned(),
+        (w, None) => w.to_string(),
+    }
+}
+
+/// `text` in your editor, as a file called `name`: what it holds when the editor is done, or
+/// `None` when that is nothing.
+fn edited(name: &str, text: &str) -> Result<Option<String>, Error> {
+    let dir =
+        tempfile::tempdir().map_err(|e| Error::internal(format!("a temporary folder: {e}")))?;
+    let path = dir.path().join(name);
+    std::fs::write(&path, text).map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+    let argv = ptyro_core::shell::editor_command(&editor, &path);
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .status()
+        .map_err(|e| Error::internal(format!("{editor}: {e}")))?;
+    if !status.success() {
+        return Err(Error::internal(format!("{editor} exited with {status}")));
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| Error::internal(format!("{}: {e}", path.display())))?;
+    Ok(Some(text).filter(|t| !t.trim().is_empty()))
+}
+
+/// What a note that was written is called, on one line.
+fn noted(item: &KbListed, path: &str) -> String {
+    format!("{}  {}  {path}", item.addr, item.item.title.as_deref().unwrap_or("(no title)"))
+}
+
+/// `kb note`: write one. The daemon says whose it is (yours; inside an agent's session, that
+/// agent's, as its `remember` tool would write it).
+#[allow(clippy::too_many_arguments)]
+async fn note(
+    ctx: &Ctx,
+    text: Vec<String>,
+    title: Option<String>,
+    project: Option<String>,
+    profile: Option<String>,
+    tags: Vec<String>,
+    edit: bool,
+    json: bool,
+) -> Result<i32, Error> {
+    let mut text = text.join(" ");
+    if text == "-" {
+        text = std::io::read_to_string(std::io::stdin())
+            .map_err(|e| Error::internal(format!("stdin: {e}")))?;
+    }
+    if edit || text.trim().is_empty() {
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            return Err(Error::invalid(
+                "say what to note: `ptyro kb note \"we chose X because Y\"`, or `-` to read it from stdin (with a terminal, no text opens your editor)",
+            ));
+        }
+        // The title is the note's first heading there: one thing to edit, not two.
+        let start = ptyro_core::kb::note::compose(&text, title.as_deref());
+        let start = if start.is_empty() { "# ".to_owned() } else { start };
+        text = match edited("note.md", &format!("{start}\n"))? {
+            Some(t) if t.trim() != "#" => t,
+            _ => {
+                eprintln!("nothing written: no note");
+                return Ok(1);
+            }
+        };
+    }
+    let title = title.filter(|_| !edit);
+    let c = ctx.connect(true).await?;
+    let req = Request::KbNote { text, title, project, profile, tags, replaces: None, addr: None };
+    let (item, path) = match ask(ctx, &c, req).await? {
+        Reply::KbNoted { item, path } => (item, path),
+        r => return Err(unexpected(r)),
+    };
+    if json {
+        println!("{}", json!({ "item": item, "path": path }));
+    } else {
+        println!("{}", noted(&item, &path));
+    }
+    Ok(0)
+}
+
+/// `kb show REF --open` of a note: its file in your editor, written back when it changed.
+async fn edit_note(ctx: &Ctx, c: &ptyro_client::Client, addr: &str) -> Result<i32, Error> {
+    let (item, text) = match ask(ctx, c, Request::KbNoteRead { addr: addr.to_owned() }).await? {
+        Reply::KbNoteText { item, text, .. } => (item, text),
+        r => return Err(unexpected(r)),
+    };
+    let name = item.item.uri.rsplit('/').next().unwrap_or("note");
+    let Some(new) = edited(&format!("{name}.md"), &text)? else {
+        eprintln!(
+            "left as it was (an empty note is not written: `ptyro kb forget {}` deletes it)",
+            item.addr
+        );
+        return Ok(1);
+    };
+    if new == text {
+        eprintln!("unchanged");
+        return Ok(0);
+    }
+    let req = Request::KbNote {
+        addr: Some(item.item.id.clone()),
+        text: new,
+        title: None,
+        project: None,
+        profile: None,
+        tags: Vec::new(),
+        replaces: None,
+    };
+    match ask(ctx, c, req).await? {
+        Reply::KbNoted { item, path } => println!("{}", noted(&item, &path)),
+        r => return Err(unexpected(r)),
+    }
+    Ok(0)
+}
+
+/// `kb notes`: by project, the ones about none first.
+async fn notes(
+    ctx: &Ctx,
+    project: Option<String>,
+    who: Option<String>,
+    json: bool,
+) -> Result<i32, Error> {
+    let c = ctx.connect(true).await?;
+    let req = Request::KbNotes { project, writer: wrote(who.as_deref()) };
+    let mut items = match ask(ctx, &c, req).await? {
+        Reply::KbItems { items } => items,
+        r => return Err(unexpected(r)),
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+        return Ok(0);
+    }
+    if items.is_empty() {
+        eprintln!("no notes yet: `ptyro kb note \"we chose X because Y\"` writes one");
+        return Ok(0);
+    }
+    // (Stable: within a project they stay newest first.)
+    items.sort_by(|a, b| a.project_name.cmp(&b.project_name));
+    let mut last: Option<Option<&str>> = None;
+    for i in &items {
+        let project = i.project_name.as_deref();
+        if last != Some(project) {
+            println!("{}", project.unwrap_or("global"));
+            last = Some(project);
+        }
+        let title = i.item.title.as_deref().unwrap_or(i.item.uri.as_str()).replace('\n', " ");
+        println!("  {}  {title} · {} · {}", i.addr, by(i), ago(at(i)));
     }
     Ok(0)
 }

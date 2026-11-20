@@ -136,7 +136,8 @@ impl KbFilter {
             );
         }
         if let Some(s) = &self.not_session {
-            c.and("i.session IS NOT ?", [text(s)]);
+            // (A note it wrote is not what it is saying: it finds its own notes.)
+            c.and("(i.session IS NOT ? OR i.kind = 'note')", [text(s)]);
         }
         c
     }

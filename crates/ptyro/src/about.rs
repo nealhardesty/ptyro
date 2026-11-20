@@ -218,6 +218,8 @@ pub async fn collect(ctx: &Ctx) -> About {
         place("data", ctx.paths.data.clone()),
         // What the knowledge base keeps (SPEC §25.12): sessions' text, on this computer only.
         place("knowledge", ctx.paths.data.join("kb.db")),
+        // Your notes and your agents' (SPEC §25.6.4): Markdown files, yours to edit.
+        place("notes", crate::uninstall::notes_dir(&ctx.paths)),
         place("logs", ctx.paths.log_dir()),
         place("socket", ctx.paths.socket.clone()),
     ];

@@ -8,6 +8,8 @@
 pub const CHAT: &str = "It goes from every list, on every device. This can't be undone.";
 /// `kb forget`: the daemon asks with it (`KbForget` unconfirmed).
 pub const KB: &str = "The text is deleted from the knowledge base for good, and nothing of it is kept again. Your files and the agents' own transcripts aren't touched.";
+/// `kb forget` of a note: after the count, in place of `KB` (or after it, with other items).
+pub const KB_NOTE: &str = "A note's file is deleted from the notes folder. This can't be undone.";
 /// `project rm`.
 pub const PROJECT: &str = "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.";
 /// Letting a project's running sessions go: after `PROJECT` in `project rm --release`, and in

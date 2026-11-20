@@ -969,6 +969,10 @@ enum Cmd {
         /// Don't remove the ptyro program itself
         #[arg(long)]
         keep_binary: bool,
+        /// Also delete the notes you and your agents wrote (the knowledge base's notes
+        /// folder, which is otherwise left where it is)
+        #[arg(long)]
+        delete_notes: bool,
         /// Also delete the snapshots under refs/ptyro/ in your repositories (archived and
         /// taken-over work)
         #[arg(long)]

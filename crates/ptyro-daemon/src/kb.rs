@@ -14,11 +14,12 @@
 //! readers find past each item's cursor (`KbDb::cursors`, [`Daemon::kb_catch_up`]), so nothing
 //! crosses the exec; a job that was queued and not yet written is found again that way.
 //!
-//! Agent sessions, the first source, are in [`sessions`].
+//! Agent sessions, the first source, are in [`sessions`]; notes, which are files, in [`notes`].
 
 #[cfg(test)]
 mod golden;
 mod machines;
+mod notes;
 mod requests;
 mod search;
 mod sessions;
@@ -60,6 +61,15 @@ pub struct Kb {
     /// The last assistant message read of each session (its URI), hashed: how a read knows
     /// that the reply a `Stop` hook named was taken already (`sessions`).
     replies: Mutex<HashMap<String, u64>>,
+    /// The notes folder's watcher (`notes`), kept for as long as the daemon runs.
+    notes_watch: Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
+    /// One reader or writer of the notes folder at a time.
+    notes_lock: tokio::sync::Mutex<()>,
+    /// Note files that were refused, each as it was then (its time and size): not read
+    /// again until it changes.
+    notes_refused: Mutex<HashMap<String, serde_json::Value>>,
+    /// Notes each session's agent wrote today (the day, how many): `remember`'s limit.
+    remembered: Mutex<HashMap<String, (u64, u32)>>,
 }
 
 struct Rules {
@@ -73,7 +83,7 @@ struct Rules {
 /// except one that was read for another reason already.
 pub(crate) enum Job {
     /// A source that is already in memory, with what the daemon knows about it.
-    #[allow(dead_code)] // (KB2's notes are its first users; until then this module's tests.)
+    #[allow(dead_code)] // (This module's tests; a note is ingested where it is written.)
     Prepared(Box<Prepared>),
     /// An agent session whose transcript may have grown (a turn's end, its exit).
     Session(sessions::SessionJob),
@@ -127,6 +137,10 @@ impl Kb {
             skipped: Mutex::new(VecDeque::new()),
             rules: Mutex::new(None),
             replies: Mutex::new(HashMap::new()),
+            notes_watch: Mutex::new(None),
+            notes_lock: tokio::sync::Mutex::new(()),
+            notes_refused: Mutex::new(HashMap::new()),
+            remembered: Mutex::new(HashMap::new()),
         }
     }
 
@@ -190,6 +204,7 @@ impl Daemon {
         let me = Arc::clone(self);
         tokio::spawn(async move { me.kb_actor().await });
         self.start_kb_retention();
+        self.start_kb_notes();
     }
 
     /// A session's workspace as an item is stamped with it: its id. (A session knows its
