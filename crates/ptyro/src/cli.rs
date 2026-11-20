@@ -461,6 +461,7 @@ async fn dispatch(
         Some(Cmd::Proxy) => crate::remote::proxy(&ctx).await,
         Some(Cmd::Chat { cmd, new }) => crate::chat::run(&ctx, cmd, new).await,
         Some(Cmd::Recall { args }) => crate::kb::recall(&ctx, args).await,
+        Some(Cmd::Ingest { args }) => crate::ingest::run(&ctx, args).await,
         Some(Cmd::Kb { cmd, json }) => crate::kb::run(&ctx, cmd, json).await,
         Some(Cmd::Shells { cmd, ls }) => crate::shells::run(&ctx, cmd, ls).await,
         Some(Cmd::Shell { worktree, json, read, scrollback }) => {

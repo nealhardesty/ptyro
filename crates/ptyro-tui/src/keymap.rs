@@ -402,7 +402,23 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "kb.sync",
-        "Read the notes folder again now: what you wrote, changed or deleted there by hand is found",
+        "Look again now: the notes folder is read (what you wrote, changed or deleted there by hand is found), and every project and folder is looked at for files that changed",
+    ),
+    a(
+        "kb.sources",
+        "What is read into the knowledge base: every project and every folder given to it, with what each holds and how it stands",
+    ),
+    a(
+        "kb.ingest",
+        "Read a folder or a file into the knowledge base and keep reading it: its documents, its files' names, its source comments, its commits",
+    ),
+    a(
+        "kb.backfill",
+        "Read what your agents kept before ptyro did: every conversation in Claude Code's and Codex's own folders that isn't kept yet",
+    ),
+    a(
+        "kb.remove",
+        "Stop reading a folder or file, and drop what was kept of it (your files aren't touched); asks first",
     ),
     a("nav.collapse", "Sidebar: fold the selected workspace, project or worktree"),
     a("nav.expand", "Sidebar: unfold the selected workspace, project or worktree"),

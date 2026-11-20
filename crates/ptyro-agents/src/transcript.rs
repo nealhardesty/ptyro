@@ -38,6 +38,9 @@ pub struct Transcript {
     pub model: Option<String>,
     /// The files the piece's tool calls changed, each once, in order.
     pub files: Vec<String>,
+    /// The folder the conversation ran in, when the piece says it (the history's backfill
+    /// has nothing else to place a conversation by).
+    pub cwd: Option<String>,
 }
 
 impl Transcript {
@@ -304,6 +307,9 @@ pub fn claude(bytes: &[u8], from: u64) -> Transcript {
         if t.conversation.is_none() {
             t.conversation = v["sessionId"].as_str().map(str::to_owned);
         }
+        if t.cwd.is_none() {
+            t.cwd = v["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned);
+        }
         let at = stamp(&v);
         let content = &v["message"]["content"];
         if kind == "user" {
@@ -414,6 +420,7 @@ pub fn codex(bytes: &[u8], from: u64) -> Transcript {
         match (v["type"].as_str().unwrap_or(""), p["type"].as_str().unwrap_or("")) {
             ("session_meta", _) => {
                 t.conversation = p["id"].as_str().or(p["session_id"].as_str()).map(str::to_owned);
+                t.cwd = p["cwd"].as_str().filter(|c| !c.is_empty()).map(str::to_owned);
             }
             ("turn_context", _) => {
                 if let Some(m) = p["model"].as_str().filter(|m| !m.is_empty()) {
@@ -548,6 +555,60 @@ pub(crate) fn codex_path(at: &TranscriptAt<'_>) -> Option<PathBuf> {
         entries.iter().find_map(|d| newest(d, depth - 1, ours))
     }
     newest(&sessions, 3, &ours).or_else(|| newest(&archived, 0, &ours))
+}
+
+/// Every conversation Claude Code kept under `home`: `projects/<folder>/<id>.jsonl`, with the
+/// id each is known by. Sub-agents' files (`<id>/subagents/…`) are not conversations.
+pub(crate) fn claude_all(home: &Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for dir in std::fs::read_dir(home.join("projects")).into_iter().flatten().flatten() {
+        for f in std::fs::read_dir(dir.path()).into_iter().flatten().flatten() {
+            let path = f.path();
+            let id = path.file_stem().and_then(|n| n.to_str()).map(str::to_owned);
+            if let Some(id) = id
+                && path.extension().is_some_and(|e| e == "jsonl")
+                && path.is_file()
+            {
+                out.push((id, path));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Every conversation Codex kept under `home`: `sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl`
+/// and `archived_sessions/rollout-<time>-<id>.jsonl`, with the id each is known by (the
+/// thread's, a UUID at the name's end).
+pub(crate) fn codex_all(home: &Path) -> Vec<(String, PathBuf)> {
+    fn walk(dir: &Path, depth: usize, out: &mut Vec<(String, PathBuf)>) {
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = e.path();
+            if depth > 0 {
+                walk(&path, depth - 1, out);
+                continue;
+            }
+            let id = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix("rollout-")?.strip_suffix(".jsonl"))
+                .and_then(|n| n.get(n.len().checked_sub(36)?..))
+                .filter(|id| id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
+                .map(str::to_owned);
+            if let Some(id) = id
+                && path.is_file()
+            {
+                out.push((id, path));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&home.join("sessions"), 3, &mut out);
+    walk(&home.join("archived_sessions"), 0, &mut out);
+    out.sort();
+    // (A thread that was archived and is also in `sessions/`: the one read first stands.)
+    out.dedup_by(|b, a| a.0 == b.0);
+    out
 }
 
 /// The title Codex keeps for a thread: the last `{id, thread_name}` line of

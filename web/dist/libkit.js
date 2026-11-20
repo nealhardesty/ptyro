@@ -166,3 +166,27 @@ export function found(chunks, text) {
 export const conversation = (uri) => uri.slice(uri.lastIndexOf("/") + 1);
 export const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 export const bytes = (n) => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+/// `kb_ingest`, from the form's values: what `ptyro ingest PATH` takes. A switch left as it
+/// stands by default is not sent (the computer's own settings then decide).
+export function ingestRequest(v) {
+    const text = (k) => (typeof v[k] === "string" && v[k].trim() ? v[k].trim() : undefined);
+    const globs = (k) => (text(k) ?? "").split(",").map((g) => g.trim()).filter(Boolean);
+    const options = {};
+    if (globs("include").length)
+        options.include = globs("include");
+    if (globs("exclude").length)
+        options.exclude = globs("exclude");
+    if (v.comments === false)
+        options.comments = false;
+    if (v.code === true)
+        options.code = true;
+    if (v.commits === false)
+        options.commits = false;
+    if (v.once === true)
+        options.once = true;
+    const spec = { path: text("path") ?? "", options };
+    for (const k of ["name", "project", "profile"])
+        if (text(k))
+            spec[k] = text(k);
+    return { t: "kb_ingest", spec };
+}

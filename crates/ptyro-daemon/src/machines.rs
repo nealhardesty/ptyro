@@ -249,7 +249,12 @@ fn here_only(req: &Request) -> bool {
             | KbNote { .. }
             | KbNotes { .. }
             | KbNoteRead { .. }
-            | KbSync
+            | KbSync { .. }
+            // Roots are managed on their own machine (SPEC §25.11).
+            | KbRoots
+            | KbIngest { .. }
+            | KbRemove { .. }
+            | KbHistory { .. }
             | Shutdown { .. }
             | Upgrade { .. }
             | DevicePair { .. }

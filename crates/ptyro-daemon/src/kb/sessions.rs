@@ -85,7 +85,7 @@ struct Target {
 }
 
 /// What a read found.
-struct Piece {
+pub(super) struct Piece {
     transcript: Transcript,
     /// Where it stopped, for the item.
     cursor: Value,
@@ -106,6 +106,23 @@ fn file_id(m: &std::fs::Metadata) -> (u64, u64) {
 #[cfg(not(unix))]
 fn file_id(_: &std::fs::Metadata) -> (u64, u64) {
     (0, 0)
+}
+
+impl Piece {
+    /// The folder the conversation ran in, when the piece says it.
+    pub(super) fn cwd(&self) -> Option<&str> {
+        self.transcript.cwd.as_deref()
+    }
+}
+
+/// A conversation ptyro never ran, from its file's start (the history's backfill): what the
+/// first read of `path` gives, with the title the agent keeps for it.
+pub(super) fn import(adapter: &str, home: &Path, conversation: &str, path: &Path) -> Option<Piece> {
+    let a = ptyro_agents::adapter(adapter);
+    let mut piece = read(a.as_ref(), path, None, READ_MAX)?;
+    let cwd = piece.cwd().map(PathBuf::from).unwrap_or_default();
+    piece.title = a.transcript_title(&TranscriptAt { home, cwd: &cwd, conversation, hook: None });
+    Some(piece)
 }
 
 /// Whether the file a cursor names is not where the cursor left it: longer, shorter, or
@@ -217,11 +234,22 @@ impl Daemon {
     }
 
     fn kb_queue_session(&self, s: &Session, job: SessionJob) {
-        let ours = {
+        let (ours, out, project) = {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let agent = m.kind == SessionKind::Agent && m.place.chat.is_none();
             // (A private session is never queued, §25.7a: the gate would refuse it too.)
-            m.kind == SessionKind::Agent && m.place.chat.is_none() && !m.place.private
+            (
+                agent && !m.place.private,
+                agent && (m.place.private || m.place.unrecorded),
+                m.place.project.clone().filter(|_| agent),
+            )
         };
+        // What is kept of nothing is not read from the agent's own copy later either.
+        if out {
+            self.kb_keep_out(s, job.conversation.clone());
+        }
+        // A turn ended in a project: a document the agent just wrote becomes findable.
+        self.kb_root_turn(project.as_deref());
         let kb = self.config().kb;
         if ours && kb.enabled && kb.sessions {
             self.kb_enqueue(Job::Session(job));
@@ -266,6 +294,44 @@ impl Daemon {
     /// The URI `s` is kept under now, if it is a source whose conversation is known.
     pub(super) fn kb_session_uri(&self, s: &Session) -> Option<String> {
         self.kb_target(s, None).map(|t| t.uri)
+    }
+
+    /// The same, in the conversation a trigger named.
+    pub(super) fn kb_session_uri_in(
+        &self,
+        s: &Session,
+        conversation: Option<String>,
+    ) -> Option<String> {
+        self.kb_target(s, conversation).map(|t| t.uri)
+    }
+
+    /// The first piece of a conversation ptyro never ran (`history`), through the way in.
+    /// Returns whether the file holds more than the piece.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn kb_write_import(
+        self: &Arc<Self>,
+        db: &KbDb,
+        passed: ptyro_core::kb::ingest::Passed,
+        uri: String,
+        stamp: Stamp,
+        facts: Facts,
+        card: Card,
+        piece: Piece,
+    ) -> Result<bool, Refused> {
+        let more = piece.more;
+        let target = Target {
+            uri,
+            adapter: String::new(),
+            conversation: String::new(),
+            cwd: PathBuf::new(),
+            hook: None,
+            stamp,
+            facts,
+            card,
+            title: None,
+        };
+        self.kb_write_session(db, passed, target, None, Some(piece)).await?;
+        Ok(more)
     }
 
     /// What the daemon knows of `s` as a source, or `None` when it is never one: not an

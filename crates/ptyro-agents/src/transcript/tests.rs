@@ -420,3 +420,51 @@ fn the_file_is_the_hooks_only_when_it_is_that_conversations() {
 fn inside_day(p: &Path) -> bool {
     p.to_string_lossy().contains("/2026/11/19/")
 }
+
+/// What the history's backfill asks (SPEC §25.6.1): every conversation an agent kept, each
+/// with its id, and the folder a conversation ran in.
+#[test]
+fn every_conversation_an_agent_kept_and_where_it_ran() {
+    let t = tempfile::tempdir().unwrap();
+    let put = |rel: &str, bytes: &[u8]| {
+        let p = t.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let a = "1428ccdc-2336-4067-abd0-ac2ef1665b1f";
+    let b = "6992c0ad-dafa-428e-8e80-8de66de55326";
+    let plain = fixture(CLAUDE, "plain.jsonl");
+    let one = put(&format!("claude/projects/-home-u-proj/{a}.jsonl"), &plain);
+    let two = put(&format!("claude/projects/-r-other/{b}.jsonl"), b"");
+    // A sub-agent's file, a folder's own notes and a stray file are no conversations.
+    put(&format!("claude/projects/-home-u-proj/{a}/subagents/agent-1.jsonl"), &plain);
+    put("claude/projects/-home-u-proj/memory/MEMORY.md", b"# m");
+    put("claude/projects/stray.jsonl", b"");
+    let claude_home = t.path().join("claude");
+    assert_eq!(
+        crate::adapter("claude").transcripts(&claude_home),
+        [(a.to_owned(), one), (b.to_owned(), two)]
+    );
+    assert_eq!(claude(&plain, 0).cwd.as_deref(), Some("/home/u/proj"));
+
+    let rollout = fixture(CODEX, "plain.jsonl");
+    let id = "01a1f5f6-b278-76d1-8a83-cfe1291c7e0d";
+    let new =
+        put(&format!("codex/sessions/2026/11/19/rollout-2026-11-19T22-39-07-{id}.jsonl"), &rollout);
+    let old = put(&format!("codex/archived_sessions/rollout-2026-10-01T10-00-00-{b}.jsonl"), b"");
+    put(&format!("codex/archived_sessions/rollout-2026-11-19T22-39-07-{id}.jsonl"), &rollout);
+    put("codex/sessions/2026/11/19/notes.jsonl", b"");
+    put("codex/session_index.jsonl", b"");
+    let codex_home = t.path().join("codex");
+    let mut found = crate::adapter("codex").transcripts(&codex_home);
+    found.sort_by(|x, y| x.1.cmp(&y.1));
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found.contains(&(b.to_owned(), old)));
+    assert!(found.iter().any(|(i, _)| i == id));
+    let _ = new;
+    assert_eq!(codex(&rollout, 0).cwd.as_deref(), Some("/home/u/proj"));
+    // An agent with no transcripts, and a folder that isn't there.
+    assert!(crate::adapter("opencode").transcripts(&claude_home).is_empty());
+    assert!(crate::adapter("claude").transcripts(&t.path().join("nope")).is_empty());
+}

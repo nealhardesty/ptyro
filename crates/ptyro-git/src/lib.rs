@@ -26,6 +26,7 @@ pub enum GitError {
 }
 
 pub mod diff;
+pub mod log;
 pub mod orch;
 
 pub type Result<T, E = GitError> = std::result::Result<T, E>;

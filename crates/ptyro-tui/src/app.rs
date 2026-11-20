@@ -1710,6 +1710,8 @@ impl App {
             DomainEvent::HostLoad { load } => self.host_load = load,
             // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
             DomainEvent::KbUpdated { .. } => self.library_news(),
+            // (A pass over a root: the Sources tab, KB3.7, shows how far it is.)
+            DomainEvent::KbProgress { .. } => {}
             DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
@@ -1965,7 +1967,7 @@ impl App {
             (Pending::KbForgotten, Ok(Reply::KbForgotten { items, chunks })) => {
                 self.library_forgot(items, chunks)
             }
-            (Pending::KbSynced, Ok(Reply::KbSynced { notes, changed, removed })) => {
+            (Pending::KbSynced, Ok(Reply::KbSynced { notes, changed, removed, .. })) => {
                 self.library_synced(notes, changed, removed)
             }
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {

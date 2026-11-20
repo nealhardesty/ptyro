@@ -24,6 +24,13 @@ same entry. An agent with no transcript ptyro can read (OpenCode) gets its card 
 **Notes**, which you and your agents write: see [Notes](#notes). They are files; `kb.db`
 holds their index.
 
+**Your projects, and any folder you give it**: see [Projects and folders](#projects-and-folders).
+Their documents, the names of their files, the comments in their code and their commit
+messages; their code itself only if you ask.
+
+**What your agents kept before ptyro did**, when you ask for it: `ptyro ingest --history`
+(see [The agents' own history](#the-agents-own-history)).
+
 **Your chats are searched beside it.** They live in their own file (`chat.db`) and are not
 copied; one search answers from both.
 
@@ -44,9 +51,98 @@ only. Nothing leaves this computer. Each linked machine keeps its own (see
 - **What you forgot** (below), and anything of an agent or a repository you kept out.
 - Terminal contents. ptyro's database (`ptyro.db`) holds no text of your work at all.
 
-Not built yet: notes you or an agent write down, folders of documents and code (`ptyro
-ingest`), an agent's history from before ptyro kept it, and shell commands. They are planned
-(ROADMAP KB2 to KB5); today the knowledge base holds agent sessions.
+Not built yet: shell commands, and pointers offered at a prompt (ROADMAP KB4, KB5).
+
+## Projects and folders
+
+**Every project ptyro knows is read by itself** (`[kb] projects`, on): when you add a project
+it becomes searchable, with nothing to run. Only its own checkout is read, never its
+worktrees, so a file is found once and not once per agent. `ptyro ingest PATH` reads any other
+folder or file, and keeps reading it:
+
+```sh
+ptyro ingest ~/notes                 # read it, and say what was read
+ptyro ingest docs --include '*.md' --name handbook
+ptyro ingest ~/src/lib --code        # its source code too, found by its words
+ptyro kb ls                          # what is read: each with what it holds and how it stands
+ptyro kb sync                        # look again now, at everything (or: kb sync handbook)
+ptyro kb rm handbook                 # stop reading it and drop what was kept (asks first)
+```
+
+What is made of a file:
+
+| | What | By default |
+|---|---|---|
+| Its path | the path, and the words in its name (`RateLimiter.ts` is found by `rate limiter`) | always |
+| A document | `.md .mdx .markdown .txt .rst .adoc .org`, `README`, `CHANGELOG`, `NOTES`, `TODO`: its text, each piece under its heading | on |
+| Its comments | a source file's comments, each with the line of code it stands on. Licence headers, tool directives (`eslint-disable`), switched-off code and trailing comments are left out; a comment that several files repeat is kept once | on (`[kb] comments`, `--no-comments`) |
+| Its code | the source itself, in pieces of 60 lines, found by its words only | **off** (`[kb] code`, `--code`): it puts a copy of your code in `kb.db` |
+
+And of a repository, **its commits** (`[kb] commits`, `--no-commits`): the message and the
+names of the files each changed, the newest 5,000 of its main branch at first, then the new
+ones.
+
+**Which files.** In a git repository, what git tracks and what it would add: nothing that
+`.gitignore` ignores. Elsewhere, everything but hidden folders and `node_modules`, `target`,
+`dist`, `build`, `vendor`, `.venv`. Then `--include` and `--exclude` (globs like `docs/**` or
+`*.md`). Never a file of keys (`.env*`, `*.pem`, `.ssh/`…; `[kb] exclude` adds to the list),
+never one that isn't text, never one larger than `[kb] max_file` (1 MiB), never anything in
+ptyro's own data folder. A root takes 50,000 files; one with more says so, and `--include`
+narrows it. `ptyro kb` lists what was not kept, and why.
+
+**It stays current.** A root is looked at again every hour (`[kb] sync_every`), when the
+daemon starts, when an agent's turn ends in its project (so a document an agent just wrote is
+found), and on `ptyro kb sync`. Only files whose time or size changed are read. A file that is
+gone, or renamed, leaves. A folder that is gone is `missing`: what was read of it stays until
+it is back or you remove it. `--once` reads now and never again.
+
+**Whose it is.** A folder belongs to every profile unless you say `--profile work`; a project
+to the profile it is pinned to, else to every profile. An agent of another profile never
+finds it.
+
+**A repository's own say**, in its `.ptyro.toml`:
+
+```toml
+[knowledge]
+enabled = false          # nothing of this project
+comments = false         # not its comments
+commits = false          # not its commits
+code = true              # its code too (the one thing a repository may switch on)
+include = ["docs/**"]    # only these
+exclude = ["fixtures/**"]
+```
+
+`ptyro kb rm` drops a folder's root and everything read of it; your files aren't touched, and
+ingesting it again brings it back. A project's root goes when the project is removed from
+ptyro, when its file keeps it out, or when `[kb] projects` is off.
+
+Not built yet: the Library's Sources tab and its form (today: `kb.sources`, `kb.ingest`,
+`kb.backfill` and `kb.remove` in the TUI's palette run the commands in a split, and the web's
+Library has Sources… with Read a folder…); `ptyro gc` and mend naming a root that is missing
+(`ptyro kb`, `ptyro kb ls` and `ptyro doctor` do).
+
+## The agents' own history
+
+Claude Code and Codex keep their own transcripts. `ptyro ingest --history` reads the ones
+ptyro never saw: sessions from before you installed it, and agents you started by hand in a
+shell.
+
+```sh
+ptyro ingest --history --dry-run     # how many there are, and read nothing
+ptyro ingest --history               # read them (it says how many first)
+ptyro ingest --history --agent codex --profile work --since 30d
+```
+
+It looks in each profile's Claude Code folder (`projects/`) and Codex folder (`sessions/`,
+`archived_sessions/`). A conversation belongs to the profile whose folder held it, and to the
+project its folder was in, if ptyro knows that project. It is read as a live session is: what
+was typed, what was answered, a line a tool. It is read behind everything else, so a session's
+own turn never waits for it.
+
+Never read: a conversation that is kept already; one you forgot; **a private session's** (it
+is marked as never to be kept as soon as ptyro knows its conversation); a chat's (its text is
+in your chats); one older than `retain_days` or `--since`; an agent's with `kb = false`; one
+that ran in a project that keeps itself out. Sub-agents' own files are not read.
 
 ## Private sessions
 
@@ -187,14 +283,22 @@ Settings → Knowledge in the TUI and on the web; `[kb]` in the config.
 | `retain_days` | delete agent sessions older than this, once a day; `0` keeps them |
 | `redact` | more patterns to take out before anything is kept |
 | `exclude` | more paths that are never read |
-| `max_file` | the largest transcript or file that is read |
+| `max_file` | the largest file that is read |
+| `projects` | off: projects are not read by themselves (only what `ptyro ingest` was given) |
+| `comments` | off: source comments are not read |
+| `code` | on: source code is read too, found by its words. It makes `kb.db` several times larger |
+| `commits` | off: commit messages are not read |
+| `sync_every` | how often every project and folder is looked at again (`1h`) |
 | `[agents.NAME] kb` | off: nothing of this agent's sessions, and no tools for it |
 | `[knowledge] enabled` in a repository's `.ptyro.toml` | off: nothing of this project. A repository can keep itself out, never in |
+| `[knowledge] comments`, `commits`, `include`, `exclude` there | narrow what is read of this project; `code = true` reads its code too |
 
 `ptyro kb` says how it stands: on or off, what it holds, its size, how long sessions are kept,
 what was forgotten, and what was not kept and why.
 
 ## Retention
+
+Files, commits and notes are never aged out: they are current by being read again.
 
 `retain_days = 90` deletes agent sessions older than 90 days. It acts when you set it, at the
 daemon's start and once a day. A session deleted this way may be kept again if it goes on.

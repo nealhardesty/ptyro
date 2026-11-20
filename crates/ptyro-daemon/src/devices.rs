@@ -138,6 +138,7 @@ pub fn needed(req: &Request) -> Scope {
         | KbRecent { .. }
         | KbNotes { .. }
         | KbNoteRead { .. }
+        | KbRoots
         | KbStatus => Scope::Read,
         ChatNew { .. }
         | ChatTask { .. }
@@ -151,7 +152,10 @@ pub fn needed(req: &Request) -> Scope {
         | ChatDelete { .. }
         // Writing a note and reading the notes folder again (SPEC §25.11).
         | KbNote { .. }
-        | KbSync => Scope::Control,
+        | KbSync { .. }
+        // Reading a folder in, and what the agents kept (SPEC §25.11).
+        | KbIngest { .. }
+        | KbHistory { .. } => Scope::Control,
         List
         | Get { .. }
         | ReadScreen { .. }
@@ -224,7 +228,7 @@ pub fn needed(req: &Request) -> Scope {
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
         // Forgetting deletes for good (SPEC §25.11).
-        KbForget { .. } => Scope::Full,
+        KbForget { .. } | KbRemove { .. } => Scope::Full,
         Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | GcKeep { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
     }
 }

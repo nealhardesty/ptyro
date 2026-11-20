@@ -33,6 +33,17 @@ pub struct ProjectSection {
 pub struct KnowledgeSection {
     /// `false`: nothing that happens in this project is kept (default: your own setting).
     pub enabled: Option<bool>,
+    /// `false`: its source files' comments are not read.
+    pub comments: Option<bool>,
+    /// Its source code is read (`true`), or not (`false`), whatever your own setting says:
+    /// the one switch a repository may turn on for itself.
+    pub code: Option<bool>,
+    /// `false`: its commit messages are not read.
+    pub commits: Option<bool>,
+    /// Only these of its files are read (globs).
+    pub include: Vec<String>,
+    /// These of its files are not read (globs).
+    pub exclude: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

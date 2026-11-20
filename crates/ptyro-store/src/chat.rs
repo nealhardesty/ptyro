@@ -855,6 +855,18 @@ impl ChatDb {
         .await
     }
 
+    /// The agents' own ids of every conversation that served a chat: what the knowledge
+    /// base's backfill never reads (a chat's text is here, SPEC §25.6.1).
+    pub async fn conversation_ids(&self) -> Result<Vec<String>> {
+        self.call(|db| {
+            let mut st = db.prepare(
+                "SELECT DISTINCT conversation_id FROM conv WHERE conversation_id IS NOT NULL",
+            )?;
+            Ok(st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
     // ── the file ─────────────────────────────────────────────────────────────────────────────
 
     pub async fn doctor(&self) -> Result<ChatDoctor> {

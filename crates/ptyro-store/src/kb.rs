@@ -177,6 +177,15 @@ pub struct Cursor {
     pub cursor: Option<serde_json::Value>,
 }
 
+/// One item of a root ([`KbDb::root_items`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RootItem {
+    pub id: String,
+    pub uri: String,
+    pub kind: ItemKind,
+    pub cursor: Option<serde_json::Value>,
+}
+
 /// What an item's stored chunks say of its session ([`KbDb::session_facts`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionFacts {
@@ -660,6 +669,61 @@ impl KbDb {
                     root_row,
                 )
                 .optional()?)
+        })
+        .await
+    }
+
+    /// What a root holds, for a pass over it: every item of it that isn't forgotten, with
+    /// where reading it stopped.
+    pub async fn root_items(&self, root: String) -> Result<Vec<RootItem>> {
+        self.call(move |db| {
+            let mut st = db.prepare(
+                "SELECT id, uri, kind, cursor FROM item WHERE root = ?1 AND forgotten_at IS NULL",
+            )?;
+            Ok(st
+                .query_map([root], |r| {
+                    Ok(RootItem {
+                        id: r.get(0)?,
+                        uri: r.get(1)?,
+                        kind: word(2, &r.get::<_, String>(2)?, ItemKind::parse)?,
+                        cursor: json(3, r)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// How much each root holds: its id, a kind, that kind's items and their chunks.
+    pub async fn root_counts(&self) -> Result<Vec<(String, ItemKind, u64, u64)>> {
+        self.call(|db| {
+            let mut st = db.prepare(
+                "SELECT root, kind, count(*), sum(chunks) FROM item
+                 WHERE root IS NOT NULL AND forgotten_at IS NULL GROUP BY root, kind",
+            )?;
+            Ok(st
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        word(1, &r.get::<_, String>(1)?, ItemKind::parse)?,
+                        r.get::<_, i64>(2)? as u64,
+                        r.get::<_, Option<i64>>(3)?.unwrap_or(0) as u64,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// Every URI of `kind` the file knows, forgotten ones too: what a backfill must not read
+    /// again (`true`: it was forgotten).
+    pub async fn uris(&self, kind: ItemKind) -> Result<Vec<(String, bool)>> {
+        self.call(move |db| {
+            let mut st =
+                db.prepare("SELECT uri, forgotten_at IS NOT NULL FROM item WHERE kind = ?1")?;
+            Ok(st
+                .query_map([kind.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
         })
         .await
     }

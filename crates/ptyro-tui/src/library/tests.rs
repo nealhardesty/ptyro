@@ -217,8 +217,15 @@ fn it_has_a_key_and_a_place_in_the_palette_the_help_and_which_key() {
     for a in ["kb.status", "kb.enable"].iter().chain(ACTIONS) {
         assert!(crate::keymap::spec(a).is_some(), "{a}");
     }
-    // None of them runs a command in a split any more.
-    assert!(crate::cli_actions::TEMPLATES.iter().all(|(a, _)| !a.starts_with("kb.")));
+    // None of them runs a command in a split any more. (The four of the sources do, until
+    // the Sources tab, KB3.7: they are not the Library's yet.)
+    let split: Vec<&str> = crate::cli_actions::TEMPLATES
+        .iter()
+        .map(|(a, _)| *a)
+        .filter(|a| a.starts_with("kb."))
+        .collect();
+    assert_eq!(split, ["kb.sources", "kb.ingest", "kb.backfill", "kb.remove"]);
+    assert!(split.iter().all(|a| !ACTIONS.contains(a)));
     app.overlay = Some(Overlay::Help { filter: "kb.open".into(), scroll: 0 });
     let shown = screen(app);
     assert!(shown.contains("C-q L") && shown.contains("The Library"), "{shown}");
@@ -1208,7 +1215,7 @@ fn the_note_actions_and_a_notes_hit() {
     press(app, "<Esc>");
     run(app, "kb.sync");
     assert!(asked(app).iter().any(|p| matches!(p, Pending::KbSynced)));
-    reply(app, Pending::KbSynced, Reply::KbSynced { notes: 3, changed: 1, removed: 0 });
+    reply(app, Pending::KbSynced, Reply::KbSynced { notes: 3, changed: 1, removed: 0, roots: 0 });
     assert_eq!(toast(app), "3 notes in the folder: 1 read again, 0 gone");
     for action in ["kb.notes", "kb.note", "kb.sync"] {
         assert!(ACTIONS.contains(&action), "{action} is in the Library's menu");

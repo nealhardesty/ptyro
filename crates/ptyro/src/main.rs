@@ -17,6 +17,7 @@ mod complete;
 mod config;
 mod doctor;
 mod host;
+mod ingest;
 mod kb;
 mod linked;
 mod logins;
@@ -685,6 +686,13 @@ enum Cmd {
     Recall {
         #[command(flatten)]
         args: kb::RecallArgs,
+    },
+    /// Read a folder or a file into the knowledge base, and keep reading it as it changes: its
+    /// documents, its files' names, its source comments, its commits. `ptyro ingest ~/notes`;
+    /// `ptyro ingest --history` reads what your agents kept before ptyro did
+    Ingest {
+        #[command(flatten)]
+        args: ingest::IngestArgs,
     },
     /// The knowledge base: what ptyro keeps of your work, on this computer only. Plain `ptyro
     /// kb` says whether it is on and what it holds

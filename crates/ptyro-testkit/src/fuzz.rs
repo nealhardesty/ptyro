@@ -538,6 +538,31 @@ pub fn kb(data: &[u8]) {
         assert!(part.text.chars().count() <= LIMIT);
     }
 
+    // A file under a root (§25.6.3), whatever it is called and holds: its path, then its
+    // text, its comments or its code; and a commit of the same text.
+    let _ = ptyro_core::kb::file::name_parts(&line);
+    let _ = ptyro_core::kb::file::document(&line);
+    let _ = ptyro_core::kb::file::is_binary(data);
+    let names = ["a/RateLimiter.ts", "x.py", "README", "notes.md", "data.json", line.as_str()];
+    let tiers = ptyro_core::kb::file::Tiers { comments: head & 8 != 0, code: head & 16 != 0 };
+    let mut files = vec![
+        ptyro_core::kb::file::source(
+            "file:///fuzz/f",
+            names[usize::from(head) % names.len()],
+            &text,
+            0,
+            tiers,
+            |block| block.len() % 2 == 0,
+        ),
+        ptyro_core::kb::file::commit(
+            "commit://r/abc",
+            &line,
+            &text,
+            std::slice::from_ref(&line),
+            0,
+        ),
+    ];
+
     let body = match head % 3 {
         0 => Body::Markdown { name: "f.md".into(), text: text.clone().into_owned(), at_ms: 0 },
         1 => Body::Plain { name: "f.txt".into(), text: text.clone().into_owned(), at_ms: 0 },
@@ -561,6 +586,13 @@ pub fn kb(data: &[u8]) {
         assert!(p.chunks.iter().all(|c| c.text.chars().count() <= LIMIT && !c.text.is_empty()));
         // (More than that is refused whole, not kept.)
         assert!(p.append || p.hits <= ptyro_core::kb::redact::MAX_HITS);
+    }
+    for file in files.drain(..) {
+        let a = plan(file.clone());
+        assert_eq!(a, plan(file), "the same file gave another plan");
+        if let Some(p) = a {
+            assert!(p.chunks.iter().all(|c| c.text.chars().count() <= LIMIT && !c.text.is_empty()));
+        }
     }
 }
 

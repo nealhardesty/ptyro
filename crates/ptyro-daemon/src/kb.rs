@@ -14,13 +14,18 @@
 //! readers find past each item's cursor (`KbDb::cursors`, [`Daemon::kb_catch_up`]), so nothing
 //! crosses the exec; a job that was queued and not yet written is found again that way.
 //!
-//! Agent sessions, the first source, are in [`sessions`]; notes, which are files, in [`notes`].
+//! Agent sessions, the first source, are in [`sessions`]; notes, which are files, in [`notes`];
+//! projects and folders in [`roots`], which has a task of its own (a folder of fifty thousand
+//! files must not stand in a session's way); what the agents kept before ptyro did in
+//! [`history`], which waits behind everything else on the queue.
 
 #[cfg(test)]
 mod golden;
+mod history;
 mod machines;
 mod notes;
 mod requests;
+mod roots;
 mod search;
 mod sessions;
 
@@ -51,6 +56,9 @@ pub struct Kb {
     /// Opened at start when `[kb] enabled`, else the first time it is wanted.
     db: OnceLock<Result<KbDb, String>>,
     queue: Mutex<VecDeque<Job>>,
+    /// Jobs that wait until the queue is empty: the history's backfill, which is thousands
+    /// of old conversations and must not stand before a session's turn.
+    backlog: Mutex<VecDeque<Job>>,
     wake: Notify,
     /// Jobs queued or being worked on: 0 is idle.
     pending: watch::Sender<usize>,
@@ -70,13 +78,18 @@ pub struct Kb {
     notes_refused: Mutex<HashMap<String, serde_json::Value>>,
     /// Notes each session's agent wrote today (the day, how many): `remember`'s limit.
     remembered: Mutex<HashMap<String, (u64, u32)>>,
+    /// Projects and folders (`roots`).
+    roots: roots::Roots,
+    /// Conversations of sessions that nothing is kept of, which got their tombstone since
+    /// the daemon started (`history`).
+    kept_out: Mutex<std::collections::HashSet<String>>,
 }
 
-struct Rules {
+pub(crate) struct Rules {
     redact: Vec<String>,
     exclude: Vec<String>,
     redactor: Redactor,
-    never: Never,
+    pub(crate) never: Never,
 }
 
 /// One thing to ingest. A job never holds text that the gate has not been asked about,
@@ -89,6 +102,8 @@ pub(crate) enum Job {
     Session(sessions::SessionJob),
     /// A session's item whose session ptyro no longer has, by its URI (the daemon's start).
     Item(String),
+    /// A conversation an agent kept that ptyro never saw (`ingest --history`).
+    History(history::HistoryJob),
 }
 
 pub(crate) struct Prepared {
@@ -132,6 +147,7 @@ impl Kb {
             path,
             db: OnceLock::new(),
             queue: Mutex::new(VecDeque::new()),
+            backlog: Mutex::new(VecDeque::new()),
             wake: Notify::new(),
             pending: watch::Sender::new(0),
             skipped: Mutex::new(VecDeque::new()),
@@ -141,6 +157,8 @@ impl Kb {
             notes_lock: tokio::sync::Mutex::new(()),
             notes_refused: Mutex::new(HashMap::new()),
             remembered: Mutex::new(HashMap::new()),
+            roots: roots::Roots::default(),
+            kept_out: Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -205,6 +223,7 @@ impl Daemon {
         tokio::spawn(async move { me.kb_actor().await });
         self.start_kb_retention();
         self.start_kb_notes();
+        self.start_kb_roots();
     }
 
     /// A session's workspace as an item is stamped with it: its id. (A session knows its
@@ -254,6 +273,14 @@ impl Daemon {
         self.kb.wake.notify_one();
     }
 
+    /// Queue something that waits for everything else: it is taken only while the queue
+    /// itself is empty.
+    pub(crate) fn kb_enqueue_later(&self, job: Job) {
+        self.kb.pending.send_modify(|n| *n += 1);
+        self.kb.backlog.locked().push_back(job);
+        self.kb.wake.notify_one();
+    }
+
     /// Wait until the queue is empty and nothing is being written or waiting to be tried
     /// again (a test, `kb sync`).
     #[allow(dead_code)] // (KB3's `kb sync`; this module's tests.)
@@ -269,11 +296,16 @@ impl Daemon {
 
     async fn kb_actor(self: Arc<Self>) {
         loop {
-            let batch: Vec<Job> = {
+            let mut batch: Vec<Job> = {
                 let mut q = self.kb.queue.locked();
                 let n = q.len().min(BATCH);
                 q.drain(..n).collect()
             };
+            if batch.is_empty() {
+                let mut later = self.kb.backlog.locked();
+                let n = later.len().min(BATCH);
+                batch = later.drain(..n).collect();
+            }
             if batch.is_empty() {
                 self.kb.wake.notified().await;
                 continue;
@@ -287,6 +319,10 @@ impl Daemon {
                     Job::Item(uri) => {
                         let done = self.kb_item(&uri).await;
                         (uri, done)
+                    }
+                    Job::History(j) => {
+                        let uri = j.uri.clone();
+                        (uri, self.kb_history_read(j).await)
                     }
                 };
                 match done {
@@ -306,7 +342,7 @@ impl Daemon {
     }
 
     /// `kb.redact` and `kb.exclude` as they are now, compiled once for each change of them.
-    fn kb_rules(&self) -> Arc<Rules> {
+    pub(crate) fn kb_rules(&self) -> Arc<Rules> {
         let config = self.config();
         let mut cached = self.kb.rules.locked();
         if let Some(r) = cached.as_ref()
@@ -372,17 +408,44 @@ impl Daemon {
         passed: Passed,
         p: Prepared,
     ) -> Result<Written, Refused> {
-        // The profile's secret values: without them the source is not kept, since redaction
-        // can't be skipped. (It is found again from its cursor when they can be read.)
-        let secrets = match p.stamp.profile.as_deref() {
-            Some(profile) => crate::redact::secrets(&self.profile_plan(profile).await.map_err(|e| {
+        let secrets = self.kb_secrets(p.stamp.profile.as_deref()).await?;
+        let kind = p.source.kind;
+        let w = self.kb_store(db, passed, p, secrets).await?;
+        // Something new can be found, or something of it went: who shows it asks again.
+        if w.added + w.changed + w.removed > 0 {
+            self.kb_changed([kind]);
+        }
+        Ok(w)
+    }
+
+    /// A profile's secret values, for the redactor: without them a source of that profile is
+    /// not kept, since redaction can't be skipped. (It is found again from its cursor when
+    /// they can be read.)
+    pub(crate) async fn kb_secrets(
+        self: &Arc<Self>,
+        profile: Option<&str>,
+    ) -> Result<Vec<(String, String)>, Error> {
+        match profile {
+            Some(profile) => Ok(crate::redact::secrets(&self.profile_plan(profile).await.map_err(|e| {
                 Error::new(
                     ErrorCode::Invalid,
                     format!("not kept, because profile {profile}'s secrets can't be read to redact them: {}", e.message),
                 )
-            })?),
-            None => Vec::new(),
-        };
+            })?)),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The plan and the write of a source the gate let through, redacted with `secrets` (its
+    /// profile's) and the user's patterns. It tells nobody: a pass over a root writes
+    /// thousands of items and says so now and then.
+    pub(crate) async fn kb_store(
+        self: &Arc<Self>,
+        db: &KbDb,
+        passed: Passed,
+        p: Prepared,
+        secrets: Vec<(String, String)>,
+    ) -> Result<Written, Refused> {
         let rules = self.kb_rules();
         let Prepared { source, stamp, .. } = p;
         let uri = source.uri.clone();
@@ -401,7 +464,6 @@ impl Daemon {
                 ),
             );
         }
-        let kind = plan.kind;
         let w = db.write(plan).await.map_err(store_err)?;
         if w.outcome == Outcome::Forgotten {
             // Forgotten between the gate and the write.
@@ -411,10 +473,6 @@ impl Daemon {
         // model is here (§25.8).
         if w.added + w.changed > 0 {
             self.kb_embed(db, &w.item).await;
-        }
-        // Something new can be found, or something of it went: who shows it asks again.
-        if w.added + w.changed + w.removed > 0 {
-            self.kb_changed([kind]);
         }
         Ok(w)
     }
@@ -466,8 +524,12 @@ impl Daemon {
                     .map(|(k, n, _)| format!("{n} {k}{}", if *n == 1 { "" } else { "s" }))
                     .collect();
                 let chunks: u64 = d.status.items.iter().map(|(_, _, c)| c).sum();
+                let roots = match db.roots().await {
+                    Ok(roots) => roots::doctor(&roots),
+                    Err(_) => String::new(),
+                };
                 Some(format!(
-                    "knowledge base: {} in {chunks} piece(s), {}, {} in {file} (schema {})",
+                    "knowledge base: {} in {chunks} piece(s), {}, {} in {file} (schema {}){roots}",
                     if kinds.is_empty() { "nothing yet".into() } else { kinds.join(", ") },
                     if d.status.forgotten == 0 {
                         "nothing forgotten".into()

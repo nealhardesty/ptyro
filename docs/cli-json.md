@@ -120,6 +120,8 @@ Conventions:
 - `kb_updated` (`kinds`: the kinds of the items that changed, like `["session"]`): the
   knowledge base changed: something new can be found by `ptyro recall`, or something went
   (forgotten, expired);
+- `kb_progress` (`root`: its id, `name`, `done`, `of`): a folder or project is being read into
+  the knowledge base, this far (files and commits); the last one has `done` = `of`;
 - `events_lost` (`count`): this stream fell behind and skipped events, so re-read state with
   `ls --json`.
 
@@ -191,8 +193,20 @@ Not pinned by the snapshot yet; new fields may be added.
   `item.uri` is `note://<profile or _all>/<project or _global>/<name>`, `item.writer` is `user`
   or `agent`) and its file.
 - `ptyro kb notes --json` → `[KbListed]`, newest first.
-- `ptyro kb sync --json` → `{notes, changed, removed}`: how many notes the folder holds, how
-  many were read again, how many that were kept are gone.
+- `ptyro kb sync [ROOT…] --json` → `{notes, changed, removed, roots: [KbRootInfo]}`: how many
+  notes the folder holds, how many were read again, how many that were kept are gone (all 0
+  when roots were named), and the roots as they are after the read.
+- `ptyro kb ls --json` → `[KbRootInfo]`: a root's `id`, `name`, `kind` (`project`, `folder`,
+  `file`), `path`, `project?`, `project_name?`, `profile?` (absent: every profile's),
+  `options` (`include`, `exclude`, `comments?`, `code?`, `commits?`, `once`), `head?` (the
+  newest commit read), `state` (`ok`, `syncing`, `missing`, `error`), `error?` (why, or a note
+  such as the 50,000-file cap), `added_ms`, `synced_ms?`, and `files`, `commits`, `chunks`,
+  `progress?` (`[done, of]` while it is read or waits), `removing?`.
+- `ptyro ingest PATH… --json` → `[{root: KbRootInfo, plan}]`, after the read. `plan`:
+  `{existing, git, files, documents, sources, comments, code, commits, over?}`.
+- `ptyro ingest --history --json` → `{found, known, old, chats, new, places: [{agent, profile,
+  dir, found, new}], reading}`.
+- `ptyro kb rm ROOT --json` → `{name, items, chunks}`: what was dropped.
 - `ptyro kb forget … --json` → `{items, chunks}`: what was deleted. With `--session`:
   `{items, chunks, private: true}`.
 - `ptyro uninstall --dry-run --json` has `kb_notes: {path, count, bytes, delete}` when there

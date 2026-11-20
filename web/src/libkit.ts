@@ -187,3 +187,20 @@ export const conversation = (uri: string): string => uri.slice(uri.lastIndexOf("
 
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 export const bytes = (n: number): string => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+/// `kb_ingest`, from the form's values: what `ptyro ingest PATH` takes. A switch left as it
+/// stands by default is not sent (the computer's own settings then decide).
+export function ingestRequest(v: Record<string, unknown>): object {
+  const text = (k: string): string | undefined => (typeof v[k] === "string" && (v[k] as string).trim() ? (v[k] as string).trim() : undefined);
+  const globs = (k: string): string[] => (text(k) ?? "").split(",").map((g) => g.trim()).filter(Boolean);
+  const options: Record<string, unknown> = {};
+  if (globs("include").length) options.include = globs("include");
+  if (globs("exclude").length) options.exclude = globs("exclude");
+  if (v.comments === false) options.comments = false;
+  if (v.code === true) options.code = true;
+  if (v.commits === false) options.commits = false;
+  if (v.once === true) options.once = true;
+  const spec: Record<string, unknown> = { path: text("path") ?? "", options };
+  for (const k of ["name", "project", "profile"]) if (text(k)) spec[k] = text(k);
+  return { t: "kb_ingest", spec };
+}

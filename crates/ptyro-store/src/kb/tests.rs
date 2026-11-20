@@ -547,6 +547,24 @@ async fn roots_are_kept_and_removed_with_their_items_and_no_tombstones() {
     let f = ItemFilter { root: Some("r1".into()), ..Default::default() };
     assert_eq!(db.list(f).await.unwrap().len(), 2);
     assert_eq!(db.status().await.unwrap().roots, 2);
+    // What a pass over a root asks: its items, and how much each root holds.
+    let mut of: Vec<_> = db.root_items("r1".into()).await.unwrap();
+    of.sort_by(|a, b| a.uri.cmp(&b.uri));
+    assert_eq!(
+        of.iter().map(|i| (i.uri.as_str(), i.kind)).collect::<Vec<_>>(),
+        [("file:///src/ptyro/a.md", ItemKind::File), ("file:///src/ptyro/b.md", ItemKind::File)]
+    );
+    let mut counts = db.root_counts().await.unwrap();
+    counts.sort();
+    assert_eq!(
+        counts,
+        [
+            ("r1".to_owned(), ItemKind::File, 2, DELETE_BATCH as u64 + 11),
+            ("r2".to_owned(), ItemKind::File, 1, 1)
+        ]
+    );
+    let uris = db.uris(ItemKind::File).await.unwrap();
+    assert_eq!((uris.len(), uris.iter().any(|(_, forgotten)| *forgotten)), (3, false));
     let mut said = Vec::new();
     let gone = db.remove_root("r1".into(), |n| said.push(n)).await.unwrap();
     assert_eq!(gone, DELETE_BATCH + 11);

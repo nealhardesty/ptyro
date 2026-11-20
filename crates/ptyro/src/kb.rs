@@ -195,9 +195,31 @@ pub enum KbCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Read the notes folder again now: what you wrote, changed or deleted there with
-    /// anything else is found (ptyro also watches the folder, so this is rarely needed)
+    /// What is read into the knowledge base: every project and every folder or file given to
+    /// `ptyro ingest`, with what each holds, when it was last read, and what went wrong
+    Ls {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Look again now, for what changed: at the notes folder and everything `kb ls` lists,
+    /// or only at what you name (ptyro also looks by itself: at the notes as they change, at
+    /// a project when an agent's turn ends in it, at everything every `kb.sync_every`)
     Sync {
+        /// Only these (names from `ptyro kb ls`, or paths)
+        #[arg(value_name = "ROOT")]
+        roots: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop reading a folder or file given to `ptyro ingest`, and drop what was kept of it
+    /// (your files aren't touched; ingest it again and it is back). Asks first
+    Rm {
+        /// Its name from `ptyro kb ls`, or its path
+        #[arg(value_name = "ROOT")]
+        root: String,
+        /// Don't ask
+        #[arg(short, long)]
+        yes: bool,
         #[arg(long)]
         json: bool,
     },
@@ -260,7 +282,7 @@ fn off(ctx: &Ctx, e: Error) -> Error {
 }
 
 /// Send a request of the knowledge base's; when it is off, say so and offer to switch it on.
-async fn ask(ctx: &Ctx, c: &ptyro_client::Client, req: Request) -> Result<Reply, Error> {
+pub(crate) async fn ask(ctx: &Ctx, c: &ptyro_client::Client, req: Request) -> Result<Reply, Error> {
     match c.request(req).await {
         Err(e)
             if e.code == ErrorCode::Unsupported && e.message.contains("knowledge base is off") =>
@@ -401,22 +423,9 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
             note(ctx, text, title, project, profile, tag, edit, json).await
         }
         KbCmd::Notes { project, wrote: who, json } => notes(ctx, project, who, json).await,
-        KbCmd::Sync { json } => {
-            let c = ctx.connect(true).await?;
-            let (notes, changed, removed) = match ask(ctx, &c, Request::KbSync).await? {
-                Reply::KbSynced { notes, changed, removed } => (notes, changed, removed),
-                r => return Err(unexpected(r)),
-            };
-            if json {
-                println!("{}", json!({ "notes": notes, "changed": changed, "removed": removed }));
-            } else {
-                println!(
-                    "{notes} note{} in the folder: {changed} read again, {removed} gone",
-                    if notes == 1 { "" } else { "s" }
-                );
-            }
-            Ok(0)
-        }
+        KbCmd::Ls { json } => crate::ingest::list(ctx, json).await,
+        KbCmd::Sync { roots, json } => crate::ingest::sync(ctx, roots, json).await,
+        KbCmd::Rm { root, yes, json } => crate::ingest::remove(ctx, root, yes, json).await,
         KbCmd::Recent { kind, project, machine, wrote: who, limit, json } => {
             let kinds = kinds(kind.as_deref(), ItemKind::parse, ItemKind::ALL, ItemKind::as_str)?;
             let c = ctx.connect(true).await?;

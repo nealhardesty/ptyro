@@ -302,9 +302,29 @@ impl Daemon {
                 Ok(Reply::KbItems { items: self.kb_listed(&db, items).await? })
             }
             Request::KbNoteRead { addr } => self.kb_note_read(&addr, scope).await,
-            Request::KbSync => {
-                let (notes, changed, removed) = self.kb_notes_sync().await?;
-                Ok(Reply::KbSynced { notes, changed, removed })
+            Request::KbSync { roots } => {
+                // Every root and the notes folder; or only the roots named.
+                let (notes, changed, removed) =
+                    if roots.is_empty() { self.kb_notes_sync().await? } else { (0, 0, 0) };
+                let roots = self.kb_roots_sync(&roots).await?;
+                Ok(Reply::KbSynced { notes, changed, removed, roots })
+            }
+            Request::KbRoots => Ok(Reply::KbRoots { roots: self.kb_roots(scope).await? }),
+            // What is read, and what is dropped, is yours to say: an agent's session could
+            // read another profile's folder in, or drop what you chose to keep.
+            Request::KbIngest { .. } | Request::KbRemove { .. } | Request::KbHistory { .. }
+                if scope.is_some() =>
+            {
+                Err(Error::new(
+                    ErrorCode::PermissionDenied,
+                    "an agent's session doesn't add or remove what the knowledge base reads: the user does, with `ptyro ingest` and `ptyro kb rm`",
+                ))
+            }
+            Request::KbIngest { spec } => self.kb_ingest_root(spec).await,
+            Request::KbRemove { root, confirmed } => self.kb_remove_root(&root, confirmed).await,
+            Request::KbHistory { agent, profile, since_ms, dry_run } => {
+                let plan = self.kb_history(agent, profile, since_ms, dry_run).await?;
+                Ok(Reply::KbHistory { plan })
             }
             other => Err(Error::internal(format!("not a knowledge base request: {other:?}"))),
         }
@@ -492,6 +512,9 @@ impl Daemon {
                     .collect();
                 out.vectors = s.vectors;
                 out.roots = s.roots;
+                if let Ok(roots) = db.roots().await {
+                    out.failing = super::roots::failing(&roots);
+                }
                 out.forgotten = s.forgotten;
             }
             Err(e) => out.error = Some(store_err(e).message),

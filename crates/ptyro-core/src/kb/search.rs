@@ -213,6 +213,8 @@ pub struct KbStatusInfo {
     /// Meaning search, in a line: off, downloading, how far (`ptyro doctor`'s).
     pub meaning: Option<String>,
     pub roots: u64,
+    /// The roots that are missing or could not be read, each in a line.
+    pub failing: Vec<String>,
     /// Items forgotten: their text is gone, their URIs are never kept again.
     pub forgotten: u64,
     /// Sources waiting to be read.
@@ -265,6 +267,14 @@ impl KbStatusInfo {
             1 => "  sessions older than a day are deleted".to_owned(),
             n => format!("  sessions older than {n} days are deleted"),
         });
+        match s.roots {
+            0 => {}
+            1 => out.push("  1 root is read (`ptyro kb ls`)".to_owned()),
+            n => out.push(format!("  {n} roots are read (`ptyro kb ls`)")),
+        }
+        for f in &s.failing {
+            out.push(format!("    {f}"));
+        }
         if s.forgotten > 0 {
             out.push(format!("  {} forgotten: never kept again", s.forgotten));
         }

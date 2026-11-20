@@ -3,7 +3,7 @@
 // are in a text, an address's parts, what forgetting names, and the daemon's question.
 //   node web/test/library.mjs
 import assert from "node:assert/strict";
-import { PAGE, byProject, clock, conversation, day, forgetAddr, found, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, question, request, searching, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
+import { PAGE, byProject, clock, conversation, day, forgetAddr, found, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, question, request, searching, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
 
 const DAY = 86_400_000;
 const f = (o = {}) => ({ ...noFilters(), ...o });
@@ -58,6 +58,11 @@ assert.deepEqual(tagsOf(""), []);
 assert.deepEqual(noteRequest({ text: "we chose X" }), { t: "kb_note", text: "we chose X" });
 assert.deepEqual(noteRequest({ text: "x", title: "X", project: "p1", profile: "work", tags: "db decision" }),
   { t: "kb_note", text: "x", title: "X", project: "p1", profile: "work", tags: ["db", "decision"] });
+// Reading a folder: its path, and only what was changed from how the form stood.
+assert.deepEqual(ingestRequest({ path: " ~/notes ", comments: true, code: false, commits: true, once: false }),
+  { t: "kb_ingest", spec: { path: "~/notes", options: {} } });
+assert.deepEqual(ingestRequest({ path: "/src/docs", name: "docs", project: "feeder", profile: "work", include: "*.md, guides/**", exclude: "drafts", comments: false, code: true, commits: false, once: true }),
+  { t: "kb_ingest", spec: { path: "/src/docs", name: "docs", project: "feeder", profile: "work", options: { include: ["*.md", "guides/**"], exclude: ["drafts"], comments: false, code: true, commits: false, once: true } } });
 assert.equal(wroteBy({ writer: "user", agent: null }), "you");
 assert.equal(wroteBy({ writer: "agent", agent: "claude@work" }), "claude@work");
 assert.equal(wroteBy({ writer: "agent" }), "agent");

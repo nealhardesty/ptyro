@@ -405,6 +405,10 @@ impl Adapter for Claude {
         (str_of(p, "transcript_path").map(Into::into), matches!(event, "Stop" | "SessionEnd"))
     }
 
+    fn transcripts(&self, home: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+        crate::transcript::claude_all(home)
+    }
+
     fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
         Some(crate::transcript::claude(bytes, from))
     }

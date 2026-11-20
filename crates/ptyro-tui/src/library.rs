@@ -548,7 +548,7 @@ impl App {
             }
             "kb.notes" => self.library_tab(Tab::Notes),
             "kb.note" => self.open_note_form(),
-            "kb.sync" => self.request(Pending::KbSynced, Request::KbSync),
+            "kb.sync" => self.request(Pending::KbSynced, Request::KbSync { roots: Vec::new() }),
             "kb.status" => {
                 self.show_library(|l| (l.show_status, l.reader, l.typing) = (true, None, false));
                 self.request(Pending::KbStatus, Request::KbStatus);

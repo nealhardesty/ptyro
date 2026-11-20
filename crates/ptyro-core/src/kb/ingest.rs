@@ -121,8 +121,17 @@ impl Default for Never {
 impl Never {
     /// The built-in list and `more` (`kb.exclude`).
     pub fn new(more: &[String]) -> Self {
-        let all =
-            NEVER.iter().copied().chain(more.iter().map(|m| m.trim())).filter(|p| !p.is_empty());
+        Self::build(NEVER.iter().copied().chain(more.iter().map(String::as_str)))
+    }
+
+    /// These globs alone, without the built-in list: a root's `include` and `exclude`
+    /// ([`Never::is_never`] then says whether a path matches one). None: nothing matches.
+    pub fn only(globs: &[String]) -> Self {
+        Self::build(globs.iter().map(String::as_str))
+    }
+
+    fn build<'a>(all: impl Iterator<Item = &'a str>) -> Self {
+        let all = all.map(str::trim).filter(|p| !p.is_empty());
         let (mut parts, mut paths) = (Vec::new(), Vec::new());
         for p in all {
             let p = p.replace('\\', "/");
@@ -259,6 +268,8 @@ pub enum Body {
     /// message and paths, a shell's commands. Each is cut further only if it is too long
     /// ([`chunk::message`]).
     Parts(Vec<Part>),
+    /// Several of those, one after another: a file's path, then its text or its comments.
+    Seq(Vec<Body>),
 }
 
 /// One thing read, as its reader hands it over: what it *is*, never who says so.
@@ -379,35 +390,8 @@ pub fn plan(_: Passed, source: Source, stamp: Stamp, redactor: &Redactor) -> Res
         hits += r.hits;
         r.text
     });
-    let chunks: Vec<Part> = match body {
-        Body::Markdown { name, text, at_ms } => {
-            let r = redactor.redact(&text);
-            hits += r.hits;
-            chunk::markdown(&name, &r.text, at_ms)
-        }
-        Body::Plain { name, text, at_ms } => {
-            let r = redactor.redact(&text);
-            hits += r.hits;
-            chunk::plain(&name, &r.text, at_ms)
-        }
-        Body::Parts(parts) => {
-            let mut out = Vec::with_capacity(parts.len());
-            for mut part in parts {
-                let text = redactor.redact(&part.text);
-                let heading = part.heading.as_deref().map(|h| redactor.redact(h));
-                let n = text.hits + heading.as_ref().map_or(0, |h| h.hits);
-                if append && n > MAX_HITS {
-                    dropped += 1;
-                    continue;
-                }
-                hits += n;
-                part.text = text.text;
-                part.heading = heading.map(|h| h.text);
-                out.extend(chunk::message(part));
-            }
-            out
-        }
-    };
+    let mut chunks = Vec::new();
+    cut(body, append, redactor, &mut chunks, &mut hits, &mut dropped);
     if !append && hits > MAX_HITS {
         return Err(Skip::Secrets { hits });
     }
@@ -428,6 +412,49 @@ pub fn plan(_: Passed, source: Source, stamp: Stamp, redactor: &Redactor) -> Res
         hits,
         dropped,
     })
+}
+
+/// A body redacted and cut into `out`.
+fn cut(
+    body: Body,
+    append: bool,
+    redactor: &Redactor,
+    out: &mut Vec<Part>,
+    hits: &mut usize,
+    dropped: &mut usize,
+) {
+    match body {
+        Body::Markdown { name, text, at_ms } => {
+            let r = redactor.redact(&text);
+            *hits += r.hits;
+            out.extend(chunk::markdown(&name, &r.text, at_ms));
+        }
+        Body::Plain { name, text, at_ms } => {
+            let r = redactor.redact(&text);
+            *hits += r.hits;
+            out.extend(chunk::plain(&name, &r.text, at_ms));
+        }
+        Body::Parts(parts) => {
+            for mut part in parts {
+                let text = redactor.redact(&part.text);
+                let heading = part.heading.as_deref().map(|h| redactor.redact(h));
+                let n = text.hits + heading.as_ref().map_or(0, |h| h.hits);
+                if append && n > MAX_HITS {
+                    *dropped += 1;
+                    continue;
+                }
+                *hits += n;
+                part.text = text.text;
+                part.heading = heading.map(|h| h.text);
+                out.extend(chunk::message(part));
+            }
+        }
+        Body::Seq(bodies) => {
+            for b in bodies {
+                cut(b, append, redactor, out, hits, dropped);
+            }
+        }
+    }
 }
 
 fn hash(title: Option<&str>, rel: Option<&str>, files: &[String], chunks: &[Part]) -> String {

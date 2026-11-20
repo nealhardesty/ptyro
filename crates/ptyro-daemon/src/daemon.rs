@@ -1178,7 +1178,11 @@ impl Daemon {
             | Request::KbNote { .. }
             | Request::KbNotes { .. }
             | Request::KbNoteRead { .. }
-            | Request::KbSync) => self.handle_kb(req, caller).await,
+            | Request::KbSync { .. }
+            | Request::KbRoots
+            | Request::KbIngest { .. }
+            | Request::KbRemove { .. }
+            | Request::KbHistory { .. }) => self.handle_kb(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,

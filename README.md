@@ -594,7 +594,17 @@ ptyro new --private -a claude        # a private session: nothing of it is kept 
 ptyro kb forget --session brisk-rook # forget a running session, and keep nothing more of it
 ptyro kb note "We chose SQLite because there is no server to run" --tag decision   # a note
 ptyro kb notes                       # the notes, by project (kb show REF --open edits one)
+ptyro ingest ~/notes                 # read a folder: its documents, file names, comments, commits
+ptyro ingest --history               # read what your agents kept before ptyro did
+ptyro kb ls                          # what is read (every project is, by itself); kb sync, kb rm
 ```
+
+**Your projects are read too**, with nothing to do: when ptyro knows a project, its documents
+(by heading), the names of its files, the comments in its code and its commit messages become
+searchable; its code itself only with `[kb] code = true`. Only what git doesn't ignore, never a
+file of keys, never a worktree. `ptyro ingest PATH` reads any other folder and keeps it
+current; `ptyro ingest --history` brings in the conversations Claude Code and Codex kept
+before ptyro did (never a private session's, never one you forgot).
 
 **Notes are what someone wrote down**: a decision and its reason, a fact, a how-to. `ptyro kb
 note` writes one (no text: your editor opens), and so do your agents, with their `remember`
@@ -853,7 +863,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
-| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, notes, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
+| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, projects and folders (`ptyro ingest`), the agents' own history, notes, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
@@ -906,7 +916,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
 | `make bench-kb-redact` | ROADMAP KB1.3: how long the knowledge base's redaction takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file before anything is kept) |
-| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan, the transcript readers) / coverage-guided `cargo fuzz` (nightly) |
+| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan, a file under a root, the transcript readers) / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
 | `make compat` (`VTTEST=…`) | headless compatibility sweep → a table for `docs/compat.md` |
 | `make bench` / `make criterion` | emulator parse speed, daemon throughput, idle CPU, key latency (Linux) / micro-benchmarks (`target/criterion`) |

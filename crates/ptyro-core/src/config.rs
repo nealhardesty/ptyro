@@ -615,6 +615,17 @@ pub struct Kb {
     pub retain_days: u32,
     /// The largest file read (`1MiB`); a larger one is named in `ptyro kb status`.
     pub max_file: String,
+    /// Every project ptyro knows is read: its documents, its files' names, and what the
+    /// three switches below allow (§25.6.3).
+    pub projects: bool,
+    /// Source files' comments are read.
+    pub comments: bool,
+    /// Source code itself is read, searched by words only. It makes the index large.
+    pub code: bool,
+    /// Commit messages are read.
+    pub commits: bool,
+    /// How often every project and folder is looked at again (`1h`).
+    pub sync_every: String,
 }
 
 impl Default for Kb {
@@ -631,6 +642,11 @@ impl Default for Kb {
             scope: "profile".into(),
             retain_days: 0,
             max_file: "1MiB".into(),
+            projects: true,
+            comments: true,
+            code: false,
+            commits: true,
+            sync_every: "1h".into(),
         }
     }
 }
@@ -646,11 +662,23 @@ impl Kb {
         if !KB_SCOPES.contains(&self.scope.as_str()) {
             return Err(format!("kb.scope: {:?} (profile, workspace or all)", self.scope));
         }
+        match parse_duration(&self.sync_every) {
+            Ok(d) if d < std::time::Duration::from_secs(60) => {
+                return Err("kb.sync_every: a minute or more (like 1h)".into());
+            }
+            Ok(_) => {}
+            Err(e) => return Err(format!("kb.sync_every: {e}")),
+        }
         match parse_bytes(&self.max_file) {
             Ok(0) => Err("kb.max_file: more than 0 (like 1MiB)".into()),
             Ok(_) => Ok(()),
             Err(e) => Err(format!("kb.max_file: {e}")),
         }
+    }
+
+    /// `kb.sync_every`.
+    pub fn sync_every(&self) -> std::time::Duration {
+        parse_duration(&self.sync_every).unwrap_or(std::time::Duration::from_secs(3600))
     }
 
     /// `kb.max_file` in bytes.
@@ -2448,6 +2476,17 @@ mod tests {
             Config::parse("[kb]\nmax_file = 'big'\n").unwrap_err().starts_with("kb.max_file: ")
         );
         assert!(Config::parse("[kb]\nmax_file = '0'\n").unwrap_err().starts_with("kb.max_file: "));
+        // Roots (KB3).
+        let c = Config::default();
+        assert!(c.kb.projects && c.kb.comments && !c.kb.code && c.kb.commits);
+        assert_eq!(c.kb.sync_every(), std::time::Duration::from_secs(3600));
+        let c = Config::parse("[kb]\nprojects = false\ncode = true\nsync_every = '15m'\n").unwrap();
+        assert!(!c.kb.projects && c.kb.code);
+        assert_eq!(c.kb.sync_every(), std::time::Duration::from_secs(900));
+        for bad in ["soon", "5s"] {
+            let e = Config::parse(&format!("[kb]\nsync_every = '{bad}'\n")).unwrap_err();
+            assert!(e.starts_with("kb.sync_every: "), "{e}");
+        }
         // `[chat] history_scope` is `[kb] scope`'s old name: it holds until the file has the new one.
         assert_eq!(Config::parse("[chat]\nhistory_scope = 'all'\n").unwrap().kb.scope, "all");
         let both = "[chat]\nhistory_scope = 'all'\n[kb]\nscope = 'profile'\n";

@@ -141,6 +141,11 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 # max_file = "2MiB"                       # the largest file read (default 1MiB)
 # redact = ["ACME-[0-9]{6}"]              # more patterns to redact before anything is kept
 # exclude = ["private/**"]                # more paths never to read
+# projects = false                        # don't read every project by itself (only what `ptyro ingest` was given)
+# comments = false                        # don't read source files' comments
+# code = true                             # read source code too, found by its words (it makes kb.db large)
+# commits = false                         # don't read commit messages
+# sync_every = "30m"                      # how often projects and folders are looked at again (default 1h)
 
 [clipboard]
 # allow_write = false                     # programs' OSC 52 copies don't reach your clipboard
@@ -259,6 +264,11 @@ share = ["node_modules"]             # shared, not copied (copy-on-write clone, 
 
 [knowledge]
 # enabled = false                    # keep nothing of this project in the knowledge base
+# comments = false                   # don't read its source comments
+# commits = false                    # don't read its commit messages
+# code = true                        # read its source code too (found by its words)
+# include = ["docs/**"]              # read only these of its files
+# exclude = ["fixtures/**"]          # never these
 
 [scripts]
 setup = "pnpm install --frozen-lockfile"
@@ -292,8 +302,9 @@ command = "cargo test"
 - **A repository can never define agent commands or profiles.** Those live only in your config.
 - **A repository can keep itself out of the knowledge base, never in.** `[knowledge] enabled =
   false` (here, or in your own `.ptyro.local.toml`) keeps the sessions that run in this project
-  out of it. It can't switch on what you switched off, and the knowledge base's other settings
-  (`[kb]`) are yours alone.
+  out of it, and its files unread. `comments`, `commits`, `include` and `exclude` narrow what is
+  read of it. It can't switch on what you switched off, except `code = true` (its own source,
+  found by its words), and the knowledge base's other settings (`[kb]`) are yours alone.
 
 Scripts and sessions in a worktree see `PTYRO_PROJECT`, `PTYRO_ROOT_PATH`, `PTYRO_WORKTREE_PATH`,
 `PTYRO_WORKTREE_NAME` and `PTYRO_BRANCH`. Every session also gets `PTYRO_SESSION_ID` and

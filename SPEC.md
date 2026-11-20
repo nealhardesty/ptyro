@@ -1114,6 +1114,14 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-20] Protocol 1.58** (additive; roots, `ingest` and the history's backfill,
+KB3, §25.6.3, §25.14): the requests `KbRoots` → `KbRoots{roots}`, `KbIngest{spec}` →
+`KbIngested{root, plan}`, `KbRemove{root, confirmed}` → `KbRemoved{name, items, chunks}`
+(unconfirmed: `needs_confirmation`), `KbHistory{agent?, profile?, since_ms?, dry_run}` →
+`KbHistory{plan}`; `KbSync` gained `roots[]` and `KbSynced` `roots`; the event
+`KbProgress{root, name, done, of}`; `KbStatusInfo.failing`. An older client's `{"t":"kb_sync"}`
+still parses (and now looks at the roots too).
+
 **[built 2026-11-20] Protocol 1.57** (additive; notes, KB2, §25.6.4, §25.14): the requests
 `KbNote{text, title?, project?, profile?, tags, replaces?, addr?}` → `KbNoted{item, path}`
 (write a note's file and index it; from inside an agent's session it is `remember`, and who
@@ -3919,8 +3927,8 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
 
 # proposed KB (§25.10): the knowledge base
 ptyro recall <query…> [--project P] [--kind K,…] [--since D] [--machine M|--here] [--words|--meaning] [--json]
-ptyro ingest <path>… [--name N] [--project P] [--profile PR] [--include G]… [--exclude G]… [--code] [--once]
-ptyro ingest --history [--agent A] [--profile PR] [--since D] [--dry-run]
+ptyro ingest <path>… [-n NAME] [-p P] [--profile PR] [--include G]… [--exclude G]… [--code] [--no-comments] [--no-commits] [--once]   # built, KB3
+ptyro ingest --history [-a claude|codex] [--profile PR] [--since AGE] [--dry-run]   # built, KB3.6
 ptyro kb [status]|ls|show <ref>|recent|sync [<root>…]|rm <root>|forget <ref…>|note [<text>]|notes
 ptyro new … --private ; ptyro shells new … --private     # nothing of the session is kept (§25.7a)
   `session.tab` host op: inside WSL it asks Windows Terminal when `wt.exe` is there; the server
@@ -9978,7 +9986,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; KB3 to KB5 (roots and `ingest`, shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and KB3.1 to KB3.6: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (engine and CLI; the Sources tab and the ingest form, KB3.7, are not built); KB4 and KB5 (shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -9992,10 +10000,92 @@ task; agent sessions are kept as they happen, `ptyro recall` and `ptyro kb` sear
 list and forget them, agents search them with `recall` and `recall_read`, a session can
 be private, the TUI and the web have the Library, a search asks linked machines too, and
 (KB2) you and your agents write notes, which are files.
-**What KB1 and KB2 did not build**, and nothing below should be read as built: roots,
-`ingest`, documents, comments, paths and commits (KB3), shells (KB4), anything offered at a
-prompt (KB5), the Library's Sources tab and the ingest form, the events' `KbProgress`, and
-`doctor`'s roots and skipped files):
+**What KB1 to KB3 did not build**, and nothing below should be read as built: shells (KB4),
+anything offered at a prompt (KB5), the Library's Sources tab and the ingest form (KB3.7),
+and `gc` and mend naming a failing root):
+- **KB3 roots, `ingest` and the history's backfill (2026-11-20; engine and CLI: KB3.1 to
+  KB3.6. `ptyro_core::kb::file`, `ptyro-git`'s `log.rs`, `crates/ptyro-daemon/src/kb/roots.rs`
+  and `kb/history.rs`, `ptyro-protocol` 1.58, `crates/ptyro/src/ingest.rs`). Not built: the
+  Sources tab and the ingest form in the TUI and the web (KB3.7), and `gc` and mend naming a
+  failing root:**
+  - **A pass has its own task, not the ingest queue** (`Daemon::kb_roots_kick`): one root at
+    a time, listing and reading off the async threads, each file its own write. The queue is
+    the sessions': eight jobs then 50 ms would be 160 files a second, and fifty thousand
+    files queued before a session's turn would starve it. **Measured (2026-11-20, a debug
+    build, an M4 Pro): this repository's own checkout, 544 files and 505 commits, in 4.4 s,
+    into 17 MiB (16,220 pieces); 20,000 small documents in 6.7 s (26 MiB); a pass over those
+    20,000 that finds nothing changed, 0.3 s with the command's own start; removing that root,
+    8 s.** A pass that is asked for while one runs is run once more after it.
+  - **Resumed, not restarted.** A root is `syncing` in `kb.db` from the moment it is added
+    and while a pass writes; the daemon's start asks at once for a pass over every root that
+    is `syncing` or was never read, and a file whose cursor (`{mtime, size, read}`) is its
+    item's is not read again. `read` says how it was read (`1` + comments + code), so
+    switching `kb.code` on reads every source file again. The other roots wait a minute, then
+    `kb.sync_every`.
+  - **No watcher on a root.** §25.6.3 never had one (a recursive watch of fifty thousand
+    files costs a Linux machine its inotify watches); the stat pass at a turn's end is what
+    makes an agent's new document findable. Only the notes folder is watched.
+  - **A file's item**: `file://<absolute path>`, `title` and `rel` its path inside the root,
+    one `path` chunk (the path, then its name's words when they differ: `RateLimiter.ts` gives
+    `rate limiter`, `HTTPServer` `http server`), then a document's `text` chunks under
+    `<rel> › heading`, or a source file's `comment` chunks and (when on) its `code` chunks.
+    **A source file is one the comment table knows**: `data.json` is its path alone, with
+    code on too. `Body::Seq` is how one source holds several bodies (`ingest::plan` redacts
+    and cuts each).
+  - **The never list is asked of a file's path inside its root**, and of a root's own path
+    when it is added (`ptyro ingest ~/.ssh` is refused; so is a path in ptyro's data
+    directory, and nothing under it is ever listed: its worktrees are checkouts of projects
+    that are read where they are). A file that is not text is passed over in silence; one
+    that is too big, or holds more than 25 credentials, is named in `ptyro kb`; each is
+    remembered as it was (time and size) and not read again until it changes.
+  - **A comment block that another file of the root holds is not stored again**
+    (`Roots.repeats`: the block's hash and the file that holds it, in memory). It is exact
+    for a pass that reads the whole root and approximate after a restart (a file read again
+    then keeps its blocks).
+  - **Commits**: `commit://<root id>/<sha>`, a `message` chunk and a `path` chunk (at most
+    50 files), the commit's time; merges are left out (`--no-merges`: they say nothing of
+    their own). The history is the default branch's when that is a commit here, else what is
+    checked out. `root.head` is written when the pass ends, so an interrupted first pass
+    plans its commits again and writes none twice (their hashes are unchanged). A head that
+    is no longer a commit (a rewritten history) reads the newest 5,000 again. Commits
+    switched off: their items go.
+  - **Projects by themselves** (`Daemon::kb_roots_reconcile`, at the start, when the config
+    is reloaded, at `ProjectUpdated`, `ProjectRemoved` and `ProjectAutoAdded`): each local
+    project is a root of kind `project` under its pin. A change of pin removes the root and
+    makes it again (an unchanged item's hash would keep its old profile). `kb rm` of a
+    project's root is refused, with the three ways that do take it out.
+  - **The project's own file** (`[knowledge]`: `comments`, `code`, `commits`, `include`,
+    `exclude`) is read for any root that has a project, at each pass.
+  - **`KbIngest` asks nothing** (§25.14 had `confirmed`): reading deletes nothing and
+    `kb rm` undoes it. It answers with the root and a plan (files, documents, source files,
+    which tiers, whether commits, the cap) and the pass runs after; the command waits for it
+    by asking `KbRoots`, which carries `progress`. **`KbRemove` asks** (`needs_confirmation`)
+    and removes in the background, in batches.
+  - **Roots, ingest, removal and the backfill are refused from inside an agent's session**
+    (it could read another profile's folder in for everyone); `KbRoots` there lists what its
+    profile may see.
+  - **The backfill** (`Daemon::kb_history`, `kb_history_read`): `Adapter::transcripts(home)`
+    lists a config directory's conversations (Claude: `projects/*/<id>.jsonl`, never
+    `<id>/subagents/`; Codex: `sessions/Y/M/D/rollout-*-<id>.jsonl` and
+    `archived_sessions/`); `Transcript.cwd` is where one ran (Claude's lines carry `cwd`,
+    Codex's `session_meta` does). Each profile's directories come from `profile::info` (no
+    secret is resolved for it); two profiles that share one are the first's. Counted by file
+    name and time alone (no file is opened for `--dry-run`); read behind everything else
+    (`Kb.backlog`, taken only while the queue is empty); the gate is asked before the file
+    is opened and again once its folder is known (the project's switch). A conversation
+    under `<data>/chat/` or `<data>/summaries/` is passed over when it is read, so it is
+    counted as new each time. A file longer than one read (32 MiB) is carried on as
+    `Job::Item`, and so is, at the daemon's next start, an imported conversation that grew.
+  - **A private session's conversation gets a tombstone** (`Daemon::kb_keep_out`, at its
+    turns' ends, once a conversation; §25.7a said nothing is tombstoned). Without it the
+    backfill would read the agent's own copy of a private session once the session is
+    removed from ptyro. It is written while the knowledge base is off too, when `kb.db`
+    exists. They count among the forgotten in `ptyro kb`. **Not covered:** a private session
+    that ran and was removed while there was no `kb.db` at all.
+  - **Unverified**: Linux (the walk, the listing and the backfill are tested on macOS only
+    here; CI runs them on Linux); a real Claude Code's or Codex's own folders (the fixtures
+    are real transcripts; no real folder was read: `ingest --history` was never run on this
+    machine's `~/.claude`).
 - **KB2 notes (2026-11-20; `ptyro_core::kb::note`, `crates/ptyro-daemon/src/kb/notes.rs`,
   `ptyro-protocol` 1.57, `crates/ptyro/src/kb.rs`, `mcp.rs`, the Libraries):**
   - **The files are the truth, and one function makes the index agree with them**
@@ -10373,8 +10463,8 @@ prompt (KB5), the Library's Sources tab and the ingest form, the events' `KbProg
     them; `Daemon::kb_workspace_id`).
   - **A tombstone can be made for a URI that has no item** (`KbDb::tombstone`): `kb forget
     --session` makes one for a conversation nothing was read of yet (KB1.14).
-  - **Not built**: the event `KbProgress` (`KbUpdated` is KB1.8's, 1.55), `kb ls`,
-    `kb sync`, `kb rm`, `kb note(s)` and `ingest` (KB2, KB3). **Dropped: `Features.kb`.**
+  - **Not built by KB1.7** (built since, by KB2 and KB3): the event `KbProgress`, `kb ls`,
+    `kb sync`, `kb rm`, `kb note(s)` and `ingest`. **Dropped: `Features.kb`.**
     `Features` are what a connection negotiates (`zstd`, `input_seq`); a client learns that
     the knowledge base is off from `KbStatus`, or from the error every other request answers,
     and one that meets an older daemon is told so by the request's own error.
@@ -10458,9 +10548,9 @@ prompt (KB5), the Library's Sources tab and the ingest form, the events' `KbProg
     file (device and inode), or the byte before the cursor is not a line's end (cut back and
     grown past it). A file cut back to a line's end and grown past the cursor between two
     reads is not noticed.
-  - **Not read yet**: sub-agents' files, and an
+  - **Not read as it happens**: sub-agents' files (never read), and an
     agent started by hand in a shell session (it has no hooks and ptyro doesn't know its
-    conversation: KB3's backfill finds it).
+    conversation: `ptyro ingest --history` finds it, KB3.6).
   - **A trap for tests and tools**: a process that holds `kb.db` open must not also open the
     file by itself (to look at its bytes, to copy it). Closing any handle of a file gives up
     the locks a SQLite connection in the same process holds on it, and the next connection to
@@ -10949,7 +11039,7 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
   what Claude's rewind writes: it needs the TUI, and no transcript here holds one (§20.1). Every
   file seen only ever grew, so a rewound branch is expected to stay in the file beside the new
   one; if so, both are kept, which a record should do.
-- **Backfill (KB3).** `ptyro ingest --history` reads what the agents kept before ptyro did:
+- **Backfill (KB3.6, built 2026-11-20; "As built" above has how).** `ptyro ingest --history` reads what the agents kept before ptyro did:
   each profile's Claude `projects/` and Codex `sessions/` and `archived_sessions/`. It says how
   many conversations it found before it reads any (`--dry-run` stops there). An item's profile
   is the profile whose config directory held it; its project is the registered project its
@@ -10962,10 +11052,10 @@ Nothing is copied. `chat.db` keeps its text, its index and its vectors, with its
 `recall` and the Library query both files and merge (§25.8). A chat can't be forgotten from the
 knowledge base, because it was never in it: delete the chat.
 
-#### 25.6.3 Projects and folders (KB3; not built, but for the comment table of KB0.4)
+#### 25.6.3 Projects and folders (KB3; built 2026-11-20: what differs is in §25's "As built" list)
 
 - **Roots.** Every project in `ptyro.db` is a root by itself while `kb.projects` is on (a new
-  project becomes one when it is registered; `[kb] enabled = false` in its `.ptyro.toml` takes it
+  project becomes one when it is registered; `[knowledge] enabled = false` in its `.ptyro.toml` takes it
   out). `ptyro ingest <path>` adds any other folder or file. A root is **the checkout at that
   path, as it is on disk**: a project's own checkout, never its worktrees under
   `<data>/worktrees/`, so a file is found once and not once per agent.
@@ -11065,9 +11155,9 @@ knowledge base, because it was never in it: delete the chat.
     survey): a `#` line inside a shell here-document is taken for a comment; JSX's
     `{/* … */}` and Elixir's `@doc """…"""` are not; nor are files of languages the table
     lacks (`.bat`, `.vim`, assembly).
-  - KB3 should **store a block that many files of a root repeat only once** (it is the largest
-    source of noise that was found), and may skip generated files. Both are accepted for
-    search; a real parser can replace the table without changing the schema.
+  - KB3 **stores a block that another file of the root holds only once** (it is the largest
+    source of noise that was found; built, "As built" above), and may skip generated files
+    (not built). A real parser can replace the table without changing the schema.
 - **Commits** (`kb.commits`, on): in a git root, the default branch's history, newest 5,000 at
   first and only the new ones after (`root.head`). One item a commit: a `message` chunk (subject
   and body, words and meaning) and a `path` chunk (the files it changed, at most 50, words). Its
@@ -11193,8 +11283,9 @@ A session can be started **private**: the knowledge base keeps nothing of it. It
 session what incognito is to a chat (§22.9), and it is chosen where the session is created.
 
 - **What it stops.** Its transcript is never read, it gets no card and no item, and in a shell
-  no command and no output is recorded. Nothing is queued and nothing is tombstoned: there is
-  nothing to forget later.
+  no command and no output is recorded. Nothing is queued. *As built (KB3.6)*: its
+  conversation's URI gets a tombstone as soon as it is known (only the URI), because the
+  agent keeps its own transcript and `ptyro ingest --history` would otherwise read it later.
 - **What it doesn't stop.** The session still *reads* the knowledge base (`recall`,
   `recall_read`) and may write a note with `remember`: a note is a deliberate act, and it names
   the session that wrote it only as "a private session". The recorder still keeps its screen
@@ -11488,9 +11579,9 @@ Every command has its TUI path and its web action in the same change (§1.3), it
 ```text
 ptyro recall <query…> [--project P] [--kind K,…] [--since D] [--before D] [--machine M|--here]
                       [--words|--meaning] [-n N] [--json]
-ptyro ingest <path>… [--name N] [--project P] [--profile PR] [--include GLOB]… [--exclude GLOB]…
-                     [--code] [--no-comments] [--no-commits] [--once]
-ptyro ingest --history [--agent A] [--profile PR] [--since D] [--dry-run]     # what the agents kept (KB3)
+ptyro ingest <path>… [-n NAME] [-p P] [--profile PR] [--include GLOB]… [--exclude GLOB]…
+                     [--code] [--no-comments] [--no-commits] [--once] [--json]         # built, KB3
+ptyro ingest --history [-a claude|codex] [--profile PR] [--since AGE] [--dry-run] [--json]   # built, KB3.6
 ptyro kb [status] [--json]              # on or off, sizes, items by kind, vectors, each root's state, what was skipped
 ptyro kb ls [--json]                    # the roots: name, path, counts, last read, errors
 ptyro kb show <ref> [--context N] [--open]      # a hit with its neighbours; --open: the source (editor, resume, chat)
@@ -11523,7 +11614,15 @@ ptyro new … [--private]                 # nothing of this session is kept (§2
   and `--here` on `recall`, and `--machine M` on `kb recent`, came with KB1.12 (§25.11); a
   machine left out of a search is said on stderr. *As built (KB2)*: `kb note`, `kb notes`,
   `kb sync` (the notes folder), `kb show --open` on a note, `--wrote` ("As built" above).
-  **Not built**: `ingest`, `kb ls`, `kb rm`, `kb sync` of roots (KB3).
+  *As built (KB3, `crates/ptyro/src/ingest.rs`)*: `ingest` (it prints the plan in a line,
+  `handbook (/path): 6 files: 3 documents, 1 source file (comments), its commits`, waits for
+  the pass with a line of progress on a terminal, then `read handbook: 5 files, 12 commits,
+  40 pieces` and up to ten of what was not kept with why; exit 1 when the root could not be
+  read); `ingest --history` (the count, then the read, then `read N conversations`); `kb ls`
+  (name, kind, state or `done/of`, what it holds, last read, profile, path, and the error
+  under it); `kb sync [ROOT…]` (the notes and every root, or the roots named; it waits);
+  `kb rm ROOT [-y]` (asks in the daemon's words, exit 5 with nobody to ask; waits until it is
+  gone). Each with `--json`.
 - *As built, the web*: KB1.7 gave it the Library page's first part and KB1.9 the rest
   (below). (The TUI's five actions ran their command in a split until KB1.8.)
 - `ingest` of a path that is already a root (or inside one) says so and syncs it. It prints what
@@ -11557,7 +11656,12 @@ built.**
   filtered to it); `M` (mend) lists a root that is missing or failing.
 - Actions: `kb.open`, `kb.search`, `kb.recent`, `kb.show`, `kb.history` (a row's history),
   `kb.forget`, `kb.status`, `kb.enable`, `kb.notes`, `kb.note`, `kb.sync` (**built**);
-  `kb.sources`, `kb.ingest`, `kb.backfill` (`ingest --history`), `kb.remove` (KB3).
+  `kb.sources`, `kb.ingest`, `kb.backfill` (`ingest --history`), `kb.remove` (KB3: **built as
+  a first part**: in the TUI each runs its command in a split, from the palette
+  (`cli_actions.rs` `TEMPLATES`); on the web the Library's Sources… sheet lists the roots,
+  with Read a folder… (a form with every option of `ingest PATH`, as text and switches),
+  Agents' history… (the count, then a question) and Remove…. The tab, the form's picks and
+  `--agent`/`--profile`/`--since` for the history are KB3.7's).
 - **The session form and the shell form** gain **Private** (§25.7a), default off, with what it
   means beside it.
 - **The ingest form** shows every option the command takes, defaults visible (§11.5a): the path
@@ -11580,13 +11684,16 @@ each root's last read and error, files skipped and why (§25.12). *Built (KB1.1)
 `knowledge base: 12 sessions, 3 files in 840 piece(s), nothing forgotten, 1.2 MB in …/kb.db
 (schema 1)`, from `DaemonDoctor.kb` (`quick_check`, FTS5, and both secure-delete switches,
 each a problem when it fails); `off`, or why the file can't be opened with the fix. Vectors,
-roots and skipped files join it with KB1.5, KB3 and KB1.7.
+*Built (KB3)*: the line ends `; 3 roots`, and names each that is missing or failing
+(`; 3 roots (docs: /src/docs is gone (…))`); `ptyro kb` has the same lines, and what was
+not kept with why (KB1.7).
 
 ### 25.11 Many machines
 
 As chats (§22.10, §22.11), with the machinery MM1 built. *As built (KB1.12; this section's
 "As built" list has what differs)*: the fan-out, a far hit read, listed and forgotten on its
-machine, the wall across the link, and the scopes. Roots and ingest (KB3) and an editor on a
+machine, the wall across the link, and the scopes. Roots and ingest are built (KB3) and
+act on the daemon asked, here only; the form's machine pick (KB3.7) and an editor on a
 far file are the design, not built.
 
 - **Each machine has its own `kb.db`** and ingests its own sessions, roots, notes and shells.
@@ -11700,8 +11807,9 @@ web's panels and `ptyro config set` (§13.7). **Built (KB1.1, KB1.3, KB1.5, KB1.
 KB1.14): `enabled`, `sessions`, `private`, `tools`, `scope`, `meaning`, `retain_days`,
 `max_file` (a size like `1MiB`; 0 and what isn't a size are refused when the file loads),
 `redact` (a pattern that isn't a regex is refused the same way) and `exclude`; (KB2)
-`remember`**; the others come with the tasks that read them (`projects`, `comments`,
-`code`, `commits`, `sync_every` KB3, the `shell` keys KB4, `inject` KB5).
+`remember`; (KB3) `projects`, `comments`, `code`, `commits`, `sync_every` (a duration of a
+minute or more)**; the others come with the tasks that read them (the `shell` keys KB4,
+`inject` KB5).
 
 ```toml
 [kb]
@@ -11734,8 +11842,9 @@ exclude = []              # more paths never to ingest (globs)
     `knowledge.enabled` in the panel's "This project" section; `.ptyro.local.toml` counts, as
     for every project key). `true` changes nothing. **The table is `[knowledge]`, not `[kb]`**:
     a key is one setting of one scope in the schema, and `kb.enabled` is the user's. `[kb]` in
-    a repository's file is an error that names `[knowledge] enabled = false`. The other five
-    keys are KB3's.
+    a repository's file is an error that names `[knowledge] enabled = false`.
+  - *As built (KB3)*: `[knowledge] comments`, `code`, `commits`, `include`, `exclude`
+    (`knowledge.*` in the panel's "This project" section, advanced).
 - **Per agent:** `[agents.<name>] kb = false`: none of its sessions are ingested and it gets no
   tools. *Built (KB1.11)*: its sessions are refused at the gate, by the agent's name
   (`claude@work` is `claude`); the tools are KB1.10's.
@@ -11754,7 +11863,7 @@ exclude = []              # more paths never to ingest (globs)
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
-### 25.14 Protocol (additive; KB1's and KB2's parts are built, 1.53 to 1.57)
+### 25.14 Protocol (additive; KB1's, KB2's and KB3's parts are built, 1.53 to 1.58)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
@@ -11808,8 +11917,19 @@ exclude = []              # more paths never to ingest (globs)
     only; then nothing else of the request is read). `read` for the two that read, `control`
     for the two that write; here only; a chat's agent may send `KbNote` without `addr` and
     nothing else new.
-  - Not built: the roots' and ingest's messages, `KbProgress`. `Features.kb` is
-    dropped ("As built", KB1.7).
+  - **1.58 (KB3)**: `KbRoots` → `KbRoots{roots: [KbRootInfo]}` (a `KbRoot`'s fields, and
+    `project_name?`, `files`, `commits`, `chunks`, `progress?: [done, of]`, `removing?`);
+    `KbIngest{spec: RootSpec{path, name?, project?, profile?, options}}` → `KbIngested{root,
+    plan: KbPlan{existing, git, files, documents, sources, comments, code, commits, over?}}`
+    (no `confirmed`: "As built"); `KbRemove{root, confirmed}` → `KbRemoved{name, items,
+    chunks}`, or `needs_confirmation`; `KbHistory{agent?, profile?, since_ms?, dry_run}` →
+    `KbHistory{plan: KbHistoryPlan{found, known, old, chats, new, places, reading}}`;
+    `KbSync{roots[]}` (empty: the notes and every root; `KbSynced.roots`: how many passes
+    were asked for); the event `KbProgress{root, name, done, of}`, a few a second while a
+    pass writes, to every watcher; `KbStatusInfo.failing` (the roots that are missing or in
+    error, a line each). `KbRoots` needs `read`, `KbIngest`, `KbHistory` and `KbSync`
+    `control`, `KbRemove` `full`; all here only. `KbUpdated` still carries no `root`.
+  - `Features.kb` is dropped ("As built", KB1.7).
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
   error, times).
 - `KbIngest{spec: RootSpec, confirmed}` → `KbRoot`, or `NeedsConfirmation` with the plan (files
@@ -11833,7 +11953,7 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 | `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`, `kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, `rank` and its weights), `chats::parse_kb_query`; (KB2) `kb::note` (a note's header, title, URI and its `Source`)**; it now depends on `regex` |
 | `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (`session_facts` for a session's card), `kb/search.rs` (`KbFilter`, `search_words`, `search_meaning`, `MATCH_CAP`, the vectors' upkeep: `vec_todo`, `vec_todo_of`, `put_vecs`, `vec_counts`, `drop_other_vecs`)** |
 | `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments. **Built: `transcript.rs` (`Transcript`, `TranscriptAt`, the readers `claude` and `codex`, where each agent keeps its file), `Adapter::{transcript, hook_transcript, read_transcript, transcript_title}`; the example `transcript` prints what a reader makes of a file** |
-| `ptyro-git` | listing files (`ls-files`), the commit log since a head |
+| `ptyro-git` | listing files (`ls-files`), the commit log since a head. **Built (KB3): `log.rs` (`Git::ls_files`, `history_tip`, `log`, `parse_log`, `Commit`)** |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes. **Built: `fuse_lists` (`fuse` is it for two lists), and `score` in eight running sums** |
 | `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (**built**, KB2: the watcher, `kb_notes_sync`, `kb_note`, `kb_notes`, `kb_note_read`, `kb_note_forget`), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
 | `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.55): `DomainEvent::KbUpdated`; (1.56): `machines`, `machine`, `profile`, `left_out`; (1.57): `KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`** |

@@ -227,6 +227,14 @@ pub trait Adapter: Send + Sync {
         let _ = (bytes, from);
         None
     }
+    /// Every conversation the agent kept under its config directory `home`, each with the
+    /// id it is known by and its file (the history's backfill, SPEC §25.6.1). Empty for an
+    /// agent whose transcripts are not read.
+    fn transcripts(&self, home: &Path) -> Vec<(String, PathBuf)> {
+        let _ = home;
+        Vec::new()
+    }
+
     /// A conversation's title, when the agent keeps it outside the transcript.
     fn transcript_title(&self, at: &TranscriptAt<'_>) -> Option<String> {
         let _ = at;
