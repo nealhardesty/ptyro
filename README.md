@@ -588,11 +588,13 @@ no session is read), `redact` adds your own patterns to what is redacted before 
 kept (keys, tokens, passwords and your profile's secrets already are), and `exclude` adds
 paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind never are).
 
-**Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
-yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it) downloads
-a small model once (model2vec `potion-base-8M`, 31 MB, MIT) and reads every chat in the background,
-on this machine only. Searches then also find messages *about* what you typed, marked `≈`, merged
-with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how far it is.
+**Meaning search** is opt-in: `[kb] meaning = true` (the settings panel's Knowledge section, or say
+yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it; `[chat]
+meaning`, its old name, still switches it on) downloads a small model once (model2vec
+`potion-base-8M`, 31 MB, MIT) and reads every chat, and what the knowledge base keeps, in the
+background, on this machine only. Searches then also find messages *about* what you typed, marked
+`≈`, merged with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how
+far it is.
 
 ### Your phone and other machines
 
@@ -820,7 +822,8 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
-| `make spike-kb` (`CHUNKS=…`) | ROADMAP KB0.1: what the knowledge base's search costs over 500k (or `CHUNKS=1000000`) made-up chunks in SPEC §25.4's schema: by words, by meaning with each filter, each fallback with its recall, the merged search, the file's size by part, an ingest and a forget (a synthetic model the real one's size, nothing downloaded; about 2 minutes) |
+| `make spike-kb` (`CHUNKS=…`) | ROADMAP KB0.1: what the knowledge base's search costs over 500k (or `CHUNKS=1000000`) made-up chunks in SPEC §25.4's schema: by words, by meaning with each filter, each fallback with its recall, the merged search, the same through the search as built (KB1.5), the file's size by part, an ingest and a forget (a synthetic model the real one's size, nothing downloaded; about 2 minutes) |
+| `make kb-eval` (`KB_EVAL_VERBOSE=1`) / `make kb-eval-real` (`PTYRO_KB_EVAL_MODEL=…`) | ROADMAP KB1.6: the knowledge base's golden set: 300 made-up items of every kind in two profiles, a few chats, and 63 questions, each with what must be among the first five hits and what must never be found (another profile's, a forgotten one), through the real ingest and search. Prints recall at 5 and the mean reciprocal rank by words alone and with meaning, and fails when one drops two points under the committed numbers (a synthetic model, nothing downloaded, a second; `make test` runs it too) / the same with the real model if it is already on this machine (it reports only, and downloads nothing) |
 | `make spike-kb-comments` (`ARGS="<folder>…"`, `SAMPLE=…`) | ROADMAP KB0.4: the comment table (SPEC §25.6.3) run over real code, read-only: files by extension, comment blocks kept and dropped by each rule (licence headers, tools' directives, code switched off, too short), and a sample of each to judge by eye |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |

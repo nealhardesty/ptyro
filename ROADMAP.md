@@ -4030,15 +4030,60 @@ Development section), its README and `docs/` text, and the milestone's version b
         0.167.1 write. Not built: `kb.sessions`, `[agents.X] kb` and the project's switch
         (KB1.11), the private gate's flag (KB1.14), sub-agents' files, an agent started by
         hand in a shell (KB3's backfill). SPEC §25 "As built", §25.6.1, §25.15, §25.16.)*
-  - [ ] **KB1.5** Search (§25.8): the query's new words in `parse_query`; words in both files;
+  - [x] **KB1.5** Search (§25.8): the query's new words in `parse_query`; words in both files;
         meaning in both (`meaning.rs` backfilling `chunk_vec` too, `fuse` over several lists);
         the ranking; two hits an item and merged neighbours; `KbSearch`, `KbRead`, `KbRecent`;
         `kb.meaning` with `chat.meaning` as its old name. From KB0.1 (§25.8's table): the words
         query in two steps (`ORDER BY rank LIMIT`, then a snippet for each kept row), and
         `ptyro_meaning::score` with eight running sums; `kb_spike.rs` has both. **L**
-  - [ ] **KB1.6** The golden set (`make kb-eval`, `make kb-eval-real`; §25.16): the corpus, the
+        *(Built 2026-11-19: three functions of the daemon, `Daemon::kb_search(KbSearch,
+        Option<&KbScope>) -> KbHits`, `kb_read` and `kb_recent`
+        (`crates/ptyro-daemon/src/kb/search.rs`), over `KbDb::search_words` and
+        `search_meaning` (`crates/ptyro-store/src/kb/search.rs`: the words query in two steps,
+        one pass over `chunk_vec` by its own columns, and every row returned checked against
+        its item, which is where the wall and a tombstone are held), `chat.db`'s two lists
+        (`Daemon::chat_lists`), `ptyro_meaning::fuse_lists` and `score` in eight sums, and
+        `ptyro_core::kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, and `rank`:
+        kind, age, place, two hits an item, neighbours as one). The query's new words are
+        `chats::parse_kb_query`'s; a chat's search reads them as words still. The embed step
+        is the ingest's own (`Daemon::kb_embed`), with the meaning task's pass over
+        `chunk_vec` for what was there before the model. `kb.meaning` is the one switch
+        (schema, Knowledge section); `chat.meaning` is read and rewritten
+        (`settings::renamed`). **KB0.1's miss is bounded**: a query with more than 20,000
+        matches is ranked among its newest 20,000 (`MATCH_CAP`), 13 ms where it took 105.
+        **Measured as built** (`make spike-kb`'s new rows): the whole search 58 ms at the 95th
+        percentile at 500k chunks and 102 at a million; 75 and 118 for the commonest words.
+        Found on the way: a NUL typed into a search was an FTS5 error, in chats too; control
+        characters are dropped. Tests: the parser and the ranking (`ptyro-core`), the fusion
+        and the score (`ptyro-meaning`), every filter by words and by meaning, the wall
+        against a wrong vector, a forgotten item from its tombstone on, the cap, the vectors'
+        upkeep and a property test that no typed text is an FTS5 syntax error
+        (`ptyro-store`, `kb/search/tests.rs`), and the search over both files, the wall,
+        words-only and why, addresses and the history (`ptyro-daemon`, `kb/search/tests.rs`).
+        Not built here: the protocol's messages, the CLI and an end-to-end test through them
+        (KB1.7), `kb.scope` and the scope from a caller's session (KB1.11, KB1.10: the wall is
+        the `KbScope` argument), the fan-out to linked machines (`machine:` is refused), a
+        reading connection with `mmap_size`. SPEC §25 "As built", §25.4, §25.5, §25.8, §25.9,
+        §25.13 to §25.16, §22.10.)*
+  - [x] **KB1.6** The golden set (`make kb-eval`, `make kb-eval-real`; §25.16): the corpus, the
         questions, the must-never rows, the committed numbers, the CI gate. Built with KB1.5,
         not after it: the weights are set against it. **M**
+        *(Built 2026-11-19: `crates/ptyro-daemon/src/kb/golden.rs`, a test of the daemon
+        (`make test` and CI run it; `make kb-eval` runs it alone and prints,
+        `KB_EVAL_VERBOSE=1` each question). 300 items made from 30 topics (a session, an old
+        session, a document, a source file, a commit, a note and a shell's day each, and 90
+        documents about nothing) in two profiles, seven chats, three notes forgotten; each
+        item through `Daemon::kb_ingest`, each of 63 questions through `Daemon::kb_search`,
+        with a synthetic model and nothing downloaded. **Committed: recall at 5 1.000 and mean
+        reciprocal rank 0.761 with meaning, 0.746 and 0.576 by words alone** (16 questions are
+        asked in words the corpus doesn't hold); two points under either fails, and so does
+        anything found that must never be (another profile's, a forgotten note, what a
+        filter rules out). The weights of §25.8 were run against it and stayed; it found
+        that two hits an item must count an item's chunks of every kind. In the daemon and
+        not in `ptyro-store/tests/kb_golden/` as designed: only there do the gate, the embed
+        step, both files and the ranking meet. `make kb-eval-real` copies the real model from
+        where it already is, reports and gates nothing: **not run, the model was not on this
+        machine**. SPEC §25 "As built", §25.16.)*
   - [ ] **KB1.7** The CLI: `recall`, `kb` (`status`), `kb show`, `kb recent`, `kb forget`
         (§25.12: really deleted, a tombstone, the bytes test), `--json` for each. **M**
   - [ ] **KB1.8** The TUI's Library (`C-q L`): Search with its filters and the history when

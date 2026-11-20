@@ -7689,6 +7689,10 @@ Three tiers; each one is useful without the next.
 3. **Meaning (CHAT5, opt-in; built 2026-10-30).** A local embedding of each message, merged with
    the keyword hits by reciprocal-rank fusion. Off by default: `[chat] meaning = true` (the settings
    panel's Chat section, `ptyro config set chat.meaning true`, or yes where a search offers it).
+   **Since KB1.5 (2026-11-19) the switch is `[kb] meaning`**, in the panel's Knowledge section,
+   for chats and the knowledge base alike; `chat.meaning` is its old name, still read and
+   still accepted by `config set`, which writes the new one (§25.13). The cosine is summed in
+   eight running sums (§25.8), which halves a search's scan.
    Nothing is downloaded or computed until then. model2vec was chosen over fastembed: 31 MB against
    ~130 MB, and no ONNX Runtime. As built:
    - **Model:** model2vec `minishlab/potion-base-8M` (MIT), pinned to commit
@@ -9897,7 +9901,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in, redaction and agent sessions (KB1.1 to KB1.4); the rest proposed]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6); the rest proposed]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -9907,8 +9911,55 @@ at ingest, no vector database and no graph. The ideas and what other products do
 section I and R-KB-01…13; the tasks are ROADMAP KB0…KB5.
 
 **As built, and where building and the spikes changed the design below** (each line names its
-task; agent sessions are kept as they happen, and nothing shows them yet: there is no search and
-no command until KB1.5 and KB1.7):
+task; agent sessions are kept as they happen and the daemon can search them, and nothing shows
+either yet: there is no command until KB1.7):
+- **KB1.5 search and KB1.6 the golden set (2026-11-19; `ptyro_core::kb::search`,
+  `crates/ptyro-store/src/kb/search.rs`, `crates/ptyro-daemon/src/kb/search.rs` and
+  `kb/golden.rs`, `ptyro_meaning::{score, fuse_lists}`; `make kb-eval`, and the "as built" rows
+  of `make spike-kb`):**
+  - **The search is three functions of the daemon, and nothing calls them yet**:
+    `Daemon::kb_search`, `kb_read` and `kb_recent`. The protocol's messages, the CLI, the
+    Library and the tools (KB1.7 to KB1.10) are their callers. The fan-out to linked machines
+    is theirs too: until then `machine:` in a query is refused in words (§25.8, §25.14).
+  - **A word that a large part of all chunks hold is ranked among its newest 20,000 matches**
+    (`MATCH_CAP`). That was KB0.1's one miss. One probe walks the matches newest first without
+    scoring them; a query with more than the cap is ranked from that row on. 13 ms where it
+    took 105 at the 95th percentile, and nothing changes for a query with fewer matches (§25.8).
+  - **The budget is met as built, with room**: the whole search (both lists of both files, the
+    fusion, the ranking) takes 58 ms at the 95th percentile at 500k chunks, and 75 ms for the
+    commonest words. It runs on the writer's connection and without `PRAGMA mmap_size`:
+    neither a reading connection nor the mapping was needed (§25.8's table).
+  - **The wall, and that a forgotten item is never found, are checked against the item
+    itself**, last, for every row returned. `chunk_vec`'s own columns narrow the pass and are
+    a copy, never the authority; `KbDb::write` keeps them true when an item changes its
+    profile or project (§25.4).
+  - **The ingest embeds what it wrote** (`Daemon::kb_embed`, after `KbDb::write`) when the model
+    is here; the meaning task's pass is for what was kept before the model was. A session's
+    card is rewritten with every piece and loses its vector each time: it has one again at
+    once (§25.5 step 7).
+  - **`kb.meaning` is the switch, for chats too.** `[chat] meaning` in a file still switches it
+    on, and setting either name writes `[kb] meaning` and takes the old one out
+    (`settings::renamed`). The clients still send `chat.meaning`, and it works (§25.13).
+  - **Two hits an item whatever kinds its chunks are of** (a file's path, its comment and its
+    code are one item), and a hit takes in at most two neighbouring chunks. A session's tool
+    title, which the table of weights did not name, weighs 0.7 (§25.8).
+  - **`workspace:` and the wall's `workspace` mean that workspace's items and no others**: an
+    item of no workspace is hidden by the narrow setting, as a chat's `history_scope` does it.
+  - **The weights stayed as designed** after the golden set: recall at 5 is 1.000 with meaning
+    and 0.746 by words alone (every question words can answer: the other 16 are asked in words
+    the corpus doesn't hold), the mean reciprocal rank 0.761 and 0.576. What costs rank: a
+    session's card and a note an agent wrote weigh the same, and the card, found both ways,
+    comes first (§25.16).
+  - **The golden set runs in the daemon's tests**, not `ptyro-store`'s: only there do the gate,
+    redaction, the cutters, the embed step, both files and the ranking meet. Its corpus is made
+    from 30 topics in `golden.rs`, not kept as files. `make kb-eval-real` reports and gates
+    nothing, and **the real model was not on the machine this was built on: its numbers are
+    unmeasured [unverified]**.
+  - **A control character typed into a search is dropped**, in chats' search too: a NUL in a
+    quoted term was an FTS5 error (`unterminated string`), in `chat search` as well (§25.8).
+  - **Not built**: `kb.scope` (the wall is a parameter, `KbScope`: KB1.11 adds the setting and
+    KB1.10 fills it from the caller's session), the fan-out and `machine:`, a reading
+    connection of its own with `mmap_size`, the one-bit sketch, and the real model's numbers.
 - **KB1.4 agent sessions (2026-11-19; `ptyro_agents::transcript`, `ptyro_core::kb::card`,
   `crates/ptyro-daemon/src/kb/sessions.rs`; checked against Claude Code 2.1.329 and Codex 0.167.1
   by `make verify-kb`, which now runs ptyro's own reader over the transcripts it makes):**
@@ -10029,6 +10080,7 @@ no command until KB1.5 and KB1.7):
     found) and is kept for later: its recall is unverified on the real model.
   - **One query misses the budget and nothing here fixes it**: a single word that a large
     part of all chunks hold (17 ms at the median, 108 at the 95th percentile, by words alone).
+    (KB1.5 bounds it: above.)
   - **Forgetting needs FTS5's own `secure-delete`**: with `PRAGMA secure_delete` alone a
     forgotten word was still in the file's bytes, in the words' index (§25.12). It costs the
     writer 1.7 ms a deleted chunk.
@@ -10197,6 +10249,9 @@ CREATE TABLE chunk_vec (              -- only prose: card, user, assistant, summ
 
 - **`chunk_vec` carries its own filter columns** (profile, project, kind, time), so the scan
   never joins: chat's first version joined and took 160 ms where 45 ms was possible (§22.10).
+  *As built (KB1.5)*: they are a copy. A write that changes an item's profile or project
+  updates its vectors' in the same transaction, and a search checks every row it returns
+  against the item itself, so a wrong copy can hide a hit and never show one (§25.8).
 - **What is the truth.** For a `file` or a `commit` the truth is on disk and in git: the rows are
   an index, and `kb sync` rebuilds them. For a `note` the truth is its file. For a `session` and a
   `shell`, **`kb.db` is the durable copy**: Claude deletes transcripts after 30 days (§20.1), and
@@ -10260,7 +10315,10 @@ daemon knows of it. In the daemon the gate is one function, `Daemon::kb_gate`.
      parses whole lines does by itself. What a piece doesn't say of the item (its title, its
      model) stays; its times widen.
    - A forgotten URI is refused by the writer too, whatever the gate was told.
-7. **Embed** later, by the meaning task (§25.8), when meaning search is on.
+7. **Embed**, when meaning search is on and its model is here: the ingest gives the item's
+   prose chunks that have no vector theirs, right after the write (`Daemon::kb_embed`; built,
+   KB1.5). What was kept before the model arrived is embedded by the meaning task's pass
+   (§25.8).
 
 The ingest actor (`crates/ptyro-daemon/src/kb.rs`) takes work from a queue at low priority, in
 batches with a pause between, the way chat's embedding backfill does. **Nothing here is on a
@@ -10695,34 +10753,67 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   `by:words`. It gains `kind:session|chat|note|doc|comment|code|path|commit|command`,
   `project:`, `root:`, `file:` (a path part: a file item's path, or a session or commit that
   touched it), `before:`, `wrote:you|agent` and `machine:`.
+  - *As built (KB1.5, `chats::parse_kb_query`)*: the new words are the knowledge base's only;
+    in a chat's search they stay ordinary words. `kind:` takes several (`kind:note,doc`) and
+    says which words there are when it is given another. A filter in a phrase or after `-` is
+    text. `before:7d` is "older than seven days", as `since:7d` is "newer". `project:` is a
+    project's name, id or path, `root:` a root's name, and one that doesn't exist is an error,
+    not an empty answer. A caller's own options (`KbSearch.kinds`, `project`, `since_ms`,
+    `before_ms`) narrow what the query says, never widen it. `machine:` is refused until the
+    fan-out is built. A query needs at least one word to look for, and a prefix three letters.
+  - **Every term is quoted, and no typed text can be an FTS5 syntax error**: a property test
+    runs both parsers' output through the real index with every character that means
+    something to FTS5 made likely (`no_typed_text_is_an_fts5_syntax_error`). One thing got
+    through the quoting as chats had it: a NUL, which ends the expression inside its quote
+    (`unterminated string`). Control characters are now dropped from a term, in both parsers.
 - **Finding.**
   1. Words in `kb.db` (`chunk_fts`, bm25, a match in `heading` weighted above `text`) and words
      in `chat.db` (`node_fts`, as chat search does it): the best `4 × limit` of each.
   2. Meaning, when it is on: the query's vector against `chunk_vec` and `node_vec`, each
      filtered first by its own columns (profile, project, kind, time), a cosine of at least the
      floor chat uses (§22.10), the best `4 × limit` of each.
-  3. The lists are merged by reciprocal-rank fusion (k = 60; `ptyro_meaning::fuse`, extended to
-     several lists). bm25 scores of two files are not comparable; ranks are.
-- **Ranking**, applied to the merged list. The numbers are a first setting, **[U]** until the
-  golden set tunes them (§25.16):
+  3. The lists are merged by reciprocal-rank fusion (k = 60; `ptyro_meaning::fuse_lists`, which
+     takes any number of lists, each said to be by words or by meaning). bm25 scores of two
+     files are not comparable; ranks are.
+  - *As built (KB1.5, `KbDb::search_words` and `search_meaning`)*: what only the item knows (a
+    kind that is an item's, the root, the workspace, the agent, the writer, a path, the
+    caller's own session) is joined into the words' first step, and for the vectors looked up
+    once before the pass, as the set of items a hit may be of. With nothing asked of the
+    item, the pass reads `chunk_vec` alone. **Every row either list returns is then read with
+    its item and checked against the whole filter**: that is where the wall and a tombstone
+    are held, whatever the index or a vector's columns say.
+  - Chats are left out when the query asks what no chat has (`project:`, `root:`, `file:`,
+    `wrote:`, or kinds without `chat`), and when chats are off. A chat's hit carries its
+    chat's profile, so the wall is the same wall.
+- **Ranking**, applied to the merged list (`ptyro_core::kb::search::rank`; built, KB1.5). The
+  numbers were a first setting; the golden set was run against them and they stayed (§25.16):
   - **By kind:** a note you wrote 1.25, a note an agent wrote 1.15, a session's card or summary
     1.15, a document 1.0, a chat 1.0, a comment 0.95, a session's message 0.9, a commit 0.85,
-    a path 0.8, code 0.75, a command 0.7, output 0.6.
+    a path 0.8, code 0.75, a command 0.7, a session's tool title 0.7, output 0.6.
   - **By age**, for what happened (sessions, chats, commits, commands): `0.85 + 0.15 ×
     0.5^(age / 180 d)`. What is current by being re-read (notes, documents, comments, code,
     paths) has no age.
   - **By place:** the project you are in (the caller's working directory, the TUI's selected
-    row) × 1.2. It is a boost and never a filter; `--project` is the filter.
-  - **At most two hits an item**, and neighbouring chunks of one item become one hit with a
-    wider snippet, so one long session can't fill the page.
+    row; `KbSearch.here`, a project's id) × 1.2. It is a boost and never a filter; `--project`
+    is the filter.
+  - **At most two hits an item** (or a chat), whatever kinds its chunks are of, and
+    neighbouring chunks of one item become one hit with both snippets (joined by ` … `, in
+    the item's order), so one long session can't fill the page. A hit takes in at most two
+    neighbours; it keeps the address and the kind of its best chunk.
 - **A hit** (`KbHit`): its address, kind, the item's title, a snippet with the match marked
   (`\u{2}`/`\u{3}`, as chat's), time, project, profile, agent, machine, and `how` (`words`,
-  `meaning`, `both`; a hit by meaning alone shows `≈`).
+  `meaning`, `both`; a hit by meaning alone shows `≈`). *As built*: also the item's id and
+  URI, the chunk's index and kind (`part`), its heading, the workspace, the writer and the
+  score it was ranked by. A chunk's address is `k:7f3k/12`; a chat's hit keeps the chat's,
+  `c:7f3k/01JB…` (its title's: `c:7f3k`). The answer (`KbHits`) also says **why it was by
+  words alone** when that was not the query's choice: meaning search is off, or its model
+  isn't here yet. `by:meaning` then is an error, as in chats.
 - **Meaning** is chat's model and code (`ptyro-meaning`, model2vec `potion-base-8M`, §22.10).
-  **One switch for both**: `kb.meaning`, with `chat.meaning` as its old name. The backfill task
-  (`meaning.rs`) is generalised over the two tables. Paths, code, tool titles, commands and
-  output get no vector: the model is trained on prose and averages word vectors, which adds
-  nothing for identifiers, and they are the bulk of the rows.
+  **One switch for both**: `kb.meaning`, with `chat.meaning` as its old name (built, KB1.5:
+  §25.13). One task (`meaning.rs`) downloads the model and walks both tables for what has no
+  vector; what an ingest writes is embedded by the ingest (§25.5). Paths, code, tool titles,
+  commands and output get no vector: the model is trained on prose and averages word vectors,
+  which adds nothing for identifiers, and they are the bulk of the rows.
 - **Cost, measured** [KB0.1, `make spike-kb`, 2026-11-19: an M4 Pro, macOS, SQLite 3.54.1, the
   synthetic model at the real one's size, 61 queries a row; median / 95th percentile, in ms,
   each with its hits' rows fetched]. The budget is **`recall` answers in 150 ms at the 95th
@@ -10743,10 +10834,24 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   | **The merged search**, each part as chat does it | **86 / 90** | **156 / 165** |
   | **The merged search**, as KB1.5 builds it (below) | **41 / 42** | **71 / 75** |
   | The merged search with the sketch | 22 / 24 | 32 / 35 |
+  | *As built (KB1.5)*: by words, a telling word | 2.5 / 2.9 | 2.5 / 3.9 |
+  | … one very common word, ranked among its newest 20,000 | 10 / 13 | 12 / 15 |
+  | … by meaning, unfiltered | 43 / 45 | 87 / 91 |
+  | … by meaning, documents only (their items looked up first) | 39 / 44 | 80 / 84 |
+  | **The merged search as built** | **55 / 58** | **98 / 102** |
+  | … behind the wall (one profile) | 53 / 56 | 94 / 98 |
+  | … one very common word | 67 / 75 | 111 / 118 |
 
   The merged search is words and meaning in `kb.db`, the same two in a 100k-chunk file standing
   in for `chat.db`, one after the other, the fusion, and a page of ten fetched. Embedding the
   query is a microsecond.
+  - **The "as built" rows** [KB1.5, `make spike-kb`, 2026-11-19, the same machine and files]
+    are the code that ships: `KbDb::search_words` and `search_meaning` for both files (the
+    stand-in is searched as `kb.db` is; chat's own queries are §22.10's), every row of each
+    list of 40 fetched and checked against its item, `fuse_lists`, `rank`. On the writer's
+    connection, without `mmap_size`: that, the check of every row and the lists' rows being
+    fetched before the fusion (40 a list, where the spike fetched ten after it) are the 14 ms
+    over the row above.
   - **The budget is met at 500k chunks with nothing new, and missed at a million.** With the two
     changes below it is met at both, with room.
   - **KB1.5 builds these two; neither changes what is found:**
@@ -10779,13 +10884,22 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
     (§25.18). It is the next step when vectors pass a million or KB5's hook needs the time,
     measured on the real model first; then `sqlite-vec` (state **[unverified]**, RESEARCH I).
     Core SQLite has no vector type; ptyro's vectors are blobs in an ordinary table.
-  - **One kind of query misses the budget, and nothing above fixes it**: a single word that a
-    large part of all chunks hold, with no other word. FTS5 scores every match before it can
-    name the best, so the cost follows the number of matches: 17 ms at the median of the
-    20 commonest words (a word in 7% of the chunks), 108 ms for the commonest of them, and
-    59 / 166 ms merged. A common word beside a
-    telling one costs nothing (3 / 6 ms). Not tried: looking up the word's document count
-    first (`fts5vocab`) and answering such a query by meaning alone.
+  - **One kind of query missed the budget, and KB1.5 bounds it**: a single word that a large
+    part of all chunks hold, with no other word. FTS5 scores every match before it can name
+    the best, so the cost follows the number of matches: 17 ms at the median of the 20
+    commonest words (a word in 7% of the chunks), 108 ms for the commonest of them, and
+    59 / 166 ms merged. A common word beside a telling one costs nothing (3 / 6 ms).
+    - **Built: no more than 20,000 matches are ranked** (`ptyro_store::kb::MATCH_CAP`). Before
+      the ranking, one statement asks for the row 20,000 matches back from the newest (`ORDER
+      BY rowid DESC LIMIT 1 OFFSET 20000`): walking matches without scoring them is cheap. If
+      there is such a row, only rows after it are ranked (`AND rowid > ?`, which FTS5 applies
+      before it scores). A query with fewer matches is ranked whole, as before.
+    - **What it costs**: for a word in more than 20,000 chunks the answer is the best of the
+      newest 20,000 that hold it, not of all. A filter (the wall, a kind) applies after the
+      cut, so such a query can find fewer of a small profile's chunks than there are. That is
+      a word like "the" typed alone; a second word, or `kind:`, is the way to ask better.
+    - **Measured**: 10 / 13 ms by words (it was 17 / 105 in the same run) and 67 / 75 ms
+      merged, at 500k chunks, all 61 queries over the cap. Not tried: `fts5vocab`.
 - **Not built in KB1:** a trigram index (substring search in code, CJK), a reranking model, a
   code-trained embedding model (it would need a larger download and the ONNX runtime the project
   chose against in CHAT5, §22.10).
@@ -10843,6 +10957,13 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   no profile (`kb.scope = "profile"`, the default; `"workspace"` narrows to its workspace's
   items, `"all"` removes the wall). So a work account's model is never shown a personal
   account's history. `kb.scope` takes over from `chat.history_scope`, its old name.
+  - *As built (KB1.5)*: the wall is an argument of the search, `KbScope` (a profile, a
+    workspace, the caller's own session and chat), made by `KbScope::of(scope, profile,
+    workspace)` from the setting's word. It holds for `kb_search`, `kb_read` (an address
+    behind it is "no such item") and `kb_recent`, in `kb.db` and in `chat.db`. **The setting
+    itself is not built** (KB1.11), nor the tool that fills the scope from the caller's
+    session (KB1.10). `"workspace"` shows that workspace's items only: one of no workspace
+    is hidden.
   - A session's, a note's and a shell's profile is the one it ran under.
   - A root's is its project's pin (§10.10); a project with no pin, and a folder ingested without
     `--profile`, belong to every profile: you chose not to isolate them.
@@ -11017,9 +11138,9 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
 
 `[kb]` in the user config; every key is in the settings schema
 (`crates/ptyro-core/src/settings.rs`, a new **Knowledge** section) and so in the TUI's and the
-web's panels and `ptyro config set` (§13.7). **Built so far (KB1.1, KB1.3): `enabled`, `redact`
-(a pattern that isn't a regex is refused when the file loads) and `exclude`**; the rest come
-with the tasks that read them (KB1.11).
+web's panels and `ptyro config set` (§13.7). **Built so far (KB1.1, KB1.3, KB1.5): `enabled`,
+`redact` (a pattern that isn't a regex is refused when the file loads), `exclude` and
+`meaning`**; the rest come with the tasks that read them (KB1.11).
 
 ```toml
 [kb]
@@ -11053,6 +11174,13 @@ exclude = []              # more paths never to ingest (globs)
 - **Old names:** `chat.meaning` → `kb.meaning`, `chat.history_scope` → `kb.scope` (read, and
   rewritten by `ptyro config set`; not retired keys, since they still mean something).
   `chat.history_tool` stays: it gives chats the tools or not.
+  - *As built (KB1.5), `chat.meaning`*: the settings schema has `kb.meaning` only, in the
+    Knowledge section. `[chat] meaning = true` in a file switches it on as before (either
+    name does). Setting or unsetting either name (`settings::renamed`) writes `[kb] meaning`
+    and takes `[chat] meaning` out of the file, so a file never says two things. The CLI,
+    the TUI and the web still offer the switch under its old name where a search asks for
+    it; that keeps working, and KB1.7 to KB1.9 rename it there. `chat.history_scope` is
+    as it was until `kb.scope` is built.
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
@@ -11060,7 +11188,10 @@ exclude = []              # more paths never to ingest (globs)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
-  caller's session.
+  caller's session. *As built (KB1.5)*: the types are in `ptyro_core::kb::search` (`KbSearch`
+  without `machines`, `KbHits{hits, words_only}`, `KbHit`, `KbDoc{item, chunks, at, stale}`),
+  serializable, and the daemon answers them (`Daemon::kb_search`, `kb_read`, `kb_recent`). The
+  messages themselves are KB1.7's.
 - `KbRead{addr, before, after}` → `KbDoc{item: KbItem, chunks, at}`.
 - `KbRecent{kinds?, project?, before_ms?, limit}` → `KbItems{items}` (the history, paged).
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
@@ -11081,12 +11212,12 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 
 | Crate | What it gains |
 |---|---|
-| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`**; it now depends on `regex` |
-| `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (all but the search SQL; `session_facts` for a session's card)** |
+| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`, `kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, `rank` and its weights), `chats::parse_kb_query`**; it now depends on `regex` |
+| `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (`session_facts` for a session's card), `kb/search.rs` (`KbFilter`, `search_words`, `search_meaning`, `MATCH_CAP`, the vectors' upkeep: `vec_todo`, `vec_todo_of`, `put_vecs`, `vec_counts`, `drop_other_vecs`)** |
 | `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments. **Built: `transcript.rs` (`Transcript`, `TranscriptAt`, the readers `claude` and `codex`, where each agent keeps its file), `Adapter::{transcript, hook_transcript, read_transcript, transcript_title}`; the example `transcript` prints what a reader makes of a file** |
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head |
-| `ptyro-meaning` | `fuse` over several lists; nothing else changes |
-| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables; the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
+| `ptyro-meaning` | `fuse` over several lists; nothing else changes. **Built: `fuse_lists` (`fuse` is it for two lists), and `score` in eight running sums** |
+| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`) and `kb/golden.rs` (the golden set, a test); the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
 | `ptyro-protocol` | the messages of §25.14 |
 | `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms |
@@ -11099,10 +11230,14 @@ No new dependency is needed: `regex`, `sha2`, `notify` and `rusqlite` are in the
 **Budgets** (targets; KB0.1 measured the first two on 2026-11-19, `make spike-kb`, §25.8's
 table; the benches of §18.3 the rest):
 - `recall`: 150 ms at the 95th percentile, 500k chunks, meaning on; 50 ms by words alone.
-  **Measured: 42 ms and 6 ms** as KB1.5 is to build it (90 ms and 5 ms done as chat does it),
-  and 75 ms and 10 ms at a million chunks. **One kind of query misses both**: a single word
+  **Measured: 42 ms and 6 ms** as KB1.5 was to build it (90 ms and 5 ms done as chat does it),
+  and 75 ms and 10 ms at a million chunks. One kind of query missed both: a single word
   that a large part of all chunks hold, 108 ms by words alone and 166 ms merged at the 95th
   percentile (17 and 59 ms at the median).
+  **As built (KB1.5, `make spike-kb`, 2026-11-19): 58 ms and 3 ms at 500k chunks, and
+  102 ms and 4 ms at a million; that one kind of query now takes 13 ms
+  by words and 75 ms merged** (15 and 118 at a million): no more
+  than 20,000 matches are ranked (§25.8).
 - A turn's ingest: under 50 ms of the writer's time per 100 chunks, and none of the session's.
   **Measured: 2.5 ms** (6 at the 95th percentile, 17 at worst) with one transaction an item,
   rows and the words' index; their 51 vectors, written later, 0.1 ms. The same at a million.
@@ -11173,16 +11308,62 @@ table; the benches of §18.3 the rest):
   chat's engine. A profile's secret and a token redacted in what was typed, run and answered,
   in the title and the card, with the transcript found in the profile's own folder. In the daemon (`kb/sessions/tests.rs`): the read from a cursor, a shorter
   file, another file, a cut and regrown one, a file longer than a read.
-- **The golden set, `make kb-eval`:** a made-up corpus of about 300 items of every kind and two
-  profiles (`crates/ptyro-store/tests/kb_golden/`), and about 60 questions, each with the
-  addresses that must be among the first five and those that must never appear (the other
-  profile's, a forgotten one). It reports recall at 5 and the mean reciprocal rank, by words
-  alone and with meaning (the synthetic model in CI; `make kb-eval-real` with the real one).
-  The numbers are committed; CI fails when one drops by more than two points. Every ranking
-  change in §25.8 is made against it.
+- **The golden set, `make kb-eval`** (built, KB1.6: `crates/ptyro-daemon/src/kb/golden.rs`):
+  a made-up corpus of 300 items of every kind and two profiles, and 63 questions, each with
+  the addresses that must be among the first five and those that must never appear (the other
+  profile's, a forgotten one, what a filter rules out). It reports recall at 5 and the mean
+  reciprocal rank, by words alone and with meaning (the synthetic model in CI; `make
+  kb-eval-real` with the real one). The numbers are committed; CI fails when one drops by
+  more than two points. Every ranking change in §25.8 is made against it.
+  - **Where and how**: a test of the daemon (`kb::golden::the_golden_set`, so `make test`
+    and CI run it; `make kb-eval` runs it alone and prints, `KB_EVAL_VERBOSE=1` every
+    question with its first five). Each item goes through `Daemon::kb_ingest` (the gate,
+    redaction, the cutters, the write, the embed step) and each question through
+    `Daemon::kb_search`: nothing is mocked but the model. About a second.
+  - **The corpus** is made from 30 topics, each with two telling words, three words that
+    mean it and are nowhere in the corpus, and three sentences (what was asked, what was
+    done, what was decided). A topic is seven items: a session (card, messages, a tool), a
+    session of 400 days ago, a document, a source file (path, comment, code), a commit, a
+    note (you wrote half, an agent half) and a shell's day. 90 more documents are about
+    nothing and say one topic's word each. Topics alternate between the profiles `work` and
+    `home`; every third topic's files are nobody's; commits are nobody's. Seven topics have
+    a chat in `chat.db`. Three notes are forgotten after they were kept.
+  - **The questions**: 30 by a topic's two words (the note must be among the first five; for
+    a forgotten note, the document, and the note never); 16 in the words that mean a topic
+    (found by meaning or not at all); 9 from behind the wall (the commit is found, nothing of
+    the other profile is, in either file); 8 with a filter (`kind:`, `since:`, `before:`,
+    `wrote:`, `file:`), each with what the filter must keep out.
+  - **The synthetic model** puts a topic's words, and the words that mean it, along one axis
+    of 31, with a little noise. It is the best case for meaning: what it proves is the
+    plumbing and the ranking, not the model.
+  - **The committed numbers** (2026-11-19, `COMMITTED` in `golden.rs`): **with meaning, recall
+    at 5 1.000 and mean reciprocal rank 0.761; by words alone 0.746 and 0.576.** By words
+    every question that words can answer is answered (47 of 63). A never row fails the run
+    whatever the numbers.
+  - **`make kb-eval-real`** copies `potion-base-8M` from where it already is
+    (`PTYRO_KB_EVAL_MODEL`, by default ptyro's own data folder), runs the same questions and
+    prints the same two lines. It downloads nothing, says so when the model isn't there, and
+    gates nothing: its numbers are the model's. **Not run: the model was not on the machine
+    this was built on [unverified].**
+- **Search** (built, KB1.5). In `ptyro-core`: the query's new words; the ranking by kind, age
+  and place; two hits an item and neighbours as one. In `ptyro-meaning`: the fusion of
+  several lists; eight sums against one for every length. In `ptyro-store`
+  (`kb/search/tests.rs`): what words find and mark, a heading's weight; **every filter by
+  words and by meaning, which must agree**; the wall when a vector's own columns are wrong; a
+  forgotten item from its tombstone on, before its chunks are gone, and that no vector is
+  made for it; the cap on a word most chunks hold; the vectors' upkeep (a changed chunk, an
+  item that changes hands); and **a property test that no typed text is an FTS5 syntax
+  error**. In the daemon (`kb/search/tests.rs`): one search over both files with its order,
+  its addresses and each opening; every filter of the query and of the caller; the wall for
+  `profile`, `workspace` and `all`, the caller's own session and chat, in search, read and
+  history; a forgotten item; by words alone and why (off, the model not here), `by:meaning`
+  refused, chats off, the knowledge base off; an address with its neighbours, a stale one,
+  a handle; the history's pages. Not reachable without the protocol, so not in `kb1.rs`:
+  KB1.7 adds `recall` there.
 - **`make spike-kb`** (KB0.1, built: `crates/ptyro-store/examples/kb_spike.rs`; `CHUNKS=1000000`
   for the larger run): 500k and 1M synthetic chunks, the search's cost by words, by meaning
-  with each filter, each fallback of §25.8 with its recall, the merged search, the file's
+  with each filter, each fallback of §25.8 with its recall, the merged search, **the same
+  through the search as built** (KB1.5: `KbDb`'s lists, the fusion, the ranking), the file's
   size by part, an ingest, and a forget with a look through the file's bytes for what was
   forgotten. **`make spike-kb-comments`** (KB0.4): the comment table over any folder, with
   counts by rule and a sample of each. **`make verify-kb`**: against the real
