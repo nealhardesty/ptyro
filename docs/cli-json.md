@@ -207,8 +207,8 @@ Not pinned by the snapshot yet; new fields may be added.
 - `ptyro ingest --history --json` → `{found, known, old, chats, new, places: [{agent, profile,
   dir, found, new}], reading}`.
 - `ptyro kb rm ROOT --json` → `{name, items, chunks}`: what was dropped.
-- `ptyro kb forget … --json` → `{items, chunks}`: what was deleted. With `--session`:
-  `{items, chunks, private: true}`.
+- `ptyro kb forget … --json` → `{items, chunks}`: what was deleted (`{"items": 0, "chunks": 0}`
+  when `--query` found nothing). With `--session`: `{items, chunks, private: true}`.
 - `ptyro uninstall --dry-run --json` has `kb_notes: {path, count, bytes, delete}` when there
   are notes (`delete`: `--delete-notes` was given; otherwise the folder stays).
 - A `Session` (`ptyro ls --json`, `ptyro new --json`) has `private`: the knowledge base keeps

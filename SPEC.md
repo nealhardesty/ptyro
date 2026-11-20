@@ -1114,6 +1114,16 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-20] Protocol 1.62** (additive; the review of the knowledge base, §25 "As
+built", §25.14): `KbSearch` gained `session` and `worktree` (only that ptyro session's or that
+worktree's items: a search within a row's history, filtered in `kb.db`; with either, linked
+machines are asked only when one is named, and no chat is found). `KbNote` gained `base` and
+`KbNoteText` `version`: a note written again (`addr`) names the text it was read as, and is
+refused with `conflict` when its file has changed since. A 1.61 daemon ignores the new request
+fields (a search within a history then answers with everything that matches, and a note is
+written over as before) and sends no `version`, which a client reads as "none": it sends no
+`base`. A 1.61 client sends neither, and is answered as before.
+
 **[built 2026-11-20] Protocol 1.61** (additive; what is offered at a prompt, KB5, §25.9,
 §25.14): `KbStatusInfo` gained `inject` (`kb.inject`) and `offered` (the last 20 offers, each
 with its session and its pointers). A 1.60 daemon sends neither, which a client reads as
@@ -10047,8 +10057,9 @@ list and forget them, agents search them with `recall` and `recall_read`, a sess
 be private, the TUI and the web have the Library, a search asks linked machines too, and
 (KB2) you and your agents write notes, which are files; (KB5) an agent may be offered
 pointers at a prompt, where you switch that on):
-- **The review of the whole (2026-11-20; PR #121; no change to the protocol).** What reading
-  the code found wrong and is now so; each is also said where the design has it:
+- **The review of the whole (2026-11-20; PR #121; its clients' side is protocol 1.62).**
+  What reading the code found wrong and is now so; each is also said where the design has
+  it:
   - **Who a caller is comes from what the daemon knows, never from what the client says**
     (§25.9). `kind` in a client's hello is its own word: a process in an agent's session that
     said `machine` was taken for another machine's link and answered as you. A link is one
@@ -10103,6 +10114,43 @@ pointers at a prompt, where you switch that on):
   - **Not a fault** (tried against FTS5): a search term with no letter or digit in it (`&&`)
     doesn't empty a search; FTS5 leaves a phrase with no token out
     (`a_term_with_no_word_in_it_does_not_empty_the_search`).
+  - **The clients' side of the same review (§25.10):**
+    - **Stored text reaches a terminal without its control characters.** A README, a comment
+      or a commit message may hold an ESC, a BEL or a C1 control; `ptyro recall`, `kb show`,
+      `kb recent`, `kb notes`, `kb`, `kb ls`, `ingest`, `gc` and `doctor` print titles,
+      snippets, headings, URIs, pieces, root names and the daemon's questions through one
+      filter (`kb::printable`, `printable_lines`); `--json` escapes its own. (The TUI's
+      drawing drops them already; the web sets text, never markup.) A root's name loses its
+      control characters when it is made.
+    - **A root in a command a message offers is one word** (`ptyro_core::kb::root_word`): its
+      name, its name in single quotes, or its id where no quoting carries it (it starts with
+      `-`, or holds a quote). The line of a missing or failing root carries the command
+      itself (`KbStatusInfo.failing`), so no client cuts a name out of it; the TUI's mend
+      list, the web's Health page and `doctor --fix` run that command as it stands, and a
+      folder called `x --yes` no longer answers the question `kb rm` asks.
+    - **A form's switch says something only when it was moved.** The ingest form's Comments,
+      Code and Commits start where the settings have them and are sent only when they
+      differ from that (the TUI sent `--no-comments`, `--code`, `--no-commits` by the
+      built-in defaults, so with other settings a switch did the opposite of what it
+      showed); for a linked machine, and for a web device that may not read the settings,
+      every switch says what it shows. **What a form's text field holds is never a flag**: a
+      `Make::Cli` form puts its words last, after `--`, and joins a value that starts with
+      `-` to its flag.
+    - **A note edited from a copy is not written over what changed meanwhile (1.62).**
+      `KbNoteText.version` names the text that was read; `KbNote{addr, base}` is refused
+      with `conflict` when the file is no longer that text (or is gone). `kb show REF
+      --open` keeps what you wrote in a file and says where; the web's editor follows the
+      file while nothing was typed (it asks again on `KbUpdated`), and with edits says the
+      note changed and lets you load it or keep yours.
+    - **A search within a row's history is the store's (1.62).** `KbSearch.session` and
+      `.worktree` filter in `kb.db`; both Libraries filtered the hits themselves, against
+      the first page of that history, and said nothing matched when the hit was older.
+      With either, no other machine is asked unless one is named, and no chat is found.
+    - **The notes folder's watcher goes by an event's kind, not by what its path is**: a
+      folder moved in whole is one event, of a folder, and its notes are read; an open (which
+      reading the folder is, where opens are reported) never counts.
+    - **The web's Settings → Knowledge → shell asks before `output`**, in the words the
+      Library's switch uses.
 - **KB5 offered at a prompt (2026-11-20; `ptyro_core::kb::offer`,
   `crates/ptyro-daemon/src/kb/offer.rs`, `Adapter::{hook_prompt, hook_context}`,
   `ptyro-protocol` 1.61; §25.9 has it whole):**
@@ -12281,7 +12329,7 @@ exclude = []              # more paths never to ingest (globs)
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
-### 25.14 Protocol (additive; all of it is built, 1.53 to 1.61)
+### 25.14 Protocol (additive; all of it is built, 1.53 to 1.62)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
@@ -12359,6 +12407,10 @@ exclude = []              # more paths never to ingest (globs)
     (`KbOffer{at_ms, session, name, pointers: [KbPointer{addr, kind, title?, at_ms,
     project?}]}`, newest first, at most 20; empty for an agent that asks, and from a daemon
     before it). No request is new: an offer is the answer to `Hook`, as `HookOutput` (§8.3).
+  - **1.62 (the review)**: `KbSearch.session?` and `.worktree?` (ids; a filter in the store,
+    as `KbRecent`'s; this machine only unless `machine` names one; no chats);
+    `KbNote.base?` with `KbNoteText.version` (a hash of the file's text: a note written
+    again from a text that is no longer the file's is `conflict`, and nothing is written).
   - `Features.kb` is dropped ("As built", KB1.7).
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
   error, times).

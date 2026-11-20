@@ -83,7 +83,8 @@ shell, keep nothing. Commands your *agents* run are not here: they are in the ag
 it beside the command: the first 2 KiB and the last 6 KiB of it, as plain text, with a line
 that says how much was left out between. It is deleted after 30 days
 (`[kb] shell_output_days`), the command line stays. This is the one setting that stores what
-is on your terminal, which is why it is off and why the web asks before it switches it on.
+is on your terminal, which is why it is off and why the web asks before it switches it on
+(in the Library's Sources and in Settings → Knowledge → shell alike).
 
 **Never kept, whatever the setting:**
 
@@ -208,7 +209,9 @@ keeps itself out (`[knowledge] enabled = false`) is not read through `~/work` ei
 **A folder that is gone** keeps what was read of it (it may come back) and is named until you
 say what to do: in `ptyro kb`, `ptyro kb ls`, the Sources tab, `ptyro gc`, and `ptyro doctor`,
 which is what the TUI's mend list (`M`) and the web's Health page show. `ptyro kb rm NAME`
-drops it; `ptyro kb sync NAME` looks again once it is back.
+drops it; `ptyro kb sync NAME` looks again once it is back. Each of those lines carries the
+command, with the root as one word of it (a name with a space in it is quoted; one no quoting
+carries is named by its id, which `kb rm` and `kb sync` take too).
 
 ## The agents' own history
 
@@ -303,6 +306,12 @@ ptyro kb show k:7f3k --open          # edit one in your editor
 ptyro kb forget k:7f3k               # delete one (its file goes)
 ```
 
+A note edited from a copy is never saved over what changed meanwhile. If the file changed
+while your editor was open on it (another editor, an agent, the web app), `kb show --open`
+writes nothing, keeps what you wrote in a file and says where. The web app's editor follows the
+file while you have typed nothing; once you have, it says the note changed on the computer and
+asks whether to load it as it is now or keep yours.
+
 - **They are files, and the files are the truth**:
   `<data>/kb/notes/<profile>/<project>/<name>.md` (`ptyro about` and `ptyro kb` name the
   folder). The folder says whose a note is and what it is about: `_all` is every profile's,
@@ -358,7 +367,8 @@ The same, to look at.
   a commit's hit show what was kept of them: a phone has no editor to open them in. A
   shell's day has **Its shell**.
 - A session's, a worktree's and a project's menu has **History**: the Library with only that
-  one's.
+  one's. Typing there searches within it: only what was kept of that session or worktree is
+  found.
 - Switched off, both say so and offer to switch it on.
 
 ## What your agents get

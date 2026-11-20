@@ -48,7 +48,7 @@ Conventions:
 | **WIN** | Windows and PowerShell | pwsh sessions as good as bash everywhere; WSL2 checked, bridged and doctored (done). `ptyro.exe` in Windows Terminal and the native daemon on ConPTY were built, then removed 2026-11-18 (owner): on Windows, ptyro runs inside WSL2 (RESEARCH DD3) |
 | **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (built 2026-11-04) |
 | **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
-| **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and (optionally) shell commands, searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest; pointers offered at a prompt where you switch that on (decided 2026-11-19; every task KB0 to KB5 is built, 2026-11-20; open until its "Done when" is run with the real agents in the TUI, on Linux, and from a phone, SPEC §25) |
+| **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and shell commands (what they print only where you ask for it), searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest; pointers offered at a prompt where you switch that on (decided 2026-11-19; the code of every task KB0 to KB5 is built, 2026-11-20, and reviewed, PR #121; open: three things were not run, and the boxes of KB0, KB0.3 and KB1 stay unticked for them: a real agent inside the TUI (KB0.3's flags in an interactive Claude session; step 1 of the "Done when" with the real Claude and Codex), the golden set with the real embedding model (KB1.6's `make kb-eval-real`: the model was not on the machine), and anything on Linux by hand (CI runs the tests there); SPEC §25) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; and KB4 is: a shell's commands, and what they print only where asked for; and KB5 is: pointers offered at a prompt, off unless switched on. Every task is built; the milestone stays open until its "Done when" is run with the real agents in the TUI, on Linux, and from a phone: see the note under it)
+## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; and KB4 is: a shell's commands, and what they print only where asked for; and KB5 is: pointers offered at a prompt, off unless switched on. The code of every task is built; three things were not run, and the boxes of KB0, KB0.3 and KB1 stay unticked for them: a real agent inside the TUI (KB0.3's flags in an interactive Claude session; step 1 of the "Done when" with the real Claude and Codex), the golden set with the real embedding model (KB1.6's `make kb-eval-real`: the model was not on the machine), and anything on Linux by hand (CI runs the tests there). The milestone stays open until they are: see the note under its "Done when")
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -3865,6 +3865,8 @@ Development section), its README and `docs/` text, and the milestone's version b
 (`make bump`). Each stage is useful without the next.
 
 - [ ] **KB0 Spikes** — results into SPEC §20 and §25 before KB1 starts. **M**
+      *(Open for one thing: KB0.3's run of Claude's flags in an interactive session. KB0.1,
+      KB0.2 and KB0.4 are done.)*
   - [x] **KB0.1 Search at size** (`make spike-kb`, `crates/ptyro-store/examples/kb_spike.rs`):
         500k and 1M synthetic chunks in the §25.4 schema; the cost of a search by words, by
         meaning (unfiltered, then filtered by profile, project, kind and time from `chunk_vec`'s
@@ -3925,7 +3927,8 @@ Development section), its README and `docs/` text, and the milestone's version b
         the user's `config.toml` unless `-c projects={…}` is given, and the script now checks
         the file is untouched. OpenCode from its docs only (§20.4): MCP by config file, no
         per-launch way, and an API that no longer matches §8.6. SPEC §20.1, §20.2, §20.4, §25.9,
-        §25.18. **Not run:** Claude's flags in an interactive session (`--help` only).)*
+        §25.18. **Not run, which is why this box is unticked:** Claude's flags in an
+        interactive session (`--help` only; `-p` mode took them).)*
   - [x] **KB0.4 The comment table**: the extension → comment-marks table of §25.6.3 run over
         this repository and three others of other languages; count what whole-line-only keeps
         and drops, and what the code-switched-off and licence rules catch. **S**
@@ -3943,6 +3946,10 @@ Development section), its README and `docs/` text, and the milestone's version b
         directives are a fourth rule. SPEC §25.6.3.)*
 - [ ] **KB1 A memory that fills itself** (R-KB-01, 02, 03, 05, 09, 10, 11) — the core: agent
       sessions are ingested as they happen, and found by you and by your agents. **L**
+      *(Every task KB1.1 to KB1.14 below is built and ticked. This box is open for two
+      runs nobody made: step 1 of the milestone's "Done when" with the real Claude and
+      Codex inside the TUI (the tests do it with fake agents; the real ones were run in
+      `-p` and `exec` mode only), and KB1.6's golden set with the real embedding model.)*
   - [x] **KB1.1** `kb.db`: the schema of §25.4, `KbDb` and its writer thread, migrations and the
         copy aside, `secure_delete` **and FTS5's own `secure-delete` option** (KB0.1: without
         it a forgotten word stays in the index, §25.12), "can't open" handling with the fix (as
@@ -4540,7 +4547,10 @@ OpenCode's sessions and tools; sub-agents' transcripts and tool results; code by
 merging knowledge across machines (with CHAT6); export. Of what is offered at a prompt (KB5):
 offers by meaning alone, telling words chosen by how rare they are in `kb.db`, chats as
 pointers, a trace kept across a daemon restart, and making it the default, which waits for
-evidence from real use that it helps.
+evidence from real use that it helps. From the review of PR #121: a process in an agent's
+terminal session that talks to the daemon itself can still change chats (`ChatSend`,
+`ChatDelete`, `ChatUpdate`), as it could before the knowledge base (only a chat's own engine
+is held to reading; the session's `ptyro mcp` offers no chat tool).
 
 **Done when (milestone):** on Linux and macOS, with nothing set up beyond `ptyro setup`:
 1. *(KB1)* A Claude session and a Codex session each finish a task. `C-q L` shows both in the
@@ -4579,7 +4589,10 @@ real agents were run only in `-p` and `exec` mode by `make verify-kb`, which sho
 tools, the transcripts and the prompt hook); a search by a paraphrase with the real model
 (not on this machine; the golden set does it with a synthetic one); anything on Linux by
 hand (CI runs the tests there); step 5 by hand (the web's end-to-end test and
-`kb_machines.rs` stand for it). KB0.3 and KB1 stay unticked for the first of these.)*
+`kb_machines.rs` stand for it). KB0 and KB0.3 stay unticked for the first of these (an
+interactive Claude session was never started with ptyro's flags by hand), and KB1 for the
+first and the second; KB2 to KB5 are ticked because what they add was walked above and
+is covered by their tests, with the same three runs still owed for the milestone.)*
 
 ---
 
