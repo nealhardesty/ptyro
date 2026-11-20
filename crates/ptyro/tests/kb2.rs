@@ -565,7 +565,9 @@ async fn the_tuis_library_has_the_notes_tab() {
         .send_when("Forget 1 item: note", "y")
         // The form: every option the command takes.
         .send_when("forgot 1 item", "n")
-        .until("Seen by");
+        // (Its last row: a screen read while the form is still being drawn has only the
+        // rows above it.)
+        .until("In your editor");
     let r = ptyro_testkit::headless::run(script).await.expect("headless run");
     let shown = &r.screen;
     assert!(shown.contains("Write a note") && shown.contains("In your editor"), "{shown}");

@@ -201,6 +201,9 @@ const scenarios = {
     const text = await tab.eval(`document.querySelector("textarea.kb-note").value`);
     await fill("textarea.kb-note", text.replace("zqformnote", "zqpageedit"));
     await press("Save");
+    // The page says it saved and asks for the file again (for a moment it shows no note, and
+    // no ⋯): what it then shows is the file as it was saved.
+    await tab.waitFor("the page to say it saved, and show the note as it is now", `document.querySelector(".toast")?.textContent === "Saved" && !!document.querySelector('header button[aria-label="More"]') && (document.querySelector("textarea.kb-note")?.value ?? "").includes("zqpageedit")`);
     await until("the edit to be found", () => recalled("zqpageedit").length > 0);
     if (recalled("zqformnote").length) throw new Error("the old words are still found");
     // ⋯ → Delete…: the daemon says the file goes.
