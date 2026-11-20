@@ -481,7 +481,12 @@ const scenarios = {
       return { cells: o.cells.map((x) => x.t).join(""), cursor: o.cursor, slow: t.predict.slow, srtt: t.predict.srtt };
     })()`);
     const settled = () => tab.waitFor("the predictions confirmed", `ptyroTerm.predict.preds.length === 0`, 5000);
-    for (const c of "ec") { await key(c); await settled(); await sleep(150); }
+    // The cursor trusted again: anything sent before (the terminal taking focus sends a focus
+    // event) is a barrier until the daemon said it typed it, plus a moment. Letters typed before
+    // that are held and placed late, never measured, so the test waits as the predictor does.
+    const trusted = () => tab.waitFor("the predictor to trust the cursor", `(() => { const p = ptyroTerm.predict; return p.waitN === null && p.io.now() >= p.trustAt && p.held.length === 0; })()`, 10_000);
+    for (const c of "ec") { await trusted(); await key(c); await settled(); await sleep(150); }
+    await trusted();
     const auto = await key("h");
     if (auto.srtt === null) throw new Error("the echo's round trip wasn't measured");
     if (!auto.slow && auto.cells) throw new Error(`a prediction was drawn on a fast link: ${JSON.stringify(auto)}`);
