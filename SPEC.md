@@ -1114,6 +1114,18 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-19] Protocol 1.53** (additive; the knowledge base's commands, KB1.7, §25.14):
+`Request::KbSearch{query, project, kinds, since_ms, before_ms, limit, here}` → `Reply::KbHits{hits,
+words_only}`; `KbRead{addr, before, after}` → `KbDoc{item, chunks, at, stale}`; `KbRecent{kinds,
+project, before_ms, limit}` → `KbItems{items}`; `KbForget{addrs, query, confirmed}` →
+`KbForgotten{items, chunks}` (unconfirmed: `needs_confirmation`); `KbStatus` → `KbStatus{status}`.
+The types are `ptyro_core::kb::search::{KbHit, KbListed, KbStatusInfo}` and `ptyro_core::kb::{KbItem,
+KbChunk}`. `read` scope, `full` to forget; never routed to another machine. 1.53 also counts
+`DaemonDoctor.kb`, which 1.52 builds already sent. Compatibility: a 1.52 daemon can't read these
+requests and answers `invalid` ("the daemon couldn't read this request"), which `ptyro recall` and
+`ptyro kb` turn into "the running daemon is older than this ptyro … `ptyro daemon upgrade`"; an
+older client never sends them.
+
 **[built 2026-11-19] Protocol 1.52** (additive; WEB2.3, every key exactly once, §16.4 WEB1.8):
 `ClientMsg::Keys{session, stream, keys: [SeqKey{n, event, token, age_ms, typed_ms, heard}], replay}`
 and `ServerMsg::Typed{session, stream, upto, refused: [Refused{from, to, why, reason}]}` (`why`
@@ -3789,6 +3801,8 @@ ptyro install NAME… [-y] [--dry-run] [--json]             # install agents/too
 ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
 ptyro mcp                              # internal; the chat history tools for a chat's agent (§22.10)
+ptyro recall <query…> [filters] [--json]   # search the knowledge base and the chats (§25.10; built KB1.7)
+ptyro kb [status] | show <ref> | recent | forget <ref…>|--query <q>   # §25.10; the rest of `kb` and `ingest` with KB2, KB3
 ```
 
 **[built M2]** Added: `attach --view-only`, `restart S…`, `ls --all` (history from the store,
@@ -7683,7 +7697,8 @@ Three tiers; each one is useful without the next.
      are tools of `ptyro mcp`, appearing only in chat engines. **[proposed KB1, §25.9]** They
      become `recall` and `recall_read`, which every agent session gets too and which search the
      knowledge base with the chats; `chat_search` and `chat_read` stay as names for one release.
-   - **Scope:** `[chat] history_scope = "profile"` (default): a chat sees chats of **its own
+   - **Scope:** `[kb] scope = "profile"` (default; `[chat] history_scope` until KB1.11, and
+     still read under that name, §25.13): a chat sees chats of **its own
      profile** only, so a work account's history never reaches a personal account's model. `"workspace"`
      narrows, `"all"` widens. Incognito chats are never visible.
 3. **Meaning (CHAT5, opt-in; built 2026-10-30).** A local embedding of each message, merged with
@@ -7911,7 +7926,7 @@ title = "auto"            # auto | off
 title_command = ["claude", "-p", "--model", "haiku", "--output-format", "json", "--strict-mcp-config", "--tools", ""]  # [] = no titler (§22.8)
 daily_cap = 200           # per profile per UTC day: titles and chat find, counted together
 history_tool = true       # the chat tools of §22.10 in every chat
-history_scope = "profile" # profile | workspace | all
+history_scope = "profile" # profile | workspace | all; since KB1.11 the old name of `[kb] scope` (§25.13), still read
 index_tools = false       # also index tool output (2 KB a node)
 meaning = false           # live: meaning search (§22.10 tier 3); on downloads a 31 MB model once
 notify = "blocked"        # blocked | all | off (§22.11)
@@ -9901,7 +9916,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6); the rest proposed]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11); the rest proposed]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -9911,16 +9926,77 @@ at ingest, no vector database and no graph. The ideas and what other products do
 section I and R-KB-01…13; the tasks are ROADMAP KB0…KB5.
 
 **As built, and where building and the spikes changed the design below** (each line names its
-task; agent sessions are kept as they happen and the daemon can search them, and nothing shows
-either yet: there is no command until KB1.7):
+task; agent sessions are kept as they happen, and `ptyro recall` and `ptyro kb` search, read,
+list and forget them; the Library, the agents' tools and private sessions are not built yet):
+- **KB1.7 the protocol's messages and the commands, KB1.11 the settings, the switches and
+  retention (2026-11-19; `ptyro-protocol` 1.53, `crates/ptyro-daemon/src/kb/requests.rs`,
+  `crates/ptyro/src/kb.rs`, `ptyro_core::config::Kb`):**
+  - **Five requests, on this machine only**: `KbSearch`, `KbRead`, `KbRecent`, `KbForget`,
+    `KbStatus` (§25.14 has them as built). The other machines' part is KB1.12's: none of the
+    five is routed to a linked machine.
+  - **Who asks decides what is seen, already.** A request that comes from inside an agent's
+    session (the agent running `ptyro recall` in its terminal; its tools, when KB1.10 gives
+    them) is answered within the wall: `kb.scope`, that session's profile and workspace, and
+    never that session's own item. Which session it is comes from the kernel (the caller's
+    process, `Daemon::kb_caller_scope`), as a chat's history tools are placed. **An agent can't
+    forget**: what it could forget, it could hide (`guard_agent`). You, a paired device and a
+    plain shell see everything (§25.9).
+  - **A hit and a listed item carry names beside the ids**: `project_name` and
+    `workspace_name`, where the daemon still knows them. An item in a list (`KbListed`) has its
+    address (`k:7f3k`) too.
+  - **`recall` ranks what is of the project you are in higher by itself**: the CLI sends its
+    working directory (`KbSearch.here`: a project's id or name, or a path), and the daemon
+    finds the project. **`--here` and `--machine` are not built**: they are the fan-out's
+    (KB1.12), and `--here` means "this machine only" there, as in `chat search`.
+  - **`kb forget` asks about exactly what will go**: the CLI resolves the addresses and the
+    query's hits to items first, shows the daemon's question (`KbForget` unconfirmed answers
+    `needs_confirmation` with what would go, and deletes nothing), and its "yes" forgets those
+    items by their ids. By a query it is the items of the search's best 100 hits; a chat's
+    address is refused (`chat rm` deletes one).
+  - **`kb show --open` opens a session** (the TUI on it; a dormant one resumes) **or a chat**.
+    A file, a note and a commit open with their own tasks (KB2, KB3).
+  - **In the TUI the five commands are palette actions that run the command in a split**
+    (`kb.search`, `kb.show`, `kb.recent`, `kb.forget`, `kb.status`; `cli_actions.rs`), and
+    **the web has the Library page's first part** (`web/src/library.ts`, More → Library: the
+    search box, the history when nothing is typed, a hit with its neighbours, Forget…, the
+    status, and Switch it on). KB1.8 and KB1.9 build the Library on these (§25.10).
+  - **A repository's switch is `[knowledge] enabled = false`, not `[kb] enabled`.** A
+    setting's key names one setting of one file family everywhere (the schema, both panels,
+    `config set`): `kb.enabled` is yours. So the project's table has its own name, as
+    `[worktree]` has beside your `[worktrees]`; a `[kb]` table in a repository is refused with
+    a line that says so. KB3's per-project keys (`comments`, `code`, `commits`, `include`,
+    `exclude`) go in the same table (§25.13).
+  - **Retention acts when it is set, then once a day**, and deletes sessions (and, once there
+    are any, shells' days) with no tombstones. A session too old to keep is not read back in
+    at the daemon's start; one that is carried on is read again from its start, and kept
+    (§25.12).
+  - **Switched off, then on: a session that goes on is read from where reading stopped**, so
+    what was said while `kb.enabled` or `kb.sessions` was off is kept with its next turn.
+    Nothing moves a cursor without reading. `kb forget`, the agent's or the project's switch,
+    and (KB1.14) a private session are the ways to keep something out for good (§25.12).
+  - **`kb.scope` is the wall's setting, for chats' history tools too** (`chat.history_scope`
+    is read as its old name). For a chat it means what it did: `profile` that profile's chats,
+    `workspace` that workspace's. For the knowledge base `workspace` is the profile's items
+    of that workspace (§25.9).
+  - **`kb.tools` is in the schema and nothing reads it yet** (KB1.10 gives the tools), and
+    `[agents.X] kb = false` keeps that agent's sessions out; that it gets no tools is KB1.10's.
+  - **A session's item is stamped with its workspace's id** (found on the way: KB1.4 stamped
+    the name a session knows its workspace by, so `workspace:` and the wall's `workspace`,
+    which go by id as chats do, never matched a session, and a rename would have orphaned
+    them; `Daemon::kb_workspace_id`).
+  - **A tombstone can be made for a URI that has no item** (`KbDb::tombstone`), for KB1.14's
+    `kb forget <session>`; no command makes one yet.
+  - **Not built**: the events (`KbUpdated`, `KbProgress`), `Features.kb` (a client learns that
+    it is off from `KbStatus`, or from the error every other request answers), `kb ls`,
+    `kb sync`, `kb rm`, `kb note(s)` and `ingest` (KB2, KB3).
 - **KB1.5 search and KB1.6 the golden set (2026-11-19; `ptyro_core::kb::search`,
   `crates/ptyro-store/src/kb/search.rs`, `crates/ptyro-daemon/src/kb/search.rs` and
   `kb/golden.rs`, `ptyro_meaning::{score, fuse_lists}`; `make kb-eval`, and the "as built" rows
   of `make spike-kb`):**
-  - **The search is three functions of the daemon, and nothing calls them yet**:
-    `Daemon::kb_search`, `kb_read` and `kb_recent`. The protocol's messages, the CLI, the
-    Library and the tools (KB1.7 to KB1.10) are their callers. The fan-out to linked machines
-    is theirs too: until then `machine:` in a query is refused in words (§25.8, §25.14).
+  - **The search is three functions of the daemon**: `Daemon::kb_search`, `kb_read` and
+    `kb_recent`. The protocol's messages and the CLI call them (KB1.7); the Library and the
+    tools will (KB1.8 to KB1.10). The fan-out to linked machines is KB1.12's: until then
+    `machine:` in a query is refused in words (§25.8, §25.14).
   - **A word that a large part of all chunks hold is ranked among its newest 20,000 matches**
     (`MATCH_CAP`). That was KB0.1's one miss. One probe walks the matches newest first without
     scoring them; a query with more than the cap is ranked from that row on. 13 ms where it
@@ -9939,7 +10015,7 @@ either yet: there is no command until KB1.7):
     once (§25.5 step 7).
   - **`kb.meaning` is the switch, for chats too.** `[chat] meaning` in a file still switches it
     on, and setting either name writes `[kb] meaning` and takes the old one out
-    (`settings::renamed`). The clients still send `chat.meaning`, and it works (§25.13).
+    (`settings::renamed`). The clients say `kb.meaning` since KB1.7 (§25.13).
   - **Two hits an item whatever kinds its chunks are of** (a file's path, its comment and its
     code are one item), and a hit takes in at most two neighbouring chunks. A session's tool
     title, which the table of weights did not name, weighs 0.7 (§25.8).
@@ -9957,9 +10033,9 @@ either yet: there is no command until KB1.7):
     unmeasured [unverified]**.
   - **A control character typed into a search is dropped**, in chats' search too: a NUL in a
     quoted term was an FTS5 error (`unterminated string`), in `chat search` as well (§25.8).
-  - **Not built**: `kb.scope` (the wall is a parameter, `KbScope`: KB1.11 adds the setting and
-    KB1.10 fills it from the caller's session), the fan-out and `machine:`, a reading
-    connection of its own with `mmap_size`, the one-bit sketch, and the real model's numbers.
+  - **Not built**: the fan-out and `machine:`, a reading connection of its own with
+    `mmap_size`, the one-bit sketch, and the real model's numbers. (`kb.scope` and the scope
+    from the caller's session came with KB1.11 and KB1.7.)
 - **KB1.4 agent sessions (2026-11-19; `ptyro_agents::transcript`, `ptyro_core::kb::card`,
   `crates/ptyro-daemon/src/kb/sessions.rs`; checked against Claude Code 2.1.329 and Codex 0.167.1
   by `make verify-kb`, which now runs ptyro's own reader over the transcripts it makes):**
@@ -9993,8 +10069,8 @@ either yet: there is no command until KB1.7):
     file (device and inode), or the byte before the cursor is not a line's end (cut back and
     grown past it). A file cut back to a line's end and grown past the cursor between two
     reads is not noticed.
-  - **Not read yet**: `kb.sessions`, `[agents.X] kb` and a project's `[kb] enabled` (KB1.11),
-    a private session (KB1.14: the gate's argument is `false`), sub-agents' files, and an
+  - **Not read yet**: a private session (KB1.14: the gate's argument is `false`),
+    sub-agents' files, and an
     agent started by hand in a shell session (it has no hooks and ptyro doesn't know its
     conversation: KB3's backfill finds it).
   - **A trap for tests and tools**: a process that holds `kb.db` open must not also open the
@@ -10030,8 +10106,8 @@ either yet: there is no command until KB1.7):
     by a file's re-read leaves no byte of its old text in the file after a checkpoint (§25.16).
   - **A profile whose secrets can't be read keeps its sources out** until they can: redaction
     by the profile's exact values can't be skipped (§25.5).
-  - **Settings so far**: `kb.enabled`, `kb.redact`, `kb.exclude`. `kb.max_file` is the constant
-    1 MiB until KB1.11.
+  - **Settings then**: `kb.enabled`, `kb.redact`, `kb.exclude`. (`kb.max_file`, a constant
+    1 MiB then, is a setting since KB1.11.)
 - **KB0.2, transcripts (2026-11-19; `make verify-kb`, Claude Code 2.1.328 and 2.1.329, Codex
   0.167.1; the facts are §20.1, §20.2 and §20.8):**
   - **A transcript is not read once at `Stop`.** Claude's file gets the turn's last assistant
@@ -10279,7 +10355,11 @@ daemon knows of it. In the daemon the gate is one function, `Daemon::kb_gate`.
 
 1. **Gate.** Is the knowledge base on, and this source, for this agent and project? Is the
    session unrecorded (§7.6), the URI forgotten (a tombstone), the file on the never list or too
-   big (§25.7)? Then nothing is read.
+   big (§25.7)? Then nothing is read. *As built (KB1.11)*, in this order: `kb.enabled`;
+   `kb.sessions` for an agent's session; `[agents.X] kb = false`; the project's `[knowledge]
+   enabled = false` (its `.ptyro.toml` or your `.ptyro.local.toml`, read from the session's
+   worktree when the session is read, never on a hook's path); unrecorded; private; forgotten;
+   the never list; `kb.max_file`. Each refusal is named in `ptyro kb` with its reason.
 2. **Read** from the cursor (a transcript's offset) or whole (a file whose size or time changed,
    then whose hash did).
 3. **Redact** (§25.7), before anything is chunked, hashed or stored.
@@ -10333,7 +10413,8 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
   threads. **If that profile's secrets can't be read the source is not kept**, and is found
   again from its cursor.
 - What the gate or the rules refused is kept in memory, the newest hundred, each with its
-  reason (`Daemon::kb_skipped`), for `ptyro kb status` (KB1.7).
+  reason (`Daemon::kb_skipped`): `ptyro kb status` lists them (built, KB1.7), since the
+  daemon started.
 
 ### 25.6 Sources
 
@@ -10709,7 +10790,8 @@ Redaction runs inside the ingest function, before chunking, so no source can ski
   case doesn't matter.
 - **Never ingested at all:** a private session (§25.7a); an unrecorded session (logins, §7.6,
   §24.4); an incognito chat (never on disk, §22.9); a chat's engine; a session of an agent with
-  `kb = false`; anything in a project with `[kb] enabled = false`; a URI with a tombstone.
+  `kb = false`; anything in a project with `[knowledge] enabled = false` (§25.13); a URI
+  with a tombstone.
 - **Redaction is a net, not a proof.** A secret in no known shape gets through. So the file is
   `0600`, `kb forget` really deletes (§25.12), and nothing leaves the machine except to an agent
   of the same profile that asked for it.
@@ -10960,10 +11042,15 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   - *As built (KB1.5)*: the wall is an argument of the search, `KbScope` (a profile, a
     workspace, the caller's own session and chat), made by `KbScope::of(scope, profile,
     workspace)` from the setting's word. It holds for `kb_search`, `kb_read` (an address
-    behind it is "no such item") and `kb_recent`, in `kb.db` and in `chat.db`. **The setting
-    itself is not built** (KB1.11), nor the tool that fills the scope from the caller's
-    session (KB1.10). `"workspace"` shows that workspace's items only: one of no workspace
-    is hidden.
+    behind it is "no such item") and `kb_recent`, in `kb.db` and in `chat.db`.
+    `"workspace"` shows that workspace's items only: one of no workspace is hidden.
+  - *As built (KB1.7, KB1.11)*: `kb.scope` is the setting, and **the daemon fills the scope
+    from the caller's session for every request** (`Daemon::kb_caller_scope`: the caller's
+    process is placed in a session by the kernel's word, §17): an agent that runs `ptyro
+    recall` or `ptyro kb show` in its terminal is behind the wall as its tools will be, never
+    finds its own session, and is refused `kb forget`. `kb1.rs` runs exactly that with two
+    profiles. A chat's history tools read `kb.scope` too (`[chat] history_scope` is its old
+    name).
   - A session's, a note's and a shell's profile is the one it ran under.
   - A root's is its project's pin (§10.10); a project with no pin, and a folder ingested without
     `--profile`, belong to every profile: you chose not to isolate them.
@@ -11014,6 +11101,29 @@ ptyro new … [--private]                 # nothing of this session is kept (§2
 
 - `recall` with no terminal on stdout prints one hit a line; `--json` is the `KbHit` list. A hit
   by meaning shows `≈`. With no daemon it starts one, as `chat search` does.
+- *As built (KB1.7, `crates/ptyro/src/kb.rs`)*: `recall`, `kb [status]`, `kb show`, `kb recent`
+  and `kb forget`, each with `--json`. `recall QUERY… [-p P] [-k KIND,…] [--since AGE]
+  [--before AGE] [--meaning|--words] [-l N]` (`-l` and `--context`, not the design's `-n` and a
+  short `-C`: a letter means one flag in every command, §12, and those are `--name` and `--cwd`): a query's words may start with `-`, so flags typed
+  after them are taken back from the words, as `chat search` does it; `--since` and `--before`
+  are the query's `since:` and `before:`. A hit is `ADDRESS  kind · title · project · agent ·
+  age`, then its snippet (on the same line in a pipe), matches bold (between `*` in a pipe).
+  What is of the project the command is run in ranks higher. `kb show REF [--context N]` prints the
+  item's line, its URI, then each piece under `ADDRESS/N  kind`, the one named marked `▶`;
+  `kb show --open` opens a session or a chat. `kb recent [-k KIND,…] [-p P] [-l N]` lists by
+  day (UTC). `kb forget REF…|--query Q [-y]` asks first (exit 5 with nobody to ask). `kb`
+  prints on or off, the file and its size, items and pieces by kind, vectors, meaning
+  search's line, how long sessions are kept, the forgotten, the queue, and what was not kept
+  with why. **Switched off**, every command says so in one line that names the command which
+  switches it on, and on a terminal offers to (`kb` itself prints the status). **Not built**:
+  `--machine` and `--here` (KB1.12), `ingest`, `kb ls`, `kb sync`, `kb rm`, `kb note(s)`,
+  `new --private`.
+- *As built, the other two clients (KB1.7)*: the TUI's actions `kb.search`, `kb.show`,
+  `kb.recent`, `kb.forget` and `kb.status` are in the palette and run their command in a split
+  (asking for the query or the address first); the web's Library page has the search box, the
+  history, a hit with its neighbours, Forget… and the status (`web/src/library.ts`, its
+  `ACTIONS` named as the TUI's, with `kb.open` and `kb.enable`). Both are the Library's first
+  part, replaced as KB1.8 and KB1.9 build it.
 - `ingest` of a path that is already a root (or inside one) says so and syncs it. It prints what
   it will read before it reads (files by tier, commits) and then its progress.
 - `by:meaning` while meaning is off asks to switch it on, as chat search does (§22.10).
@@ -11109,8 +11219,17 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
     A root's removal, an item's deletion and retention delete the same way.
   - **The copies set aside before a migration go too** (`kb.db.bak-v<N>`): they hold what the
     file held then, and nothing else would ever delete it from them.
-  - **Not built: forgetting a URI that has no item yet** (a session nothing was read of). It
-    needs a tombstone made from the URI alone; KB1.14's `kb forget <session>` adds it.
+  - **Forgetting a URI that has no item yet** (a session nothing was read of) needs a
+    tombstone made from the URI alone: `KbDb::tombstone(uri, kind)` makes one (built,
+    KB1.11; an item that is there is left to `forget`). KB1.14's `kb forget <session>` is its
+    caller; no command reaches it yet.
+  - *As built (KB1.7), the command*: `KbForget{addrs, query, confirmed}`. Not confirmed, it
+    answers `needs_confirmation` with what would go ("Forget 2 items: session “…”, …? The text
+    is deleted from the knowledge base for good, and nothing of it is kept again. Your files
+    and the agents' own transcripts aren't touched."), and deletes nothing. It needs `full`
+    scope from a device, and an agent's session is refused it. `kb1.rs` forgets a session
+    through the CLI, looks through every byte of the file for its words, and then lets the
+    session take another turn: nothing of it comes back, and `ptyro kb` names it as forgotten.
 - **Removing a root** drops its items, with no tombstones: ingest it again and it is back.
   Removing a project from ptyro removes its root; the sessions that ran in it stay.
 - **Removing a session from ptyro** (`rm`) doesn't remove its item: the history is the point.
@@ -11118,8 +11237,29 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
 - **Retention.** `kb.retain_days` (0, forever): sessions and shell commands older than that are
   deleted in a daily pass. `kb.shell_output_days` (30) for output. Notes, files and commits are
   never aged out: they are current by being re-read.
+  - *As built (KB1.11, `Daemon::start_kb_retention`, `kb_retention_pass`)*: the pass runs at
+    the daemon's start, once a day, and **at once when `kb.retain_days` changes** (a setting
+    that waited a day to act would look broken). It deletes the items of kind `session` and
+    `shell` whose time (ended, else started, else kept) is older, in the writer's batches,
+    with no tombstones, and checkpoints. Nothing is deleted while the knowledge base is off.
+  - **An agent's own transcript outlives the item** (Claude keeps its for 30 days). So a
+    session too old to keep is not written when its transcript is read again (the daemon's
+    start reads every session that has no item): the read stops at the same cut. A session
+    that is carried on has a new last message, is read from its start and kept whole.
+    `kb.shell_output_days` comes with shells (KB4).
 - **Switched off** (`kb.enabled = false`): nothing is ingested, the tools are not given, the
   Library and the commands say it is off and offer to switch it on. What is stored stays.
+  - *As built (KB1.7, KB1.11)*: no trigger queues a read, the gate refuses what is queued
+    already, no request opens the file, retention deletes nothing, and every request but
+    `KbStatus` answers `unsupported`, "the knowledge base is off". The CLI turns that into
+    one line naming `ptyro config set kb.enabled true` and, on a terminal, the question
+    "Switch it on?"; `ptyro kb` prints the status (off, where what was kept stays, how to
+    switch it on); the web's Library has the same sentence and a Switch it on button.
+    **What is stored stays in the file, unsearched, until it is switched on or forgotten.**
+  - **Switched on again, nothing is caught up at once**: a session's next turn (or the
+    daemon's next start) reads its transcript from where reading stopped, which takes in what
+    was said while it was off. The same holds for `kb.sessions`. That is how a cursor works,
+    and it is said where the settings are documented (`docs/config.md`).
 - **Live upgrade and restart.** The writer closes before the exec and reopens after, as chat's
   does. The queue is rebuilt from the cursors. A half-written item is one transaction, so it is
   whole or absent. *Built (KB1.1)*: the upgrade waits for the writer's queue to empty
@@ -11138,9 +11278,12 @@ As chats (§22.10, §22.11), with the machinery MM1 built:
 
 `[kb]` in the user config; every key is in the settings schema
 (`crates/ptyro-core/src/settings.rs`, a new **Knowledge** section) and so in the TUI's and the
-web's panels and `ptyro config set` (§13.7). **Built so far (KB1.1, KB1.3, KB1.5): `enabled`,
-`redact` (a pattern that isn't a regex is refused when the file loads), `exclude` and
-`meaning`**; the rest come with the tasks that read them (KB1.11).
+web's panels and `ptyro config set` (§13.7). **Built (KB1.1, KB1.3, KB1.5, KB1.11): `enabled`,
+`sessions`, `tools` (in the schema; KB1.10 reads it), `scope`, `meaning`, `retain_days`,
+`max_file` (a size like `1MiB`; 0 and what isn't a size are refused when the file loads),
+`redact` (a pattern that isn't a regex is refused the same way) and `exclude`**; the others
+come with the tasks that read them (`private` KB1.14, `remember` KB2, `projects`, `comments`,
+`code`, `commits`, `sync_every` KB3, the `shell` keys KB4, `inject` KB5).
 
 ```toml
 [kb]
@@ -11166,11 +11309,18 @@ redact = []               # more patterns to redact (regexes)
 exclude = []              # more paths never to ingest (globs)
 ```
 
-- **Per project**, in `.ptyro.toml`: `[kb] enabled`, `comments`, `code`, `commits`, `include`,
-  `exclude`. A project's file can only narrow what the user allowed, except `code`, which it may
-  switch on for itself.
+- **Per project**, in `.ptyro.toml`: `[knowledge] enabled`, `comments`, `code`, `commits`,
+  `include`, `exclude`. A project's file can only narrow what the user allowed, except `code`,
+  which it may switch on for itself.
+  - *As built (KB1.11)*: `[knowledge] enabled = false` (`ProjectConfig.knowledge`, the setting
+    `knowledge.enabled` in the panel's "This project" section; `.ptyro.local.toml` counts, as
+    for every project key). `true` changes nothing. **The table is `[knowledge]`, not `[kb]`**:
+    a key is one setting of one scope in the schema, and `kb.enabled` is the user's. `[kb]` in
+    a repository's file is an error that names `[knowledge] enabled = false`. The other five
+    keys are KB3's.
 - **Per agent:** `[agents.<name>] kb = false`: none of its sessions are ingested and it gets no
-  tools.
+  tools. *Built (KB1.11)*: its sessions are refused at the gate, by the agent's name
+  (`claude@work` is `claude`); the tools are KB1.10's.
 - **Old names:** `chat.meaning` → `kb.meaning`, `chat.history_scope` → `kb.scope` (read, and
   rewritten by `ptyro config set`; not retired keys, since they still mean something).
   `chat.history_tool` stays: it gives chats the tools or not.
@@ -11178,9 +11328,11 @@ exclude = []              # more paths never to ingest (globs)
     Knowledge section. `[chat] meaning = true` in a file switches it on as before (either
     name does). Setting or unsetting either name (`settings::renamed`) writes `[kb] meaning`
     and takes `[chat] meaning` out of the file, so a file never says two things. The CLI,
-    the TUI and the web still offer the switch under its old name where a search asks for
-    it; that keeps working, and KB1.7 to KB1.9 rename it there. `chat.history_scope` is
-    as it was until `kb.scope` is built.
+    the TUI and the web say `kb.meaning` where a search offers the switch (KB1.7).
+  - *As built (KB1.11), `chat.history_scope`*: the same, for `kb.scope`. `[chat]
+    history_scope` in a file holds while the file has no `[kb] scope` (the new name wins when
+    both are there: the wall is never wider than the newer line says), and setting either
+    name writes `[kb] scope` and takes the old one out. The Chat section no longer lists it.
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
@@ -11194,6 +11346,26 @@ exclude = []              # more paths never to ingest (globs)
   messages themselves are KB1.7's.
 - `KbRead{addr, before, after}` → `KbDoc{item: KbItem, chunks, at}`.
 - `KbRecent{kinds?, project?, before_ms?, limit}` → `KbItems{items}` (the history, paged).
+- **As built (KB1.7), protocol 1.53** (§6.4; requests are `t: "kb_search"`… on the wire):
+  - `KbSearch{query, project?, kinds[], since_ms?, before_ms?, limit?, here?}` →
+    `KbHits{hits: [KbHit], words_only?}`. `limit`: 20 when absent, 100 at most. `here`: a
+    project's id or name, or a path (a boost; a place that is no project's is nothing).
+    `KbHit` gained `project_name` and `workspace_name`.
+  - `KbRead{addr, before?, after?}` → `KbDoc{item: KbListed, chunks: [KbChunk], at?, stale}`.
+    For `k:7f3k/12`, 2 neighbours each side when absent; for `k:7f3k`, the item from its
+    start, all of it when `after` is absent. A chat's address is refused (it is `ChatRead`'s).
+  - `KbRecent{kinds[], project?, before_ms?, limit?}` → `KbItems{items: [KbListed]}`.
+    `KbListed{addr, item: KbItem, project_name?, workspace_name?}`.
+  - `KbForget{addrs[], query?, confirmed}` → `KbForgotten{items, chunks}`; not confirmed,
+    the error `needs_confirmation` with what would go (§25.12).
+  - `KbStatus` → `KbStatus{status: KbStatusInfo{enabled, sessions, retain_days, error?, path,
+    bytes, kinds: [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued,
+    skipped: [{uri, why, at_ms}]}}`, answered when the knowledge base is off too.
+  - Scopes: the first three and the status need `read`, forgetting `full`. All five are
+    answered by the machine asked (`here_only`). A caller inside an agent's session is
+    answered within the wall (§25.9).
+  - Not built: `machines` on `KbSearch`, the roots', ingest's and notes' messages, the
+    events, `Features.kb`, `SpawnSpec.private`.
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
   error, times).
 - `KbIngest{spec: RootSpec, confirmed}` → `KbRoot`, or `NeedsConfirmation` with the plan (files
@@ -11217,11 +11389,11 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 | `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments. **Built: `transcript.rs` (`Transcript`, `TranscriptAt`, the readers `claude` and `codex`, where each agent keeps its file), `Adapter::{transcript, hook_transcript, read_transcript, transcript_title}`; the example `transcript` prints what a reader makes of a file** |
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes. **Built: `fuse_lists` (`fuse` is it for two lists), and `score` in eight running sums** |
-| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`) and `kb/golden.rs` (the golden set, a test); the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
-| `ptyro-protocol` | the messages of §25.14 |
-| `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools |
+| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
+| `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies** |
+| `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools. **Built: `kb.rs` (`recall`, `kb status`, `kb show`, `kb recent`, `kb forget`)** |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms |
-| `web/` | `library.ts`, its `ACTIONS` |
+| `web/` | `library.ts`, its `ACTIONS`. **Built: the page's first part (KB1.7)** |
 
 No new dependency is needed: `regex`, `sha2`, `notify` and `rusqlite` are in the workspace.
 
@@ -11358,8 +11530,24 @@ table; the benches of §18.3 the rest):
   `profile`, `workspace` and `all`, the caller's own session and chat, in search, read and
   history; a forgotten item; by words alone and why (off, the model not here), `by:meaning`
   refused, chats off, the knowledge base off; an address with its neighbours, a stale one,
-  a handle; the history's pages. Not reachable without the protocol, so not in `kb1.rs`:
-  KB1.7 adds `recall` there.
+  a handle; the history's pages.
+- **The commands, the switches and retention** (built, KB1.7 and KB1.11). In `ptyro-protocol`:
+  every message each way round, and as a page writes them. In the daemon
+  (`kb/requests/tests.rs`): the requests with names and addresses, `here` in each form,
+  forgetting (asked first, then for good, a chat's address, nothing named), each switch at the
+  gate with its reason, `kb.max_file`, the status on and off, a retention pass. In `kb1.rs`,
+  through the real CLI and a real daemon: a fake Claude session's turn found by `recall` (the
+  line, `--json`, the filters as flags and in the query, nothing found, by meaning while it
+  is off), read by `kb show`, listed by `kb recent` and `kb`, forgotten by `kb forget` (refused
+  with nobody to ask; then no byte of its words in the file, and its next turn not kept);
+  **each switch keeping a session out** (`[agents.codex] kb = false`, a repository's
+  `[knowledge] enabled = false`, `kb.sessions`, `kb.enabled`, each set while the daemon runs)
+  with what `ptyro kb` says of it; **retention** deleting a session of 40 days ago when
+  `kb.retain_days` is set and leaving a newer one and a document; and **the wall**: a fake
+  agent of another profile runs `ptyro recall`, `kb show`, `kb recent` and `kb forget` in its
+  own session and finds, reads, lists and forgets nothing, while one of the same profile
+  finds it (and still can't forget). In the browser (`web_e2e`, `library`): the page lists a
+  kept session, finds it, opens it and forgets it.
 - **`make spike-kb`** (KB0.1, built: `crates/ptyro-store/examples/kb_spike.rs`; `CHUNKS=1000000`
   for the larger run): 500k and 1M synthetic chunks, the search's cost by words, by meaning
   with each filter, each fallback of §25.8 with its recall, the merged search, **the same

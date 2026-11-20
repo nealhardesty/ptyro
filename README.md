@@ -570,31 +570,51 @@ after a restart too. A linked machine's chats show under its workspaces and are 
 (they run there, on its agents). In a chat, `C-f` finds in it, `/` in the composer lists commands
 (`/retry` and `/edit` replace the last answer or your last message, `/agent`…) and `C-q C-g`
 searches every chat; `Tab` (or `C-i`) makes a new chat incognito (nothing kept). A chat can look up your earlier
-chats itself (`[chat] history_tool`), only those of its own profile unless `history_scope` says
+chats itself (`[chat] history_tool`), only those of its own profile unless `[kb] scope` says
 otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
 
-**The knowledge base** is being built (ROADMAP KB): one memory of your work, for you and your
-agents to search. So far ptyro keeps its file, `kb.db`, beside `chat.db`, and **your agent
-sessions go into it as they happen**, with nothing for you to do: at the end of each turn
-ptyro reads what Claude Code or Codex wrote in its own transcript and keeps what you typed,
-what the agent answered and one line for each tool it used (`Bash: cargo test`), under one
-entry a conversation, with a short card (the task, the outcome, the files changed). It never
-keeps the agent's thinking, what a tool printed, or a chat (chats have their own file). The
-search and the Library that show all this come next; until then `ptyro doctor` says how much
-is kept. `ptyro about` names the file and `ptyro uninstall` lists it. It stays on this
-computer. Settings → Knowledge (`[kb]` in the config): `enabled = false` switches it off (and
-no session is read), `redact` adds your own patterns to what is redacted before anything is
-kept (keys, tokens, passwords and your profile's secrets already are), and `exclude` adds
-paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind never are).
+**The knowledge base** is one memory of your work, for you to search (and, soon, your agents:
+ROADMAP KB). ptyro keeps it in one file, `kb.db`, beside `chat.db`, and **your agent sessions
+go into it as they happen**, with nothing for you to do: at the end of each turn ptyro reads
+what Claude Code or Codex wrote in its own transcript and keeps what you typed, what the agent
+answered and one line for each tool it used (`Bash: cargo test`), under one entry a
+conversation, with a short card (the task, the outcome, the files changed). It never keeps the
+agent's thinking, what a tool printed, or a chat (chats have their own file, and are searched
+beside it). It stays on this computer.
+
+```sh
+ptyro recall retry policy            # search everything kept, and your chats
+ptyro recall flaky test kind:session since:30d -p myrepo
+ptyro kb show k:7f3k/12              # a hit with what was said around it (k:7f3k: all of it)
+ptyro kb recent                      # the history, by day
+ptyro kb                             # on or off, what it holds, what was not kept and why
+ptyro kb forget k:7f3k               # delete it for good; nothing of it is kept again
+```
+
+In the TUI these are in the palette (`C-q :`, "kb"); on the web, More → Library. The Library
+view that both get (a panel to search, read and resume from) is being built.
+
+What it keeps is yours to bound. Settings → Knowledge (`[kb]` in the config): `enabled = false`
+switches it off (no session is read and nothing is searched; what was kept stays in the file
+until you forget it), `sessions = false` stops keeping agent sessions, `retain_days = 90`
+deletes sessions older than that once a day, `redact` adds your own patterns to what is
+redacted before anything is kept (keys, tokens, passwords and your profile's secrets already
+are), and `exclude` adds paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind
+never are). `[agents.codex] kb = false` keeps one agent's sessions out, and a repository keeps
+itself out with `[knowledge] enabled = false` in its `.ptyro.toml`. `ptyro kb forget` really
+deletes: the text is zeroed in the file, and a forgotten session is not read again. An agent
+that runs `ptyro recall` itself sees only what happened under its own profile (`scope`), never
+its own session, and can't forget anything. `ptyro doctor` and `ptyro about` name the file,
+and `ptyro uninstall` lists it.
 
 **Meaning search** is opt-in: `[kb] meaning = true` (the settings panel's Knowledge section, or say
 yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it; `[chat]
 meaning`, its old name, still switches it on) downloads a small model once (model2vec
 `potion-base-8M`, 31 MB, MIT) and reads every chat, and what the knowledge base keeps, in the
 background, on this machine only. Searches then also find messages *about* what you typed, marked
-`≈`, merged with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how
-far it is.
+`≈`, merged with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro recall` searches
+the same way. `ptyro doctor` and `ptyro kb` show how far it is.
 
 ### Your phone and other machines
 

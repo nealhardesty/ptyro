@@ -157,6 +157,30 @@ Conventions:
   the address it last connected from; `push` counts its Web Push subscriptions; `pending`: its
   pairing code hasn't been claimed yet.
 
+## The knowledge base
+
+Not pinned by the snapshot yet; new fields may be added.
+
+- `ptyro recall … --json` → `[KbHit]`, best first: `{addr, item, idx?, node?, uri?, kind, part,
+  title?, heading?, snippet, at_ms, project?, workspace?, project_name?, workspace_name?,
+  profile?, agent?, writer?, machine?, how, score}`. `addr` is what `kb show` takes
+  (`k:7f3k/12`; a chat's hit is `c:7f3k/<node>`, and has `node` and no `uri`). `kind` is
+  `session`, `chat`, `note`, `doc`, `comment`, `code`, `path`, `commit` or `command`; `part`
+  what the piece is (`card`, `user`, `assistant`, `tool`, `summary`…). In `snippet` each match
+  stands between the characters U+0002 and U+0003. `project` and `workspace` are ids, the
+  `_name`s what they are called now. `how` is `words`, `meaning` or `both`.
+- `ptyro kb show REF --json` → `{item: KbListed, chunks: [{seq, item, idx, kind, anchor?,
+  heading?, text, meta?, at_ms}], at?, stale}`. `at`: the piece the address named; `stale`: it
+  named one the item no longer has.
+- `ptyro kb recent --json` → `[KbListed]`, newest first: `{addr, item: {id, uri, kind, title?,
+  project?, workspace?, worktree?, branch?, profile?, agent?, model?, session?, writer, files,
+  chunks, started_ms?, ended_ms?, ingested_ms?, origin, …}, project_name?, workspace_name?}`.
+  `item.session` is the ptyro session it happened in.
+- `ptyro kb [status] --json` → `{enabled, sessions, retain_days, error?, path, bytes, kinds:
+  [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued, skipped: [{uri, why,
+  at_ms}]}`. Answered when the knowledge base is off too (`enabled: false`).
+- `ptyro kb forget … --json` → `{items, chunks}`: what was deleted.
+
 ## Setup, config and the daemon
 
 - `ptyro doctor --json`, `ptyro profile doctor --json` → `[{section, name, level, text}]`.

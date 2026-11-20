@@ -4084,8 +4084,33 @@ Development section), its README and `docs/` text, and the milestone's version b
         step, both files and the ranking meet. `make kb-eval-real` copies the real model from
         where it already is, reports and gates nothing: **not run, the model was not on this
         machine**. SPEC §25 "As built", §25.16.)*
-  - [ ] **KB1.7** The CLI: `recall`, `kb` (`status`), `kb show`, `kb recent`, `kb forget`
+  - [x] **KB1.7** The CLI: `recall`, `kb` (`status`), `kb show`, `kb recent`, `kb forget`
         (§25.12: really deleted, a tombstone, the bytes test), `--json` for each. **M**
+        *(Built 2026-11-19: protocol 1.53, five requests (`KbSearch`, `KbRead`, `KbRecent`,
+        `KbForget`, `KbStatus`) and their replies (`KbHits`, `KbDoc`, `KbItems`, `KbForgotten`,
+        `KbStatus`), answered in `crates/ptyro-daemon/src/kb/requests.rs` (`handle_kb`) over
+        KB1.5's three functions: `read` scope, `full` to forget, this machine only. **Whoever
+        asks from inside an agent's session is answered within the wall** (`kb_caller_scope`:
+        `kb.scope`, the session's profile and workspace, never its own item), and an agent
+        can't forget. Hits and listed items carry their project's and workspace's names; a
+        listed item its address. `crates/ptyro/src/kb.rs`: `recall` (flags wherever they are
+        typed, one hit a line in a pipe, the working directory's project ranked higher),
+        `kb` and `kb status`, `kb show` (a piece with its neighbours, an item whole, `--open`
+        for a session or a chat), `kb recent` by day, `kb forget` (it resolves what will go,
+        asks with the daemon's words, then forgets those ids; `--query`; `-y`), `--json` for
+        each; switched off, each says so and offers to switch it on. The TUI has the five as
+        palette actions that run the command in a split (`kb.search`, `kb.show`, `kb.recent`,
+        `kb.forget`, `kb.status`), and the web the Library page's first part
+        (`web/src/library.ts`: search, the history, a hit with its neighbours, Forget…, the
+        status, Switch it on): KB1.8 and KB1.9 build the Library on them. The clients say
+        `kb.meaning` now. Tests: the messages' round trips; `kb/requests/tests.rs` (the
+        requests, names, `here`, forgetting, the status); `kb1.rs` through the CLI (found,
+        read, listed, forgotten with no byte left and not kept again; the wall with two
+        profiles' fake agents running the commands themselves); `web_e2e`'s `library`. Not
+        built: `--machine`/`--here` (KB1.12), the events and `Features.kb`, `kb ls`/`sync`/`rm`
+        and notes (KB2, KB3). Found on the way: a session's item was stamped with its
+        workspace's name, not its id, so `workspace:` never matched one; fixed. SPEC §6.4, §25 "As built", §25.9, §25.10, §25.12, §25.14 to
+        §25.16; `docs/commands.md`, `docs/parity.md`, README.)*
   - [ ] **KB1.8** The TUI's Library (`C-q L`): Search with its filters and the history when
         nothing is typed, the hit beside the list, the session reader, `⏎` opens the source, `r`
         resumes a session, forget; the "history" entry in the session, worktree and project row
@@ -4097,10 +4122,34 @@ Development section), its README and `docs/` text, and the milestone's version b
         resume) and to every chat (`chat_search`/`chat_read` as old names); the profile wall
         (`kb.scope`, with `chat.history_scope` as its old name) and its test on every tool; the
         fence and the provenance line; never the caller's own session. **M**
-  - [ ] **KB1.11** Settings and switches: the Knowledge section (`enabled`, `sessions`, `tools`,
+  - [x] **KB1.11** Settings and switches: the Knowledge section (`enabled`, `sessions`, `tools`,
         `scope`, `meaning`, `retain_days`, `redact`, `exclude`), `[agents.X] kb`, the project's
         `[kb] enabled`; the daily retention pass; switched off says so everywhere and offers to
         switch on. **M**
+        *(Built 2026-11-19: `ptyro_core::config::Kb` gains `sessions`, `tools`, `scope`,
+        `retain_days` and `max_file`, each with its schema entry in the Knowledge section
+        (`settings.rs`); `AgentDef.kb` (`agents.*.kb`); and the project's switch, **which is
+        `[knowledge] enabled = false`, not `[kb] enabled`** (`ProjectConfig.knowledge`, the
+        setting `knowledge.enabled`): a key is one setting of one scope in the schema, and
+        `[kb]` in a repository is refused with a line that says what to write.
+        `chat.history_scope` is `kb.scope`'s old name (read while the file has no `[kb]
+        scope`, rewritten by `config set`), and chats' history tools read `kb.scope`. The gate
+        (`ingest::gate`, `Daemon::kb_gate`) asks them in order: on, `kb.sessions`
+        (`Skip::SessionsOff`), the agent (`kb_agent_off`), the project (`kb_project_off`, the
+        session's worktree's file, read when the session is read), then the rest, with
+        `kb.max_file` as its limit. Retention (`start_kb_retention`, `kb_retention_pass`): at
+        the start, once a day, and at once when `kb.retain_days` changes; sessions older than
+        it go with no tombstones, and one too old is not read back in from its transcript.
+        `KbDb::tombstone` makes a tombstone for a URI with no item (KB1.14 calls it).
+        Switched off: nothing is read, searched or deleted, every command says so and offers
+        the switch, the web's page has the button; what is stored stays. Tests: the config and
+        the gate's order (`ptyro-core`), the tombstone (`ptyro-store`), each switch, the
+        status and a retention pass (`kb/requests/tests.rs`), and `kb1.rs` with a real daemon:
+        an agent kept out, a repository keeping itself out, `kb.sessions` and `kb.enabled`
+        set while it runs, and retention deleting an old session when it is set. Not built:
+        `kb.tools` is in the schema and read by nothing until KB1.10; switching on again
+        reads a session from where reading stopped, including what was said meanwhile (said
+        in `docs/config.md`). SPEC §25 "As built", §25.5, §25.7, §25.9, §25.12, §25.13.)*
   - [ ] **KB1.14** Private sessions (§25.7a; R-KB-14): `new --private` and `shells new
         --private`, `SpawnSpec.private` and `SessionInfo.private`, the column in `ptyro.db` (kept
         across a restart, a resume, a daemon restart and a live upgrade; a clone is private),

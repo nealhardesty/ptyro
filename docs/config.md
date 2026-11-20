@@ -89,6 +89,7 @@ hibernate_after = "2h"                    # stop when idle and unwatched this lo
 [agents.claude-work]
 adapter = "claude"                        # any name, any wrapper: still gets Claude's integration
 command = "claude"
+# kb = false                              # keep none of this agent's sessions in the knowledge base
 env = { CLAUDE_CODE_MAX_OUTPUT_TOKENS = "64000" }
 
 [agents.my-acp-agent]
@@ -128,6 +129,17 @@ port = 7091                               # always HTTPS, on this port
 approval_wait = "10m"                     # held Claude permission prompts wait this long for a phone
 # push_hosts = ["ntfy.example.com"]       # self-hosted push services (UnifiedPush, ntfy)
 
+[kb]                                      # the knowledge base: what ptyro keeps of your work (`ptyro recall`, `ptyro kb`)
+# enabled = false                         # keep nothing more and search nothing (what was kept stays until you forget it)
+# sessions = false                        # don't keep agent sessions
+# retain_days = 90                        # delete kept sessions older than this, once a day (default 0: keep them)
+# scope = "workspace"                     # what an agent may see of it and of your chats: profile (default) | workspace | all
+# tools = false                           # don't give agents the tools that search it
+# meaning = true                          # also search by meaning (downloads a 31 MB model once)
+# max_file = "2MiB"                       # the largest file read (default 1MiB)
+# redact = ["ACME-[0-9]{6}"]              # more patterns to redact before anything is kept
+# exclude = ["private/**"]                # more paths never to read
+
 [clipboard]
 # allow_write = false                     # programs' OSC 52 copies don't reach your clipboard
 
@@ -138,6 +150,16 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 [keys]
 "y" = "pane.zoom"         # after the prefix; "global:M-1" = "session.focus 1" needs no prefix
 ```
+
+**The knowledge base's settings (`[kb]`).** Everything it keeps stays in one file on this
+computer (`kb.db`). `retain_days` acts when you set it and then once a day; it deletes agent
+sessions only (never a tombstone: a session that is carried on afterwards is kept again).
+`enabled = false` reads nothing and searches nothing, and leaves what was kept in the file:
+`ptyro kb forget` deletes for good. Switched on again (or `sessions`), a session that goes on is
+read from where reading stopped, so what was said while it was off is kept then too: forget the
+session, or keep its agent or project out, when that is not what you want. `scope` is the wall
+between your accounts' agents (`[chat] history_scope` is its old name, still read; you always
+see everything yourself). `tools` is read once agents are given the tools (ROADMAP KB1.10).
 
 Key bindings and the action names you can bind are in [`keys.md`](keys.md). Settings lists
 every key, defaults included, to change, unbind or reset from the panel; in the file only your
@@ -230,6 +252,9 @@ base = "origin/main"                 # what new worktrees start from
 copy = ["config/local.yml"]          # untracked files to copy into new worktrees
 share = ["node_modules"]             # shared, not copied (copy-on-write clone, else a symlink)
 
+[knowledge]
+# enabled = false                    # keep nothing of this project in the knowledge base
+
 [scripts]
 setup = "pnpm install --frozen-lockfile"
 run_mode = "exclusive"               # starting a run script stops it in other worktrees
@@ -260,6 +285,10 @@ command = "cargo test"
   (`copilot-setup-steps.yml`) fill only what `.ptyro.toml` leaves unset.
   `ptyro project config --explain` shows where every value came from.
 - **A repository can never define agent commands or profiles.** Those live only in your config.
+- **A repository can keep itself out of the knowledge base, never in.** `[knowledge] enabled =
+  false` (here, or in your own `.ptyro.local.toml`) keeps the sessions that run in this project
+  out of it. It can't switch on what you switched off, and the knowledge base's other settings
+  (`[kb]`) are yours alone.
 
 Scripts and sessions in a worktree see `PTYRO_PROJECT`, `PTYRO_ROOT_PATH`, `PTYRO_WORKTREE_PATH`,
 `PTYRO_WORKTREE_NAME` and `PTYRO_BRANCH`. Every session also gets `PTYRO_SESSION_ID` and
