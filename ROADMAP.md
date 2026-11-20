@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: the spikes and the store, the way in and redaction are built, KB0 and KB1.1 to KB1.3; nothing a person can use yet)
+## KB — Knowledge base (decided 2026-11-19; open: the spikes, the store, the way in, redaction and agent sessions are built, KB0 and KB1.1 to KB1.4; sessions are kept, nothing shows them yet)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -3999,11 +3999,37 @@ Development section), its README and `docs/` text, and the milestone's version b
         corpus in prose, JSON, shell, YAML and code with no credential surviving, the
         look-alikes unchanged, PEM whole and cut off, the 25-hit rule, the never list; `make
         bench-kb-redact`: 4.7 ms for 1 MiB. SPEC §25.7.)*
-  - [ ] **KB1.4** Agent sessions (§25.6.1): `Adapter::transcript` and `read_transcript`; the
+  - [x] **KB1.4** Agent sessions (§25.6.1): `Adapter::transcript` and `read_transcript`; the
         Claude and Codex parsers (CHAT5's import, from before `b80632f`, moved into
         `ptyro-agents`); the triggers (`Stop`, `SessionEnd`, exit, daemon start); the card;
         Claude's compaction summary as a `summary` chunk; rewinds; chat engines and one-shots
         never ingested; an item for agents with no transcript. Fixtures and the fuzz target. **L**
+        *(Built 2026-11-19: `ptyro_agents::transcript`: the readers `claude` and `codex` (bytes
+        from an offset in, parts and the offset of the last whole line out; the user's words,
+        the assistant's text, a title a tool, Claude's compaction summary; never thinking, a
+        result, or a line that is not conversation), and `Adapter::{transcript,
+        hook_transcript, read_transcript, transcript_title}`: a hook's `transcript_path` is
+        taken only when it is that conversation's file in the agent's folder for the session's
+        profile. `ptyro_core::kb::card`: the card, a line a fact. `KbDb::session_facts`: what
+        the next card needs of what is stored. `crates/ptyro-daemon/src/kb/sessions.rs`:
+        `kb_hook` and `kb_hooked` (a turn's or the session's end, as the adapter names the
+        hooks), `kb_session_changed` (a turn's end as ptyro counts it, the process's exit),
+        `kb_catch_up` (at the start and after a live upgrade: every transcript not where its
+        cursor is), all of which only queue; the read from the cursor `{path, dev, ino,
+        offset}`, from the start when the file is shorter, another one, or cut and regrown;
+        the reply `Stop` named looked for again after 250 ms and 2 s; one item a conversation
+        (`session://claude/<id>`), ptyro's session, place, agent and model stamped by the
+        daemon; the card alone for an agent with no transcript
+        (`session://opencode/<ptyro's session id>`); never a chat's engine. The fake agent
+        keeps real-shaped transcripts (`PTYRO_FAKE_TRANSCRIPT=1`). Tests: each of the eight
+        fixtures' expected parts, every cut of a file, what is never taken; the daemon's
+        cursor cases; `kb1.rs` end to end (a turn, a second, a compaction, a resume, lines
+        written while the daemon was down, a live upgrade, Codex, the late reply, a rewind,
+        OpenCode's card, a chat's engine, a profile's secrets redacted); the fuzz target `kb` now also runs the readers;
+        `make verify-kb` runs ptyro's reader over what the real Claude Code 2.1.329 and Codex
+        0.167.1 write. Not built: `kb.sessions`, `[agents.X] kb` and the project's switch
+        (KB1.11), the private gate's flag (KB1.14), sub-agents' files, an agent started by
+        hand in a shell (KB3's backfill). SPEC §25 "As built", §25.6.1, §25.15, §25.16.)*
   - [ ] **KB1.5** Search (§25.8): the query's new words in `parse_query`; words in both files;
         meaning in both (`meaning.rs` backfilling `chunk_vec` too, `fuse` over several lists);
         the ranking; two hits an item and merged neighbours; `KbSearch`, `KbRead`, `KbRecent`;

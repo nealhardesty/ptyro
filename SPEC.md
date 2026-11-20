@@ -9897,7 +9897,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in and redaction (KB1.1 to KB1.3); the rest proposed]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: `kb.db`, the way in, redaction and agent sessions (KB1.1 to KB1.4); the rest proposed]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -9907,8 +9907,49 @@ at ingest, no vector database and no graph. The ideas and what other products do
 section I and R-KB-01…13; the tasks are ROADMAP KB0…KB5.
 
 **As built, and where building and the spikes changed the design below** (each line names its
-task; nothing a person can use is built yet: there is no source, no search and no command until
-KB1.4, KB1.5 and KB1.7):
+task; agent sessions are kept as they happen, and nothing shows them yet: there is no search and
+no command until KB1.5 and KB1.7):
+- **KB1.4 agent sessions (2026-11-19; `ptyro_agents::transcript`, `ptyro_core::kb::card`,
+  `crates/ptyro-daemon/src/kb/sessions.rs`; checked against Claude Code 2.1.329 and Codex 0.167.1
+  by `make verify-kb`, which now runs ptyro's own reader over the transcripts it makes):**
+  - **Four things say "read now", and all of them only queue**: the hook that ends a turn or
+    the session (the adapter says which: Claude's `Stop` and `SessionEnd`, Codex's `Stop` and
+    its `notify`), a turn's end as ptyro itself counts it (so an agent whose hooks are off is
+    read too), the process's exit, and the daemon's start. A session already waiting in the
+    queue is not queued twice (§25.6.1, "When").
+  - **The reply a `Stop` names is looked for, twice more**: a read whose last assistant text is
+    not that reply is made again after 250 ms and after 2 s, on a timer, never in the hook. What
+    was read is written each time; only the cursor waits at the last whole line.
+  - **The hook's `transcript_path` is taken only when it is that conversation's file inside the
+    agent's own folder for the session's profile**; else the adapter finds the file. A hook
+    can't point the reader at another file.
+  - **A reader is given bytes from an offset and gives parts back** (`Adapter::read_transcript`
+    → `Transcript`: parts, the offset where the whole lines end, the conversation's id, its
+    title, the model, the files changed). It keeps no state: a piece read twice is the same
+    parts, with the same anchors.
+  - **Codex's tool titles are decided piece by piece**: a piece that holds an `item_completed`
+    tool takes its titles from those; a piece with none takes them from the calls, never from
+    the `exec` wrapper. (The design said "a rollout with none"; a reader that starts at a
+    cursor doesn't see the rollout.)
+  - **The card says each thing on one line**, and is made from what `kb.db` already holds of
+    the session (`KbDb::session_facts`: the first prompt, the last answer, the user's
+    messages counted) and the piece just read. Nothing of it is kept anywhere unredacted.
+  - **An agent with no transcript is one item a ptyro session**, not a conversation
+    (`session://opencode/<ptyro's session id>`): that id is known from the start, the agent's
+    own may be learned late or never. Its card holds only what the daemon knows, which for
+    OpenCode is the agent, the place, the times and the turns (no hook gives its prompt).
+  - **A transcript is read again from its start** when it is shorter than its cursor, another
+    file (device and inode), or the byte before the cursor is not a line's end (cut back and
+    grown past it). A file cut back to a line's end and grown past the cursor between two
+    reads is not noticed.
+  - **Not read yet**: `kb.sessions`, `[agents.X] kb` and a project's `[kb] enabled` (KB1.11),
+    a private session (KB1.14: the gate's argument is `false`), sub-agents' files, and an
+    agent started by hand in a shell session (it has no hooks and ptyro doesn't know its
+    conversation: KB3's backfill finds it).
+  - **A trap for tests and tools**: a process that holds `kb.db` open must not also open the
+    file by itself (to look at its bytes, to copy it). Closing any handle of a file gives up
+    the locks a SQLite connection in the same process holds on it, and the next connection to
+    close elsewhere then removes the write-ahead log from under it.
 - **KB1.1 `kb.db`, KB1.2 the way in, KB1.3 redaction (2026-11-19; `ptyro_store::kb`,
   `ptyro_core::kb::{ingest, chunk, redact}`, `crates/ptyro-daemon/src/kb.rs`):**
   - **Nothing reaches `kb.db` but a `Plan`, and nothing makes a `Plan` but `ingest::plan`,
@@ -10113,7 +10154,7 @@ CREATE TABLE item (
   writer TEXT NOT NULL,               -- user | agent | file | import | ptyro (set by the daemon, never by a caller)
   files JSON,                         -- a session's touched files, a commit's changed files
   hash TEXT,                          -- SHA-256 of what is stored (title, path, files, chunks); NULL when appended to
-  cursor JSON,                        -- where reading stopped: {dev, ino, size, offset} or {mtime, size}
+  cursor JSON,                        -- where reading stopped: {path, dev, ino, offset} or {mtime, size}
   chunks INTEGER NOT NULL DEFAULT 0,
   started_at INTEGER, ended_at INTEGER, ingested_at INTEGER,
   origin TEXT NOT NULL,               -- meta.machine_id of the machine that wrote it
@@ -10225,9 +10266,11 @@ The ingest actor (`crates/ptyro-daemon/src/kb.rs`) takes work from a queue at lo
 batches with a pause between, the way chat's embedding backfill does. **Nothing here is on a
 session's hot path** (§4.3): a hook only enqueues `(session, transcript path)`, and the queue is
 rebuilt from the cursors after a restart or a live upgrade, so nothing crosses the exec.
-- *As built (KB1.2)*: eight jobs, then 50 ms. The only job so far is a source already in memory
-  (`Job::Prepared`, queued by nothing but tests): KB1.4 adds the transcript to read, and asks
-  `kb_gate` before it reads. The redactor is the user's patterns, compiled once for each change
+- *As built (KB1.2, KB1.4)*: eight jobs, then 50 ms. The jobs: a session to read
+  (`Job::Session`: ptyro's session, the conversation it was in, the reply its `Stop` named), an
+  item whose session is gone (`Job::Item`, at the daemon's start), and a source already in
+  memory (`Job::Prepared`, queued by nothing but tests yet). `kb_gate` is asked before a
+  transcript is opened. The redactor is the user's patterns, compiled once for each change
   of `kb.redact`, with the secrets of the source's profile; planning runs off the async
   threads. **If that profile's secrets can't be read the source is not kept**, and is found
   again from its cursor.
@@ -10240,33 +10283,62 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
 
 - **When.** At the end of a turn (`Stop`), at `SessionEnd`, when the session's process exits,
   and once at daemon start for every session whose transcript grew since its cursor.
+  - *As built (KB1.4)*: `Adapter::hook_transcript(event, payload)` says which hooks end a turn
+    or the session (Claude: `Stop`, `SessionEnd`; Codex: `Stop`, and `notify`'s
+    `agent-turn-complete`, which still comes when its hooks are held for review) and gives the
+    file the hook names; `Daemon::kb_hook` keeps that path with the session (it crosses a
+    live upgrade in the session's image) and queues the read once the hook's signals are
+    applied. `Daemon::kb_session_changed` queues one at every turn's end as ptyro counts it
+    (`turn_ended`: this is what reads an agent whose hooks are switched off, and what writes
+    the card of an agent with no transcript) and when the process exits.
+    `Daemon::kb_catch_up` runs once the sessions are back after a start or a live upgrade:
+    every agent session whose item's cursor is not where its file ends (or that has no item),
+    and every item whose session ptyro no longer has, is queued.
   - **`Stop` is a signal to read soon, not proof the turn is in the file.** Claude writes the
     turn's last assistant line 14 to 17 ms after `Stop` fires **[verified 2026-11-19, 2.1.328 and
     2.1.329, §20.1]**; Codex's rollout has it already **[verified 2026-11-19, 0.167.1]**. The
-    queue carries `(session, transcript path, last_assistant_message)`. A read that doesn't find
+    queue carries `(session, conversation id, last_assistant_message)`; the path is the
+    session's. A read that doesn't find
     that reply as the file's last assistant text leaves the cursor where the complete lines end
     and is tried again after 250 ms, then 2 s; `SessionEnd`, the process's exit and the next
     turn's `Stop` catch whatever is still missing. A last line with no newline yet is never
-    parsed.
+    parsed. *As built*: the reply is compared by a hash kept in memory with the last reply
+    read of that session, so the second signal of one turn (Codex's `notify` after its `Stop`)
+    finds it taken and doesn't wait. A wait is a timer that queues the session again; while it
+    runs the queue is not idle (`kb_idle`).
   - A compaction fires no `Stop` (`PreCompact` and `PostCompact` only, which ptyro doesn't
     install): its lines are read with the next turn, or at `SessionEnd`.
 - **Where.** The hook's `transcript_path` (Claude and Codex, on `Stop`, `SessionStart` and
   `UserPromptSubmit` alike **[verified 2026-11-19, §20.1, §20.2]**; Codex's `notify` has none),
   else the path the adapter derives (Claude: `<config dir>/projects/<cwd>/<session id>.jsonl`).
-  Only `ptyro-agents` knows a format: `Adapter::transcript(&Session) -> Option<PathBuf>` and
-  `Adapter::read_transcript(bytes, from) -> (Vec<Turn>, to)`. The formats are §20.8's; the
+  Only `ptyro-agents` knows a format: `Adapter::transcript(&TranscriptAt) -> Option<PathBuf>` and
+  `Adapter::read_transcript(bytes, from) -> Option<Transcript>`. The formats are §20.8's; the
   parsers are CHAT5's import (`crates/ptyro-daemon/src/chats/import.rs` before commit `b80632f`),
-  moved to the adapters.
+  moved to `ptyro_agents::transcript` and corrected to the fixtures.
+  - *As built*: a `TranscriptAt` is the agent's folder under the session's profile (the
+    profile's `CLAUDE_CONFIG_DIR` or `CODEX_HOME`, else the agent's default), the session's
+    working directory, the conversation's id and the hook's path. **The hook's path is taken
+    only when it is that conversation's file inside that folder** (Claude: `<id>.jsonl` under
+    `projects/`; Codex: `rollout-…-<id>.jsonl` under `sessions/` or `archived_sessions/`).
+    Else Claude's is derived, and if the working directory was another, found by its name in
+    any project folder; Codex's is the newest rollout of the thread, looked for by day,
+    newest first.
+  - A read takes at most 32 MiB; a longer file is read in several, one after another. A line
+    over 4 MiB is passed over unread.
 - **Claude** **[the format: verified 2026-11-19, 2.1.328 and 2.1.329, §20.8]**. Only `user` and
   `assistant` lines are read; every other type is skipped unparsed (they hold the account's
   email, the system prompt, and the prompt a second time).
   - `user` lines that are yours: content a string, not `isMeta`, not `isCompactSummary`, not a
     wrapped kind (`<local-command-stdout>`, `<bash-…>`, `<task-notification>`,
-    `<system-reminder>`); a slash command is kept as `/name args`.
+    `<system-reminder>`); a slash command is kept as `/name args`. Content in blocks: its
+    `text` blocks by the same rules (the words beside a pasted image **[unverified]**: CHAT5's
+    reader took them, no fixture holds one); a `tool_result` block is never read.
   - `assistant` `text` blocks, and a **tool's title** for each `tool_use` (its name and its one
     telling input: a path, a command's first 200 characters, a pattern, a URL, a query). An MCP
     tool is `mcp__<server>__<tool>`. Never `thinking`, never a tool's result, and not
-    `ToolSearch` (it only loads a tool).
+    `ToolSearch` (it only loads a tool). A title reads `Write: /repo/notes.txt`, `Bash: cargo
+    test`, `mcp__ptyro__recall: retry policy`. A line with `isSidechain` or
+    `isApiErrorMessage` is left out.
   - A line with **`isCompactSummary`** is kept as a `summary` chunk: it is a summary of the
     session that Claude already wrote. Its text is what stands between the opening sentence and
     the closing "If you need specific details from before compaction…": the rest is said to the
@@ -10287,10 +10359,25 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
     its telling argument). Today's Codex makes every call through an `exec` tool whose input is a
     JavaScript program, so the call itself names nothing. A rollout with none of those items
     (an older Codex) gives a title per `function_call` and `custom_tool_call` instead.
+    *As built*: this is decided for each piece read (a reader at a cursor doesn't see the
+    rollout): a piece with such an item takes its titles from the items; one with none takes
+    them from its `function_call`, `custom_tool_call`, `local_shell_call` and
+    `web_search_call` lines, an `apply_patch`'s from the files its patch names, and never
+    from the `exec` wrapper. Titles read `shell: cat notes.txt`, `patch: /repo/notes.txt`,
+    `ptyro.recall: retry policy`.
   - The other `event_msg` lines repeat the messages and are skipped. The anchor is the message's
-    `id`. The title is `session_index.jsonl`'s `thread_name`.
+    `id` (a tool's: its item's `id`; a line with none: `L<its offset in the file>`). The title
+    is `session_index.jsonl`'s `thread_name`. The model is the last `turn_context`'s.
 - **OpenCode and other agents.** No transcript is read (OpenCode: **[unverified]**, §25.18). The
   session still gets an item with its card, from what the daemon knows.
+  - *As built*: the item is `session://<adapter>/<ptyro's session id>` (the agent's own id may
+    be learned late or never), written at each turn's end. What the daemon knows is the agent,
+    the place, the times and the turns, and the first prompt and the last reply **only where a
+    hook gives them** (neither for OpenCode today). The daemon forgets those two at a restart:
+    a later card keeps them from the card it replaces, and counts the turns since that start.
+    For an agent with a transcript whose file can't be found, the same card is written until
+    the file is; once a transcript was read into an item, the item is never made less by a
+    file that is gone (Claude removes them after 30 days).
 - **The card** is chunk 0 of every session, rebuilt at each ingest, with no model: the task (the
   first prompt, 500 characters; `SessionInfo.task` when there is no transcript), the outcome
   (the last assistant text, 1,000 characters; else `last_reply`), the files it changed (from
@@ -10298,6 +10385,23 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
   `item.files`), then agent, model,
   project, worktree, branch, start, end and the number of turns. A finished agent's last message
   is usually its own summary, which is why this works without a summariser.
+  - *As built* (`ptyro_core::kb::card`; its anchor is `card`, so each piece's card stands in
+    for the one before):
+    ```
+    Task: <the first prompt, on one line>
+    Outcome: <the last assistant text, on one line>
+    Files changed: <path>, <path>
+    Agent: claude (claude-opus-5-5)
+    Project: shop, worktree fix-login, branch ptyro/fix-login
+    Started 2026-11-19 22:38 UTC, ended 2026-11-19 22:39, 3 turns
+    ```
+    A line is left out when nothing is known for it. The task and the turns come from what
+    `kb.db` holds of the session already (`KbDb::session_facts`) and the piece just read, so
+    no text waits anywhere unredacted; the outcome is the piece's last assistant text, else
+    the session's last reply as its hook gave it, else the stored one. Files also count
+    Claude's `MultiEdit` and `NotebookEdit`. A turn is a user message (a slash command is one).
+    A card over 1,500 characters is two chunks. `item.agent` is the configured agent's name
+    (`claude-work`); the URI names the adapter.
 - **Identity.** One item per conversation (`session://claude/<uuid>`): a resumed conversation
   carries on in its item. **[verified 2026-11-19, §20.1, §20.2]** `claude --resume <id>` and
   `codex exec resume <id>` keep the id and append to the same file, leaving its earlier bytes as
@@ -10306,9 +10410,15 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
   session, so a hit can offer **resume** (§25.10).
 - **Not sessions.** A chat's engine (its text is in `chat.db` already), a title one-shot and
   `chat find` are never ingested: a session with `chat` set is skipped, and the backfill skips a
-  working directory under `<data>/` and any conversation id `chat.db`'s `conv` table knows.
+  working directory under `<data>/chat/` or `<data>/summaries/` and any conversation id
+  `chat.db`'s `conv` table knows. (Not everything under `<data>/`: worktrees are in
+  `<data>/worktrees/`.) *As built*: only a session of kind agent is read, never one with
+  `chat` set (`chat find`'s engine is one); a title one-shot is no session at all. An
+  unrecorded session is refused by the gate and named in `kb_skipped`.
 - **Rewinds.** A transcript that shrank or was replaced (another inode) is read again from the
-  start. Chunks are matched by anchor (a message's uuid), so nothing doubles. **[unverified]**
+  start. Chunks are matched by anchor (a message's uuid), so nothing doubles. *As built*: also
+  when the byte before the cursor is not a line's end (cut back, then grown past it). What the
+  item held of a part of the file that is gone stays in the item. **[unverified]**
   what Claude's rewind writes: it needs the TUI, and no transcript here holds one (§20.1). Every
   file seen only ever grew, so a rewound branch is expected to stay in the file beside the new
   one; if so, both are kept, which a record should do.
@@ -10971,12 +11081,12 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 
 | Crate | What it gains |
 |---|---|
-| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`**; it now depends on `regex` |
-| `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (all but the search SQL)** |
-| `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments |
+| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`**; it now depends on `regex` |
+| `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (all but the search SQL; `session_facts` for a session's card)** |
+| `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments. **Built: `transcript.rs` (`Transcript`, `TranscriptAt`, the readers `claude` and `codex`, where each agent keeps its file), `Adapter::{transcript, hook_transcript, read_transcript, transcript_title}`; the example `transcript` prints what a reader makes of a file** |
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes |
-| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables; the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
+| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables; the fan-out beside chat's in `machines.rs`. `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
 | `ptyro-protocol` | the messages of §25.14 |
 | `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms |
@@ -11006,7 +11116,14 @@ table; the benches of §18.3 the rest):
 **Tests**
 - **Parsers:** real transcripts of the pinned Claude and Codex versions as fixtures
   (`crates/ptyro-agents/tests/fixtures/`), with the expected turns; a fuzz target
-  (`kb_transcript`) proves they never panic on any bytes.
+  (`kb_transcript`) proves they never panic on any bytes. *Built*
+  (`crates/ptyro-agents/src/transcript/tests.rs`): the parts expected of each of the eight
+  fixtures; what is never taken (the account's email, the prompt's repeats, thinking, results,
+  wrappers, side chains); an older Codex's calls; a torn last line; every fixture read in two
+  pieces at every byte (or every 53rd) against the whole; where each agent's file is and when
+  a hook's path is refused. The fuzz target is `kb` (one target for all of the way in): on any
+  bytes the readers don't panic, stop at a whole line's end, and two pieces at any cut say
+  what the whole says.
 - **Idempotence** (a property test): ingesting any source twice, or in pieces at any cut
   points, gives the same rows as ingesting it once. *Built* (`crates/ptyro-store/src/kb/tests.rs`,
   proptest): a transcript in pieces cut between any of its turns, each piece possibly read
@@ -11043,7 +11160,19 @@ table; the benches of §18.3 the rest):
 - **End to end** (`crates/ptyro/tests/kb1.rs` … `kb5.rs`, with the fake agent, no real agent
   installed): the fake agent writes a transcript and fires `Stop`; `ptyro recall` finds the turn;
   the TUI's Library opens it; the fake agent's `recall` tool call returns it; a note it
-  `remember`s is found by the next session.
+  `remember`s is found by the next session. *Built (KB1.4)*: the fake Claude and Codex keep a
+  transcript as the real ones do (`PTYRO_FAKE_TRANSCRIPT=1`,
+  `crates/ptyro-testkit/src/fake_transcript.rs`: the lines a reader must not take are in it,
+  and Claude's last line comes after `Stop`). `kb1.rs` then reads `kb.db`: a Claude session's
+  item, card and messages after one turn, with no byte of the account's email or a tool's
+  result in the file; a second turn appended; a compaction's summary with the next turn; a
+  resume in the same item; lines written while the daemon was down, and lines unread at a
+  live upgrade, found at the start; every message once at the end. A Codex session with what
+  its tools ran, across a resume. A reply written 800 ms after `Stop` read with no further
+  turn. A rewind doubling nothing and keeping its rows. OpenCode's card, and nothing of a
+  chat's engine. A profile's secret and a token redacted in what was typed, run and answered,
+  in the title and the card, with the transcript found in the profile's own folder. In the daemon (`kb/sessions/tests.rs`): the read from a cursor, a shorter
+  file, another file, a cut and regrown one, a file longer than a read.
 - **The golden set, `make kb-eval`:** a made-up corpus of about 300 items of every kind and two
   profiles (`crates/ptyro-store/tests/kb_golden/`), and about 60 questions, each with the
   addresses that must be among the first five and those that must never appear (the other
@@ -11057,7 +11186,9 @@ table; the benches of §18.3 the rest):
   size by part, an ingest, and a forget with a look through the file's bytes for what was
   forgotten. **`make spike-kb-comments`** (KB0.4): the comment table over any folder, with
   counts by rule and a sample of each. **`make verify-kb`**: against the real
-  agents, that each is handed the tools and that a real transcript parses.
+  agents, that each is handed the tools and that a real transcript parses: ptyro's own reader
+  is run over the transcripts the turns leave **[verified 2026-11-19, Claude Code 2.1.329,
+  Codex 0.167.1]**.
 
 ### 25.17 Order of building
 

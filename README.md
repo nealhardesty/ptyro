@@ -575,11 +575,17 @@ otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). S
 `[chat]` in the config (the Chat section of the settings panel).
 
 **The knowledge base** is being built (ROADMAP KB): one memory of your work, for you and your
-agents to search. So far ptyro only keeps its file, `kb.db`, beside `chat.db`, and nothing
-fills it yet. `ptyro doctor` checks it and says what it holds, `ptyro about` names it, and
-`ptyro uninstall` lists it. It stays on this computer. Settings → Knowledge (`[kb]` in the
-config): `enabled = false` switches it off, `redact` adds your own patterns to what is
-redacted before anything is kept (keys, tokens and passwords already are), and `exclude` adds
+agents to search. So far ptyro keeps its file, `kb.db`, beside `chat.db`, and **your agent
+sessions go into it as they happen**, with nothing for you to do: at the end of each turn
+ptyro reads what Claude Code or Codex wrote in its own transcript and keeps what you typed,
+what the agent answered and one line for each tool it used (`Bash: cargo test`), under one
+entry a conversation, with a short card (the task, the outcome, the files changed). It never
+keeps the agent's thinking, what a tool printed, or a chat (chats have their own file). The
+search and the Library that show all this come next; until then `ptyro doctor` says how much
+is kept. `ptyro about` names the file and `ptyro uninstall` lists it. It stays on this
+computer. Settings → Knowledge (`[kb]` in the config): `enabled = false` switches it off (and
+no session is read), `redact` adds your own patterns to what is redacted before anything is
+kept (keys, tokens, passwords and your profile's secrets already are), and `exclude` adds
 paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind never are).
 
 **Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
@@ -809,7 +815,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
-| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`) | check what the knowledge base rests on against the real Claude Code and Codex here: that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
+| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`) | check what the knowledge base rests on against the real Claude Code and Codex here: that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that ptyro's own reader keeps the conversation of those transcripts and nothing else, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
@@ -819,7 +825,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
 | `make bench-kb-redact` | ROADMAP KB1.3: how long the knowledge base's redaction takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file before anything is kept) |
-| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan) / coverage-guided `cargo fuzz` (nightly) |
+| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan, the transcript readers) / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
 | `make compat` (`VTTEST=…`) | headless compatibility sweep → a table for `docs/compat.md` |
 | `make bench` / `make criterion` | emulator parse speed, daemon throughput, idle CPU, key latency (Linux) / micro-benchmarks (`target/criterion`) |
