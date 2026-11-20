@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 55 };
+pub const PROTO: Version = Version { major: 1, minor: 56 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -925,7 +925,8 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
     },
-    /// Search the knowledge base and the chats, on this machine (1.53, SPEC §25.8, §25.14):
+    /// Search the knowledge base and the chats (1.53, SPEC §25.8, §25.14; on this machine,
+    /// and on every linked one with `machines`, 1.56):
     /// agent sessions, and whatever else is kept, best first. `query` is the search box's:
     /// words, `"phrases"`, `-word`, `prefix*`, `kind:`, `project:`, `since:`, `before:`,
     /// `agent:`, `workspace:`, `file:`, `wrote:`, `by:meaning`, `by:words`. The options narrow
@@ -950,16 +951,35 @@ pub enum Request {
         /// project's is nothing.
         #[serde(default)]
         here: Option<String>,
+        /// Every linked machine that is up searches its own too (1.56, SPEC §25.11): the
+        /// answers are interleaved, each hit of another machine with its `machine` and its
+        /// address under it (`laptop2:k:7f3k/12`), and a machine that didn't answer is named
+        /// in `KbHits.left_out`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        machines: bool,
+        /// Only this machine's (1.56): a linked machine's name, or this one's own (or
+        /// `here`). The query's `machine:` says the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+        /// Only what that profile may see (1.56): an agent's search asking another machine,
+        /// which is given the caller's profile by name (SPEC §25.9, §25.11). It narrows,
+        /// never widens.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
     },
     /// Open an address a search gave (1.53): `k:7f3k/12` with `before` and `after` of its
     /// neighbours (`None`: 2 each), or `k:7f3k`, the item from its start (`after`: how many
-    /// pieces, `None`: all). A chat's address (`c:…`) is `ChatRead`'s. → `KbDoc`.
+    /// pieces, `None`: all). A chat's address (`c:…`) is `ChatRead`'s. Another machine's
+    /// (`laptop2:k:7f3k/12`, 1.56) is read there. → `KbDoc`.
     KbRead {
         addr: String,
         #[serde(default)]
         before: Option<u32>,
         #[serde(default)]
         after: Option<u32>,
+        /// Only if that profile may see it (1.56): as `KbSearch.profile`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
     },
     /// The history (1.53): items newest first, `before_ms` for the next page. → `KbItems`.
     KbRecent {
@@ -982,6 +1002,9 @@ pub enum Request {
         /// `None`: 20; at most 100.
         #[serde(default)]
         limit: Option<u32>,
+        /// A linked machine's history instead of this one's (1.56).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     /// Forget items for good (1.53, SPEC §25.12): their text is deleted and zeroed, and their
     /// URIs are never kept again. `addrs` (addresses or ids), or every item `query` finds (its
@@ -1523,6 +1546,10 @@ pub enum Reply {
         /// off, or its model isn't here yet.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         words_only: Option<String>,
+        /// The linked machines that were asked and are not in the answer, each with why
+        /// (1.56): `laptop2 is offline since 10:02`, `laptop3 didn't answer within 5s`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        left_out: Vec<String>,
     },
     /// What an address opened (1.53): the item, and the pieces asked for in its order. `at`:
     /// the piece the address named; `stale`: it named one the item no longer has, and the
@@ -2230,8 +2257,16 @@ mod tests {
             before_ms: Some(2),
             limit: Some(5),
             here: Some("/src/ptyro".into()),
+            machines: true,
+            machine: Some("laptop2".into()),
+            profile: Some("work".into()),
         });
-        round_trip(Request::KbRead { addr: "k:7f3k/12".into(), before: Some(1), after: None });
+        round_trip(Request::KbRead {
+            addr: "laptop2:k:7f3k/12".into(),
+            before: Some(1),
+            after: None,
+            profile: Some("work".into()),
+        });
         round_trip(Request::KbRecent {
             kinds: vec![ItemKind::Session],
             project: None,
@@ -2240,6 +2275,7 @@ mod tests {
             since_ms: Some(3),
             before_ms: Some(9),
             limit: None,
+            machine: Some("laptop2".into()),
         });
         round_trip(ServerMsg::Event {
             event: DomainEvent::KbUpdated { kinds: vec![ItemKind::Session] },
@@ -2314,6 +2350,7 @@ mod tests {
                 score: 0.031,
             }],
             words_only: Some("by words only: meaning search is off".into()),
+            left_out: vec!["laptop2 is offline since 10:02".into()],
         });
         round_trip(Reply::KbDoc {
             item: listed.clone(),
@@ -2357,7 +2394,7 @@ mod tests {
         // As a page writes them.
         let (m, _): (Request, _) = decode(br#"{"t":"kb_search","query":"retry"}"#).unwrap();
         assert!(
-            matches!(m, Request::KbSearch { limit: None, here: None, ref kinds, .. } if kinds.is_empty())
+            matches!(m, Request::KbSearch { limit: None, here: None, machines: false, machine: None, profile: None, ref kinds, .. } if kinds.is_empty())
         );
         let (m, _): (Request, _) = decode(br#"{"t":"kb_read","addr":"k:7f3k"}"#).unwrap();
         assert!(matches!(m, Request::KbRead { before: None, after: None, .. }));

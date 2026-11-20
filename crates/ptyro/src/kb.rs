@@ -44,6 +44,12 @@ pub struct RecallArgs {
     /// Only what has the words, even when meaning search is on
     #[arg(long)]
     words: bool,
+    /// Only this machine's: a linked machine's name (the query's `machine:` says the same)
+    #[arg(long, value_name = "MACHINE", conflicts_with = "here", add = ArgValueCandidates::new(complete::machines))]
+    machine: Option<String>,
+    /// This computer only: linked machines aren't asked
+    #[arg(long)]
+    here: bool,
     /// At most N (100 at most)
     #[arg(short, long, default_value_t = 20)]
     limit: u32,
@@ -79,6 +85,8 @@ impl RecallArgs {
                 "-k" | "--kind" => self.kind = Some(value()?),
                 "--since" => self.since = Some(value()?),
                 "--before" => self.before = Some(value()?),
+                "--machine" => self.machine = Some(value()?),
+                "--here" => self.here = true,
                 "-l" | "--limit" => {
                     let v = value()?;
                     self.limit = v.parse().map_err(|_| {
@@ -93,6 +101,9 @@ impl RecallArgs {
                 "--meaning and --words can't go together: one or the other",
             ));
         }
+        if self.here && self.machine.is_some() {
+            return Err(Error::invalid("--here and --machine can't go together: one or the other"));
+        }
         Ok(words)
     }
 }
@@ -106,7 +117,7 @@ pub enum KbCmd {
         json: bool,
     },
     /// Open what a search found: a piece with its neighbours (`k:7f3k/12`), or a whole item
-    /// (`k:7f3k`)
+    /// (`k:7f3k`); a linked machine's by its name in front (`laptop2:k:7f3k`)
     Show {
         /// An address from `ptyro recall` or `ptyro kb recent`
         #[arg(value_name = "REF")]
@@ -129,6 +140,9 @@ pub enum KbCmd {
         /// Only this project's
         #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
         project: Option<String>,
+        /// A linked machine's history instead of this computer's
+        #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
+        machine: Option<String>,
         /// At most N (100 at most)
         #[arg(short, long, default_value_t = 20)]
         limit: u32,
@@ -225,10 +239,10 @@ fn cite(h: &KbHit) -> String {
 }
 
 /// What a hit is and where it is from, on one line: `session · retry policy · feeder · claude · 3d`.
-fn about(kind: &str, title: Option<&str>, place: [Option<&str>; 2], at_ms: Option<u64>) -> String {
+fn about(kind: &str, title: Option<&str>, place: &[Option<&str>], at_ms: Option<u64>) -> String {
     let mut parts = vec![kind.to_owned()];
     parts.extend(title.map(|t| t.replace('\n', " ")));
-    parts.extend(place.into_iter().flatten().map(str::to_owned));
+    parts.extend(place.iter().flatten().map(|p| (*p).to_owned()));
     parts.extend(at_ms.map(ago));
     parts.join(" · ")
 }
@@ -256,14 +270,22 @@ pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
         limit: Some(a.limit),
         // Where you are: what is of this project ranks higher.
         here: std::env::current_dir().ok().map(|d| d.display().to_string()),
+        // Every linked machine that is up searches its own too (SPEC §25.11).
+        machines: !a.here,
+        machine: a.machine,
+        profile: None,
     };
-    let (hits, words_only) = match ask(ctx, &c, req).await {
-        Ok(Reply::KbHits { hits, words_only }) => (hits, words_only),
+    let (hits, words_only, left_out) = match ask(ctx, &c, req).await {
+        Ok(Reply::KbHits { hits, words_only, left_out }) => (hits, words_only, left_out),
         Ok(r) => return Err(unexpected(r)),
         // Meaning search is off: offer to switch it on (SPEC §25.10), as `chat search` does.
         Err(e) if e.code == ErrorCode::NeedsConfirmation => return meaning_on(ctx, e),
         Err(e) => return Err(e),
     };
+    // A machine that didn't answer is said, and the search is still an answer.
+    for m in &left_out {
+        eprintln!("(not searched: {m})");
+    }
     if a.json {
         println!("{}", serde_json::to_string_pretty(&hits).unwrap_or_default());
         return Ok(0);
@@ -275,8 +297,8 @@ pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
     }
     let lines = std::io::stdout().is_terminal();
     for h in &hits {
-        let place = [h.project_name.as_deref(), h.agent.as_deref()];
-        let what = about(h.kind.as_str(), h.title.as_deref(), place, Some(h.at_ms));
+        let place = [h.machine.as_deref(), h.project_name.as_deref(), h.agent.as_deref()];
+        let what = about(h.kind.as_str(), h.title.as_deref(), &place, Some(h.at_ms));
         // ≈: found by meaning, none of the words is in it.
         let how = if h.how == "meaning" { "≈ " } else { "" };
         if lines {
@@ -318,7 +340,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
         KbCmd::Status { json } => status(ctx, json).await,
         KbCmd::Show { addr, open: true, .. } => open(ctx, &addr).await,
         KbCmd::Show { addr, context, json, .. } => show(ctx, addr, context, json).await,
-        KbCmd::Recent { kind, project, limit, json } => {
+        KbCmd::Recent { kind, project, machine, limit, json } => {
             let kinds = kinds(kind.as_deref(), ItemKind::parse, ItemKind::ALL, ItemKind::as_str)?;
             let c = ctx.connect(true).await?;
             let req = Request::KbRecent {
@@ -329,6 +351,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
                 since_ms: None,
                 before_ms: None,
                 limit: Some(limit),
+                machine,
             };
             let items = match ask(ctx, &c, req).await? {
                 Reply::KbItems { items } => items,
@@ -372,7 +395,7 @@ fn at(i: &KbListed) -> u64 {
 fn listed(i: &KbListed, with_age: bool) -> String {
     let place = [i.project_name.as_deref(), i.item.agent.as_deref()];
     let title = i.item.title.as_deref().or(i.item.rel.as_deref());
-    let line = about(i.item.kind.as_str(), title, place, with_age.then(|| at(i)));
+    let line = about(i.item.kind.as_str(), title, &place, with_age.then(|| at(i)));
     format!("{line} · {}", pieces(u64::from(i.item.chunks)))
 }
 
@@ -401,7 +424,8 @@ async fn read(
     addr: String,
     context: Option<u32>,
 ) -> Result<(KbListed, Vec<KbChunk>, Option<u32>, bool), Error> {
-    match ask(ctx, c, Request::KbRead { addr, before: context, after: context }).await? {
+    let req = Request::KbRead { addr, before: context, after: context, profile: None };
+    match ask(ctx, c, req).await? {
         Reply::KbDoc { item, chunks, at, stale } => Ok((item, chunks, at, stale)),
         r => Err(unexpected(r)),
     }
@@ -436,7 +460,8 @@ async fn show(ctx: &Ctx, addr: String, context: Option<u32>, json: bool) -> Resu
 /// `kb show --open`: the source itself. A session opens in the TUI (resumed when it is
 /// dormant and can be); a chat in its view.
 async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
-    if addr.starts_with("c:") {
+    // (A linked machine's chat is `laptop2:c:7f3k`.)
+    if addr.starts_with("c:") || addr.contains(":c:") {
         let chat = addr.split('/').next().unwrap_or(addr).to_owned();
         return crate::chat::open(ctx, &chat).await;
     }
@@ -486,14 +511,16 @@ async fn forget(
         // Asked first, about exactly what will go: each address and the query's hits are
         // resolved to items once, and the "yes" forgets those items, by their ids.
         for addr in addrs {
-            if addr.starts_with("c:") {
+            if addr.starts_with("c:") || addr.contains(":c:") {
                 return Err(Error::invalid(format!(
                     "{addr} is a chat: `ptyro chat rm` deletes one"
                 )));
             }
             let (item, ..) = read(ctx, &c, addr, Some(0)).await?;
-            if !ids.contains(&item.item.id) {
-                ids.push(item.item.id);
+            // An item here by its id; a linked machine's by its address there.
+            let id = if item.addr.starts_with("k:") { item.item.id } else { item.addr };
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
         if let Some(q) = &query {
@@ -505,6 +532,9 @@ async fn forget(
                 before_ms: None,
                 limit: Some(ptyro_core::kb::search::MAX_LIMIT),
                 here: None,
+                machines: false,
+                machine: None,
+                profile: None,
             };
             let hits = match ask(ctx, &c, req).await? {
                 Reply::KbHits { hits, .. } => hits,

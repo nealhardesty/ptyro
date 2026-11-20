@@ -1,6 +1,6 @@
 //! The Library (SPEC §25.10, ROADMAP KB1.8): what the knowledge base kept, searched and read in
 //! one panel over the panes (`kb.open`, `C-q L`). A search box, a row of filters (kind,
-//! project, since), the hits on the left and the selected one with its neighbours on the right;
+//! project, since, and the machine when others are linked), the hits on the left and the selected one with its neighbours on the right;
 //! with nothing typed it is the history, by day. `⏎` opens the source: a chat at its message,
 //! anything else in the reader (its stored pieces as a transcript, drawn by the chat view's
 //! renderer). `r` goes to the session it happened in, `d` forgets (the daemon asks first, in
@@ -60,6 +60,11 @@ pub struct Library {
     /// (id, what it is called).
     pub project: Option<(String, String)>,
     pub since: Option<&'static str>,
+    /// Only this machine's: `here` (this computer) or a linked machine's name. `None`: a
+    /// search asks every linked machine too (SPEC §25.11); the history is this computer's.
+    pub machine: Option<String>,
+    /// The linked machines a search asked that are not in the answer, each with why.
+    pub left_out: Vec<String>,
     /// A row's history: only what was kept of this session or worktree.
     pub of: Option<Of>,
     /// The items that history holds (their ids): what a search within it keeps.
@@ -130,10 +135,16 @@ pub enum Filter {
     Kind,
     Project,
     Since,
+    Machine,
 }
 
 impl Filter {
-    const ALL: [Self; 3] = [Self::Kind, Self::Project, Self::Since];
+    const ALL: [Self; 4] = [Self::Kind, Self::Project, Self::Since, Self::Machine];
+
+    /// The filters shown: the machine only where other machines are linked.
+    fn shown(machines: bool) -> &'static [Self] {
+        if machines { &Self::ALL } else { &Self::ALL[..3] }
+    }
 }
 
 /// How far back `since` may look: what the pick offers.
@@ -171,6 +182,8 @@ impl Library {
             kind: None,
             project: None,
             since: None,
+            machine: None,
+            left_out: Vec::new(),
             of: None,
             of_items: Vec::new(),
             chip: None,
@@ -238,6 +251,10 @@ impl Library {
                 before_ms: None,
                 limit: Some(limit),
                 here,
+                // Every linked machine that is up searches its own too, unless one is picked.
+                machines: self.machine.is_none(),
+                machine: self.machine.clone(),
+                profile: None,
             });
         }
         let kinds = match self.kind.map(HitKind::stored) {
@@ -262,6 +279,7 @@ impl Library {
             since_ms,
             before_ms: None,
             limit: Some(ptyro_core::kb::search::MAX_LIMIT),
+            machine: self.machine.clone().filter(|m| m != "here"),
         })
     }
 
@@ -587,6 +605,7 @@ impl App {
         }
         let before = l.selected().map(|(addr, _)| addr);
         (l.loading, l.note, l.words_only) = (false, None, None);
+        l.left_out.clear();
         match res {
             Ok(Reply::KbItems { items }) => {
                 if l.of.is_some() {
@@ -594,7 +613,8 @@ impl App {
                 }
                 l.rows = Rows::History(items);
             }
-            Ok(Reply::KbHits { mut hits, words_only }) => {
+            Ok(Reply::KbHits { mut hits, words_only, left_out }) => {
+                l.left_out = left_out;
                 // A row's history: of what was found, only that session's or worktree's (the
                 // history asked for before the typing began says which items those are).
                 if l.of.is_some() {
@@ -663,8 +683,12 @@ impl App {
         }
         // A piece with its neighbours; an item from its start.
         let piece = addr.contains('/');
-        let req =
-            Request::KbRead { addr: addr.clone(), before: None, after: (!piece).then_some(5) };
+        let req = Request::KbRead {
+            addr: addr.clone(),
+            before: None,
+            after: (!piece).then_some(5),
+            profile: None,
+        };
         self.request(Pending::KbPreview(addr), req);
     }
 
@@ -700,7 +724,8 @@ impl App {
             Some((item, n)) => (item, n.parse::<u32>().ok()),
             None => (addr, None),
         };
-        let req = Request::KbRead { addr: item.to_owned(), before: None, after: None };
+        let req =
+            Request::KbRead { addr: item.to_owned(), before: None, after: None, profile: None };
         self.request(Pending::KbReader(piece), req);
     }
 
@@ -761,7 +786,7 @@ impl App {
             (None, Some((_, item))) => item,
             (None, None) => return,
         };
-        let req = Request::KbRead { addr: item, before: Some(0), after: Some(0) };
+        let req = Request::KbRead { addr: item, before: Some(0), after: Some(0), profile: None };
         self.request(Pending::KbResume, req);
     }
 
@@ -798,6 +823,8 @@ impl App {
                 .toast(format!("that is a chat: the chat list ({key}) archives or deletes one"));
         }
         let item = match (&l.reader, l.selected()) {
+            // (Another machine's by its address there: ids are each machine's own.)
+            (Some(r), _) if !r.item.addr.starts_with("k:") => r.item.addr.clone(),
             (Some(r), _) => r.item.item.id.clone(),
             (None, Some((_, item))) => item,
             (None, None) => return,
@@ -852,8 +879,14 @@ impl App {
             Filter::Since => {
                 ("No older than", SINCE.iter().map(|(v, what)| row(v, what)).collect())
             }
+            Filter::Machine => {
+                let mut rows = vec![row("here", "this computer only")];
+                rows.extend(self.machines.iter().map(|m| row(&m.name, m.state.label())));
+                ("Only this machine's", rows)
+            }
         };
-        items.insert(0, row("any", "no filter"));
+        let any = if f == Filter::Machine { "every machine that is up" } else { "no filter" };
+        items.insert(0, row("any", any));
         self.overlay = Some(Overlay::Picker {
             palette: Palette::new(title, items),
             purpose: Purpose::Library(f),
@@ -872,6 +905,7 @@ impl App {
             Filter::Kind => l.kind = HitKind::parse(value),
             Filter::Project => l.project = project,
             Filter::Since => l.since = SINCE.iter().map(|(v, _)| *v).find(|v| *v == value),
+            Filter::Machine => l.machine = Some(value.to_owned()).filter(|v| v != "any"),
         }
         l.sel = 0;
         self.library_ask();
@@ -992,14 +1026,15 @@ impl App {
         }
         // On the filters: ←/→ and Tab move, ⏎ picks, Backspace clears, Esc goes back.
         if let Some(f) = l.chip {
-            let at = Filter::ALL.iter().position(|x| *x == f).unwrap_or(0);
+            let shown = Filter::shown(!self.machines.is_empty());
+            let at = shown.iter().position(|x| *x == f).unwrap_or(0);
             let (mut pick, mut cleared) = (false, false);
             match (key.code, ch) {
                 (KeyCode::Tab | KeyCode::Right, _) | (_, Some('l')) => {
-                    l.chip = Filter::ALL.get(at + 1).copied();
+                    l.chip = shown.get(at + 1).copied();
                 }
                 (KeyCode::Left, _) | (_, Some('h')) => {
-                    l.chip = Some(Filter::ALL[at.saturating_sub(1)]);
+                    l.chip = Some(shown[at.saturating_sub(1)]);
                 }
                 (KeyCode::Enter, _) | (_, Some(' ')) => pick = true,
                 (KeyCode::Backspace, _) | (_, Some('x')) => {
@@ -1007,6 +1042,7 @@ impl App {
                         Filter::Kind => l.kind = None,
                         Filter::Project => l.project = None,
                         Filter::Since => l.since = None,
+                        Filter::Machine => l.machine = None,
                     }
                     cleared = true;
                 }
@@ -1193,6 +1229,9 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
         chip(Filter::Project, "project", l.project.as_ref().map(|(_, name)| name.clone())),
         chip(Filter::Since, "since", l.since.map(str::to_owned)),
     ];
+    if !app.machines.is_empty() {
+        chips.push(chip(Filter::Machine, "machine", l.machine.clone()));
+    }
     if let Some(of) = &l.of {
         chips.push(Span::styled(format!(" only {} ", of.label()), fg(app, t.accent)));
     }
@@ -1381,7 +1420,10 @@ fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library, alone: bool)
         _ if l.loading => say(&mut out, "Looking…"),
         Rows::History(items) => {
             if items.is_empty() && l.note.is_none() {
-                let filtered = l.kind.is_some() || l.project.is_some() || l.since.is_some();
+                let filtered = l.kind.is_some()
+                    || l.project.is_some()
+                    || l.since.is_some()
+                    || l.machine.is_some();
                 let none = match (&l.of, filtered) {
                     (Some(of), _) => format!("nothing is kept of {}", of.label()),
                     (None, true) => "nothing kept matches these filters".to_owned(),
@@ -1455,10 +1497,15 @@ fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library, alone: bool)
                     out.push((Line::from(line), Some(i)));
                 }
             }
-            // Why it was by words alone.
-            if let Some(why) = &l.words_only {
+            // Why it was by words alone, and which machines are not in it.
+            if l.words_only.is_some() || !l.left_out.is_empty() {
                 out.push((Line::raw(""), None));
+            }
+            if let Some(why) = &l.words_only {
                 say(&mut out, &format!("({why})"));
+            }
+            for m in &l.left_out {
+                say(&mut out, &format!("(not searched: {m})"));
             }
         }
     }

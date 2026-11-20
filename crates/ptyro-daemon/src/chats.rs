@@ -2693,15 +2693,19 @@ impl HistoryScope {
 /// Several machines' hits, each list best first, taken one from each in turn (bm25 isn't
 /// comparable across machines), each round newest first.
 fn interleave(lists: Vec<Vec<ChatHit>>) -> Vec<ChatHit> {
-    let mut iters: Vec<std::vec::IntoIter<ChatHit>> =
-        lists.into_iter().map(Vec::into_iter).collect();
+    interleave_by(lists, |h| h.at_ms)
+}
+
+/// [`interleave`] for any hits (the knowledge base's too), `at` saying when each happened.
+pub(crate) fn interleave_by<T>(lists: Vec<Vec<T>>, at: impl Fn(&T) -> u64) -> Vec<T> {
+    let mut iters: Vec<std::vec::IntoIter<T>> = lists.into_iter().map(Vec::into_iter).collect();
     let mut out = Vec::new();
     loop {
-        let mut round: Vec<ChatHit> = iters.iter_mut().filter_map(Iterator::next).collect();
+        let mut round: Vec<T> = iters.iter_mut().filter_map(Iterator::next).collect();
         if round.is_empty() {
             return out;
         }
-        round.sort_by_key(|h| std::cmp::Reverse(h.at_ms));
+        round.sort_by_key(|h| std::cmp::Reverse(at(h)));
         out.extend(round);
     }
 }

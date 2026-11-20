@@ -199,7 +199,7 @@ fn searched(app: &mut App, query: &str, hits: Vec<KbHit>, words_only: Option<&st
     reply(
         app,
         Pending::KbRows(n),
-        Reply::KbHits { hits, words_only: words_only.map(str::to_owned) },
+        Reply::KbHits { hits, words_only: words_only.map(str::to_owned), left_out: Vec::new() },
     );
     press(app, "<Enter>");
     asked(app);
@@ -292,6 +292,7 @@ fn what_is_asked_follows_the_box_and_the_filters() {
             since_ms: None,
             before_ms: None,
             limit: Some(100),
+            machine: None,
         })
     );
     // Two letters are not a search yet.
@@ -328,6 +329,9 @@ fn what_is_asked_follows_the_box_and_the_filters() {
             before_ms: None,
             limit: Some(100),
             here: Some("p9".into()),
+            machines: true,
+            machine: None,
+            profile: None,
         })
     );
     l.of = None;
@@ -355,7 +359,11 @@ fn a_search_lists_hits_with_what_they_are_and_says_when_it_was_by_words_alone() 
     assert!(n > stale);
     // An answer to an older ask is dropped.
     let old = vec![hit("0000", 1, "an old answer", "old")];
-    reply(app, Pending::KbRows(stale), Reply::KbHits { hits: old, words_only: None });
+    reply(
+        app,
+        Pending::KbRows(stale),
+        Reply::KbHits { hits: old, words_only: None, left_out: Vec::new() },
+    );
     assert!(matches!(lib(app).rows, Rows::History(_)));
     let hits = vec![
         hit(
@@ -367,7 +375,11 @@ fn a_search_lists_hits_with_what_they_are_and_says_when_it_was_by_words_alone() 
         chat_hit(),
     ];
     let why = "meaning search is off: Knowledge → meaning switches it on";
-    reply(app, Pending::KbRows(n), Reply::KbHits { hits, words_only: Some(why.into()) });
+    reply(
+        app,
+        Pending::KbRows(n),
+        Reply::KbHits { hits, words_only: Some(why.into()), left_out: Vec::new() },
+    );
     press(app, "<Enter>");
     assert!(!lib(app).typing);
     let shown = screen(app);
@@ -910,4 +922,85 @@ fn days_and_matches() {
     };
     assert_eq!((name.as_str(), title.as_str()), ("Edit", "src/feeder.rs"));
     assert!(matches!(chat_item(&chunk(0, "card", "Task: x")).body, ChatBody::Notice { .. }));
+}
+
+/// KB1.12 (SPEC §25.11): with a linked machine there is a fourth filter. A search asks every
+/// machine unless one is picked; a hit of another machine says which, is read and forgotten by
+/// its address there; and a machine that didn't answer is named under the hits.
+#[test]
+fn with_a_linked_machine_the_search_asks_them_all_and_a_filter_picks_one() {
+    let mut t = t();
+    let app = &mut t.app;
+    opened(app);
+    // No machine linked: three filters, and Tab past the third is the list.
+    assert!(!screen(app).contains("machine:"));
+    press(app, "<Tab><Tab><Tab><Tab>");
+    assert_eq!(lib(app).chip, None);
+    app.machines.push(
+        serde_json::from_value(json!({
+            "name": "laptop2", "transport": { "t": "ssh", "target": "laptop2" },
+            "state": "online", "added_ms": 0,
+        }))
+        .unwrap(),
+    );
+    assert!(screen(app).contains("machine: any"));
+    assert!(matches!(lib(app).request(None), Some(Request::KbRecent { machine: None, .. })));
+    // A search: every machine. laptop2's hit carries its name, and one that was down is said.
+    let mut far = hit("9H5N", 2, "the far retry", &format!("a far {MARK_ON}retry{MARK_OFF}"));
+    (far.addr, far.machine) = ("laptop2:k:9H5N/2".into(), Some("laptop2".into()));
+    press(app, "/retry");
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbSearch { machines: true, machine: None, .. })
+    ));
+    let n = lib(app).asked;
+    let left_out = vec!["laptop3 is offline since 10:02".to_owned()];
+    reply(app, Pending::KbRows(n), Reply::KbHits { hits: vec![far], words_only: None, left_out });
+    press(app, "<Enter>");
+    let shown = screen(app);
+    assert!(shown.contains("laptop2 · feeder · claude"), "{shown}");
+    assert!(shown.contains("(not searched: laptop3 is offline since 10:02)"), "{shown}");
+    // Its text is asked for by its address there, and so is forgetting it.
+    assert!(
+        asked(app).iter().any(|p| matches!(p, Pending::KbPreview(a) if a == "laptop2:k:9H5N/2"))
+    );
+    assert_eq!(lib(app).selected(), Some(("laptop2:k:9H5N/2".into(), "laptop2:k:9H5N".into())));
+    // The fourth filter: this computer, or one machine.
+    press(app, "<Tab><Tab><Tab><Tab>");
+    assert_eq!(lib(app).chip, Some(Filter::Machine));
+    press(app, "<Enter>");
+    let Some(Overlay::Picker { palette, purpose: Purpose::Library(Filter::Machine) }) =
+        &app.overlay
+    else {
+        panic!("a pick")
+    };
+    let offered: Vec<&str> = (0..3).map(|i| palette.item(i).label.as_str()).collect();
+    assert_eq!(offered, ["any", "here", "laptop2"]);
+    press(app, "laptop2<Enter>");
+    assert!(screen(app).contains("machine: laptop2"));
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbSearch { machines: false, machine: Some(m), .. }) if m == "laptop2"
+    ));
+    // Its history, with nothing typed; `here` is this computer's own.
+    lib_mut(app).query.clear();
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbRecent { machine: Some(m), .. }) if m == "laptop2"
+    ));
+    app.picked(Target::Path("here".into()), Purpose::Library(Filter::Machine));
+    assert!(matches!(lib(app).request(None), Some(Request::KbRecent { machine: None, .. })));
+    lib_mut(app).query = "retry".into();
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbSearch { machines: false, machine: Some(m), .. }) if m == "here"
+    ));
+    // Backspace on it clears it.
+    assert_eq!(lib(app).chip, Some(Filter::Machine));
+    press(app, "<BS>");
+    assert_eq!(lib(app).machine, None);
+}
+
+fn lib_mut(app: &mut App) -> &mut Library {
+    app.library_mut().expect("the Library is shown")
 }

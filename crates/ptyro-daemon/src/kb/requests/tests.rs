@@ -99,6 +99,7 @@ fn recent_all() -> Request {
         since_ms: None,
         before_ms: None,
         limit: None,
+        machine: None,
     }
 }
 
@@ -111,6 +112,9 @@ fn search(query: &str) -> Request {
         before_ms: None,
         limit: None,
         here: None,
+        machines: false,
+        machine: None,
+        profile: None,
     }
 }
 
@@ -131,7 +135,8 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
         .unwrap();
     d.kb_ingest(session("session://claude/c2", "the hopper motor hums", now - DAY)).await.unwrap();
 
-    let Reply::KbHits { hits, words_only } = ask(&d, search("hopper jams")).await.unwrap() else {
+    let Reply::KbHits { hits, words_only, .. } = ask(&d, search("hopper jams")).await.unwrap()
+    else {
         panic!()
     };
     assert!(words_only.is_some_and(|w| w.contains("meaning search is off")));
@@ -157,7 +162,12 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
     }
 
     // A piece with two neighbours each side unless told; an item, all of it.
-    let read = |addr: &str, before, after| Request::KbRead { addr: addr.into(), before, after };
+    let read = |addr: &str, before, after| Request::KbRead {
+        addr: addr.into(),
+        before,
+        after,
+        profile: None,
+    };
     let Reply::KbDoc { item, chunks, at, stale } =
         ask(&d, read(&h.addr, None, None)).await.unwrap()
     else {
@@ -195,6 +205,7 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
         since_ms: None,
         before_ms,
         limit,
+        machine: None,
     };
     let Reply::KbItems { items } = ask(&d, recent(None, Some(1))).await.unwrap() else { panic!() };
     assert_eq!(items.len(), 1);
@@ -246,6 +257,7 @@ async fn the_history_of_a_session_or_a_worktree_and_the_news_of_a_change() {
         since_ms,
         before_ms: None,
         limit: None,
+        machine: None,
     };
     let c2 = "ptyro-session://claude/c2";
     assert_eq!(uris(ask(&d, of(Some(c2), None, None)).await.unwrap()), ["session://claude/c2"]);

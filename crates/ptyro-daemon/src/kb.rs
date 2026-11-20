@@ -18,6 +18,7 @@
 
 #[cfg(test)]
 mod golden;
+mod machines;
 mod requests;
 mod search;
 mod sessions;

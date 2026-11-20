@@ -192,6 +192,26 @@ pub fn parse_kb_query(q: &str, now_ms: u64) -> Result<Query, String> {
     parse(q, now_ms, true)
 }
 
+/// A knowledge-base query without its `machine:` words, and the machine the last of them
+/// named: the daemon asked decides where to search, and each machine is sent the rest.
+pub fn take_machine(q: &str) -> (String, Option<String>) {
+    let (mut kept, mut machine) = (Vec::new(), None);
+    let mut rest = q.trim();
+    while !rest.is_empty() {
+        let body = rest.strip_prefix('-').unwrap_or(rest);
+        let end = match body.strip_prefix('"') {
+            Some(r) => rest.len() - r.len() + r.find('"').map_or(r.len(), |i| i + 1),
+            None => rest.find(char::is_whitespace).unwrap_or(rest.len()),
+        };
+        match rest[..end].strip_prefix("machine:") {
+            Some(m) if !m.is_empty() => machine = Some(m.to_owned()),
+            _ => kept.push(&rest[..end]),
+        }
+        rest = rest[end..].trim_start();
+    }
+    (kept.join(" "), machine)
+}
+
 fn parse(q: &str, now_ms: u64, kb: bool) -> Result<Query, String> {
     let mut out = Query::default();
     let (mut yes, mut no): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
@@ -594,6 +614,15 @@ mod tests {
         assert_eq!((q.since_ms, q.before_ms), (Some(70 * day), Some(93 * day)));
         assert_eq!(q.wrote.as_deref(), Some("agent"));
         assert_eq!(q.machine.as_deref(), Some("laptop2"));
+        // The machine is the asked daemon's to act on: the rest goes to each machine.
+        assert_eq!(
+            take_machine(r#"retry machine:laptop2 "machine:x y" -machine:z -"a b" kind:note"#),
+            (
+                r#"retry "machine:x y" -machine:z -"a b" kind:note"#.to_owned(),
+                Some("laptop2".to_owned())
+            )
+        );
+        assert_eq!(take_machine(" retry  policy "), ("retry policy".to_owned(), None));
         // What isn't one of the words says which are.
         let e = parse_kb_query("x kind:memo", 0).unwrap_err();
         assert!(e.starts_with("kind:memo: say one of session, chat, note"), "{e}");

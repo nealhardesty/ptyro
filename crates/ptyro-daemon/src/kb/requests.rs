@@ -9,7 +9,7 @@
 //! process), never from the request.
 
 use ptyro_core::kb::search::{
-    HitKind, KbCount, KbHit, KbListed, KbSearch, KbSkipped, KbStatusInfo, MAX_LIMIT,
+    HitKind, KbCount, KbHit, KbListed, KbSearch, KbSkipped, KbStatusInfo, LIMIT, MAX_LIMIT,
 };
 use ptyro_core::kb::{ItemKind, KbItem};
 use ptyro_core::session::SessionKind;
@@ -89,29 +89,127 @@ impl Daemon {
         caller: crate::guard::Caller,
     ) -> Result<Reply, Error> {
         let scope = self.kb_caller_scope(caller);
-        let scope = scope.as_ref();
+        // Another machine asking for an agent of its own (§25.11): that profile's, by name.
+        // What the request says only narrows: a caller's own wall comes first.
+        let asked = match &req {
+            Request::KbSearch { profile: Some(p), .. }
+            | Request::KbRead { profile: Some(p), .. } => {
+                Some(KbScope { profile: Some(p.clone()), ..KbScope::default() })
+            }
+            _ => None,
+        };
+        let scope = scope.as_ref().or(asked.as_ref());
+        // A wall that is a workspace is one of this machine's: nothing is asked elsewhere.
+        let walled = scope.is_some_and(|s| s.workspace.is_some());
+        let stays = |m: &str| {
+            Error::invalid(format!(
+                "this session sees its own workspace only (`kb.scope`): {m} isn't asked"
+            ))
+        };
         match req {
-            Request::KbSearch { query, project, kinds, since_ms, before_ms, limit, here } => {
-                // Where the caller is, as a project: a boost, so a place that is none is nothing.
-                let here = here.and_then(|h| self.find_project(&h).ok()).map(|p| p.id);
-                let ask = KbSearch {
+            Request::KbSearch {
+                query,
+                project,
+                kinds,
+                since_ms,
+                before_ms,
+                limit,
+                here,
+                machines,
+                machine,
+                profile: _,
+            } => {
+                // Where to look: one machine by name (the option, or the query's `machine:`),
+                // every linked one too (`machines`), else here.
+                let (query, named) = ptyro_core::chats::take_machine(&query);
+                let only = match machine.or(named) {
+                    Some(m) => Some(self.kb_machine(&m)?),
+                    None => None,
+                };
+                let far = match &only {
+                    Some(Some(m)) if walled => return Err(stays(m)),
+                    Some(Some(m)) => vec![m.clone()],
+                    Some(None) => Vec::new(),
+                    None if machines && !walled => self.kb_linked(),
+                    None => Vec::new(),
+                };
+                let alone = matches!(only, Some(Some(_)));
+                let (mut lists, mut words_only, mut missing) = (Vec::new(), None, None);
+                if !alone {
+                    // Where the caller is, as a project: a boost, so a place that is none is
+                    // nothing.
+                    let here = here.and_then(|h| self.find_project(&h).ok()).map(|p| p.id);
+                    let ask = KbSearch {
+                        query: query.clone(),
+                        project: project.clone(),
+                        kinds: kinds.clone(),
+                        since_ms,
+                        before_ms,
+                        limit: limit.unwrap_or(0),
+                        here,
+                    };
+                    match self.kb_search(ask, scope).await {
+                        Ok(mut found) => {
+                            self.kb_named(&mut found.hits);
+                            words_only = found.words_only;
+                            lists.push(found.hits);
+                        }
+                        // A project this machine doesn't have may be another's.
+                        Err(e) if e.code == ErrorCode::NotFound && !far.is_empty() => {
+                            missing = Some(e);
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if far.is_empty() {
+                    let hits = lists.pop().unwrap_or_default();
+                    return Ok(Reply::KbHits { hits, words_only, left_out: Vec::new() });
+                }
+                // Each machine searches its own by its own settings. A project goes by its
+                // name (ids are each machine's own).
+                let ask = Request::KbSearch {
                     query,
-                    project,
+                    project: project.map(|p| self.find_project(&p).map_or(p, |p| p.slug)),
                     kinds,
                     since_ms,
                     before_ms,
-                    limit: limit.unwrap_or(0),
-                    here,
+                    limit,
+                    here: None,
+                    machines: false,
+                    machine: None,
+                    profile: scope.and_then(|s| s.profile.clone()),
                 };
-                let mut found = self.kb_search(ask, scope).await?;
-                self.kb_named(&mut found.hits);
-                Ok(Reply::KbHits { hits: found.hits, words_only: found.words_only })
+                let (theirs, left_out) = self.kb_search_far(&far, &ask, alone).await?;
+                if let (Some(e), true) = (missing, theirs.is_empty()) {
+                    return Err(e);
+                }
+                lists.extend(theirs);
+                // Interleaved by each machine's own rank: scores don't compare across them.
+                let mut hits = crate::chats::interleave_by(lists, |h| h.at_ms);
+                hits.truncate(limit.map_or(LIMIT, |n| n.min(MAX_LIMIT)) as usize);
+                Ok(Reply::KbHits { hits, words_only, left_out })
             }
-            Request::KbRead { addr, before, after } => {
+            Request::KbRead { addr, before, after, profile: _ } => {
+                let (machine, addr) = self.kb_split(&addr);
                 if lookup::key(&addr).starts_with("c:") {
                     return Err(Error::invalid(format!(
                         "{addr} is a chat's: `ptyro chat show` opens it"
                     )));
+                }
+                // Another machine's is read there, within the same wall.
+                if let Some(m) = machine {
+                    if walled {
+                        return Err(stays(&m));
+                    }
+                    let profile = scope.and_then(|s| s.profile.clone());
+                    let req = Request::KbRead { addr, before, after, profile };
+                    return match self.kb_far(&m, req).await? {
+                        Reply::KbDoc { mut item, chunks, at, stale } => {
+                            item.addr = format!("{m}:{}", item.addr);
+                            Ok(Reply::KbDoc { item, chunks, at, stale })
+                        }
+                        other => Err(Error::internal(format!("{m} answered {other:?}"))),
+                    };
                 }
                 // A piece with its neighbours; an item from its start, all of it unless told.
                 let piece = addr.contains('/');
@@ -127,7 +225,45 @@ impl Daemon {
                 let item = self.kb_listed(&db, vec![doc.item]).await?.remove(0);
                 Ok(Reply::KbDoc { item, chunks: doc.chunks, at: doc.at, stale: doc.stale })
             }
-            Request::KbRecent { kinds, project, session, worktree, since_ms, before_ms, limit } => {
+            Request::KbRecent {
+                kinds,
+                project,
+                session,
+                worktree,
+                since_ms,
+                before_ms,
+                limit,
+                machine,
+            } => {
+                // A linked machine's history, asked for by name: you may, a model may not
+                // (its wall is its profile here, and a history has no profile to be given).
+                if let Some(m) = machine.map(|m| self.kb_machine(&m)).transpose()?.flatten() {
+                    if scope.is_some() {
+                        return Err(Error::new(
+                            ErrorCode::PermissionDenied,
+                            format!("an agent's session lists this machine's history, not {m}'s"),
+                        ));
+                    }
+                    let req = Request::KbRecent {
+                        kinds,
+                        project: project.map(|p| self.find_project(&p).map_or(p, |p| p.slug)),
+                        session,
+                        worktree,
+                        since_ms,
+                        before_ms,
+                        limit,
+                        machine: None,
+                    };
+                    return match self.kb_far(&m, req).await? {
+                        Reply::KbItems { mut items } => {
+                            for i in &mut items {
+                                i.addr = format!("{m}:{}", i.addr);
+                            }
+                            Ok(Reply::KbItems { items })
+                        }
+                        other => Err(Error::internal(format!("{m} answered {other:?}"))),
+                    };
+                }
                 let of = super::search::Of { session, worktree, since_ms };
                 let items = self
                     .kb_recent(kinds, project, of, before_ms, limit.unwrap_or(0), scope)
@@ -139,6 +275,20 @@ impl Daemon {
                 self.kb_forget_session(&session, confirmed).await
             }
             Request::KbForget { addrs, query, confirmed, session: None } => {
+                // Another machine's items are forgotten there (its file, its tombstones).
+                let split: Vec<(Option<String>, String)> =
+                    addrs.iter().map(|a| self.kb_split(a)).collect();
+                if let Some(m) = split.iter().find_map(|(m, _)| m.clone()) {
+                    if split.iter().any(|(x, _)| x.as_ref() != Some(&m)) {
+                        return Err(Error::invalid(format!(
+                            "these are on more than one machine ({m} and another): one at a time"
+                        )));
+                    }
+                    let addrs = split.into_iter().map(|(_, a)| a).collect();
+                    let req = Request::KbForget { addrs, query: None, confirmed, session: None };
+                    return self.kb_far(&m, req).await;
+                }
+                let addrs = split.into_iter().map(|(_, a)| a).collect();
                 self.kb_forget(addrs, query, confirmed).await
             }
             Request::KbStatus => Ok(Reply::KbStatus { status: self.kb_status().await }),

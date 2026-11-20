@@ -238,7 +238,8 @@ fn here_only(req: &Request) -> bool {
     matches!(
         req,
         List | Status
-            // The knowledge base is each machine's own until the fan-out (KB1.12).
+            // The knowledge base's are sent on by `handle_kb` itself (`kb/machines.rs`),
+            // which knows who asks: the wall holds across a link.
             | KbSearch { .. }
             | KbRead { .. }
             | KbRecent { .. }

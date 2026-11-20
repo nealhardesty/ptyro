@@ -113,7 +113,8 @@ fn chat_hit(h: RawHit, ids: &[String], how: &str) -> KbHit {
 }
 
 impl Daemon {
-    /// **Search the knowledge base and the chats** (SPEC §25.8), on this machine. `scope` is
+    /// **Search the knowledge base and the chats** (SPEC §25.8), on this machine (the linked
+    /// ones are `kb/machines.rs`'s, which takes `machine:` out of the query first). `scope` is
     /// the wall for a caller that is a model (an agent's tool); `None` for you.
     ///
     /// The answer says when it was by words alone for want of the model
@@ -139,7 +140,7 @@ impl Daemon {
         }
         if let Some(m) = &q.machine {
             return Err(Error::invalid(format!(
-                "machine:{m}: this search looks on this machine only"
+                "machine:{m}: this looks on this machine only (a search takes `machine:`)"
             )));
         }
         // Kinds asked both ways narrow each other.

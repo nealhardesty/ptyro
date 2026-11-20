@@ -58,6 +58,7 @@ const READ_MAX: usize = 6 * 1024;
 fn kb_tools(always: bool) -> Vec<Value> {
     let s = |d: &str| json!({ "type": "string", "description": d });
     let n = |d: &str| json!({ "type": "integer", "description": d });
+    let b = |d: &str| json!({ "type": "boolean", "description": d });
     vec![
         tool(
             "recall",
@@ -68,6 +69,7 @@ fn kb_tools(always: bool) -> Vec<Value> {
                 "kind": s("Only these kinds, comma separated: session, chat, note, doc, comment, code, path, commit, command"),
                 "since": s("Only what is newer: 7d, 12h, or a date like 2026-11-01"),
                 "limit": n("At most this many (default 8, at most 20)"),
+                "machines": b("The user's linked computers too"),
             }),
             &["query"],
             always,
@@ -151,14 +153,22 @@ async fn kb_call(client: &Client, name: &str, a: &Value) -> Result<String, Error
                 ),
                 // Where the agent works: what is of this project ranks higher.
                 here: std::env::current_dir().ok().map(|d| d.display().to_string()),
+                // Other machines only when asked (SPEC §25.11): each answers within the wall.
+                machines: a["machines"].as_bool().unwrap_or(false),
+                machine: None,
+                profile: None,
             };
-            let Reply::KbHits { hits, .. } = client.request(req).await? else {
+            let Reply::KbHits { hits, left_out, .. } = client.request(req).await? else {
                 return Err(Error::internal("unexpected reply"));
             };
-            if hits.is_empty() {
-                return Ok(fenced("nothing found (other words, or fewer, may find it)"));
-            }
             let mut out = String::new();
+            for m in &left_out {
+                out.push_str(&format!("(not searched: {m})\n"));
+            }
+            if hits.is_empty() {
+                out.push_str("nothing found (other words, or fewer, may find it)");
+                return Ok(fenced(&out));
+            }
             for h in &hits {
                 let mut line = vec![h.addr.clone(), h.kind.to_string()];
                 line.extend(h.title.as_deref().map(|t| t.replace('\n', " ")));
@@ -178,7 +188,7 @@ async fn kb_call(client: &Client, name: &str, a: &Value) -> Result<String, Error
         "recall_read" => {
             let addr = need(a, "ref")?;
             let around = |k: &str| a[k].as_u64().unwrap_or(AROUND).min(AROUND_MAX) as u32;
-            if ptyro_core::lookup::key(&addr).starts_with("c:") {
+            if ptyro_core::lookup::key(&addr).starts_with("c:") || addr.contains(":c:") {
                 // A chat's: read as `chat_read` reads it, inside the same fence.
                 let n = a["before"]
                     .as_u64()
@@ -213,6 +223,7 @@ async fn kb_call(client: &Client, name: &str, a: &Value) -> Result<String, Error
                 addr,
                 before: Some(if piece { around("before") } else { 0 }),
                 after: Some(if piece { around("after") } else { 2 * around("after") }),
+                profile: None,
             };
             let Reply::KbDoc { item, chunks, at, stale } = client.request(req).await? else {
                 return Err(Error::internal("unexpected reply"));
