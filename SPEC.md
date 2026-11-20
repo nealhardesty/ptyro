@@ -1114,6 +1114,18 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-20] Protocol 1.57** (additive; notes, KB2, §25.6.4, §25.14): the requests
+`KbNote{text, title?, project?, profile?, tags, replaces?, addr?}` → `KbNoted{item, path}`
+(write a note's file and index it; from inside an agent's session it is `remember`, and who
+wrote it is the daemon's word; with `addr`, write an existing note's whole file again, you
+only), `KbNotes{project?, writer?}` → `KbItems`, `KbNoteRead{addr}` → `KbNoteText{item, text,
+path}` (a note's file as it is, for editing) and `KbSync` → `KbSynced{notes, changed, removed}`
+(the notes folder read again); `KbRecent.writer` (only what you wrote, or what agents did);
+`KbStatusInfo.notes` (the notes folder). Scopes: `KbNotes` and `KbNoteRead` need `read`,
+`KbNote` and `KbSync` `control`. All four are answered by the machine asked. Compatibility: a
+1.56 daemon answers them "couldn't read this request", which `ptyro kb` turns into "the
+running daemon is older than this ptyro"; a 1.56 client never sends them.
+
 **[built 2026-11-19] Protocol 1.56** (additive; the knowledge base across linked machines,
 KB1.12, §25.11, §25.14): `KbSearch.machines` (every linked machine that is up searches its own
 too), `KbSearch.machine` (only that machine: a linked one's name, this one's, or `here`) and
@@ -3830,7 +3842,8 @@ ptyro hook <adapter> <event>           # internal; used by agent integrations
 ptyro proxy                            # internal; stdio⇄socket bridge for ssh remote (§16.2)
 ptyro mcp                              # internal; the knowledge base's tools for an agent's session (§25.9), the chat history tools for a chat's agent (§22.10)
 ptyro recall <query…> [filters] [--json]   # search the knowledge base and the chats (§25.10; built KB1.7)
-ptyro kb [status] | show <ref> | recent | forget <ref…>|--query <q>|--session <s>   # §25.10; the rest of `kb` and `ingest` with KB2, KB3
+ptyro kb [status] | show <ref> | recent | forget <ref…>|--query <q>|--session <s>   # §25.10
+ptyro kb note [<text…>|-] [--title T] [-p P] [--profile PR] [--tag T]… [--edit] | notes [-p P] [--wrote you|agent] | sync   # notes (§25.6.4; built KB2); `kb ls`, `kb rm` and `ingest` with KB3
 ```
 
 **[built M2]** Added: `attach --view-only`, `restart S…`, `ls --all` (history from the store,
@@ -4629,7 +4642,9 @@ would stop that daemon and its sessions), and refuses `--remote`, naming where t
 Windows side, removing `ptyro.exe` and its logon task, went with the native Windows build on
 2026-11-18.) Kept: the
 user's repositories, branches, `.ptyro.toml`, `.ptyro.local.toml`, `.git/info/exclude` lines and
-`refs/ptyro/*` snapshots (`--purge-refs` deletes the last). The binary is removed only from a
+`refs/ptyro/*` snapshots (`--purge-refs` deletes the last), and the knowledge base's notes
+folder, `<data>/kb/notes/` (your writing: the rest of the data directory goes around it;
+`--delete-notes` removes it too; §25.12). The binary is removed only from a
 place the user put it (`~/.local/bin`, `/usr/local/bin`); `~/.cargo/bin` goes through `cargo
 uninstall`; Homebrew and system paths get the package manager's command; a path under
 `/target/` is never removed. In a sandbox (`PTYRO_HOME`) only that home is touched. Web:
@@ -9963,7 +9978,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); KB2 to KB5 (notes and `remember`, roots and `ingest`, shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; KB3 to KB5 (roots and `ingest`, shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -9975,11 +9990,111 @@ section I and R-KB-01…13; the tasks are ROADMAP KB0…KB5.
 **As built, and where building and the spikes changed the design below** (each line names its
 task; agent sessions are kept as they happen, `ptyro recall` and `ptyro kb` search, read,
 list and forget them, agents search them with `recall` and `recall_read`, a session can
-be private, the TUI and the web have the Library, and a search asks linked machines too.
-**What KB1 did not build**, and nothing below should be read as built: notes and the third
-tool `remember` (KB2), roots, `ingest`, documents, comments, paths and commits (KB3), shells
-(KB4), anything offered at a prompt (KB5), the Library's Notes and Sources tabs and the
-ingest and note forms, the events' `KbProgress`, and `doctor`'s roots and skipped files):
+be private, the TUI and the web have the Library, a search asks linked machines too, and
+(KB2) you and your agents write notes, which are files.
+**What KB1 and KB2 did not build**, and nothing below should be read as built: roots,
+`ingest`, documents, comments, paths and commits (KB3), shells (KB4), anything offered at a
+prompt (KB5), the Library's Sources tab and the ingest form, the events' `KbProgress`, and
+`doctor`'s roots and skipped files):
+- **KB2 notes (2026-11-20; `ptyro_core::kb::note`, `crates/ptyro-daemon/src/kb/notes.rs`,
+  `ptyro-protocol` 1.57, `crates/ptyro/src/kb.rs`, `mcp.rs`, the Libraries):**
+  - **The files are the truth, and one function makes the index agree with them**
+    (`Daemon::kb_notes_sync`): every `<profile>/<project>/<name>.md` under `<data>/kb/notes/`
+    whose time or size is not what its item's cursor says is read through the one way in
+    (kind `note`), and an item whose file is gone is deleted. It runs at the daemon's start,
+    when the folder changes (watched with `notify`, 500 ms of quiet), when the settings change
+    (the knowledge base may have been switched on), and on `KbSync`. A file ptyro writes is
+    indexed at once, in the request, and the watcher's pass then finds nothing to do.
+  - **A folder that is no profile's: `_all`.** §25.4 had only `<profile>`. A note you write
+    without naming a profile belongs to every profile (its item's `profile` is NULL, as a
+    root's with no pin), and lives under `_all/`. So does its URI: `note://_all/_global/x`. (A
+    profile can't be told from it only if it is itself called `_all`.) A folder named for a
+    profile that isn't in the config is not read, and `ptyro kb` says why.
+  - **Who wrote a note read from a file is what its header says** (`by`: absent or `you` is
+    you, anything else an agent of that name), since after a rebuild of `kb.db` there is
+    nothing else to ask. When ptyro *writes* a note the header is the daemon's word, from the
+    caller's process (§17): a request from inside an agent's session is that agent's, whether
+    it came through `remember` or the agent ran `ptyro kb note`. The folder is trusted as you
+    are: a program that can write files there can write `by: you`, as it could edit `kb.db`.
+  - **An agent's words are redacted before they are a file**: the rendered note (header, title,
+    tags, text) goes through the profile's secrets, the credential shapes and your patterns,
+    and one with more than 25 hits is refused. A note you write is your file as you wrote it;
+    its *index* is redacted like everything else, and a file with more than 25 hits is not
+    indexed (named in `ptyro kb`, and not read again until it changes; what the index held
+    of it before goes, so nothing stale is found).
+  - **The header is not text.** It is taken off before the note is cut; the title (the first
+    heading, else the first line, 80 characters) is the name every piece's heading path
+    starts with; the tags are a last line of the text (`tags: a, b`), so they are found. A
+    note that is one line is its own title and its own text.
+  - **The never list is not asked about a note**: `credentials-rotation.md` is a note like any
+    other. `kb.max_file` is.
+  - **Forgetting a note leaves no tombstone.** Its file is deleted, then its text (as any
+    forgetting deletes: zeroed, checkpointed), then its row: a note written later under the
+    same name is a new note, and a file you delete by hand is the same thing. The daemon's
+    question says "A note's file is deleted from the notes folder" in place of "Your files …
+    aren't touched". §25.12 said the tombstone stays for every kind.
+  - **`replaces`** writes the new note first, then moves the old file to `_old/` beside it
+    (kept, never read: only files directly in a project's folder are notes) and deletes its
+    item. The new note's header has `replaces: <the old URI>`. An agent may replace any note
+    it can see, one of no profile too: nothing is lost, the file is aside.
+  - **The limits are the daemon's**, by the caller's session: 8 KiB of text, 20 notes a
+    session a UTC day (counted in memory: a daemon restart forgets the count), `kb.remember`,
+    the agent's `kb = false`; and an agent can't write over a note (`KbNote.addr`) or forget
+    one. They hold for `ptyro kb note` run by an agent as for the tool.
+  - **A note's `item.session` is the session that wrote it** (the header's `session`, when it
+    is a ptyro session's id), and a note is the one thing a session is shown of itself: the
+    wall hides a session's own *session item* from it, not the notes it wrote there. A chat's
+    agent writes `session: c:<chat id>`; a private session `a private session`; an incognito
+    chat `an incognito chat`.
+  - **A workspace is not in the file**, so under `kb.scope = "workspace"` an agent's note is
+    seen in the workspace it was written in for as long as `kb.db` is not rebuilt (the item
+    keeps it across re-reads); a note you write has none and is hidden there, as §25.9 says of
+    every item of no workspace.
+  - **The tools**: `remember(text, title?, tags?, project?, replaces?)`; `project` defaults to
+    the session's (`_global`: none). `ptyro mcp` lists it only when the launch said so
+    (`PTYRO_KB_REMEMBER`, set where `kb.remember` is on); Claude's `--allowedTools` then has
+    three names, and Codex's approval key covers it. Its answer is one plain line (the
+    address, the title, what it is about), not fenced: it is not retrieved history. The
+    server's instructions gain one sentence ("When a decision is made or a fact is learned …
+    keep it with remember"), still under 100 words in all.
+  - **The commands**: `ptyro kb note [TEXT…|-] [--title T] [-p P] [--profile PR] [--tag T]…
+    [--edit]` (no text, on a terminal: your editor on a new file; no `--project` is a global
+    note, not the project you stand in, because a form must be able to say "none"); `kb notes
+    [-p P] [--wrote you|agent]`; `kb sync` (the notes now, the roots with KB3); `kb show REF
+    --open` on a note is your editor on its text, sent back when it changed (so it works
+    against a daemon on another computer); `--wrote you|agent` on `recall` and `kb recent`.
+  - **The TUI's Library has its tab bar** (`1 Search`, `2 Notes` in the title line; Sources
+    with KB3). Notes: every note under what it is about, the ones about no project first,
+    with who wrote it; `n` (in either tab) is the note form, which runs `ptyro kb note` in a
+    split as the other command forms do; `⏎` on a note, in either tab, is `kb show REF
+    --open` in a split; `x` deletes through the daemon's question; `/` is the search with
+    `kind: note`. **"Who wrote it" is the fourth filter** (`wrote`), on both tabs; the
+    machine is the fifth. Actions `kb.notes`, `kb.note`, `kb.sync`.
+  - **The web's Library has the two tabs** (`#/library`, `#/library/notes`), New note as a
+    form in a sheet (text, title, About and Seen by as picks, tags), a note edited in the page
+    (`#/library/note/<address>`: its whole file in a text box, Save; ⋯ → Read it, Copy its
+    address, Delete…), Read the folder again, and the Wrote pick on both tabs.
+  - **Uninstall** removes everything in the data directory but `kb/notes/` (`remove_tree_but`),
+    names the folder among what is kept with how many notes it holds, and removes it too with
+    `--delete-notes`. `ptyro about` has `notes`; `ptyro kb` names the folder.
+  - **Tested** by `ptyro_core::kb::note`'s cases (the header, the title, the URI, the source,
+    times), `kb/notes/tests.rs` in the daemon (a note written, listed, found first, edited,
+    replaced, forgotten with its file; hand-made, edited and deleted files; `_old/`; the wall;
+    a refused file named once), `crates/ptyro/tests/kb2.rs` over a real daemon with the fake
+    agents (`remember` from Claude and Codex, the file and its stamp, redaction, the next
+    session's `recall` returns it first, another profile never, an edit and a deletion by hand
+    found through the watcher, the limits, `replaces`, a private session, `kb.remember`, the
+    commands, uninstall, the TUI's Notes tab), the TUI's
+    `the_notes_tab_lists_by_project_and_writes_edits_and_deletes`, `web/test/library.mjs` and
+    `web_e2e`'s `notes`. `make verify-kb ARGS=--built` expects the three tools.
+  - **Not built**: notes on a linked machine are searched and read there (the search fans out)
+    but are written, listed, edited and synced only on the machine asked; `sources` in a
+    header is read and never written (no tool argument gives it); the `updated` key is read
+    and never written (a file's own time is when it changed); a note's hit opens the editor
+    at its top, not at the piece. **Unverified**: the real Claude Code and Codex calling
+    `remember` (the fakes do; `make verify-kb ARGS=--built` checks that the real ones are
+    given the tool, and never calls it); the watcher on Linux (the tests ran on macOS; a
+    change the watcher misses is found by `kb sync` and at the next start).
 - **KB1.12 linked machines (2026-11-19; `crates/ptyro-daemon/src/kb/machines.rs`,
   `kb/requests.rs`, `ptyro-protocol` 1.56):**
   - **The knowledge base's requests are still never routed** by the daemon's general rule
@@ -10124,7 +10239,7 @@ ingest and note forms, the events' `KbProgress`, and `doctor`'s roots and skippe
 - **KB1.10 the agents' tools (2026-11-19; `crates/ptyro/src/mcp.rs`, `ptyro_agents::adapter::{KB_TOOLS,
   kb_env}`, the Claude and Codex adapters, `crates/ptyro-daemon/src/launch.rs`; checked against
   Claude Code 2.1.329 and Codex 0.167.1 by `make verify-kb ARGS=--built`):**
-  - **Two tools, `recall` and `recall_read`** (`remember` is KB2's), served by `ptyro mcp` to
+  - **Two tools, `recall` and `recall_read`** (`remember` came with KB2, above), served by `ptyro mcp` to
     every Claude and Codex terminal session, **at its launch and again on every resume**:
     the adapters add the flags wherever they build a launch, so a resume, a restart and a
     session brought back after a daemon restart all have them.
@@ -10197,7 +10312,7 @@ ingest and note forms, the events' `KbProgress`, and `doctor`'s roots and skippe
   - **`Reply::Agents` carries `private`** (the default), as `Chats` carries `incognito`: a
     client that can't read the config (a paired phone) shows the form's switch right.
   - **Not built**: a shell's commands are not kept yet (KB4), so a private shell differs
-    from another only by its mark; `remember` from a private session (KB2); a session lost
+    from another only by its mark (`remember` from a private session came with KB2); a session lost
     in a daemon restart and offered again in SHELLS comes back not private (its kept record
     has no flag).
 - **KB1.7 the protocol's messages and the commands, KB1.11 the settings, the switches and
@@ -10503,7 +10618,7 @@ Still proposed: OpenCode's sessions are not read in KB1 (how to read them is unv
 | `session` | `card`, `user`, `assistant`, `tool`, `summary` | `session://<agent>/<conversation id>` |
 | `file` | `path`, then `text` (a document), `comment`, `code` | `file://<absolute path>` |
 | `commit` | `message`, `path` (the files it changed) | `commit://<root id>/<sha>` |
-| `note` | `text` | `note://<profile>/<project or _global>/<slug>` |
+| `note` | `text` | `note://<profile or _all>/<project or _global>/<slug>` |
 | `shell` | `command`, `output` | `shell://<session id>/<YYYY-MM-DD>` |
 
 A chat is not an item; a hit in one keeps its chat address (`7f3k/01JB…`, §22.3).
@@ -10605,9 +10720,9 @@ CREATE TABLE chunk_vec (              -- only prose: card, user, assistant, summ
   an index, and `kb sync` rebuilds them. For a `note` the truth is its file. For a `session` and a
   `shell`, **`kb.db` is the durable copy**: Claude deletes transcripts after 30 days (§20.1), and
   a shell's commands exist nowhere else.
-- **Notes** are files: `<data>/kb/notes/<profile>/<project slug or _global>/<slug>.md` (0600,
-  folders 0700). The folder says whose a note is and what it is about; the file needs nothing
-  but its text (§25.6.4).
+- **Notes** are files: `<data>/kb/notes/<profile or _all>/<project slug or _global>/<slug>.md`
+  (0600, folders 0700; built, KB2). The folder says whose a note is and what it is about
+  (`_all`: every profile's); the file needs nothing but its text (§25.6.4).
 - **Size** [measured, KB0.1, `make spike-kb`, 2026-11-19, synthetic text]: **516 MB at 500k
   chunks and 1.03 GB at a million**, about 1 KB a chunk and in a straight line. (The estimate
   from chat's numbers was 1.1 GB at 500k: chat's rows are whole messages, and a third of the
@@ -10965,7 +11080,7 @@ knowledge base, because it was never in it: delete the chat.
   `missing` and keeps its items until it is back or removed. `--once` reads now and never again.
 - **Not in KB3:** web pages, PDFs, Office files, images (§25.18).
 
-#### 25.6.4 Notes (KB2; not built)
+#### 25.6.4 Notes (KB2; built 2026-11-20: what differs is in §25's "As built" list)
 
 A note is a small Markdown file about one thing: a decision, a fact, a how-to, a gotcha. Notes
 are the only part of the knowledge base that someone *writes*, so they rank first (§25.8).
@@ -10978,12 +11093,15 @@ are the only part of the knowledge base that someone *writes*, so they rank firs
   `sources` (addresses it rests on), `created`, `updated`, `replaces`. A file with no header is
   as good as any other. The folder gives the profile and the project (§25.4).
 - **Watched.** The daemon watches the notes folder (`notify`, as it watches config) and indexes
-  a changed file within a second or two; `kb sync` reads them all.
+  a changed file within a second or two; `kb sync` reads them all. *As built*: one pass
+  (`kb_notes_sync`) for the watcher, the start and `kb sync`; a moved or deleted folder is
+  found by it too.
 - **Replacing, not editing in place, for agents.** `remember` with `replaces` writes the new
   note and marks the old one `superseded` (kept on disk, in `_old/`, out of search). An agent
   never deletes or overwrites a note. You edit and delete freely.
 - **Limits.** A note an agent writes is at most 8 KiB, and a session writes at most 20 a day
-  (a runaway loop then gets an error that says so). `kb.remember = false` takes the tool away.
+  (a runaway loop then gets an error that says so). `kb.remember = false` takes the tool away
+  (and the daemon refuses a note from an agent whatever it was given).
 - **Not the scratchpad** (NOTE1, removed 2026-11-17): that was one file you typed into, opened
   by a key. Notes are many, mostly written by agents, and found by search.
 - This supersedes R-ORC-20's `decisions` log and R-CHAT-16's per-workspace memory.
@@ -11266,7 +11384,7 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
 ### 25.9 What agents get
 
 - **Three tools, through `ptyro mcp`**, in every agent session and every chat (**built KB1.10:
-  `recall` and `recall_read`**; `remember` in KB2). Three and not nine: every tool is paid for in every session (RESEARCH I3). Budget:
+  `recall` and `recall_read`; KB2: `remember`**). Three and not nine: every tool is paid for in every session (RESEARCH I3). Budget:
   under 400 tokens a session. **Measured in KB0 [verified 2026-11-19, §20.1, §20.2]: 228 in
   Claude, about 66 in Codex**, because both agents now defer MCP tools: the model is given the
   tools' names (Claude) or one line a server (Codex) and the server's `instructions`, and loads
@@ -11283,7 +11401,7 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
   - **`recall_read(ref, before?, after?)`** → that chunk with its neighbours (2 each side by
     default, 6 KiB at most), under one line of provenance (what it is, when, who wrote it).
   - **`remember(text, title?, tags?, project?, replaces?)`** → writes a note (§25.6.4) and
-    answers its address.
+    answers its address. *Built (KB2)*: `project` defaults to the session's.
   - The server's `instructions` say when to use them, in a paragraph: look before re-deriving
     something that may have been done before; remember decisions and facts worth keeping. Both
     agents show them to the model **[verified 2026-11-19]**: Claude whole, Codex **only their
@@ -11304,8 +11422,8 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
     not driven, the flags are session flags in `--help`]:** `--mcp-config
     '{"mcpServers":{"ptyro":{"type":"stdio","command":"<ptyro>","args":["mcp"],"env":{…}}}}'`
     beside the user's own servers (no `--strict-mcp-config`), and `--allowedTools
-    mcp__ptyro__recall,mcp__ptyro__recall_read` (as built: one comma-separated word, and
-    `remember` with KB2), which adds to the user's
+    mcp__ptyro__recall,mcp__ptyro__recall_read,mcp__ptyro__remember` (as built: one
+    comma-separated word; without the third when `kb.remember` is off), which adds to the user's
     allow rules and leaves their permission mode alone, so the tools never raise a prompt. **Both
     are passed again on every resume**: Claude restores neither, and without the second the
     tools are there and refused. `ptyro mcp` answers Claude's first probe (`server/discover`)
@@ -11318,8 +11436,9 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
     the thread's config (built).
   - **OpenCode:** none in KB1 **[docs, not run, §20.4]**: its MCP servers are set in config files
     only, and ptyro writes none into a user's project or home.
-  - `kb.tools = false` gives none; `[agents.X] kb = false` gives that agent none and ingests
-    none of its sessions. **Built (KB1.10)**, read at each launch and resume.
+  - `kb.tools = false` gives none; `kb.remember = false` gives the two that read; `[agents.X]
+    kb = false` gives that agent none and ingests none of its sessions. **Built (KB1.10,
+    KB2)**, read at each launch and resume.
 - **The wall between profiles.** A caller sees only items of **its own profile** and items with
   no profile (`kb.scope = "profile"`, the default; `"workspace"` narrows to its workspace's
   items, `"all"` removes the wall). So a work account's model is never shown a personal
@@ -11402,8 +11521,9 @@ ptyro new … [--private]                 # nothing of this session is kept (§2
   with why. **Switched off**, every command says so in one line that names the command which
   switches it on, and on a terminal offers to (`kb` itself prints the status). `--machine M`
   and `--here` on `recall`, and `--machine M` on `kb recent`, came with KB1.12 (§25.11); a
-  machine left out of a search is said on stderr. **Not built**: `ingest`, `kb ls`, `kb
-  sync`, `kb rm`, `kb note(s)` (KB2, KB3).
+  machine left out of a search is said on stderr. *As built (KB2)*: `kb note`, `kb notes`,
+  `kb sync` (the notes folder), `kb show --open` on a note, `--wrote` ("As built" above).
+  **Not built**: `ingest`, `kb ls`, `kb rm`, `kb sync` of roots (KB3).
 - *As built, the web*: KB1.7 gave it the Library page's first part and KB1.9 the rest
   (below). (The TUI's five actions ran their command in a split until KB1.8.)
 - `ingest` of a path that is already a root (or inside one) says so and syncs it. It prints what
@@ -11414,9 +11534,10 @@ ptyro new … [--private]                 # nothing of this session is kept (§2
 (§11.2i). *As built (KB1.8)*: the Search tab below, with three filters (kind, project, since),
 the reader for every kind of item, and the actions `kb.open`, `kb.search`, `kb.recent`,
 `kb.history`, `kb.show`, `kb.forget`, `kb.status` and `kb.enable`; what differs, and what waits
-for KB2 and KB3, is in this section's "As built" list. **The Notes and Sources tabs, `n`,
-`i`, `x`, `M`, opening a file, a note or a commit, and the ingest form below are the design
-for KB2 and KB3, not built.**
+for KB3, is in this section's "As built" list. *As built (KB2)*: the tab bar, the Notes tab,
+`n`, `x`, a note in your editor, the note form, the `wrote` filter. **The Sources tab, `i`,
+`M`, opening a file or a commit, and the ingest form below are the design for KB3, not
+built.**
 
 - A search box, a row of filters (kind, project, since, who wrote it, machine; `Tab` reaches
   them, each a pick), the hits on the left (a mark for the kind, title, date, project, snippet),
@@ -11435,8 +11556,8 @@ for KB2 and KB3, not built.**
 - Elsewhere: a session's, a worktree's and a project's row menu gain "history" (the Library
   filtered to it); `M` (mend) lists a root that is missing or failing.
 - Actions: `kb.open`, `kb.search`, `kb.recent`, `kb.show`, `kb.history` (a row's history),
-  `kb.forget`, `kb.status`, `kb.enable` (**built**); `kb.notes`, `kb.note`, `kb.sources`,
-  `kb.ingest`, `kb.backfill` (`ingest --history`), `kb.sync`, `kb.remove` (KB2, KB3).
+  `kb.forget`, `kb.status`, `kb.enable`, `kb.notes`, `kb.note`, `kb.sync` (**built**);
+  `kb.sources`, `kb.ingest`, `kb.backfill` (`ingest --history`), `kb.remove` (KB3).
 - **The session form and the shell form** gain **Private** (§25.7a), default off, with what it
   means beside it.
 - **The ingest form** shows every option the command takes, defaults visible (§11.5a): the path
@@ -11448,8 +11569,9 @@ for KB2 and KB3, not built.**
 gain the Private switch (§25.7a). On a phone the list and the hit are two
 steps. *As built (KB1.9)*: More → Library (`web/src/library.ts`, which registers its own
 `ACTIONS`): the Search part as two pages, the list and the reader, with the filters as picks,
-`Older…`, the find box, Its session, copy, Forget… and History in the row menus; the tabs and
-the forms wait for KB2 and KB3 ("As built" above has the rest). "Open in your editor" is not offered on the web (there is no editor there); a file's hit
+`Older…`, the find box, Its session, copy, Forget… and History in the row menus. *As built
+(KB2)*: the Search and Notes tabs, New note, a note edited in the page; the Sources tab and
+the ingest form wait for KB3 ("As built" above has the rest). "Open in your editor" is not offered on the web (there is no editor there); a file's hit
 shows its text.
 
 **Settings:** a **Knowledge** section in both panels (§25.13). **`ptyro doctor`:** a `kb.db`
@@ -11491,7 +11613,8 @@ far file are the design, not built.
 - **Forgetting really deletes.** `kb forget` removes the item's chunks, their index entries and
   their vectors, in a file with `secure_delete` on, and then checkpoints the WAL, so the text is
   not left in freed pages. The item stays as a **tombstone** (its URI and `forgotten_at`, no
-  text), so a later sync or backfill doesn't bring it back. Forgetting a note deletes its file.
+  text), so a later sync or backfill doesn't bring it back. Forgetting a note deletes its file
+  (*as built, KB2*: and leaves no tombstone: the file was the note, and the name is free again).
   Forgetting by `--query` lists what it will delete and asks.
   - **The words' index needs its own switch** [measured, KB0.1]. `PRAGMA secure_delete` zeroes
     the rows' pages, but FTS5 only marks a deleted row in a new segment and keeps its words in
@@ -11563,10 +11686,11 @@ far file are the design, not built.
 - **Uninstall** (§14.5): the plan lists `kb.db` and the notes folder with their sizes and the
   number of notes. **Notes are your writing: uninstall leaves `<data>/kb/notes/` in place**
   unless `--delete-notes`, as it leaves your repositories. *Built (KB1.1)*: the `knowledge`
-  line with `kb.db`'s size (`Plan.knowledge`); it goes with the data directory. The notes
-  folder is KB2's.
+  line with `kb.db`'s size (`Plan.knowledge`); it goes with the data directory. *Built (KB2)*:
+  `Plan.kb_notes` (the folder, how many notes, their size); the data directory is removed
+  around it, and `--delete-notes` takes it too.
 - **`ptyro about`** names `kb.db` and the notes folder among the paths. *Built (KB1.1)*: the
-  `knowledge` place (`kb.db`); the notes folder with KB2.
+  `knowledge` place (`kb.db`), and `notes` (KB2).
 
 ### 25.13 Configuration
 
@@ -11575,8 +11699,8 @@ far file are the design, not built.
 web's panels and `ptyro config set` (§13.7). **Built (KB1.1, KB1.3, KB1.5, KB1.10, KB1.11,
 KB1.14): `enabled`, `sessions`, `private`, `tools`, `scope`, `meaning`, `retain_days`,
 `max_file` (a size like `1MiB`; 0 and what isn't a size are refused when the file loads),
-`redact` (a pattern that isn't a regex is refused the same way) and `exclude`**; the others
-come with the tasks that read them (`remember` KB2, `projects`, `comments`,
+`redact` (a pattern that isn't a regex is refused the same way) and `exclude`; (KB2)
+`remember`**; the others come with the tasks that read them (`projects`, `comments`,
 `code`, `commits`, `sync_every` KB3, the `shell` keys KB4, `inject` KB5).
 
 ```toml
@@ -11591,7 +11715,7 @@ commits = true            # commit messages
 shell = "commands"        # off | commands | output  (output keeps what commands printed)
 shell_skip = ["ls", "cd", "pwd", "clear", "exit", "ll", "la", "fg", "bg", "history"]
 shell_output_days = 30
-tools = true              # agents get recall and recall_read
+tools = true              # agents get recall, recall_read and remember
 remember = true           # agents may write notes
 scope = "profile"         # what an agent may see: profile | workspace | all
 inject = false            # offer up to three pointers when a prompt matches (KB5)
@@ -11630,7 +11754,7 @@ exclude = []              # more paths never to ingest (globs)
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
-### 25.14 Protocol (additive; KB1's part is built, 1.53 to 1.56)
+### 25.14 Protocol (additive; KB1's and KB2's parts are built, 1.53 to 1.57)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
@@ -11676,14 +11800,23 @@ exclude = []              # more paths never to ingest (globs)
     profile may see; it narrows); `KbHits.left_out: [String]`; `KbRead.profile?`;
     `KbRecent.machine?`. `KbRead` and `KbForget` take an address under a linked machine's
     name. The requests stay `here_only` for the general router: `handle_kb` sends them on.
-  - Not built: the roots', ingest's and notes' messages, `KbProgress`. `Features.kb` is
+  - **1.57 (KB2)**: `KbNote{text, title?, project?, profile?, tags[], replaces?, addr?}` →
+    `KbNoted{item: KbListed, path}`; `KbNotes{project?, writer?}` → `KbItems`;
+    `KbNoteRead{addr}` → `KbNoteText{item, text, path}`; `KbSync` → `KbSynced{notes, changed,
+    removed}`; `KbRecent.writer?`; `KbStatusInfo.notes`. `project`: a project's name, id or a
+    path in it, `_global` for none. `KbNote.addr`: write that note's whole file again (you
+    only; then nothing else of the request is read). `read` for the two that read, `control`
+    for the two that write; here only; a chat's agent may send `KbNote` without `addr` and
+    nothing else new.
+  - Not built: the roots' and ingest's messages, `KbProgress`. `Features.kb` is
     dropped ("As built", KB1.7).
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
   error, times).
 - `KbIngest{spec: RootSpec, confirmed}` → `KbRoot`, or `NeedsConfirmation` with the plan (files
   by tier, commits). `KbHistory{agent?, profile?, since?, dry_run}` → `KbPlan` / `Ok`.
 - `KbSync{roots}`, `KbRemove{root}`, `KbForget{addrs | query, confirmed}`.
-- `KbNote{text, title?, project?, tags, replaces?}` → `KbItem`; `KbNotes{project?}` → `KbItems`.
+- `KbNote{text, title?, project?, tags, replaces?}` → `KbItem`; `KbNotes{project?}` → `KbItems`
+  (built as above, 1.57).
 - `KbStatus` → `KbStatus{enabled, sizes, counts, vectors, roots, skipped}`.
 - Events: `KbUpdated{root?, kinds}` (something new is searchable), `KbProgress{root, done, of}`.
 - `SpawnSpec` gains `private`, and `SessionInfo` gains `private` (§25.7a). `KbForget` of a
@@ -11697,14 +11830,14 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 
 | Crate | What it gains |
 |---|---|
-| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`, `kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, `rank` and its weights), `chats::parse_kb_query`**; it now depends on `regex` |
+| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`, `kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, `rank` and its weights), `chats::parse_kb_query`; (KB2) `kb::note` (a note's header, title, URI and its `Source`)**; it now depends on `regex` |
 | `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (`session_facts` for a session's card), `kb/search.rs` (`KbFilter`, `search_words`, `search_meaning`, `MATCH_CAP`, the vectors' upkeep: `vec_todo`, `vec_todo_of`, `put_vecs`, `vec_counts`, `drop_other_vecs`)** |
 | `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments. **Built: `transcript.rs` (`Transcript`, `TranscriptAt`, the readers `claude` and `codex`, where each agent keeps its file), `Adapter::{transcript, hook_transcript, read_transcript, transcript_title}`; the example `transcript` prints what a reader makes of a file** |
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes. **Built: `fuse_lists` (`fuse` is it for two lists), and `score` in eight running sums** |
-| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (the watcher), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
-| `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.55): `DomainEvent::KbUpdated`; (1.56): `machines`, `machine`, `profile`, `left_out`** |
-| `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools. **Built: `kb.rs` (`recall`, `kb status`, `kb show`, `kb recent`, `kb forget`)** |
+| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (**built**, KB2: the watcher, `kb_notes_sync`, `kb_note`, `kb_notes`, `kb_note_read`, `kb_note_forget`), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
+| `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.55): `DomainEvent::KbUpdated`; (1.56): `machines`, `machine`, `profile`, `left_out`; (1.57): `KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`** |
+| `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools. **Built: `kb.rs` (`recall`, `kb status`, `kb show`, `kb recent`, `kb forget`; KB2: `kb note`, `kb notes`, `kb sync`), `mcp.rs` (all three tools)** |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms. **Built (KB1.8): `library.rs` (`Library`, `ChatPanel::Library`, the reader over `chat::ChatView` with `read_only`), `clock::local_ms`** |
 | `web/` | `library.ts`, its `ACTIONS`. **Built (KB1.9): `library.ts` (the list and the reader) and `libkit.ts` (its logic with no DOM, tested by `web/test/library.mjs`)** |
 
@@ -11780,7 +11913,7 @@ table; the benches of §18.3 the rest):
 - **End to end** (`crates/ptyro/tests/kb1.rs` … `kb5.rs`, with the fake agent, no real agent
   installed): the fake agent writes a transcript and fires `Stop`; `ptyro recall` finds the turn;
   the TUI's Library opens it; the fake agent's `recall` tool call returns it; a note it
-  `remember`s is found by the next session. *Built (KB1.4)*: the fake Claude and Codex keep a
+  `remember`s is found by the next session (*built, KB2: `kb2.rs`*). *Built (KB1.4)*: the fake Claude and Codex keep a
   transcript as the real ones do (`PTYRO_FAKE_TRANSCRIPT=1`,
   `crates/ptyro-testkit/src/fake_transcript.rs`: the lines a reader must not take are in it,
   and Claude's last line comes after `Stop`). `kb1.rs` then reads `kb.db`: a Claude session's

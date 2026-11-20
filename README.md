@@ -592,11 +592,24 @@ ptyro kb                             # on or off, what it holds, what was not ke
 ptyro kb forget k:7f3k               # delete it for good; nothing of it is kept again
 ptyro new --private -a claude        # a private session: nothing of it is kept at all
 ptyro kb forget --session brisk-rook # forget a running session, and keep nothing more of it
+ptyro kb note "We chose SQLite because there is no server to run" --tag decision   # a note
+ptyro kb notes                       # the notes, by project (kb show REF --open edits one)
 ```
 
-**Your agents search it too.** Every Claude Code and Codex session ptyro starts is given two
-tools, `recall` (search: it answers pointers) and `recall_read` (open one with what was said
-around it), so an agent can look up what was done before instead of working it out again.
+**Notes are what someone wrote down**: a decision and its reason, a fact, a how-to. `ptyro kb
+note` writes one (no text: your editor opens), and so do your agents, with their `remember`
+tool, when you say "remember that we chose X because Y". A search lists notes first. They are
+plain Markdown files in ptyro's data folder (`kb/notes/<profile>/<project>/`; `ptyro about`
+names it), so any editor works on them: ptyro watches the folder and finds what you change. A
+note an agent wrote says which agent and which session, lands under that session's profile,
+and never overwrites another (it *replaces* one, and the old file is kept aside). `[kb]
+remember = false` stops agents writing them. Uninstalling ptyro leaves your notes where they
+are.
+
+**Your agents search it too.** Every Claude Code and Codex session ptyro starts is given three
+tools, `recall` (search: it answers pointers), `recall_read` (open one with what was said
+around it) and `remember` (write a note), so an agent can look up what was done before instead
+of working it out again.
 They come with the session, for that session only (ptyro writes nothing into `~/.claude` or
 `~/.codex`), and are there again after a resume. What they answer is marked as retrieved
 history, not instructions, and says who wrote each piece. An agent sees only what happened
@@ -612,8 +625,10 @@ private session is marked `◌`. It still has the tools to search with.
 **In the TUI it is the Library**: `Ctrl-Q L` (`L` in the sidebar; `kb.open` in the palette). With
 nothing typed it is the history, by day: what your agents did, newest first. `/` searches as you
 type, and the selected hit's text is beside the list with what was said around it. `Tab` reaches
-the filters (kind, project, since). `⏎` opens it: a chat at its message, a session in the
-reader (the stored conversation, read only; `/` finds in it). `r` goes to the session it
+the filters (kind, project, since, who wrote it). `⏎` opens it: a chat at its message, a
+session in the reader (the stored conversation, read only; `/` finds in it), a note in your
+editor. `2` is the **Notes** tab: the notes by project, `n` writes one (a form with every
+option), `x` deletes one. `r` goes to the session it
 happened in, resuming it if it sleeps; `y` copies its address, `Y` its text; `d` forgets it
 (it asks first); `s` shows how the knowledge base stands. A session's, a worktree's and a
 project's menu (`.`) have `kb.history`: the Library with only that one's. It follows what is
@@ -622,8 +637,9 @@ kept as it happens. Switched off, it says so, and `⏎` switches it on.
 **On the web it is More → Library**, made for a phone: the search box, the same filters as
 picks, the history by day (**Older…** brings more); a tap opens the reader, which shows the
 piece with what was said around it, then **All of it**, with a box to find in it, **Its
-session** (resumed if it sleeps) and ⋯ to copy its address or its text and to **Forget…** it. A
-session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
+session** (resumed if it sleeps) and ⋯ to copy its address or its text and to **Forget…** it. Its
+**Notes** tab lists the notes by project: **New note**, a tap to edit one in the page, ⋯ →
+Delete…. A session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
 happens, and switched off it offers to switch it on.
 
 **With linked machines** (`ptyro machine add`), each keeps its own knowledge base and nothing
@@ -647,7 +663,7 @@ itself out with `[knowledge] enabled = false` in its `.ptyro.toml`. `ptyro kb fo
 deletes: the text is zeroed in the file, and a forgotten session is not read again. An agent
 that runs `ptyro recall` itself sees only what happened under its own profile (`scope`), never
 its own session, and can't forget anything. `ptyro doctor` and `ptyro about` name the file,
-and `ptyro uninstall` lists it.
+and `ptyro uninstall` lists it (and leaves your notes folder in place unless `--delete-notes`).
 
 **Meaning search** is opt-in: `[kb] meaning = true` (the settings panel's Knowledge section, or say
 yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it; `[chat]
@@ -837,7 +853,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
-| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
+| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, notes, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |

@@ -22,7 +22,9 @@ It stops the daemon and every session, then removes:
 
 - **ptyro's directories**: config, data (history, chats, the knowledge base's `kb.db`, managed
   profiles and the agent logins in them; the plan names `chat.db` and `kb.db` with their
-  sizes, and notes left from the old scratchpad, `scratchpad.md`), state, and the runtime directory, wherever `ptyro daemon status` says they are
+  sizes, and notes left from the old scratchpad, `scratchpad.md`), state, and the runtime directory, wherever `ptyro daemon status` says they are. **The knowledge base's notes
+  (`<data>/kb/notes/`) are left in place**: they are your writing, as your repositories are.
+  The plan says how many there are; `--delete-notes` removes them too
   (`PTYRO_HOME`, `XDG_*`), with their sizes;
 - **its worktrees**, through `git worktree remove` so the repository forgets them (the branches
   stay). Each is checked with git, not the daemon's last look: uncommitted changes are listed and
@@ -65,6 +67,7 @@ and run it from a plain terminal.
 | `--yes`, `--delete-work` | skip `[y/N]`; also skip typing `delete` |
 | `--keep-config` / `--keep-data` | keep the config / the data directory (and with it the worktrees) |
 | `--keep-binary` | leave the program |
+| `--delete-notes` | also delete the notes you and your agents wrote (`<data>/kb/notes/`), which are otherwise left where they are |
 | `--purge-refs` | also delete `refs/ptyro/*` in your repositories |
 | `--json` | the plan and each step's result, for scripts |
 

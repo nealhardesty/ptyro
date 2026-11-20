@@ -21,10 +21,13 @@ or Codex wrote in its own transcript and keeps, under one entry a conversation:
 There is nothing to switch on and nothing to run. A session that is resumed goes on in the
 same entry. An agent with no transcript ptyro can read (OpenCode) gets its card only.
 
+**Notes**, which you and your agents write: see [Notes](#notes). They are files; `kb.db`
+holds their index.
+
 **Your chats are searched beside it.** They live in their own file (`chat.db`) and are not
 copied; one search answers from both.
 
-Everything is in `kb.db`, in ptyro's data folder (`ptyro about` names it), readable by you
+Everything else is in `kb.db`, in ptyro's data folder (`ptyro about` names it), readable by you
 only. Nothing leaves this computer. Each linked machine keeps its own (see
 [Linked machines](#linked-machines)).
 
@@ -87,28 +90,73 @@ ptyro kb recent             # the history, by day
 and what is kept is read in the background, on this computer only. Searches then also find
 what is *about* your words, marked `≈`. Without it a search says it was by words alone.
 
+## Notes
+
+A note is a small Markdown file about one thing: a decision and its reason, a fact about a
+project, how something is done, a gotcha. Notes are the only part of the knowledge base that
+someone *writes*, so a search lists them first.
+
+```sh
+ptyro kb note "We chose SQLite because there is no server to run" --title Storage --tag decision
+ptyro kb note                        # no text: your editor opens
+ptyro kb note --project myrepo -     # about a project, the text from stdin
+ptyro kb notes                       # the notes, by project
+ptyro kb show k:7f3k --open          # edit one in your editor
+ptyro kb forget k:7f3k               # delete one (its file goes)
+```
+
+- **They are files, and the files are the truth**:
+  `<data>/kb/notes/<profile>/<project>/<name>.md` (`ptyro about` and `ptyro kb` name the
+  folder). The folder says whose a note is and what it is about: `_all` is every profile's,
+  `_global` is about no project. Edit, add, rename or delete them with anything: ptyro watches
+  the folder and finds the change in a moment (`ptyro kb sync` reads it again at once).
+- **A note may start with a header** between `---` lines, which ptyro writes when it writes
+  the note: `by` (`you`, or the agent), `session`, `tags`, `created`, `replaces`. A file with
+  no header is as good as any other: it is yours. The title is the first heading, else the
+  first line.
+- **Your agents write them with `remember`**, a third tool beside `recall` (below). An agent
+  told "remember that we chose X because Y" writes a note; the next session's `recall` finds
+  it first. Who wrote it is ptyro's word, never the agent's: the note is stamped with the
+  agent and its session, lands under that session's profile (and its project, unless it says
+  otherwise), and is redacted before it becomes a file.
+- **What an agent can't do**: write more than 8 KiB in a note, write more than 20 notes in a
+  session in a day, edit or delete a note (it writes a new one that *replaces* the old, which
+  is moved to `_old/` beside it and out of search), or see another profile's notes.
+  `[kb] remember = false` takes the tool away and leaves the reading ones.
+- **Whose agents see a note you write**: every profile's, unless you say `--profile work`
+  (the forms have the pick). You see every note.
+- **A private session may still `remember`**: a note is a deliberate act. The note then says
+  "a private session" and never which.
+- **In the Library**: the Notes tab (below).
+- **Uninstalling ptyro leaves the notes folder where it is** (`ptyro uninstall --delete-notes`
+  removes it too): notes are your writing.
+
 ## The Library
 
 The same, to look at.
 
 - **TUI**: `Ctrl-Q L` (`L` in the sidebar). The history by day when nothing is typed; `/`
   searches as you type; `Tab` reaches the filters (kind, project, since, and the machine when
-  others are linked); `⏎` opens the reader; `r` goes to the session it happened in; `y` / `Y`
-  copy; `d` forgets; `s` shows the status.
+  others are linked, and who wrote it); `⏎` opens the reader (a note: your editor); `r` goes
+  to the session it happened in; `y` / `Y` copy; `d` forgets; `s` shows the status. `2` is
+  the **Notes** tab: the notes by project, `n` writes one (a form with every option), `⏎`
+  edits one in your editor, `x` deletes it; `1` is the search again.
 - **Web**: More → Library, built for a phone. The search box, the same filters as picks, the
   history by day with **Older…** for more; a tap opens the reader (the piece with what was said
   around it, then **All of it**, a box to find in it, **Its session**, and ⋯ for copying and
-  Forget…). It follows what is kept as it happens.
+  Forget…). It follows what is kept as it happens. **Notes** is its second tab: the notes by
+  project, **New note**, a tap to edit one in the page (Save), ⋯ → Delete….
 - A session's, a worktree's and a project's menu has **History**: the Library with only that
   one's.
 - Switched off, both say so and offer to switch it on.
 
 ## What your agents get
 
-Every Claude Code and Codex session ptyro starts is given two tools:
+Every Claude Code and Codex session ptyro starts is given three tools:
 
 - `recall`: search. It answers pointers (an address, what it is, when, a snippet).
 - `recall_read`: open an address, with what was said around it.
+- `remember`: write a [note](#notes) for later sessions.
 
 They come with the session, for that session only (ptyro writes nothing into `~/.claude` or
 `~/.codex`), and are there again after a resume. Chats have them too. What they answer is
@@ -119,8 +167,9 @@ what belongs to no profile), never the session it is in, and it can't forget any
 agent that runs `ptyro recall` in its terminal is behind the same wall. You see everything.
 `[kb] scope` moves the wall: `profile` (the default), `workspace` (narrower), `all`.
 
-`[kb] tools = false` gives no agent the tools; `[agents.codex] kb = false` gives that agent
-none and keeps its sessions out.
+`[kb] tools = false` gives no agent the tools; `[kb] remember = false` gives them the two that
+read and not the one that writes; `[agents.codex] kb = false` gives that agent none and keeps
+its sessions out.
 
 ## The switches
 
@@ -131,7 +180,8 @@ Settings → Knowledge in the TUI and on the web; `[kb]` in the config.
 | `enabled` | off: nothing is read, kept or searched. What was kept stays in the file |
 | `sessions` | off: agent sessions are no longer kept |
 | `private` | new sessions start private |
-| `tools` | off: no agent is given `recall` and `recall_read` |
+| `tools` | off: no agent is given `recall`, `recall_read` and `remember` |
+| `remember` | off: agents don't write notes (you still do) |
 | `scope` | what an agent's search may see: `profile`, `workspace`, `all` |
 | `meaning` | search by meaning too (downloads a model once) |
 | `retain_days` | delete agent sessions older than this, once a day; `0` keeps them |
@@ -162,7 +212,11 @@ file, gone from the search index, and **never kept again** (a forgotten session'
 are not read). Your files and the agents' own transcripts are not touched. In the Library it
 is `d` (TUI) or ⋯ → Forget… (web; a device paired with `--scope full`).
 
-`ptyro uninstall` lists `kb.db` and removes it with the rest of ptyro's data.
+**Forgetting a note deletes its file** (the question says so), and that is all of it: a note
+you write later under the same name is a new note.
+
+`ptyro uninstall` lists `kb.db` and removes it with the rest of ptyro's data; it leaves your
+notes folder in place unless you say `--delete-notes`.
 
 ## Linked machines
 

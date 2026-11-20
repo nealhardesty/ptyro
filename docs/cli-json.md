@@ -183,11 +183,20 @@ Not pinned by the snapshot yet; new fields may be added.
   chunks, started_ms?, ended_ms?, ingested_ms?, origin, …}, project_name?, workspace_name?}`.
   `item.session` is the ptyro session it happened in. With `--machine`, each `addr` has the
   machine in front.
-- `ptyro kb [status] --json` → `{enabled, sessions, retain_days, error?, path, bytes, kinds:
-  [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued, skipped: [{uri, why,
-  at_ms}]}`. Answered when the knowledge base is off too (`enabled: false`).
+- `ptyro kb [status] --json` → `{enabled, sessions, retain_days, error?, path, notes, bytes,
+  kinds: [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued, skipped: [{uri,
+  why, at_ms}]}`. Answered when the knowledge base is off too (`enabled: false`). `notes` is
+  the notes folder.
+- `ptyro kb note … --json` → `{item: KbListed, path}`: the note's item (`item.kind` is `note`,
+  `item.uri` is `note://<profile or _all>/<project or _global>/<name>`, `item.writer` is `user`
+  or `agent`) and its file.
+- `ptyro kb notes --json` → `[KbListed]`, newest first.
+- `ptyro kb sync --json` → `{notes, changed, removed}`: how many notes the folder holds, how
+  many were read again, how many that were kept are gone.
 - `ptyro kb forget … --json` → `{items, chunks}`: what was deleted. With `--session`:
   `{items, chunks, private: true}`.
+- `ptyro uninstall --dry-run --json` has `kb_notes: {path, count, bytes, delete}` when there
+  are notes (`delete`: `--delete-notes` was given; otherwise the folder stays).
 - A `Session` (`ptyro ls --json`, `ptyro new --json`) has `private`: the knowledge base keeps
   nothing of it. `ptyro shells --json` rows have it too.
 

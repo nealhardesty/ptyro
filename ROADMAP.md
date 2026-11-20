@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions and the TUI's Library are built, KB0 and KB1.1 to KB1.8, KB1.10, KB1.11, KB1.14; the web's Library is its first part)
+## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; KB3 to KB5 are not)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -4288,15 +4288,63 @@ Development section), its README and `docs/` text, and the milestone's version b
         `docs/keys.md` and `docs/parity.md` have the machine flags and the web's cells; SPEC
         §25's head says what KB1 did not build, and each section that describes KB2 to KB5
         says it is the design.)*
-- [ ] **KB2 Notes** (R-KB-07; supersedes R-ORC-20's decisions log and R-CHAT-16) — what someone
+- [x] **KB2 Notes** (R-KB-07; supersedes R-ORC-20's decisions log and R-CHAT-16) — what someone
       wrote down, ranked first. **M**
-  - [ ] **KB2.1** Notes as files (§25.6.4): the folder per profile and project, the optional
+  - [x] **KB2.1** Notes as files (§25.6.4): the folder per profile and project, the optional
         header, the watcher, `kb sync` reading them, a note's item and chunks. **M**
-  - [ ] **KB2.2** `ptyro kb note` and `kb notes`; the Library's Notes tab in the TUI and the web
+        *(Built 2026-11-20: `ptyro_core::kb::note` (the header between `---` lines, the title,
+        the slug, `note://<profile or _all>/<project or _global>/<slug>`, a note as a `Source`:
+        its header taken off, its text under its title, its tags as a last line) and
+        `crates/ptyro-daemon/src/kb/notes.rs`: the files under `<data>/kb/notes/` are the
+        truth, and `Daemon::kb_notes_sync` makes the index agree with them (a file whose time
+        or size changed is read through the one way in as an item of kind `note`; an item
+        whose file is gone is deleted, with no tombstone). It runs at the daemon's start, when
+        the watched folder changes, when the settings change and on `ptyro kb sync` (protocol
+        1.57's `KbSync`). A note of no profile lives under `_all/` and is every profile's;
+        who wrote a file is what its `by` says; `_old/` is never read; a file that is refused
+        (too many credentials, a profile that isn't) is named in `ptyro kb` and not read
+        again until it changes. Tests: `note.rs`'s five, `kb/notes/tests.rs`'s four (written
+        and found before a session, hand-made, edited and deleted files, the wall), and
+        `kb2.rs` (an edit and a deletion by hand found through the watcher). SPEC §25 "As
+        built", §25.4, §25.6.4.)*
+  - [x] **KB2.2** `ptyro kb note` and `kb notes`; the Library's Notes tab in the TUI and the web
         (new, edit in your editor or in the page, delete); the note form. **M**
-  - [ ] **KB2.3** `remember` for agents: the tool, `replaces` and `_old/`, the limits (8 KiB, 20
+        *(Built 2026-11-20: protocol 1.57 (`KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`,
+        `KbRecent.writer`, `KbStatusInfo.notes`; `read` to list and read, `control` to write).
+        CLI (`crates/ptyro/src/kb.rs`): `kb note [TEXT…|-] [--title] [-p] [--profile] [--tag]…
+        [--edit]` (no text: your editor), `kb notes [-p] [--wrote]`, `kb sync`, `kb show REF
+        --open` on a note (your editor, written back), `--wrote you|agent` on `recall` and `kb
+        recent`; `kb forget` of a note deletes its file, and the daemon's question says so.
+        TUI (`library.rs`): the tab bar (`1 Search`, `2 Notes`), the notes by project with who
+        wrote each, `n` the note form (every option, `form.rs`), `⏎` your editor, `x` delete,
+        the fourth filter `wrote` on both tabs, actions `kb.notes`, `kb.note`, `kb.sync`. Web
+        (`library.ts`, `libkit.ts`): the two tabs, New note, a note edited in the page, Read
+        the folder again, the Wrote pick. `docs/parity.md` has the rows. Tests: `kb2.rs`'s
+        commands test and its TUI test, the TUI's two (`the_notes_tab_…`,
+        `the_note_actions_and_a_notes_hit`), `web/test/library.mjs`, `web_e2e`'s `notes`. Not
+        built: writing, listing or editing a note on a linked machine from here (a search
+        finds one there). SPEC §25 "As built", §25.10, §25.14.)*
+  - [x] **KB2.3** `remember` for agents: the tool, `replaces` and `_old/`, the limits (8 KiB, 20
         a session a day), `kb.remember`, the writer stamped by the daemon. **S**
-  - [ ] **KB2.4** Uninstall keeps the notes folder unless `--delete-notes`. **S**
+        *(Built 2026-11-20: the third tool in `ptyro mcp` (`crates/ptyro/src/mcp.rs`), offered
+        when the launch says so (`PTYRO_KB_REMEMBER`, `ptyro_agents::adapter::{KB_TOOLS,
+        kb_tools, kb_env}`, `LaunchCtx.remember`): Claude's `--allowedTools` has three names,
+        Codex's approval covers it, at launch and on every resume, and a chat's agent has it
+        too. `Daemon::kb_note` decides everything from the caller's process: the agent and
+        its session in the header, the session's profile and project, the text redacted
+        before it is a file, 8 KiB, 20 a session a day, `kb.remember`, never over another
+        note (`replaces` moves the old file to `_old/`), a private session named by nothing.
+        The setting `kb.remember` is in the schema. Tests: `kb2.rs`
+        (`an_agent_remembers_…`, `remember_has_its_limits_…`, `ptyro_mcp_offers_remember_…`),
+        the adapters' and `chats.rs`'s flag tests, `mcp.rs`'s. `make verify-kb ARGS=--built`
+        expects the three tools. Unverified: a real Claude Code or Codex calling `remember`.
+        SPEC §25 "As built", §25.6.4, §25.9.)*
+  - [x] **KB2.4** Uninstall keeps the notes folder unless `--delete-notes`. **S**
+        *(Built 2026-11-20: `crates/ptyro/src/uninstall.rs`: `Plan.kb_notes` (the folder, how
+        many notes, their size), named among what is kept; the data directory is removed
+        around it (`remove_tree_but`); `--delete-notes` takes it too. `ptyro about` has
+        `notes`. Tests: `notes_stay_where_they_are_unless_told`, and `kb2.rs`'s commands
+        test runs both uninstalls. SPEC §14.5, §25.12.)*
 - [ ] **KB3 Ingest** (R-KB-04, 13) — the owner's `ptyro ingest newProjectFolder/`. **L**
   - [ ] **KB3.1** Roots (§25.6.3): `ptyro ingest <path>` with every option, `kb ls`, `kb sync`,
         `kb rm`; listing files through git or the walk; include, exclude, the never list, the

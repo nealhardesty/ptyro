@@ -136,6 +136,7 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 # retain_days = 90                        # delete kept sessions older than this, once a day (default 0: keep them)
 # scope = "workspace"                     # what an agent may see of it and of your chats: profile (default) | workspace | all
 # tools = false                           # don't give agents the tools that search it
+# remember = false                        # agents may not write notes (you still do)
 # meaning = true                          # also search by meaning (downloads a 31 MB model once)
 # max_file = "2MiB"                       # the largest file read (default 1MiB)
 # redact = ["ACME-[0-9]{6}"]              # more patterns to redact before anything is kept
@@ -153,7 +154,7 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 ```
 
 **The knowledge base's settings (`[kb]`).** Everything it keeps stays in one file on this
-computer (`kb.db`). `retain_days` acts when you set it and then once a day; it deletes agent
+computer (`kb.db`), and notes in a folder of Markdown files beside it (`kb/notes/`). `retain_days` acts when you set it and then once a day; it deletes agent
 sessions only (never a tombstone: a session that is carried on afterwards is kept again).
 `enabled = false` reads nothing and searches nothing, and leaves what was kept in the file:
 `ptyro kb forget` deletes for good. Switched on again (or `sessions`), a session that goes on is

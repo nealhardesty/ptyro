@@ -1025,9 +1025,10 @@ def built(agents):
                 if one["error"]:
                     out("NOT RUN", f"claude did not answer: {one['error']}")
                 else:
-                    names = ["mcp__ptyro__recall", "mcp__ptyro__recall_read"]
-                    check(all(t in one["tools"] for t in names) and "mcp__ptyro__remember" not in one["tools"],
-                          f"Claude {version(exe)}: ptyro's own `--mcp-config` starts the real `ptyro mcp`, which gives the session recall and recall_read", str([t for t in one["tools"] if "mcp__" in t]))
+                    # (`remember` too since KB2: `kb.remember` is on unless you switch it off. It is
+                    # listed and allowed here, never called: a call would write a note.)
+                    check(all(t in one["tools"] for t in TOOL_NAMES) and allowed.split(",") == TOOL_NAMES,
+                          f"Claude {version(exe)}: ptyro's own `--mcp-config` starts the real `ptyro mcp`, which gives the session recall, recall_read and remember, all three allowed", str([t for t in one["tools"] if "mcp__" in t]))
                     check("mcp__ptyro__recall" in one["uses"] and not one["denials"],
                           "ptyro's own `--allowedTools` (one comma-separated word) lets recall run with no permission request", f"uses {one['uses']}, denials {one['denials']}")
                     check(item in one["text"], "the real server's answer reached the model: it gave the kept session's address", one["text"][:120])
