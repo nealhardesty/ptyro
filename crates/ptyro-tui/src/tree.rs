@@ -566,6 +566,7 @@ mod tests {
             pin: None,
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         }];
         let mut gone = wt("t9", "p", false, 9);
         gone.state = WorktreeState::Removed;
@@ -613,6 +614,7 @@ mod tests {
             pin: None,
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         }
     }
 
@@ -826,6 +828,7 @@ mod tests {
             pin: None,
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         }];
         let worktrees = [wt("root", "p", true, 1)];
         let quick = |name, wt| SessionInfo { quick: true, ..session(name, wt, Some("p"), None) };

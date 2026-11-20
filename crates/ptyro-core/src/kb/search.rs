@@ -199,7 +199,7 @@ pub struct KbStatusInfo {
     pub enabled: bool,
     /// `kb.sessions`: agent sessions are kept.
     pub sessions: bool,
-    /// `kb.shell` (1.60): `off`, `commands` or `output` (what is kept of your shells). Empty: a
+    /// `kb.shell` (1.61): `off`, `commands` or `output` (what is kept of your shells). Empty: a
     /// daemon from before shells were kept.
     pub shell: String,
     /// `kb.retain_days` (0: for good).
@@ -228,10 +228,10 @@ pub struct KbStatusInfo {
     pub queued: u64,
     /// What was not kept since the daemon started, newest last, with why (at most 100).
     pub skipped: Vec<KbSkipped>,
-    /// `kb.inject` (1.61): agents are offered pointers at a prompt (§25.9).
+    /// `kb.inject` (1.62): agents are offered pointers at a prompt (§25.9).
     pub inject: bool,
     /// What was offered at prompts since the daemon started, newest first (at most 20;
-    /// 1.61): the trace of what agents were given without asking. Empty for an agent that
+    /// 1.62): the trace of what agents were given without asking. Empty for an agent that
     /// asks.
     pub offered: Vec<super::offer::KbOffer>,
 }

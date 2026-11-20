@@ -23,6 +23,7 @@ mod listen;
 mod load;
 mod machines;
 mod meaning;
+mod moves;
 mod notifier;
 mod push;
 mod quick;
@@ -382,6 +383,8 @@ async fn serve(
     daemon.load_kept().await;
     daemon.start_machines().await;
     daemon.load_declined().await;
+    daemon.load_moves().await;
+    daemon.start_moves();
     daemon.start_serve_supervisor();
     daemon.start_wsl_hold();
     daemon.start_chats().await;

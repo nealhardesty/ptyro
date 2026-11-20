@@ -456,7 +456,7 @@ async fn a_note_that_changed_underneath_is_not_written_over() {
     assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
     assert!(e.message.contains("changed since it was read"), "{}", e.message);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
-    // Read again, it is written; a client from before 1.62 names no text and writes as before.
+    // Read again, it is written; a client from before 1.63 names no text and writes as before.
     let (_, base) = read().await;
     ask(&d, again(&mine, Some(base.clone()))).await.unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), mine);

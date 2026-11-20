@@ -49,6 +49,9 @@ pub enum Fix {
     /// An agent out of date (BOOT5): `ptyro update <names>` in a split, one at a time like the
     /// checklist's installs, and the badge looks again once it ends.
     Update(Vec<String>),
+    /// A project whose main checkout is gone (its slug, SPEC §10.1): the move form, with the
+    /// place ptyro found filled in.
+    Move(String),
 }
 
 #[derive(Debug, Clone)]
@@ -176,6 +179,8 @@ pub fn finding(c: &Check) -> Option<Finding> {
     };
     let fix = if c.section == "worktrees" && c.name == "stale" {
         Some(Fix::Action("worktree.gc"))
+    } else if c.section == "projects" {
+        Some(Fix::Move(c.name.clone()))
     } else if c.section == "wsl" && c.name == "network" {
         Some(Fix::Setting("remote.access"))
     } else if c.section == "terminal" && c.name == "windows terminal" {
@@ -448,6 +453,7 @@ impl App {
                         format!("{} · ⏎ sets {name} {value}", f.text)
                     }
                     Some(Fix::Action(_)) => format!("{} · ⏎ opens the clean-up list", f.text),
+                    Some(Fix::Move(_)) => format!("{} · ⏎ moves it (asks where)", f.text),
                     Some(Fix::Setting(key)) => format!("{} · ⏎ opens the setting {key}", f.text),
                     Some(Fix::Setup { .. }) => format!("{} · ⏎ opens the setup checklist", f.text),
                     Some(Fix::Update(names)) => format!(
@@ -487,6 +493,10 @@ impl App {
             Some(Fix::Setting(key)) => self.open_settings(Some(key)),
             Some(Fix::Setup { names }) => self.open_setup((!names.is_empty()).then_some(names)),
             Some(Fix::Update(names)) => self.update_agents(names),
+            Some(Fix::Move(slug)) => match self.projects.iter().find(|p| p.slug == slug).cloned() {
+                Some(p) => self.open_project_move(&p),
+                None => self.toast_err(format!("no project {slug} any more")),
+            },
             Some(Fix::Private(path)) => {
                 // Only a file: 600 on a directory would shut its owner out of it.
                 if !path.is_file() {

@@ -399,6 +399,7 @@ impl Daemon {
                     pin,
                     created_ms: now_ms(),
                     last_used_ms: None,
+                    moved_to: None,
                 };
                 self.put_project(p.clone());
                 self.put_worktree(WorktreeInfo {
@@ -424,6 +425,10 @@ impl Daemon {
                     self.watch_worktree_bg(&rw);
                     let _ = self.status_tx.send(rw.id);
                 }
+                // Who it is, should it move (SPEC §10.1); and a project gone missing may be it.
+                self.record_roots_bg(p.id.clone(), p.root.clone());
+                self.see_checkouts();
+                self.spot_moves_bg();
                 p
             }
         };
@@ -435,7 +440,7 @@ impl Daemon {
         Ok(Reply::Project { info: project, notes })
     }
 
-    fn project_remove(&self, addr: &str, release: bool) -> Result<Reply, Error> {
+    fn project_remove(self: &Arc<Self>, addr: &str, release: bool) -> Result<Reply, Error> {
         let p = self.find_project(addr)?;
         let worktrees: Vec<WorktreeInfo> = {
             let reg = self.registry.locked();
@@ -485,19 +490,118 @@ impl Daemon {
                 w.projects.retain(|id| *id != p.id);
             }
         }
-        self.unwatch_project(&p.id);
+        for w in &worktrees {
+            self.unwatch(&w.id);
+        }
         if let Some(store) = &self.store {
             store.delete_project(p.id.clone());
         }
         let _ = self.events.send(DomainEvent::ProjectRemoved { id: p.id.clone() });
         self.decline(&p.root);
+        self.forget_moves(&p.id);
         let kept: Vec<String> =
             worktrees.iter().filter(|w| !w.is_root).map(|w| w.path.display().to_string()).collect();
+        // A project gone missing may have been offered this one's place.
+        self.spot_moves_bg();
         notes.insert(0, format!("forgot {}", p.slug));
         if !kept.is_empty() {
             notes.push(format!("its worktrees are still on disk: {}", kept.join(", ")));
         }
         Ok(Reply::Removed { notes })
+    }
+
+    /// `project add` of a repository a registered project lost, moved (SPEC §10.1): asked first
+    /// (a refusal whose fix, `moved`, moves that project here), moved when said, or registered on
+    /// its own when said (`separate`; no project gone missing is offered this place again). `Some`:
+    /// what was done instead of registering. `moved` with nothing to move here is refused: it
+    /// never registers. `old`: the client knows no `moved` fix (before 1.53), so the refusal
+    /// names the commands.
+    async fn add_or_move(
+        self: &Arc<Self>,
+        path: &Path,
+        moved: bool,
+        separate: bool,
+        old: bool,
+    ) -> Result<Option<Reply>, Error> {
+        let probe = ptyro_core::config::expand_home(&path.to_string_lossy());
+        let Ok(Ok(root)) = crate::worktrees::blocking(move || Git::new().main_root(&probe)).await
+        else {
+            // Not a repository: `project_add` says so.
+            return Ok(None);
+        };
+        let root = ptyro_core::os::canonicalize(&root).unwrap_or(root);
+        let registered = {
+            let reg = self.registry.locked();
+            reg.projects.iter().find(|p| ptyro_core::os::same_path(&p.root, &root)).cloned()
+        };
+        if let Some(p) = registered {
+            if moved {
+                return Err(Error::conflict(format!(
+                    "{} is project {} already: there's nothing to move there",
+                    root.display(),
+                    p.slug
+                )));
+            }
+            return Ok(None);
+        }
+        let found = self.all_moved_here(&root).await;
+        let Some(m) = found.first().cloned() else {
+            if moved {
+                return Err(self.nothing_moved_here(&root));
+            }
+            return Ok(None);
+        };
+        if separate {
+            // A project of its own: none of the projects gone missing is offered it.
+            for p in &found {
+                self.decline_move(p, &root);
+            }
+            return Ok(None);
+        }
+        if moved {
+            return self.project_move(&m.id, root).await.map(Some);
+        }
+        self.offer_move(&m, &root);
+        let mut text = format!(
+            "{slug}'s main checkout ({old}) is gone, and {new} is the same repository: it seems {slug} moved there. \
+             Move {slug} there to keep its id, trust, pin, workspaces and worktrees, or add {new} as a project of its own",
+            slug = m.slug,
+            old = m.root.display(),
+            new = root.display(),
+        );
+        if old {
+            text.push_str(&format!(
+                " (`ptyro project move {slug} {new}`, or `ptyro project add {new} --separate`)",
+                slug = m.slug,
+                new = root.display()
+            ));
+            return Err(Error::conflict(text));
+        }
+        Err(Error::conflict(text)
+            .with_fix(ptyro_core::error::Again::Moved, &format!("Move {} here", m.slug)))
+    }
+
+    /// `project add --moved` where no project gone missing is the repository: refused, never
+    /// registered; it says how to point a project there, and which ones are gone.
+    fn nothing_moved_here(&self, root: &Path) -> Error {
+        let gone: Vec<String> = {
+            let reg = self.registry.locked();
+            reg.projects
+                .iter()
+                .filter(|p| p.machine.is_none() && !p.root.is_dir())
+                .map(|p| format!("{} (was at {})", p.slug, p.root.display()))
+                .collect()
+        };
+        let mut text = format!(
+            "no project whose main checkout is gone is the repository at {root}, so nothing was moved or added. \
+             To point a project there, move it (`ptyro project move PROJECT {root}`, or Move… on the project); \
+             to add it as a project, add it without saying it moved",
+            root = root.display()
+        );
+        if !gone.is_empty() {
+            text.push_str(&format!(". Gone: {}", gone.join(", ")));
+        }
+        Error::conflict(text)
     }
 
     /// `ProjectRename` (SPEC §2.3): a new slug, the project's address. Sessions, workspaces and
@@ -709,9 +813,18 @@ impl Daemon {
         }
     }
 
-    pub(crate) async fn handle_registry(self: &Arc<Self>, req: Request) -> Result<Reply, Error> {
+    pub(crate) async fn handle_registry(
+        self: &Arc<Self>,
+        req: Request,
+        caller: crate::guard::Caller,
+    ) -> Result<Reply, Error> {
         match req {
-            Request::ProjectAdd { path, workspace } => {
+            Request::ProjectAdd { path, workspace, moved, separate } => {
+                // A client before 1.53 knows no `moved` fix: the refusal names the commands.
+                let old = caller.older_than(53);
+                if let Some(moved) = self.add_or_move(&path, moved, separate, old).await? {
+                    return Ok(moved);
+                }
                 let reply = self.project_add(path, workspace).await?;
                 // Added by hand: it may register on its own again.
                 if let Reply::Project { info, .. } = &reply {
@@ -719,6 +832,7 @@ impl Daemon {
                 }
                 Ok(reply)
             }
+            Request::ProjectMove { addr, path } => self.project_move(&addr, path).await,
             Request::ProjectList => {
                 Ok(Reply::Projects { projects: self.registry.locked().projects.clone() })
             }
@@ -999,6 +1113,7 @@ mod tests {
             pin: None,
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         }
     }
 

@@ -65,14 +65,14 @@ impl KbScope {
     }
 }
 
-/// What a history is narrowed to beyond its kinds and project (`KbRecent`, 1.55): one ptyro
+/// What a history is narrowed to beyond its kinds and project (`KbRecent`, 1.56): one ptyro
 /// session's items, one worktree's, and nothing older than a time.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Of {
     pub session: Option<String>,
     pub worktree: Option<String>,
     pub since_ms: Option<u64>,
-    /// Only what you wrote, or what agents did (1.57).
+    /// Only what you wrote, or what agents did (1.58).
     pub writer: Option<Writer>,
 }
 

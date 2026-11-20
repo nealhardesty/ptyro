@@ -13,7 +13,7 @@ import type { Focus } from "./keys.js";
 import { PressGate, actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import type { Child } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
-import { staleMaybeChanged } from "./projects.js";
+import { moveMaybeSpotted, staleMaybeChanged } from "./projects.js";
 import "./settings.js";
 import "./panel.js";
 import "./library.js";
@@ -763,6 +763,7 @@ conn.listeners.add((msg) => {
     const e = msg.event;
     if (e.t === "host_load") { setHostLoad(e.load ?? null); return; }
     staleMaybeChanged(e);
+    moveMaybeSpotted(e);
     if (onEvent(e)) { render(); return; }
     if (e.info?.chat) return;
     if (e.info && (e.t === "session_created" || e.t === "session_updated" || e.t === "session_exited" || e.t === "session_restarted")) {

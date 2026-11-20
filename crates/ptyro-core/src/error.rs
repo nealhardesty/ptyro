@@ -82,6 +82,8 @@ pub enum Again {
     Stop,
     /// `release`: let the running sessions go on, outside it.
     Release,
+    /// `moved`: it is a registered project's repository, moved: move that project here (1.53).
+    Moved,
 }
 
 impl Error {

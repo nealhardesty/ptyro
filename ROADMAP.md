@@ -2261,6 +2261,20 @@ rules as everywhere: CLI, TUI and web, with the parity row.
 The owner asked for the smoothest, most obvious daily loop (RESEARCH R-UX-34…37). CLI, TUI and
 web, with the parity rows.
 
+- [x] **UX3.10 A repository that moved** — M. *From the owner's machine, 2026-11-19: `woa` moved
+  from `~/dev/woa` to `~/external/dev/woa` (a symlink to an external disk); ptyro marked it
+  missing and auto-registration registered the new place as `woa-2`, stranding `woa`'s trust,
+  pin, workspaces and worktree history.* Protocol 1.53, SPEC §10.1:
+  - `ptyro project move P PATH` (`relocate`), the TUI's `project.move` (row menu, palette, a
+    form with the place found) and the web's ⋯ → Move…: the same repository only (records, root
+    commits, remote; never another one, never a copy), keeping the project's id; worktrees
+    linked to the new place with `git worktree repair`; one transaction.
+  - Spotting: auto-registration offers the move instead of a duplicate (`ProjectInfo.moved_to`);
+    `project add` asks (`--moved`, `--separate`); the TUI's toast and `missing` marker, the web's
+    banner, `project ls`, `ptyro doctor` and Health offer it.
+  - A duplicate already made (`woa-2`) is folded into the original by the same move.
+  - The TUI's project row menu gains `project.move`, `project.leave` and `project.remove`
+    (palette-only before); a missing project's leads with move, then forget.
 - [x] **UX3.9 What the pare-down cut by accident, back** — M. *From an audit of v0.0.70 → v0.0.87
   (owner, 2026-11-19: "clone was a pretty useful shortcut and I'm worried we cut out a bunch of
   other useful ease of use facilities").* Every surface diffed against the decisions in
@@ -4093,7 +4107,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         machine**. SPEC §25 "As built", §25.16.)*
   - [x] **KB1.7** The CLI: `recall`, `kb` (`status`), `kb show`, `kb recent`, `kb forget`
         (§25.12: really deleted, a tombstone, the bytes test), `--json` for each. **M**
-        *(Built 2026-11-19: protocol 1.53, five requests (`KbSearch`, `KbRead`, `KbRecent`,
+        *(Built 2026-11-19: protocol 1.54, five requests (`KbSearch`, `KbRead`, `KbRecent`,
         `KbForget`, `KbStatus`) and their replies (`KbHits`, `KbDoc`, `KbItems`, `KbForgotten`,
         `KbStatus`), answered in `crates/ptyro-daemon/src/kb/requests.rs` (`handle_kb`) over
         KB1.5's three functions: `read` scope, `full` to forget, this machine only. **Whoever
@@ -4137,7 +4151,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         so and `⏎` switches it on (`kb.enable`). `kb.history` in a session's, a worktree's and
         a project's row menu is the Library with only that one's. The five placeholder actions
         that ran a command in a split are gone; `kb.show` and `kb.forget` from the palette ask
-        for an address when nothing is selected. **Protocol 1.55**: the event
+        for an address when nothing is selected. **Protocol 1.56**: the event
         `KbUpdated{kinds}` (the daemon says when something was written, forgotten or expired;
         the Library asks again), and `KbRecent.session`, `.worktree`, `.since_ms`. Tests: 17 in
         `library/tests.rs` (narrow and tiny terminals, off, the notice, forgetting, the reader
@@ -4239,7 +4253,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         session and shell forms and the web's sheets**, the `◌` mark on rows, in `ls` and in
         the pane's header, `kb forget <session>` switching it on, and the test that `kb.db`
         holds no byte of one. **M**
-        *(Built 2026-11-19, protocol 1.54: `SpawnSpec.private` and `WorktreeSpec.private`
+        *(Built 2026-11-19, protocol 1.55: `SpawnSpec.private` and `WorktreeSpec.private`
         (`Option<bool>`: absent is "as `kb.private` says"), `SessionInfo.private`,
         `Place.private` in the daemon (in the session's meta, so across a restart, a resume
         and a live upgrade) and the column `session.private` in `ptyro.db` (a daemon restart).
@@ -4269,7 +4283,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         `docs/parity.md`, README.)*
   - [x] **KB1.12** Machines (§25.11): the search's fan-out and interleave, a hit read on its
         machine, the profile by name across a link, the scopes on both ends. **M**
-        *(Built 2026-11-19, protocol 1.56: `crates/ptyro-daemon/src/kb/machines.rs` and
+        *(Built 2026-11-19, protocol 1.57: `crates/ptyro-daemon/src/kb/machines.rs` and
         `kb/requests.rs`. `KbSearch.machines` asks every linked machine too, all at once, 5
         seconds each, and interleaves the lists as chat search does; a far hit has its
         machine and an address under it (`laptop2:k:7f3k/12`); **a machine that doesn't
@@ -4307,7 +4321,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         or size changed is read through the one way in as an item of kind `note`; an item
         whose file is gone is deleted, with no tombstone). It runs at the daemon's start, when
         the watched folder changes, when the settings change and on `ptyro kb sync` (protocol
-        1.57's `KbSync`). A note of no profile lives under `_all/` and is every profile's;
+        1.58's `KbSync`). A note of no profile lives under `_all/` and is every profile's;
         who wrote a file is what its `by` says; `_old/` is never read; a file that is refused
         (too many credentials, a profile that isn't) is named in `ptyro kb` and not read
         again until it changes. Tests: `note.rs`'s five, `kb/notes/tests.rs`'s four (written
@@ -4316,7 +4330,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         built", §25.4, §25.6.4.)*
   - [x] **KB2.2** `ptyro kb note` and `kb notes`; the Library's Notes tab in the TUI and the web
         (new, edit in your editor or in the page, delete); the note form. **M**
-        *(Built 2026-11-20: protocol 1.57 (`KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`,
+        *(Built 2026-11-20: protocol 1.58 (`KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`,
         `KbRecent.writer`, `KbStatusInfo.notes`; `read` to list and read, `control` to write).
         CLI (`crates/ptyro/src/kb.rs`): `kb note [TEXT…|-] [--title] [-p] [--profile] [--tag]…
         [--edit]` (no text: your editor), `kb notes [-p] [--wrote]`, `kb sync`, `kb show REF
@@ -4368,7 +4382,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         size and binary checks, the 50,000 cap; `KbIngest` with its plan, `KbProgress`. **M**
         *(Built 2026-11-20: `crates/ptyro-daemon/src/kb/roots.rs` (a pass on a task of its
         own, one root at a time; `list` by `Git::ls_files` or a walk; the cursor `{mtime,
-        size, read}`; a pass interrupted by a restart carried on), protocol 1.58 (`KbRoots`,
+        size, read}`; a pass interrupted by a restart carried on), protocol 1.59 (`KbRoots`,
         `KbIngest`, `KbRemove`, `KbSync{roots}`, `KbProgress`), `crates/ptyro/src/ingest.rs`
         (`ingest`, `kb ls`, `kb sync ROOT…`, `kb rm`, each `--json`). The TUI's `kb.sources`,
         `kb.ingest`, `kb.backfill` and `kb.remove` run the commands in a split and the web has
@@ -4427,7 +4441,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         `b` the history's form, counted first, `t` `kb.sessions`), `Make::KbIngest` and
         `Make::KbBackfill` in `form.rs`, no `kb.` action left in `TEMPLATES`;
         `web/src/library.ts` (`#/library/sources`, a root's sheet, both forms) and
-        `libkit.ts`. Protocol 1.59: `machine?` on `KbRoots`, `KbIngest`, `KbSync`,
+        `libkit.ts`. Protocol 1.60: `machine?` on `KbRoots`, `KbIngest`, `KbSync`,
         `KbRemove` and `KbHistory` (`Daemon::kb_roots_far`), `--machine` on the five
         commands, the machine filter and the forms' pick. Also: `kb show REF --open` on a
         file (your editor at the piece's line, `shell::editor_command_at`) and on a commit
@@ -4454,7 +4468,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         `SessionInfo.command`, which is cut to 200 characters: the snippets
         (`ptyro_core::shell`) send 2,000 now, a space before a line survives the emulator,
         and bash says which commands its history skipped. `kb.shell`, `kb.shell_skip`,
-        `KbStatusInfo.shell` (protocol 1.60), `ptyro kb`'s line. The Sources tab's switches:
+        `KbStatusInfo.shell` (protocol 1.61), `ptyro kb`'s line. The Sources tab's switches:
         TUI `c` and `o` (`library/sources.rs`), the web's sentence and buttons
         (`libkit.ts` `shellsKept`); `kb show --open`, `r` and **Its shell** go to the shell.
         A shell of SHELLS lost in a restart comes back private (`shells.rs` `Kept`). Tests:
@@ -4523,7 +4537,7 @@ Development section), its README and `docs/` text, and the milestone's version b
         never one it was offered before, the `kb_offer` event; `kb_pointers`: three words
         by words alone, two and found by meaning with meaning on; `kb_offered`: the trace),
         the setting `kb.inject` (off, in the schema and so in both settings panels and
-        `ptyro config set`), protocol 1.61 (`KbStatusInfo.inject`, `.offered`), the trace in
+        `ptyro config set`), protocol 1.62 (`KbStatusInfo.inject`, `.offered`), the trace in
         `ptyro kb`, the TUI's Library status and the web's status sheet. **Not built:** an
         offer by meaning alone; chats, commands, code and comments as pointers; telling
         words chosen by how rare they are; a per-agent or per-project switch of its own

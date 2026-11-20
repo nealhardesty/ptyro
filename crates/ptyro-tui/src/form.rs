@@ -24,6 +24,8 @@ pub enum Make {
     Profile(Option<Box<Form>>),
     /// A project, into the chosen workspace.
     ProjectAdd,
+    /// Where this project's (by id) repository is now (SPEC §10.1).
+    ProjectMove(String),
     /// Which workspaces this project (by id) is in.
     ProjectWorkspaces(String),
     /// A shell (or a command) in a workspace's SHELLS.
@@ -530,6 +532,16 @@ mod tests {
         )
     }
 
+    /// A relative path is the TUI's (as the CLI's is the shell's), `~` the home folder.
+    #[test]
+    fn typed_paths_are_where_the_tui_runs() {
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(typed_path(" src/app "), here.join("src/app"));
+        assert_eq!(typed_path("/abs/app"), std::path::PathBuf::from("/abs/app"));
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        assert_eq!(typed_path("~/src/app"), home.join("src/app"));
+    }
+
     #[test]
     fn enter_creates_from_any_field_once_whats_needed_is_there() {
         let mut f = form();
@@ -825,16 +837,20 @@ impl App {
                 Err((key, e)) => form.fail(key, e),
             },
             Make::ProjectAdd => {
-                let path = form.get("path").trim().to_owned();
-                let path = match path.strip_prefix("~/") {
-                    Some(rest) => std::env::var_os("HOME").map_or_else(
-                        || path.clone().into(),
-                        |h| std::path::PathBuf::from(h).join(rest),
-                    ),
-                    None => path.clone().into(),
+                let path = typed_path(&form.get("path"));
+                let choice = form.get("moved");
+                let req = Request::ProjectAdd {
+                    path,
+                    workspace: form.opt("workspace"),
+                    moved: choice == "moved",
+                    separate: choice == "separate",
                 };
-                let req = Request::ProjectAdd { path, workspace: form.opt("workspace") };
                 return self.request(Pending::ProjectAdded(None), req);
+            }
+            Make::ProjectMove(id) => {
+                let path = typed_path(&form.get("path"));
+                let slug = self.project(&id).map(|p| p.slug.clone()).unwrap_or_default();
+                return self.request(Pending::Moved(slug), Request::ProjectMove { addr: id, path });
             }
             Make::ProjectWorkspaces(id) => {
                 let want: Vec<String> = form
@@ -984,6 +1000,18 @@ impl App {
 }
 
 /// `ptyro profile new …` with every field that was filled in.
+/// A path typed into a form, as the CLI takes it: `~` is the home folder, and a relative one is
+/// relative to where the TUI runs (never the daemon's own folder).
+fn typed_path(text: &str) -> std::path::PathBuf {
+    let path = ptyro_core::config::expand_home(text.trim());
+    if path.is_relative()
+        && let Ok(here) = std::env::current_dir()
+    {
+        return here.join(path);
+    }
+    path
+}
+
 pub fn profile_new_args(form: &Form) -> Vec<String> {
     form.cli_args(&["profile".to_owned(), "new".to_owned()])
 }
@@ -1186,6 +1214,18 @@ impl App {
                 0,
                 "The workspace it joins (more later: the project's menu → workspaces)",
             ),
+            // `--moved` / `--separate` (SPEC §10.1): asked when it happens, unless said here.
+            Field::choice(
+                "moved",
+                "Is it a moved project?",
+                vec![
+                    ("".into(), "ask me if it looks like one".into()),
+                    ("moved".into(), "yes: move that project here".into()),
+                    ("separate".into(), "no: a project of its own".into()),
+                ],
+                0,
+                "When a project whose directory is gone is this repository: move it here (keeping its trust, pin, workspaces and worktrees), or add this one apart",
+            ),
         ];
         let mut form = Form::new("Add a project", fields, Make::ProjectAdd);
         form.verb = "add";
@@ -1193,6 +1233,25 @@ impl App {
         if !form.get("path").is_empty() {
             form.sel = 1;
         }
+        self.open(form);
+    }
+
+    /// `project.move`: where its repository is now, the place ptyro found filled in. `ptyro
+    /// project move` takes nothing else.
+    pub(crate) fn open_project_move(&mut self, p: &ptyro_core::model::ProjectInfo) {
+        let path = Field::required(
+            "path",
+            "It is now at",
+            "~/src/my-repo",
+            &format!(
+                "Its main checkout (it was at {}). It keeps its trust, pin, workspaces and worktrees; a project registered there is folded in",
+                p.root.display()
+            ),
+        )
+        .with(p.moved_to.as_ref().map(|t| t.display().to_string()).unwrap_or_default());
+        let mut form =
+            Form::new(format!("Move {}", p.slug), vec![path], Make::ProjectMove(p.id.clone()));
+        form.verb = "move";
         self.open(form);
     }
 

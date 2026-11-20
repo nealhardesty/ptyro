@@ -704,6 +704,10 @@ impl Daemon {
                 w.state = WorktreeState::Missing;
                 w.status = None;
                 self.put_worktree(w.clone());
+                // A main checkout gone: maybe it moved somewhere ptyro knows (SPEC §10.1).
+                if w.is_root {
+                    self.spot_moves_bg();
+                }
                 return Some(w);
             }
             (false, _) => return Some(wt),
@@ -711,6 +715,9 @@ impl Daemon {
                 let mut w = wt.clone();
                 w.state = WorktreeState::Ready;
                 self.put_worktree(w);
+                if wt.is_root {
+                    self.spot_moves_bg();
+                }
             }
             _ => {}
         }
@@ -1198,6 +1205,7 @@ mod tests {
             pin: None,
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         };
         let data = Path::new("/data");
         assert_eq!(

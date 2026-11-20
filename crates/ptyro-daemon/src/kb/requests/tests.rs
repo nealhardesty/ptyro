@@ -37,6 +37,7 @@ fn registry(root: &std::path::Path) -> Registry {
             pin: None,
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         }],
         workspaces: vec![workspace],
         ..Registry::default()
@@ -227,7 +228,7 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
     );
 }
 
-/// 1.55: the history of one ptyro session, of one worktree, and since a time; and every
+/// 1.56: the history of one ptyro session, of one worktree, and since a time; and every
 /// change (a write, a forgetting) is said to whoever watches, with the kinds it touched.
 #[tokio::test]
 async fn the_history_of_a_session_or_a_worktree_and_the_news_of_a_change() {
@@ -273,7 +274,7 @@ async fn the_history_of_a_session_or_a_worktree_and_the_news_of_a_change() {
     );
     assert!(uris(ask(&d, of(Some("nobody"), None, None)).await.unwrap()).is_empty());
 
-    // A search within one (1.62, review D3): the store filters, so what is found is that
+    // A search within one (1.63, review D3): the store filters, so what is found is that
     // session's or worktree's whatever else holds the words, however much else there is.
     let within = |query: &str, session: Option<&str>, worktree: Option<&str>| {
         let mut req = search(query);

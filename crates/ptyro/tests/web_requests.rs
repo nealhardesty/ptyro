@@ -78,6 +78,8 @@ fn the_shapes_the_web_app_sends_parse() {
         json!({ "t": "quick_shell", "worktree": null, "cwd": "", "create": true, "env": {}, "size": null, "workspace": null }),
         json!({ "t": "mute", "target": "a", "minutes": null, "unmute": false }),
         json!({ "t": "project_add", "path": "/r", "workspace": null }),
+        json!({ "t": "project_add", "path": "/r", "workspace": null, "moved": false, "separate": false }),
+        json!({ "t": "project_move", "addr": "p", "path": "/r" }),
         json!({ "t": "project_scripts", "addr": "p", "worktree": null }),
         json!({ "t": "project_pin", "addr": "p", "profile": null }),
         json!({ "t": "project_remove", "addr": "p", "release": false }),

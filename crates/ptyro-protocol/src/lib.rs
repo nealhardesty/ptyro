@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 62 };
+pub const PROTO: Version = Version { major: 1, minor: 63 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -578,6 +578,14 @@ pub enum Request {
         path: PathBuf,
         #[serde(default)]
         workspace: Option<String>,
+        /// It is the repository a registered project lost (its main checkout gone): move that
+        /// project here instead of registering another (1.53, the refusal's fix `moved`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        moved: bool,
+        /// Register it as a project of its own even so; that project isn't offered this place
+        /// again (1.53).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        separate: bool,
     },
     ProjectList,
     ProjectGet {
@@ -596,6 +604,13 @@ pub enum Request {
     ProjectRename {
         addr: String,
         name: String,
+    },
+    /// Point a project at where its repository is now (1.53, SPEC §10.1): the same repository,
+    /// moved. It keeps its id (so its trust, pin, workspaces, sessions and worktrees); its
+    /// worktrees are linked to the new place. A project already registered there is folded in.
+    ProjectMove {
+        addr: String,
+        path: PathBuf,
     },
     /// Pin to a profile, or unpin with `None` (SPEC §10.10).
     ProjectPin {
@@ -925,8 +940,8 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
     },
-    /// Search the knowledge base and the chats (1.53, SPEC §25.8, §25.14; on this machine,
-    /// and on every linked one with `machines`, 1.56):
+    /// Search the knowledge base and the chats (1.54, SPEC §25.8, §25.14; on this machine,
+    /// and on every linked one with `machines`, 1.57):
     /// agent sessions, and whatever else is kept, best first. `query` is the search box's:
     /// words, `"phrases"`, `-word`, `prefix*`, `kind:`, `project:`, `since:`, `before:`,
     /// `agent:`, `workspace:`, `file:`, `wrote:`, `by:meaning`, `by:words`. The options narrow
@@ -951,59 +966,59 @@ pub enum Request {
         /// project's is nothing.
         #[serde(default)]
         here: Option<String>,
-        /// Every linked machine that is up searches its own too (1.56, SPEC §25.11): the
+        /// Every linked machine that is up searches its own too (1.57, SPEC §25.11): the
         /// answers are interleaved, each hit of another machine with its `machine` and its
         /// address under it (`laptop2:k:7f3k/12`), and a machine that didn't answer is named
         /// in `KbHits.left_out`.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         machines: bool,
-        /// Only this machine's (1.56): a linked machine's name, or this one's own (or
+        /// Only this machine's (1.57): a linked machine's name, or this one's own (or
         /// `here`). The query's `machine:` says the same.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
-        /// Only what that profile may see (1.56): an agent's search asking another machine,
+        /// Only what that profile may see (1.57): an agent's search asking another machine,
         /// which is given the caller's profile by name (SPEC §25.9, §25.11). It narrows,
         /// never widens.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
-        /// Only what was kept of this ptyro session (its id; 1.62): a search within a row's
+        /// Only what was kept of this ptyro session (its id; 1.63): a search within a row's
         /// history, as `KbRecent.session` lists it. A session is one machine's: with it (or
         /// `worktree`) no other machine is asked unless `machine` names one, and no chat is
         /// found.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
-        /// Only what happened in this worktree (its id; 1.62).
+        /// Only what happened in this worktree (its id; 1.63).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
     },
-    /// Open an address a search gave (1.53): `k:7f3k/12` with `before` and `after` of its
+    /// Open an address a search gave (1.54): `k:7f3k/12` with `before` and `after` of its
     /// neighbours (`None`: 2 each), or `k:7f3k`, the item from its start (`after`: how many
     /// pieces, `None`: all). A chat's address (`c:…`) is `ChatRead`'s. Another machine's
-    /// (`laptop2:k:7f3k/12`, 1.56) is read there. → `KbDoc`.
+    /// (`laptop2:k:7f3k/12`, 1.57) is read there. → `KbDoc`.
     KbRead {
         addr: String,
         #[serde(default)]
         before: Option<u32>,
         #[serde(default)]
         after: Option<u32>,
-        /// Only if that profile may see it (1.56): as `KbSearch.profile`.
+        /// Only if that profile may see it (1.57): as `KbSearch.profile`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
     },
-    /// The history (1.53): items newest first, `before_ms` for the next page. → `KbItems`.
+    /// The history (1.54): items newest first, `before_ms` for the next page. → `KbItems`.
     KbRecent {
         /// Empty: every kind.
         #[serde(default)]
         kinds: Vec<ptyro_core::kb::ItemKind>,
         #[serde(default)]
         project: Option<String>,
-        /// Only what was kept of this ptyro session (its id; 1.55): a row's history.
+        /// Only what was kept of this ptyro session (its id; 1.56): a row's history.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
-        /// Only what happened in this worktree (its id; 1.55).
+        /// Only what happened in this worktree (its id; 1.56).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         worktree: Option<String>,
-        /// Only items no older than this (1.55).
+        /// Only items no older than this (1.56).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         since_ms: Option<u64>,
         #[serde(default)]
@@ -1011,19 +1026,19 @@ pub enum Request {
         /// `None`: 20; at most 100.
         #[serde(default)]
         limit: Option<u32>,
-        /// A linked machine's history instead of this one's (1.56).
+        /// A linked machine's history instead of this one's (1.57).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
-        /// Only what you wrote (`user`), or what agents did (`agent`; 1.57).
+        /// Only what you wrote (`user`), or what agents did (`agent`; 1.58).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         writer: Option<ptyro_core::kb::Writer>,
     },
-    /// Forget items for good (1.53, SPEC §25.12): their text is deleted and zeroed, and their
+    /// Forget items for good (1.54, SPEC §25.12): their text is deleted and zeroed, and their
     /// URIs are never kept again. `addrs` (addresses or ids), or every item `query` finds (its
     /// best 100 hits' items). Without `confirmed` nothing is deleted: the answer is
     /// `needs_confirmation`, saying what would go. → `KbForgotten`.
     ///
-    /// `session` (1.54, SPEC §25.7a): a ptyro session instead. Everything kept of it goes, and
+    /// `session` (1.55, SPEC §25.7a): a ptyro session instead. Everything kept of it goes, and
     /// it is private from then on.
     KbForget {
         #[serde(default)]
@@ -1035,10 +1050,10 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
     },
-    /// What the knowledge base holds and how it stands (1.53); answered when it is off too.
+    /// What the knowledge base holds and how it stands (1.54); answered when it is off too.
     /// → `KbStatus`.
     KbStatus,
-    /// Write a note (1.57, SPEC §25.6.4): a Markdown file in the notes folder, indexed at once.
+    /// Write a note (1.58, SPEC §25.6.4): a Markdown file in the notes folder, indexed at once.
     /// Who wrote it is the daemon's word, never the request's: a caller inside an agent's
     /// session (its `remember` tool) writes as that agent, under its own profile, within the
     /// limits (8 KiB, 20 a session a day, `kb.remember`); anyone else writes as you.
@@ -1050,7 +1065,7 @@ pub enum Request {
     /// takes the place of (an address), which is moved to `_old/` and out of search.
     ///
     /// `addr`: write an existing note again instead (you only): `text` is then the whole
-    /// file, header and all, and nothing else is read. `base` (1.62) is the `version` its
+    /// file, header and all, and nothing else is read. `base` (1.63) is the `version` its
     /// text was read with (`KbNoteText`): when the file is no longer that text (it was
     /// edited elsewhere meanwhile, or is gone) nothing is written and the answer is
     /// `conflict`. Without it the file is written whatever it holds. → `KbNoted`.
@@ -1071,7 +1086,7 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
     },
-    /// The notes (1.57), newest first: all of them, or a project's (`_global`: those about
+    /// The notes (1.58), newest first: all of them, or a project's (`_global`: those about
     /// none), or one writer's. → `KbItems`.
     KbNotes {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1079,40 +1094,40 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         writer: Option<ptyro_core::kb::Writer>,
     },
-    /// A note's file as it is, for editing (1.57). → `KbNoteText`.
+    /// A note's file as it is, for editing (1.58). → `KbNoteText`.
     KbNoteRead {
         addr: String,
     },
-    /// Read the notes folder again now (1.57): what was written, changed or deleted by hand
-    /// is found (the daemon also watches the folder). And (1.58) look at the roots again:
+    /// Read the notes folder again now (1.58): what was written, changed or deleted by hand
+    /// is found (the daemon also watches the folder). And (1.59) look at the roots again:
     /// every one of them when `roots` is empty, else only those named (by name, id or path;
     /// the notes folder is then left alone). The notes are read before the answer; a root's
     /// pass runs after it (`KbRoots` and `KbProgress` say how far it is). → `KbSynced`.
     KbSync {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         roots: Vec<String>,
-        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        /// A linked machine's instead of this one's (1.60, SPEC §25.11): its name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
-    /// The roots (1.58, SPEC §25.6.3): every project and folder that is read into the
+    /// The roots (1.59, SPEC §25.6.3): every project and folder that is read into the
     /// knowledge base, with what each holds and how it stands. → `KbRoots`.
     KbRoots {
-        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        /// A linked machine's instead of this one's (1.60, SPEC §25.11): its name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
-    /// Read a folder or a file into the knowledge base and keep reading it (1.58, `ptyro
+    /// Read a folder or a file into the knowledge base and keep reading it (1.59, `ptyro
     /// ingest PATH`). A path that is a root already, or inside one, is read again instead
     /// (and takes the options given, when it is that root's own path). The answer says what
     /// will be read; the reading itself goes on after it. → `KbIngested`.
     KbIngest {
         spec: ptyro_core::kb::RootSpec,
-        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        /// A linked machine's instead of this one's (1.60, SPEC §25.11): its name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
-    /// Stop reading a root and drop what was kept of it (1.58, `ptyro kb rm`): its files'
+    /// Stop reading a root and drop what was kept of it (1.59, `ptyro kb rm`): its files'
     /// and commits' items go, with no tombstones (ingest it again and it is back). Unless
     /// `confirmed`, nothing goes and the answer is `needs_confirmation`. A project's own root
     /// is not removed this way. → `KbRemoved`.
@@ -1120,11 +1135,11 @@ pub enum Request {
         root: String,
         #[serde(default)]
         confirmed: bool,
-        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        /// A linked machine's instead of this one's (1.60, SPEC §25.11): its name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
-    /// Read what the agents kept before ptyro did (1.58, `ptyro ingest --history`): every
+    /// Read what the agents kept before ptyro did (1.59, `ptyro ingest --history`): every
     /// conversation in each profile's Claude Code and Codex folders that is not kept
     /// already, not forgotten, not private, not a chat's and not older than
     /// `kb.retain_days`. `agent`: only that agent's; `profile`: only that profile's;
@@ -1139,7 +1154,7 @@ pub enum Request {
         since_ms: Option<u64>,
         #[serde(default)]
         dry_run: bool,
-        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        /// A linked machine's instead of this one's (1.60, SPEC §25.11): its name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
@@ -1440,6 +1455,7 @@ impl Request {
             Request::Remove { .. }
                 | Request::WorktreeRemove { .. }
                 | Request::ProjectRemove { .. }
+                | Request::ProjectAdd { .. }
                 | Request::Shutdown { .. }
         )
     }
@@ -1454,6 +1470,7 @@ impl Request {
             (Request::WorktreeRemove { opts, .. }, A::Force) => opts.force = true,
             (Request::WorktreeRemove { opts, .. }, A::StopSessions) => opts.stop_sessions = true,
             (Request::ProjectRemove { release, .. }, A::Release) => *release = true,
+            (Request::ProjectAdd { moved, .. }, A::Moved) => *moved = true,
             (Request::Shutdown { force }, A::Force) => *force = true,
             _ => return None,
         }
@@ -1576,7 +1593,7 @@ pub enum Reply {
     Agents {
         agents: Vec<AgentChoice>,
         default: String,
-        /// A new session is private unless the person says otherwise (`kb.private`; 1.54).
+        /// A new session is private unless the person says otherwise (`kb.private`; 1.55).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         private: bool,
     },
@@ -1656,7 +1673,7 @@ pub enum Reply {
     ChatHits {
         hits: Vec<ptyro_core::chats::ChatHit>,
     },
-    /// What a search of the knowledge base found, best first (1.53).
+    /// What a search of the knowledge base found, best first (1.54).
     KbHits {
         hits: Vec<ptyro_core::kb::search::KbHit>,
         /// Why it was by words alone when the query didn't ask for that: meaning search is
@@ -1664,11 +1681,11 @@ pub enum Reply {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         words_only: Option<String>,
         /// The linked machines that were asked and are not in the answer, each with why
-        /// (1.56): `laptop2 is offline since 10:02`, `laptop3 didn't answer within 5s`.
+        /// (1.57): `laptop2 is offline since 10:02`, `laptop3 didn't answer within 5s`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         left_out: Vec<String>,
     },
-    /// What an address opened (1.53): the item, and the pieces asked for in its order. `at`:
+    /// What an address opened (1.54): the item, and the pieces asked for in its order. `at`:
     /// the piece the address named; `stale`: it named one the item no longer has, and the
     /// item is shown from its start.
     KbDoc {
@@ -1679,60 +1696,60 @@ pub enum Reply {
         #[serde(default)]
         stale: bool,
     },
-    /// Items, newest first (1.53).
+    /// Items, newest first (1.54).
     KbItems {
         items: Vec<ptyro_core::kb::search::KbListed>,
     },
-    /// What was forgotten (1.53): how many items, and how many pieces of text they held.
+    /// What was forgotten (1.54): how many items, and how many pieces of text they held.
     KbForgotten {
         items: u32,
         chunks: u32,
     },
-    /// The knowledge base's state (1.53).
+    /// The knowledge base's state (1.54).
     KbStatus {
         status: ptyro_core::kb::search::KbStatusInfo,
     },
-    /// A note was written (1.57): its item, and its file.
+    /// A note was written (1.58): its item, and its file.
     KbNoted {
         item: ptyro_core::kb::search::KbListed,
         path: String,
     },
-    /// A note's file (1.57): its item, its whole text (header and all) and where it is.
+    /// A note's file (1.58): its item, its whole text (header and all) and where it is.
     KbNoteText {
         item: ptyro_core::kb::search::KbListed,
         text: String,
         path: String,
-        /// What this text is known by (1.62): `KbNote.base` when it is written again. Empty
+        /// What this text is known by (1.63): `KbNote.base` when it is written again. Empty
         /// from a daemon before it.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         version: String,
     },
-    /// The notes folder was read again (1.57): how many notes it holds, how many of them
+    /// The notes folder was read again (1.58): how many notes it holds, how many of them
     /// were new or changed, and how many that were kept are gone.
     KbSynced {
         notes: u32,
         changed: u32,
         removed: u32,
-        /// How many roots are being looked at again (1.58).
+        /// How many roots are being looked at again (1.59).
         #[serde(default)]
         roots: u32,
     },
-    /// The roots (1.58), by name.
+    /// The roots (1.59), by name.
     KbRoots {
         roots: Vec<ptyro_core::kb::KbRootInfo>,
     },
-    /// A root was added, or was one already (`plan.existing`), and is being read (1.58).
+    /// A root was added, or was one already (`plan.existing`), and is being read (1.59).
     KbIngested {
         root: ptyro_core::kb::KbRootInfo,
         plan: ptyro_core::kb::KbPlan,
     },
-    /// A root is being removed (1.58): what it held, which goes in the background.
+    /// A root is being removed (1.59): what it held, which goes in the background.
     KbRemoved {
         name: String,
         items: u64,
         chunks: u64,
     },
-    /// What the agents' folders hold (1.58), and whether it is being read.
+    /// What the agents' folders hold (1.59), and whether it is being read.
     KbHistory {
         plan: ptyro_core::kb::KbHistoryPlan,
     },
@@ -2119,7 +2136,7 @@ pub enum DomainEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
-    /// The knowledge base changed (1.55, SPEC §25.14): something new can be found (an item
+    /// The knowledge base changed (1.56, SPEC §25.14): something new can be found (an item
     /// written or grown), or something went (forgotten, expired). `kinds`: the kinds of the
     /// items that changed. It says nothing of what they hold: a client that shows the Library
     /// asks again. To every watcher; never mirrored from another machine.
@@ -2127,7 +2144,7 @@ pub enum DomainEvent {
         #[serde(default)]
         kinds: Vec<ptyro_core::kb::ItemKind>,
     },
-    /// A pass over a root is under way (1.58): `done` of `of` files and commits are read.
+    /// A pass over a root is under way (1.59): `done` of `of` files and commits are read.
     /// At most a few a second, and one when the pass ends (`done` = `of`). To every watcher.
     KbProgress {
         /// The root's id.
@@ -2413,7 +2430,7 @@ mod tests {
         });
     }
 
-    /// The knowledge base's messages (1.53): each way round, and as a page writes them (JSON,
+    /// The knowledge base's messages (1.54): each way round, and as a page writes them (JSON,
     /// what it has no use for left out).
     #[test]
     fn knowledge_base_messages_round_trip() {
@@ -2433,7 +2450,7 @@ mod tests {
             session: Some("01JB0000000000000000000S01".into()),
             worktree: Some("w1".into()),
         });
-        // 1.62: a search within a row's history, and a note written again from the text it
+        // 1.63: a search within a row's history, and a note written again from the text it
         // was read as; an older client's messages say neither.
         let m: Request = serde_json::from_str(r#"{"t":"kb_search","query":"x"}"#).unwrap();
         assert!(matches!(m, Request::KbSearch { session: None, worktree: None, .. }));
@@ -2483,7 +2500,7 @@ mod tests {
         let m: Request = serde_json::from_str(r#"{"t":"kb_sync"}"#).unwrap();
         assert_eq!(m, Request::KbSync { roots: Vec::new(), machine: None });
         round_trip(Request::KbRoots { machine: None });
-        // 1.59: a linked machine's roots; an older client's message is this machine's.
+        // 1.60: a linked machine's roots; an older client's message is this machine's.
         round_trip(Request::KbRoots { machine: Some("laptop2".into()) });
         let m: Request = serde_json::from_str(r#"{"t":"kb_roots"}"#).unwrap();
         assert_eq!(m, Request::KbRoots { machine: None });
@@ -2674,7 +2691,7 @@ mod tests {
             path: "/data/kb/notes/x.md".into(),
             version: "9f2c".into(),
         };
-        // (A daemon from before 1.62 says no version: read as none.)
+        // (A daemon from before 1.63 says no version: read as none.)
         let mut older = serde_json::to_value(&text).unwrap();
         older.as_object_mut().unwrap().remove("version");
         let m: Reply = serde_json::from_value(older).unwrap();
@@ -2720,7 +2737,7 @@ mod tests {
                 }],
             },
         });
-        // 1.60: what is kept of shells; a daemon from before says nothing of it. 1.61: nor
+        // 1.61: what is kept of shells; a daemon from before says nothing of it. 1.62: nor
         // of what is offered at a prompt.
         let old: Reply =
             serde_json::from_str(r#"{"t":"kb_status","status":{"enabled":true}}"#).unwrap();

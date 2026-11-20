@@ -286,7 +286,7 @@ async fn what_is_refused_and_one_file_alone() {
     let e =
         ask(&d, Request::KbSync { roots: vec!["nope".into()], machine: None }).await.unwrap_err();
     assert!(e.message.contains("plan"), "{}", e.message);
-    // (1.59) Asked of this machine by its word, it is this machine's; a machine that isn't
+    // (1.60) Asked of this machine by its word, it is this machine's; a machine that isn't
     // linked is said, with the ones there are.
     let here = ask(&d, Request::KbRoots { machine: Some("here".into()) }).await.unwrap();
     assert!(matches!(here, Reply::KbRoots { roots } if roots.len() == 2), "this machine's own");
@@ -625,6 +625,7 @@ async fn the_innermost_root_owns_a_file_and_a_project_kept_out_is_in_no_root() {
             pin: Some("acme".into()),
             created_ms: 0,
             last_used_ms: None,
+            moved_to: None,
         }],
         ..ptyro_store::Registry::default()
     };

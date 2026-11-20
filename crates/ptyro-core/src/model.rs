@@ -76,6 +76,10 @@ pub struct ProjectInfo {
     pub created_ms: u64,
     #[serde(default)]
     pub last_used_ms: Option<u64>,
+    /// Its main checkout is gone, and the same repository was found here: it seems to have moved
+    /// (1.53, SPEC §10.1). `ProjectMove` takes it there; never stored, the daemon looks again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -480,7 +484,7 @@ pub struct WorktreeSpec {
     /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Its agent's session is private (1.54, SPEC §25.7a); `None`: as `kb.private` says.
+    /// Its agent's session is private (1.55, SPEC §25.7a); `None`: as `kb.private` says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private: Option<bool>,
 }

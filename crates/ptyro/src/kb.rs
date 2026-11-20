@@ -951,7 +951,7 @@ async fn edit_note(ctx: &Ctx, c: &ptyro_client::Client, addr: &str) -> Result<i3
         profile: None,
         tags: Vec::new(),
         replaces: None,
-        // (A daemon from before 1.62 says no version, and writes as it always did.)
+        // (A daemon from before 1.63 says no version, and writes as it always did.)
         base: Some(version).filter(|v| !v.is_empty()),
     };
     match ask(ctx, c, req).await {

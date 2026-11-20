@@ -400,7 +400,14 @@ async fn a_worktree_here_in_a_workspace_there_is_refused_with_the_fix() {
                 .success()
         );
     }
-    here.request(Request::ProjectAdd { path: repo, workspace: None }).await.unwrap();
+    here.request(Request::ProjectAdd {
+        path: repo,
+        workspace: None,
+        moved: false,
+        separate: false,
+    })
+    .await
+    .unwrap();
     let root = match here.request(Request::WorktreeList { project: None }).await.unwrap() {
         Reply::Worktrees { worktrees } => worktrees.into_iter().find(|w| w.is_root).unwrap(),
         other => panic!("{other:?}"),

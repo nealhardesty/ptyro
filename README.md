@@ -459,6 +459,15 @@ much disk they take. ptyro also reads
 setup config written for Conductor, Superset, the Codex app, Claude Desktop, Cursor and Copilot.
 Details: [`docs/config.md`](docs/config.md).
 
+**Moved a repository?** (`mv ~/dev/app ~/external/dev/app`, another disk.) Tell ptyro where it
+is now: `ptyro project move app ~/external/dev/app` (the TUI: the project's menu, `.` → move; the
+web: the project's ⋯ → Move…). The project keeps its trust, pin, workspaces, sessions and
+worktrees; worktrees elsewhere are linked to the new place, and nothing is deleted. ptyro refuses
+another repository, and a copy while the old one is still there. Usually you needn't type it:
+when a session starts in the moved repository, ptyro registers no second project; it says the
+project seems to have moved (a toast with the move one key away, a banner on the web, `ptyro
+doctor`), and a second project an older ptyro made (`app-2`) is folded in by the same move.
+
 ### Profiles: separate accounts
 
 A profile is one identity: agent accounts, git author, SSH key, `gh` login and secrets. Repos

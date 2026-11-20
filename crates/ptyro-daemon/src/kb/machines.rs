@@ -3,7 +3,7 @@
 //! and interleaves the answers (each machine's own ranking, as chat search does, §22.10); an
 //! address under a machine's name (`laptop2:k:7f3k/12`) is read, listed or forgotten there.
 //! What a machine reads (its roots) is listed, added to, looked at again and removed there too,
-//! when a request names it (`machine`, 1.59).
+//! when a request names it (`machine`, 1.60).
 //!
 //! The requests are never routed by `handle_as` (they are `here_only`): `handle_kb` sends them
 //! on from here, because it knows who asks. An agent's search reaches another machine with its

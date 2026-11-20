@@ -851,7 +851,7 @@ Push messages have no id.
 - Workspaces: `WorkspaceCreate/List/Rename/Delete/AddProject/RemoveProject/Set` (profile, notify), `SaveView`, `LoadView`.
 - Profiles: `ProfileList`, `ProfileShow` (resolved, secrets redacted), `ProfileResolve` (which profile a spawn would get, and why), `ProfileLogin`, `ProfileSync`. Profiles are defined only in user config, so there is no create/update over the socket.
 - Projects: `ProjectAdd{path}`, `ProjectList`, `ProjectRemove`, `ProjectTrust{fingerprint}`,
-  `ProjectConfig` (effective merged config).
+  `ProjectConfig` (effective merged config), `ProjectMove{addr, path}` (1.53, §10.1).
 - Worktrees: `WorktreeCreate(WorktreeSpec)`, `WorktreeList`, `WorktreeRemove{force}`,
   `WorktreeStatus` (dirty/ahead/behind/diffstat), `WorktreeDiff{format}`, `WorktreeOpen{editor}`,
   `RunScript{name}`.
@@ -1114,33 +1114,33 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
-**[built 2026-11-20] Protocol 1.62** (additive; the review of the knowledge base, §25 "As
+**[built 2026-11-20] Protocol 1.63** (additive; the review of the knowledge base, §25 "As
 built", §25.14): `KbSearch` gained `session` and `worktree` (only that ptyro session's or that
 worktree's items: a search within a row's history, filtered in `kb.db`; with either, linked
 machines are asked only when one is named, and no chat is found). `KbNote` gained `base` and
 `KbNoteText` `version`: a note written again (`addr`) names the text it was read as, and is
-refused with `conflict` when its file has changed since. A 1.61 daemon ignores the new request
+refused with `conflict` when its file has changed since. A 1.62 daemon ignores the new request
 fields (a search within a history then answers with everything that matches, and a note is
 written over as before) and sends no `version`, which a client reads as "none": it sends no
-`base`. A 1.61 client sends neither, and is answered as before.
+`base`. A 1.62 client sends neither, and is answered as before.
 
-**[built 2026-11-20] Protocol 1.61** (additive; what is offered at a prompt, KB5, §25.9,
+**[built 2026-11-20] Protocol 1.62** (additive; what is offered at a prompt, KB5, §25.9,
 §25.14): `KbStatusInfo` gained `inject` (`kb.inject`) and `offered` (the last 20 offers, each
-with its session and its pointers). A 1.60 daemon sends neither, which a client reads as
+with its session and its pointers). A 1.61 daemon sends neither, which a client reads as
 "nothing is offered". `Hook`'s answer may now be `HookOutput` for a prompt's hook too.
 
-**[built 2026-11-20] Protocol 1.60** (additive; what is kept of shells, KB4, §25.6.5,
+**[built 2026-11-20] Protocol 1.61** (additive; what is kept of shells, KB4, §25.6.5,
 §25.14): `KbStatusInfo` gained `shell` (`kb.shell`'s word: `off`, `commands` or `output`).
-A 1.59 daemon sends none, which a client reads as "says nothing of shells" and shows no
+A 1.60 daemon sends none, which a client reads as "says nothing of shells" and shows no
 switch for.
 
-**[built 2026-11-20] Protocol 1.59** (additive; roots on a linked machine, KB3.7, §25.11,
+**[built 2026-11-20] Protocol 1.60** (additive; roots on a linked machine, KB3.7, §25.11,
 §25.14): `KbRoots`, `KbIngest`, `KbSync`, `KbRemove` and `KbHistory` gained `machine?` (a
 linked machine's name: the request is answered there, for you only). `KbRoots` became a
-message with a field; an older client's `{"t":"kb_roots"}` still parses. A 1.58 daemon
+message with a field; an older client's `{"t":"kb_roots"}` still parses. A 1.59 daemon
 ignores the field and answers for itself.
 
-**[built 2026-11-20] Protocol 1.58** (additive; roots, `ingest` and the history's backfill,
+**[built 2026-11-20] Protocol 1.59** (additive; roots, `ingest` and the history's backfill,
 KB3, §25.6.3, §25.14): the requests `KbRoots` → `KbRoots{roots}`, `KbIngest{spec}` →
 `KbIngested{root, plan}`, `KbRemove{root, confirmed}` → `KbRemoved{name, items, chunks}`
 (unconfirmed: `needs_confirmation`), `KbHistory{agent?, profile?, since_ms?, dry_run}` →
@@ -1148,7 +1148,7 @@ KB3, §25.6.3, §25.14): the requests `KbRoots` → `KbRoots{roots}`, `KbIngest{
 `KbProgress{root, name, done, of}`; `KbStatusInfo.failing`. An older client's `{"t":"kb_sync"}`
 still parses (and now looks at the roots too).
 
-**[built 2026-11-20] Protocol 1.57** (additive; notes, KB2, §25.6.4, §25.14): the requests
+**[built 2026-11-20] Protocol 1.58** (additive; notes, KB2, §25.6.4, §25.14): the requests
 `KbNote{text, title?, project?, profile?, tags, replaces?, addr?}` → `KbNoted{item, path}`
 (write a note's file and index it; from inside an agent's session it is `remember`, and who
 wrote it is the daemon's word; with `addr`, write an existing note's whole file again, you
@@ -1157,10 +1157,10 @@ path}` (a note's file as it is, for editing) and `KbSync` → `KbSynced{notes, c
 (the notes folder read again); `KbRecent.writer` (only what you wrote, or what agents did);
 `KbStatusInfo.notes` (the notes folder). Scopes: `KbNotes` and `KbNoteRead` need `read`,
 `KbNote` and `KbSync` `control`. All four are answered by the machine asked. Compatibility: a
-1.56 daemon answers them "couldn't read this request", which `ptyro kb` turns into "the
-running daemon is older than this ptyro"; a 1.56 client never sends them.
+1.57 daemon answers them "couldn't read this request", which `ptyro kb` turns into "the
+running daemon is older than this ptyro"; a 1.57 client never sends them.
 
-**[built 2026-11-19] Protocol 1.56** (additive; the knowledge base across linked machines,
+**[built 2026-11-19] Protocol 1.57** (additive; the knowledge base across linked machines,
 KB1.12, §25.11, §25.14): `KbSearch.machines` (every linked machine that is up searches its own
 too), `KbSearch.machine` (only that machine: a linked one's name, this one's, or `here`) and
 `KbSearch.profile` (only what that profile may see: one daemon asking another for an agent of
@@ -1168,37 +1168,59 @@ its own); `KbHits.left_out` (the machines asked that are not in the answer, each
 `KbRead.profile`; `KbRecent.machine` (a linked machine's history). An address under a linked
 machine's name (`laptop2:k:7f3k/12`) in `KbRead` and `KbForget` is acted on there.
 Compatibility: links are between equal versions (§16.4b: another version is `mismatch`, and
-is named in `left_out`); a 1.55 daemon asked by a 1.56 client ignores the new fields and
-answers its own; a 1.55 client never sets them, so its searches stay on the machine it asks.
+is named in `left_out`); a 1.56 daemon asked by a 1.57 client ignores the new fields and
+answers its own; a 1.56 client never sets them, so its searches stay on the machine it asks.
 
-**[built 2026-11-19] Protocol 1.55** (additive; the Library, KB1.8, §25.10, §25.14):
+**[built 2026-11-19] Protocol 1.56** (additive; the Library, KB1.8, §25.10, §25.14):
 `DomainEvent::KbUpdated{kinds}` (`t: "kb_updated"`; the knowledge base changed: something new
 can be found, or something went; to every watcher, never mirrored), and `KbRecent.session`,
 `KbRecent.worktree` and `KbRecent.since_ms` (the history of one ptyro session, of one worktree,
-and no older than a time). Compatibility: a 1.54 client can't read the event and drops it (as
-any message it doesn't know); a 1.54 daemon ignores the three fields and answers the whole
+and no older than a time). Compatibility: a 1.55 client can't read the event and drops it (as
+any message it doesn't know); a 1.55 daemon ignores the three fields and answers the whole
 history, and never sends the event, so a Library over it is fresh when it is opened and after
 each thing done in it.
 
-**[built 2026-11-19] Protocol 1.54** (additive; private sessions, KB1.14, §25.7a):
+**[built 2026-11-19] Protocol 1.55** (additive; private sessions, KB1.14, §25.7a):
 `SpawnSpec.private` and `WorktreeSpec.private` (`Option<bool>`; absent: as `kb.private` says),
 `SessionInfo.private`, `Reply::Agents.private` (what a new session starts as, for a form's
 switch), and `KbForget.session` (forget everything kept of a ptyro session and make it private).
-Compatibility: a 1.53 daemon ignores `private` on a spawn and starts the session not private
+Compatibility: a 1.54 daemon ignores `private` on a spawn and starts the session not private
 (the session's row then shows no `◌`), and answers `KbForget` with a `session` as "say what to
 forget"; an older client never sends them, and reads `private` as absent.
 
-**[built 2026-11-19] Protocol 1.53** (additive; the knowledge base's commands, KB1.7, §25.14):
+**[built 2026-11-19] Protocol 1.54** (additive; the knowledge base's commands, KB1.7, §25.14):
 `Request::KbSearch{query, project, kinds, since_ms, before_ms, limit, here}` → `Reply::KbHits{hits,
 words_only}`; `KbRead{addr, before, after}` → `KbDoc{item, chunks, at, stale}`; `KbRecent{kinds,
 project, before_ms, limit}` → `KbItems{items}`; `KbForget{addrs, query, confirmed}` →
 `KbForgotten{items, chunks}` (unconfirmed: `needs_confirmation`); `KbStatus` → `KbStatus{status}`.
 The types are `ptyro_core::kb::search::{KbHit, KbListed, KbStatusInfo}` and `ptyro_core::kb::{KbItem,
-KbChunk}`. `read` scope, `full` to forget; never routed to another machine. 1.53 also counts
-`DaemonDoctor.kb`, which 1.52 builds already sent. Compatibility: a 1.52 daemon can't read these
+KbChunk}`. `read` scope, `full` to forget; never routed to another machine. 1.54 also counts
+`DaemonDoctor.kb`, which 1.52 builds already sent. Compatibility: a 1.53 daemon can't read these
 requests and answers `invalid` ("the daemon couldn't read this request"), which `ptyro recall` and
 `ptyro kb` turn into "the running daemon is older than this ptyro … `ptyro daemon upgrade`"; an
 older client never sends them.
+
+**[built 2026-11-19] Protocol 1.53** (additive; UX3.10, a repository that moved, §10.1):
+`Request::ProjectMove{addr, path}` → `Reply::Project{info, notes}`, full scope, routed by `addr`
+to the project's machine; `ProjectInfo.moved_to` (skipped when empty; not a column: kept in kv
+`move:offered` so an offer survives a restart, and looked at again at start) says its main
+checkout is gone and the same repository was found there;
+`Request::ProjectAdd` gains `moved` (move that project here instead of registering) and
+`separate` (register it apart; that project isn't offered this place again), both skipped when
+false; `Again::Moved` (wire `"fix": "moved"`, label "Move P here"), the fix of `ProjectAdd`'s
+refusal when a missing project is the repository (`Request::with_fix` sets `moved`; `ProjectAdd`
+is `fixable`). Watchers hear `ProjectUpdated` when `moved_to` is set or cleared, and for a move
+`ProjectUpdated`, a `WorktreeUpdated` per worktree, `ProjectRemoved` and `WorktreeRemoved` for a
+duplicate folded in, `WorkspaceUpdated` and `SessionUpdated` for what followed. Compatibility: a
+1.52 daemon answers `ProjectMove` "unsupported request" and ignores `moved`/`separate` (it
+registers the duplicate, as before: accepted, a 1.53 client can't tell); a 1.52 client ignores
+`moved_to`, and its `ProjectAdd` refusal comes without the fix (it knows none) and with the
+commands in its message (`ptyro project move P PATH`, `ptyro project add PATH --separate`; the
+daemon knows the client's version from its Hello). `ProjectMove` and `ProjectAdd{moved}` are
+refused to agents (§17: moving projects is the person's call). The store keeps four kv keys,
+`repo:roots` (project id → root commits), `repo:seen` (project id → `{ms, mount}`: when its
+checkout was last seen, and its drive's mount point), `move:offered` (project id → place) and
+`move:declined` (`[project id, place]`); no migration.
 
 **[built 2026-11-19] Protocol 1.52** (additive; WEB2.3, every key exactly once, §16.4 WEB1.8):
 `ClientMsg::Keys{session, stream, keys: [SeqKey{n, event, token, age_ms, typed_ms, heard}], replay}`
@@ -2515,6 +2537,79 @@ modes and other-workspace badges.
   `[discover] auto_register = false` turns it off. **[proposed SH, §23.2]** A loose session (one in
   a workspace's SHELLS) is never moved: its repository may be registered, the shell stays put. `project add` without `--workspace` uses the
   workspace the TUI showed last.
+- **[built UX3.10, 2026-11-19] A repository that moved.** `ptyro project move P PATH` (alias
+  `relocate`; the TUI's `project.move`, the web's ⋯ → Move…; protocol 1.53 `ProjectMove`) points
+  a project at where its repository is now (`crates/ptyro-daemon/src/moves.rs`). It keeps its id,
+  so its trust, pin, workspaces, sessions and worktree history stay.
+  - **What is checked first, and refused** (nothing changes on a refusal): `PATH` resolved as
+    registration resolves it (symlinks: `~/external/dev/app` is `/Volumes/…/dev/app`; a path
+    inside the repository finds its main checkout, and the reply says so); a git repository
+    (bare ones are refused, as by `project add`). **The same repository**: proof is the
+    repository's own records (its `<common dir>/worktrees/*` list the project's worktrees, by
+    ptyro's `ptyro.json` marker or by path, or places under the old root), a root commit in
+    common with the ones recorded while the checkout was there (`git rev-list --max-parents=0
+    --branches HEAD`, kv `repo:roots`, recorded at registration and, for older projects, once at
+    start), or the same remote (`normalize_remote`). Another history, or another remote (unless
+    its records prove it is the very repository: a renamed remote), is refused as another
+    repository; nothing to tell by (no remote, nothing recorded) is refused too, with what to do
+    (forget it and add the new place). There is no override: a project is never pointed at
+    another repository. **Not a copy**: when the old root is still a checkout of the same
+    repository, it's a copy, refused with how to choose (remove or rename the old one, or add
+    the copy as its own project). An old root that holds something else, or no repository, is
+    left as it is (the reply says so).
+  - **The move**: the root, its `@root` worktree (path, branch, state), the default branch and
+    remote follow the new place. Worktrees inside the old root moved with it (their paths are
+    rewritten); `sibling` ones (`<repo>.worktrees/`) follow when that directory moved too;
+    anything else (ptyro's worktrees directory) stayed. Every worktree whose directory exists
+    and whose git doesn't reach the new repository is repaired with `git worktree repair PATH`
+    run from the new root (git 2.30+), then checked (`Git::belongs`); one git can't repair is
+    reported with where its files are, one not found stays `missing`. (git 2.31 is needed
+    before that already: `main_root`'s `--path-format`.) Sessions keep running
+    where they started (the reply counts them); a session's start directory (`cwd`, what a
+    restart uses) under a moved directory follows, in memory and in history. Watches move,
+    statuses refresh. The database is written in one transaction (`Store::relocate`), after
+    the repairs: if that write fails, the refusal says the project still points at its old
+    place and which worktrees git linked to the new one already, and that moving it again
+    finishes it (what is linked is left as it is). Nothing is deleted, ever: git's link repairs
+    are the only writes outside ptyro's database. `PATH` relative is the CLI's and the TUI's
+    current folder; the web, with none, refuses one, saying to write it in full (or from `~`).
+  - **Folding in a duplicate**: a project registered at `PATH` already (auto-registration's
+    `app-2` before 1.53) is folded in: the original's id, slug and settings stay and win; it
+    gains what only the duplicate had: its linked worktrees (renamed `-2` on a name clash; one
+    with the same directory as one of the original's is that one), its sessions (live and in
+    history; its `@root`'s go to the original's), its workspace memberships (in its place in
+    each list; written in the same transaction), its pin when the original has none, and its
+    trust only for a scope the original has no approval for at all: the original wins on
+    conflicts, trust included (owner, 2026-11-19). Then it is forgotten without being declined,
+    so nothing stops the moved project from being found there.
+  - **Spotting a move**: a local project whose root is gone gets `ProjectInfo.moved_to` when
+    ptyro finds its repository, unless its drive isn't mounted: while a checkout is there ptyro
+    keeps when it saw it and its drive's mount point (its highest ancestor on the same device;
+    kv `repo:seen`, at every look and before `project add` answers). No drive mounted at that
+    mount point now (gone, or a directory left behind on its parent's device: an unclean eject's
+    `/Volumes/EXT`, an fstab `/mnt/data` that didn't mount) is unmounted, and offered nothing;
+    for a checkout this ptyro never saw: nothing left above `/Volumes`, `/media`, `/mnt`,
+    `/run/media` or `/`, or only an empty directory there that isn't a mount point. A place that
+    is the same path on the drive mounted again under another name (`/Volumes/EXT 1/…`, udisks'
+    `EXT1`) is never offered (an explicit move there is allowed, with a note). Auto-registration
+    meeting the repository (a session started or `cd`ed there) registers nothing and offers the
+    move instead; a project registered elsewhere is offered as the place, folding it in, when
+    its own records prove it is the very repository, or, on the history or remote alone (any
+    clone has them), only when it was registered after the missing one's checkout was last
+    seen (for one never seen, after the missing one was registered): a clone registered while
+    the other checkout was there is a project of its own, kept on purpose, never offered either
+    way round. Looked for at start, when a project is added or forgotten, and when a main
+    checkout goes or comes back; a look that finishes after a newer look, a move, an offer or a
+    decline changes nothing. `project add` of such a repository is refused with the fix `moved`
+    ("Move P here", the CLI asks at a terminal, else names `--moved` and `--separate`);
+    `--separate` registers it apart and no project gone missing that is that repository is
+    offered that place again (kv `move:declined`); `--moved` with no such project is refused
+    (never registers), naming `project move` and the projects that are gone. Every client offers it: the TUI marks the row `missing` (`missing →?`
+    once found), its hint and row menu lead with move, then forget, and a toast offers the move
+    on `toast.act`; the web's Projects tab and project page show a banner (Move it there,
+    Somewhere else…, It's another project, Forget it) and a toast; `project ls`/`show` say
+    `gone: …` with the command; `ptyro doctor` warns (`projects`, `data.move`), so the TUI's
+    health badge opens the move form and the web's Health page moves it.
 - Discovery walks `[discover] roots` (depth 3). It stops at repositories and skips hidden dirs,
   `node_modules`, `target`, `vendor` and `venv`, and caches the result for an hour in kv
   `discover:cache`. The first run (`setup`) and the TUI's and web's project pickers (the palette's
@@ -5296,6 +5391,11 @@ emulator, no WASM.
   of a line is checked but not drawn; a coincidence (a program printing exactly the predicted
   letter with the cursor after it, twice) could prove an epoch, and a guess then shows for at
   most a round trip.
+  **[fixed 2026-11-19, v0.0.90]** A guess placed as its key is typed is never "late" (only letters
+  held since a barrier are, and their round trip isn't measured). It was decided by comparing two
+  reads of the clock a moment apart, which differ on a busy machine: every guess there counted as
+  late, the round trip was never measured, and nothing was ever drawn. Caught by the browser e2e
+  on CI; `E2E_THROTTLE=6 PTYRO_E2E_ONLY=predict make web-e2e` reproduces a slow machine.
 - **[built 2026-11-19, WEB2.2] Terminal first** (`termFirst`, `strayToTerm` in `app.ts`; the
   rules are `strayKey`, `hardKey`, `ownKeyboard`, `autoFocus` in `keys.ts`, tested in
   `web/test/typing.mjs`; e2e `terminalFirst`, `typePhone`). The terminal is the session page's
@@ -10042,7 +10142,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and all of KB3: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (KB3.1 to KB3.6), and the Sources tab and the ingest form in the TUI and the web, a file and a commit opened in their own tools, roots on a linked machine (KB3.7, protocol 1.59); and all of KB4: a shell's commands, and what they print only where asked for (KB4.1, KB4.2, protocol 1.60); and KB5: pointers offered at a prompt, off unless switched on (KB5.1 the spike, KB5.2, protocol 1.61)]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and all of KB3: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (KB3.1 to KB3.6), and the Sources tab and the ingest form in the TUI and the web, a file and a commit opened in their own tools, roots on a linked machine (KB3.7, protocol 1.60); and all of KB4: a shell's commands, and what they print only where asked for (KB4.1, KB4.2, protocol 1.61); and KB5: pointers offered at a prompt, off unless switched on (KB5.1 the spike, KB5.2, protocol 1.62)]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -10057,7 +10157,7 @@ list and forget them, agents search them with `recall` and `recall_read`, a sess
 be private, the TUI and the web have the Library, a search asks linked machines too, and
 (KB2) you and your agents write notes, which are files; (KB5) an agent may be offered
 pointers at a prompt, where you switch that on):
-- **The review of the whole (2026-11-20; PR #121; its clients' side is protocol 1.62).**
+- **The review of the whole (2026-11-20; PR #121; its clients' side is protocol 1.63).**
   What reading the code found wrong and is now so; each is also said where the design has
   it:
   - **Who a caller is comes from what the daemon knows, never from what the client says**
@@ -10136,13 +10236,13 @@ pointers at a prompt, where you switch that on):
       every switch says what it shows. **What a form's text field holds is never a flag**: a
       `Make::Cli` form puts its words last, after `--`, and joins a value that starts with
       `-` to its flag.
-    - **A note edited from a copy is not written over what changed meanwhile (1.62).**
+    - **A note edited from a copy is not written over what changed meanwhile (1.63).**
       `KbNoteText.version` names the text that was read; `KbNote{addr, base}` is refused
       with `conflict` when the file is no longer that text (or is gone). `kb show REF
       --open` keeps what you wrote in a file and says where; the web's editor follows the
       file while nothing was typed (it asks again on `KbUpdated`), and with edits says the
       note changed and lets you load it or keep yours.
-    - **A search within a row's history is the store's (1.62).** `KbSearch.session` and
+    - **A search within a row's history is the store's (1.63).** `KbSearch.session` and
       `.worktree` filter in `kb.db`; both Libraries filtered the hits themselves, against
       the first page of that history, and said nothing matched when the hit was older.
       With either, no other machine is asked unless one is named, and no chat is found.
@@ -10153,7 +10253,7 @@ pointers at a prompt, where you switch that on):
       Library's switch uses.
 - **KB5 offered at a prompt (2026-11-20; `ptyro_core::kb::offer`,
   `crates/ptyro-daemon/src/kb/offer.rs`, `Adapter::{hook_prompt, hook_context}`,
-  `ptyro-protocol` 1.61; §25.9 has it whole):**
+  `ptyro-protocol` 1.62; §25.9 has it whole):**
   - **The spike (KB5.1; `make verify-kb ARGS=--offer`, four tiny turns) [verified
     2026-11-20, Claude Code 2.1.329 and Codex 0.167.1]:** a hook that prints one line of JSON,
     `{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": …}}`,
@@ -10203,7 +10303,7 @@ pointers at a prompt, where you switch that on):
     (a pointer nobody can open is noise). So does a project's `[knowledge] enabled =
     false`. There is **no per-agent or per-project switch of its own**: those two are it.
   - **The trace** (the design had none): the last 20 offers are in `KbStatusInfo.offered`
-    (1.61), which `ptyro kb` prints, the TUI's Library shows under `s`, and the web's under
+    (1.62), which `ptyro kb` prints, the TUI's Library shows under `s`, and the web's under
     the status line; each is also a `kb_offer` event of its session (the addresses, no
     text). An agent that asks for the status gets none of it. A pointer to an item
     forgotten since is left out. The trace is the daemon's memory: a restart empties it,
@@ -10213,7 +10313,7 @@ pointers at a prompt, where you switch that on):
   - **The golden set gained prompts** (§25.16): 60 that must be offered their own topic and
     nothing else, 12 that must be offered nothing.
 - **KB4 shells (2026-11-20; `ptyro_core::kb::shell`, `ptyro_term::capture`,
-  `crates/ptyro-daemon/src/kb/shells.rs`, `ptyro-protocol` 1.60; §25.6.5 has it whole):**
+  `crates/ptyro-daemon/src/kb/shells.rs`, `ptyro-protocol` 1.61; §25.6.5 has it whole):**
   - **The command line comes from the `C` mark itself, not from `SessionInfo.command`**: that
     one is cut to 200 characters for a list. The session keeps the line as the shell sent it
     (`Meta.command_line`, at most 4 KiB) and hands it over at `D` (`Feed::Ran`). ptyro's
@@ -10263,7 +10363,7 @@ pointers at a prompt, where you switch that on):
     gate refuses it besides). A shell of SHELLS lost in a daemon restart came back not
     private: its kept record now carries `private` and `unrecorded` (`shells.rs` `Kept`).
   - **The switches.** `kb.shell` (`off`, `commands`, `output`), `kb.shell_skip`,
-    `kb.shell_output_days` in the schema; `KbStatusInfo.shell` (1.60) says which is on, in
+    `kb.shell_output_days` in the schema; `KbStatusInfo.shell` (1.61) says which is on, in
     `ptyro kb`'s lines and to the Libraries. The Sources tab: TUI `c` (the commands: `off` ↔
     `commands`, and from `output` off too) and `o` (what they print: `commands` ↔ `output`;
     from `off` it switches nothing and says `c` comes first); web: the sentence with **Keep
@@ -10283,7 +10383,7 @@ pointers at a prompt, where you switch that on):
     fish, pwsh and bash ≥ 4.4's `PS0` path unverified]**.
 - **KB3.7 the Sources tab, the ingest form, and a source opened in its own tool (2026-11-20;
   `crates/ptyro-tui/src/library/sources.rs`, `web/src/library.ts` and `libkit.ts`,
-  `crates/ptyro/src/kb.rs` and `ingest.rs`, `kb/machines.rs`, `ptyro-protocol` 1.59):**
+  `crates/ptyro/src/kb.rs` and `ingest.rs`, `kb/machines.rs`, `ptyro-protocol` 1.60):**
   - **The third tab, in both Libraries.** TUI: `3` (`kb.sources`): each root in two or three
     lines (its kind, its name, how it stands; what it holds, its profile, its path; what
     went wrong), the selected one in full beside the list from 80 columns. `i` reads a
@@ -10315,7 +10415,7 @@ pointers at a prompt, where you switch that on):
     the TUI, a pick of four ages on the web), only count (`--dry-run`), the machine. It is
     always counted first; the count is the question (`KbHistoryPlan::text`, in
     `ptyro-core`, which the command prints too), and a yes reads.
-  - **Roots on a linked machine (1.59)**: `KbRoots`, `KbIngest`, `KbSync`, `KbRemove` and
+  - **Roots on a linked machine (1.60)**: `KbRoots`, `KbIngest`, `KbSync`, `KbRemove` and
     `KbHistory` have `machine?`; `handle_kb` sends one that names a linked machine on
     (`Daemon::kb_roots_far`), for you only (an agent's session is refused), and the
     machine answers as for its own client: its paths, its projects and profiles by name, its
@@ -10363,7 +10463,7 @@ pointers at a prompt, where you switch that on):
     [unverified]); a real linked machine over the network (two daemons on one computer).
 - **KB3 roots, `ingest` and the history's backfill (2026-11-20; engine and CLI: KB3.1 to
   KB3.6. `ptyro_core::kb::file`, `ptyro-git`'s `log.rs`, `crates/ptyro-daemon/src/kb/roots.rs`
-  and `kb/history.rs`, `ptyro-protocol` 1.58, `crates/ptyro/src/ingest.rs`). The Sources tab
+  and `kb/history.rs`, `ptyro-protocol` 1.59, `crates/ptyro/src/ingest.rs`). The Sources tab
   and the ingest form came with KB3.7 (above), with `gc` and mend naming a failing root:**
   - **A pass has its own task, not the ingest queue** (`Daemon::kb_roots_kick`): one root at
     a time, listing and reading off the async threads, each file its own write. The queue is
@@ -10444,7 +10544,7 @@ pointers at a prompt, where you switch that on):
     are real transcripts; no real folder was read: `ingest --history` was never run on this
     machine's `~/.claude`).
 - **KB2 notes (2026-11-20; `ptyro_core::kb::note`, `crates/ptyro-daemon/src/kb/notes.rs`,
-  `ptyro-protocol` 1.57, `crates/ptyro/src/kb.rs`, `mcp.rs`, the Libraries):**
+  `ptyro-protocol` 1.58, `crates/ptyro/src/kb.rs`, `mcp.rs`, the Libraries):**
   - **The files are the truth, and one function makes the index agree with them**
     (`Daemon::kb_notes_sync`): every `<profile>/<project>/<name>.md` under `<data>/kb/notes/`
     whose time or size is not what its item's cursor says is read through the one way in
@@ -10543,7 +10643,7 @@ pointers at a prompt, where you switch that on):
     given the tool, and never calls it); the watcher on Linux (the tests ran on macOS; a
     change the watcher misses is found by `kb sync` and at the next start).
 - **KB1.12 linked machines (2026-11-19; `crates/ptyro-daemon/src/kb/machines.rs`,
-  `kb/requests.rs`, `ptyro-protocol` 1.56):**
+  `kb/requests.rs`, `ptyro-protocol` 1.57):**
   - **The knowledge base's requests are still never routed** by the daemon's general rule
     (`here_only`): `handle_kb` sends them on itself, because it knows who asks. The general
     rule would send an agent's `laptop2:k:…` straight to laptop2 and past the wall.
@@ -10616,7 +10716,7 @@ pointers at a prompt, where you switch that on):
   - **Not built**: the hit beside the list on a wide screen, and the status in the command's
     exact lines (the page has its own table of the same facts).
 - **KB1.8 the TUI's Library (2026-11-19; `crates/ptyro-tui/src/library.rs`, `ptyro-protocol`
-  1.55):**
+  1.56):**
   - **It is a panel over the panes, one of the chat panel's shapes** (`ChatPanel::Library`),
     not an overlay: the sidebar stays, `` ` `` goes back and forth between it and a session
     shown from it, Esc from a chat opened from it comes back to it, and the palette and every
@@ -10663,7 +10763,7 @@ pointers at a prompt, where you switch that on):
   - **"history" in a row's menu is the action `kb.history`** (a session's, a worktree's and a
     project's; from the palette, the selected row's or the project you are in): a project's
     is the project filter; a session's and a worktree's are `KbRecent{session}` and
-    `KbRecent{worktree}` (new in 1.55, with `since_ms`), shown as an `only …` chip that
+    `KbRecent{worktree}` (new in 1.56, with `since_ms`), shown as an `only …` chip that
     Backspace clears. A search inside one keeps, of the project-wide hits, those whose item
     that history holds (so at most its newest 100 items). **KB3's backfill, which §25.10
     listed under the same name, is `kb.backfill` now.**
@@ -10732,7 +10832,7 @@ pointers at a prompt, where you switch that on):
     `codex exec` once each; KB0 verified that a resume needs the flags again, with a
     stand-in server), and a user's own `--mcp-config` or `--allowedTools` in `[agents.X]
     args` beside ptyro's (two of the same flag) **[unverified]**.
-- **KB1.14 private sessions (2026-11-19; `ptyro-protocol` 1.54, `SpawnSpec.private`,
+- **KB1.14 private sessions (2026-11-19; `ptyro-protocol` 1.55, `SpawnSpec.private`,
   `SessionInfo.private`, `Place.private` in `crates/ptyro-daemon/src/session.rs`, the column
   `session.private` in `ptyro.db`):**
   - **`private` is three-valued where a session is asked for**: `SpawnSpec.private` and
@@ -10763,7 +10863,7 @@ pointers at a prompt, where you switch that on):
     command, and one lost in a daemon restart and offered again in SHELLS comes back
     private: its kept record carries the flag.)
 - **KB1.7 the protocol's messages and the commands, KB1.11 the settings, the switches and
-  retention (2026-11-19; `ptyro-protocol` 1.53, `crates/ptyro-daemon/src/kb/requests.rs`,
+  retention (2026-11-19; `ptyro-protocol` 1.54, `crates/ptyro-daemon/src/kb/requests.rs`,
   `crates/ptyro/src/kb.rs`, `ptyro_core::config::Kb`):**
   - **Five requests, on this machine only**: `KbSearch`, `KbRead`, `KbRecent`, `KbForget`,
     `KbStatus` (§25.14 has them as built). (Since KB1.12 a search, a read, a history and
@@ -12010,7 +12110,7 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
     §20.2]**: one line of JSON on the hook's stdout, `{"hookSpecificOutput":
     {"hookEventName": "UserPromptSubmit", "additionalContext": …}}`, the same for both
     (`ptyro_agents::adapter::prompt_context`). OpenCode: none (no such hook).
-  - **The trace**: `KbStatusInfo.inject` and `.offered` (§25.14, 1.61): the last 20 offers,
+  - **The trace**: `KbStatusInfo.inject` and `.offered` (§25.14, 1.62): the last 20 offers,
     each with its session and its pointers, in `ptyro kb`, the TUI's Library status and the
     web's; and a `kb_offer` event in the session's log.
 
@@ -12146,7 +12246,7 @@ list; `ptyro gc` prints the same line.
 As chats (§22.10, §22.11), with the machinery MM1 built. *As built (KB1.12; this section's
 "As built" list has what differs)*: the fan-out, a far hit read, listed and forgotten on its
 machine, the wall across the link, and the scopes. Roots and ingest are built (KB3) and
-act on the daemon asked, or on a linked machine named in the request (KB3.7, 1.59: the
+act on the daemon asked, or on a linked machine named in the request (KB3.7, 1.60: the
 commands' `--machine`, the Sources tab's machine filter, the forms' pick). An editor on a
 far file is the design, not built: its hit is read in the reader.
 
@@ -12329,7 +12429,7 @@ exclude = []              # more paths never to ingest (globs)
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
-### 25.14 Protocol (additive; all of it is built, 1.53 to 1.62)
+### 25.14 Protocol (additive; all of it is built, 1.54 to 1.63)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
@@ -12339,8 +12439,8 @@ exclude = []              # more paths never to ingest (globs)
   messages themselves are KB1.7's.
 - `KbRead{addr, before, after}` → `KbDoc{item: KbItem, chunks, at}`.
 - `KbRecent{kinds?, project?, before_ms?, limit}` → `KbItems{items}` (the history, paged).
-  *As built (1.55)*: also `session?`, `worktree?`, `since_ms?`.
-- **As built (KB1.7), protocol 1.53** (§6.4; requests are `t: "kb_search"`… on the wire):
+  *As built (1.56)*: also `session?`, `worktree?`, `since_ms?`.
+- **As built (KB1.7), protocol 1.54** (§6.4; requests are `t: "kb_search"`… on the wire):
   - `KbSearch{query, project?, kinds[], since_ms?, before_ms?, limit?, here?}` →
     `KbHits{hits: [KbHit], words_only?}`. `limit`: 20 when absent, 100 at most. `here`: a
     project's id or name, or a path (a boost; a place that is no project's is nothing).
@@ -12358,11 +12458,11 @@ exclude = []              # more paths never to ingest (globs)
   - Scopes: the first three and the status need `read`, forgetting `full`. All five are
     answered by the machine asked (`here_only`). A caller inside an agent's session is
     answered within the wall (§25.9).
-  - **1.54 (KB1.14)**: `SpawnSpec.private?` and `WorktreeSpec.private?` (absent: as
+  - **1.55 (KB1.14)**: `SpawnSpec.private?` and `WorktreeSpec.private?` (absent: as
     `kb.private` says), `SessionInfo.private`, `Reply::Agents.private` (the default), and
     `KbForget.session?` (a ptyro session: everything kept of it goes and it is private from
     then on; unconfirmed, `needs_confirmation`).
-  - **1.55 (KB1.8)**: the event `KbUpdated{kinds: [ItemKind]}`, to every watcher (a client
+  - **1.56 (KB1.8)**: the event `KbUpdated{kinds: [ItemKind]}`, to every watcher (a client
     that asked to watch, as for `ChatUpdated`), never mirrored from another machine. Sent
     when an item was written and a piece of it was added, changed or removed (one event a
     write, so about one a turn of a session), after `KbForget` deleted something, and after a
@@ -12370,12 +12470,12 @@ exclude = []              # more paths never to ingest (globs)
     carries nothing of what they hold and no `root` yet (roots are KB3's): a client showing
     the knowledge base asks again (`KbStatus`, and its list). And `KbRecent` gained
     `session?` (a ptyro session's id), `worktree?` (a worktree's id) and `since_ms?`.
-  - **1.56 (KB1.12)**: `KbSearch.machines` (every linked machine too), `.machine?` (only
+  - **1.57 (KB1.12)**: `KbSearch.machines` (every linked machine too), `.machine?` (only
     that one: a linked machine's name, this one's, or `here`) and `.profile?` (only what that
     profile may see; it narrows); `KbHits.left_out: [String]`; `KbRead.profile?`;
     `KbRecent.machine?`. `KbRead` and `KbForget` take an address under a linked machine's
     name. The requests stay `here_only` for the general router: `handle_kb` sends them on.
-  - **1.57 (KB2)**: `KbNote{text, title?, project?, profile?, tags[], replaces?, addr?}` →
+  - **1.58 (KB2)**: `KbNote{text, title?, project?, profile?, tags[], replaces?, addr?}` →
     `KbNoted{item: KbListed, path}`; `KbNotes{project?, writer?}` → `KbItems`;
     `KbNoteRead{addr}` → `KbNoteText{item, text, path}`; `KbSync` → `KbSynced{notes, changed,
     removed}`; `KbRecent.writer?`; `KbStatusInfo.notes`. `project`: a project's name, id or a
@@ -12383,7 +12483,7 @@ exclude = []              # more paths never to ingest (globs)
     only; then nothing else of the request is read). `read` for the two that read, `control`
     for the two that write; here only; a chat's agent may send `KbNote` without `addr` and
     nothing else new.
-  - **1.58 (KB3)**: `KbRoots` → `KbRoots{roots: [KbRootInfo]}` (a `KbRoot`'s fields, and
+  - **1.59 (KB3)**: `KbRoots` → `KbRoots{roots: [KbRootInfo]}` (a `KbRoot`'s fields, and
     `project_name?`, `files`, `commits`, `chunks`, `progress?: [done, of]`, `removing?`);
     `KbIngest{spec: RootSpec{path, name?, project?, profile?, options}}` → `KbIngested{root,
     plan: KbPlan{existing, git, files, documents, sources, comments, code, commits, over?}}`
@@ -12395,19 +12495,19 @@ exclude = []              # more paths never to ingest (globs)
     pass writes, to every watcher; `KbStatusInfo.failing` (the roots that are missing or in
     error, a line each). `KbRoots` needs `read`, `KbIngest`, `KbHistory` and `KbSync`
     `control`, `KbRemove` `full`; all here only. `KbUpdated` still carries no `root`.
-  - **1.59 (KB3.7)**: `machine?` on `KbRoots` (now `KbRoots{machine?}`; `{"t":"kb_roots"}`
+  - **1.60 (KB3.7)**: `machine?` on `KbRoots` (now `KbRoots{machine?}`; `{"t":"kb_roots"}`
     still parses), `KbIngest`, `KbSync`, `KbRemove` and `KbHistory`: a linked machine's
     name, and the request is answered there (this machine's own name, or `here`, is this
     one). You only: from inside an agent's session it is `permission_denied`. The scopes
     are unchanged, and the general router still leaves all five alone (`here_only`).
-  - **1.60 (KB4)**: `KbStatusInfo.shell` (`off`, `commands`, `output`; empty from a daemon
+  - **1.61 (KB4)**: `KbStatusInfo.shell` (`off`, `commands`, `output`; empty from a daemon
     before it). No request is new: a shell's commands are kept by the daemon itself, read,
     listed and forgotten as every item is, and switched by the setting.
-  - **1.61 (KB5)**: `KbStatusInfo.inject` (`kb.inject`) and `KbStatusInfo.offered`
+  - **1.62 (KB5)**: `KbStatusInfo.inject` (`kb.inject`) and `KbStatusInfo.offered`
     (`KbOffer{at_ms, session, name, pointers: [KbPointer{addr, kind, title?, at_ms,
     project?}]}`, newest first, at most 20; empty for an agent that asks, and from a daemon
     before it). No request is new: an offer is the answer to `Hook`, as `HookOutput` (§8.3).
-  - **1.62 (the review)**: `KbSearch.session?` and `.worktree?` (ids; a filter in the store,
+  - **1.63 (the review)**: `KbSearch.session?` and `.worktree?` (ids; a filter in the store,
     as `KbRecent`'s; this machine only unless `machine` names one; no chats);
     `KbNote.base?` with `KbNoteText.version` (a hash of the file's text: a note written
     again from a text that is no longer the file's is `conflict`, and nothing is written).
@@ -12418,7 +12518,7 @@ exclude = []              # more paths never to ingest (globs)
   by tier, commits). `KbHistory{agent?, profile?, since?, dry_run}` → `KbPlan` / `Ok`.
 - `KbSync{roots}`, `KbRemove{root}`, `KbForget{addrs | query, confirmed}`.
 - `KbNote{text, title?, project?, tags, replaces?}` → `KbItem`; `KbNotes{project?}` → `KbItems`
-  (built as above, 1.57).
+  (built as above, 1.58).
 - `KbStatus` → `KbStatus{enabled, sizes, counts, vectors, roots, skipped}`.
 - Events: `KbUpdated{root?, kinds}` (something new is searchable), `KbProgress{root, done, of}`.
 - `SpawnSpec` gains `private`, and `SessionInfo` gains `private` (§25.7a). `KbForget` of a
@@ -12438,7 +12538,7 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head. **Built (KB3): `log.rs` (`Git::ls_files`, `history_tip`, `log`, `parse_log`, `Commit`)** |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes. **Built: `fuse_lists` (`fuse` is it for two lists), and `score` in eight running sums** |
 | `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/offer.rs` (**built**, KB5: `kb_offer`, the answer to a prompt's hook; `kb_pointers`, the floor; `kb_offered`, the trace), `kb/notes.rs` (**built**, KB2: the watcher, `kb_notes_sync`, `kb_note`, `kb_notes`, `kb_note_read`, `kb_note_forget`), `kb/shells.rs` (**built**, KB4: `kb_shell_ran`, `kb_shell`, `kb_output_switch`, `kb_shell_output_pass`; the session's side is `Feed::Ran` in `session.rs`); `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
-| `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.55): `DomainEvent::KbUpdated`; (1.56): `machines`, `machine`, `profile`, `left_out`; (1.57): `KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`** |
+| `ptyro-protocol` | the messages of §25.14. **Built (1.54): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.56): `DomainEvent::KbUpdated`; (1.57): `machines`, `machine`, `profile`, `left_out`; (1.58): `KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`** |
 | `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools. **Built: `kb.rs` (`recall`, `kb status`, `kb show`, `kb recent`, `kb forget`; KB2: `kb note`, `kb notes`, `kb sync`), `mcp.rs` (all three tools)** |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms. **Built (KB1.8): `library.rs` (`Library`, `ChatPanel::Library`, the reader over `chat::ChatView` with `read_only`), `clock::local_ms`; (KB3.7): `library/sources.rs` (the Sources tab, the ingest form and the history's, `Make::KbIngest`, `Make::KbBackfill`)** |
 | `web/` | `library.ts`, its `ACTIONS`. **Built (KB1.9): `library.ts` (the list and the reader) and `libkit.ts` (its logic with no DOM, tested by `web/test/library.mjs`)** |

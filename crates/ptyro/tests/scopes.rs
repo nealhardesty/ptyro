@@ -201,6 +201,7 @@ fn table() -> Vec<Sample> {
         ),
         s(json!({"t":"project_remove","addr":a,"release":false}), FULL, false),
         s(json!({"t":"project_rename","addr":a,"name":"x"}), FULL, false),
+        s(json!({"t":"project_move","addr":a,"path":"/nonexistent-scopes-test"}), FULL, false),
         s(json!({"t":"project_pin","addr":a,"profile":null}), FULL, false),
         s(json!({"t":"project_scripts","addr":a,"worktree":null}), FULL, false),
         s(json!({"t":"project_trust","addr":a,"fingerprint":"x"}), FULL, false),

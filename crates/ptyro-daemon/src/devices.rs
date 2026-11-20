@@ -229,7 +229,7 @@ pub fn needed(req: &Request) -> Scope {
         SetupRun { .. } => Scope::Full,
         // Forgetting deletes for good (SPEC §25.11).
         KbForget { .. } | KbRemove { .. } => Scope::Full,
-        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | GcKeep { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
+        Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectMove { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | GcKeep { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
     }
 }
 

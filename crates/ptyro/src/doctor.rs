@@ -1089,6 +1089,7 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
         }
     }
     worktrees(&c, config, r).await;
+    projects(&c, r).await;
     if quick {
         return;
     }
@@ -1104,6 +1105,67 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
             Ok(_) => {}
             Err(e) => r.add("hooks", adapter, Level::Problem, e.message),
         }
+    }
+}
+
+/// Projects whose main checkout is gone (SPEC §10.1): a warning, with the move when ptyro found
+/// where the repository is now (a project registered there again is folded in), else how to say
+/// where it went, or forget it. `data.move` lets the web and the TUI offer the move itself.
+async fn projects(c: &ptyro_client::Client, r: &mut Report) {
+    const S: &str = "projects";
+    let (Ok(Reply::Projects { projects }), Ok(Reply::Worktrees { worktrees })) = (
+        c.request(Request::ProjectList).await,
+        c.request(Request::WorktreeList { project: None }).await,
+    ) else {
+        return;
+    };
+    let mut gone = 0;
+    for p in projects.iter().filter(|p| p.machine.is_none()) {
+        let missing = worktrees.iter().any(|w| {
+            w.project == p.id && w.is_root && w.state == ptyro_core::model::WorktreeState::Missing
+        });
+        if !missing && p.moved_to.is_none() {
+            continue;
+        }
+        gone += 1;
+        let was = p.root.display();
+        match &p.moved_to {
+            Some(to) => {
+                let into = projects.iter().find(|d| d.id != p.id && d.root == *to);
+                let text = match into {
+                    Some(d) => format!(
+                        "{slug}'s directory ({was}) is gone; it seems to have moved to {to}, registered again there as {d}:                          `ptyro project move {slug} {to}` moves {slug} there and folds {d} into it",
+                        slug = p.slug,
+                        to = to.display(),
+                        d = d.slug
+                    ),
+                    None => format!(
+                        "{slug}'s directory ({was}) is gone; it seems to have moved to {to}: `ptyro project move {slug} {to}`",
+                        slug = p.slug,
+                        to = to.display()
+                    ),
+                };
+                r.add(S, &p.slug, Level::Warn, text);
+                r.add_data(serde_json::json!({ "move": {
+                    "project": p.id, "slug": p.slug, "path": to, "into": into.map(|d| d.slug.clone()),
+                }}));
+            }
+            None => {
+                r.add(
+                    S,
+                    &p.slug,
+                    Level::Warn,
+                    format!(
+                        "{slug}'s directory ({was}) is gone: if you moved it, `ptyro project move {slug} NEWPATH`;                          if it's gone for good, `ptyro project rm {slug}`",
+                        slug = p.slug
+                    ),
+                );
+                r.add_data(serde_json::json!({ "move": { "project": p.id, "slug": p.slug, "path": null } }));
+            }
+        }
+    }
+    if gone == 0 && !projects.is_empty() {
+        r.add(S, "where", Level::Ok, "every project's directory is where ptyro has it");
     }
 }
 
