@@ -155,6 +155,8 @@ pub struct ItemFilter {
     pub root: Option<String>,
     /// A ptyro session's id.
     pub session: Option<String>,
+    /// A worktree's id.
+    pub worktree: Option<String>,
     /// By an item's time: when it ended, else started, else was ingested.
     pub since_ms: Option<u64>,
     /// Items older than this: the next page of a history.
@@ -524,6 +526,9 @@ impl KbDb {
             }
             if let Some(s) = f.session {
                 arg(&mut sql, " AND session = ?", Box::new(s));
+            }
+            if let Some(w) = f.worktree {
+                arg(&mut sql, " AND worktree = ?", Box::new(w));
             }
             if let Some(t) = f.since_ms {
                 arg(&mut sql, &format!(" AND {AT} >= ?"), Box::new(t as i64));

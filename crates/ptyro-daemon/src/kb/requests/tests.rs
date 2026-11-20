@@ -89,6 +89,19 @@ async fn ask(d: &Daemon, req: Request) -> Result<Reply, ptyro_core::Error> {
     d.handle_kb(req, Caller::default()).await
 }
 
+/// The history, all of it.
+fn recent_all() -> Request {
+    Request::KbRecent {
+        kinds: Vec::new(),
+        project: None,
+        session: None,
+        worktree: None,
+        since_ms: None,
+        before_ms: None,
+        limit: None,
+    }
+}
+
 fn search(query: &str) -> Request {
     Request::KbSearch {
         query: query.into(),
@@ -177,6 +190,9 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
     let recent = |before_ms, limit| Request::KbRecent {
         kinds: vec![ItemKind::Session],
         project: Some("feeder".into()),
+        session: None,
+        worktree: None,
+        since_ms: None,
         before_ms,
         limit,
     };
@@ -193,6 +209,64 @@ async fn the_requests_search_read_and_list_with_names_and_addresses() {
     assert_eq!(
         items.iter().map(|i| i.item.uri.as_str()).collect::<Vec<_>>(),
         ["session://claude/c2"]
+    );
+}
+
+/// 1.55: the history of one ptyro session, of one worktree, and since a time; and every
+/// change (a write, a forgetting) is said to whoever watches, with the kinds it touched.
+#[tokio::test]
+async fn the_history_of_a_session_or_a_worktree_and_the_news_of_a_change() {
+    let t = tempfile::tempdir().unwrap();
+    let d = daemon(&t, "");
+    let mut events = d.events.subscribe();
+    let now = ptyro_core::now_ms();
+    let mut one = session("session://claude/c1", "the hopper jams", now);
+    one.stamp.worktree = Some("wt1".into());
+    d.kb_ingest(one).await.unwrap();
+    d.kb_ingest(session("session://claude/c2", "the motor hums", now - 3 * DAY)).await.unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            events.try_recv().ok(),
+            Some(ptyro_protocol::DomainEvent::KbUpdated { kinds: vec![ItemKind::Session] })
+        );
+    }
+    // The same text again changes nothing, and says nothing.
+    d.kb_ingest(session("session://claude/c2", "the motor hums", now - 3 * DAY)).await.unwrap();
+    assert!(events.try_recv().is_err());
+
+    let uris = |r: Reply| match r {
+        Reply::KbItems { items } => items.into_iter().map(|i| i.item.uri).collect::<Vec<_>>(),
+        r => panic!("{r:?}"),
+    };
+    let of = |session: Option<&str>, worktree: Option<&str>, since_ms| Request::KbRecent {
+        kinds: Vec::new(),
+        project: None,
+        session: session.map(str::to_owned),
+        worktree: worktree.map(str::to_owned),
+        since_ms,
+        before_ms: None,
+        limit: None,
+    };
+    let c2 = "ptyro-session://claude/c2";
+    assert_eq!(uris(ask(&d, of(Some(c2), None, None)).await.unwrap()), ["session://claude/c2"]);
+    assert_eq!(uris(ask(&d, of(None, Some("wt1"), None)).await.unwrap()), ["session://claude/c1"]);
+    assert_eq!(
+        uris(ask(&d, of(None, None, Some(now - DAY))).await.unwrap()),
+        ["session://claude/c1"]
+    );
+    assert!(uris(ask(&d, of(Some("nobody"), None, None)).await.unwrap()).is_empty());
+
+    // Forgetting is news too.
+    let forget = Request::KbForget {
+        addrs: Vec::new(),
+        query: Some("hopper".into()),
+        confirmed: true,
+        session: None,
+    };
+    ask(&d, forget).await.unwrap();
+    assert_eq!(
+        events.try_recv().ok(),
+        Some(ptyro_protocol::DomainEvent::KbUpdated { kinds: vec![ItemKind::Session] })
     );
 }
 
@@ -251,13 +325,7 @@ async fn forgetting_asks_first_then_deletes_for_good() {
     ));
     assert!(uris(&d, "zebra").await.is_empty());
     // One by its address.
-    let Reply::KbItems { items } =
-        ask(&d, Request::KbRecent { kinds: vec![], project: None, before_ms: None, limit: None })
-            .await
-            .unwrap()
-    else {
-        panic!()
-    };
+    let Reply::KbItems { items } = ask(&d, recent_all()).await.unwrap() else { panic!() };
     assert_eq!(items.len(), 1);
     let e = ask(&d, forget(&[&items[0].addr], None, false)).await.unwrap_err();
     assert!(

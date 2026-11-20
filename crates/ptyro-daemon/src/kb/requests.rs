@@ -127,9 +127,11 @@ impl Daemon {
                 let item = self.kb_listed(&db, vec![doc.item]).await?.remove(0);
                 Ok(Reply::KbDoc { item, chunks: doc.chunks, at: doc.at, stale: doc.stale })
             }
-            Request::KbRecent { kinds, project, before_ms, limit } => {
-                let items =
-                    self.kb_recent(kinds, project, before_ms, limit.unwrap_or(0), scope).await?;
+            Request::KbRecent { kinds, project, session, worktree, since_ms, before_ms, limit } => {
+                let of = super::search::Of { session, worktree, since_ms };
+                let items = self
+                    .kb_recent(kinds, project, of, before_ms, limit.unwrap_or(0), scope)
+                    .await?;
                 let db = self.kb_db()?;
                 Ok(Reply::KbItems { items: self.kb_listed(&db, items).await? })
             }
@@ -227,6 +229,7 @@ impl Daemon {
             chunks += db.forget(item.id.clone()).await.map_err(store_err)?.unwrap_or(0);
             tracing::info!("knowledge base: {} forgotten", item.uri);
         }
+        self.kb_changed(items.iter().map(|i| i.kind));
         Ok(Reply::KbForgotten { items: items.len() as u32, chunks: chunks as u32 })
     }
 
@@ -269,6 +272,7 @@ impl Daemon {
         if let Some(uri) = self.kb_session_uri(&s) {
             db.tombstone(uri, ptyro_core::kb::ItemKind::Session).await.map_err(store_err)?;
         }
+        self.kb_changed(items.iter().map(|i| i.kind));
         Ok(Reply::KbForgotten { items: items.len() as u32, chunks: chunks as u32 })
     }
 
@@ -337,6 +341,7 @@ impl Daemon {
         match db.expire(vec![ItemKind::Session, ItemKind::Shell], cut).await {
             Ok(n) => {
                 if n > 0 {
+                    self.kb_changed([ItemKind::Session, ItemKind::Shell]);
                     tracing::info!(
                         "knowledge base: {n} item(s) older than {} day(s) deleted",
                         self.config().kb.retain_days

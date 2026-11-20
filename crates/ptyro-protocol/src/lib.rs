@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 54 };
+pub const PROTO: Version = Version { major: 1, minor: 55 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -968,6 +968,15 @@ pub enum Request {
         kinds: Vec<ptyro_core::kb::ItemKind>,
         #[serde(default)]
         project: Option<String>,
+        /// Only what was kept of this ptyro session (its id; 1.55): a row's history.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
+        /// Only what happened in this worktree (its id; 1.55).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
+        /// Only items no older than this (1.55).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_ms: Option<u64>,
         #[serde(default)]
         before_ms: Option<u64>,
         /// `None`: 20; at most 100.
@@ -1922,6 +1931,14 @@ pub enum DomainEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
     },
+    /// The knowledge base changed (1.55, SPEC §25.14): something new can be found (an item
+    /// written or grown), or something went (forgotten, expired). `kinds`: the kinds of the
+    /// items that changed. It says nothing of what they hold: a client that shows the Library
+    /// asks again. To every watcher; never mirrored from another machine.
+    KbUpdated {
+        #[serde(default)]
+        kinds: Vec<ptyro_core::kb::ItemKind>,
+    },
     /// A setup run's progress (protocol 1.31): a step started, a line of its output, ✓, ✗ with
     /// the fix, and at the end the report.
     SetupProgress {
@@ -2218,8 +2235,14 @@ mod tests {
         round_trip(Request::KbRecent {
             kinds: vec![ItemKind::Session],
             project: None,
+            session: Some("01JB0000000000000000000S01".into()),
+            worktree: Some("w1".into()),
+            since_ms: Some(3),
             before_ms: Some(9),
             limit: None,
+        });
+        round_trip(ServerMsg::Event {
+            event: DomainEvent::KbUpdated { kinds: vec![ItemKind::Session] },
         });
         round_trip(Request::KbForget {
             addrs: vec!["k:7f3k".into()],
@@ -2339,7 +2362,10 @@ mod tests {
         let (m, _): (Request, _) = decode(br#"{"t":"kb_read","addr":"k:7f3k"}"#).unwrap();
         assert!(matches!(m, Request::KbRead { before: None, after: None, .. }));
         let (m, _): (Request, _) = decode(br#"{"t":"kb_recent"}"#).unwrap();
-        assert!(matches!(m, Request::KbRecent { limit: None, .. }));
+        assert!(matches!(
+            m,
+            Request::KbRecent { limit: None, session: None, worktree: None, since_ms: None, .. }
+        ));
         // Nothing is forgotten by a request that doesn't say it was agreed to.
         let (m, _): (Request, _) = decode(br#"{"t":"kb_forget","addrs":["k:7f3k"]}"#).unwrap();
         assert!(matches!(m, Request::KbForget { confirmed: false, query: None, .. }));

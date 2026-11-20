@@ -60,6 +60,15 @@ impl KbScope {
     }
 }
 
+/// What a history is narrowed to beyond its kinds and project (`KbRecent`, 1.55): one ptyro
+/// session's items, one worktree's, and nothing older than a time.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Of {
+    pub session: Option<String>,
+    pub worktree: Option<String>,
+    pub since_ms: Option<u64>,
+}
+
 /// What a hit is in the lists: the file, the item (or chat), the chunk (or message).
 type Key = (bool, String, String);
 
@@ -363,12 +372,13 @@ impl Daemon {
         Ok(KbDoc { item, chunks, at, stale })
     }
 
-    /// **The history** (SPEC §25.14's `KbRecent`): items newest first, by kind and project,
-    /// `before_ms` for the next page.
+    /// **The history** (SPEC §25.14's `KbRecent`): items newest first, by kind and project
+    /// and what [`Of`] names, `before_ms` for the next page.
     pub(crate) async fn kb_recent(
         &self,
         kinds: Vec<ItemKind>,
         project: Option<String>,
+        of: Of,
         before_ms: Option<u64>,
         limit: u32,
         scope: Option<&KbScope>,
@@ -389,6 +399,9 @@ impl Daemon {
                 kinds,
                 project,
                 profile: scope.and_then(|s| s.profile.clone()),
+                session: of.session,
+                worktree: of.worktree,
+                since_ms: of.since_ms,
                 before_ms,
                 limit: if narrowed { 0 } else { limit },
                 ..ItemFilter::default()

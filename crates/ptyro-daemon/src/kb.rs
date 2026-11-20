@@ -385,6 +385,7 @@ impl Daemon {
                 ),
             );
         }
+        let kind = plan.kind;
         let w = db.write(plan).await.map_err(store_err)?;
         if w.outcome == Outcome::Forgotten {
             // Forgotten between the gate and the write.
@@ -395,7 +396,22 @@ impl Daemon {
         if w.added + w.changed > 0 {
             self.kb_embed(db, &w.item).await;
         }
+        // Something new can be found, or something of it went: who shows it asks again.
+        if w.added + w.changed + w.removed > 0 {
+            self.kb_changed([kind]);
+        }
         Ok(w)
+    }
+
+    /// Tell every watcher that the knowledge base changed (`KbUpdated`, SPEC §25.14): items
+    /// of these kinds were written, grew, or went.
+    pub(crate) fn kb_changed(&self, kinds: impl IntoIterator<Item = ptyro_core::kb::ItemKind>) {
+        let mut kinds: Vec<_> = kinds.into_iter().collect();
+        kinds.sort_by_key(|k| k.as_str());
+        kinds.dedup();
+        if !kinds.is_empty() {
+            let _ = self.events.send(ptyro_protocol::DomainEvent::KbUpdated { kinds });
+        }
     }
 
     /// Before a live upgrade's exec: what is being written is written (the queue itself is

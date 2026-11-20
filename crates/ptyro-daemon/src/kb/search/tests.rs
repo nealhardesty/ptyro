@@ -297,10 +297,13 @@ async fn the_wall_and_what_is_forgotten() {
     let note = d.kb_search(ask("vet"), None).await.unwrap().hits[0].addr.clone();
     assert_eq!(d.kb_read(&note, 0, 0, None).await.unwrap().item.uri, "note://home/_global/vet");
     assert_eq!(d.kb_read(&note, 0, 0, Some(&work)).await.unwrap_err().code, ErrorCode::NotFound);
-    let recent = d.kb_recent(Vec::new(), None, None, 0, Some(&work)).await.unwrap();
+    let recent = d.kb_recent(Vec::new(), None, Of::default(), None, 0, Some(&work)).await.unwrap();
     assert_eq!(recent.len(), 2);
     assert!(recent.iter().all(|i| i.profile.as_deref() != Some("home")));
-    assert_eq!(d.kb_recent(Vec::new(), None, None, 0, Some(&own)).await.unwrap().len(), 1);
+    assert_eq!(
+        d.kb_recent(Vec::new(), None, Of::default(), None, 0, Some(&own)).await.unwrap().len(),
+        1
+    );
 
     // Forgotten: found by nobody, by words or by meaning, and it doesn't open.
     let db = d.kb_db().unwrap();
@@ -311,7 +314,7 @@ async fn the_wall_and_what_is_forgotten() {
         assert!(!got.iter().any(|u| u.starts_with("session:")), "{q}: {got:?}");
     }
     assert!(d.kb_read(&format!("k:{}", item.id), 0, 0, None).await.is_err());
-    assert_eq!(d.kb_recent(Vec::new(), None, None, 0, None).await.unwrap().len(), 2);
+    assert_eq!(d.kb_recent(Vec::new(), None, Of::default(), None, 0, None).await.unwrap().len(), 2);
 }
 
 #[tokio::test]
@@ -391,10 +394,19 @@ async fn an_address_opens_with_its_neighbours_and_the_history_pages() {
 
     // The history: newest first, a page at a time, by kind.
     let uris = |items: &[KbItem]| items.iter().map(|i| i.uri.clone()).collect::<Vec<_>>();
-    let page = d.kb_recent(Vec::new(), None, None, 2, None).await.unwrap();
+    let page = d.kb_recent(Vec::new(), None, Of::default(), None, 2, None).await.unwrap();
     assert_eq!(uris(&page), ["file:///c.md", "file:///b.md"]);
-    let next = d.kb_recent(Vec::new(), None, page[1].ended_ms, 2, None).await.unwrap();
+    let next =
+        d.kb_recent(Vec::new(), None, Of::default(), page[1].ended_ms, 2, None).await.unwrap();
     assert_eq!(uris(&next), ["file:///a.md"]);
-    assert!(d.kb_recent(vec![ItemKind::Session], None, None, 0, None).await.unwrap().is_empty());
-    assert_eq!(d.kb_recent(vec![ItemKind::File], None, None, 0, None).await.unwrap().len(), 3);
+    assert!(
+        d.kb_recent(vec![ItemKind::Session], None, Of::default(), None, 0, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        d.kb_recent(vec![ItemKind::File], None, Of::default(), None, 0, None).await.unwrap().len(),
+        3
+    );
 }

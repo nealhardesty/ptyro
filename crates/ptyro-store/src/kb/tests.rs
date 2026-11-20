@@ -304,6 +304,7 @@ async fn the_history_is_listed_newest_first_and_filtered() {
             p.stamp.profile = Some("personal".into());
             p.stamp.project = Some("p2".into());
             p.stamp.session = Some("s3".into());
+            p.stamp.worktree = Some("w3".into());
         }
         db.write(p).await.unwrap();
     }
@@ -329,6 +330,8 @@ async fn the_history_is_listed_newest_first_and_filtered() {
     let f = ItemFilter { project: Some("p2".into()), since_ms: Some(150), ..Default::default() };
     assert_eq!(uris(db.list(f).await.unwrap()), ["session://claude/c3"]);
     let f = ItemFilter { session: Some("s3".into()), ..Default::default() };
+    assert_eq!(uris(db.list(f).await.unwrap()), ["session://claude/c3"]);
+    let f = ItemFilter { worktree: Some("w3".into()), ..Default::default() };
     assert_eq!(uris(db.list(f).await.unwrap()), ["session://claude/c3"]);
     assert_eq!(db.ids().await.unwrap().len(), 4);
 
