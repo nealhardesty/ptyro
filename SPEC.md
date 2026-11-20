@@ -10759,7 +10759,9 @@ pointers at a prompt, where you switch that on):
     daemon after a write that added, changed or removed a piece, after a forgetting and after
     a retention pass that deleted something. The Library asks its list and the status again
     (the selection stays on its row), also when the config is reloaded and when it comes back
-    from a chat or a session.
+    from a chat or a session. An item open in the reader is read again too, where it is
+    shown (as the web's reader does): a turn's reply is kept a moment after the turn
+    (§25.6.1), and a reader opened in between would otherwise never show it.
   - **"history" in a row's menu is the action `kb.history`** (a session's, a worktree's and a
     project's; from the palette, the selected row's or the project you are in): a project's
     is the project filter; a session's and a worktree's are `KbRecent{session}` and

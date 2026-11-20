@@ -1206,9 +1206,13 @@ fn ptyro_mcp_lists_the_tools_for_a_session_and_for_a_chat() {
 /// has said anything; the turn that happens meanwhile shows up by itself (`KbUpdated`); it is
 /// searched for, its address copied, the item read in the reader and found in, and forgotten
 /// from there with the daemon's question. Then no byte of it is left.
+///
+/// The turn's reply is written most of a second after `Stop` (as in
+/// `a_reply_written_after_stop_is_read_without_another_turn`), so the item is found and opened
+/// while it holds the prompt and the tool alone: the reader shows the reply when it is kept.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_tuis_library_shows_what_is_kept_as_it_happens_reads_it_and_forgets_it() {
-    let w = World::new(&agents(""));
+    let w = World::new(&agents(", PTYRO_FAKE_TRANSCRIPT_LAG_MS = \"800\""));
     let c = w.d.client().await.unwrap();
     w.agent(&c, "lb", "claude").await;
     let script = w
@@ -1220,8 +1224,10 @@ async fn the_tuis_library_shows_what_is_kept_as_it_happens_reads_it_and_forgets_
         // The piece that matched, beside the list: leave the box, copy the address.
         .send_when("\u{25b6}", "\ry")
         .send_when("copied its address", "\r")
-        // The reader: the stored transcript, found in.
-        .send_when("read only", "/")
+        // The reader: the stored transcript, with the reply once it is kept (a line of its
+        // own: the card's is `Outcome: wrote notes.txt`), found in.
+        .send_when("read only", "")
+        .send_when("\u{2502}wrote notes.txt", "/")
         .send_when("Find in it", "wrote\r")
         // (The card says it too.)
         .send_when("1/2 \u{b7} n next", "d")

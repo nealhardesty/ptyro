@@ -487,6 +487,8 @@ pub enum Pending {
     KbRows(u64),
     KbPreview(String),
     KbReader(Option<u32>),
+    /// The reader's item again, after news of a change.
+    KbReaderAgain,
     KbResume,
     KbStatus,
     KbForgotten,
@@ -2001,6 +2003,11 @@ impl App {
             (Pending::KbReader(piece), Ok(Reply::KbDoc { item, chunks, .. })) => {
                 self.library_read(piece, item, chunks)
             }
+            (Pending::KbReaderAgain, Ok(Reply::KbDoc { item, chunks, .. })) => {
+                self.library_read_again(item, chunks)
+            }
+            // The news was that it went (forgotten from here, or elsewhere).
+            (Pending::KbReaderAgain, Err(_)) => {}
             (Pending::KbResume, Ok(Reply::KbDoc { item, .. })) => self.library_resumed(&item),
             (Pending::KbForgotten, Ok(Reply::KbForgotten { items, chunks })) => {
                 self.library_forgot(items, chunks)

@@ -862,6 +862,46 @@ fn a_rows_history_is_the_library_with_only_that() {
     assert!(app.chat_panel.is_none() && toast(app).contains("pick a session"));
 }
 
+/// An item open in the reader while it is still being written (a turn's reply is kept a
+/// moment after the turn): news of a change reads it again, where it is shown.
+#[test]
+fn news_of_a_change_reads_the_readers_item_again() {
+    let mut t = t();
+    let app = &mut t.app;
+    opened(app);
+    press(app, "<Enter>");
+    asked(app);
+    let item = listed("7F3K", "retry policy for the feeder", now_ms(), None);
+    let Reply::KbDoc { mut chunks, .. } = doc(item.clone(), None) else { unreachable!() };
+    chunks.pop();
+    let early = Reply::KbDoc { item: item.clone(), chunks, at: None, stale: false };
+    reply(app, Pending::KbReader(None), early);
+    assert!(!screen(app).contains("done: the feeder retries three times"));
+    press(app, "/");
+    press(app, "feeder<Enter>");
+    assert!(toast(app).starts_with("1/3 · n next"), "{}", toast(app));
+    press(app, "n");
+    app.on_server(ptyro_protocol::ServerMsg::Event {
+        event: DomainEvent::KbUpdated { kinds: vec![ItemKind::Session] },
+    });
+    let again = asked(app);
+    assert!(again.iter().any(|p| matches!(p, Pending::KbReaderAgain)), "{again:?}");
+    // Another item's answer (one that was open when it was asked for) changes nothing.
+    reply(app, Pending::KbReaderAgain, doc(listed("8G4M", "the hopper jams", 1, None), None));
+    assert!(!screen(app).contains("done: the feeder retries three times"));
+    reply(app, Pending::KbReaderAgain, doc(item, None));
+    let shown = screen(app);
+    assert!(shown.contains("done: the feeder retries three times"), "{shown}");
+    assert!(shown.contains("read only"), "{shown}");
+    // What was found is found in it as it is now, at the piece that was shown.
+    let r = lib(app).reader.as_ref().unwrap();
+    assert_eq!((r.found.len(), r.found_at), (4, 1));
+    // It went (forgotten elsewhere): nothing is said, the list's own answer shows it.
+    let gone = Err(ptyro_core::Error::missing("item", "k:7F3K"));
+    app.on_reply(AppMsg::Reply(Pending::KbReaderAgain, gone));
+    assert!(!toast(app).contains("k:7F3K"), "{}", toast(app));
+}
+
 #[test]
 fn news_of_a_change_asks_again_and_the_selection_stays_on_its_row() {
     let mut t = t();

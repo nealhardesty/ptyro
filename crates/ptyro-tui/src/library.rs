@@ -738,11 +738,16 @@ impl App {
     }
 
     /// The knowledge base changed (`KbUpdated`), or its switch did: what is shown is asked for
-    /// again. The selection stays on its row where that row still is.
+    /// again. The selection stays on its row where that row still is, and an item open in
+    /// the reader is read again (a turn's reply is kept a moment after the turn itself).
     pub(crate) fn library_news(&mut self) {
-        if self.library().is_some() {
-            self.request(Pending::KbStatus, Request::KbStatus);
-            self.library_ask();
+        let Some(l) = self.library() else { return };
+        let read = l.reader.as_ref().map(|r| r.item.addr.clone());
+        self.request(Pending::KbStatus, Request::KbStatus);
+        self.library_ask();
+        if let Some(addr) = read {
+            let req = Request::KbRead { addr, before: None, after: None, profile: None };
+            self.request(Pending::KbReaderAgain, req);
         }
     }
 
@@ -989,6 +994,23 @@ impl App {
             (l.typing, l.show_status) = (false, false);
             l.reader = Some(Reader { item, view, found: Vec::new(), found_at: 0 });
         });
+    }
+
+    /// The reader's item as it is now: its pieces replace the ones shown, where they are
+    /// shown (the scroll stays), and what `/` found is found in them.
+    pub(crate) fn library_read_again(&mut self, item: KbListed, chunks: Vec<KbChunk>) {
+        let Some(r) = self.library_mut().and_then(|l| l.reader.as_mut()) else { return };
+        // (Another item was opened while this one was asked for.)
+        if r.item.item.id != item.item.id {
+            return;
+        }
+        r.view.apply(0, true, chunks.iter().map(chat_item).collect(), String::new());
+        r.item = item;
+        if let (false, Some(text)) = (r.found.is_empty(), r.view.highlight.clone()) {
+            let shown = r.found.get(r.found_at).cloned();
+            r.found = r.view.find(&text);
+            r.found_at = shown.and_then(|s| r.found.iter().position(|f| *f == s)).unwrap_or(0);
+        }
     }
 
     /// `/` in the reader: highlight `text` and show the first piece that has it.
