@@ -44,7 +44,8 @@ export function apply(machine: string, waiting: number): void {
   else root.style.removeProperty("--machine");
   const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
   if (icon && machine) { icon.type = "image/svg+xml"; icon.href = faviconUrl(machine, dark); }
-  document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", machine ? `${machine} · ptyro` : "ptyro");
+  // The same name the server gives an installed app (`serve.rs` `app_names`).
+  document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", machine ? `ptyro ${machine}` : "ptyro");
 }
 
 /// Whether the page was opened over Tailscale: a MagicDNS `*.ts.net` name or a tailnet address

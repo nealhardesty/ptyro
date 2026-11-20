@@ -44,7 +44,8 @@ export function apply(machine, waiting) {
         icon.type = "image/svg+xml";
         icon.href = faviconUrl(machine, dark);
     }
-    document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", machine ? `${machine} · ptyro` : "ptyro");
+    // The same name the server gives an installed app (`serve.rs` `app_names`).
+    document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute("content", machine ? `ptyro ${machine}` : "ptyro");
 }
 /// Whether the page was opened over Tailscale: a MagicDNS `*.ts.net` name or a tailnet address
 /// (100.64.0.0/10, fd7a:115c:a1e0::/48). An offline page can't ask the server, so the address

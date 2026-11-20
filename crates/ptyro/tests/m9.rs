@@ -1901,3 +1901,26 @@ async fn serve_keeps_its_own_certificate_when_tailscale_cannot_give_one() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+/// An app installed from this server is called `ptyro <machine>` on the home screen: the page's
+/// iOS title and the manifest Android reads both carry the daemon's machine name.
+#[test]
+fn an_installed_app_is_named_after_the_machine() {
+    let w = World::new("[daemon]\nmachine_name = \"studio\"\n", &[]);
+    let serve = w.serve();
+    let get = |path: &str| {
+        http(
+            serve.port,
+            &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+        )
+    };
+    let (code, page) = get("/");
+    assert_eq!(code, 200, "{page}");
+    assert!(
+        page.contains(r#"<meta name="apple-mobile-web-app-title" content="ptyro studio">"#),
+        "{page}"
+    );
+    let (code, manifest) = get("/manifest.webmanifest");
+    assert_eq!(code, 200, "{manifest}");
+    assert!(manifest.contains(r#""short_name": "ptyro studio""#), "{manifest}");
+}
