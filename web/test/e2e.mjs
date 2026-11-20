@@ -99,27 +99,69 @@ const scenarios = {
     await tab.waitFor("the Allow buttons to go", `!document.querySelector(".blocked-wrap .actions .allow")`);
   },
 
-  // The Library (KB1.7): a session's turn is kept; the page lists it, the search finds it with
-  // the match marked, a tap opens it, and Forget… deletes it for good.
+  // The Library (KB1.9): a session's turn is kept and the page lists it under its day, another
+  // one's shows as it is kept (no reload); the search finds it with the match marked; a tap
+  // opens the reader at that piece, All of it reads the rest, the find box looks in it, Its
+  // session goes to the session; and Forget…, asked in the daemon's words, deletes it for good.
   async library() {
     const recalled = () => JSON.parse(ptyro("recall", "--json", "zqlibrary"));
+    const rowWith = (word) => `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes(${JSON.stringify(word)}))`;
+    const type = (sel, text) => tab.eval(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); b.value = ${JSON.stringify(text)}; b.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    const press = (label) => tab.eval(`[...document.querySelectorAll("main.library button, .sheet button")].find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
     ptyro("new", "-d", "-n", "lib1", "--agent", "claude");
     ptyro("send", "lib1", "edit lib.txt zqlibrary", "--wait-ready");
     await until("the turn to be kept", () => recalled().length > 0, 20_000);
     await fresh("#/library");
+    // On a phone: nothing wider than the screen, in the list or in the reader.
+    await tab.phone();
+    const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
     await tab.waitFor("the search box", `!!document.querySelector("input.search")`);
-    await tab.waitFor("the history", `[...document.querySelectorAll("main .rows .row")].some((r) => r.textContent.includes("zqlibrary"))`);
-    await tab.eval(`(() => { const b = document.querySelector("input.search"); b.value = "zqlibrary"; b.dispatchEvent(new Event("input", { bubbles: true })); })()`);
-    await tab.waitFor("a hit with the match marked", `[...document.querySelectorAll("main .rows .row mark")].some((m) => m.textContent === "zqlibrary")`);
-    await tab.eval(`[...document.querySelectorAll("main .rows .row")].find((r) => r.querySelector("mark")).click()`);
-    await tab.waitFor("the piece that matched, opened", `[...document.querySelectorAll(".sheet .kb-piece.at pre")].some((p) => p.textContent.includes("zqlibrary"))`);
-    await tab.click(".sheet-foot .deny");
-    await tab.waitFor("the question, in the words every client uses", `[...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("The text is deleted from the knowledge base for good"))`);
+    await tab.waitFor("the history, under its day", `${rowWith("zqlibrary")} && document.querySelector("main.library h3.day")?.textContent === "Today"`);
+    await tab.waitFor("the filters: the kinds that are kept", `[...(document.querySelector('.kb-filters select[aria-label="Kind"]')?.options ?? [])].map((o) => o.value).join() === ",session,chat" && document.querySelectorAll(".kb-filters select").length === 3`);
+    // Kept while the page is open: shown without a reload (the daemon's `kb_updated`).
+    ptyro("new", "-d", "-n", "lib2", "--agent", "claude");
+    ptyro("send", "lib2", "edit other.txt zqsecond", "--wait-ready");
+    await tab.waitFor("the second session's turn, as it is kept", rowWith("zqsecond"), 20_000);
+    // A filter that keeps nothing says so; back to every kind.
+    const kind = (v) => tab.eval(`(() => { const k = document.querySelector('.kb-filters select[aria-label="Kind"]'); k.value = ${JSON.stringify(v)}; k.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await kind("chat");
+    await tab.waitFor("chats have no history here", `document.querySelector("main.library .rows")?.textContent.includes("Chats are on the Chats page")`);
+    await kind("");
+    await type("input.search", "zqlibrary");
+    await tab.waitFor("a hit with the match marked", `[...document.querySelectorAll("main.library .rows .row mark")].some((m) => m.textContent === "zqlibrary")`);
+    if (await tab.eval(rowWith("zqsecond"))) throw new Error("the search lists what doesn't match");
+    await fits("the list");
+    await tab.eval(`[...document.querySelectorAll("main.library .rows .row")].find((r) => r.querySelector("mark")).click()`);
+    await tab.waitFor("the reader, at the piece that matched", `location.hash.startsWith("#/library/k/") && [...document.querySelectorAll("main.reader .kb-piece.at pre mark")].some((m) => m.textContent === "zqlibrary")`);
+    // All of it, then find in it.
+    if (await tab.eval(`[...document.querySelectorAll("main.reader button")].some((b) => b.textContent.startsWith("All of it"))`)) await press("All of it");
+    await tab.waitFor("all of it", `document.querySelectorAll("main.reader .kb-piece").length >= 3 && ![...document.querySelectorAll("main.reader button")].some((b) => b.textContent.startsWith("All of it"))`);
+    await type('input[aria-label="Find in it"]', "WROTE");
+    await tab.waitFor("what was looked for, marked and counted", `/^1\\/\\d+$/.test(document.querySelector("main.reader .bar .sub")?.textContent ?? "") && document.querySelector("main.reader .kb-piece.at mark")?.textContent === "wrote"`);
+    await fits("the reader");
+    // Its session, and back to the reader.
+    await press("Its session");
+    await tab.waitFor("the session it happened in", `location.hash === "#/s/" + ${JSON.stringify(encodeURIComponent(find("lib1").id))}`);
+    await tab.eval(`history.back()`);
+    await tab.waitFor("the reader again", `!!document.querySelector("main.reader .kb-piece")`);
+    // ⋯ → Forget…: the daemon says what will go, in the words every client uses.
+    await tab.click(`header button[aria-label="More"]`);
+    await tab.waitFor("the reader's menu", `[...document.querySelectorAll(".sheet .menu button")].some((b) => b.textContent.startsWith("Copy its address"))`);
+    await press("Forget…");
+    await tab.waitFor("the question, in the daemon's words", `document.querySelector(".sheet h2")?.textContent.startsWith("Forget 1 item: session") && [...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("The text is deleted from the knowledge base for good"))`);
     await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Forget").click()`);
     await until("it to be forgotten", () => recalled().length === 0);
-    await tab.waitFor("the hit to go", `!document.querySelector("main .rows .row mark")`);
+    await tab.waitFor("the list again, without it", `location.hash === "#/library" && !document.querySelector("main.library .rows .row mark") && document.querySelector("main.library .rows")?.textContent.includes("Nothing matches.")`);
     if (!ptyro("kb").includes("1 forgotten")) throw new Error(`the status doesn't count it: ${ptyro("kb")}`);
+    // A session's ⋯ → History: the Library with only what was kept of it.
+    await fresh(`#/s/${encodeURIComponent(find("lib2").id)}`);
+    await tab.waitFor("the session's menu button", `!!document.querySelector('header button[aria-label="More"], header button.icon')`);
+    await tab.eval(`[...document.querySelectorAll("header button")].find((b) => b.textContent === "⋯").click()`);
+    await tab.waitFor("History in its menu", `[...document.querySelectorAll(".sheet .menu button")].some((b) => b.textContent.startsWith("History"))`);
+    await press("History");
+    await tab.waitFor("only that session's", `location.hash === "#/library" && ${rowWith("zqsecond")} && [...document.querySelectorAll(".kb-filters button")].some((b) => b.textContent.startsWith("Only session lib2"))`);
     ptyro("kill", "lib1");
+    ptyro("kill", "lib2");
   },
 
   // A switch writes the config file (comments kept), Undo restores it, a bad number is refused

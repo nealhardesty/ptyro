@@ -381,6 +381,18 @@ a.button { display: inline-block; padding: 7px 12px; border-radius: 8px; border:
 .kb-piece { display: grid; gap: 4px; margin: 8px 0; } .kb-piece small { color: var(--muted); }
 .kb-piece.at pre.block { border-left: 3px solid var(--accent); }
 .snippet mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; }
+/* The Library (SPEC §25.10): the filters under the search box, the history by day, the reader. */
+.kb-filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.kb-filters select { flex: 1 1 7em; min-width: 0; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+.kb-filters .small.on { color: var(--accent); }
+.library h3.day { margin: 8px 4px 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.library .row .snippet { padding: 0; }
+.library mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; }
+.library.reader .bar { align-items: center; }
+.library.reader .bar input.search { flex: 1 1 9em; width: auto; }
+.library.reader > .small { justify-self: start; }
+.kb-piece.k-user pre.block { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
+.kb-piece.k-tool pre.block, .kb-piece.k-card pre.block, .kb-piece.k-summary pre.block { font-size: 12px; color: var(--muted); }
 .chat-row.hit { flex-direction: column; align-items: stretch; text-decoration: none; color: inherit; }
 .chat-pick .check { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
 /* Chats: `@` folders, the CHATS section beside the sessions. */

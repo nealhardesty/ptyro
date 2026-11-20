@@ -8,6 +8,7 @@ import { createWorktree, startSession } from "./flow.js";
 import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, confirm, confirmed, enc, errText, form, go, h, menu, pending, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
+import { historyOf } from "./library.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
     "session.menu": "More for this session: stop, restart, rename, hibernate…",
@@ -392,6 +393,7 @@ export function sessionMenu(s) {
         w && { title: tip("session.again"), label: `Another ${againLabel(w.id)}`, hint: "The agent its worktree last started, there", run: () => void startAgain(w) },
         w && { title: tip("shell.new"), label: "A new shell in its worktree", hint: "Besides its quick terminal", run: () => void newShell(w) },
         s.worktree && { title: tip("session.shell"), label: "Its worktree's quick terminal", hint: "On a page of its own", run: () => void openQuickShell(w) },
+        s.kind === "agent" && { title: tipOf("kb.history"), label: "History", hint: "What the knowledge base kept of it", run: () => historyOf({ t: "session", id: s.id, name: s.name }, "", s.machine ?? "") },
         { title: tip("session.scrollback"), label: "Scrollback", hint: "Everything it printed, searchable", run: () => go(`#/scroll/${enc(s.id)}`) },
         { title: tip("session.events"), label: "Events", run: () => go(`#/events/${enc(s.id)}`) },
         can("full") && { title: tip("session.tab"), label: "Open on the computer", hint: "A new Windows Terminal tab there", run: () => void openOnComputer(s) },

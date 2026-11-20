@@ -11,6 +11,7 @@ import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
 import type { Session } from "./screen.js";
+import { historyOf } from "./library.js";
 
 const ACTIONS = {
   "projects": "Projects and their worktrees, with what each is doing",
@@ -182,6 +183,7 @@ function projectView(id: string): HTMLElement {
   const ws = [...data.workspaces.values()];
   return h("div", {}, ui.header(p.slug, "#/p", h("button", { class: "icon", "aria-label": "More", onclick: () => menu(p.slug, [
     { title: tip("project.config"), label: "Configuration", hint: "And where each value comes from", run: async () => { const r = await ask({ t: "project_config", addr: p.id }); if (r) textSheet(`${p.slug}: configuration`, r.text); } },
+    { title: tipOf("kb.history"), label: "History", hint: "What the knowledge base kept of work in it", run: () => historyOf(null, p.id) },
     { title: tip("project.rename"), label: "Rename…", run: () => renameProject(p) },
     { title: tip("project.pin"), label: "Pin to a profile…", run: () => pinProject(p) },
     { title: tip("workspace.member"), label: "Workspaces…", run: () => projectWorkspaces(p) },
@@ -349,6 +351,7 @@ function worktreeMenu(w: Worktree): void {
   menu(w.title || w.name, [
     { title: tip("worktree.open"), label: "Open in…", hint: "An editor, the file manager, a terminal or a shell", run: () => openIn(w) },
     { title: tip("worktree.run"), label: "Run a script…", run: () => runScript(w) },
+    { title: tipOf("kb.history"), label: "History", hint: "What the knowledge base kept of work in it", run: () => historyOf({ t: "worktree", id: w.id, name: `${w.project_slug}/${w.name}` }) },
     { title: tip("worktree.rename"), label: w.is_root ? "Set title…" : "Rename…", hint: w.is_root ? "What people read" : "Its name and title; the branch stays", run: () => renameWorktree(w) },
     !w.is_root && { title: tip("worktree.remove"), label: "Remove…", danger: true, run: () => remove(w) },
   ]);
