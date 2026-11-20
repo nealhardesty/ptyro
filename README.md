@@ -741,6 +741,11 @@ ptyro devices revoke ID        # cut a device off at once
 ptyro --remote me@workbox      # the TUI (or any command) on another machine, over ssh
 ```
 
+Add the web app to your phone's home screen (Share → Add to Home Screen on an iPhone, Install app
+in Chrome on Android) and the icon is called `ptyro <machine>` (`ptyro studio`; just the machine's
+name when that is too long for a label), so the apps of several machines tell apart. The name is
+`[daemon] machine_name`, else the computer's name.
+
 The web app does everything the CLI does, laid out for a phone, and its session screen is a real terminal: just type (on a computer it has the keys when the page opens; on a phone tap ⌨ Type) (every key goes to the session as you press it, soft keyboards and a hardware keyboard alike; a phone keyboard's letters arrive as you type them and its autocorrect as a correction, dictation arrives as one paste when you pause and a spoken new line never presses Enter, and Aa → Plain keys turns predictions off; on a slow connection what you type shows at once, underlined, until the session echoes it (Aa → Predict typing); ✎ Compose is a box for a long prompt or dictation, read over and sent as one), a key row gives a phone Esc, Tab, Ctrl and Alt (tap once for the next key, twice to hold), arrows and F-keys, pinch to zoom the text (a wide session opens readable on a phone), scroll back through the history, select and copy text (long-press, or drag), paste, click and scroll in `vim`, `htop` and Claude when they ask for the mouse, find in the scrollback, open links, and size the session to your screen. It needs `--scope control` or `full`; a read-only device watches.
 
 The rest of the app: a tab for sessions (blocked ones

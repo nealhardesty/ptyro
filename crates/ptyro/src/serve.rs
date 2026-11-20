@@ -809,6 +809,12 @@ async fn handle(
                         let stamp = format!("\n// certificate {}\n", s.locked().stamp);
                         Bytes::from([data, stamp.as_bytes()].concat())
                     }
+                    // What an installed app is called: `ptyro <machine>`, so a phone with
+                    // several machines' apps tells them apart.
+                    _ if NAMED.contains(&p) => match daemon_machine(&st).await {
+                        Some(m) => Bytes::from(named(p, data, &m)),
+                        None => Bytes::from_static(data),
+                    },
                     _ => Bytes::from_static(data),
                 };
                 let mut r = respond(StatusCode::OK, ctype, body);
@@ -825,6 +831,58 @@ async fn handle(
         },
         _ => respond(StatusCode::METHOD_NOT_ALLOWED, "text/plain", "method not allowed"),
     })
+}
+
+/// The assets that carry the app's name: the page (iOS's home-screen title) and the manifest
+/// (Android's).
+const NAMED: [&str; 3] = ["/", "/index.html", "/manifest.webmanifest"];
+
+/// The daemon's machine name (`Welcome.machine`: `[daemon] machine_name`, else the host name),
+/// asked for each time so a renamed machine shows at once; `None` when the daemon doesn't answer.
+async fn daemon_machine(st: &State) -> Option<String> {
+    // As this server itself (a local process), not as the page: only its name is read.
+    let mut opts = ptyro_client::ConnectOptions::new(st.ctx_paths.clone(), ClientKind::Proxy);
+    opts.autospawn = false;
+    let client =
+        tokio::time::timeout(Duration::from_secs(2), ptyro_client::Client::connect(&opts)).await;
+    client.ok()?.ok()?.machine.clone().filter(|m| !m.trim().is_empty())
+}
+
+/// An installed app's name for `machine`: `ptyro studio`. A launcher label shows about 12
+/// characters, so when that is too long the short name is the machine alone: the part that tells
+/// the apps apart is never what gets cut.
+fn app_names(machine: &str) -> (String, String) {
+    let name = format!("ptyro {machine}");
+    let short = if name.chars().count() <= 12 { name.clone() } else { machine.to_owned() };
+    (name, short)
+}
+
+/// `data` (one of [`NAMED`]) with the app named after `machine`.
+fn named(path: &str, data: &[u8], machine: &str) -> Vec<u8> {
+    let (name, short) = app_names(machine);
+    if path == "/manifest.webmanifest" {
+        let Ok(mut m) = serde_json::from_slice::<serde_json::Value>(data) else {
+            return data.to_vec();
+        };
+        m["name"] = name.into();
+        m["short_name"] = short.into();
+        return serde_json::to_vec_pretty(&m).unwrap_or_else(|_| data.to_vec());
+    }
+    let esc = |s: &str| {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&#39;")
+    };
+    String::from_utf8_lossy(data)
+        .replacen(
+            r#"<meta name="apple-mobile-web-app-title" content="ptyro">"#,
+            &format!(r#"<meta name="apple-mobile-web-app-title" content="{}">"#, esc(&name)),
+            1,
+        )
+        .replacen("<title>ptyro</title>", &format!("<title>{}</title>", esc(&name)), 1)
+        .into_bytes()
 }
 
 fn upgrade(
@@ -1192,6 +1250,34 @@ async fn api_pair(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn an_installed_app_is_named_after_its_machine() {
+        assert_eq!(app_names("devbox"), ("ptyro devbox".into(), "ptyro devbox".into()));
+        // Too long for a launcher label: the machine alone, so it is never what gets cut.
+        assert_eq!(
+            app_names("Neals-MacBook-Pro"),
+            ("ptyro Neals-MacBook-Pro".into(), "Neals-MacBook-Pro".into())
+        );
+        let page =
+            String::from_utf8(named("/", include_bytes!("../../../web/dist/index.html"), "a<b"))
+                .unwrap();
+        assert!(
+            page.contains(r#"<meta name="apple-mobile-web-app-title" content="ptyro a&lt;b">"#),
+            "{page}"
+        );
+        assert!(page.contains("<title>ptyro a&lt;b</title>"), "{page}");
+        let manifest: serde_json::Value = serde_json::from_slice(&named(
+            "/manifest.webmanifest",
+            include_bytes!("../../../web/dist/manifest.webmanifest"),
+            "studio",
+        ))
+        .unwrap();
+        assert_eq!(manifest["name"], "ptyro studio");
+        assert_eq!(manifest["short_name"], "ptyro studio");
+        assert_eq!(manifest["start_url"], "/#/", "the rest is kept");
+    }
+
     use super::*;
 
     #[test]

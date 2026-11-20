@@ -5528,12 +5528,18 @@ known. A client of a remote daemon (`--remote`, a page served by another compute
 daemon's. Surfaces: the web page title `studio · ptyro` (`(2) studio · ptyro` with agents waiting),
 a name chip and a thin top bar in a colour hashed from the name (`hue`: FNV-1a over the lowercase
 name, mod 360, the same in Rust and TypeScript) on every header, a favicon with a dot in that
-colour, the installed app's title (`apple-mobile-web-app-title`), More → This device → Machine;
+colour, the installed app's name `ptyro studio`, More → This device → Machine;
 the TUI's sidebar title (`WORKSPACE main ● studio`, dropped when it doesn't fit) and the
 terminal's window title `ptyro · studio` (OSC 0, with xterm's title stack saved and restored on
-exit); `ptyro daemon status` (`machine`), `ptyro pair` ("Pairing 'phone' with studio"). The
-manifest is static and served before sign-in, so it keeps the name `ptyro` (the name is not given
-to unauthenticated requests). The name is read at connect: a changed `machine_name` shows after
+exit); `ptyro daemon status` (`machine`), `ptyro pair` ("Pairing 'phone' with studio"). An
+installed app is named after the machine (owner, 2026-11-20, so a phone with several machines' apps
+tells them apart): `ptyro serve` asks the daemon for the name when it serves the page (iOS's
+`apple-mobile-web-app-title` and `<title>`) and the manifest (Android's `name`, and `short_name`,
+which is the machine alone when `ptyro <machine>` passes the 12 characters a launcher label shows).
+Those requests carry no device token, so whoever can reach the server (loopback, the tailnet, the
+configured names) sees the machine's name before signing in, as the certificate already shows its
+host name; set `[daemon] machine_name` for a name other than the macOS ComputerName. Android picks a
+changed name up when it next checks the manifest; iOS keeps what was installed. The name is read at connect: a changed `machine_name` shows after
 the next reconnect.
 
 ### 16.4b Many machines: workspaces on other machines **[decided 2026-10-27 (owner, ROADMAP MM1.0); built MM1.B]**
