@@ -57,6 +57,12 @@ fn every_request_the_web_app_names_exists() {
 #[test]
 fn the_shapes_the_web_app_sends_parse() {
     let shapes: Vec<Value> = vec![
+        // The Library (web/src/library.ts).
+        json!({ "t": "kb_status" }),
+        json!({ "t": "kb_recent", "limit": 50 }),
+        json!({ "t": "kb_search", "query": "retry policy", "limit": 30 }),
+        json!({ "t": "kb_read", "addr": "k:7f3k/12" }),
+        json!({ "t": "kb_forget", "addrs": ["01JB0000000000000000007F3K"], "confirmed": true }),
         json!({ "t": "spawn", "spec": { "cwd": "", "argv": [], "agent": "claude", "worktree": "w1", "prompt": "do it", "title": "do it", "confirmed": false } }),
         json!({ "t": "spawn", "spec": { "cwd": "", "argv": ["sh", "-c", "make"], "worktree": "w1" } }),
         json!({ "t": "worktree_new", "spec": { "setup": true, "project": "p", "agent": "claude", "prompt": "x", "title": "x", "pr": 12, "existing": true, "branch": "b", "trust": "fp", "confirmed": false } }),

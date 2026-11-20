@@ -3,6 +3,9 @@
 //! name it; it is closed before a live upgrade's exec and opened again after; switched off, it
 //! is not made, and a file that can't be opened is a reason with its fix while the daemon runs.
 //! KB1.4: an agent's session is kept as it happens, from the agent's own transcript.
+//! KB1.7: `ptyro recall` finds it, `ptyro kb show`, `recent` and `status` read it, `kb forget`
+//! deletes it for good, and an agent that runs them itself stays behind the wall.
+//! KB1.11: each switch keeps a session out, and retention deletes an old one.
 
 use std::path::PathBuf;
 use std::process::Output;
@@ -695,5 +698,464 @@ async fn a_profiles_secrets_and_what_looks_like_a_key_never_reach_the_file() {
     );
     for never in ["hunter2-value", "abc123def456"] {
         assert!(!w.bytes_hold(never), "{never} is in kb.db");
+    }
+}
+
+// ── KB1.7, the commands, and KB1.11, the switches ───────────────────────────────────────────
+
+impl World {
+    /// A command's output as JSON.
+    fn json(&self, args: &[&str]) -> serde_json::Value {
+        let o = self.cli(args);
+        serde_json::from_slice(&o.stdout).unwrap_or_else(|e| {
+            panic!(
+                "{args:?}: {e}\n{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            )
+        })
+    }
+
+    /// Wait until `ptyro kb status` says `pred`.
+    async fn status(
+        &self,
+        what: &str,
+        pred: impl Fn(&serde_json::Value) -> bool,
+    ) -> serde_json::Value {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let s = self.json(&["kb", "status", "--json"]);
+            if pred(&s) {
+                return s;
+            }
+            assert!(Instant::now() < deadline, "the status never said {what}: {s:#}");
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+    }
+
+    /// Wait until the knowledge base says why it did not keep `uri`.
+    async fn skipped(&self, uri: &str, why: &str) {
+        self.status(&format!("{uri} was not kept ({why})"), |s| {
+            s["skipped"].as_array().is_some_and(|k| {
+                k.iter()
+                    .any(|k| k["uri"] == uri && k["why"].as_str().is_some_and(|w| w.contains(why)))
+            })
+        })
+        .await;
+    }
+
+    /// An agent session under `profile`, in `cwd`.
+    async fn agent_at(
+        &self,
+        c: &Client,
+        name: &str,
+        agent: &str,
+        profile: Option<&str>,
+        cwd: PathBuf,
+    ) -> SessionInfo {
+        let spec = SpawnSpec {
+            agent: Some(agent.into()),
+            profile: profile.map(Into::into),
+            cwd,
+            name: Some(name.into()),
+            size: Some(TermSize::new(100, 20)),
+            ..SpawnSpec::default()
+        };
+        let info = match c.request(Request::Spawn { spec }).await.expect("spawn") {
+            Reply::Session { info } => info,
+            other => panic!("{other:?}"),
+        };
+        self.d.wait_for_text(c, name, "resumed=", WAIT).await.unwrap();
+        info
+    }
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "T")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "T")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com")
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(ok, "git {args:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recall_finds_a_session_kb_shows_it_and_forgetting_is_for_good() {
+    let w = World::new(&agents(""));
+    let c = w.d.client().await.unwrap();
+    let s = w.agent(&c, "rc", "claude").await;
+    let uri = format!("session://claude/{}", s.conversation.clone().unwrap());
+    w.turn(&c, "rc", "edit notes.txt zqrecallme").await;
+    w.kept(&uri, "the turn", |k| k.has(ChunkKind::Assistant, "wrote notes.txt")).await;
+
+    // `recall`: one hit a line where nothing is a terminal, the match marked.
+    let found = w.cli(&["recall", "zqrecallme"]);
+    assert!(found.status.success(), "{found:?}");
+    let out = String::from_utf8_lossy(&found.stdout).into_owned();
+    let line = out.lines().next().unwrap_or_else(|| panic!("no hit: {found:?}"));
+    assert!(
+        line.starts_with("k:") && line.contains("  session · edit notes.txt zqrecallme · "),
+        "{line}"
+    );
+    assert!(line.contains(" · claude · ") && line.contains("*zqrecallme*"), "{line}");
+    // `--json` is the list of hits.
+    let hits = w.json(&["recall", "--json", "zqrecallme"]);
+    let hit = &hits[0];
+    assert_eq!(
+        (&hit["uri"], &hit["kind"], &hit["how"]),
+        (&uri.clone().into(), &"session".into(), &"words".into())
+    );
+    assert_eq!(hit["agent"], "claude");
+    // Its workspace by id, and what that is called: `workspace:` finds it by either.
+    assert_eq!(hit["workspace_name"], "main");
+    assert_ne!(hit["workspace"], "main", "an item is stamped with its workspace's id");
+    assert_eq!(w.json(&["recall", "--json", "zqrecallme", "workspace:main"])[0]["uri"], hit["uri"]);
+    let addr = hit["addr"].as_str().unwrap().to_owned();
+    // The best hit is the session's card, which says the task; the message is its neighbour.
+    let (item, piece) = addr.split_once('/').unwrap();
+    assert_eq!((piece, hit["part"].as_str()), ("0", Some("card")));
+    let message = format!("{item}/1");
+    // The filters, as flags and in the query; flags typed after the words are flags still.
+    for args in [
+        &["recall", "zqrecallme", "--kind", "session", "-l", "1", "--since", "1d", "--words"][..],
+        &["recall", "-k", "session", "zqrecallme", "kind:session", "agent:claude"],
+    ] {
+        let o = w.cli(args);
+        assert_eq!(String::from_utf8_lossy(&o.stdout).lines().count(), 1, "{args:?}: {o:?}");
+    }
+    for args in [
+        &["recall", "zqrecallme", "--kind", "chat"][..],
+        &["recall", "zqrecallme", "--before", "1d"],
+        &["recall", "zqrecallme", "agent:codex"],
+        &["recall", "zqnothing"],
+    ] {
+        let o = w.cli(args);
+        assert!(o.status.success() && o.stdout.is_empty(), "{args:?}: {o:?}");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("nothing matches"), "{o:?}");
+    }
+    let e = w.out(&["recall", "zqrecallme", "--kind", "sesion"]);
+    assert!(e.contains("no kind is called \"sesion\": session, chat, note,"), "{e}");
+    // By meaning while it is off: it says how to switch it on, by its name now.
+    let o = w.cli(&["recall", "zqrecallme", "--meaning"]);
+    let e = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(!o.status.success() && e.contains("meaning search is off"), "{o:?}");
+    assert!(e.contains("ptyro config set kb.meaning true"), "{e}");
+
+    // `kb show`: the piece with its neighbours, the one named marked; an item, all of it.
+    let shown = w.out(&["kb", "show", &message]);
+    assert!(
+        shown.starts_with(&format!("{item}  session · edit notes.txt zqrecallme · ")),
+        "{shown}"
+    );
+    assert!(shown.contains(&uri), "{shown}");
+    assert!(
+        shown.contains(&format!("▶ {message}  user\n    edit notes.txt zqrecallme\n")),
+        "{shown}"
+    );
+    assert!(
+        shown.contains(&format!("\n  {addr}  card\n    Task: edit notes.txt zqrecallme\n")),
+        "{shown}"
+    );
+    assert!(shown.contains("  assistant\n    wrote notes.txt\n"), "{shown}");
+    let one = w.out(&["kb", "show", &message, "--context", "0"]);
+    assert!(one.contains("zqrecallme\n") && !one.contains("wrote notes.txt"), "{one}");
+    let doc = w.json(&["kb", "show", item, "--json"]);
+    assert_eq!(
+        (&doc["item"]["item"]["uri"], &doc["item"]["addr"]),
+        (&uri.clone().into(), &item.into())
+    );
+    assert_eq!(doc["chunks"].as_array().unwrap().len(), 4, "{doc:#}");
+    assert_eq!(doc["chunks"][1]["text"], "edit notes.txt zqrecallme");
+    let e = w.cli(&["kb", "show", "k:zzzzzz"]);
+    assert_eq!(e.status.code(), Some(3), "{e:?}");
+
+    // `kb recent`: by day; `kb`: what it holds.
+    let recent = w.out(&["kb", "recent"]);
+    let mut lines = recent.lines();
+    assert!(lines.next().is_some_and(|d| d.len() == 10 && d.starts_with("20")), "{recent}");
+    let row = lines.next().unwrap();
+    assert!(row.contains(&format!("  {item}  session · edit notes.txt zqrecallme · ")), "{recent}");
+    assert!(row.ends_with(" · claude · 4 pieces"), "{recent}");
+    let listed = w.json(&["kb", "recent", "--kind", "session", "--json"]);
+    assert_eq!(
+        (&listed[0]["addr"], &listed[0]["item"]["uri"]),
+        (&item.into(), &uri.clone().into())
+    );
+    assert!(w.out(&["kb", "recent", "--kind", "note"]).contains("nothing is kept yet"));
+    let status = w.out(&["kb"]);
+    assert!(status.starts_with("knowledge base: on · ") && status.contains("kb.db ("), "{status}");
+    assert!(status.contains("\n  1 session · 4 pieces\n"), "{status}");
+    assert!(status.contains("\n  sessions are kept for good"), "{status}");
+    let s = w.json(&["kb", "--json"]);
+    assert_eq!(
+        (&s["enabled"], &s["kinds"][0]["items"], &s["forgotten"]),
+        (&true.into(), &1.into(), &0.into())
+    );
+
+    // `kb forget` asks first: with nobody to ask, nothing goes, and it says what would.
+    let o = w.cli(&["kb", "forget", item]);
+    let e = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert_eq!(o.status.code(), Some(5), "{o:?}");
+    assert!(e.contains("Forget 1 item: session “edit notes.txt zqrecallme”?"), "{e}");
+    assert!(
+        e.contains("deleted from the knowledge base for good") && e.contains("pass --yes"),
+        "{e}"
+    );
+    assert!(w.bytes_hold("zqrecallme"));
+    let o = w.cli(&["kb", "forget", "--query", "zqrecallme"]);
+    assert_eq!(o.status.code(), Some(5), "{o:?}");
+    // Agreed to: its text is in no byte of the file, and no search finds it.
+    let o = w.cli(&["kb", "forget", "--query", "zqrecallme", "--yes"]);
+    let e = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(o.status.success() && e.contains("forgot 1 item (4 pieces)"), "{o:?}");
+    assert!(!w.bytes_hold("zqrecallme"), "the forgotten text is still in kb.db");
+    assert!(w.cli(&["recall", "zqrecallme"]).stdout.is_empty());
+    assert!(w.cli(&["kb", "show", item]).status.code() == Some(3));
+    // The session goes on, and nothing of it is kept again: not its next turn, not after a
+    // restart of the daemon's reading (the transcript still holds all of it).
+    w.turn(&c, "rc", "edit notes.txt zqagain").await;
+    w.skipped(&uri, "forgotten").await;
+    assert!(w.cli(&["recall", "zqagain"]).stdout.is_empty());
+    assert!(!w.bytes_hold("zqagain") && !w.bytes_hold("zqrecallme"));
+    let status = w.out(&["kb"]);
+    assert!(status.contains("\n  1 forgotten: never kept again\n"), "{status}");
+    assert!(status.contains(&format!("    {uri}: it was forgotten (")), "{status}");
+    assert!(status.contains("nothing is kept yet"), "{status}");
+    // Forgetting what isn't there, and a chat's address, say so.
+    assert!(w.out(&["kb", "forget", "c:7f3k", "--yes"]).contains("ptyro chat rm"));
+    assert!(
+        w.out(&["kb", "forget", "--query", "zqnothing"])
+            .contains("nothing in the knowledge base matches")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_switch_keeps_a_session_out() {
+    // Codex is kept out by its agent's switch.
+    let config = agents("").replace("[agents.codex]\n", "[agents.codex]\nkb = false\n");
+    let w = World::new(&config);
+    let c = w.d.client().await.unwrap();
+    w.agent(&c, "sx", "codex").await;
+    w.turn(&c, "sx", "sh echo zqcodexword").await;
+    let codex = format!("session://codex/{}", w.info(&c, "sx").await.conversation.unwrap());
+    w.skipped(&codex, "its agent is kept out").await;
+
+    // A repository keeps itself out, with `[knowledge] enabled = false` in its `.ptyro.toml`.
+    let repo = w.home().join("quiet");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join(".ptyro.toml"), "[knowledge]\nenabled = false\n").unwrap();
+    git(&repo, &["add", ".ptyro.toml"]);
+    git(&repo, &["commit", "-q", "-m", "init"]);
+    assert!(w.cli(&["project", "add", &repo.to_string_lossy()]).status.success());
+    let q = w.agent_at(&c, "sq", "claude", None, repo.clone()).await;
+    assert!(q.project.is_some(), "the session is the project's: {q:?}");
+    w.turn(&c, "sq", "edit notes.txt zqquietword").await;
+    let quiet = format!("session://claude/{}", q.conversation.unwrap());
+    w.skipped(&quiet, "its project is kept out").await;
+
+    // A session of neither is kept.
+    let s = w.agent(&c, "sk", "claude").await;
+    let uri = format!("session://claude/{}", s.conversation.clone().unwrap());
+    w.turn(&c, "sk", "edit notes.txt zqkeptword").await;
+    w.kept(&uri, "the first turn", |k| k.has(ChunkKind::Assistant, "wrote notes.txt")).await;
+    assert_eq!(w.sessions().await.len(), 1);
+    for never in ["zqcodexword", "zqquietword"] {
+        assert!(!w.bytes_hold(never) && w.cli(&["recall", never]).stdout.is_empty(), "{never}");
+    }
+    let status = w.out(&["kb"]);
+    assert!(
+        status.contains(&format!("    {codex}: its agent is kept out of the knowledge base (")),
+        "{status}"
+    );
+    assert!(
+        status.contains(&format!("    {quiet}: its project is kept out of the knowledge base (")),
+        "{status}"
+    );
+
+    // `kb.sessions` off: no turn is read while it is; what was kept stays, and can be found.
+    assert!(w.cli(&["config", "set", "kb.sessions", "false"]).status.success());
+    w.status("sessions are off", |s| s["sessions"] == false).await;
+    w.turn(&c, "sk", "edit notes.txt zqwhileoff").await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!w.bytes_hold("zqwhileoff"));
+    assert!(w.out(&["kb"]).contains("agent sessions are not kept (`kb.sessions` is off)"));
+    assert!(!w.cli(&["recall", "zqkeptword"]).stdout.is_empty());
+    // On again: a session that goes on is read from where reading stopped.
+    assert!(w.cli(&["config", "set", "kb.sessions", "true"]).status.success());
+    w.status("sessions are on", |s| s["sessions"] == true).await;
+    w.turn(&c, "sk", "edit notes.txt zqbackon").await;
+    let k =
+        w.kept(&uri, "the turn after", |k| k.has(ChunkKind::User, "edit notes.txt zqbackon")).await;
+    assert!(k.has(ChunkKind::User, "edit notes.txt zqwhileoff"), "{:?}", k.shown());
+
+    // The knowledge base off: nothing is read, nothing is searched, and every command says
+    // so and how to switch it on. What is stored stays in the file.
+    assert!(w.cli(&["config", "set", "kb.enabled", "false"]).status.success());
+    w.status("it is off", |s| s["enabled"] == false).await;
+    w.turn(&c, "sk", "edit notes.txt zqalloff").await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!w.bytes_hold("zqalloff") && w.bytes_hold("zqkeptword"));
+    let status = w.out(&["kb"]);
+    assert!(
+        status.starts_with("knowledge base: off. Nothing is kept and nothing is searched.\n"),
+        "{status}"
+    );
+    assert!(
+        status.contains("what was kept before stays in ")
+            && status.contains("ptyro config set kb.enabled true"),
+        "{status}"
+    );
+    for args in [
+        &["recall", "zqkeptword"][..],
+        &["kb", "recent"],
+        &["kb", "show", "k:7f3k"],
+        &["kb", "forget", "k:7f3k", "--yes"],
+    ] {
+        let o = w.cli(args);
+        let e = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert!(!o.status.success() && o.stdout.is_empty(), "{args:?}: {o:?}");
+        assert_eq!(
+            e.trim(),
+            "ptyro: the knowledge base is off: `ptyro config set kb.enabled true` switches it on",
+            "{args:?}"
+        );
+    }
+    assert!(w.doctor_line().contains("knowledge base: off"));
+    // And on again.
+    assert!(w.cli(&["config", "set", "kb.enabled", "true"]).status.success());
+    w.status("it is on", |s| s["enabled"] == true).await;
+    assert!(!w.cli(&["recall", "zqkeptword"]).stdout.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retention_deletes_old_sessions_once_it_is_set() {
+    let w = World::new("");
+    let _ = w.out(&["daemon", "status", "--json"]);
+    // Kept long ago, written beside the daemon through the same plan and writer: a session
+    // of 40 days ago, one of yesterday, and a document as old as the first.
+    let day = 86_400_000;
+    let now = ptyro_core::now_ms();
+    {
+        let db = w.db();
+        let never = Never::default();
+        for (kind, uri, at) in [
+            (ItemKind::Session, "session://claude/old", now - 40 * day),
+            (ItemKind::Session, "session://claude/new", now - day),
+            (ItemKind::File, "file:///old.md", now - 40 * day),
+        ] {
+            let passed = ingest::gate(&Gate::open(&never)).unwrap();
+            let text = format!("zqretention {uri}");
+            let mut source =
+                Source::new(kind, uri, Body::Plain { name: "x".into(), text, at_ms: at });
+            (source.started_ms, source.ended_ms) = (Some(at), Some(at));
+            let writer = if kind == ItemKind::Session { Writer::Agent } else { Writer::File };
+            let plan = ingest::plan(passed, source, Stamp::new(writer, None), &Redactor::default())
+                .unwrap();
+            db.write(plan).await.unwrap();
+        }
+        db.checkpoint().await.unwrap();
+    }
+    let found = |w: &World| {
+        let hits = w.json(&["recall", "--json", "zqretention"]);
+        let mut uris: Vec<String> = hits
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["uri"].as_str().unwrap().to_owned())
+            .collect();
+        uris.sort();
+        uris
+    };
+    assert_eq!(found(&w).len(), 3, "kept for good while `kb.retain_days` is 0");
+    assert!(w.out(&["kb"]).contains("sessions are kept for good"));
+
+    // Set, it acts at once (and then once a day): the old session goes, and nothing else.
+    assert!(w.cli(&["config", "set", "kb.retain_days", "30"]).status.success());
+    w.status("the old session is gone", |s| {
+        s["retain_days"] == 30 && s["kinds"].to_string().contains("\"items\":1")
+    })
+    .await;
+    let deadline = Instant::now() + WAIT;
+    while found(&w).len() != 2 {
+        assert!(Instant::now() < deadline, "the old session was never deleted: {:?}", found(&w));
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    assert_eq!(found(&w), ["file:///old.md", "session://claude/new"]);
+    assert!(!w.bytes_hold("zqretention session://claude/old"), "its text is still in kb.db");
+    let status = w.out(&["kb"]);
+    assert!(status.contains("\n  sessions older than 30 days are deleted\n"), "{status}");
+    // No tombstone: it is counted as deleted, not as forgotten.
+    assert_eq!(w.json(&["kb", "--json"])["forgotten"], 0);
+    assert!(w.log("knowledge base").contains("1 item(s) older than 30 day(s) deleted"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_that_runs_recall_sees_only_its_own_profiles_and_never_forgets() {
+    let config = format!(
+        "{}[profiles.work]\nclaude = \"~/.claude-work\"\n[profiles.home]\nclaude = \"~/.claude-home\"\n",
+        agents("")
+    );
+    let w = World::new(&config);
+    let c = w.d.client().await.unwrap();
+    // A work session says a word.
+    let a = w.agent_in(&c, "wa", "claude", Some("work")).await;
+    let work = format!("session://claude/{}", a.conversation.unwrap());
+    w.turn(&c, "wa", "edit notes.txt zqwallword").await;
+    w.kept(&work, "the work turn", |k| k.has(ChunkKind::Assistant, "wrote notes.txt")).await;
+    let addr = w.json(&["recall", "--json", "zqwallword"])[0]["addr"].as_str().unwrap().to_owned();
+
+    // An agent of another profile runs `ptyro recall` in its terminal: the daemon knows whose
+    // session the command comes from, and answers within the wall. (Its own session, which
+    // holds the word it typed, is never found for it.)
+    let b = w.agent_in(&c, "hb", "claude", Some("home")).await;
+    let home = format!("session://claude/{}", b.conversation.unwrap());
+    w.turn(&c, "hb", &format!("sh {BIN} recall --json zqwallword")).await;
+    let k = w
+        .kept(&home, "the home turn", |k| k.chunks.iter().any(|c| c.kind == ChunkKind::Assistant))
+        .await;
+    assert!(k.has(ChunkKind::Assistant, "ran: []"), "{:?}", k.shown());
+    // Nor can it read the work session by its address, list it, or forget it.
+    w.turn(&c, "hb", &format!("sh {BIN} kb show {addr}; echo code=$?")).await;
+    w.kept(&home, "the show", |k| k.has(ChunkKind::Assistant, "ran: code=3")).await;
+    w.turn(&c, "hb", &format!("sh {BIN} kb recent --json")).await;
+    w.kept(&home, "the list", |k| k.chunks.iter().filter(|c| c.text == "ran: []").count() == 2)
+        .await;
+    w.turn(&c, "hb", &format!("sh {BIN} kb forget {addr} --yes; echo code=$?")).await;
+    w.kept(&home, "the forget", |k| k.has(ChunkKind::Assistant, "ran: code=1")).await;
+
+    // An agent of the same profile finds it, and not the other profile's session, which
+    // holds the word too by now.
+    let s = w.agent_in(&c, "wc", "claude", Some("work")).await;
+    let same = format!("session://claude/{}", s.conversation.unwrap());
+    w.turn(&c, "wc", &format!("sh {BIN} recall --json zqwallword")).await;
+    let k = w
+        .kept(&same, "the same profile's turn", |k| {
+            k.chunks.iter().any(|c| c.kind == ChunkKind::Assistant)
+        })
+        .await;
+    let said: String = k
+        .chunks
+        .iter()
+        .filter(|c| c.kind == ChunkKind::Assistant)
+        .map(|c| c.text.as_str())
+        .collect();
+    assert!(said.contains(&work) && !said.contains(&home) && !said.contains(&same), "{said}");
+    // It may not forget either: what an agent could forget, it could hide.
+    w.turn(&c, "wc", &format!("sh {BIN} kb forget {addr} --yes; echo code=$?")).await;
+    w.kept(&same, "the forget", |k| k.has(ChunkKind::Assistant, "ran: code=1")).await;
+    // You see all of it.
+    let mine = w.json(&["recall", "--json", "zqwallword", "-l", "50"]);
+    let uris: Vec<&str> =
+        mine.as_array().unwrap().iter().filter_map(|h| h["uri"].as_str()).collect();
+    for uri in [&work, &home, &same] {
+        assert!(uris.contains(&uri.as_str()), "{uri} in {uris:?}");
     }
 }

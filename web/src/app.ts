@@ -16,6 +16,7 @@ import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js"
 import { staleMaybeChanged } from "./projects.js";
 import "./settings.js";
 import "./panel.js";
+import "./library.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";

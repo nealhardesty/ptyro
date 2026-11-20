@@ -99,6 +99,29 @@ const scenarios = {
     await tab.waitFor("the Allow buttons to go", `!document.querySelector(".blocked-wrap .actions .allow")`);
   },
 
+  // The Library (KB1.7): a session's turn is kept; the page lists it, the search finds it with
+  // the match marked, a tap opens it, and Forget… deletes it for good.
+  async library() {
+    const recalled = () => JSON.parse(ptyro("recall", "--json", "zqlibrary"));
+    ptyro("new", "-d", "-n", "lib1", "--agent", "claude");
+    ptyro("send", "lib1", "edit lib.txt zqlibrary", "--wait-ready");
+    await until("the turn to be kept", () => recalled().length > 0, 20_000);
+    await fresh("#/library");
+    await tab.waitFor("the search box", `!!document.querySelector("input.search")`);
+    await tab.waitFor("the history", `[...document.querySelectorAll("main .rows .row")].some((r) => r.textContent.includes("zqlibrary"))`);
+    await tab.eval(`(() => { const b = document.querySelector("input.search"); b.value = "zqlibrary"; b.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await tab.waitFor("a hit with the match marked", `[...document.querySelectorAll("main .rows .row mark")].some((m) => m.textContent === "zqlibrary")`);
+    await tab.eval(`[...document.querySelectorAll("main .rows .row")].find((r) => r.querySelector("mark")).click()`);
+    await tab.waitFor("the piece that matched, opened", `[...document.querySelectorAll(".sheet .kb-piece.at pre")].some((p) => p.textContent.includes("zqlibrary"))`);
+    await tab.click(".sheet-foot .deny");
+    await tab.waitFor("the question, in the words every client uses", `[...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("The text is deleted from the knowledge base for good"))`);
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Forget").click()`);
+    await until("it to be forgotten", () => recalled().length === 0);
+    await tab.waitFor("the hit to go", `!document.querySelector("main .rows .row mark")`);
+    if (!ptyro("kb").includes("1 forgotten")) throw new Error(`the status doesn't count it: ${ptyro("kb")}`);
+    ptyro("kill", "lib1");
+  },
+
   // A switch writes the config file (comments kept), Undo restores it, a bad number is refused
   // in the form and never reaches the file.
   async settings() {

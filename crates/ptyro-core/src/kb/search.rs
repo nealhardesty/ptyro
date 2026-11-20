@@ -123,6 +123,12 @@ pub struct KbHit {
     pub project: Option<String>,
     #[serde(default)]
     pub workspace: Option<String>,
+    /// What the project and the workspace are called, where the daemon that answered still
+    /// knows them (`None`: it has none, or it is gone).
+    #[serde(default)]
+    pub project_name: Option<String>,
+    #[serde(default)]
+    pub workspace_name: Option<String>,
     #[serde(default)]
     pub profile: Option<String>,
     #[serde(default)]
@@ -138,6 +144,9 @@ pub struct KbHit {
     /// What it was ranked by, higher is better (comparable within one answer only).
     pub score: f64,
 }
+
+/// (A score is never NaN: it is a sum of reciprocal ranks times fixed weights.)
+impl Eq for KbHit {}
 
 /// What a search answers.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -162,6 +171,67 @@ pub struct KbDoc {
     /// item is shown from its start.
     #[serde(default)]
     pub stale: bool,
+}
+
+/// An item as a list shows it (SPEC §25.14's `KbItems`, and what `KbRead` opened): with its
+/// address and what its place is called.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KbListed {
+    /// `k:7f3k`.
+    pub addr: String,
+    pub item: KbItem,
+    #[serde(default)]
+    pub project_name: Option<String>,
+    #[serde(default)]
+    pub workspace_name: Option<String>,
+}
+
+/// What the knowledge base holds and how it stands (SPEC §25.14's `KbStatus`; `ptyro kb`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KbStatusInfo {
+    /// `kb.enabled`. Off: nothing more is kept; the rest says what is stored, if the file is
+    /// there to be read.
+    pub enabled: bool,
+    /// `kb.sessions`: agent sessions are kept.
+    pub sessions: bool,
+    /// `kb.retain_days` (0: for good).
+    pub retain_days: u32,
+    /// Why `kb.db` can't be opened, with the fix.
+    pub error: Option<String>,
+    /// `kb.db`.
+    pub path: String,
+    /// The file and its write-ahead log.
+    pub bytes: u64,
+    /// Items and their pieces by kind, forgotten ones left out.
+    pub kinds: Vec<KbCount>,
+    /// Pieces that can be found by meaning.
+    pub vectors: u64,
+    /// Meaning search, in a line: off, downloading, how far (`ptyro doctor`'s).
+    pub meaning: Option<String>,
+    pub roots: u64,
+    /// Items forgotten: their text is gone, their URIs are never kept again.
+    pub forgotten: u64,
+    /// Sources waiting to be read.
+    pub queued: u64,
+    /// What was not kept since the daemon started, newest last, with why (at most 100).
+    pub skipped: Vec<KbSkipped>,
+}
+
+/// How much of one kind the knowledge base holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KbCount {
+    pub kind: ItemKind,
+    pub items: u64,
+    pub chunks: u64,
+}
+
+/// A source that was not kept, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KbSkipped {
+    pub uri: String,
+    pub why: String,
+    pub at_ms: u64,
 }
 
 // ── ranking ─────────────────────────────────────────────────────────────────────────────────
@@ -276,6 +346,8 @@ mod tests {
             snippet: format!("{item}{idx}"),
             at_ms: 1000 * DAY,
             project: None,
+            project_name: None,
+            workspace_name: None,
             workspace: None,
             profile: None,
             agent: None,

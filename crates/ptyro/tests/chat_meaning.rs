@@ -96,7 +96,7 @@ fn meaning_search_finds_what_words_dont() {
     let out = w.cli(&["chat", "search", "cat", "--meaning"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    assert!(err.contains("meaning search is off") && err.contains("chat.meaning true"), "{err}");
+    assert!(err.contains("meaning search is off") && err.contains("kb.meaning true"), "{err}");
 
     // On, with its model in place: every message is embedded in the background.
     model(&w.d.paths.data.join("models").join(ptyro_meaning::NAME));

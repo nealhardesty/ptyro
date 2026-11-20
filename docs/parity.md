@@ -93,6 +93,21 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 | `chat search` | `chat.search` (`C-g`): the chat list searching every chat, messages with their snippets; `⏎` opens one at its message; `--meaning`/`--words` are `by:meaning`/`by:words` in the box, `≈` marks a hit by meaning, and `by:meaning` while it is off asks to switch it on | `chat.search` (`Ctrl-G`): the Chats page's search box: titles, then every message on every machine; tap one to open it there; `by:meaning`/`by:words` as in the TUI, `≈`, and `chat.meaning` switches it on where it is off |
 | `chat find` | `chat.find` (`/find`): ask your chats; the answer, with its citations (`chat.cite` opens one) | `chat.find`: ？ on the Chats page; citations in the answer are links (`chat.cite`) |
 
+## The knowledge base (SPEC §25)
+
+What ptyro keeps of your work, searchable in one place: agent sessions as they happen, and your
+chats beside them. The TUI's Library panel (ROADMAP KB1.8) and the rest of the web's Library
+page (KB1.9) are being built: until then the TUI runs each command in a split, and the web has
+the page's first part.
+
+| Command | In the TUI | On the web |
+|---|---|---|
+| `recall` | `kb.search` (the palette): asks what to look for (the search box's words: `"a phrase"`, `kind:session`, `project:`, `since:7d`, `by:meaning`), then the hits in a split, each with its address | `kb.search`: More → Library, the search box (`kb.open`): hits as you type, each with what it is, where and when, the match marked, `≈` for one found by meaning; a chat's hit opens the chat at its message |
+| `kb status` | `kb.status` (the palette): on or off, what it holds, how long sessions are kept, what was not kept and why, in a split | `kb.status`: the line under the Library's search box (how much is kept): tap it for the rest; switched off, the page says so and `kb.enable` switches it on |
+| `kb show` | `kb.show` (the palette): asks for an address (`k:7f3k/12` from a search), then the piece with its neighbours in a split | `kb.show`: tap a hit or a row of the history: the piece with what was said around it, and All of it |
+| `kb recent` | `kb.recent` (the palette): the history by day, in a split | `kb.recent`: the Library with nothing typed: what was kept, newest first, by day |
+| `kb forget` | `kb.forget` (the palette): asks for an address, then says what will go and asks, in a split | `kb.forget`: Forget… under an opened hit (asks, in the same words; a device paired with `--scope full`) |
+
 ## Attention and notifications
 
 | Command | In the TUI | On the web |

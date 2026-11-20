@@ -1384,7 +1384,7 @@ impl App {
     /// sees the change and downloads its model.
     pub(crate) fn meaning_on(&mut self) {
         self.set_config(
-            "chat.meaning",
+            "kb.meaning",
             "true",
             "meaning search is on: its model is downloading (ptyro doctor shows how far)",
         );

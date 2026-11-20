@@ -747,6 +747,21 @@ impl KbDb {
         Ok(Some(gone))
     }
 
+    /// A tombstone for a URI that has no item (§25.12): a session nothing was read of yet,
+    /// which is never to be kept. An item that is there is left as it is ([`KbDb::forget`]
+    /// forgets one). Returns whether a tombstone was made.
+    pub async fn tombstone(&self, uri: String, kind: ItemKind) -> Result<bool> {
+        let origin = self.machine_id.clone();
+        self.call(move |db| {
+            Ok(db.execute(
+                "INSERT INTO item (id, uri, kind, writer, origin, ingested_at, forgotten_at)
+                 VALUES (?1, ?2, ?3, 'ptyro', ?4, ?5, ?5) ON CONFLICT(uri) DO NOTHING",
+                params![ptyro_core::chats::new_id(), uri, kind.as_str(), origin, now()],
+            )? > 0)
+        })
+        .await
+    }
+
     /// Delete an item and its chunks, with no tombstone (a file that is gone, §25.6.3): the
     /// same URI may be written again. In batches. Returns whether it was there.
     pub async fn delete_item(&self, id: String) -> Result<bool> {

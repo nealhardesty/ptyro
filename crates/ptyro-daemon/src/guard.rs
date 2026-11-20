@@ -113,6 +113,10 @@ impl Daemon {
         // (SPEC §17).
         match req {
             Request::Answer { .. } => refuse("permission prompts are answered by a person"),
+            // What an agent could forget, it could hide.
+            Request::KbForget { .. } => {
+                refuse("what the knowledge base keeps is forgotten by a person")
+            }
             // A token minted here would leave through the agent's output.
             Request::DevicePair { .. }
             | Request::DeviceRevoke { .. }

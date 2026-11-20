@@ -362,6 +362,14 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("devices.revoke", "Cut a paired device off now"),
     a("devices.push_test", "Send a test push to your devices"),
     a("config.show", "The effective config, defaults filled in"),
+    a(
+        "kb.search",
+        "Search everything ptyro kept of your work, and your chats (words, \"phrases\", kind:, project:, since:)",
+    ),
+    a("kb.recent", "The history: what was kept, newest first, by day"),
+    a("kb.show", "Open what a search found: a piece with its neighbours, or a whole item"),
+    a("kb.forget", "Forget something kept: its text is deleted for good and never kept again"),
+    a("kb.status", "The knowledge base: on or off, what it holds, what was not kept and why"),
     a("nav.collapse", "Sidebar: fold the selected workspace, project or worktree"),
     a("nav.expand", "Sidebar: unfold the selected workspace, project or worktree"),
 ];

@@ -6,6 +6,8 @@
 
 /// `chat rm`: the daemon asks with it (`ChatDelete` unconfirmed).
 pub const CHAT: &str = "It goes from every list, on every device. This can't be undone.";
+/// `kb forget`: the daemon asks with it (`KbForget` unconfirmed).
+pub const KB: &str = "The text is deleted from the knowledge base for good, and nothing of it is kept again. Your files and the agents' own transcripts aren't touched.";
 /// `project rm`.
 pub const PROJECT: &str = "ptyro forgets it: its trust, its pin and its place in workspaces. Its worktrees stay on disk, and it won't register on its own again.";
 /// Letting a project's running sessions go: after `PROJECT` in `project rm --release`, and in
@@ -57,6 +59,7 @@ pub const SESSION_ENDS: &[&str] = &[STOP, KILL, STOP_REMOVE];
 /// repeats them word for word in the dialog that asks that question (the test below checks it).
 pub const DIALOGS: &[(&str, &[&str])] = &[
     ("Delete the chat", &[CHAT]),
+    ("Forget 1 item", &[KB]),
     ("Forget project", &[PROJECT]),
     ("Remove worktree", &[WORKTREE, SAFE, FORCED]),
     ("Remove workspace", &[WORKSPACE]),

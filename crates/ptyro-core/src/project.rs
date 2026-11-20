@@ -26,6 +26,15 @@ pub struct ProjectSection {
     pub import: Option<bool>,
 }
 
+/// The knowledge base, for this repository (SPEC §25.13). A repository can only keep itself
+/// out: it never switches on what you switched off.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KnowledgeSection {
+    /// `false`: nothing that happens in this project is kept (default: your own setting).
+    pub enabled: Option<bool>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShareMode {
@@ -252,6 +261,7 @@ impl ProjectConfig {
 pub struct ProjectConfig {
     pub project: ProjectSection,
     pub worktree: WorktreeSection,
+    pub knowledge: KnowledgeSection,
     pub scripts: Scripts,
     /// Prompt snippets offered by the wizard and `--prompt @name`.
     pub prompts: BTreeMap<String, String>,
@@ -280,6 +290,9 @@ impl ProjectConfig {
             toml::from_str(text).map_err(|e| e.to_string().trim_end().to_owned())?;
         // A removed feature's keys are ignored (the doctor reports them, SPEC §13.8).
         crate::retired::strip_table(&mut table);
+        if table.contains_key("kb") {
+            return Err("[kb]: the knowledge base's settings are your own, in your user config; a repository can only keep itself out, with `[knowledge] enabled = false`".into());
+        }
         for (key, what) in USER_ONLY {
             if table.contains_key(*key) {
                 return Err(format!(

@@ -130,7 +130,13 @@ pub fn needed(req: &Request) -> Scope {
         ChatList { .. }
         | ChatRead { .. }
         | ChatExport { .. }
-        | ChatSearch { .. } => Scope::Read,
+        | ChatSearch { .. }
+        // The knowledge base (SPEC §25.11): a lost `read` token leaks it, as it leaks screens
+        // and chats; forgetting needs `full`.
+        | KbSearch { .. }
+        | KbRead { .. }
+        | KbRecent { .. }
+        | KbStatus => Scope::Read,
         ChatNew { .. }
         | ChatTask { .. }
         | ChatRetry { .. }
@@ -212,6 +218,8 @@ pub fn needed(req: &Request) -> Scope {
         MachineAdd { .. } | MachineRemove { .. } | MachineHide { .. } | MachineRetry { .. } | MachineUpdate { .. } | SelfUpdate => Scope::Full,
         // Installs software on the machine (never with administrator rights, BOOT1).
         SetupRun { .. } => Scope::Full,
+        // Forgetting deletes for good (SPEC §25.11).
+        KbForget { .. } => Scope::Full,
         Shutdown { .. } | Upgrade { .. } | DevicePair { .. } | DeviceClaim { .. } | DeviceList | DeviceRevoke { .. } | SaveView { .. } | ReloadConfig | ProjectAdd { .. } | ProjectRemove { .. } | ProjectRename { .. } | ProjectPin { .. } | ProjectScripts { .. } | ProjectTrust { .. } | ProjectUntrust { .. } | Discover { .. } | WorkspaceNew { .. } | WorkspaceSet { .. } | WorkspaceRename { .. } | WorkspaceRemove { .. } | WorkspaceMember { .. } | WorktreeNew { .. } | WorktreeRemove { .. } | WorktreeRefresh { .. } | WorktreeRun { .. } | WorktreeRename { .. } | Gc | GcKeep { .. } | ProfileEnv { .. } | ProfileRename { .. } | ProfileResolve { .. } | Hook { .. } | StatusLine { .. } | NotifyTest | Doctor | SelfTest { .. } | CheckpointRestore { .. } => Scope::Full,
     }
 }

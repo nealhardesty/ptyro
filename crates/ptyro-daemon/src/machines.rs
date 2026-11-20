@@ -238,6 +238,12 @@ fn here_only(req: &Request) -> bool {
     matches!(
         req,
         List | Status
+            // The knowledge base is each machine's own until the fan-out (KB1.12).
+            | KbSearch { .. }
+            | KbRead { .. }
+            | KbRecent { .. }
+            | KbForget { .. }
+            | KbStatus
             | Shutdown { .. }
             | Upgrade { .. }
             | DevicePair { .. }

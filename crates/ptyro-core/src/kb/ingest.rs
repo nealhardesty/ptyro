@@ -30,9 +30,11 @@ pub const MAX_FILE: u64 = 1 << 20;
 pub enum Skip {
     /// `[kb] enabled = false`.
     Off,
+    /// `[kb] sessions = false`: agent sessions are not kept.
+    SessionsOff,
     /// `[agents.<name>] kb = false`.
     AgentOff,
-    /// `[kb] enabled = false` in the project's `.ptyro.toml`.
+    /// `[knowledge] enabled = false` in the project's `.ptyro.toml`.
     ProjectOff,
     /// A session whose screen is not recorded (a login, §7.6).
     Unrecorded,
@@ -56,6 +58,7 @@ impl std::fmt::Display for Skip {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Skip::Off => f.write_str("the knowledge base is off"),
+            Skip::SessionsOff => f.write_str("agent sessions are not kept (`kb.sessions` is off)"),
             Skip::AgentOff => f.write_str("its agent is kept out of the knowledge base"),
             Skip::ProjectOff => f.write_str("its project is kept out of the knowledge base"),
             Skip::Unrecorded => f.write_str("the session is not recorded"),
@@ -168,6 +171,8 @@ fn glob(p: &str) -> String {
 pub struct Gate<'a> {
     /// `kb.enabled`.
     pub enabled: bool,
+    /// The source is an agent's session and `kb.sessions` is off.
+    pub sessions_off: bool,
     /// The source's agent has `kb = false`.
     pub agent_off: bool,
     /// The source's project has `[kb] enabled = false`.
@@ -192,6 +197,7 @@ impl<'a> Gate<'a> {
     pub fn open(never: &'a Never) -> Self {
         Self {
             enabled: true,
+            sessions_off: false,
             agent_off: false,
             project_off: false,
             unrecorded: false,
@@ -213,6 +219,9 @@ pub struct Passed(());
 pub fn gate(g: &Gate<'_>) -> Result<Passed, Skip> {
     if !g.enabled {
         return Err(Skip::Off);
+    }
+    if g.sessions_off {
+        return Err(Skip::SessionsOff);
     }
     if g.agent_off {
         return Err(Skip::AgentOff);
@@ -468,6 +477,7 @@ mod tests {
         assert!(gate(&open).is_ok());
         let all = Gate {
             enabled: false,
+            sessions_off: true,
             agent_off: true,
             project_off: true,
             unrecorded: true,
@@ -486,6 +496,7 @@ mod tests {
                     assert!(!why.to_string().is_empty());
                     match why {
                         Skip::Off => g.enabled = true,
+                        Skip::SessionsOff => g.sessions_off = false,
                         Skip::AgentOff => g.agent_off = false,
                         Skip::ProjectOff => g.project_off = false,
                         Skip::Unrecorded => g.unrecorded = false,
@@ -503,6 +514,7 @@ mod tests {
             seen,
             [
                 Skip::Off,
+                Skip::SessionsOff,
                 Skip::AgentOff,
                 Skip::ProjectOff,
                 Skip::Unrecorded,

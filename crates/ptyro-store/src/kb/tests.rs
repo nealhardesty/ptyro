@@ -442,6 +442,18 @@ async fn forgetting_leaves_no_byte_of_the_text() {
     assert!(in_files(dir.path(), "zqtextxyzzy").is_empty());
     assert_eq!(db.item(id.clone()).await.unwrap().unwrap().cursor, None);
     assert_eq!(db.status().await.unwrap().forgotten, 1);
+    // A tombstone for a URI nothing was kept of: it is forgotten from then on, counted, in
+    // no list, and one that has an item is left alone.
+    let never = "session://claude/never-read";
+    assert!(db.tombstone(never.into(), ItemKind::Session).await.unwrap());
+    assert!(!db.tombstone(never.into(), ItemKind::Session).await.unwrap());
+    assert!(db.tombstoned(never.into()).await.unwrap());
+    assert!(!db.tombstone("file:///other1.md".into(), ItemKind::File).await.unwrap());
+    assert!(!db.tombstoned("file:///other1.md".into()).await.unwrap());
+    let stone = db.item_by_uri(never.into()).await.unwrap().unwrap();
+    assert!(stone.forgotten_ms.is_some() && stone.chunks == 0);
+    assert!(db.list(ItemFilter::default()).await.unwrap().iter().all(|i| i.uri != never));
+    assert_eq!(db.status().await.unwrap().forgotten, 2);
     // Forgetting it again, or what isn't there.
     assert_eq!(db.forget(id.clone()).await.unwrap(), Some(0));
     assert_eq!(db.item(id).await.unwrap().unwrap().forgotten_ms, tomb.forgotten_ms);

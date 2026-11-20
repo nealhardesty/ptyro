@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 52 };
+pub const PROTO: Version = Version { major: 1, minor: 53 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -925,6 +925,70 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
     },
+    /// Search the knowledge base and the chats, on this machine (1.53, SPEC §25.8, §25.14):
+    /// agent sessions, and whatever else is kept, best first. `query` is the search box's:
+    /// words, `"phrases"`, `-word`, `prefix*`, `kind:`, `project:`, `since:`, `before:`,
+    /// `agent:`, `workspace:`, `file:`, `wrote:`, `by:meaning`, `by:words`. The options narrow
+    /// what the query says, never widen it. → `KbHits`.
+    KbSearch {
+        query: String,
+        /// Only this project's (its name, id or a path in it).
+        #[serde(default)]
+        project: Option<String>,
+        /// Only these kinds; empty: every kind.
+        #[serde(default)]
+        kinds: Vec<ptyro_core::kb::search::HitKind>,
+        #[serde(default)]
+        since_ms: Option<u64>,
+        #[serde(default)]
+        before_ms: Option<u64>,
+        /// `None`: 20; at most 100.
+        #[serde(default)]
+        limit: Option<u32>,
+        /// Where you are: a project (its id or name) or a path (the working directory). What
+        /// is of that project ranks higher; it is never a filter, and a place that is no
+        /// project's is nothing.
+        #[serde(default)]
+        here: Option<String>,
+    },
+    /// Open an address a search gave (1.53): `k:7f3k/12` with `before` and `after` of its
+    /// neighbours (`None`: 2 each), or `k:7f3k`, the item from its start (`after`: how many
+    /// pieces, `None`: all). A chat's address (`c:…`) is `ChatRead`'s. → `KbDoc`.
+    KbRead {
+        addr: String,
+        #[serde(default)]
+        before: Option<u32>,
+        #[serde(default)]
+        after: Option<u32>,
+    },
+    /// The history (1.53): items newest first, `before_ms` for the next page. → `KbItems`.
+    KbRecent {
+        /// Empty: every kind.
+        #[serde(default)]
+        kinds: Vec<ptyro_core::kb::ItemKind>,
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        before_ms: Option<u64>,
+        /// `None`: 20; at most 100.
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// Forget items for good (1.53, SPEC §25.12): their text is deleted and zeroed, and their
+    /// URIs are never kept again. `addrs` (addresses or ids), or every item `query` finds (its
+    /// best 100 hits' items). Without `confirmed` nothing is deleted: the answer is
+    /// `needs_confirmation`, saying what would go. → `KbForgotten`.
+    KbForget {
+        #[serde(default)]
+        addrs: Vec<String>,
+        #[serde(default)]
+        query: Option<String>,
+        #[serde(default)]
+        confirmed: bool,
+    },
+    /// What the knowledge base holds and how it stands (1.53); answered when it is off too.
+    /// → `KbStatus`.
+    KbStatus,
     /// Ask your chats a question: an incognito chat whose agent has only the chat history tools
     /// answers it, citing `c:7f3k/node` (SPEC §22.10).
     ChatFind {
@@ -1434,6 +1498,38 @@ pub enum Reply {
     /// Search hits, best first (1.23).
     ChatHits {
         hits: Vec<ptyro_core::chats::ChatHit>,
+    },
+    /// What a search of the knowledge base found, best first (1.53).
+    KbHits {
+        hits: Vec<ptyro_core::kb::search::KbHit>,
+        /// Why it was by words alone when the query didn't ask for that: meaning search is
+        /// off, or its model isn't here yet.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        words_only: Option<String>,
+    },
+    /// What an address opened (1.53): the item, and the pieces asked for in its order. `at`:
+    /// the piece the address named; `stale`: it named one the item no longer has, and the
+    /// item is shown from its start.
+    KbDoc {
+        item: ptyro_core::kb::search::KbListed,
+        chunks: Vec<ptyro_core::kb::KbChunk>,
+        #[serde(default)]
+        at: Option<u32>,
+        #[serde(default)]
+        stale: bool,
+    },
+    /// Items, newest first (1.53).
+    KbItems {
+        items: Vec<ptyro_core::kb::search::KbListed>,
+    },
+    /// What was forgotten (1.53): how many items, and how many pieces of text they held.
+    KbForgotten {
+        items: u32,
+        chunks: u32,
+    },
+    /// The knowledge base's state (1.53).
+    KbStatus {
+        status: ptyro_core::kb::search::KbStatusInfo,
     },
     Devices {
         devices: Vec<DeviceInfo>,
@@ -2093,6 +2189,153 @@ mod tests {
             ],
             replay: true,
         });
+    }
+
+    /// The knowledge base's messages (1.53): each way round, and as a page writes them (JSON,
+    /// what it has no use for left out).
+    #[test]
+    fn knowledge_base_messages_round_trip() {
+        use ptyro_core::kb::search::{HitKind, KbCount, KbHit, KbListed, KbSkipped, KbStatusInfo};
+        use ptyro_core::kb::{ChunkKind, ItemKind, KbChunk, KbItem, Writer};
+        round_trip(Request::KbSearch {
+            query: "retry policy kind:session".into(),
+            project: Some("ptyro".into()),
+            kinds: vec![HitKind::Session, HitKind::Chat],
+            since_ms: Some(1),
+            before_ms: Some(2),
+            limit: Some(5),
+            here: Some("/src/ptyro".into()),
+        });
+        round_trip(Request::KbRead { addr: "k:7f3k/12".into(), before: Some(1), after: None });
+        round_trip(Request::KbRecent {
+            kinds: vec![ItemKind::Session],
+            project: None,
+            before_ms: Some(9),
+            limit: None,
+        });
+        round_trip(Request::KbForget {
+            addrs: vec!["k:7f3k".into()],
+            query: None,
+            confirmed: true,
+        });
+        round_trip(Request::KbStatus);
+        let item = KbItem {
+            id: "01JB0000000000000000007F3K".into(),
+            uri: "session://claude/c1".into(),
+            kind: ItemKind::Session,
+            root: None,
+            title: Some("retry policy".into()),
+            rel: None,
+            project: Some("p1".into()),
+            workspace: Some("w1".into()),
+            worktree: None,
+            branch: Some("main".into()),
+            profile: Some("work".into()),
+            agent: Some("claude".into()),
+            model: None,
+            session: None,
+            writer: Writer::Agent,
+            files: vec!["src/retry.rs".into()],
+            hash: None,
+            cursor: Some(serde_json::json!({ "offset": 12 })),
+            chunks: 3,
+            started_ms: Some(1),
+            ended_ms: Some(2),
+            ingested_ms: Some(3),
+            origin: "m1".into(),
+            forgotten_ms: None,
+        };
+        let listed = KbListed {
+            addr: "k:7f3k".into(),
+            item,
+            project_name: Some("ptyro".into()),
+            workspace_name: None,
+        };
+        round_trip(Reply::KbHits {
+            hits: vec![KbHit {
+                addr: "k:7f3k/1".into(),
+                item: "01JB0000000000000000007F3K".into(),
+                idx: Some(1),
+                node: None,
+                uri: Some("session://claude/c1".into()),
+                kind: HitKind::Session,
+                part: "user".into(),
+                title: Some("retry policy".into()),
+                heading: None,
+                snippet: "the \u{2}retry\u{3} policy".into(),
+                at_ms: 2,
+                project: Some("p1".into()),
+                workspace: Some("w1".into()),
+                project_name: Some("ptyro".into()),
+                workspace_name: Some("main".into()),
+                profile: Some("work".into()),
+                agent: Some("claude".into()),
+                writer: Some(Writer::Agent),
+                machine: None,
+                how: "both".into(),
+                score: 0.031,
+            }],
+            words_only: Some("by words only: meaning search is off".into()),
+        });
+        round_trip(Reply::KbDoc {
+            item: listed.clone(),
+            chunks: vec![KbChunk {
+                seq: 7,
+                item: "01JB0000000000000000007F3K".into(),
+                idx: 1,
+                kind: ChunkKind::User,
+                anchor: Some("u1".into()),
+                heading: None,
+                text: "the retry policy".into(),
+                meta: None,
+                at_ms: 2,
+            }],
+            at: Some(1),
+            stale: false,
+        });
+        round_trip(Reply::KbItems { items: vec![listed] });
+        round_trip(Reply::KbForgotten { items: 1, chunks: 3 });
+        round_trip(Reply::KbStatus {
+            status: KbStatusInfo {
+                enabled: true,
+                sessions: true,
+                retain_days: 90,
+                error: None,
+                path: "/data/kb.db".into(),
+                bytes: 4096,
+                kinds: vec![KbCount { kind: ItemKind::Session, items: 1, chunks: 3 }],
+                vectors: 2,
+                meaning: Some("meaning search: off".into()),
+                roots: 0,
+                forgotten: 1,
+                queued: 0,
+                skipped: vec![KbSkipped {
+                    uri: "file:///x/.env".into(),
+                    why: "never read".into(),
+                    at_ms: 5,
+                }],
+            },
+        });
+        // As a page writes them.
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_search","query":"retry"}"#).unwrap();
+        assert!(
+            matches!(m, Request::KbSearch { limit: None, here: None, ref kinds, .. } if kinds.is_empty())
+        );
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_read","addr":"k:7f3k"}"#).unwrap();
+        assert!(matches!(m, Request::KbRead { before: None, after: None, .. }));
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_recent"}"#).unwrap();
+        assert!(matches!(m, Request::KbRecent { limit: None, .. }));
+        // Nothing is forgotten by a request that doesn't say it was agreed to.
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_forget","addrs":["k:7f3k"]}"#).unwrap();
+        assert!(matches!(m, Request::KbForget { confirmed: false, query: None, .. }));
+        let (m, _): (Request, _) = decode(br#"{"t":"kb_status"}"#).unwrap();
+        assert_eq!(m, Request::KbStatus);
+        // A status from a daemon that says less still reads.
+        let (m, _): (Reply, _) =
+            decode(br#"{"t":"kb_status","status":{"enabled":false}}"#).unwrap();
+        assert!(
+            matches!(m, Reply::KbStatus { status } if !status.enabled && status.kinds.is_empty())
+        );
     }
 
     /// The web app's shapes (JSON, fields left out) read; what 1.51 sent still reads the same.

@@ -1198,7 +1198,7 @@ impl Daemon {
     /// workspace's, or all; never an incognito one, nor itself.
     async fn history_scope(&self, chat: &str) -> Result<HistoryScope, Error> {
         let c = self.rec_get(chat).await?.ok_or_else(|| Error::missing("chat", chat))?;
-        let scope = self.config().chat.history_scope;
+        let scope = self.config().kb.scope;
         Ok(HistoryScope {
             profile: (scope == "profile").then(|| c.profile.clone()),
             workspace: (scope == "workspace").then(|| c.workspace.clone()),

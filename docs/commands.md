@@ -134,6 +134,20 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro chat find [--agent A] QUESTION…` | ask your chats: an agent with only the history tools searches them and answers, citing; nothing of it is kept |
 | `ptyro chat new --incognito …` / `chat ask` | keep nothing: not saved, not searchable, gone with its agent (`ask` is always incognito unless `--keep`) |
 
+## The knowledge base
+
+What ptyro keeps of your work, on this computer only: every Claude Code and Codex session as
+it happens (what you asked, what the agent answered, one line a tool it ran). Your chats are
+searched beside it.
+
+| Command | What it does |
+|---|---|
+| `ptyro recall QUERY… [-p PROJECT] [-k KIND,…] [--since AGE] [--before AGE] [--meaning\|--words] [-l N] [--json]` | search everything kept, and your chats: words (all must match), `"a phrase"`, `prefix*` (3 letters), `-word`, and in the query `kind:session`, `project:NAME`, `since:7d`, `before:30d`, `agent:codex`, `workspace:work`, `file:PATH`, `wrote:you\|agent`, `by:meaning`. Each hit: its address (`k:7f3k/12`; a chat's is `c:7f3k/node`), what it is, where and when, and the text around the match (`≈`: found by meaning). What is of the project you are in ranks higher. In a pipe, one hit a line; `--json` is the list of hits |
+| `ptyro kb [status] [--json]` | whether it is on, what it holds by kind, the file and its size, how much can be found by meaning, how long sessions are kept, how many were forgotten, and what was not kept and why (a forgotten session, an agent or a project kept out, a file too big) |
+| `ptyro kb show REF [--context N] [--json]` / `show REF --open` | open what a search found: `k:7f3k/12` is that piece with N pieces each side (2), `k:7f3k` the whole item / `--open`: its source instead, a session in the TUI (resumed when it can be), a chat in its view |
+| `ptyro kb recent [-k KIND,…] [-p PROJECT] [-l N] [--json]` | the history: what was kept, newest first, by day (UTC) |
+| `ptyro kb forget REF… \| --query QUERY [-y] [--json]` | delete items and their text for good; nothing of them is kept again (a forgotten session's later turns are not read). It says what will go and asks unless `-y`. An agent can't forget |
+
 ## Scripting
 
 | Command | Does |

@@ -44,7 +44,6 @@ impl KbScope {
     /// What a caller of `profile` in `workspace` may see under `scope` (`kb.scope`):
     /// `profile` (its profile's and nobody's), `workspace` (of those, its workspace's) or
     /// `all`.
-    #[allow(dead_code)] // (KB1.10's tools; this module's tests.)
     pub(crate) fn of(scope: &str, profile: &str, workspace: Option<&str>) -> Self {
         Self {
             profile: (scope != "all").then(|| profile.to_owned()),
@@ -92,6 +91,8 @@ fn chat_hit(h: RawHit, ids: &[String], how: &str) -> KbHit {
         snippet: h.snippet,
         at_ms: h.at_ms,
         project: None,
+        project_name: None,
+        workspace_name: None,
         workspace: Some(h.chat.workspace),
         profile: Some(h.chat.profile),
         agent: Some(h.chat.agent),
@@ -109,7 +110,6 @@ impl Daemon {
     /// The answer says when it was by words alone for want of the model
     /// ([`KbHits::words_only`]). Errors: the knowledge base is off or can't be opened, the
     /// query asks nothing or names what there isn't, `by:meaning` while it can't be done.
-    #[allow(dead_code)] // (KB1.7's `recall` and KB1.10's tools; this module's tests.)
     pub(crate) async fn kb_search(
         &self,
         ask: KbSearch,
@@ -312,7 +312,7 @@ impl Daemon {
 
     /// The item an address names (`k:7f3k`, `k:7f3k/12`, an id), and the chunk if it names
     /// one. Never a forgotten item; never one behind the wall.
-    async fn kb_find(
+    pub(super) async fn kb_find(
         &self,
         db: &KbDb,
         addr: &str,
@@ -345,7 +345,6 @@ impl Daemon {
     /// **Open an address** (SPEC §25.14's `KbRead`): the chunk it names with `before` and
     /// `after` of its neighbours, or the item from its start. A chat's address is the
     /// chats' to open (`ChatRead`).
-    #[allow(dead_code)] // (KB1.7's `kb show` and KB1.10's `recall_read`; this module's tests.)
     pub(crate) async fn kb_read(
         &self,
         addr: &str,
@@ -366,7 +365,6 @@ impl Daemon {
 
     /// **The history** (SPEC §25.14's `KbRecent`): items newest first, by kind and project,
     /// `before_ms` for the next page.
-    #[allow(dead_code)] // (KB1.7's `kb recent` and the Library; this module's tests.)
     pub(crate) async fn kb_recent(
         &self,
         kinds: Vec<ItemKind>,

@@ -393,7 +393,7 @@ pub enum Confirmed {
     Quit,
     /// Restart the daemon, stopping what runs (`daemon restart --force`).
     RestartDaemon,
-    /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
+    /// Switch meaning search on (SPEC §22.10, §25.13): `kb.meaning = true` in the config.
     MeaningOn,
     /// Send this request again, agreed to (`confirmed`), its reply going to this.
     Again(Box<Request>, Box<Pending>),

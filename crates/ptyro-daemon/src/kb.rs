@@ -18,6 +18,7 @@
 
 #[cfg(test)]
 mod golden;
+mod requests;
 mod search;
 mod sessions;
 
@@ -90,9 +91,11 @@ pub(crate) struct Prepared {
 /// from the session or the root it comes from.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Facts {
+    /// It is an agent's session (`kb.sessions` switches those off).
+    pub session: bool,
     /// The source's agent has `kb = false`.
     pub agent_off: bool,
-    /// The source's project has `[kb] enabled = false`.
+    /// The source's project has `[knowledge] enabled = false`.
     pub project_off: bool,
     /// Its session is not recorded (§7.6).
     pub unrecorded: bool,
@@ -185,6 +188,34 @@ impl Daemon {
         }
         let me = Arc::clone(self);
         tokio::spawn(async move { me.kb_actor().await });
+        self.start_kb_retention();
+    }
+
+    /// A session's workspace as an item is stamped with it: its id. (A session knows its
+    /// workspace by name, which a rename changes; a chat and the search's filters go by id.)
+    pub(crate) fn kb_workspace_id(&self, name: Option<&str>) -> Option<String> {
+        let name = name?;
+        let reg = self.registry.locked();
+        reg.workspaces.iter().find(|w| w.machine.is_none() && w.name == name).map(|w| w.id.clone())
+    }
+
+    /// Whether the agent called `name` (as `[agents.<name>]` has it) is kept out of the
+    /// knowledge base: `kb = false` (SPEC §25.13).
+    pub(crate) fn kb_agent_off(&self, name: Option<&str>) -> bool {
+        // (`claude@work` is the agent `claude` under a profile.)
+        name.and_then(|n| n.split('@').next())
+            .is_some_and(|n| self.config().agents.get(n).and_then(|a| a.kb) == Some(false))
+    }
+
+    /// Whether a project keeps itself out of the knowledge base: `[knowledge] enabled = false`
+    /// in its `.ptyro.toml` (or your `.ptyro.local.toml` there), read from the worktree the
+    /// source is of, else the main checkout. A file that can't be read keeps nothing out.
+    pub(crate) fn kb_project_off(&self, project: Option<&str>, worktree: Option<&str>) -> bool {
+        let Some(p) = project.and_then(|id| self.project_by_id(id)) else { return false };
+        let checkout =
+            worktree.and_then(|id| self.worktree_by_id(id)).map_or(p.root.clone(), |w| w.path);
+        ptyro_core::project::ProjectConfig::load(&p.root, &checkout)
+            .is_ok_and(|c| c.knowledge.enabled == Some(false))
     }
 
     /// Queue something to ingest, and return at once. A session that is already waiting is
@@ -216,7 +247,6 @@ impl Daemon {
     }
 
     /// Sources that were not kept, newest last, with why.
-    #[allow(dead_code)] // (KB1.7's `kb status`.)
     pub(crate) fn kb_skipped(&self) -> Vec<Skipped> {
         self.kb.skipped.locked().iter().cloned().collect()
     }
@@ -293,8 +323,10 @@ impl Daemon {
     ) -> Result<Passed, Refused> {
         let rules = self.kb_rules();
         let forgotten = db.tombstoned(uri.to_owned()).await.map_err(store_err)?;
+        let config = self.config();
         let gate = Gate {
-            enabled: self.config().kb.enabled,
+            enabled: config.kb.enabled,
+            sessions_off: facts.session && !config.kb.sessions,
             agent_off: facts.agent_off,
             project_off: facts.project_off,
             unrecorded: facts.unrecorded,
@@ -303,7 +335,7 @@ impl Daemon {
             path: facts.path.as_deref(),
             never: &rules.never,
             bytes: facts.bytes,
-            max_bytes: ingest::MAX_FILE,
+            max_bytes: config.kb.max_file_bytes(),
         };
         ingest::gate(&gate).map_err(Refused::Skip)
     }

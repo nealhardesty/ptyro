@@ -252,6 +252,8 @@ fn hit_row(r: &rusqlite::Row<'_>, snippet: String, how: &str) -> rusqlite::Resul
         snippet,
         at_ms: r.get::<_, i64>(6)?.max(0) as u64,
         project: r.get(10)?,
+        project_name: None,
+        workspace_name: None,
         workspace: r.get(11)?,
         profile: r.get(12)?,
         agent: r.get(13)?,

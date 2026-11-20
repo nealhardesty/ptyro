@@ -602,10 +602,13 @@ const CHAT_TITLE: &[Choice] = &[
     c("auto", "a short title from a small model after the first answer"),
     c("off", "the first line of the first message"),
 ];
-const CHAT_SCOPE: &[Choice] = &[
-    c("profile", "chats of the same profile (account) only: a work chat never sees a personal one"),
-    c("workspace", "chats of the same workspace only"),
-    c("all", "every chat on this machine"),
+const KB_SCOPE: &[Choice] = &[
+    c(
+        "profile",
+        "what happened under the same profile (account), and what belongs to none: a work agent never sees a personal session or chat",
+    ),
+    c("workspace", "of those, only the same workspace's"),
+    c("all", "everything on this machine"),
 ];
 const CHAT_NOTIFY: &[Choice] = &[
     c("blocked", "when a chat needs you (a permission, an error)"),
@@ -695,7 +698,6 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.agent", "chat", dynamic(Source::Agents), "The agent new chats talk to; `agent@profile` picks its account too.").or("the workspace's default agent, else the first installed of claude, codex and opencode").new_only(),
     s("chat.incognito", "chat", Kind::Bool, "New chats start incognito: nothing of them is kept or searchable, and they end when their agent stops (C-i in a new chat flips it).").new_only().also("private"),
     s("chat.history_tool", "chat", Kind::Bool, "Chats can look up your other chats (\"as we said last week…\"): search, read and list them.").new_only().also("memory search"),
-    s("chat.history_scope", "chat", pick(CHAT_SCOPE), "Which chats a chat can look up (and `chat find` searches).").new_only().also("privacy"),
     s("chat.hibernate_after", "chat", Kind::Duration, "An idle chat's agent stops after this long, so it costs nothing; the next message carries on.").new_only(),
     s("chat.seed_tokens", "chat", int(1000, 1_000_000), "When an agent has to be told the conversation again (it was lost, or you switched agents), at most this much of it is sent.").unit("tokens").adv(),
     s("chat.title", "chat", pick(CHAT_TITLE), "How a new chat gets its title."),
@@ -705,8 +707,13 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
     s("kb.enabled", "knowledge", Kind::Bool, "The knowledge base: what happens in ptyro is kept in one file on this computer (`kb.db`), for you and your agents to search. Off: nothing more is kept and nothing is offered; what is already stored stays.").also("memory recall library history search ingest"),
-    s("kb.redact", "knowledge", Kind::List, "More patterns to redact before anything is kept (regular expressions), beside the built-in rules for keys, tokens and passwords. What matches is stored as `<redacted>`.").also("secrets privacy credentials regex").or("none").eg("ACME-[0-9]{6}").adv(),
+    s("kb.sessions", "knowledge", Kind::Bool, "Keep agent sessions: what you asked, what the agent answered and which tools it ran, read from the agent's own transcript as it happens (Claude Code and Codex; another agent's session is kept as one summary line). Off: no new session is kept; those already kept stay.").also("transcript history claude codex record"),
+    s("kb.tools", "knowledge", Kind::Bool, "Give agents the tools that search the knowledge base (`recall`, `recall_read`), so one can look up what was done before instead of working it out again.").new_only().also("mcp recall agents memory"),
+    s("kb.scope", "knowledge", pick(KB_SCOPE), "What an agent may see of the knowledge base and of your chats (a chat looking up other chats, `chat find`). You always see everything: this is the wall between your accounts' agents.").also("privacy wall profile history_scope"),
     s("kb.meaning", "knowledge", Kind::Bool, "Meaning search: also find things by what they are about, not only by their words (marked ≈), in the knowledge base and in your chats. Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; nothing you keep leaves this machine.").also("semantic embeddings ai similar search chat"),
+    s("kb.retain_days", "knowledge", int(0, 36_500), "Delete kept agent sessions older than this many days, once a day. 0 keeps them for good. Notes and files are never aged out.").unit("days").also("retention expire delete old history"),
+    s("kb.max_file", "knowledge", Kind::Text, "The largest file read into the knowledge base, like 1MiB or 512KiB. A larger one is left out and named in `ptyro kb status`.").eg("2MiB").adv(),
+    s("kb.redact", "knowledge", Kind::List, "More patterns to redact before anything is kept (regular expressions), beside the built-in rules for keys, tokens and passwords. What matches is stored as `<redacted>`.").also("secrets privacy credentials regex").or("none").eg("ACME-[0-9]{6}").adv(),
     s("kb.exclude", "knowledge", Kind::List, "More paths never to read (globs like `*.sqlite` or `private/**`), beside the built-in list of key and credential files (`.env*`, `*.pem`, `.ssh/`…).").also("ignore never privacy secrets").or("none").eg("private/**").adv(),
     // ── Editors ──
     s("editors.default", "editors", dynamic(Source::Editors), "The editor that opens a worktree. Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
@@ -757,6 +764,7 @@ pub const SETTINGS: &[Setting] = &[
     s("agents.*.hooks", "agents", Kind::Bool, "Wire ptyro's hooks, plugin or notify into the agent.").new_only().or("on"),
     s("agents.*.usage", "agents", Kind::Bool, "Report rate limits per profile.").new_only().or("on for Claude, off for Codex"),
     s("agents.*.record", "agents", Kind::Bool, "Record this agent's sessions.").new_only().or("on"),
+    s("agents.*.kb", "agents", Kind::Bool, "Keep this agent's sessions in the knowledge base, and give it the tools that search it. Off: neither.").new_only().or("on").also("knowledge memory recall history"),
     s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol a chat speaks with it.").new_only().or("from its adapter"),
     // ── Profiles ──
     s("profiles.*.label", "profiles", Kind::Text, "A name to show.").new_only().or("the profile's name"),
@@ -783,6 +791,7 @@ pub const SETTINGS: &[Setting] = &[
     s("project.name", "project", Kind::Text, "What the project is called.").or("the folder's name"),
     s("project.default_agent", "project", dynamic(Source::Agents), "What quick new (`C-n`) starts in this project's worktrees until one has run an agent.").or("your default agent").also("quick new default agent"),
     s("project.base", "project", Kind::Text, "What new worktrees start from, like origin/main.").or("the repository's main branch"),
+    s("knowledge.enabled", "project", Kind::Bool, "Keep what happens in this project in the knowledge base. Off: none of its sessions are kept (a repository can keep itself out; it can't switch on what you switched off).").or("your Knowledge setting").also("kb memory recall history private"),
     s("project.import", "project", Kind::Bool, "Read other tools' committed setup (Conductor, Cursor, Codex…) for scripts this file doesn't set.").or("on"),
     s("worktree.copy", "project", Kind::List, "Untracked files to copy into new worktrees, like .env.").or("none"),
     s("worktree.share", "project", Kind::List, "Heavy folders to share instead of copying, like node_modules.").or("none"),
@@ -837,7 +846,8 @@ pub fn find(key: &str) -> Option<&'static Setting> {
 /// Settings that have a new name (SPEC §25.13): the old one is still read from a file, and
 /// setting or unsetting it writes the new one and takes the old one out. Not retired keys:
 /// they still mean something.
-const RENAMED: &[(&str, &str)] = &[("chat.meaning", "kb.meaning")];
+const RENAMED: &[(&str, &str)] =
+    &[("chat.meaning", "kb.meaning"), ("chat.history_scope", "kb.scope")];
 
 /// The name `key` has now.
 pub fn renamed(key: &str) -> &str {

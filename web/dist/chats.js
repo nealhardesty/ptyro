@@ -219,7 +219,7 @@ function hitRows() {
 /// Meaning search on, in your config (as the settings panel would): the daemon downloads its model.
 async function meaningOn() {
     try {
-        await host("settings.apply", { scope: "user", change: { t: "set", key: "chat.meaning", value: "true" } });
+        await host("settings.apply", { scope: "user", change: { t: "set", key: "kb.meaning", value: "true" } });
         state.meaningOff = "";
         ui.toast("Meaning search is on: its model is downloading, then your chats are read (ptyro doctor shows how far)");
         ui.render();

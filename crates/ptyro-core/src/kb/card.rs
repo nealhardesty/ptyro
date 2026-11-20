@@ -55,7 +55,7 @@ pub fn said(text: &str) -> (Option<String>, Option<String>) {
 }
 
 /// `2026-11-19 22:38` (UTC).
-fn minute(ms: u64) -> String {
+pub fn minute(ms: u64) -> String {
     let secs = ms / 1000;
     let (days, rest) = ((secs / 86_400) as i64, secs % 86_400);
     // The civil date from days (Howard Hinnant's algorithm).

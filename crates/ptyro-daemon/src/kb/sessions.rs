@@ -221,7 +221,8 @@ impl Daemon {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             m.kind == SessionKind::Agent && m.place.chat.is_none()
         };
-        if ours && self.config().kb.enabled {
+        let kb = self.config().kb;
+        if ours && kb.enabled && kb.sessions {
             self.kb_enqueue(Job::Session(job));
         }
     }
@@ -230,7 +231,8 @@ impl Daemon {
     /// upgrade's running ones): queue every session whose transcript is not where its item's
     /// cursor left it, or that has no item yet. The queue itself is never carried over.
     pub(crate) async fn kb_catch_up(self: &Arc<Self>) {
-        if !self.config().kb.enabled {
+        let kb = self.config().kb;
+        if !kb.enabled || !kb.sessions {
             return;
         }
         let Ok(db) = self.kb_db() else { return };
@@ -279,7 +281,7 @@ impl Daemon {
         let branch = worktree.as_ref().and_then(|w| w.branch.clone());
         let stamp = Stamp {
             project: m.place.project.clone(),
-            workspace: m.place.workspace.clone(),
+            workspace: self.kb_workspace_id(m.place.workspace.as_deref()),
             worktree: m.place.worktree.clone(),
             branch: branch.clone(),
             agent: m.place.agent.clone().or(Some(adapter.clone())),
@@ -300,6 +302,7 @@ impl Daemon {
             ended_ms: m.ended_ms,
             turns: m.turns,
         };
+        let agent_off = self.kb_agent_off(stamp.agent.as_deref());
         Some(Target {
             uri: format!("session://{adapter}/{conversation}"),
             adapter,
@@ -308,6 +311,11 @@ impl Daemon {
             hook: m.transcript,
             stamp,
             facts: Facts {
+                session: true,
+                agent_off,
+                // (Its project's own switch is a file to read: asked when the session is
+                // read, `kb_session`, never where a session is only looked at.)
+                project_off: false,
                 unrecorded: m.place.unrecorded,
                 // (§25.7a: the session's flag arrives with KB1.14.)
                 private: false,
@@ -326,8 +334,10 @@ impl Daemon {
     ) -> (String, Result<(), Refused>) {
         let target =
             self.session(job.session).and_then(|s| self.kb_target(&s, job.conversation.clone()));
-        let Some(target) = target else { return (String::new(), Ok(())) };
+        let Some(mut target) = target else { return (String::new(), Ok(())) };
         let uri = target.uri.clone();
+        target.facts.project_off =
+            self.kb_project_off(target.stamp.project.as_deref(), target.stamp.worktree.as_deref());
         let again = match self.kb_read_session(target, job.expect.as_deref()).await {
             Ok(again) => again,
             Err(e) => return (uri, Err(e)),
@@ -484,6 +494,13 @@ impl Daemon {
                     })
                     .flatten()
             });
+            // Too old to keep (`kb.retain_days`): the daily pass deleted it, or would at once.
+            // A session that is carried on is read again from its start, and kept.
+            if let (Some(cut), Some(ended)) = (self.kb_retain_cut(), source.ended_ms)
+                && ended < cut
+            {
+                return Ok(());
+            }
             source.cursor = Some(cursor);
             parts = transcript.parts;
         } else {
@@ -524,10 +541,16 @@ impl Daemon {
     /// cursor with what the item itself says of its session.
     pub(super) async fn kb_item(self: &Arc<Self>, uri: &str) -> Result<(), Refused> {
         let db = self.kb_db()?;
-        let passed = self.kb_gate(&db, uri, &Facts::default()).await?;
         let Some(item) = db.item_by_uri(uri.to_owned()).await.map_err(store_err)? else {
             return Ok(());
         };
+        let facts = Facts {
+            session: true,
+            agent_off: self.kb_agent_off(item.agent.as_deref()),
+            project_off: self.kb_project_off(item.project.as_deref(), item.worktree.as_deref()),
+            ..Facts::default()
+        };
+        let passed = self.kb_gate(&db, uri, &facts).await?;
         let adapter = uri.strip_prefix("session://").and_then(|r| r.split('/').next());
         let (Some(adapter), Some(cursor)) = (adapter.map(str::to_owned), item.cursor.clone())
         else {
@@ -553,7 +576,7 @@ impl Daemon {
                 session: item.session.clone(),
                 ..Stamp::new(item.writer, item.profile.clone())
             },
-            facts: Facts::default(),
+            facts,
             card: Card {
                 agent: item.agent.clone(),
                 project: project.map(|p| p.slug),

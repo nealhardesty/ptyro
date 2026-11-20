@@ -17,6 +17,7 @@ mod complete;
 mod config;
 mod doctor;
 mod host;
+mod kb;
 mod linked;
 mod logins;
 mod machines;
@@ -670,6 +671,22 @@ enum Cmd {
         /// A new chat's first message and options (the same as `ptyro chat new …`)
         #[command(flatten)]
         new: chat::NewArgs,
+    },
+    /// Search everything ptyro kept, here and in your chats: what you asked your agents, what
+    /// they answered and did. `ptyro recall retry policy`; `ptyro kb show` opens a hit
+    Recall {
+        #[command(flatten)]
+        args: kb::RecallArgs,
+    },
+    /// The knowledge base: what ptyro keeps of your work, on this computer only. Plain `ptyro
+    /// kb` says whether it is on and what it holds
+    #[command(args_conflicts_with_subcommands = true)]
+    Kb {
+        #[command(subcommand)]
+        cmd: Option<kb::KbCmd>,
+        /// The status as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Internal: the web app's server itself, which `ptyro web on` has the daemon run (and a
     /// machine's link reaches). Run by hand, it serves until Ctrl-C

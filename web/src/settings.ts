@@ -88,6 +88,7 @@ function moreView(): HTMLElement {
   const version = status.get("")?.version;
   const groups: [string, [string, string, string][]][] = [
     ["Status", [
+      ["Library", "Search everything ptyro kept of your work", "#/library"],
       ["Health", "What's wrong, with its fixes", "#/health"],
       ["Usage", "Your accounts' limits", "#/usage"],
     ]],

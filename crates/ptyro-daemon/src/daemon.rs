@@ -1157,6 +1157,11 @@ impl Daemon {
             | Request::ChatSearch { .. }
             | Request::ChatTask { .. }
             | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
+            req @ (Request::KbSearch { .. }
+            | Request::KbRead { .. }
+            | Request::KbRecent { .. }
+            | Request::KbForget { .. }
+            | Request::KbStatus) => self.handle_kb(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
