@@ -24,7 +24,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments bench-kb-redact spike-wsl test-wsl tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments bench-kb-redact kb-eval kb-eval-real spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -141,7 +141,7 @@ spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, a
 spike-chat-meaning: ## CHAT5: meaning search's cost over NODES (default 100000) chat messages: embedding, the backfill, a search's scan, the vectors' size (synthetic model, no download)
 	NODES=$${NODES:-100000} $(CARGO) run --profile local -p ptyro-store --example chat_meaning_spike
 
-spike-kb: ## KB0.1: the knowledge base's search at size, over CHUNKS (default 500000; also run 1000000) synthetic chunks in SPEC §25.4's schema: by words, by meaning with each filter, the fallbacks and their recall, the merged search, the file's size, ingest and forget (synthetic model, no download; about 2 minutes and 600 MB of temporary disk)
+spike-kb: ## KB0.1, KB1.5: the knowledge base's search at size, over CHUNKS (default 500000; also run 1000000) synthetic chunks in SPEC §25.4's schema: by words, by meaning with each filter, the fallbacks and their recall, the merged search, the same through the search as built (KbDb, the fusion, the ranking), the file's size, ingest and forget (synthetic model, no download; about 2 minutes and 600 MB of temporary disk)
 	CHUNKS=$${CHUNKS:-500000} $(CARGO) run --profile local -p ptyro-store --example kb_spike
 
 spike-kb-comments: ## KB0.4: run the comment table (SPEC §25.6.3) over real code, read-only: ARGS="<folder>…" (default: this repository); counts what is kept and what each rule drops, with SAMPLE (default 8) of each to judge by eye
@@ -149,6 +149,12 @@ spike-kb-comments: ## KB0.4: run the comment table (SPEC §25.6.3) over real cod
 
 bench-kb-redact: ## KB1.3: how long the knowledge base's redaction (SPEC §25.7) takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file)
 	$(CARGO) test --profile local -p ptyro-core --lib kb::redact::tests::a_mebibyte -- --nocapture
+
+kb-eval: ## KB1.6: the knowledge base's golden set (SPEC §25.16): 300 made-up items and chats, 63 questions through the real ingest and search; prints recall at 5 and the mean reciprocal rank by words and with meaning (a synthetic model, no download; a second), and fails when one drops two points under the numbers committed in crates/ptyro-daemon/src/kb/golden.rs or something that must never be found is (KB_EVAL_VERBOSE=1 shows every question; `make test` runs it too)
+	$(CARGO) test -p ptyro-daemon --lib kb::golden::the_golden_set -- --exact --nocapture
+
+kb-eval-real: ## KB1.6: the golden set with the real model (potion-base-8M) where it is already on this machine: PTYRO_KB_EVAL_MODEL=<folder> (default: ptyro's own data folder); it reports and downloads nothing, and says so when the model isn't there
+	PTYRO_KB_EVAL_MODEL="$${PTYRO_KB_EVAL_MODEL:-$${XDG_DATA_HOME:-$$HOME/.local/share}/ptyro/models/potion-base-8M}" $(CARGO) test -p ptyro-daemon --lib kb::golden::the_golden_set_with_the_real_model -- --exact --ignored --nocapture
 
 spike-chat: ## CHAT0: try the chat engine's claims against the real Claude, Codex and OpenCode here (ARGS="claude codex" for some; a few cents of tokens)
 	python3 scripts/spike-chat.py $(ARGS)

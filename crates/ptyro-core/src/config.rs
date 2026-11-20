@@ -592,11 +592,15 @@ pub struct Kb {
     pub redact: Vec<String>,
     /// More paths never to read (globs), beside the built-in list of key and credential files.
     pub exclude: Vec<String>,
+    /// Meaning search (SPEC §25.8, §22.10), for the knowledge base and for chats: find things
+    /// by what they are about, not only by their words. Switching it on downloads a 31 MB
+    /// model once. `[chat] meaning` is its old name, and switches it on too.
+    pub meaning: bool,
 }
 
 impl Default for Kb {
     fn default() -> Self {
-        Self { enabled: true, redact: Vec::new(), exclude: Vec::new() }
+        Self { enabled: true, redact: Vec::new(), exclude: Vec::new(), meaning: false }
     }
 }
 
@@ -723,8 +727,9 @@ pub struct Chat {
     pub daily_cap: u32,
     /// Also make tool output searchable (2 KB of it a message).
     pub index_tools: bool,
-    /// Meaning search (SPEC §22.10): find messages by what they are about, not only by their
-    /// words. Switching it on downloads a 31 MB model once.
+    /// The old name of `[kb] meaning` (SPEC §25.13): read from a file that still has it, and
+    /// folded into that one when the file is parsed. Nothing else reads it.
+    #[serde(skip_serializing)]
     pub meaning: bool,
     /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
     /// screen shows it; `off`.
@@ -1566,6 +1571,8 @@ impl Config {
         if let Some(argv) = titler {
             config.chat.title_command = argv;
         }
+        // `[chat] meaning` is `[kb] meaning`'s old name: either switches it on.
+        config.kb.meaning |= config.chat.meaning;
         config.validate()?;
         Ok(config)
     }
@@ -2367,6 +2374,10 @@ mod tests {
         assert_eq!((c.kb.redact.len(), c.kb.exclude.len()), (1, 1));
         let e = Config::parse("[kb]\nredact = ['(open']\n").unwrap_err();
         assert!(e.starts_with("kb.redact: \"(open\" is not a pattern"), "{e}");
+        // Meaning search is one switch, off until asked for; its old name still switches it on.
+        assert!(!c.kb.meaning);
+        assert!(Config::parse("[kb]\nmeaning = true\n").unwrap().kb.meaning);
+        assert!(Config::parse("[chat]\nmeaning = true\n").unwrap().kb.meaning);
     }
 
     #[test]

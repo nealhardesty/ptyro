@@ -7,6 +7,7 @@
 //! - [`card`]: a session's first chunk, made from what is known of it.
 //! - [`chunk`]: the cutters: any text, Markdown by its headings, messages by their turns.
 //! - [`comments`]: the comments of a source file.
+//! - [`search`]: what a search asks and answers, and the ranking (§25.8).
 //! - The types of what is stored: [`KbItem`], [`KbChunk`], [`KbRoot`].
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,8 @@ macro_rules! words {
         }
     };
 }
+
+pub mod search;
 
 words! {
     /// What an item is (SPEC §25.3): one thing you can open.

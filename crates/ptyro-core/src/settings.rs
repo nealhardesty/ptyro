@@ -702,11 +702,11 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.title_command", "chat", Kind::Argv, "The titler: reads the prompt on stdin, prints the title, on the chat's own account. Empty: a chat is titled by its first line.").adv(),
     s("chat.daily_cap", "chat", int(0, 100_000), "The most titles made for each profile in a day. 0 makes none (the first line is used).").unit("a day").adv(),
     s("chat.index_tools", "chat", Kind::Bool, "Also make what tools returned searchable (2 KB of it a message), not just their titles.").adv(),
-    s("chat.meaning", "chat", Kind::Bool, "Meaning search: also find messages by what they are about, not only by their words (marked ≈). Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; your chats never leave this machine.").also("semantic embeddings ai similar search"),
     s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
     s("kb.enabled", "knowledge", Kind::Bool, "The knowledge base: what happens in ptyro is kept in one file on this computer (`kb.db`), for you and your agents to search. Off: nothing more is kept and nothing is offered; what is already stored stays.").also("memory recall library history search ingest"),
     s("kb.redact", "knowledge", Kind::List, "More patterns to redact before anything is kept (regular expressions), beside the built-in rules for keys, tokens and passwords. What matches is stored as `<redacted>`.").also("secrets privacy credentials regex").or("none").eg("ACME-[0-9]{6}").adv(),
+    s("kb.meaning", "knowledge", Kind::Bool, "Meaning search: also find things by what they are about, not only by their words (marked ≈), in the knowledge base and in your chats. Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; nothing you keep leaves this machine.").also("semantic embeddings ai similar search chat"),
     s("kb.exclude", "knowledge", Kind::List, "More paths never to read (globs like `*.sqlite` or `private/**`), beside the built-in list of key and credential files (`.env*`, `*.pem`, `.ssh/`…).").also("ignore never privacy secrets").or("none").eg("private/**").adv(),
     // ── Editors ──
     s("editors.default", "editors", dynamic(Source::Editors), "The editor that opens a worktree. Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
@@ -830,7 +830,32 @@ pub fn read_by_client(key: &str) -> bool {
 }
 
 pub fn find(key: &str) -> Option<&'static Setting> {
+    let key = renamed(key);
     SETTINGS.iter().find(|s| matches(s.key, key))
+}
+
+/// Settings that have a new name (SPEC §25.13): the old one is still read from a file, and
+/// setting or unsetting it writes the new one and takes the old one out. Not retired keys:
+/// they still mean something.
+const RENAMED: &[(&str, &str)] = &[("chat.meaning", "kb.meaning")];
+
+/// The name `key` has now.
+pub fn renamed(key: &str) -> &str {
+    RENAMED.iter().find(|(old, _)| *old == key).map_or(key, |(_, new)| new)
+}
+
+/// Take `key`'s old names out of the file. Returns whether one was there.
+fn drop_old_names(doc: &mut toml_edit::DocumentMut, key: &str) -> bool {
+    let mut gone = false;
+    for (old, _) in RENAMED.iter().filter(|(_, new)| *new == key) {
+        let seg = split(old);
+        if let (Some(name), Ok(Some(t))) =
+            (seg.last(), container_mut(doc.as_table_mut(), &seg, false))
+        {
+            gone |= t.remove(name).is_some();
+        }
+    }
+    gone
 }
 
 /// Split a concrete key into the segments of the file: a collection's names are one segment
@@ -1357,6 +1382,7 @@ pub fn set(
     lk: &Lookups,
     extra: Extra<'_>,
 ) -> Result<String, String> {
+    let key = renamed(key);
     let value = match target(scope, key)? {
         Target::Map(c, kind) => parse_input(&map_setting(c, kind), input, lk)?,
         Target::Setting(st) => {
@@ -1379,6 +1405,7 @@ pub fn set(
     };
     let mut doc = parse_doc(text)?;
     put(&mut doc, &split(key), value)?;
+    drop_old_names(&mut doc, key);
     finish(scope, key, doc.to_string(), extra)
 }
 
@@ -1392,8 +1419,10 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
         }
         return finish(scope, key, doc.to_string(), extra);
     }
+    let key = renamed(key);
     target(scope, key)?;
     let mut doc = parse_doc(text)?;
+    let old_name = drop_old_names(&mut doc, key);
     let seg = split(key);
     let name = seg.last().ok_or("no key")?.clone();
     // An account with credentials is a table of its own: not removed by a reset.
@@ -1406,7 +1435,7 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
         ));
     }
     let gone = container_mut(doc.as_table_mut(), &seg, false)?.and_then(|t| t.remove(&name));
-    if gone.is_none() {
+    if gone.is_none() && !old_name {
         return Err(format!("{key} isn't set in the file"));
     }
     finish(scope, key, doc.to_string(), extra)
@@ -1414,7 +1443,10 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
 
 /// Whether the file sets `key`.
 pub fn is_set(text: &str, key: &str) -> bool {
-    parse_doc(text).is_ok_and(|d| item_at(&d, &split(key)).is_some())
+    let key = renamed(key);
+    let old = RENAMED.iter().filter(|(_, new)| *new == key).map(|(old, _)| *old);
+    parse_doc(text)
+        .is_ok_and(|d| std::iter::once(key).chain(old).any(|k| item_at(&d, &split(k)).is_some()))
 }
 
 /// The fields a new member of `path` must have to be valid: a sink's address, an editor's

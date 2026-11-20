@@ -386,6 +386,7 @@ async fn serve(
     daemon.start_wsl_hold();
     daemon.start_chats().await;
     daemon.start_kb();
+    daemon.start_meaning();
     // Retention (SPEC §14.2) is applied once a day while the daemon runs, not only at its start.
     {
         let d = Arc::clone(&daemon);

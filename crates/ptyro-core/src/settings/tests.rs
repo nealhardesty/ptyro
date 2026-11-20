@@ -186,6 +186,26 @@ fn setting_keeps_comments_order_and_the_rest() {
 }
 
 #[test]
+fn a_setting_with_a_new_name_is_written_under_it_and_its_old_name_goes() {
+    let lk = Lookups::default();
+    // `chat.meaning` is `kb.meaning` now (SPEC §25.13): the old name still sets it…
+    assert_eq!(renamed("chat.meaning"), "kb.meaning");
+    assert_eq!(find("chat.meaning").map(|s| s.key), Some("kb.meaning"));
+    let out = set(Scope::User, "", "chat.meaning", "true", &lk, &none).unwrap();
+    assert_eq!(out, "[kb]\nmeaning = true\n");
+    // …a file that has it is read, and a change takes it out of the file.
+    let old = "[chat]\nrecent = 3\nmeaning = true\n";
+    assert!(is_set(old, "kb.meaning") && is_set(old, "chat.meaning"));
+    assert!(crate::config::Config::parse(old).unwrap().kb.meaning);
+    let out = set(Scope::User, old, "kb.meaning", "false", &lk, &none).unwrap();
+    assert_eq!(out, "[chat]\nrecent = 3\n\n[kb]\nmeaning = false\n");
+    assert!(!crate::config::Config::parse(&out).unwrap().kb.meaning);
+    let out = unset(Scope::User, old, "kb.meaning", &none).unwrap();
+    assert_eq!(out, "[chat]\nrecent = 3\n");
+    assert!(unset(Scope::User, &out, "chat.meaning", &none).unwrap_err().contains("isn't set"));
+}
+
+#[test]
 fn bad_values_are_refused_with_the_reason() {
     let lk = Lookups::default();
     let err = |key: &str, v: &str| set(Scope::User, "", key, v, &lk, &none).unwrap_err();

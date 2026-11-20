@@ -16,6 +16,9 @@
 //!
 //! Agent sessions, the first source, are in [`sessions`].
 
+#[cfg(test)]
+mod golden;
+mod search;
 mod sessions;
 
 use std::collections::{HashMap, VecDeque};
@@ -351,11 +354,16 @@ impl Daemon {
             );
         }
         let w = db.write(plan).await.map_err(store_err)?;
-        match w.outcome {
+        if w.outcome == Outcome::Forgotten {
             // Forgotten between the gate and the write.
-            Outcome::Forgotten => Err(Refused::Skip(Skip::Forgotten)),
-            _ => Ok(w),
+            return Err(Refused::Skip(Skip::Forgotten));
         }
+        // The embed step: what was written is searchable by meaning at once, when the
+        // model is here (§25.8).
+        if w.added + w.changed > 0 {
+            self.kb_embed(db, &w.item).await;
+        }
+        Ok(w)
     }
 
     /// Before a live upgrade's exec: what is being written is written (the queue itself is
@@ -424,7 +432,7 @@ impl From<Error> for Refused {
     }
 }
 
-fn store_err(e: ptyro_store::StoreError) -> Error {
+pub(crate) fn store_err(e: ptyro_store::StoreError) -> Error {
     match e.fix("kb.db") {
         Some(fix) => Error::new(ErrorCode::Internal, fix),
         None => Error::new(ErrorCode::Internal, format!("kb.db: {e}")),

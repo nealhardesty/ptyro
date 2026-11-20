@@ -12,6 +12,10 @@
 //! their recall, the merged search over both files, an ingest's writer time, forgetting an item
 //! with `secure_delete` on, and a WAL checkpoint; and it reports the file's size by part.
 //!
+//! Since KB1.5 it also times **the search as built**: the same files through `KbDb`'s own
+//! `search_words` and `search_meaning`, `ptyro_meaning::fuse_lists` and
+//! `ptyro_core::kb::search::rank` (the "as built" rows).
+//!
 //! The text is made of the synthetic model's words (`w0`…), common ones common, and every item
 //! has a topic (16 words that half of its text is drawn from), so that a query about a topic
 //! has real neighbours to find, as real text has.
@@ -22,8 +26,11 @@ use std::io::Read as _;
 use std::path::Path;
 use std::time::Instant;
 
+use ptyro_core::chats::parse_kb_query;
+use ptyro_core::kb::search::{HitKind, KbHit, rank};
 use ptyro_meaning::synthetic::{self, Rng};
-use ptyro_meaning::{MIN_SCORE, Model, RRF_K};
+use ptyro_meaning::{Found, MIN_SCORE, Model, RRF_K, fuse_lists};
+use ptyro_store::kb::{KbDb, KbFilter, MATCH_CAP};
 use rusqlite::{Connection, params};
 
 const VOCAB: usize = 30_000;
@@ -294,6 +301,15 @@ fn main() -> R<()> {
         embed_ms * 1000.0
     );
     drop(mapped);
+
+    // ── As built ────────────────────────────────────────────────────────────────────────────
+    as_built(
+        (&kb, &kb_path),
+        (&chat, &dir.path().join("chat-standin.db")),
+        [&topical, &rare, &mixed, &common],
+        &vecs,
+        &model,
+    )?;
 
     // ── Ingest ──────────────────────────────────────────────────────────────────────────────
     println!("ingest (one transaction an item, 100 chunks each): median / 95th / worst, ms");
@@ -974,6 +990,131 @@ fn merged(kb: &Connection, chat: &Connection, text: &str, q: &[f32], plan: Plan)
     all.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     for ((file, seq), score) in all.into_iter().take(LIMIT) {
         fetch(if file == 0 { kb } else { chat }, &[(score as f32, seq)])?;
+    }
+    Ok(())
+}
+
+/// KB1.5: the same files searched by the code that ships: `KbDb::search_words` and
+/// `search_meaning` (each list with its rows fetched and checked against their items),
+/// `fuse_lists` over the four lists and `rank`. One connection a file, its writer's; no
+/// `mmap_size`.
+fn as_built(
+    (kb, kb_path): (&Connection, &Path),
+    (chat, chat_path): (&Connection, &Path),
+    [topical, rare, mixed, common]: [&Vec<String>; 4],
+    vecs: &[Vec<f32>],
+    model: &Model,
+) -> R<()> {
+    // (The spike's schema is migration 1's tables; saying so lets `KbDb` open the files.)
+    kb.pragma_update(None, "user_version", 1)?;
+    chat.pragma_update(None, "user_version", 1)?;
+    let rt = tokio::runtime::Builder::new_current_thread().build().expect("a runtime");
+    let kbdb = KbDb::open(kb_path, None).expect("KbDb opens the spike's kb.db");
+    let chatdb = KbDb::open(chat_path, None).expect("KbDb opens the stand-in");
+    let fts = |q: &str| parse_kb_query(q, 0).expect("a query").fts;
+    let timed = |n: usize, f: &mut dyn FnMut(usize)| -> Vec<f64> {
+        (0..n)
+            .map(|i| {
+                let t = Instant::now();
+                f(i);
+                ms(t)
+            })
+            .collect()
+    };
+    let all = KbFilter::default;
+    let work = || KbFilter { profile: Some("work".into()), ..KbFilter::default() };
+    println!(
+        "as built (KB1.5: KbDb's lists, best {LIST}, rows fetched; no more than {MATCH_CAP} \
+         matches ranked): median / 95th / worst, ms"
+    );
+    for (name, list) in [
+        ("two words of a topic", topical),
+        ("two rare words", rare),
+        ("a common and a topic word", mixed),
+        ("one of the 20 commonest", common),
+    ] {
+        let over = list.iter().filter(|q| count_matches(kb, &fts(q)) > MATCH_CAP as i64).count();
+        for (how, filter) in [("", all()), (", one profile", work())] {
+            let times = timed(list.len(), &mut |i| {
+                let hits = rt.block_on(kbdb.search_words(fts(&list[i]), filter.clone(), LIST));
+                std::hint::black_box(hits.expect("a search by words"));
+            });
+            row(&format!("by words, {name}{how} ({over} of {} over the cap)", list.len()), &times);
+        }
+    }
+    let docs = || KbFilter { kinds: vec![HitKind::Doc], ..KbFilter::default() };
+    let since = || KbFilter { since_ms: Some((NOW - 30 * DAY) as u64), ..KbFilter::default() };
+    for (name, filter) in [
+        ("unfiltered", all()),
+        ("one profile", work()),
+        ("kind:doc (the items looked up first)", docs()),
+        ("the last 30 days", since()),
+    ] {
+        let times = timed(vecs.len(), &mut |i| {
+            let hits = rt.block_on(kbdb.search_meaning(
+                vecs[i].clone(),
+                MODEL.into(),
+                String::new(),
+                MIN_SCORE,
+                filter.clone(),
+                LIST,
+            ));
+            std::hint::black_box(hits.expect("a search by meaning"));
+        });
+        row(&format!("by meaning, {name}"), &times);
+    }
+    // The whole search: four lists, fused by rank, ranked, the best LIMIT.
+    let merged = |text: &str, filter: &KbFilter| {
+        let (f, v) = (fts(text), model.embed(text));
+        let mut lists: Vec<(Found, Vec<KbHit>)> = Vec::new();
+        for db in [&kbdb, &chatdb] {
+            let words = rt.block_on(db.search_words(f.clone(), filter.clone(), LIST));
+            lists.push((Found::Words, words.expect("a search by words")));
+            let near = rt.block_on(db.search_meaning(
+                v.clone(),
+                MODEL.into(),
+                String::new(),
+                MIN_SCORE,
+                filter.clone(),
+                LIST,
+            ));
+            lists.push((Found::Meaning, near.expect("a search by meaning")));
+        }
+        // A hit in the lists: its file, its item, its chunk.
+        type Key = (usize, String, u32);
+        let key =
+            |file: usize, h: &KbHit| -> Key { (file / 2, h.item.clone(), h.idx.unwrap_or(0)) };
+        let keys: Vec<(Found, Vec<Key>)> = lists
+            .iter()
+            .enumerate()
+            .map(|(n, (how, l))| (*how, l.iter().map(|h| key(n, h)).collect()))
+            .collect();
+        let order =
+            fuse_lists(&keys.iter().map(|(how, l)| (*how, l.as_slice())).collect::<Vec<_>>());
+        let mut by: HashMap<Key, KbHit> = HashMap::new();
+        for (n, (_, list)) in lists.into_iter().enumerate() {
+            for h in list {
+                by.entry(key(n, &h)).or_insert(h);
+            }
+        }
+        let fused: Vec<KbHit> = order
+            .into_iter()
+            .filter_map(|(k, how, score)| {
+                let mut h = by.remove(&k)?;
+                h.how = how.as_str().to_owned();
+                h.score = score;
+                Some(h)
+            })
+            .collect();
+        std::hint::black_box(rank(fused, NOW as u64, None, LIMIT));
+    };
+    for (name, list, filter) in [
+        ("two words of a topic", topical, all()),
+        ("two words of a topic, one profile", topical, work()),
+        ("one of the 20 commonest words", common, all()),
+    ] {
+        let times = timed(list.len(), &mut |i| merged(&list[i], &filter));
+        row(&format!("the merged search as built, {name}"), &times);
     }
     Ok(())
 }

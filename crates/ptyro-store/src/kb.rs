@@ -25,6 +25,9 @@ use tokio::sync::oneshot;
 use crate::migrate::{self, M};
 use crate::{Result, StoreError};
 
+mod search;
+pub use search::{KbFilter, MATCH_CAP, VecTodo};
+
 /// Schema history. Never edit a released migration; append a new one.
 const MIGRATIONS: &[M] = &[
     // v1 (KB1.1): §25.4 as KB0.1's spike proved it at 500k and a million chunks. `chunk_fts`
@@ -940,18 +943,21 @@ fn count_chunks(tx: &Connection, item: &str) -> Result<()> {
 
 // ── writing a plan ──────────────────────────────────────────────────────────────────────────
 
-/// What the item at a plan's URI is now: its id, hash, tombstone and cursor.
-type Was = (String, Option<String>, Option<i64>, Option<String>);
+/// What the item at a plan's URI is now: its id, hash, tombstone and cursor, and whose it is
+/// (its profile and project).
+type Was = (String, Option<String>, Option<i64>, Option<String>, (Option<String>, Option<String>));
 
 fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
     let tx = db.transaction()?;
     let found: Option<Was> = tx
         .query_row(
-            "SELECT id, hash, forgotten_at, cursor FROM item WHERE uri = ?1",
+            "SELECT id, hash, forgotten_at, cursor, profile, project FROM item WHERE uri = ?1",
             [&p.uri],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, (r.get(4)?, r.get(5)?))),
         )
         .optional()?;
+    // Whose the item was, when it changes hands: its vectors carry a copy (below).
+    let mut moved = None;
     let done = |item: String, outcome| Written {
         item,
         outcome,
@@ -965,15 +971,18 @@ fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
     let t = now();
     let s = &p.stamp;
     let (id, outcome) = match found {
-        Some((id, _, Some(_), _)) => return Ok(done(id, Outcome::Forgotten)),
-        Some((id, hash, None, old_cursor)) if !p.append && p.hash.is_some() && hash == p.hash => {
+        Some((id, _, Some(_), ..)) => return Ok(done(id, Outcome::Forgotten)),
+        Some((id, hash, None, old_cursor, _))
+            if !p.append && p.hash.is_some() && hash == p.hash =>
+        {
             if cursor.is_some() && cursor != old_cursor {
                 tx.execute("UPDATE item SET cursor = ?2 WHERE id = ?1", params![id, cursor])?;
                 tx.commit()?;
             }
             return Ok(done(id, Outcome::Unchanged));
         }
-        Some((id, ..)) if p.append => {
+        Some((id, .., whose)) if p.append => {
+            moved = Some(whose);
             // More of the same item: what the piece doesn't say stays as it was.
             tx.execute(
                 "UPDATE item SET
@@ -996,7 +1005,8 @@ fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
             )?;
             (id, Outcome::Updated)
         }
-        Some((id, ..)) => {
+        Some((id, .., whose)) => {
+            moved = Some(whose);
             tx.execute(
                 "UPDATE item SET
                    kind = ?2, root = ?3, title = ?4, rel = ?5, project = ?6, workspace = ?7,
@@ -1066,6 +1076,19 @@ fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
         }
     };
     let mut w = done(id, outcome);
+    // `chunk_vec` carries the item's profile and project so that a search by meaning joins
+    // nothing (§25.4): an item that changes hands takes its vectors along.
+    if let Some((profile, project)) = moved {
+        let now_project =
+            if p.append { s.project.clone().or(project.clone()) } else { s.project.clone() };
+        if profile != s.profile || project != now_project {
+            tx.execute(
+                "UPDATE chunk_vec SET profile = ?2, project = ?3
+                 WHERE seq IN (SELECT seq FROM chunk WHERE item = ?1)",
+                params![w.item, s.profile, now_project],
+            )?;
+        }
+    }
     if p.append {
         append(&tx, &p.chunks, &mut w)?;
     } else {

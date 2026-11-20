@@ -304,7 +304,6 @@ impl Daemon {
                 }
             }
         });
-        self.start_meaning(db.clone());
         let me = Arc::clone(self);
         tokio::spawn(async move {
             loop {
