@@ -34,6 +34,10 @@ pub enum Make {
     Session(Box<crate::app::Wizard>),
     /// `ptyro <these words>` and then each field's own argument ([`Arg`]), in a split.
     Cli(Vec<String>),
+    /// A folder or a file to read into the knowledge base (`KbIngest`, SPEC §25.10).
+    KbIngest,
+    /// What the agents kept before ptyro did (`KbHistory`): counted, then read.
+    KbBackfill,
 }
 
 /// How a field goes on the command line of a [`Make::Cli`] form.
@@ -224,9 +228,16 @@ impl Form {
         self.fields.iter().find(|f| f.key == key).map(Field::value).unwrap_or_default()
     }
 
-    /// The command line of a [`Make::Cli`] form: `base`, then each field's [`Arg`].
+    /// The command line of a [`Make::Cli`] form: `base`, then each field's [`Arg`]. What was
+    /// typed is never taken for a flag: the words of their own ([`Arg::Pos`]) go last, after
+    /// `--`, and a flag's value that starts with `-` is joined to its flag (`--title=-x`).
     pub fn cli_args(&self, base: &[String]) -> Vec<String> {
         let mut args = base.to_vec();
+        let mut words = Vec::new();
+        let flagged = |flag: &str, v: &str| match v.starts_with('-') {
+            true => vec![format!("{flag}={v}")],
+            false => vec![flag.to_owned(), v.to_owned()],
+        };
         for f in &self.fields {
             let v = f.value();
             let v = v.trim();
@@ -235,11 +246,11 @@ impl Form {
             }
             match &f.arg {
                 Arg::None => {}
-                Arg::Pos => args.push(v.to_owned()),
-                Arg::Flag(flag) => args.extend([(*flag).to_owned(), v.to_owned()]),
+                Arg::Pos => words.push(v.to_owned()),
+                Arg::Flag(flag) => args.extend(flagged(flag, v)),
                 Arg::Each(flag) => {
                     for one in v.split(',').map(str::trim).filter(|x| !x.is_empty()) {
-                        args.extend([(*flag).to_owned(), one.to_owned()]);
+                        args.extend(flagged(flag, one));
                     }
                 }
                 Arg::Switch(flag) => args.push((*flag).to_owned()),
@@ -247,6 +258,10 @@ impl Form {
                     args.extend([(*flag).to_owned(), format!("{prefix}{v}")])
                 }
             }
+        }
+        if !words.is_empty() {
+            args.push("--".to_owned());
+            args.extend(words);
         }
         args
     }
@@ -614,7 +629,6 @@ mod tests {
             [
                 "thing",
                 "new",
-                "billing",
                 "--projects",
                 "a,b",
                 "--agent",
@@ -623,11 +637,22 @@ mod tests {
                 "web=claude",
                 "--adopt",
                 "claude=~/.claude-work",
-                "--overlay"
+                "--overlay",
+                "--",
+                "billing"
             ]
         );
         tick(&mut f, "projects", &[false, true]);
-        assert_eq!(f.cli_args(&base)[3..5], ["--projects".to_owned(), "b".to_owned()]);
+        assert_eq!(f.cli_args(&base)[2..4], ["--projects".to_owned(), "b".to_owned()]);
+        // What was typed is never taken for a flag (review B3): a word of its own goes last,
+        // after `--`, and a flag's value that starts with `-` is joined to its flag.
+        set(&mut f, "name", "--yes");
+        set(&mut f, "agents", "-x");
+        set(&mut f, "unused", "-n");
+        let args = f.cli_args(&base);
+        assert_eq!(args[args.len() - 2..], ["--".to_owned(), "--yes".to_owned()]);
+        assert!(args.contains(&"--agent=-x".to_owned()), "{args:?}");
+        assert!(args.contains(&"--never=-n".to_owned()), "{args:?}");
     }
 }
 
@@ -806,6 +831,11 @@ impl App {
     pub(crate) fn form_submit(&mut self, mut form: Box<Form>) {
         match form.make.clone() {
             Make::Cli(base) => return self.run_cli(&form.cli_args(&base)),
+            Make::KbIngest => return self.ingest_submit(&form),
+            Make::KbBackfill => match self.backfill_submit(&form) {
+                Ok(()) => return,
+                Err((key, e)) => form.fail(key, e),
+            },
             Make::ProjectAdd => {
                 let path = typed_path(&form.get("path"));
                 let choice = form.get("moved");
@@ -881,6 +911,7 @@ impl App {
                     loose: true,
                     slot,
                     scratch,
+                    private: Some(!form.get("private").is_empty()),
                     name: form.opt("name"),
                     title: form.opt("title"),
                     workspace: Some(ws),
@@ -1065,6 +1096,59 @@ impl App {
         self.open(form);
     }
 
+    /// `kb.note`: a note, with everything `ptyro kb note` takes (SPEC §25.10).
+    pub(crate) fn open_note_form(&mut self) {
+        // The project you are in, when there is one; a note about none is global.
+        let here = self.context().0.and_then(|p| self.project(&p).map(|p| p.slug.clone()));
+        let mut projects = vec![(String::new(), "no project (a global note)".to_owned())];
+        projects.extend(
+            self.projects
+                .iter()
+                .filter(|p| p.machine.is_none())
+                .map(|p| (p.slug.clone(), p.slug.clone())),
+        );
+        let at = here.and_then(|h| projects.iter().position(|p| p.0 == h)).unwrap_or(0);
+        let fields = vec![
+            Field::text(
+                "text",
+                "Note",
+                "(empty: write it in your editor)",
+                "What to keep: a decision and its reason, a fact, a how-to. Markdown",
+            )
+            .arg(Arg::Pos),
+            Field::text(
+                "title",
+                "Title",
+                "(its first line)",
+                "Its heading, and what lists call it",
+            )
+            .arg(Arg::Flag("--title")),
+            Field::choice("project", "About", projects, at, "The project it is about")
+                .arg(Arg::Flag("--project")),
+            Field::choice(
+                "profile",
+                "Seen by",
+                self.profile_options("every profile's agents"),
+                0,
+                "Whose agents may find it with recall (you always see every note)",
+            )
+            .arg(Arg::Flag("--profile")),
+            Field::text("tags", "Tags", "db, decision", "Words to find it by, comma separated")
+                .arg(Arg::Each("--tag")),
+            Field::yes_no(
+                "edit",
+                "In your editor",
+                false,
+                "Open your editor on it before it is kept ($VISUAL, $EDITOR)",
+            )
+            .arg(Arg::Switch("--edit")),
+        ];
+        let mut form =
+            Form::new("Write a note", fields, Make::Cli(vec!["kb".into(), "note".into()]));
+        form.verb = "keep";
+        self.open(form);
+    }
+
     /// `machine.add`: another machine whose workspaces show here.
     pub(crate) fn open_machine_form(&mut self) {
         let fields = vec![
@@ -1222,6 +1306,12 @@ impl App {
                 false,
                 "A new, empty directory of its own, which goes with it",
             ),
+            Field::yes_no(
+                "private",
+                "Private",
+                self.config.kb.private,
+                "The knowledge base keeps nothing of it",
+            ),
             Field::choice("workspace", "Workspace", wss, 0, "Whose SHELLS it is in"),
         ];
         let mut form = Form::new("New shell", fields, Make::Shell);
@@ -1305,6 +1395,7 @@ pub fn session_wizard(
         no_fetch: form.get("fetch").is_empty(),
         command,
         title: form.opt("title"),
+        private: Some(!form.get("private").is_empty()),
         project: match &target {
             Some(Where::New(p)) => Some(p.clone()),
             _ => w.project.clone(),
@@ -1433,6 +1524,12 @@ impl App {
                 "A new worktree runs its project's setup script (when trusted)",
             ),
             Field::yes_no("fetch", "Fetch first", true, "A new worktree fetches its base first"),
+            Field::yes_no(
+                "private",
+                "Private",
+                self.config.kb.private,
+                "The knowledge base keeps nothing of it (the agent keeps its own history)",
+            ),
         ];
         let title = if w.project.is_some() || w.worktree.is_some() {
             crate::app::wizard_title(&w, &self.projects, &self.worktrees, None)

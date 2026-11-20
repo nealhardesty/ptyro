@@ -1,0 +1,9 @@
+{
+  "session_id": "01a1f5f6-cb51-7a51-9b8e-6ed86b1ac639",
+  "transcript_path": "/home/u/.codex/sessions/2026/11/19/rollout-2026-11-19T17-39-14-01a1f5f6-cb51-7a51-9b8e-6ed86b1ac639.jsonl",
+  "cwd": "/home/u/proj",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "source": "startup"
+}

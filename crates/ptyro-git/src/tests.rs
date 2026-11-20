@@ -597,6 +597,60 @@ fn a_squash_merged_branch_has_its_changes_in_the_base() {
     assert!(!f.git.changes_in(&f.root, &tip, "-main"), "never an option");
 }
 
+/// What the knowledge base reads of a repository (SPEC §25.6.3): the files git knows or would
+/// add, and the main branch's commits, all of them and then only the new ones.
+#[test]
+fn files_and_commits_for_the_knowledge_base() {
+    let f = fixture();
+    std::fs::create_dir_all(f.root.join("docs/deep")).unwrap();
+    std::fs::create_dir_all(f.root.join("node_modules/x")).unwrap();
+    std::fs::write(f.root.join("docs/deep/Ünï code.md"), "# doc\n").unwrap();
+    std::fs::write(f.root.join("node_modules/x/index.js"), "ignored\n").unwrap();
+    std::fs::write(f.root.join(".env"), "ignored\n").unwrap();
+    std::fs::write(f.root.join("build.log"), "ignored\n").unwrap();
+    std::fs::write(f.root.join("untracked.txt"), "not ignored\n").unwrap();
+    let mut files = f.git.ls_files(&f.root).unwrap();
+    files.sort();
+    assert_eq!(files, [".gitignore", "README", "docs/deep/Ünï code.md", "untracked.txt"]);
+    // A folder inside the repository lists its own, by their paths inside it.
+    assert_eq!(f.git.ls_files(&f.root.join("docs")).unwrap(), ["deep/Ünï code.md"]);
+    assert!(f.git.ls_files(&f.base).is_err(), "not a repository");
+
+    let (tip, first) = f.git.history_tip(&f.root).unwrap();
+    assert_eq!(tip, "main");
+    f.git.run(&f.root, &["add", "docs"]).unwrap();
+    f.git
+        .run(&f.root, &["commit", "-q", "-m", "Add the doc", "-m", "It says why;\nin two lines."])
+        .unwrap();
+    commit(&f, &f.root, "a.txt", "third");
+    let all = f.git.log(&f.root, "main", None, 100, false).unwrap();
+    let subjects: Vec<&str> = all.iter().map(|c| c.subject.as_str()).collect();
+    assert_eq!(subjects, ["third", "Add the doc", "first"]);
+    assert_eq!(all[1].body, "It says why;\nin two lines.");
+    assert_eq!(all[1].files, ["docs/deep/Ünï code.md"]);
+    assert_eq!(all[2].files, [".gitignore", "README"]);
+    assert!(all.iter().all(|c| c.sha.len() == 40 && c.at_ms > 1_600_000_000_000));
+    assert_eq!(all[2].sha, first);
+    // Only the new ones, the newest two, and only what touched a folder.
+    let new = f.git.log(&f.root, "main", Some(&first), 100, false).unwrap();
+    assert_eq!(new.len(), 2);
+    assert_eq!(f.git.log(&f.root, "main", None, 1, false).unwrap()[0].subject, "third");
+    let here = f.git.log(&f.root.join("docs"), "main", None, 100, true).unwrap();
+    assert_eq!(here.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["Add the doc"]);
+    assert!(f.git.log(&f.root, "--all", None, 5, false).is_err(), "never an option");
+    // A branch that is not the main one is not its history.
+    f.git.run(&f.root, &["checkout", "-q", "-b", "side"]).unwrap();
+    commit(&f, &f.root, "side.txt", "on the side");
+    assert_eq!(f.git.history_tip(&f.root).unwrap().0, "main");
+    assert_eq!(f.git.log(&f.root, "main", None, 100, false).unwrap().len(), 3);
+
+    // Text that is no log gives nothing, and never panics.
+    assert!(log::parse_log("").is_empty());
+    assert!(log::parse_log("\x1enot a sha\x1f1\x1fs\x1fb\x1f\n").is_empty());
+    assert!(log::parse_log("\x1eabcdef1\x1fnot a time\x1fs\x1fb\x1f").is_empty());
+    assert_eq!(log::parse_log("junk\x1eabcdef1\x1f12\x1fs\x1f\x1f\n\na b.txt\n").len(), 1);
+}
+
 /// Two checkouts of one history share their root commits, wherever they live; an unrelated
 /// repository shares none; a repository with no commits has none.
 #[test]

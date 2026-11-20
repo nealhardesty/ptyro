@@ -10,6 +10,8 @@ use ptyro_core::config::AgentDef;
 use ptyro_core::status::Signal;
 use serde_json::Value;
 
+use crate::transcript::{Transcript, TranscriptAt};
+
 /// What an adapter can do (SPEC §8.1 capabilities).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Caps {
@@ -50,6 +52,38 @@ pub struct LaunchCtx<'a> {
     pub agent_home: Option<PathBuf>,
     /// The project's main checkout (Codex directory trust).
     pub project_root: Option<&'a Path>,
+    /// Give the session the knowledge base's tools (SPEC §25.9): the daemon's socket, which
+    /// `ptyro mcp` is told with the session's id. `None`: no tools (`kb.tools`, the agent's
+    /// `kb = false`, the knowledge base off).
+    pub kb: Option<&'a Path>,
+    /// With them, the tool that writes a note (`remember`; `kb.remember`).
+    pub remember: bool,
+}
+
+/// The knowledge base's tools (SPEC §25.9), as `ptyro mcp` names them: the two that read,
+/// then `remember`, which writes a note.
+pub const KB_TOOLS: [&str; 3] = ["recall", "recall_read", "remember"];
+
+/// The tools a session is given: all of them, or without `remember` (`kb.remember = false`).
+pub fn kb_tools(remember: bool) -> &'static [&'static str] {
+    if remember { &KB_TOOLS } else { &KB_TOOLS[..2] }
+}
+
+/// What tells `ptyro mcp` to offer `remember` (the daemon refuses it anyway when it may not).
+pub const KB_REMEMBER_ENV: &str = "PTYRO_KB_REMEMBER";
+
+/// The environment `ptyro mcp` is started with in a session: which session, which daemon,
+/// and whether it may write notes.
+/// (Who is asking is the kernel's word, never this: the daemon places the caller's process.)
+pub fn kb_env(ctx: &LaunchCtx<'_>, socket: &Path) -> Vec<(&'static str, String)> {
+    let mut env = vec![
+        ("PTYRO_SESSION_ID", ctx.session.to_owned()),
+        ("PTYRO_SOCKET", socket.to_string_lossy().into_owned()),
+    ];
+    if ctx.remember {
+        env.push((KB_REMEMBER_ENV, "1".to_owned()));
+    }
+    env
 }
 
 /// A side channel the daemon runs next to the session.
@@ -174,6 +208,51 @@ pub trait Adapter: Send + Sync {
     fn stop(&self) -> Vec<StopStep> {
         vec![StopStep::Wait(Duration::ZERO)]
     }
+    /// The file this agent keeps a conversation in, for the knowledge base (SPEC §25.6.1):
+    /// the one a hook named when it is that conversation's, else where the agent puts it.
+    /// `None`: there is none to read (yet).
+    fn transcript(&self, at: &TranscriptAt<'_>) -> Option<PathBuf> {
+        let _ = at;
+        None
+    }
+    /// What a hook says of the transcript: the file it names (`transcript_path`), and whether
+    /// this hook is a time to read it (a turn's end, the session's end).
+    fn hook_transcript(&self, event: &str, payload: &Value) -> (Option<PathBuf>, bool) {
+        let _ = (event, payload);
+        (None, false)
+    }
+    /// The prompt a hook carries, when this hook is one whose answer the agent adds to the
+    /// model's context beside that prompt (SPEC §25.9: what is offered at a prompt). `None`:
+    /// this hook can add nothing, or this agent takes nothing.
+    fn hook_prompt(&self, event: &str, payload: &Value) -> Option<String> {
+        let _ = (event, payload);
+        None
+    }
+    /// What the hook must print for the agent to add `context` to what the model is given
+    /// with the prompt. `None`: as [`Adapter::hook_prompt`].
+    fn hook_context(&self, event: &str, context: &str) -> Option<String> {
+        let _ = (event, context);
+        None
+    }
+    /// What a piece of that file says: `bytes` are the file from offset `from`. `None`: this
+    /// agent's transcripts are not read.
+    fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
+        let _ = (bytes, from);
+        None
+    }
+    /// Every conversation the agent kept under its config directory `home`, each with the
+    /// id it is known by and its file (the history's backfill, SPEC §25.6.1). Empty for an
+    /// agent whose transcripts are not read.
+    fn transcripts(&self, home: &Path) -> Vec<(String, PathBuf)> {
+        let _ = home;
+        Vec::new()
+    }
+
+    /// A conversation's title, when the agent keeps it outside the transcript.
+    fn transcript_title(&self, at: &TranscriptAt<'_>) -> Option<String> {
+        let _ = at;
+        None
+    }
 }
 
 /// 32 random hex characters from the OS's CSPRNG (also an HMAC key, so there is no weak
@@ -226,6 +305,28 @@ pub fn str_of<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
+/// The hook whose answer Claude Code and Codex add to the model's context: the one a prompt
+/// fires. (`SessionStart`'s answer is added too, but there is no prompt then to offer
+/// anything for.) **[verified 2026-11-20, Claude Code 2.1.329 and Codex 0.167.1; `make
+/// verify-kb ARGS=--offer`]**
+const PROMPT_HOOK: &str = "UserPromptSubmit";
+
+/// [`Adapter::hook_prompt`] as Claude Code and Codex have it: `prompt` of `UserPromptSubmit`.
+pub fn prompt_hook(event: &str, p: &Value) -> Option<String> {
+    (event == PROMPT_HOOK).then(|| str_of(p, "prompt").map(str::to_owned)).flatten()
+}
+
+/// [`Adapter::hook_context`] as Claude Code and Codex take it: one line of JSON on the hook's
+/// stdout, `{"hookSpecificOutput": {"hookEventName": …, "additionalContext": …}}`.
+pub fn prompt_context(event: &str, context: &str) -> Option<String> {
+    (event == PROMPT_HOOK).then(|| {
+        serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": event, "additionalContext": context }
+        })
+        .to_string()
+    })
+}
+
 /// The model a hook payload names: its own `model` (Claude's `SessionStart`, every Codex hook).
 pub fn model_in(p: &Value) -> Option<Signal> {
     str_of(p, "model").map(|id| Signal::Model { id: id.to_owned() })
@@ -256,6 +357,42 @@ pub fn transcript_model(path: &str) -> Option<Signal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real agents' `UserPromptSubmit` payloads (the fixtures the KB0.2 spike wrote) carry
+    /// the prompt, and only that hook's answer is context; every other agent takes none.
+    #[test]
+    fn a_prompt_hook_carries_the_prompt_and_takes_context() {
+        let fixture = |dir: &str| -> Value {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(dir)
+                .join("hooks/UserPromptSubmit.json");
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        for (name, dir, starts) in [
+            ("claude", "claude-2.1.329", "Do these four things"),
+            ("codex", "codex-0.167.1", "Call the recall tool"),
+        ] {
+            let a = crate::adapter(name);
+            let p = fixture(dir);
+            let prompt = a.hook_prompt("UserPromptSubmit", &p).unwrap();
+            assert!(prompt.starts_with(starts), "{name}: {prompt}");
+            assert_eq!(a.hook_prompt("Stop", &p), None, "{name}");
+            assert_eq!(a.hook_prompt("SessionStart", &p), None, "{name}");
+            let out = a.hook_context("UserPromptSubmit", "line one\n\"two\"").unwrap();
+            assert!(!out.contains('\n'), "one line: {out}");
+            let v: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+            assert_eq!(v["hookSpecificOutput"]["additionalContext"], "line one\n\"two\"");
+            assert_eq!(a.hook_context("Stop", "x"), None, "{name}");
+        }
+        for name in ["opencode", "generic", "shell"] {
+            let a = crate::adapter(name);
+            let p = serde_json::json!({ "prompt": "a prompt of several words" });
+            assert_eq!(a.hook_prompt("UserPromptSubmit", &p), None, "{name}");
+            assert_eq!(a.hook_context("UserPromptSubmit", "x"), None, "{name}");
+        }
+    }
 
     #[test]
     fn random_hex_is_32_hex_chars_and_fresh() {

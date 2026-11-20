@@ -26,8 +26,8 @@ pub fn alive(pid: u32) -> bool {
     ptyro_core::os::alive(pid)
 }
 pub use probe::{
-    cwd_of, exec_env_var, load_average, local_time_hm, local_time_hm_at, others_in_group,
-    parent_pid, process_name, session_leader,
+    cwd_of, exec_env_var, load_average, local_offset_at, local_time_hm, local_time_hm_at,
+    others_in_group, parent_pid, process_name, session_leader,
 };
 
 /// Variables that would make the child talk to the *outer* terminal or multiplexer, or that mark

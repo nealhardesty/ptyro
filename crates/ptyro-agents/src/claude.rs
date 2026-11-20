@@ -15,6 +15,7 @@ use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, integration_dir, model_in, str_of,
     tool_summary, transcript_model, uuid_v4,
 };
+use crate::transcript::{Transcript, TranscriptAt};
 
 /// The hook events ptyro listens to.
 pub const EVENTS: &[&str] = &[
@@ -73,6 +74,29 @@ impl Claude {
         if ctx.def.usage.unwrap_or(true) {
             let settings = json!({ "statusLine": { "type": "command", "command": format!("{} statusline-relay", hook_word(ctx.ptyro)) } });
             plan.argv.extend(["--settings".into(), settings.to_string()]);
+        }
+        // The knowledge base's tools (SPEC §25.9, §20.1): `ptyro mcp` beside the user's own
+        // servers (no `--strict-mcp-config`), and its tools allowed, which adds to the user's
+        // rules and leaves their permission mode alone. Claude restores neither on a resume:
+        // both are here, so on every launch.
+        if let Some(socket) = ctx.kb {
+            let env: serde_json::Map<String, Value> = crate::adapter::kb_env(ctx, socket)
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), Value::String(v)))
+                .collect();
+            let servers = json!({ "mcpServers": { "ptyro": {
+                "type": "stdio", "command": ctx.ptyro, "args": ["mcp"], "env": env,
+            } } });
+            let allowed: Vec<String> = crate::adapter::kb_tools(ctx.remember)
+                .iter()
+                .map(|t| format!("mcp__ptyro__{t}"))
+                .collect();
+            plan.argv.extend([
+                "--mcp-config".into(),
+                servers.to_string(),
+                "--allowedTools".into(),
+                allowed.join(","),
+            ]);
         }
         // We implement DEC 2026 and OSC 8 (SPEC §8.2).
         plan.env.push(("CLAUDE_CODE_FORCE_SYNC_OUTPUT".into(), "1".into()));
@@ -371,6 +395,31 @@ impl Adapter for Claude {
             StopStep::Wait(Duration::from_secs(5)),
         ]
     }
+
+    fn transcript(&self, at: &TranscriptAt<'_>) -> Option<std::path::PathBuf> {
+        crate::transcript::claude_path(at)
+    }
+
+    fn hook_transcript(&self, event: &str, p: &Value) -> (Option<std::path::PathBuf>, bool) {
+        // (A compaction fires neither: its lines are read with the next turn's.)
+        (str_of(p, "transcript_path").map(Into::into), matches!(event, "Stop" | "SessionEnd"))
+    }
+
+    fn transcripts(&self, home: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+        crate::transcript::claude_all(home)
+    }
+
+    fn hook_prompt(&self, event: &str, p: &Value) -> Option<String> {
+        crate::adapter::prompt_hook(event, p)
+    }
+
+    fn hook_context(&self, event: &str, context: &str) -> Option<String> {
+        crate::adapter::prompt_context(event, context)
+    }
+
+    fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
+        Some(crate::transcript::claude(bytes, from))
+    }
 }
 
 #[cfg(test)]
@@ -417,6 +466,45 @@ mod tests {
             port: None,
             agent_home: None,
             project_root: None,
+            kb: None,
+            remember: false,
+        }
+    }
+
+    /// SPEC §25.9, §20.1: the knowledge base's tools, at the launch and again on a resume
+    /// (Claude restores neither flag), and none when the daemon gives none.
+    #[test]
+    fn the_knowledge_tools_are_given_at_launch_and_on_every_resume() {
+        let def = AgentDef::default();
+        let with = LaunchCtx {
+            kb: Some(Path::new("/run/ptyro.sock")),
+            ..ctx(&def, vec!["claude".into()])
+        };
+        for plan in [Claude.launch(&with).unwrap(), Claude.resume(&with, "c1").unwrap()] {
+            let a = &plan.argv;
+            let at = a.iter().position(|x| x == "--mcp-config").expect("--mcp-config");
+            let cfg: Value = serde_json::from_str(&a[at + 1]).unwrap();
+            assert_eq!(
+                cfg,
+                json!({ "mcpServers": { "ptyro": { "type": "stdio", "command": "/usr/bin/ptyro",
+                    "args": ["mcp"],
+                    "env": { "PTYRO_SESSION_ID": "01abc", "PTYRO_SOCKET": "/run/ptyro.sock" } } } })
+            );
+            let at = a.iter().position(|x| x == "--allowedTools").expect("--allowedTools");
+            assert_eq!(a[at + 1], "mcp__ptyro__recall,mcp__ptyro__recall_read");
+            // Beside the user's own servers and rules: nothing that replaces them.
+            assert!(!a.iter().any(|x| x == "--strict-mcp-config" || x == "--permission-mode"));
+        }
+        // With `remember` (`kb.remember`): allowed too, and `ptyro mcp` is told to offer it.
+        let a = Claude.resume(&LaunchCtx { remember: true, ..with }, "c1").unwrap().argv;
+        let at = a.iter().position(|x| x == "--allowedTools").expect("--allowedTools");
+        assert_eq!(a[at + 1], "mcp__ptyro__recall,mcp__ptyro__recall_read,mcp__ptyro__remember");
+        let at = a.iter().position(|x| x == "--mcp-config").expect("--mcp-config");
+        let cfg: Value = serde_json::from_str(&a[at + 1]).unwrap();
+        assert_eq!(cfg["mcpServers"]["ptyro"]["env"]["PTYRO_KB_REMEMBER"], "1");
+        let none = ctx(&def, vec!["claude".into()]);
+        for plan in [Claude.launch(&none).unwrap(), Claude.resume(&none, "c1").unwrap()] {
+            assert!(!plan.argv.iter().any(|x| x == "--mcp-config" || x == "--allowedTools"));
         }
     }
 

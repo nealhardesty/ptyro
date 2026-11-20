@@ -17,6 +17,8 @@ mod complete;
 mod config;
 mod doctor;
 mod host;
+mod ingest;
+mod kb;
 mod linked;
 mod logins;
 mod machines;
@@ -414,6 +416,12 @@ enum Cmd {
         /// first prompt come from the issue
         #[arg(long, conflicts_with = "wt")]
         issue: Option<String>,
+        /// Private: the knowledge base keeps nothing of it (the agent keeps its own history)
+        #[arg(long)]
+        private: bool,
+        /// Keep it, though `[kb] private` is on
+        #[arg(long, conflicts_with = "private")]
+        no_private: bool,
         /// The command to run (default: your $SHELL); with --agent, extra agent arguments
         #[arg(last = true)]
         argv: Vec<String>,
@@ -622,10 +630,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: checkpoint::CheckpointCmd,
     },
-    /// MCP server with the chat history tools (`chat_search`, `chat_read`, `chat_list`), for a
+    /// MCP server with the knowledge base's tools (`recall`, `recall_read`) for an agent's
+    /// session, and the chat history tools (`chat_search`, `chat_read`, `chat_list`) for a
     /// chat's agent (started for you)
     Mcp {
-        /// The chat history tools (what a bare `ptyro mcp` serves too; kept for older chats)
+        /// The chat history tools, as a chat's agent gets them (a bare `ptyro mcp` in an
+        /// agent's session serves the knowledge base's)
         #[arg(long, hide = true)]
         chat: bool,
     },
@@ -670,6 +680,29 @@ enum Cmd {
         /// A new chat's first message and options (the same as `ptyro chat new …`)
         #[command(flatten)]
         new: chat::NewArgs,
+    },
+    /// Search everything ptyro kept, here and in your chats: what you asked your agents, what
+    /// they answered and did. `ptyro recall retry policy`; `ptyro kb show` opens a hit
+    Recall {
+        #[command(flatten)]
+        args: kb::RecallArgs,
+    },
+    /// Read a folder or a file into the knowledge base, and keep reading it as it changes: its
+    /// documents, its files' names, its source comments, its commits. `ptyro ingest ~/notes`;
+    /// `ptyro ingest --history` reads what your agents kept before ptyro did
+    Ingest {
+        #[command(flatten)]
+        args: ingest::IngestArgs,
+    },
+    /// The knowledge base: what ptyro keeps of your work, on this computer only. Plain `ptyro
+    /// kb` says whether it is on and what it holds
+    #[command(args_conflicts_with_subcommands = true)]
+    Kb {
+        #[command(subcommand)]
+        cmd: Option<kb::KbCmd>,
+        /// The status as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Internal: the web app's server itself, which `ptyro web on` has the daemon run (and a
     /// machine's link reaches). Run by hand, it serves until Ctrl-C
@@ -944,6 +977,10 @@ enum Cmd {
         /// Don't remove the ptyro program itself
         #[arg(long)]
         keep_binary: bool,
+        /// Also delete the notes you and your agents wrote (the knowledge base's notes
+        /// folder, which is otherwise left where it is)
+        #[arg(long)]
+        delete_notes: bool,
         /// Also delete the snapshots under refs/ptyro/ in your repositories (archived and
         /// taken-over work)
         #[arg(long)]

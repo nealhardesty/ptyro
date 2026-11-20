@@ -1,0 +1,11 @@
+{
+  "session_id": "6992c0ad-dafa-428e-8e80-8de66de55326",
+  "transcript_path": "/home/u/.claude/projects/-home-u-proj/6992c0ad-dafa-428e-8e80-8de66de55326.jsonl",
+  "cwd": "/home/u/proj",
+  "hook_event_name": "SessionStart",
+  "source": "resume",
+  "seconds_since_last_response": 1,
+  "context_tokens": 27378,
+  "prompt_cache_likely_expired": false,
+  "estimated_cache_write_usd": 0.0055
+}

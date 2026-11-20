@@ -159,6 +159,8 @@ pub struct Wizard {
     pub no_fetch: bool,
     pub command: Option<String>,
     pub title: Option<String>,
+    /// Private (SPEC §25.7a), as the form says it; `None` (quick new): as `kb.private` says.
+    pub private: Option<bool>,
 }
 
 /// A PR or an issue named in text (UX1.10): a GitHub URL, or `pr 12` / `issue 12`.
@@ -233,6 +235,10 @@ pub enum Purpose {
     Health,
     /// A word of a `ptyro …` command being put together (UX1.21).
     CliPick(Box<crate::cli_actions::CliJob>),
+    /// One of the Library's filters (SPEC §25.10).
+    Library(crate::library::Filter),
+    /// The folder to read into the knowledge base (`kb.ingest`): then its form.
+    KbIngest,
     /// The profile to pin this project to.
     Pin(String),
     /// This workspace's profile, or how it notifies.
@@ -290,6 +296,11 @@ pub enum PromptKind {
     ShellMatch(SessionId),
     /// A question for `chat find`.
     ChatFind,
+    /// An address to open in the Library (`kb.show`), or to forget (`kb.forget`).
+    KbShow,
+    KbForget,
+    /// Find in the Library's reader.
+    KbFind,
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -393,7 +404,7 @@ pub enum Confirmed {
     Quit,
     /// Restart the daemon, stopping what runs (`daemon restart --force`).
     RestartDaemon,
-    /// Switch meaning search on (SPEC §22.10): `chat.meaning = true` in the config.
+    /// Switch meaning search on (SPEC §22.10, §25.13): `kb.meaning = true` in the config.
     MeaningOn,
     /// Send this request again, agreed to (`confirmed`), its reply going to this.
     Again(Box<Request>, Box<Pending>),
@@ -470,6 +481,30 @@ pub enum Pending {
     ChatPreview(String),
     /// The chat list's message hits, for this query.
     ChatHits(String),
+    /// The Library's (SPEC §25.10): its list (the ask's number), the selected row's text (its
+    /// address), an item for the reader (at this piece), the item whose session `r` goes to,
+    /// how the knowledge base stands, and what a forgetting deleted.
+    KbRows(u64),
+    KbPreview(String),
+    KbReader(Option<u32>),
+    /// The reader's item again, after news of a change.
+    KbReaderAgain,
+    KbResume,
+    KbStatus,
+    KbForgotten,
+    /// `kb.sync`: the notes folder was read again.
+    KbSynced,
+    /// The next page of the Library's history (the ask's number).
+    KbOlder(u64),
+    /// The Sources tab's (SPEC §25.10): the repositories found, for the ingest form's path
+    /// picker; a root added (on this machine); a root being removed; the agents' history
+    /// counted (and the request that reads it, unless it was only to count); it being read
+    /// (what to say).
+    KbPaths,
+    KbIngested(Option<String>),
+    KbRemoved,
+    KbCounted(Option<Box<Request>>),
+    KbBackfilled(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
     /// What quick-new would start in the context's worktree (UX3.2), for its label.
@@ -1447,6 +1482,7 @@ impl App {
             self.refresh_again();
         }
         self.health_tick(self.started);
+        self.sources_tick();
         self.setup_tick();
         self.sync_window();
     }
@@ -1702,6 +1738,11 @@ impl App {
             }
             DomainEvent::HostLoad { load } => self.host_load = load,
             // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
+            DomainEvent::KbUpdated { .. } => self.library_news(),
+            // A pass over a root: the Sources tab shows how far it is.
+            DomainEvent::KbProgress { root, done, of, .. } => {
+                self.sources_progress(&root, done, of)
+            }
             DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
@@ -1781,6 +1822,8 @@ impl App {
                         p.refresh();
                     }
                     self.request(Pending::Registry, Request::ProfileList);
+                    // The knowledge base's switches may have moved.
+                    self.library_news();
                 }
             },
         }
@@ -1809,9 +1852,15 @@ impl App {
                 // Chats switched on: their list is fetched; off: the chat panel goes.
                 match (old.chat.enabled, self.config.chat.enabled) {
                     (false, true) => self.refresh_chats(),
+                    // (The Library is no chat: it stays.)
                     (true, false) => {
-                        self.close_chat();
-                        self.drop_chat_aside();
+                        use crate::chats::ChatPanel::Library;
+                        if !matches!(self.chat_panel, Some(Library(_))) {
+                            self.close_chat();
+                        }
+                        if !matches!(self.chat_aside, Some(Library(_))) {
+                            self.drop_chat_aside();
+                        }
                     }
                     _ => {}
                 }
@@ -1943,6 +1992,47 @@ impl App {
             }
             // A query still being typed: its error is no news (a short prefix, a lone `-`).
             (Pending::ChatHits(_), Err(_)) => {}
+            (Pending::KbRows(asked), res) => self.library_rows(asked, res),
+            (Pending::KbStatus, Ok(Reply::KbStatus { status })) => self.library_status(status),
+            (Pending::KbStatus, Err(_)) => {}
+            (Pending::KbPreview(addr), Ok(Reply::KbDoc { item, chunks, at, .. })) => {
+                self.library_previewed(&addr, item, chunks, at)
+            }
+            // The row went while its text was asked for (forgotten, read again).
+            (Pending::KbPreview(_), Err(_)) => {}
+            (Pending::KbReader(piece), Ok(Reply::KbDoc { item, chunks, .. })) => {
+                self.library_read(piece, item, chunks)
+            }
+            (Pending::KbReaderAgain, Ok(Reply::KbDoc { item, chunks, .. })) => {
+                self.library_read_again(item, chunks)
+            }
+            // The news was that it went (forgotten from here, or elsewhere).
+            (Pending::KbReaderAgain, Err(_)) => {}
+            (Pending::KbResume, Ok(Reply::KbDoc { item, .. })) => self.library_resumed(&item),
+            (Pending::KbForgotten, Ok(Reply::KbForgotten { items, chunks })) => {
+                self.library_forgot(items, chunks)
+            }
+            (Pending::KbSynced, Ok(Reply::KbSynced { notes, changed, removed, roots })) => {
+                self.library_synced(notes, changed, removed, roots)
+            }
+            (Pending::KbOlder(asked), Ok(Reply::KbItems { items })) => {
+                self.library_older_rows(asked, items)
+            }
+            (Pending::KbPaths, Ok(Reply::Paths { paths })) => self.ingest_paths(paths),
+            (Pending::KbPaths, Err(_)) => self.ingest_paths(Vec::new()),
+            (Pending::KbIngested(machine), Ok(Reply::KbIngested { root, plan })) => {
+                self.ingested(machine, &root, &plan)
+            }
+            (Pending::KbRemoved, Ok(Reply::KbRemoved { name, items, chunks })) => {
+                self.sources_removed(&name, items, chunks)
+            }
+            (Pending::KbCounted(read), Ok(Reply::KbHistory { plan })) => {
+                self.backfill_counted(read, &plan)
+            }
+            (Pending::KbBackfilled(said), Ok(Reply::KbHistory { .. })) => {
+                self.toast(said);
+                self.library_news();
+            }
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
                 match std::fs::write(&path, text) {
                     Ok(()) => self.toast(format!("written to {}", path.display())),
@@ -2677,7 +2767,8 @@ impl App {
                     Err(e) => self.toast_err(e),
                 }
             }
-            "session.resume" | "session.hibernate" | "session.explain" | "session.mute" => {
+            "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
+            | "session.private" => {
                 let target = if self.focus == Focus::Sidebar {
                     self.selected_row().and_then(|r| r.session())
                 } else {
@@ -2702,6 +2793,17 @@ impl App {
                         Pending::Done("notifications muted for 1h".into()),
                         Request::Mute { target: addr, minutes: Some(60), unmute: false },
                     ),
+                    // The daemon asks first, in its words (`kb forget --session`, §25.7a).
+                    "session.private" => {
+                        let req = Request::KbForget {
+                            addrs: Vec::new(),
+                            query: None,
+                            confirmed: false,
+                            session: Some(addr),
+                        };
+                        let done = Pending::Done("private: nothing of it is kept".into());
+                        self.request(Pending::Confirm(Box::new(req.clone()), Box::new(done)), req);
+                    }
                     _ => self.request(Pending::Explain(id), Request::StatusExplain { addr }),
                 }
             }
@@ -2829,16 +2931,20 @@ impl App {
                 // With the chat panel over the panes (a chat, the list, a new chat), they mean
                 // its chat, never the hidden session.
                 let chat_shown = self.focus == Focus::Pane && self.chat_panel.is_some();
+                // (The Library has no chat for them to mean.)
+                let library = chat_shown
+                    && matches!(self.chat_panel, Some(crate::chats::ChatPanel::Library(_)));
                 if on_chat_row || chat_shown {
                     let a = match cmd.action {
-                        "session.rename" => "chat.rename",
-                        "session.stop" => "chat.archive",
-                        "session.kill" => "chat.delete",
+                        "session.rename" if !library => "chat.rename",
+                        "session.stop" if !library => "chat.archive",
+                        "session.kill" if !library => "chat.delete",
                         _ if !chat_shown => return,
                         _ => {
                             let back = self.keymap.key_for("session.last").unwrap_or_default();
+                            let what = if library { "Library" } else { "chat" };
                             return self.toast(format!(
-                                "that's a session's: the chat covers it ({back} shows the session)"
+                                "that's a session's: the {what} covers it ({back} shows the session)"
                             ));
                         }
                     };
@@ -2910,6 +3016,7 @@ impl App {
             "row.menu" => self.open_row_menu(),
             "home" => self.open_home(),
             "app.about" => self.open_about(),
+            a if a.starts_with("kb.") => self.library_action(a),
             "health" => self.open_health(),
             "daemon.logs" => self.run_cli(&["daemon".into(), "logs".into(), "-f".into()]),
             "daemon.status" => self.run_cli(&["daemon".into(), "status".into()]),
@@ -3814,6 +3921,12 @@ impl App {
                 if s.kind == SessionKind::Agent && s.state.is_live() {
                     v.extend(["session.hibernate", "session.mute"]);
                 }
+                if !s.private {
+                    v.push("session.private");
+                }
+                if s.kind == SessionKind::Agent {
+                    v.push("kb.history");
+                }
                 if s.worktree.is_some() {
                     v.extend(["worktree.open", "script.run", "script.pick"]);
                 }
@@ -3843,6 +3956,7 @@ impl App {
                 let mut v =
                     vec!["session.new", "session.again", "shell.new", "shell.drawer", "shell.pane"];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.rename"]);
+                v.push("kb.history");
                 if !root {
                     v.push("worktree.remove");
                 }
@@ -3872,6 +3986,7 @@ impl App {
                 "project.move",
                 "project.leave",
                 "project.remove",
+                "kb.history",
             ],
             // A quick terminal (UX1.25): show or hide it, and what a shell offers.
             Row::Quick(id) => {
@@ -4155,6 +4270,7 @@ impl App {
                     profile: w.profile.clone(),
                     name: w.name.clone().filter(|n| !n.is_empty()),
                     title: w.title.clone(),
+                    private: w.private,
                     ..SpawnSpec::default()
                 };
                 self.spawn_spec(spec, w.split);
@@ -4168,6 +4284,7 @@ impl App {
                     profile: w.profile.clone(),
                     name: w.name.clone().filter(|n| !n.is_empty()),
                     title: w.title.clone(),
+                    private: w.private,
                     ..SpawnSpec::default()
                 };
                 self.spawn_spec(spec, w.split);
@@ -4183,6 +4300,7 @@ impl App {
                         title: w.title.clone().or_else(|| w.prompt.clone()),
                         name: w.name.clone().filter(|n| !n.is_empty()),
                         profile: w.profile.clone(),
+                        private: w.private,
                         ..SpawnSpec::default()
                     },
                     w.split,
@@ -4967,8 +5085,10 @@ impl App {
                 Request::ProjectRemove { addr: id, release: false },
             ),
             Confirmed::Again(mut req, then) => {
-                if let Request::ChatTask { confirmed, .. } | Request::ChatUpdate { confirmed, .. } =
-                    req.as_mut()
+                if let Request::ChatTask { confirmed, .. }
+                | Request::ChatUpdate { confirmed, .. }
+                | Request::KbForget { confirmed, .. }
+                | Request::KbRemove { confirmed, .. } = req.as_mut()
                 {
                     *confirmed = true;
                 }
@@ -5113,6 +5233,9 @@ impl App {
                     ),
                 });
             }
+            (Target::Path(v), Purpose::Library(f)) => self.library_picked(f, &v.to_string_lossy()),
+            (Target::Path(path), Purpose::KbIngest) => self.open_ingest_form(Some(path)),
+            (Target::NewProjectPath, Purpose::KbIngest) => self.open_ingest_form(None),
             (Target::Path(word), Purpose::CliPick(mut job)) => {
                 job.done.push(word.to_string_lossy().into_owned());
                 self.cli_step(*job);
@@ -5321,6 +5444,8 @@ impl App {
                 }
             }
             PromptKind::ChatFindIn(chat) => self.find_in_chat(&chat, text.trim()),
+            PromptKind::KbFind => self.library_find(&text),
+            kind @ (PromptKind::KbShow | PromptKind::KbForget) => self.library_typed(&kind, &text),
             PromptKind::ChatFind => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -5754,6 +5879,12 @@ impl App {
                     }
                     K::ScrollUp => self.chat_key(KeyEvent::new(KeyCode::Up, Mods::NONE)),
                     K::ScrollDown => self.chat_key(KeyEvent::new(KeyCode::Down, Mods::NONE)),
+                    _ => {}
+                },
+                Some(crate::chats::ChatPanel::Library(_)) => match m.kind {
+                    K::Down(crossterm::event::MouseButton::Left) => self.library_mouse(y, None),
+                    K::ScrollUp => self.library_mouse(y, Some(true)),
+                    K::ScrollDown => self.library_mouse(y, Some(false)),
                     _ => {}
                 },
                 None => {}
@@ -6281,6 +6412,7 @@ pub(crate) fn worktree_spec(w: &Wizard, project: &str) -> WorktreeSpec {
         issue: w.issue.clone(),
         existing: w.branch.is_some(),
         branch: w.branch.clone(),
+        private: w.private,
         ..WorktreeSpec::default()
     }
 }
@@ -7351,12 +7483,14 @@ mod tests {
         assert_eq!(f.get("name"), "fix-flaky-test-x-y.");
         assert_eq!(f.get("agent"), "claude");
         assert_eq!(f.get("where"), "new:p1", "a new worktree of the project in context");
+        assert_eq!(f.get("private"), "", "Private is on the form, off unless `kb.private`");
         // The bad name is said on ⏎; fixed, ⏎ creates the worktree with every option.
         key(&mut app, KeyCode::Enter, Mods::NONE);
         assert!(matches!(&app.overlay, Some(Overlay::Form(f)) if f.error.is_some()));
         typed(&mut app, "\x08");
         let Some(Overlay::Form(f)) = &mut app.overlay else { panic!() };
         f.choose("setup", "");
+        f.choose("private", "yes");
         if let Some(crate::form::Field { kind: crate::form::Kind::Text { value, .. }, .. }) =
             f.fields.iter_mut().find(|x| x.key == "base")
         {
@@ -7375,6 +7509,7 @@ mod tests {
         assert_eq!(spec.base.as_deref(), Some("origin/dev"));
         assert!(!spec.setup, "setup unticked");
         assert_eq!(spec.agent.as_deref(), Some("claude"));
+        assert_eq!(spec.private, Some(true), "the form's Private switch (SPEC §25.7a)");
     }
 
     fn profile_info(name: &str) -> ProfileInfo {
@@ -7406,7 +7541,7 @@ mod tests {
         typed(&mut app, "\tAcme Corp\n");
         assert_eq!(
             app.last_cli.as_deref(),
-            Some(&["profile", "new", "acme", "--label", "Acme Corp"].map(String::from)[..])
+            Some(&["profile", "new", "--label", "Acme Corp", "--", "acme"].map(String::from)[..])
         );
         assert!(app.after_profile.is_some(), "waits for it to show up");
         app.overlay = None;

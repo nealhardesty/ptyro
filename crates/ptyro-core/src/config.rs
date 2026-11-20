@@ -339,6 +339,9 @@ pub struct AgentDef {
     pub usage: Option<bool>,
     /// Record this agent's sessions (`[recorder]`; default true).
     pub record: Option<bool>,
+    /// `false`: none of its sessions are kept in the knowledge base, and it gets no tools to
+    /// search it (SPEC §25.13; default true).
+    pub kb: Option<bool>,
     /// The structured protocol a chat speaks with it (M10, SPEC §22): `stream-json`,
     /// `app-server`, `acp` or `opencode`. Default from its adapter; `acp` lets any Agent Client
     /// Protocol agent chat.
@@ -575,8 +578,147 @@ pub struct Config {
     pub clipboard: Clipboard,
     pub shell: Shell,
     pub chat: Chat,
+    pub kb: Kb,
     pub client: Client,
     pub updates: Updates,
+}
+
+/// The knowledge base (SPEC §25.13): everything that happens in ptyro, searchable in one
+/// place, kept in `kb.db`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Kb {
+    /// Off: nothing is ingested and nothing is offered; what is stored stays.
+    pub enabled: bool,
+    /// More patterns to redact before anything is stored (regexes), beside the built-in rules
+    /// for credentials (§25.7).
+    pub redact: Vec<String>,
+    /// More paths never to read (globs), beside the built-in list of key and credential files.
+    pub exclude: Vec<String>,
+    /// Meaning search (SPEC §25.8, §22.10), for the knowledge base and for chats: find things
+    /// by what they are about, not only by their words. Switching it on downloads a 31 MB
+    /// model once. `[chat] meaning` is its old name, and switches it on too.
+    pub meaning: bool,
+    /// Agent sessions are kept, from the agents' own transcripts (§25.6.1).
+    pub sessions: bool,
+    /// New sessions start private: nothing of them is kept (§25.7a).
+    pub private: bool,
+    /// Agents are given its tools (`recall`, `recall_read`, and `remember`; §25.9).
+    pub tools: bool,
+    /// Agents may write notes (the `remember` tool, §25.6.4).
+    pub remember: bool,
+    /// Offered at a prompt (§25.9): when an agent is given a prompt, it may also be given up
+    /// to three pointers to what is kept about it. Off unless you switch it on: it puts
+    /// stored text (titles) into a model's prompt without the model asking.
+    pub inject: bool,
+    /// What an agent may see of it (the wall, §25.9): `profile` (its own account's, and what is
+    /// nobody's), `workspace` (of those, its workspace's) or `all`. `[chat] history_scope` is
+    /// its old name.
+    pub scope: String,
+    /// Sessions older than this many days are deleted, once a day (0: never; §25.12).
+    pub retain_days: u32,
+    /// The largest file read (`1MiB`); a larger one is named in `ptyro kb status`.
+    pub max_file: String,
+    /// Every project ptyro knows is read: its documents, its files' names, and what the
+    /// three switches below allow (§25.6.3).
+    pub projects: bool,
+    /// Source files' comments are read.
+    pub comments: bool,
+    /// Source code itself is read, searched by words only. It makes the index large.
+    pub code: bool,
+    /// Commit messages are read.
+    pub commits: bool,
+    /// How often every project and folder is looked at again (`1h`).
+    pub sync_every: String,
+    /// What is kept of your shells (§25.6.5): `off` nothing, `commands` the command lines you
+    /// run, `output` those and what they printed.
+    pub shell: String,
+    /// Commands too trivial to keep, by their first word.
+    pub shell_skip: Vec<String>,
+    /// What commands printed is deleted after this many days (0: kept as long as its command).
+    pub shell_output_days: u32,
+}
+
+impl Default for Kb {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            redact: Vec::new(),
+            exclude: Vec::new(),
+            meaning: false,
+            sessions: true,
+            private: false,
+            tools: true,
+            remember: true,
+            inject: false,
+            scope: "profile".into(),
+            retain_days: 0,
+            max_file: "1MiB".into(),
+            projects: true,
+            comments: true,
+            code: false,
+            commits: true,
+            sync_every: "1h".into(),
+            shell: "commands".into(),
+            shell_skip: KB_SHELL_SKIP.iter().map(|w| (*w).to_owned()).collect(),
+            shell_output_days: 30,
+        }
+    }
+}
+
+/// The words `kb.shell` takes.
+pub const KB_SHELLS: [&str; 3] = ["off", "commands", "output"];
+/// `kb.shell_skip` as it comes.
+pub const KB_SHELL_SKIP: [&str; 10] =
+    ["ls", "cd", "pwd", "clear", "exit", "ll", "la", "fg", "bg", "history"];
+
+/// The words `kb.scope` takes.
+pub const KB_SCOPES: [&str; 3] = ["profile", "workspace", "all"];
+
+impl Kb {
+    fn validate(&self) -> Result<(), String> {
+        for p in &self.redact {
+            crate::kb::redact::pattern(p).map_err(|e| format!("kb.redact: {e}"))?;
+        }
+        if !KB_SCOPES.contains(&self.scope.as_str()) {
+            return Err(format!("kb.scope: {:?} (profile, workspace or all)", self.scope));
+        }
+        if !KB_SHELLS.contains(&self.shell.as_str()) {
+            return Err(format!("kb.shell: {:?} (off, commands or output)", self.shell));
+        }
+        match parse_duration(&self.sync_every) {
+            Ok(d) if d < std::time::Duration::from_secs(60) => {
+                return Err("kb.sync_every: a minute or more (like 1h)".into());
+            }
+            Ok(_) => {}
+            Err(e) => return Err(format!("kb.sync_every: {e}")),
+        }
+        match parse_bytes(&self.max_file) {
+            Ok(0) => Err("kb.max_file: more than 0 (like 1MiB)".into()),
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("kb.max_file: {e}")),
+        }
+    }
+
+    /// `kb.sync_every`.
+    pub fn sync_every(&self) -> std::time::Duration {
+        parse_duration(&self.sync_every).unwrap_or(std::time::Duration::from_secs(3600))
+    }
+
+    /// Shell commands are kept (`kb.shell` is `commands` or `output`).
+    pub fn shell_commands(&self) -> bool {
+        self.shell != "off"
+    }
+
+    /// What shell commands print is kept too (`kb.shell = "output"`).
+    pub fn shell_output(&self) -> bool {
+        self.shell == "output"
+    }
+
+    /// `kb.max_file` in bytes.
+    pub fn max_file_bytes(&self) -> u64 {
+        parse_bytes(&self.max_file).unwrap_or(crate::kb::ingest::MAX_FILE)
+    }
 }
 
 /// Newer versions of your agents (BOOT5, SPEC §24.7): looked for at most once a day, offered,
@@ -678,8 +820,10 @@ pub struct Chat {
     pub incognito: bool,
     /// Chats can look up your other chats (`chat_search`, `chat_read`, `chat_list`).
     pub history_tool: bool,
-    /// Which chats those tools see: `profile` (the chat's account's), `workspace`, or `all`.
-    pub history_scope: String,
+    /// The old name of `[kb] scope` (SPEC §25.13): read from a file that still has it and has
+    /// no `[kb] scope`, and folded into that one when the file is parsed. Nothing else reads it.
+    #[serde(skip_serializing)]
+    pub history_scope: Option<String>,
     /// An idle chat's agent stops after this long; the next message carries on.
     pub hibernate_after: String,
     /// The most a replayed conversation carries when an agent has to be told it again.
@@ -693,8 +837,9 @@ pub struct Chat {
     pub daily_cap: u32,
     /// Also make tool output searchable (2 KB of it a message).
     pub index_tools: bool,
-    /// Meaning search (SPEC §22.10): find messages by what they are about, not only by their
-    /// words. Switching it on downloads a 31 MB model once.
+    /// The old name of `[kb] meaning` (SPEC §25.13): read from a file that still has it, and
+    /// folded into that one when the file is parsed. Nothing else reads it.
+    #[serde(skip_serializing)]
     pub meaning: bool,
     /// `blocked`: tell you when a chat needs you; `all`: also when an answer arrives while no
     /// screen shows it; `off`.
@@ -711,7 +856,7 @@ impl Default for Chat {
             agent: String::new(),
             incognito: false,
             history_tool: true,
-            history_scope: "profile".into(),
+            history_scope: None,
             hibernate_after: "2m".into(),
             seed_tokens: 30_000,
             title: "auto".into(),
@@ -767,11 +912,10 @@ impl Chat {
         if !matches!(self.title.as_str(), "auto" | "off") {
             return Err(format!("chat.title: {:?} (auto or off)", self.title));
         }
-        if !matches!(self.history_scope.as_str(), "profile" | "workspace" | "all") {
-            return Err(format!(
-                "chat.history_scope: {:?} (profile, workspace or all)",
-                self.history_scope
-            ));
+        if let Some(s) = &self.history_scope
+            && !KB_SCOPES.contains(&s.as_str())
+        {
+            return Err(format!("chat.history_scope: {s:?} (profile, workspace or all)"));
         }
         if !matches!(self.notify.as_str(), "blocked" | "all" | "off") {
             return Err(format!("chat.notify: {:?} (blocked, all or off)", self.notify));
@@ -1536,13 +1680,23 @@ impl Config {
         if let Some(argv) = titler {
             config.chat.title_command = argv;
         }
+        // `[chat] meaning` is `[kb] meaning`'s old name: either switches it on.
+        config.kb.meaning |= config.chat.meaning;
         config.validate()?;
+        // `[chat] history_scope` is `[kb] scope`'s: it holds while the file has no `[kb] scope`.
+        if let Some(old) = config.chat.history_scope.take()
+            && !toml::from_str::<toml::Table>(text)
+                .is_ok_and(|t| t.get("kb").is_some_and(|kb| kb.get("scope").is_some()))
+        {
+            config.kb.scope = old;
+        }
         Ok(config)
     }
 
     fn validate(&self) -> Result<(), String> {
         self.client.validate()?;
         self.chat.validate()?;
+        self.kb.validate()?;
         self.updates.validate()?;
         parse_duration(&self.shell.notify_after).map_err(|e| format!("shell.notify_after: {e}"))?;
         if self.ui.prefix.keys().is_empty() {
@@ -2323,6 +2477,62 @@ pub fn normalize_key(k: KeyEvent) -> KeyEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_knowledge_base_is_on_and_a_bad_pattern_is_refused() {
+        let c = Config::parse("").unwrap();
+        assert!(c.kb.enabled && c.kb.redact.is_empty() && c.kb.exclude.is_empty());
+        let c = Config::parse(
+            "[kb]\nenabled = false\nredact = ['ACME-\\d+']\nexclude = ['private/**']\n",
+        )
+        .unwrap();
+        assert!(!c.kb.enabled);
+        assert_eq!((c.kb.redact.len(), c.kb.exclude.len()), (1, 1));
+        let e = Config::parse("[kb]\nredact = ['(open']\n").unwrap_err();
+        assert!(e.starts_with("kb.redact: \"(open\" is not a pattern"), "{e}");
+        // Meaning search is one switch, off until asked for; its old name still switches it on.
+        assert!(!c.kb.meaning);
+        // The rest of the Knowledge section (KB1.11).
+        assert!(c.kb.sessions && c.kb.tools && c.kb.retain_days == 0);
+        assert_eq!((c.kb.scope.as_str(), c.kb.max_file_bytes()), ("profile", 1 << 20));
+        let c = Config::parse(
+            "[kb]\nsessions = false\ntools = false\nscope = 'all'\nretain_days = 90\nmax_file = '64KiB'\n[agents.codex]\nkb = false\n",
+        )
+        .unwrap();
+        assert!(!c.kb.sessions && !c.kb.tools);
+        assert_eq!(
+            (c.kb.scope.as_str(), c.kb.retain_days, c.kb.max_file_bytes()),
+            ("all", 90, 64 << 10)
+        );
+        assert_eq!(c.agents.get("codex").unwrap().kb, Some(false));
+        assert!(Config::parse("[kb]\nscope = 'mine'\n").unwrap_err().starts_with("kb.scope: "));
+        assert!(
+            Config::parse("[kb]\nmax_file = 'big'\n").unwrap_err().starts_with("kb.max_file: ")
+        );
+        assert!(Config::parse("[kb]\nmax_file = '0'\n").unwrap_err().starts_with("kb.max_file: "));
+        // Roots (KB3).
+        let c = Config::default();
+        assert!(c.kb.projects && c.kb.comments && !c.kb.code && c.kb.commits);
+        assert_eq!(c.kb.sync_every(), std::time::Duration::from_secs(3600));
+        let c = Config::parse("[kb]\nprojects = false\ncode = true\nsync_every = '15m'\n").unwrap();
+        assert!(!c.kb.projects && c.kb.code);
+        assert_eq!(c.kb.sync_every(), std::time::Duration::from_secs(900));
+        for bad in ["soon", "5s"] {
+            let e = Config::parse(&format!("[kb]\nsync_every = '{bad}'\n")).unwrap_err();
+            assert!(e.starts_with("kb.sync_every: "), "{e}");
+        }
+        // `[chat] history_scope` is `[kb] scope`'s old name: it holds until the file has the new one.
+        assert_eq!(Config::parse("[chat]\nhistory_scope = 'all'\n").unwrap().kb.scope, "all");
+        let both = "[chat]\nhistory_scope = 'all'\n[kb]\nscope = 'profile'\n";
+        assert_eq!(Config::parse(both).unwrap().kb.scope, "profile");
+        assert!(
+            Config::parse("[chat]\nhistory_scope = 'x'\n")
+                .unwrap_err()
+                .starts_with("chat.history_scope: ")
+        );
+        assert!(Config::parse("[kb]\nmeaning = true\n").unwrap().kb.meaning);
+        assert!(Config::parse("[chat]\nmeaning = true\n").unwrap().kb.meaning);
+    }
 
     #[test]
     fn what_a_chat_may_use() {

@@ -110,6 +110,7 @@ expression: "Value::Object(all)"
       "name": "string",
       "pane": "number",
       "pid": "number",
+      "private": "bool",
       "profile": "string",
       "program_status": {
         "app": "string",
@@ -226,6 +227,7 @@ expression: "Value::Object(all)"
       "name": "string",
       "pane": "number",
       "pid": "number",
+      "private": "bool",
       "profile": "string",
       "program_status": {
         "app": "string",

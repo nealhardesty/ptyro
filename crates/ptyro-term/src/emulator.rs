@@ -62,6 +62,9 @@ pub enum TermEvent {
         /// `C;cmdline=…` (or kitty's percent-encoded `cmdline_url=…`): the command line.
         cmdline: Option<String>,
     },
+    /// What the shell command that just ended printed, as bounded plain text
+    /// ([`crate::capture`]): only where `capture_output` is on, and right before its `D` mark.
+    CommandOutput(String),
     /// OSC 9;4 (ConEmu) progress: state 0 clear, 1 normal, 2 error, 3 indeterminate, 4 paused.
     Progress {
         state: u8,
@@ -162,6 +165,8 @@ pub struct AlacrittyEmulator {
     ends: Vec<usize>,
     /// A prompt mark is open (OSC 133;A seen, B not yet).
     mark_open: bool,
+    /// What the running command printed, where that is kept (`capture`).
+    capture: crate::capture::Capture,
     size: TermSize,
     title: Option<String>,
     fg: Rgb,
@@ -387,6 +392,7 @@ impl AlacrittyEmulator {
             seqs: Vec::new(),
             ends: Vec::new(),
             mark_open: false,
+            capture: crate::capture::Capture::default(),
             size,
             title: None,
             fg: DEFAULT_FG,
@@ -535,7 +541,24 @@ fn prompt_mark(seq: &Seq) -> Option<bool> {
     }
 }
 
+/// `Some(true)`: a command starts (OSC 133;C). `Some(false)`: it is over (D, or the next
+/// prompt's A).
+fn command_mark(seq: &Seq) -> Option<bool> {
+    let Seq::Osc(body) = seq else { return None };
+    match body.strip_prefix(b"133;")?.first()? {
+        b'C' => Some(true),
+        b'A' | b'D' => Some(false),
+        _ => None,
+    }
+}
+
 impl AlacrittyEmulator {
+    /// Collect what each shell command prints (`capture`), told as
+    /// [`TermEvent::CommandOutput`] before the command's `D` mark. Off: nothing is collected.
+    pub fn capture_output(&mut self, on: bool) {
+        self.capture.set(on);
+    }
+
     fn set_mark(&mut self, open: bool) {
         if self.mark_open {
             self.parser.advance(&mut self.term, MARK_CLOSE);
@@ -562,9 +585,25 @@ impl Emulator for AlacrittyEmulator {
         let start = self.sniffer.state();
         self.sniffer.scan_with_ends(bytes, &mut seqs, Some(&mut ends));
         // Our replies first (they must precede the emulator's, e.g. 7501 before DA1)…
-        for seq in &seqs {
+        let mut taken = 0;
+        for (seq, &end) in seqs.iter().zip(&ends) {
+            if self.capture.on() {
+                // What the command printed up to this mark, said before the mark itself.
+                self.capture.feed(&bytes[taken..end]);
+                taken = end;
+                match command_mark(seq) {
+                    Some(true) => self.capture.start(),
+                    Some(false) => {
+                        if let Some(text) = self.capture.finish() {
+                            out.events.push(TermEvent::CommandOutput(text));
+                        }
+                    }
+                    None => {}
+                }
+            }
             self.observe(seq, out);
         }
+        self.capture.feed(&bytes[taken..]);
         // …then the bytes, split where prompt marks open or close.
         let mut pos = 0;
         for (seq, &end) in seqs.iter().zip(&ends) {
@@ -778,8 +817,10 @@ fn side_channel_osc(body: &[u8]) -> Option<TermEvent> {
                     })
                 })
                 .flatten()
-                .map(|c| c.trim().to_owned())
-                .filter(|c| !c.is_empty());
+                // (A space before it stays: the command was typed that way, to be kept out
+                // of the shell's history.)
+                .map(|c| c.trim_end().to_owned())
+                .filter(|c| !c.trim().is_empty());
             matches!(mark, 'A' | 'B' | 'C' | 'D').then_some(TermEvent::PromptMark {
                 mark,
                 exit,
@@ -1071,6 +1112,36 @@ mod tests {
                 TermEvent::Notification("9;done".into()),
             ]
         );
+    }
+
+    #[test]
+    fn a_commands_output_is_told_before_its_end_only_where_asked_for() {
+        let run =
+            b"\x1b]133;C;cmdline= make\x07\x1b[32mok\x1b[0m 1\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ";
+        let mut emu = AlacrittyEmulator::new(TermSize::new(20, 3), 100);
+        let ev = feed(&mut emu, run).events;
+        assert!(!ev.iter().any(|e| matches!(e, TermEvent::CommandOutput(_))), "off: {ev:?}");
+        emu.capture_output(true);
+        // In one read, and cut anywhere.
+        let mut cut = Vec::new();
+        for piece in run.chunks(5) {
+            cut.extend(feed(&mut emu, piece).events);
+        }
+        for ev in [feed(&mut emu, run).events, cut] {
+            assert_eq!(
+                ev,
+                vec![
+                    // (The space before a command line is kept: it was typed that way.)
+                    TermEvent::PromptMark { mark: 'C', exit: None, cmdline: Some(" make".into()) },
+                    TermEvent::CommandOutput("ok 1".into()),
+                    TermEvent::PromptMark { mark: 'D', exit: Some(0), cmdline: None },
+                    TermEvent::PromptMark { mark: 'A', exit: None, cmdline: None },
+                ]
+            );
+        }
+        // An editor's screen is not output.
+        let ev = feed(&mut emu, b"\x1b]133;C\x07\x1b[?1049hfile\x1b[?1049l\x1b]133;D\x07").events;
+        assert!(!ev.iter().any(|e| matches!(e, TermEvent::CommandOutput(_))), "{ev:?}");
     }
 
     #[test]

@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2355,7 +2355,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-agents"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "ptyro-core",
  "ptyro-git",
@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-client"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "futures",
  "ptyro-agents",
@@ -2385,10 +2385,11 @@ dependencies = [
 
 [[package]]
 name = "ptyro-core"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "etcetera",
  "getrandom 0.4.3",
+ "regex",
  "rustix",
  "serde",
  "serde_json",
@@ -2405,7 +2406,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-daemon"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2443,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-drive"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "ptyro-agents",
  "ptyro-core",
@@ -2453,7 +2454,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-git"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "ptyro-core",
  "serde_json",
@@ -2463,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-meaning"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -2471,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-protocol"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "bytes",
  "ptyro-agents",
@@ -2486,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-pty"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "libc",
  "pty-process",
@@ -2498,8 +2499,9 @@ dependencies = [
 
 [[package]]
 name = "ptyro-store"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
+ "proptest",
  "ptyro-core",
  "ptyro-meaning",
  "rusqlite",
@@ -2513,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-term"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "alacritty_terminal",
  "criterion",
@@ -2528,9 +2530,10 @@ dependencies = [
 
 [[package]]
 name = "ptyro-testkit"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "anyhow",
+ "ptyro-agents",
  "ptyro-client",
  "ptyro-core",
  "ptyro-daemon",
@@ -2548,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "ptyro-tui"
-version = "0.0.90"
+version = "0.0.91"
 dependencies = [
  "anyhow",
  "criterion",

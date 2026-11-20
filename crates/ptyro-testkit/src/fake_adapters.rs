@@ -3,8 +3,11 @@
 //!
 //! It reads the integration ptyro generated for it, exactly as the real agent would:
 //! - **claude**: the `--plugin-dir`'s `hooks/hooks.json`, the `--settings` statusLine command,
-//!   `--session-id` / `--resume`;
-//! - **codex**: `-c hooks.<Event>=[…]` and `-c notify=[…]`, `resume <id>`;
+//!   `--session-id` / `--resume`, and the `ptyro` server of `--mcp-config` with the tools
+//!   `--allowedTools` names (a tool it doesn't name is refused, as Claude refuses it);
+//! - **codex**: `-c hooks.<Event>=[…]` and `-c notify=[…]`, `resume <id>`, and
+//!   `-c mcp_servers.ptyro.*` (without `default_tools_approval_mode="approve"` a call is
+//!   refused, as `codex exec` fails it);
 //! - **opencode**: serves `GET /event` (SSE, basic auth with `OPENCODE_SERVER_PASSWORD`) on
 //!   `--port`, and the permissions API.
 //!
@@ -28,8 +31,18 @@
 //! typo in `greeting.txt` (or, told no, leaves it).
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
+//! | `as <kind> <file> <json>` | sends the request `<json>` to the daemon from inside the session, as a client that calls itself `<kind>` (`cli`, `machine`), and writes `ok: <reply>` or `error: <message>` to `<file>` |
+//! | `mcp <file> <tool> <json>` | calls a tool of the `ptyro` MCP server the launch gave it, as the real agent would, and writes the answer to `<file>` (`tools/list`: the tools' names and the server's instructions) |
 //! | `exit` | SessionEnd, exit 0 |
 //! With `PTYRO_FAKE_HOOK_DELAY_MS=N` every hook takes N ms to start (a loaded machine).
+//! A prompt's hook that answers with `hookSpecificOutput.additionalContext` (what ptyro offers
+//! at a prompt, SPEC §25.9) is taken as the real agents take it: the text goes into the
+//! transcript where they keep it, and `PTYRO_FAKE_CONTEXT=<file>` (a test knob) gets a line
+//! of JSON a prompt: `{prompt, context, ms}` (the hook's own time).
+//! With `PTYRO_FAKE_TRANSCRIPT=1` the fake Claude and Codex keep a transcript as the real ones
+//! do (`fake_transcript`), name it in every hook (`transcript_path`), and take two more
+//! commands: `compact <summary>` (Claude's `/compact`: no hook fires) and `rewind` (the file
+//! goes back to the end of the first turn).
 //! The fake Claude's terminal doesn't echo: as Claude does, it draws a prompt into the
 //! conversation once it takes it, and empties its box. So it never shows a typed-but-unsent
 //! draft: a dropped Enter on Claude's box isn't modelled (Codex's is,
@@ -69,6 +82,95 @@ struct Fake {
     laggy: Option<u64>,
     /// `PTYRO_FAKE_PLAIN_DIALOG=1`: `ask`'s dialog in words no adapter recognises.
     plain_dialog: bool,
+    /// `PTYRO_FAKE_TRANSCRIPT=1`: the conversation's file, as the real agent keeps it.
+    script: Option<crate::fake_transcript::Script>,
+    /// The `ptyro` MCP server this launch was given.
+    mcp: Option<Mcp>,
+}
+
+/// An MCP server as a launch names it, and which of its tools run unasked.
+#[derive(Default)]
+struct Mcp {
+    command: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    /// Claude's `--allowedTools` (`mcp__ptyro__recall`, …).
+    allowed: Vec<String>,
+    /// Codex's `default_tools_approval_mode = "approve"`.
+    approve: bool,
+}
+
+impl Mcp {
+    /// One call, as an agent makes it: start the server, `initialize`, then the request.
+    /// Answers the tool's text (`tools/list`: the names, `[always]` where one is always
+    /// loaded, and the server's instructions).
+    fn call(&self, tool: &str, args: &Value) -> String {
+        let mut c = std::process::Command::new(&self.command);
+        c.args(&self.args)
+            .envs(self.env.iter().cloned())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = match c.spawn() {
+            Ok(c) => c,
+            Err(e) => return format!("mcp: the server did not start: {e}"),
+        };
+        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            return "mcp: no pipes".into();
+        };
+        let mut lines = std::io::BufReader::new(stdout).lines();
+        let mut ask = |id: u64, method: &str, params: Value| -> Value {
+            let msg = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+            if writeln!(stdin, "{msg}").is_err() {
+                return Value::Null;
+            }
+            for line in lines.by_ref().map_while(Result::ok) {
+                if let Ok(v) = serde_json::from_str::<Value>(&line)
+                    && v["id"] == id
+                {
+                    return v;
+                }
+            }
+            Value::Null
+        };
+        let init = ask(
+            1,
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": { "name": "fake-agent", "version": "0" } }),
+        );
+        let said = if tool == "tools/list" {
+            let listed = ask(2, "tools/list", json!({}));
+            let names: Vec<String> = listed["result"]["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|t| {
+                    let always = t["_meta"]["anthropic/alwaysLoad"] == true;
+                    format!(
+                        "{}{}",
+                        t["name"].as_str().unwrap_or(""),
+                        if always { " [always]" } else { "" }
+                    )
+                })
+                .collect();
+            format!(
+                "tools: {}\ninstructions: {}",
+                names.join(", "),
+                init["result"]["instructions"].as_str().unwrap_or("")
+            )
+        } else {
+            let r = ask(2, "tools/call", json!({ "name": tool, "arguments": args }));
+            match r["result"]["content"][0]["text"].as_str() {
+                Some(text) if r["result"]["isError"] == true => format!("error: {text}"),
+                Some(text) => text.to_owned(),
+                None => format!("mcp: {}", r["error"]["message"].as_str().unwrap_or("no answer")),
+            }
+        };
+        drop(stdin);
+        let _ = child.wait();
+        said
+    }
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -105,6 +207,8 @@ impl Fake {
                 .filter(|_| adapter == "claude")
                 .map(|v| v.parse().unwrap_or(0)),
             plain_dialog: ptyro_core::test_knob("PTYRO_FAKE_PLAIN_DIALOG").is_some(),
+            script: None,
+            mcp: None,
             adapter,
         };
         match f.adapter.as_str() {
@@ -136,6 +240,33 @@ impl Fake {
                         f.resumed = true;
                     }
                     None => f.session = arg_value(args, "--session-id").unwrap_or_else(uuidish),
+                }
+                if let Some(s) = arg_value(args, "--mcp-config")
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .map(|v| v["mcpServers"]["ptyro"].clone())
+                    .filter(|s| s["command"].is_string())
+                {
+                    let strs = |v: &Value| -> Vec<String> {
+                        v.as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|x| x.as_str().map(str::to_owned))
+                            .collect()
+                    };
+                    f.mcp = Some(Mcp {
+                        command: s["command"].as_str().unwrap_or_default().to_owned(),
+                        args: strs(&s["args"]),
+                        env: s["env"]
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+                            .collect(),
+                        allowed: arg_value(args, "--allowedTools")
+                            .map(|a| a.split([',', ' ']).map(str::to_owned).collect())
+                            .unwrap_or_default(),
+                        approve: false,
+                    });
                 }
             }
             "codex" => {
@@ -169,6 +300,33 @@ impl Fake {
                             .flatten()
                             .filter_map(|s| s.as_str().map(str::to_owned))
                             .collect();
+                    } else if let Some(key) = k.strip_prefix("mcp_servers.ptyro.") {
+                        let m = f.mcp.get_or_insert_with(Mcp::default);
+                        match key {
+                            "command" => {
+                                m.command = t["x"].as_str().unwrap_or_default().to_owned();
+                            }
+                            "args" => {
+                                m.args = t["x"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|s| s.as_str().map(str::to_owned))
+                                    .collect();
+                            }
+                            "env" => {
+                                m.env = t["x"]
+                                    .as_table()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+                                    .collect();
+                            }
+                            "default_tools_approval_mode" => {
+                                m.approve = t["x"].as_str() == Some("approve");
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 match args.iter().position(|a| a == "resume") {
@@ -202,6 +360,7 @@ impl Fake {
                 None => f.session = uuidish(),
             },
         }
+        f.script = crate::fake_transcript::Script::open(&f.adapter, &f.session);
         f
     }
 
@@ -217,6 +376,32 @@ impl Fake {
         run_hooks(&cmds, &payload, HOOK_TIMEOUT)
     }
 
+    /// The prompt's hook, as Claude Code and Codex run it: what it answers as
+    /// `hookSpecificOutput.additionalContext` is added to what the model is given (here: kept
+    /// in the transcript the way the real ones keep it). `PTYRO_FAKE_CONTEXT=<file>` (a test
+    /// knob) gets a line of JSON a prompt: the prompt, the context it was given (or null) and
+    /// how long the hook took, in ms.
+    fn prompted(&self, payload: Value) {
+        let started = std::time::Instant::now();
+        let answer = self.hook_out("UserPromptSubmit", payload.clone());
+        let ms = started.elapsed().as_millis() as u64;
+        let context = answer
+            .as_ref()
+            .map(|a| &a["hookSpecificOutput"])
+            .filter(|h| h["hookEventName"] == "UserPromptSubmit")
+            .and_then(|h| h["additionalContext"].as_str())
+            .map(str::to_owned);
+        if let (Some(s), Some(text)) = (&self.script, &context) {
+            s.context("UserPromptSubmit", text);
+        }
+        if let Some(file) = ptyro_core::test_knob("PTYRO_FAKE_CONTEXT")
+            && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file)
+        {
+            let line = json!({ "prompt": payload["prompt"], "context": context, "ms": ms });
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
     /// The hook commands for `event` and the payload they get.
     fn hook_prep(&self, event: &str, mut payload: Value) -> (Vec<String>, Value) {
         payload["hook_event_name"] = json!(event);
@@ -227,6 +412,9 @@ impl Fake {
             _ => Vec::new(),
         };
         payload["session_id"] = json!(self.session);
+        if let Some(s) = &self.script {
+            payload["transcript_path"] = json!(s.path);
+        }
         (cmds, payload)
     }
 
@@ -256,6 +444,9 @@ impl Fake {
             return Err(why);
         }
         let out = work();
+        if let Some(s) = &self.script {
+            s.tool(name, &tool["tool_input"], &out);
+        }
         self.hook("PostToolUse", tool);
         Ok(out)
     }
@@ -270,7 +461,10 @@ impl Fake {
     ) {
         let p = json!({ "prompt": prompt });
         self.late_session_start(out);
-        self.hook("UserPromptSubmit", p);
+        if let Some(s) = &self.script {
+            s.user(prompt);
+        }
+        self.prompted(p);
         self.oc(json!({ "type": "session.status", "properties": { "sessionID": self.session, "status": { "type": "busy" } } }));
         self.report(out, "state=working:msg=d29ya2luZw");
         let msg = body(out);
@@ -384,6 +578,14 @@ impl Fake {
     }
 
     fn turn_complete(&self, msg: &str, out: &mut std::io::Stdout) {
+        // Codex has the reply in its file before `Stop`; Claude writes it just after.
+        let late = self.script.as_ref().and_then(|s| {
+            if self.adapter == "claude" {
+                return Some(s.reply_late(msg));
+            }
+            s.reply(msg);
+            None
+        });
         match self.adapter.as_str() {
             "codex" => {
                 self.hook("Stop", json!({}));
@@ -404,10 +606,10 @@ impl Fake {
                 for _ in 0..10 {
                     let stop = json!({ "stop_hook_active": active, "last_assistant_message": msg });
                     let Some(a) = self.hook_out("Stop", stop) else {
-                        return;
+                        break;
                     };
                     if a["decision"] != "block" {
-                        return;
+                        break;
                     }
                     let reason = a["reason"].as_str().unwrap_or_default();
                     let _ = writeln!(out, "stop hook: {}", reason.lines().next().unwrap_or(""));
@@ -421,6 +623,40 @@ impl Fake {
                 }
             }
         }
+        if let (Some(late), Some(s)) = (late, &self.script) {
+            let _ = late.join();
+            s.turn_ended();
+        }
+    }
+}
+
+/// One request to the daemon from this process, as a client of `kind`: `ok: <reply>`, or
+/// `error: <message>`.
+fn request_as(kind: &str, request: &str) -> String {
+    let kind = match kind {
+        "machine" => ptyro_protocol::ClientKind::Machine,
+        _ => ptyro_protocol::ClientKind::Cli,
+    };
+    let req: ptyro_protocol::Request = match serde_json::from_str(request) {
+        Ok(r) => r,
+        Err(e) => return format!("error: not a request: {e}"),
+    };
+    let asked = || -> Result<ptyro_protocol::Reply, String> {
+        let paths = ptyro_core::paths::Paths::from_env().map_err(|e| e.to_string())?;
+        let mut opts = ptyro_client::ConnectOptions::new(paths, kind);
+        opts.autospawn = false;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            let c = ptyro_client::Client::connect(&opts).await.map_err(|e| e.to_string())?;
+            c.request(req).await.map_err(|e| e.message)
+        })
+    };
+    match asked() {
+        Ok(reply) => format!("ok: {}", serde_json::to_string(&reply).unwrap_or_default()),
+        Err(e) => format!("error: {e}"),
     }
 }
 
@@ -661,7 +897,10 @@ pub fn main(args: &[String]) -> i32 {
                 let secs: f64 = secs.parse().unwrap_or(1.0);
                 let prompt = json!({ "prompt": format!("work {rest}") });
                 f.late_session_start(&mut out);
-                f.hook("UserPromptSubmit", prompt);
+                if let Some(s) = &f.script {
+                    s.user(&format!("work {rest}"));
+                }
+                f.prompted(prompt);
                 f.oc(json!({ "type": "session.status", "properties": { "sessionID": f.session, "status": { "type": "busy" } } }));
                 f.report(&mut out, "state=working:msg=d29ya2luZw");
                 let tool = json!({ "tool_name": "Bash", "tool_input": { "command": format!("sleep {secs}") } });
@@ -778,6 +1017,53 @@ pub fn main(args: &[String]) -> i32 {
                 });
             }
             "/exit" | "/quit" => return 0,
+            // `mcp <file> <tool> <json>`: a tool of the `ptyro` server, as the agent calls it.
+            "mcp" => {
+                let mut parts = rest.splitn(3, ' ');
+                let (file, tool) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let args: Value =
+                    parts.next().and_then(|a| serde_json::from_str(a).ok()).unwrap_or(json!({}));
+                let said = match &f.mcp {
+                    None => "no mcp server: this launch was given none".to_owned(),
+                    Some(m) if tool == "tools/list" => m.call(tool, &args),
+                    // Claude refuses a tool its rules don't allow; Codex one nobody approved.
+                    Some(m)
+                        if f.adapter == "claude"
+                            && !m.allowed.contains(&format!("mcp__ptyro__{tool}")) =>
+                    {
+                        format!("refused: mcp__ptyro__{tool} is not allowed")
+                    }
+                    Some(m) if f.adapter == "codex" && !m.approve => {
+                        "refused: the call needs an approval".to_owned()
+                    }
+                    Some(m) => m.call(tool, &args),
+                };
+                // (Written whole or not at all: whoever waits for it reads it once.)
+                let tmp = format!("{file}.tmp");
+                let _ = std::fs::write(&tmp, said).and_then(|()| std::fs::rename(&tmp, file));
+                let _ = writeln!(out, "mcp done {file}");
+            }
+            // `as <kind> <file> <json>`: a request from this process, whatever it says it is.
+            "as" => {
+                let mut parts = rest.splitn(3, ' ');
+                let (kind, file) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let said = request_as(kind, parts.next().unwrap_or(""));
+                let tmp = format!("{file}.tmp");
+                let _ = std::fs::write(&tmp, said).and_then(|()| std::fs::rename(&tmp, file));
+                let _ = writeln!(out, "as done {file}");
+            }
+            "compact" if f.script.is_some() => {
+                if let Some(s) = &f.script {
+                    s.compact(rest);
+                }
+                let _ = writeln!(out, "compacted");
+            }
+            "rewind" if f.script.is_some() => {
+                if let Some(s) = &f.script {
+                    s.rewind();
+                }
+                let _ = writeln!(out, "rewound");
+            }
             "" => {}
             // `PTYRO_FAKE_TASK=1`: any prose is a task, done like an agent would.
             _ if std::env::var("PTYRO_FAKE_TASK").is_ok()

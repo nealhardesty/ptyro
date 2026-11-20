@@ -5,9 +5,10 @@ import { conn, host } from "./conn.js";
 import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
-import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, confirm, enc, errText, form, go, h, menu, pending, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, confirm, confirmed, enc, errText, form, go, h, menu, pending, sheet, statusWord, textSheet, tipOf, ui, views } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
+import { historyOf } from "./library.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
     "session.menu": "More for this session: stop, restart, rename, hibernate…",
@@ -26,6 +27,7 @@ const ACTIONS = {
     "session.again": "Quick new: another of the agent this worktree last started (the default agent the first time), here, no questions",
     "session.explain": "Why the session has the status it has",
     "session.mute": "Silence the session's notifications for a while",
+    "session.private": "Make the session private: what the knowledge base kept of it is deleted for good, and nothing more of it is kept (asks first; it can't be switched off again)",
     "session.broadcast": "Type the same thing into several sessions",
     "session.scrollback": "The session's scrollback, searchable",
     "session.events": "The session's events: status changes, turns, exits",
@@ -89,7 +91,8 @@ export function newTask(where, task) {
     base.setAttribute("list", "branch-names");
     const args = input(h("input", { placeholder: "e.g. --model opus", autocapitalize: "off", spellcheck: "false" }));
     const box = () => input(h("input", { type: "checkbox" }));
-    const noSetup = box(), noFetch = box();
+    const noSetup = box(), noFetch = box(), priv = box();
+    priv.checked = data.privateDefault;
     const check = (c, label, hint) => h("label", { class: "field check" }, c, h("span", {}, label), h("small", {}, hint));
     const err = h("p", { class: "form-err" });
     const commandRow = h("label", { class: "field" }, h("span", {}, "Command"), command);
@@ -154,7 +157,8 @@ export function newTask(where, task) {
     const s = sheet("New task", [
         h("label", { class: "field" }, h("span", {}, "Task"), prompt),
         h("label", { class: "field" }, h("span", {}, "Agent"), agent), agentHint, commandRow,
-        h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow, more, err,
+        h("label", { class: "field" }, h("span", {}, "Where"), placeSel), sourceRow, whichRow, names, nameRow,
+        check(priv, "Private", "The knowledge base keeps nothing of it (the agent keeps its own history)"), more, err,
     ], [h("button", { onclick: () => s.close() }, "Cancel"), go1]);
     go1.addEventListener("click", async () => {
         err.textContent = "";
@@ -183,7 +187,7 @@ export function newTask(where, task) {
         try {
             if (kind === "w") {
                 const w = data.worktrees.get(id);
-                const spec = { worktree: w.id, cwd: "", profile: prof, name: name.value.trim() || undefined, title: label };
+                const spec = { worktree: w.id, cwd: "", profile: prof, name: name.value.trim() || undefined, title: label, private: priv.checked };
                 if (isAgent)
                     Object.assign(spec, { agent: a, prompt: text, argv: argWords(args.value) });
                 else if (a === "@command")
@@ -192,7 +196,7 @@ export function newTask(where, task) {
                 await startSession(spec);
             }
             else {
-                const wt = { project: id, name: name.value.trim() || undefined, agent: isAgent ? a : undefined, prompt: isAgent ? text : undefined, title: label, profile: prof, base: base.value.trim() || undefined };
+                const wt = { project: id, name: name.value.trim() || undefined, agent: isAgent ? a : undefined, prompt: isAgent ? text : undefined, title: label, profile: prof, base: base.value.trim() || undefined, private: priv.checked };
                 if (noSetup.checked)
                     wt.setup = false;
                 if (noFetch.checked)
@@ -222,7 +226,7 @@ export function newTask(where, task) {
                 const r = await createWorktree(wt);
                 // A shell or command in a new worktree: start it once the worktree exists.
                 if (r && !isAgent) {
-                    const spec = { worktree: r.info.id, cwd: "", profile: prof };
+                    const spec = { worktree: r.info.id, cwd: "", profile: prof, private: priv.checked };
                     if (a === "@command")
                         spec.command = command.value.trim();
                     await startSession(spec);
@@ -273,6 +277,22 @@ export function muteSession(s) {
         { label: "Until I unmute it", run: mute(null, false, "Muted") },
         { label: "Unmute", run: mute(null, true, "Notifications back on") },
     ]);
+}
+/// `kb forget --session`: the daemon says what goes, in the words every client uses; then it is
+/// private for good.
+async function makePrivate(s) {
+    const req = { t: "kb_forget", session: addr(s), addrs: [], confirmed: false };
+    try {
+        await conn.request(req);
+    }
+    catch (e) {
+        if (e?.code !== "needs_confirmation") {
+            ui.fail(errText(e));
+            return;
+        }
+        if (await confirmed(`Make ${s.name} private?`, errText(e), "Forget and make private"))
+            notice(await ask({ ...req, confirmed: true }), "Private: nothing of it is kept");
+    }
 }
 function explainSession(s) {
     conn.request({ t: "status_explain", addr: addr(s) }).then((r) => {
@@ -368,10 +388,12 @@ export function sessionMenu(s) {
         { title: tip("session.explain"), label: "Why this status?", run: () => explainSession(s) },
         agentLive && { title: tip("session.hibernate"), label: "Hibernate", hint: "Stop it, keep it resumable", run: async () => notice(await ask({ t: "hibernate", addr: addr(s) }), "Hibernated") },
         agentLive && { title: tip("session.mute"), label: "Mute notifications…", run: () => muteSession(s) },
+        !s.private && can("full") && { title: tip("session.private"), label: "Make it private…", hint: "Forget what was kept of it, and keep nothing more", run: () => makePrivate(s) },
         w && { label: "Open its worktree", hint: `${w.project_slug}/${w.name}`, run: () => go(`#/wt/${enc(w.id)}`) },
         w && { title: tip("session.again"), label: `Another ${againLabel(w.id)}`, hint: "The agent its worktree last started, there", run: () => void startAgain(w) },
         w && { title: tip("shell.new"), label: "A new shell in its worktree", hint: "Besides its quick terminal", run: () => void newShell(w) },
         s.worktree && { title: tip("session.shell"), label: "Its worktree's quick terminal", hint: "On a page of its own", run: () => void openQuickShell(w) },
+        s.kind === "agent" && { title: tipOf("kb.history"), label: "History", hint: "What the knowledge base kept of it", run: () => historyOf({ t: "session", id: s.id, name: s.name }, "", s.machine ?? "") },
         { title: tip("session.scrollback"), label: "Scrollback", hint: "Everything it printed, searchable", run: () => go(`#/scroll/${enc(s.id)}`) },
         { title: tip("session.events"), label: "Events", run: () => go(`#/events/${enc(s.id)}`) },
         can("full") && { title: tip("session.tab"), label: "Open on the computer", hint: "A new Windows Terminal tab there", run: () => void openOnComputer(s) },

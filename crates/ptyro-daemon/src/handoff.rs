@@ -317,6 +317,10 @@ impl Daemon {
         if let Some(store) = &self.store {
             let _ = store.flush().await;
         }
+        // The knowledge base's writer finishes the item it is on (one transaction): `kb.db`
+        // then holds whole items only, closes with the exec, and the next image opens it and
+        // finds the rest again from the cursors (SPEC §25.12).
+        self.kb_flush().await;
         // One image per core at once: each is mostly serializing (and compressing) cells.
         let all = self.sessions();
         let sessions = std::thread::scope(|sc| {

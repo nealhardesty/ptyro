@@ -117,6 +117,11 @@ Conventions:
 - projects and worktrees: `project_updated`/`removed`, `workspace_updated`/`removed`,
   `worktree_updated`/`removed`, `worktree_progress`;
 - `alert` (a session wants you: `{session, session_name, at_ms, kind, title, body, workspace?, profile?}`; what a linked machine's daemon delivers), `usage_updated`, `config_reloaded`, `host_load` (`load`: the computer's load average, or null once `[ui] load` is off);
+- `kb_updated` (`kinds`: the kinds of the items that changed, like `["session"]`): the
+  knowledge base changed: something new can be found by `ptyro recall`, or something went
+  (forgotten, expired);
+- `kb_progress` (`root`: its id, `name`, `done`, `of`): a folder or project is being read into
+  the knowledge base, this far (files and commits); the last one has `done` = `of`;
 - `events_lost` (`count`): this stream fell behind and skipped events, so re-read state with
   `ls --json`.
 
@@ -156,6 +161,58 @@ Conventions:
   last_via?, push, pending}`. `scope` is `read`, `approve`, `control` or `full`; `last_via` is
   the address it last connected from; `push` counts its Web Push subscriptions; `pending`: its
   pairing code hasn't been claimed yet.
+
+## The knowledge base
+
+Not pinned by the snapshot yet; new fields may be added.
+
+- `ptyro recall … --json` → `[KbHit]`, best first: `{addr, item, idx?, node?, uri?, kind, part,
+  title?, heading?, snippet, at_ms, project?, workspace?, project_name?, workspace_name?,
+  profile?, agent?, writer?, machine?, how, score}`. `addr` is what `kb show` takes
+  (`k:7f3k/12`; a chat's hit is `c:7f3k/<node>`, and has `node` and no `uri`). `kind` is
+  `session`, `chat`, `note`, `doc`, `comment`, `code`, `path`, `commit` or `command`; `part`
+  what the piece is (`card`, `user`, `assistant`, `tool`, `summary`…). In `snippet` each match
+  stands between the characters U+0002 and U+0003. `project` and `workspace` are ids, the
+  `_name`s what they are called now. `how` is `words`, `meaning` or `both`. A hit of a linked
+  machine has `machine` (its name) and its `addr` under it (`laptop2:k:7f3k/12`); its ids and
+  names are that machine's. The list is still only the hits: a machine that didn't answer is
+  said on stderr.
+- `ptyro kb show REF --json` → `{item: KbListed, chunks: [{seq, item, idx, kind, anchor?,
+  heading?, text, meta?, at_ms}], at?, stale}`. `at`: the piece the address named; `stale`: it
+  named one the item no longer has.
+- `ptyro kb recent --json` → `[KbListed]`, newest first: `{addr, item: {id, uri, kind, title?,
+  project?, workspace?, worktree?, branch?, profile?, agent?, model?, session?, writer, files,
+  chunks, started_ms?, ended_ms?, ingested_ms?, origin, …}, project_name?, workspace_name?}`.
+  `item.session` is the ptyro session it happened in. With `--machine`, each `addr` has the
+  machine in front.
+- `ptyro kb [status] --json` → `{enabled, sessions, retain_days, error?, path, notes, bytes,
+  kinds: [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued, skipped: [{uri,
+  why, at_ms}]}`. Answered when the knowledge base is off too (`enabled: false`). `notes` is
+  the notes folder.
+- `ptyro kb note … --json` → `{item: KbListed, path}`: the note's item (`item.kind` is `note`,
+  `item.uri` is `note://<profile or _all>/<project or _global>/<name>`, `item.writer` is `user`
+  or `agent`) and its file.
+- `ptyro kb notes --json` → `[KbListed]`, newest first.
+- `ptyro kb sync [ROOT…] --json` → `{notes, changed, removed, roots: [KbRootInfo]}`: how many
+  notes the folder holds, how many were read again, how many that were kept are gone (all 0
+  when roots were named), and the roots as they are after the read.
+- `ptyro kb ls --json` → `[KbRootInfo]`: a root's `id`, `name`, `kind` (`project`, `folder`,
+  `file`), `path`, `project?`, `project_name?`, `profile?` (absent: every profile's),
+  `options` (`include`, `exclude`, `comments?`, `code?`, `commits?`, `once`), `head?` (the
+  newest commit read), `state` (`ok`, `syncing`, `missing`, `error`), `error?` (why, or a note
+  such as the 50,000-file cap), `added_ms`, `synced_ms?`, and `files`, `commits`, `chunks`,
+  `progress?` (`[done, of]` while it is read or waits), `removing?`.
+- `ptyro ingest PATH… --json` → `[{root: KbRootInfo, plan}]`, after the read. `plan`:
+  `{existing, git, files, documents, sources, comments, code, commits, over?}`.
+- `ptyro ingest --history --json` → `{found, known, old, chats, new, places: [{agent, profile,
+  dir, found, new}], reading}`.
+- `ptyro kb rm ROOT --json` → `{name, items, chunks}`: what was dropped.
+- `ptyro kb forget … --json` → `{items, chunks}`: what was deleted (`{"items": 0, "chunks": 0}`
+  when `--query` found nothing). With `--session`: `{items, chunks, private: true}`.
+- `ptyro uninstall --dry-run --json` has `kb_notes: {path, count, bytes, delete}` when there
+  are notes (`delete`: `--delete-notes` was given; otherwise the folder stays).
+- A `Session` (`ptyro ls --json`, `ptyro new --json`) has `private`: the knowledge base keeps
+  nothing of it. `ptyro shells --json` rows have it too.
 
 ## Setup, config and the daemon
 

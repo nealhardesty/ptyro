@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 pub mod chat;
+pub mod kb;
 mod migrate;
 
 /// Schema history. Never edit a released migration; append a new one.
@@ -221,6 +222,8 @@ const MIGRATIONS: &[M] = &[
     ALTER TABLE worktree DROP COLUMN port_count;
     DELETE FROM kv WHERE key = 'last_agent';",
     ),
+    // KB1.14: a private session, of which the knowledge base keeps nothing (SPEC §25.7a).
+    M::up("ALTER TABLE session ADD COLUMN private INTEGER NOT NULL DEFAULT 0;"),
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -314,6 +317,9 @@ pub struct SessionRecord {
     /// Its title (UX1.24).
     #[serde(default)]
     pub title: Option<String>,
+    /// Private (SPEC §25.7a): the knowledge base keeps nothing of it.
+    #[serde(default)]
+    pub private: bool,
 }
 
 /// A trust approval (SPEC §10.5).
@@ -356,7 +362,7 @@ pub struct Registry {
 }
 
 const SESSION_COLS: &str = "id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at, \
-                            profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title";
+                            profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title, private";
 
 /// A `session` row, as selected by [`SESSION_COLS`].
 fn session_row(r: &rusqlite::Row<'_>) -> Result<SessionRecord> {
@@ -381,6 +387,7 @@ fn session_row(r: &rusqlite::Row<'_>) -> Result<SessionRecord> {
         launch: launch.map(|l| serde_json::from_str(&l)).transpose()?,
         conversation: r.get(17)?,
         title: r.get(18)?,
+        private: r.get(19)?,
     })
 }
 
@@ -501,12 +508,12 @@ impl Store {
         self.spawn(move |c| {
             c.execute(
                 "INSERT INTO session (id, name, kind, argv, cwd, state, pid, daemon_run, created_at, ended_at,
-                                      profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                                      profile, worktree_id, project_id, workspace, agent, script, launch, conversation_id, title, private)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
                  ON CONFLICT(id) DO UPDATE SET name = ?2, state = ?6, pid = ?7, ended_at = ?10, daemon_run = ?8,
                                                launch = COALESCE(?17, launch), argv = ?4, profile = ?11,
                                                conversation_id = COALESCE(?18, conversation_id), title = ?19,
-                                               worktree_id = ?12, project_id = ?13",
+                                               worktree_id = ?12, project_id = ?13, private = ?20",
                 params![
                     r.id,
                     r.name,
@@ -527,6 +534,7 @@ impl Store {
                     r.launch.as_ref().map(serde_json::Value::to_string),
                     r.conversation,
                     r.title,
+                    r.private,
                 ],
             )?;
             Ok(())
@@ -1359,6 +1367,7 @@ mod tests {
             launch: Some(serde_json::json!({"argv": ["sh"]})),
             conversation: None,
             title: Some(format!("the title of {id}")),
+            private: id.ends_with('p'),
         }
     }
 

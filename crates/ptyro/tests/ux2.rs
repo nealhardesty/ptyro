@@ -185,7 +185,7 @@ fn about_is_one_document_and_agrees_with_version() {
     assert!(doc["build"]["target"].as_str().is_some_and(|t| !t.is_empty()), "{doc}");
     let names: Vec<&str> =
         doc["places"].as_array().unwrap().iter().filter_map(|p| p["name"].as_str()).collect();
-    assert_eq!(names, ["config", "data", "logs", "socket"]);
+    assert_eq!(names, ["config", "data", "knowledge", "notes", "logs", "socket"]);
     // The test's daemon runs: its version is this one, so no fix is offered.
     assert_eq!(doc["daemon"]["running"], true, "{doc}");
     assert_eq!(doc["daemon"]["same"], true);

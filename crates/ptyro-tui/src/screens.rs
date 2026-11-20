@@ -446,10 +446,13 @@ impl App {
                 // It runs where its source runs, under the same profile: agreed to already.
                 override_pin: true,
                 confirmed: true,
+                // A clone of a private session is private (SPEC §25.7a).
+                private: s.private.then_some(true),
                 ..SpawnSpec::default()
             },
             Some(s) => SpawnSpec {
                 cwd: s.live_cwd.clone().filter(|p| p.is_dir()).unwrap_or_else(|| s.cwd.clone()),
+                private: s.private.then_some(true),
                 ..SpawnSpec::default()
             },
             None => SpawnSpec { cwd: self.here(), ..SpawnSpec::default() },

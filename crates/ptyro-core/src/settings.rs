@@ -303,6 +303,12 @@ pub const SECTIONS: &[Section] = &[
         scope: Scope::User,
     },
     Section {
+        id: "knowledge",
+        title: "Knowledge",
+        blurb: "One memory of your work for you and your agents, kept on this computer.",
+        scope: Scope::User,
+    },
+    Section {
         id: "editors",
         title: "Editors",
         blurb: "The editor that opens a worktree.",
@@ -596,10 +602,21 @@ const CHAT_TITLE: &[Choice] = &[
     c("auto", "a short title from a small model after the first answer"),
     c("off", "the first line of the first message"),
 ];
-const CHAT_SCOPE: &[Choice] = &[
-    c("profile", "chats of the same profile (account) only: a work chat never sees a personal one"),
-    c("workspace", "chats of the same workspace only"),
-    c("all", "every chat on this machine"),
+const KB_SHELL: &[Choice] = &[
+    c("off", "nothing of your shells is kept"),
+    c("commands", "the command lines you run, not what they print"),
+    c(
+        "output",
+        "the command lines, and what each command printed on your terminal (its first 2 KiB and its last 6 KiB)",
+    ),
+];
+const KB_SCOPE: &[Choice] = &[
+    c(
+        "profile",
+        "what happened under the same profile (account), and what belongs to none: a work agent never sees a personal session or chat",
+    ),
+    c("workspace", "of those, only the same workspace's"),
+    c("all", "everything on this machine"),
 ];
 const CHAT_NOTIFY: &[Choice] = &[
     c("blocked", "when a chat needs you (a permission, an error)"),
@@ -689,16 +706,34 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.agent", "chat", dynamic(Source::Agents), "The agent new chats talk to; `agent@profile` picks its account too.").or("the workspace's default agent, else the first installed of claude, codex and opencode").new_only(),
     s("chat.incognito", "chat", Kind::Bool, "New chats start incognito: nothing of them is kept or searchable, and they end when their agent stops (C-i in a new chat flips it).").new_only().also("private"),
     s("chat.history_tool", "chat", Kind::Bool, "Chats can look up your other chats (\"as we said last week…\"): search, read and list them.").new_only().also("memory search"),
-    s("chat.history_scope", "chat", pick(CHAT_SCOPE), "Which chats a chat can look up (and `chat find` searches).").new_only().also("privacy"),
     s("chat.hibernate_after", "chat", Kind::Duration, "An idle chat's agent stops after this long, so it costs nothing; the next message carries on.").new_only(),
     s("chat.seed_tokens", "chat", int(1000, 1_000_000), "When an agent has to be told the conversation again (it was lost, or you switched agents), at most this much of it is sent.").unit("tokens").adv(),
     s("chat.title", "chat", pick(CHAT_TITLE), "How a new chat gets its title."),
     s("chat.title_command", "chat", Kind::Argv, "The titler: reads the prompt on stdin, prints the title, on the chat's own account. Empty: a chat is titled by its first line.").adv(),
     s("chat.daily_cap", "chat", int(0, 100_000), "The most titles made for each profile in a day. 0 makes none (the first line is used).").unit("a day").adv(),
     s("chat.index_tools", "chat", Kind::Bool, "Also make what tools returned searchable (2 KB of it a message), not just their titles.").adv(),
-    s("chat.meaning", "chat", Kind::Bool, "Meaning search: also find messages by what they are about, not only by their words (marked ≈). Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; your chats never leave this machine.").also("semantic embeddings ai similar search"),
     s("chat.notify", "chat", pick(CHAT_NOTIFY), "When a chat tells you something."),
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
+    s("kb.enabled", "knowledge", Kind::Bool, "The knowledge base: what happens in ptyro is kept in one file on this computer (`kb.db`), for you and your agents to search. Off: nothing more is kept and nothing is offered; what is already stored stays.").also("memory recall library history search ingest"),
+    s("kb.sessions", "knowledge", Kind::Bool, "Keep agent sessions: what you asked, what the agent answered and which tools it ran, read from the agent's own transcript as it happens (Claude Code and Codex; another agent's session is kept as one summary line). Off: no new session is kept; those already kept stay.").also("transcript history claude codex record"),
+    s("kb.shell", "knowledge", pick(KB_SHELL), "What the knowledge base keeps of your shells (the quick terminal, SHELLS, a shell session). `commands`: each command line you run, with its folder, exit code and how long it took; never what it printed. `output` also keeps what commands print: this is the one place where the contents of your terminal are stored, so it is off unless you choose it. Never kept either way: a private or unrecorded shell, a command typed with a space before it, one that names a key or credential file, what a full-screen program (an editor, a pager) showed, and anything a command showed that you typed into while it ran (a password prompt, a REPL, ssh). Tokens and passwords in a command are redacted. `off`: nothing more is kept; what was kept stays until you forget it.").also("shell command history output terminal capture record privacy"),
+    s("kb.private", "knowledge", Kind::Bool, "New sessions start private: the knowledge base keeps nothing of them (the agent still keeps its own history). Each new session can say otherwise where it is created.").new_only().also("incognito privacy history record"),
+    s("kb.tools", "knowledge", Kind::Bool, "Give agents the tools that search the knowledge base (`recall`, `recall_read`), so one can look up what was done before instead of working it out again.").new_only().also("mcp recall agents memory"),
+    s("kb.remember", "knowledge", Kind::Bool, "Let agents write notes (the `remember` tool): a decision or a fact worth keeping, as a Markdown file in ptyro's notes folder that every later session finds first. Off: agents only read; you still write notes yourself.").new_only().also("mcp notes agents memory write"),
+    s("kb.inject", "knowledge", Kind::Bool, "Offer what is kept at a prompt: when you give an agent a prompt of four words or more, ptyro may add up to three pointers to what the knowledge base holds about it (an address, a date and a title each; never the text), which the agent can open with `recall_read` or ignore. Off unless you switch it on: it puts stored titles into the agent's prompt without the agent asking, costs about 185 to 300 tokens on a prompt that is offered something (never more than 1,024 bytes), and a pointer that is beside the point can distract. Claude Code and Codex only; never a private session, never across the wall between your accounts. `ptyro kb` and the Library's status show what was offered.").also("context pointers hook prompt memory recall automatic offer"),
+    s("kb.scope", "knowledge", pick(KB_SCOPE), "What an agent may see of the knowledge base and of your chats (a chat looking up other chats, `chat find`). You always see everything: this is the wall between your accounts' agents.").also("privacy wall profile history_scope"),
+    s("kb.meaning", "knowledge", Kind::Bool, "Meaning search: also find things by what they are about, not only by their words (marked ≈), in the knowledge base and in your chats. Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; nothing you keep leaves this machine.").also("semantic embeddings ai similar search chat"),
+    s("kb.retain_days", "knowledge", int(0, 36_500), "Delete kept agent sessions and shell commands older than this many days, once a day. 0 keeps them for good. Notes and files are never aged out.").unit("days").also("retention expire delete old history"),
+    s("kb.shell_skip", "knowledge", Kind::List, "Commands too trivial to keep, by their first word.").also("shell command ignore").or("none").eg("ls").adv(),
+    s("kb.shell_output_days", "knowledge", int(0, 36_500), "Delete what shell commands printed after this many days, once a day (the command lines stay as long as `kb.retain_days` says). 0 keeps it as long as its command. Only matters with `kb.shell = \"output\"`.").unit("days").also("retention expire delete shell output").adv(),
+    s("kb.max_file", "knowledge", Kind::Text, "The largest file read into the knowledge base, like 1MiB or 512KiB. A larger one is left out and named in `ptyro kb status`.").eg("2MiB").adv(),
+    s("kb.projects", "knowledge", Kind::Bool, "Read every project ptyro knows into the knowledge base: its documents, the names of its files, and what the next three switches allow. A project is read when it is added and looked at again as it changes; only its own checkout, never its worktrees. Off: only what you give `ptyro ingest` is read."),
+    s("kb.comments", "knowledge", Kind::Bool, "Read the comments of source files, each with the line of code it stands on. Licence headers, tool directives and switched-off code are left out."),
+    s("kb.code", "knowledge", Kind::Bool, "Read source code itself, in pieces of 60 lines, found by its words only. This stores a copy of your code in `kb.db` and makes it several times larger.").also("source full text"),
+    s("kb.commits", "knowledge", Kind::Bool, "Read commit messages and the names of the files each commit changed: the newest 5,000 of a repository's main branch, then the new ones."),
+    s("kb.sync_every", "knowledge", Kind::Duration, "How often every project and folder is looked at again for files that changed. A project is also looked at when an agent's turn ends in it.").eg("30m").adv(),
+    s("kb.redact", "knowledge", Kind::List, "More patterns to redact before anything is kept (regular expressions), beside the built-in rules for keys, tokens and passwords. What matches is stored as `<redacted>`.").also("secrets privacy credentials regex").or("none").eg("ACME-[0-9]{6}").adv(),
+    s("kb.exclude", "knowledge", Kind::List, "More paths never to read (globs like `*.sqlite` or `private/**`), beside the built-in list of key and credential files (`.env*`, `*.pem`, `.ssh/`…).").also("ignore never privacy secrets").or("none").eg("private/**").adv(),
     // ── Editors ──
     s("editors.default", "editors", dynamic(Source::Editors), "The editor that opens a worktree. Only installed ones are offered; `finder` (`files` on Linux) shows the folder in the file manager, and a terminal app (`iterm`, `ghostty`, `gnome-terminal`…) opens a window there.").or("the first of nvim, vim, hx, code, zed, cursor that is installed"),
     s("editors.*.command", "editors", Kind::Argv, "The program and arguments; {path} is the worktree."),
@@ -748,6 +783,7 @@ pub const SETTINGS: &[Setting] = &[
     s("agents.*.hooks", "agents", Kind::Bool, "Wire ptyro's hooks, plugin or notify into the agent.").new_only().or("on"),
     s("agents.*.usage", "agents", Kind::Bool, "Report rate limits per profile.").new_only().or("on for Claude, off for Codex"),
     s("agents.*.record", "agents", Kind::Bool, "Record this agent's sessions.").new_only().or("on"),
+    s("agents.*.kb", "agents", Kind::Bool, "Keep this agent's sessions in the knowledge base, and give it the tools that search it. Off: neither.").new_only().or("on").also("knowledge memory recall history"),
     s("agents.*.protocol", "agents", pick(PROTOCOLS), "The structured protocol a chat speaks with it.").new_only().or("from its adapter"),
     // ── Profiles ──
     s("profiles.*.label", "profiles", Kind::Text, "A name to show.").new_only().or("the profile's name"),
@@ -774,6 +810,12 @@ pub const SETTINGS: &[Setting] = &[
     s("project.name", "project", Kind::Text, "What the project is called.").or("the folder's name"),
     s("project.default_agent", "project", dynamic(Source::Agents), "What quick new (`C-n`) starts in this project's worktrees until one has run an agent.").or("your default agent").also("quick new default agent"),
     s("project.base", "project", Kind::Text, "What new worktrees start from, like origin/main.").or("the repository's main branch"),
+    s("knowledge.enabled", "project", Kind::Bool, "Keep what happens in this project in the knowledge base. Off: none of its sessions are kept (a repository can keep itself out; it can't switch on what you switched off).").or("your Knowledge setting").also("kb memory recall history private"),
+    s("knowledge.comments", "project", Kind::Bool, "Read this project's source comments into the knowledge base. A repository can only switch this off.").or("your Knowledge setting").adv(),
+    s("knowledge.code", "project", Kind::Bool, "Read this project's source code into the knowledge base, found by its words. A repository may switch this on for itself: it stores a copy of its code in `kb.db`.").or("your Knowledge setting").adv(),
+    s("knowledge.commits", "project", Kind::Bool, "Read this project's commit messages into the knowledge base. A repository can only switch this off.").or("your Knowledge setting").adv(),
+    s("knowledge.include", "project", Kind::List, "Only these of the project's files are read into the knowledge base (globs like `docs/**` or `*.md`).").or("every file git doesn't ignore").adv(),
+    s("knowledge.exclude", "project", Kind::List, "Files of this project never read into the knowledge base (globs like `fixtures/**`).").or("none").adv(),
     s("project.import", "project", Kind::Bool, "Read other tools' committed setup (Conductor, Cursor, Codex…) for scripts this file doesn't set.").or("on"),
     s("worktree.copy", "project", Kind::List, "Untracked files to copy into new worktrees, like .env.").or("none"),
     s("worktree.share", "project", Kind::List, "Heavy folders to share instead of copying, like node_modules.").or("none"),
@@ -821,7 +863,33 @@ pub fn read_by_client(key: &str) -> bool {
 }
 
 pub fn find(key: &str) -> Option<&'static Setting> {
+    let key = renamed(key);
     SETTINGS.iter().find(|s| matches(s.key, key))
+}
+
+/// Settings that have a new name (SPEC §25.13): the old one is still read from a file, and
+/// setting or unsetting it writes the new one and takes the old one out. Not retired keys:
+/// they still mean something.
+const RENAMED: &[(&str, &str)] =
+    &[("chat.meaning", "kb.meaning"), ("chat.history_scope", "kb.scope")];
+
+/// The name `key` has now.
+pub fn renamed(key: &str) -> &str {
+    RENAMED.iter().find(|(old, _)| *old == key).map_or(key, |(_, new)| new)
+}
+
+/// Take `key`'s old names out of the file. Returns whether one was there.
+fn drop_old_names(doc: &mut toml_edit::DocumentMut, key: &str) -> bool {
+    let mut gone = false;
+    for (old, _) in RENAMED.iter().filter(|(_, new)| *new == key) {
+        let seg = split(old);
+        if let (Some(name), Ok(Some(t))) =
+            (seg.last(), container_mut(doc.as_table_mut(), &seg, false))
+        {
+            gone |= t.remove(name).is_some();
+        }
+    }
+    gone
 }
 
 /// Split a concrete key into the segments of the file: a collection's names are one segment
@@ -1348,6 +1416,7 @@ pub fn set(
     lk: &Lookups,
     extra: Extra<'_>,
 ) -> Result<String, String> {
+    let key = renamed(key);
     let value = match target(scope, key)? {
         Target::Map(c, kind) => parse_input(&map_setting(c, kind), input, lk)?,
         Target::Setting(st) => {
@@ -1370,6 +1439,7 @@ pub fn set(
     };
     let mut doc = parse_doc(text)?;
     put(&mut doc, &split(key), value)?;
+    drop_old_names(&mut doc, key);
     finish(scope, key, doc.to_string(), extra)
 }
 
@@ -1383,8 +1453,10 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
         }
         return finish(scope, key, doc.to_string(), extra);
     }
+    let key = renamed(key);
     target(scope, key)?;
     let mut doc = parse_doc(text)?;
+    let old_name = drop_old_names(&mut doc, key);
     let seg = split(key);
     let name = seg.last().ok_or("no key")?.clone();
     // An account with credentials is a table of its own: not removed by a reset.
@@ -1397,7 +1469,7 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
         ));
     }
     let gone = container_mut(doc.as_table_mut(), &seg, false)?.and_then(|t| t.remove(&name));
-    if gone.is_none() {
+    if gone.is_none() && !old_name {
         return Err(format!("{key} isn't set in the file"));
     }
     finish(scope, key, doc.to_string(), extra)
@@ -1405,7 +1477,10 @@ pub fn unset(scope: Scope, text: &str, key: &str, extra: Extra<'_>) -> Result<St
 
 /// Whether the file sets `key`.
 pub fn is_set(text: &str, key: &str) -> bool {
-    parse_doc(text).is_ok_and(|d| item_at(&d, &split(key)).is_some())
+    let key = renamed(key);
+    let old = RENAMED.iter().filter(|(_, new)| *new == key).map(|(old, _)| *old);
+    parse_doc(text)
+        .is_ok_and(|d| std::iter::once(key).chain(old).any(|k| item_at(&d, &split(k)).is_some()))
 }
 
 /// The fields a new member of `path` must have to be valid: a sink's address, an editor's

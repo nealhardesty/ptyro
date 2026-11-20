@@ -55,6 +55,12 @@ pub enum ShellsCmd {
         /// In a new, empty directory of its own, which goes with it
         #[arg(long, conflicts_with = "dir")]
         scratch: bool,
+        /// Private: the knowledge base keeps nothing of it
+        #[arg(long)]
+        private: bool,
+        /// Keep it, though `[kb] private` is on
+        #[arg(long, conflicts_with = "private")]
+        no_private: bool,
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
         /// Don't attach; print its number and name
@@ -169,6 +175,7 @@ struct Row<'a> {
     attention: Option<&'a str>,
     lost: bool,
     scratch: bool,
+    private: bool,
 }
 
 pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32, Error> {
@@ -181,6 +188,8 @@ pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32
             name,
             title,
             scratch,
+            private,
+            no_private,
             workspace,
             detach,
             attach,
@@ -210,6 +219,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<ShellsCmd>, plain: LsArgs) -> Result<i32
                 loose: true,
                 slot,
                 scratch,
+                private: crate::cli::private_flag(private, no_private),
                 ..SpawnSpec::default()
             };
             let info = session_of(c.request(Request::Spawn { spec }).await?)?;
@@ -360,6 +370,7 @@ async fn ls(ctx: &Ctx, a: LsArgs) -> Result<i32, Error> {
                 attention: s.attention.as_ref().map(|a| a.text.as_str()),
                 lost: s.lost,
                 scratch: s.scratch,
+                private: s.private,
             })
             .collect();
         println!("{}", serde_json::to_string_pretty(&rows).unwrap_or_default());
@@ -408,6 +419,9 @@ async fn ls(ctx: &Ctx, a: LsArgs) -> Result<i32, Error> {
         }
         if let Some(w) = &s.watch {
             line.push_str(&format!("  ◎ {}", w.label()));
+        }
+        if s.private {
+            line.push_str("  ◌ private");
         }
         println!("{line}");
     }

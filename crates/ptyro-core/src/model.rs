@@ -484,6 +484,9 @@ pub struct WorktreeSpec {
     /// Its title (UX1.24); default: the prompt, else the PR's or issue's title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Its agent's session is private (1.55, SPEC §25.7a); `None`: as `kb.private` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<bool>,
 }
 
 fn yes() -> bool {

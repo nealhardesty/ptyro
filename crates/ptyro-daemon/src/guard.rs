@@ -140,6 +140,8 @@ impl Daemon {
 fn for_a_person(req: &Request) -> Option<&'static str> {
     match req {
         Request::Answer { .. } => Some("permission prompts are answered by a person"),
+        // What an agent could forget, it could hide.
+        Request::KbForget { .. } => Some("what the knowledge base keeps is forgotten by a person"),
         // A token minted here would leave through the agent's output.
         Request::DevicePair { .. }
         | Request::DeviceRevoke { .. }

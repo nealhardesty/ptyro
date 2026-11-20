@@ -99,6 +99,209 @@ const scenarios = {
     await tab.waitFor("the Allow buttons to go", `!document.querySelector(".blocked-wrap .actions .allow")`);
   },
 
+  // The Library (KB1.9): a session's turn is kept and the page lists it under its day, another
+  // one's shows as it is kept (no reload); the search finds it with the match marked; a tap
+  // opens the reader at that piece, All of it reads the rest, the find box looks in it, Its
+  // session goes to the session; and Forget…, asked in the daemon's words, deletes it for good.
+  async library() {
+    const recalled = () => JSON.parse(ptyro("recall", "--json", "zqlibrary"));
+    const rowWith = (word) => `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes(${JSON.stringify(word)}))`;
+    const type = (sel, text) => tab.eval(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); b.value = ${JSON.stringify(text)}; b.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    const press = (label) => tab.eval(`[...document.querySelectorAll("main.library button, .sheet button")].find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
+    ptyro("new", "-d", "-n", "lib1", "--agent", "claude");
+    ptyro("send", "lib1", "edit lib.txt zqlibrary", "--wait-ready");
+    await until("the turn to be kept", () => recalled().length > 0, 20_000);
+    await fresh("#/library");
+    // On a phone: nothing wider than the screen, in the list or in the reader.
+    await tab.phone();
+    const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
+    await tab.waitFor("the search box", `!!document.querySelector("input.search")`);
+    await tab.waitFor("the history, under its day", `${rowWith("zqlibrary")} && document.querySelector("main.library h3.day")?.textContent === "Today"`);
+    await tab.waitFor("the filters: the kinds that are kept", `[...(document.querySelector('.kb-filters select[aria-label="Kind"]')?.options ?? [])].map((o) => o.value).join() === ",session,chat" && document.querySelectorAll(".kb-filters select").length === 4`);
+    // Kept while the page is open: shown without a reload (the daemon's `kb_updated`).
+    ptyro("new", "-d", "-n", "lib2", "--agent", "claude");
+    ptyro("send", "lib2", "edit other.txt zqsecond", "--wait-ready");
+    await tab.waitFor("the second session's turn, as it is kept", rowWith("zqsecond"), 20_000);
+    // A filter that keeps nothing says so; back to every kind.
+    const kind = (v) => tab.eval(`(() => { const k = document.querySelector('.kb-filters select[aria-label="Kind"]'); k.value = ${JSON.stringify(v)}; k.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await kind("chat");
+    await tab.waitFor("chats have no history here", `document.querySelector("main.library .rows")?.textContent.includes("Chats are on the Chats page")`);
+    await kind("");
+    await type("input.search", "zqlibrary");
+    await tab.waitFor("a hit with the match marked", `[...document.querySelectorAll("main.library .rows .row mark")].some((m) => m.textContent === "zqlibrary")`);
+    if (await tab.eval(rowWith("zqsecond"))) throw new Error("the search lists what doesn't match");
+    await fits("the list");
+    await tab.eval(`[...document.querySelectorAll("main.library .rows .row")].find((r) => r.querySelector("mark")).click()`);
+    await tab.waitFor("the reader, at the piece that matched", `location.hash.startsWith("#/library/k/") && [...document.querySelectorAll("main.reader .kb-piece.at pre mark")].some((m) => m.textContent === "zqlibrary")`);
+    // All of it, then find in it.
+    if (await tab.eval(`[...document.querySelectorAll("main.reader button")].some((b) => b.textContent.startsWith("All of it"))`)) await press("All of it");
+    await tab.waitFor("all of it", `document.querySelectorAll("main.reader .kb-piece").length >= 3 && ![...document.querySelectorAll("main.reader button")].some((b) => b.textContent.startsWith("All of it"))`);
+    await type('input[aria-label="Find in it"]', "WROTE");
+    await tab.waitFor("what was looked for, marked and counted", `/^1\\/\\d+$/.test(document.querySelector("main.reader .bar .sub")?.textContent ?? "") && document.querySelector("main.reader .kb-piece.at mark")?.textContent === "wrote"`);
+    await fits("the reader");
+    // Its session, and back to the reader.
+    await press("Its session");
+    await tab.waitFor("the session it happened in", `location.hash === "#/s/" + ${JSON.stringify(encodeURIComponent(find("lib1").id))}`);
+    await tab.eval(`history.back()`);
+    await tab.waitFor("the reader again", `!!document.querySelector("main.reader .kb-piece")`);
+    // ⋯ → Forget…: the daemon says what will go, in the words every client uses.
+    await tab.click(`header button[aria-label="More"]`);
+    await tab.waitFor("the reader's menu", `[...document.querySelectorAll(".sheet .menu button")].some((b) => b.textContent.startsWith("Copy its address"))`);
+    await press("Forget…");
+    await tab.waitFor("the question, in the daemon's words", `document.querySelector(".sheet h2")?.textContent.startsWith("Forget 1 item: session") && [...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("The text is deleted from the knowledge base for good"))`);
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Forget").click()`);
+    await until("it to be forgotten", () => recalled().length === 0);
+    await tab.waitFor("the list again, without it", `location.hash === "#/library" && !document.querySelector("main.library .rows .row mark") && document.querySelector("main.library .rows")?.textContent.includes("Nothing matches.")`);
+    if (!ptyro("kb").includes("1 forgotten")) throw new Error(`the status doesn't count it: ${ptyro("kb")}`);
+    // A session's ⋯ → History: the Library with only what was kept of it.
+    await fresh(`#/s/${encodeURIComponent(find("lib2").id)}`);
+    await tab.waitFor("the session's menu button", `!!document.querySelector('header button[aria-label="More"], header button.icon')`);
+    await tab.eval(`[...document.querySelectorAll("header button")].find((b) => b.textContent === "⋯").click()`);
+    await tab.waitFor("History in its menu", `[...document.querySelectorAll(".sheet .menu button")].some((b) => b.textContent.startsWith("History"))`);
+    await press("History");
+    await tab.waitFor("only that session's", `location.hash === "#/library" && ${rowWith("zqsecond")} && [...document.querySelectorAll(".kb-filters button")].some((b) => b.textContent.startsWith("Only session lib2"))`);
+    ptyro("kill", "lib1");
+    ptyro("kill", "lib2");
+  },
+
+  // The Library's notes (KB2): a note the command wrote is listed under what it is about; New
+  // note (every option) writes one; a tap opens it to edit in the page, Save writes its file
+  // and the change is found; ⋯ → Delete…, asked in the daemon's words, deletes the file.
+  async notes() {
+    const recalled = (word) => JSON.parse(ptyro("recall", "--json", "--here", word));
+    const rowWith = (word) => `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes(${JSON.stringify(word)}))`;
+    const press = (label) => tab.eval(`[...document.querySelectorAll("main.library button, .sheet button")].find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
+    const fill = (sel, text) => tab.eval(`(() => { const b = document.querySelector(${JSON.stringify(sel)}); b.value = ${JSON.stringify(text)}; b.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    ptyro("kb", "note", "zqwebnote from the command", "--title", "Web one");
+    await fresh("#/library");
+    await tab.phone();
+    const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
+    await tab.waitFor("the tabs", `document.querySelectorAll(".kb-tabs button").length === 3`);
+    await press("Notes");
+    await tab.waitFor("the note, under what it is about", `location.hash === "#/library/notes" && ${rowWith("Web one")} && document.querySelector("main.library h3.day")?.textContent === "Global (about no project)"`);
+    await tab.waitFor("who wrote it", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("you ·"))`);
+    await fits("the notes");
+    // New note: every option the command takes, as a pick where the answers are known.
+    await press("New note");
+    await tab.waitFor("the form", `document.querySelector(".sheet h2")?.textContent === "New note" && document.querySelectorAll(".sheet select").length === 2 && !!document.querySelector(".sheet textarea")`);
+    const labels = await tab.eval(`[...document.querySelectorAll(".sheet label.field > span")].map((s) => s.textContent).join()`);
+    if (labels !== "Note,Title,About,Seen by,Tags") throw new Error(`the form's fields: ${labels}`);
+    await fill(".sheet textarea", "zqformnote we chose the page because it is here");
+    await tab.eval(`(() => { const [title, tags] = document.querySelectorAll(".sheet input:not([type=checkbox])"); title.value = "From the page"; tags.value = "web, decision"; })()`);
+    await tab.click(".sheet-foot .primary");
+    await until("the note to be kept", () => recalled("zqformnote").length > 0);
+    const made = recalled("zqformnote")[0];
+    if (made.kind !== "note" || made.writer !== "user" || made.title !== "From the page") throw new Error(`kept as ${JSON.stringify(made)}`);
+    if (recalled("decision").length !== 1) throw new Error("its tags are not found");
+    await tab.waitFor("it in the list", rowWith("From the page"));
+    // A tap: its file, in the page. Save writes it, and the change is found.
+    await tab.eval(`[...document.querySelectorAll("main.library .rows .row")].find((r) => r.textContent.includes("From the page")).click()`);
+    await tab.waitFor("the note's file", `location.hash.startsWith("#/library/note/") && (document.querySelector("textarea.kb-note")?.value ?? "").includes("by: you") && document.querySelector("textarea.kb-note").value.includes("zqformnote")`);
+    await fits("the note");
+    const text = await tab.eval(`document.querySelector("textarea.kb-note").value`);
+    await fill("textarea.kb-note", text.replace("zqformnote", "zqpageedit"));
+    await press("Save");
+    // The page says it saved and asks for the file again (for a moment it shows no note, and
+    // no ⋯): what it then shows is the file as it was saved.
+    await tab.waitFor("the page to say it saved, and show the note as it is now", `document.querySelector(".toast")?.textContent === "Saved" && !!document.querySelector('header button[aria-label="More"]') && (document.querySelector("textarea.kb-note")?.value ?? "").includes("zqpageedit")`);
+    await until("the edit to be found", () => recalled("zqpageedit").length > 0);
+    if (recalled("zqformnote").length) throw new Error("the old words are still found");
+    // ⋯ → Delete…: the daemon says the file goes.
+    await tab.click(`header button[aria-label="More"]`);
+    await tab.waitFor("the note's menu", `[...document.querySelectorAll(".sheet .menu button")].some((b) => b.textContent.startsWith("Delete…"))`);
+    await press("Delete…");
+    await tab.waitFor("the question, in the daemon's words", `document.querySelector(".sheet h2")?.textContent.startsWith("Forget 1 item: note") && [...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("A note's file is deleted"))`);
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Forget").click()`);
+    await until("it to be gone", () => recalled("zqpageedit").length === 0);
+    await tab.waitFor("the notes again, without it", `location.hash === "#/library/notes" && ${rowWith("Web one")} && !${rowWith("From the page")}`);
+    // Who wrote it, as a filter of the search too.
+    await press("Search");
+    await tab.waitFor("the search's filters", `location.hash === "#/library" && !!document.querySelector('.kb-filters select[aria-label="Wrote"]')`);
+    ptyro("kb", "forget", recalled("zqwebnote")[0].addr.split("/")[0], "--yes");
+  },
+
+  // The Library's sources (KB3.7): the project is read by itself and listed; Read a folder…
+  // (every option the command takes) reads one, and what it holds is found; a tap shows it in
+  // full, Look at it again reads what changed; Stop reading it…, asked in the daemon's words,
+  // drops it; Agents' history… counts before it reads.
+  async sources() {
+    const recalled = (word) => JSON.parse(ptyro("recall", "--json", "--here", word));
+    const rowWith = (word) => `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes(${JSON.stringify(word)}))`;
+    const press = (label) => tab.eval(`[...document.querySelectorAll("main.library button, .sheet button")].find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
+    const tapRow = (word) => tab.eval(`[...document.querySelectorAll("main.library .rows .row")].find((r) => r.textContent.includes(${JSON.stringify(word)})).click()`);
+    const labels = () => tab.eval(`[...document.querySelectorAll(".sheet label.field > span")].map((s) => s.textContent).join()`);
+    const book = join(E.repo, "..", "handbook");
+    mkdirSync(book, { recursive: true });
+    writeFileSync(join(book, "guide.md"), "# Belt tension\n\nzqsourceword: tighten the belt a quarter turn.\n");
+    await fresh("#/library");
+    await tab.phone();
+    const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
+    await tab.waitFor("the tabs", `document.querySelectorAll(".kb-tabs button").length === 3`);
+    await press("Sources");
+    // A project is read by itself: nothing was asked for it.
+    await tab.waitFor("the project, as a root", `location.hash === "#/library/sources" && [...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("project") && r.textContent.includes("repo"))`, 20_000);
+    await fits("the sources");
+    // What is kept of shells (KB4): the commands, as it comes; what they print only once the
+    // page has said what that stores, and switched back with one press.
+    const shellsSay = (text) => `!!document.querySelector("main.library .kb-shells")?.textContent.includes(${JSON.stringify(text)})`;
+    const shellNow = () => JSON.parse(ptyro("kb", "status", "--json")).shell;
+    await tab.waitFor("what is kept of shells", shellsSay("Shell commands are kept, not what they print."));
+    await press("Keep what they print too…");
+    await tab.waitFor("what that stores, asked first", `document.querySelector(".sheet h2")?.textContent === "Keep what your commands print?" && !!document.querySelector(".sheet p.confirm")?.textContent.includes("the first 2 KiB and the last 6 KiB")`);
+    if (shellNow() !== "commands") throw new Error("kb.shell was switched before the question was answered");
+    await fits("the question about what commands print");
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Keep it").click()`);
+    await tab.waitFor("what they print, kept", shellsSay("Shell commands are kept, and what they print."), 20_000);
+    await until("the daemon to keep what commands print", () => shellNow() === "output", 20_000);
+    await press("Stop keeping what they print");
+    await tab.waitFor("commands only again", shellsSay("Shell commands are kept, not what they print."), 20_000);
+    await until("the daemon to keep commands only", () => shellNow() === "commands", 20_000);
+    await fits("the sources, with the shells' switches");
+    // Read a folder…: every option the command takes, as a pick where the answers are known.
+    await press("Read a folder…");
+    await tab.waitFor("the form", `document.querySelector(".sheet h2")?.textContent === "Read a folder" && document.querySelectorAll(".sheet select").length === 2`);
+    const fields = await labels();
+    if (fields !== "Folder or file,Name,Project,Seen by,Only,Not,Source comments,Source code too (it makes the knowledge base large),Commit messages,Only now: never look at it again") throw new Error(`the form's fields: ${fields}`);
+    await fits("the form");
+    await tab.eval(`(() => { const [path, name] = document.querySelectorAll(".sheet input:not([type=checkbox])"); path.value = ${JSON.stringify(book)}; name.value = "handbook"; })()`);
+    await tab.click(".sheet-foot .primary");
+    await until("the folder's document to be found", () => recalled("zqsourceword").length > 0, 20_000);
+    const hit = recalled("zqsourceword")[0];
+    if (hit.kind !== "doc" || !String(hit.title).includes("guide.md")) throw new Error(`found as ${JSON.stringify(hit)}`);
+    // Its row, without a reload: what it holds, and that it was read.
+    await tab.waitFor("the folder's row, read", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("handbook") && r.textContent.includes("1 file") && /read [0-9]+[smh] ago/.test(r.textContent))`, 20_000);
+    await fits("the sources, with a folder");
+    // A tap: all of it, and Look at it again, which finds what changed.
+    await tapRow("handbook");
+    await tab.waitFor("the root, in full", `document.querySelector(".sheet h2")?.textContent === "handbook" && document.querySelector(".sheet .facts")?.textContent.includes("A folder you gave") && document.querySelector(".sheet .facts").textContent.includes(${JSON.stringify(book)})`);
+    await fits("a root's sheet");
+    writeFileSync(join(book, "more.md"), "# More\n\nzqsecondsource: oil the hopper.\n");
+    await press("Look at it again");
+    await until("the new file to be found", () => recalled("zqsecondsource").length > 0, 20_000);
+    await tab.waitFor("two files in its row", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("handbook") && r.textContent.includes("2 files"))`, 20_000);
+    // The project's own root is not removed here; the folder's is, asked in the daemon's words.
+    await tapRow("repo");
+    await tab.waitFor("the project's sheet", `document.querySelector(".sheet h2")?.textContent === "repo" && ![...document.querySelectorAll(".sheet button")].some((b) => b.textContent.startsWith("Stop reading it"))`);
+    await tab.click(`.sheet button[aria-label="Close"]`);
+    await tapRow("handbook");
+    await tab.waitFor("the folder's sheet", `[...document.querySelectorAll(".sheet button")].some((b) => b.textContent.startsWith("Stop reading it"))`);
+    await press("Stop reading it…");
+    await tab.waitFor("the question, in the daemon's words", `document.querySelector(".sheet h2")?.textContent.startsWith("Stop reading handbook") && [...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("Its files and its repository aren't touched"))`);
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Stop reading it").click()`);
+    await until("what was kept of it to go", () => recalled("zqsourceword").length === 0, 20_000);
+    await tab.waitFor("the sources, without it", `!${rowWith("handbook")} && ${rowWith("repo")}`, 20_000);
+    if (!existsSync(join(book, "guide.md"))) throw new Error("the folder's own files were touched");
+    // Agents' history…: every option, and the count before anything is read.
+    await press("Agents' history…");
+    await tab.waitFor("its form", `document.querySelector(".sheet h2")?.textContent === "Agents' history" && document.querySelectorAll(".sheet select").length === 3`);
+    const asked = await labels();
+    if (asked !== "Whose,Profile,Since,Only count: read nothing") throw new Error(`the history's fields: ${asked}`);
+    await tab.eval(`document.querySelector(".sheet input[type=checkbox]").click()`);
+    await tab.click(".sheet-foot .primary");
+    await tab.waitFor("the count", `/conversations? in your agents' folders/i.test(document.body.innerText)`);
+    rmSync(book, { recursive: true, force: true });
+  },
+
   // A switch writes the config file (comments kept), Undo restores it, a bad number is refused
   // in the form and never reaches the file.
   async settings() {

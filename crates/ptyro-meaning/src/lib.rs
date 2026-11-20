@@ -165,13 +165,24 @@ pub fn quantize(v: &[f32]) -> Vec<u8> {
 }
 
 /// The cosine of a stored vector and a unit query vector; `None` when they don't match.
+///
+/// Summed in eight running sums (SPEC §25.8): a sum of floats can't be reordered by the
+/// compiler, so one sum adds 256 products one after the other, where eight are one SIMD
+/// register. The same cosine but for its last bits, at half the time of a scan.
 pub fn score(blob: &[u8], q: &[f32]) -> Option<f32> {
     let (scale, bytes) = blob.split_first_chunk::<4>()?;
     if bytes.len() != q.len() {
         return None;
     }
-    let dot: f32 = bytes.iter().zip(q).map(|(b, x)| f32::from(*b as i8) * x).sum();
-    Some(dot * f32::from_le_bytes(*scale))
+    let mut acc = [0f32; 8];
+    let ((b8, b_rest), (q8, q_rest)) = (bytes.as_chunks::<8>(), q.as_chunks::<8>());
+    for (b, x) in b8.iter().zip(q8) {
+        for i in 0..8 {
+            acc[i] += f32::from(b[i] as i8) * x[i];
+        }
+    }
+    let tail: f32 = b_rest.iter().zip(q_rest).map(|(b, x)| f32::from(*b as i8) * x).sum();
+    Some((acc.iter().sum::<f32>() + tail) * f32::from_le_bytes(*scale))
 }
 
 /// Below this cosine a message is not "about" the query. Measured on the synthetic model only:
@@ -216,18 +227,29 @@ pub const RRF_K: f64 = 60.0;
 /// Two ranked lists (best first) as one: each item scores Σ 1/(k + rank) over the lists it is
 /// in. Ties keep the keyword list's order. Returns the items with their fused score.
 pub fn fuse<K: Eq + Hash + Clone>(words: &[K], meaning: &[K]) -> Vec<(K, Found, f64)> {
+    fuse_lists(&[(Found::Words, words), (Found::Meaning, meaning)])
+}
+
+/// Any number of ranked lists (best first) as one (SPEC §25.8: words and meaning, in `kb.db`
+/// and in `chat.db`): each item scores Σ 1/(k + rank) over the lists it is in, and is found
+/// by `Words`, by `Meaning`, or by `Both` when lists of both kinds hold it. Scores of two
+/// files can't be compared; ranks can. Ties keep the order of the lists, then of each list.
+pub fn fuse_lists<K: Eq + Hash + Clone>(lists: &[(Found, &[K])]) -> Vec<(K, Found, f64)> {
     let mut by: HashMap<K, (f64, Found, usize)> = HashMap::new();
-    for (i, k) in words.iter().enumerate() {
-        by.entry(k.clone()).or_insert((1.0 / (RRF_K + i as f64 + 1.0), Found::Words, i));
-    }
-    for (i, k) in meaning.iter().enumerate() {
-        let s = 1.0 / (RRF_K + i as f64 + 1.0);
-        by.entry(k.clone())
-            .and_modify(|e| {
-                e.0 += s;
-                e.1 = Found::Both;
-            })
-            .or_insert((s, Found::Meaning, words.len() + i));
+    let mut before = 0;
+    for (how, list) in lists {
+        for (i, k) in list.iter().enumerate() {
+            let s = 1.0 / (RRF_K + i as f64 + 1.0);
+            by.entry(k.clone())
+                .and_modify(|e| {
+                    e.0 += s;
+                    if e.1 != *how {
+                        e.1 = Found::Both;
+                    }
+                })
+                .or_insert((s, *how, before + i));
+        }
+        before += list.len();
     }
     let mut out: Vec<(K, f64, Found, usize)> =
         by.into_iter().map(|(k, (s, f, at))| (k, s, f, at)).collect();
@@ -340,6 +362,44 @@ mod tests {
         assert_eq!(f[3].1, Found::Meaning);
         assert_eq!(f[1].1.as_str(), "words");
         assert!(fuse::<&str>(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn fusion_over_several_lists() {
+        // Words and meaning in two files: `x` is second in three lists and beats every first.
+        let (w1, m1, w2, m2) = (["a", "x"], ["b", "x"], ["c", "x"], ["d"]);
+        let f = fuse_lists(&[
+            (Found::Words, &w1[..]),
+            (Found::Meaning, &m1[..]),
+            (Found::Words, &w2[..]),
+            (Found::Meaning, &m2[..]),
+        ]);
+        let order: Vec<&str> = f.iter().map(|x| x.0).collect();
+        assert_eq!(order, ["x", "a", "b", "c", "d"]);
+        assert_eq!(f[0].1, Found::Both);
+        assert!((f[0].2 - 3.0 / 62.0).abs() < 1e-12);
+        assert_eq!((f[1].1, f[2].1, f[4].1), (Found::Words, Found::Meaning, Found::Meaning));
+        // Twice by words is still by words; a list twice counts twice.
+        let twice = fuse_lists(&[(Found::Words, &["a"][..]), (Found::Words, &["a"][..])]);
+        assert_eq!(twice[0].1, Found::Words);
+        assert!((twice[0].2 - 2.0 / 61.0).abs() < 1e-12);
+        assert!(fuse_lists::<&str>(&[]).is_empty());
+    }
+
+    #[test]
+    fn eight_sums_are_the_same_cosine() {
+        // Any length (a tail past the eights), against the plain sum.
+        for n in [1usize, 7, 8, 9, 255, 256, 257] {
+            let mut v: Vec<f32> = (0..n).map(|i| ((i * 37 % 101) as f32 - 50.0) / 50.0).collect();
+            normalize(&mut v);
+            let mut q: Vec<f32> = (0..n).map(|i| ((i * 53 % 89) as f32 - 44.0) / 44.0).collect();
+            normalize(&mut q);
+            let b = quantize(&v);
+            let scale = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            let plain: f32 =
+                b[4..].iter().zip(&q).map(|(b, x)| f32::from(*b as i8) * x).sum::<f32>() * scale;
+            assert!((score(&b, &q).unwrap() - plain).abs() < 1e-5, "{n}");
+        }
     }
 
     #[test]

@@ -184,6 +184,8 @@ mod tests {
                 port: Some(23000),
                 agent_home: None,
                 project_root: None,
+                kb: None,
+                remember: false,
             })
             .unwrap();
         assert!(plan.argv.windows(2).any(|w| w == ["--port", "23000"]));

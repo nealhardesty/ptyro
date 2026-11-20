@@ -146,6 +146,8 @@ pub struct Daemon {
     pub(crate) project_adding: tokio::sync::Mutex<()>,
     /// Chats (SPEC §22): `chat.db` and the chats being followed or answered.
     pub(crate) chats: crate::chats::Chats,
+    /// The knowledge base (SPEC §25): `kb.db` and the queue of what is to be ingested.
+    pub(crate) kb: crate::kb::Kb,
 }
 
 impl Daemon {
@@ -171,6 +173,7 @@ impl Daemon {
         let (io_pause, pause_rx) = watch::channel(false);
         let (run_id, started_ms) = identity.unwrap_or_else(|| (SessionId::new().full(), now_ms()));
         let chats = crate::chats::Chats::open(&paths.data.join("chat.db"));
+        let kb = crate::kb::Kb::new(paths.data.join("kb.db"));
         let tools_path = ptyro_agents::setup::path_dirs(&paths);
         Arc::new(Self {
             paths,
@@ -239,6 +242,7 @@ impl Daemon {
                 pause: pause_rx,
                 readers: Arc::new(AtomicU64::new(0)),
                 parked: Arc::new(AtomicU64::new(0)),
+                kb_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             goodbye: watch::Sender::new(None),
             sends: Mutex::new(crate::typed::Sends::default()),
@@ -262,6 +266,7 @@ impl Daemon {
             kv_writer: Arc::new(tokio::sync::Mutex::new(())),
             project_adding: tokio::sync::Mutex::new(()),
             chats,
+            kb,
         })
     }
 
@@ -419,6 +424,7 @@ impl Daemon {
                     // Not in the store: a login session restarted after the daemon itself restarted is
                     // recorded as usual (it has ended by then).
                     unrecorded: false,
+                    private: r.private,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -889,6 +895,11 @@ impl Daemon {
             quick: spec.quick && agent.is_none(),
             chat: None,
             unrecorded: spec.unrecorded,
+            // As asked, else as `kb.private` says; a pane of a private shell is private.
+            private: spec.private.unwrap_or(self.config().kb.private)
+                || spec.pane_of.and_then(|src| self.session(src)).is_some_and(|s| {
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.private
+                }),
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -1101,11 +1112,18 @@ impl Daemon {
         // A link is answered with this machine's own, and never routed on (no echoes).
         // A chat's own agent (its history tools) only searches, reads and lists this machine's
         // chats, within its scope (`handle_chat`): never routed, merged with others' or guessed.
+        // The knowledge base's tools search and read too, behind the same wall (`handle_kb`).
         let engine = self.engine_chat_of(caller).is_some();
         if engine
             && !matches!(
                 req,
-                Request::ChatSearch { .. } | Request::ChatRead { .. } | Request::ChatList { .. }
+                Request::ChatSearch { .. }
+                    | Request::ChatRead { .. }
+                    | Request::ChatList { .. }
+                    | Request::KbSearch { .. }
+                    | Request::KbRead { .. }
+                    // (`remember`: a new note, which `handle_kb` stamps as the chat's agent's.)
+                    | Request::KbNote { addr: None, .. }
             )
         {
             return Err(Error::new(
@@ -1113,7 +1131,18 @@ impl Daemon {
                 "a chat's agent may search and read chats, not change them",
             ));
         }
-        let federate = !engine && !caller.is_link() && !self.links.locked().is_empty();
+        // An agent's session reading chats is walled the same way (`handle_chat`): never
+        // routed to another machine before the wall is asked.
+        let walled = !engine
+            && matches!(
+                req,
+                Request::ChatSearch { .. }
+                    | Request::ChatRead { .. }
+                    | Request::ChatList { .. }
+                    | Request::ChatExport { .. }
+            )
+            && self.kb_agent(caller).is_some();
+        let federate = !engine && !walled && !caller.is_link() && !self.links.locked().is_empty();
         if federate && let Some(m) = self.machine_for(&req)? {
             self.guard_caller(&req, caller)?;
             self.guard_device(&req, caller)?;
@@ -1167,6 +1196,19 @@ impl Daemon {
             | Request::ChatSearch { .. }
             | Request::ChatTask { .. }
             | Request::ChatFind { .. }) => self.handle_chat(req, caller).await,
+            req @ (Request::KbSearch { .. }
+            | Request::KbRead { .. }
+            | Request::KbRecent { .. }
+            | Request::KbForget { .. }
+            | Request::KbStatus
+            | Request::KbNote { .. }
+            | Request::KbNotes { .. }
+            | Request::KbNoteRead { .. }
+            | Request::KbSync { .. }
+            | Request::KbRoots { .. }
+            | Request::KbIngest { .. }
+            | Request::KbRemove { .. }
+            | Request::KbHistory { .. }) => self.handle_kb(req, caller).await,
             req @ (Request::CheckpointList { .. }
             | Request::CheckpointDiff { .. }
             | Request::CheckpointRestore { .. }) => self.checkpoint_request(req).await,
@@ -1413,11 +1455,12 @@ impl Daemon {
                 report.warnings.extend(warnings);
                 report.chats = self.chat_doctor().await;
                 report.meaning = self.meaning_doctor().await;
+                report.kb = self.kb_doctor().await;
                 Ok(Reply::Doctor { report })
             }
             Request::Agents => {
                 let (agents, default) = self.agent_choices();
-                Ok(Reply::Agents { agents, default })
+                Ok(Reply::Agents { agents, default, private: self.config().kb.private })
             }
             Request::Editors => {
                 let config = self.config();
@@ -1501,7 +1544,10 @@ impl Daemon {
             Ok(c) => {
                 crate::set_log_level(&c.daemon.log_level);
                 *self.config.writing() = c;
+                self.kb_output_switch();
+                self.kb_keep_out_all();
                 self.secrets.locked().clear();
+                self.kb_secrets_changed();
                 // A web app running with other `[remote]` settings starts again with these.
                 self.serve_child.wake();
                 self.wsl_hold.wake();

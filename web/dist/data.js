@@ -8,6 +8,8 @@ export const data = {
     workspaces: new Map(),
     agents: [],
     defaultAgent: "claude",
+    /// `[kb] private`: a new session starts private (its box ticked; unticked, it is kept).
+    privateDefault: false,
     machines: new Map(),
     /// What quick new starts in each worktree, by id (UX3.7: its last agent, else the default).
     lastLaunch: new Map(),
@@ -60,6 +62,7 @@ export async function loadAll() {
     if (ag.status === "fulfilled") {
         data.agents = ag.value.agents;
         data.defaultAgent = ag.value.default;
+        data.privateDefault = !!ag.value.private;
     }
     ui.render();
     // What quick new starts in each worktree ("+ codex@work", "Another …"): asked after the first

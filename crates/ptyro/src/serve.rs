@@ -71,6 +71,8 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("kit"),
     js!("machine"),
     js!("machines"),
+    js!("library"),
+    js!("libkit"),
     js!("outbox"),
     js!("predict"),
     js!("chats"),

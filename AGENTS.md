@@ -136,6 +136,11 @@ Strong success criteria lets you loop independently. Weak criteria ("make it wor
   the web. A change that adds an option also adds it to those screens: its schema entry in
   `crates/ptyro-core/src/settings.rs` (section, kind, default, help), placed where a user would
   look for it. A setting you can only change by editing the file isn't finished.
-* **The database holds metadata, never contents, with one exception** (owner, 2026-10-29): chat
-  conversation text lives in its own file, `chat.db` (SPEC §22.4). Terminal contents still never go into any
-  database, and chat text never goes into `ptyro.db`.  This may change in the future.
+* **The database holds metadata, never contents, with two exceptions.** Chat conversation text
+  lives in its own file, `chat.db` (owner, 2026-10-29; SPEC §22.4). The knowledge base's text
+  (agent sessions' transcripts, documents, comments, notes' index, shell commands) lives in its own
+  file, `kb.db` (owner, 2026-11-19; SPEC §25.4). Neither ever goes into `ptyro.db`. Terminal
+  contents still never go into any database, except a shell command's output into `kb.db` when the
+  user switched `kb.shell = "output"` on (off by default).  This may change in the future.
+* **Everything the knowledge base stores goes through its one ingest function** (SPEC §25.5), which
+  redacts it and stamps where it came from. A new source never writes `kb.db` rows of its own.

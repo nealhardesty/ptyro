@@ -13,7 +13,8 @@ import { APPLY, ORIGIN, article, fieldsOf, fromLines, gist, hexOf, keyLabel, lab
 import type { Binding } from "./cfgkit.js";
 import type { Collection, Entry, Schema, Section, Setting, View } from "./cfgkit.js";
 import { data } from "./data.js";
-import { actions, NAME_HINT, badge, bar, confirm, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, badge, bar, confirm, confirmed, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
+import { SHELL_OUTPUT_ASK, asksFirst } from "./libkit.js";
 import type { Child, Field } from "./kit.js";
 import { cfgChanged, editConfigAt } from "./settings.js";
 
@@ -184,7 +185,9 @@ function card(e: Entry, s: Setting, scope: Scope, view: View): HTMLElement {
   const set = (text: string): Promise<boolean> => change(scope, { t: "set", key: e.key, value: text }, `${e.key} = ${shownText(text)}`, { at: showErr });
   const reset = (): Promise<boolean> => change(scope, { t: "unset", key: e.key }, `${e.key} reset`, { shared: resetShared(e), at: showErr });
   const refresh = (): void => page?.repaint(e.key);
-  const ctl = control(e, s, scope, view, id, async (text) => { if (await set(text)) refresh(); }, async () => { if (await reset()) refresh(); }, showErr);
+  // (The one setting that stores what is on your terminal asks first, here as in the Library.)
+  const agreed = async (text: string): Promise<boolean> => !asksFirst(e.key, text, e.value) || confirmed(...SHELL_OUTPUT_ASK, false);
+  const ctl = control(e, s, scope, view, id, async (text) => { if (!(await agreed(text))) { refresh(); return; } if (await set(text)) refresh(); }, async () => { if (await reset()) refresh(); }, showErr);
   const from = `${ORIGIN[e.origin]}${e.line ? `, line ${e.line}` : ""}`;
   const head = h("div", { class: "set-head" },
     h("label", { for: id }, labelOf(e.key, !!e.member)),

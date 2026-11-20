@@ -1,11 +1,16 @@
-//! Meaning search in the daemon (SPEC §22.10 tier 3), opt-in with `[chat] meaning = true`.
+//! Meaning search in the daemon (SPEC §22.10 tier 3, §25.8), opt-in with `[kb] meaning = true`
+//! (`[chat] meaning`, its old name, switches it on too): one switch, one model and one task for
+//! chats (`chat.db`'s `node_vec`) and the knowledge base (`kb.db`'s `chunk_vec`).
 //!
 //! A background task does everything, at low priority: when meaning search is switched on it
 //! downloads the model (31 MB, once, resumable, checked) into `<data>/models/potion-base-8M/`,
-//! then embeds every message that has no vector yet, newest first, a batch at a time, and after
-//! that each message as it is written. Switched off, it stops: what was downloaded and embedded
-//! stays, so switching it on again is instant. A search embeds its words and merges the nearest
-//! messages with the keyword hits by reciprocal-rank fusion ([`ptyro_meaning::fuse`]).
+//! then embeds every message and every prose chunk that has no vector yet, newest first, a
+//! batch at a time, and after that each message as it is written. (What an ingest writes to
+//! the knowledge base is embedded by the ingest itself, [`Daemon::kb_embed`]; the task's pass
+//! is for what was there before the model was.) Switched off, it stops: what was downloaded
+//! and embedded stays, so switching it on again is instant. A search embeds its words and
+//! merges the nearest messages with the keyword hits by reciprocal-rank fusion
+//! ([`ptyro_meaning::fuse`]).
 //!
 //! The model is loaded only while it is used: it is dropped after [`IDLE`] without a search or a
 //! message to embed (it is 30 MB of memory), and loading it again takes a few milliseconds.
@@ -20,6 +25,7 @@ use ptyro_core::{Error, ErrorCode};
 use ptyro_meaning::{FILES, Found, MODEL_ID, Model};
 use ptyro_protocol::DomainEvent;
 use ptyro_store::chat::{ChatDb, RawHit, SearchFilter};
+use ptyro_store::kb::KbDb;
 use tokio::sync::Notify;
 
 use crate::daemon::Daemon;
@@ -74,10 +80,18 @@ fn mb(n: u64) -> String {
     format!("{:.0} MB", n as f64 / 1_000_000.0)
 }
 
+/// Where the knowledge base's backfill is: chunks up to `top` (a `chunk.seq`) have been
+/// looked at.
+#[derive(Debug, Default)]
+struct KbPass {
+    top: i64,
+    full: Option<Instant>,
+}
+
 impl Daemon {
-    fn meaning_on(&self) -> bool {
+    pub(crate) fn meaning_on(&self) -> bool {
         let c = self.config();
-        c.chat.enabled && c.chat.meaning
+        (c.chat.enabled || c.kb.enabled) && c.kb.meaning
     }
 
     fn meaning_dir(&self) -> PathBuf {
@@ -88,10 +102,11 @@ impl Daemon {
         *self.chats.meaning.state.locked() = s;
     }
 
-    /// Start the task (at start, once `chat.db` is open): it waits until meaning search is on.
-    pub(crate) fn start_meaning(self: &Arc<Self>, db: ChatDb) {
+    /// Start the task (at the daemon's start): it waits until meaning search is on, and then
+    /// works on whichever of `chat.db` and `kb.db` is there.
+    pub(crate) fn start_meaning(self: &Arc<Self>) {
         let me = Arc::clone(self);
-        tokio::spawn(async move { me.meaning_task(db).await });
+        tokio::spawn(async move { me.meaning_task().await });
         let me = Arc::clone(self);
         tokio::spawn(async move {
             let mut events = me.events.subscribe();
@@ -108,10 +123,19 @@ impl Daemon {
         });
     }
 
-    async fn meaning_task(self: Arc<Self>, db: ChatDb) {
+    /// `chat.db`, when chats are on and it opened.
+    pub(crate) fn meaning_chats(&self) -> Option<ChatDb> {
+        if !self.config().chat.enabled {
+            return None;
+        }
+        self.chats.db().ok().cloned()
+    }
+
+    async fn meaning_task(self: Arc<Self>) {
         let mut failed: Option<Instant> = None;
         let mut was_on = false;
         let mut pass = Pass::default();
+        let mut kb_pass = KbPass::default();
         loop {
             let on = self.meaning_on();
             if !on {
@@ -126,9 +150,15 @@ impl Daemon {
                 was_on = true;
                 failed = None;
                 pass = Pass::default();
-                if let Ok(n) = db.drop_other_vecs(MODEL_ID.into()).await
-                    && n > 0
-                {
+                kb_pass = KbPass::default();
+                let mut n = 0;
+                if let Some(db) = self.meaning_chats() {
+                    n += db.drop_other_vecs(MODEL_ID.into()).await.unwrap_or(0);
+                }
+                if let Ok(kb) = self.kb_db() {
+                    n += kb.drop_other_vecs(MODEL_ID.into()).await.unwrap_or(0);
+                }
+                if n > 0 {
                     tracing::info!("meaning search: {n} vector(s) of an older model dropped");
                 }
             }
@@ -166,7 +196,14 @@ impl Daemon {
                     continue;
                 }
             };
-            if let Err(e) = self.meaning_backfill(&db, model, &mut pass).await {
+            if let Some(db) = self.meaning_chats()
+                && let Err(e) = self.meaning_backfill(&db, Arc::clone(&model), &mut pass).await
+            {
+                tracing::warn!("meaning search: {e}");
+            }
+            if let Ok(kb) = self.kb_db()
+                && let Err(e) = self.kb_backfill(&kb, model, &mut kb_pass).await
+            {
                 tracing::warn!("meaning search: {e}");
             }
             // Idle: drop the model when nothing has used it for a while.
@@ -254,6 +291,74 @@ impl Daemon {
         Ok(())
     }
 
+    /// The knowledge base's pass: embed every prose chunk above `pass.top` that has no
+    /// vector, newest first, a batch at a time. The first pass (and one an hour) reads the
+    /// whole table; the others only what is new.
+    async fn kb_backfill(
+        &self,
+        db: &KbDb,
+        model: Arc<Model>,
+        pass: &mut KbPass,
+    ) -> Result<(), String> {
+        if pass.full.is_none_or(|t| t.elapsed() > FULL_PASS) {
+            *pass = KbPass { top: 0, full: Some(Instant::now()) };
+        }
+        let e = |e: ptyro_store::StoreError| e.to_string();
+        let top = db.vec_top().await.map_err(e)?;
+        let mut below = top + 1;
+        while self.meaning_on() && top > pass.top {
+            let todo = db.vec_todo(MODEL_ID.into(), (pass.top, below), BATCH).await.map_err(e)?;
+            let Some(last) = todo.last() else { break };
+            below = last.seq;
+            let m = Arc::clone(&model);
+            let rows = tokio::task::spawn_blocking(move || {
+                todo.into_iter()
+                    .map(|t| {
+                        let v = ptyro_meaning::quantize(&m.embed(&t.text));
+                        (t.seq, t.text, v)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            db.put_vecs(MODEL_ID.into(), rows).await.map_err(e)?;
+            self.touch_model();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        if self.meaning_on() {
+            pass.top = top;
+        }
+        Ok(())
+    }
+
+    /// The embed step of an ingest (SPEC §25.5): the prose chunks of `item` that have no
+    /// vector get one, when meaning search is on and its model is here. Without the model
+    /// nothing is done, and the task's pass embeds them when it arrives.
+    pub(crate) async fn kb_embed(&self, db: &KbDb, item: &str) {
+        if !self.meaning_on() || !have_model(&self.meaning_dir()) {
+            return;
+        }
+        let Ok(model) = self.meaning_model().await else { return };
+        let Ok(todo) = db.vec_todo_of(item.to_owned(), MODEL_ID.into()).await else { return };
+        if todo.is_empty() {
+            return;
+        }
+        let rows = tokio::task::spawn_blocking(move || {
+            todo.into_iter()
+                .map(|t| {
+                    let v = ptyro_meaning::quantize(&model.embed(&t.text));
+                    (t.seq, t.text, v)
+                })
+                .collect::<Vec<_>>()
+        })
+        .await;
+        if let Ok(rows) = rows
+            && let Err(e) = db.put_vecs(MODEL_ID.into(), rows).await
+        {
+            tracing::warn!("meaning search: {e}");
+        }
+    }
+
     fn touch_model(&self) {
         if let Some((_, used)) = self.chats.meaning.model.locked().as_mut() {
             *used = Instant::now();
@@ -261,7 +366,7 @@ impl Daemon {
     }
 
     /// The model, loaded if it isn't.
-    async fn meaning_model(&self) -> Result<Arc<Model>, String> {
+    pub(crate) async fn meaning_model(&self) -> Result<Arc<Model>, String> {
         if let Some((m, used)) = self.chats.meaning.model.locked().as_mut() {
             *used = Instant::now();
             return Ok(Arc::clone(m));
@@ -289,7 +394,8 @@ impl Daemon {
 
     /// `ptyro doctor`'s line about meaning search.
     pub(crate) async fn meaning_doctor(&self) -> Option<String> {
-        if !self.config().chat.enabled {
+        let config = self.config();
+        if !config.chat.enabled && !config.kb.enabled {
             return None;
         }
         let dir = self.meaning_dir();
@@ -297,11 +403,11 @@ impl Daemon {
         let total = mb(ptyro_meaning::total_bytes());
         Some(match state {
             State::Off if have_model(&dir) => format!(
-                "meaning search: off ([chat] meaning); its model ({total}) stays in {} until you delete it",
+                "meaning search: off ([kb] meaning); its model ({total}) stays in {} until you delete it",
                 dir.display()
             ),
             State::Off => format!(
-                "meaning search: off ([chat] meaning = true finds messages by what they are about; it downloads {total} once)"
+                "meaning search: off ([kb] meaning = true finds things by what they are about; it downloads {total} once)"
             ),
             State::Fetching { got } => {
                 format!("meaning search: downloading its model, {} of {total}", mb(got))
@@ -312,23 +418,97 @@ impl Daemon {
             }
             State::Ready => {
                 let tools = self.config().chat.index_tools;
-                let n = match self.chats.db() {
-                    Ok(db) => db.vec_counts(MODEL_ID.into(), tools).await.ok(),
+                let n = match self.meaning_chats() {
+                    Some(db) => db.vec_counts(MODEL_ID.into(), tools).await.ok(),
+                    None => None,
+                };
+                let kb = match self.kb_db() {
+                    Ok(db) => db.vec_counts(MODEL_ID.into()).await.ok(),
                     Err(_) => None,
                 };
-                match n {
-                    Some((done, all)) if done < all => {
-                        format!("meaning search: {done} of {all} messages embedded so far")
-                    }
-                    Some((done, _)) => format!(
-                        "meaning search: ready, {done} messages ({} in {})",
+                let (done, all) = n.unwrap_or((0, 0));
+                let (kb_done, kb_all) = kb.unwrap_or((0, 0));
+                if done < all || kb_done < kb_all {
+                    format!(
+                        "meaning search: {done} of {all} messages and {kb_done} of {kb_all} pieces of the knowledge base embedded so far"
+                    )
+                } else if n.is_none() && kb.is_none() {
+                    "meaning search: ready".into()
+                } else {
+                    format!(
+                        "meaning search: ready, {done} messages and {kb_done} pieces of the knowledge base ({} in {})",
                         ptyro_meaning::NAME,
                         dir.display()
-                    ),
-                    None => "meaning search: ready".into(),
+                    )
                 }
             }
         })
+    }
+
+    /// The query's vector, when it is to be searched by meaning too. `Ok((None, why))`: by
+    /// words alone, and `why` says so when that was not the query's own choice (meaning search
+    /// is off, or its model isn't here yet). `by:meaning` while it can't be done is an error.
+    pub(crate) async fn meaning_vector(
+        &self,
+        q: &Query,
+    ) -> Result<(Option<Vec<f32>>, Option<String>), Error> {
+        let by = q.by.as_deref();
+        let on = self.meaning_on();
+        if by == Some("meaning") {
+            self.meaning_ready(on)?;
+        }
+        if by == Some("words") {
+            return Ok((None, None));
+        }
+        if !on {
+            return Ok((None, Some("by words only: meaning search is off (Knowledge → meaning in the settings switches it on)".into())));
+        }
+        if !have_model(&self.meaning_dir()) {
+            return Ok((None, Some("by words only: meaning search's model isn't here yet".into())));
+        }
+        let text = q.words.join(" ");
+        if text.is_empty() {
+            return Ok((None, None));
+        }
+        match self.meaning_model().await {
+            Ok(m) => {
+                let v = m.embed(&text);
+                // (No word of the query is one the model knows: nothing is near it.)
+                Ok(((!v.iter().all(|x| *x == 0.0)).then_some(v), None))
+            }
+            Err(e) if by == Some("meaning") => {
+                Err(Error::new(ErrorCode::Internal, format!("meaning search: {e}")))
+            }
+            Err(e) => Ok((
+                None,
+                Some(format!("by words only: meaning search's model couldn't be read ({e})")),
+            )),
+        }
+    }
+
+    /// A chat search's two lists (SPEC §22.10), each best first: the keyword hits, and when
+    /// `near` is the query's vector, the messages nearest in meaning. `by:meaning` in the
+    /// query leaves the first empty.
+    pub(crate) async fn chat_lists(
+        &self,
+        db: &ChatDb,
+        filter: SearchFilter,
+        q: &Query,
+        near: Option<Vec<f32>>,
+    ) -> Result<(Vec<RawHit>, Vec<RawHit>), Error> {
+        let words = if q.by.as_deref() == Some("meaning") {
+            Vec::new()
+        } else {
+            db.search(filter.clone()).await.map_err(store_err)?
+        };
+        let near = match near {
+            Some(v) => db
+                .meaning(filter, v, MODEL_ID.into(), q.not.clone(), ptyro_meaning::MIN_SCORE)
+                .await
+                .map_err(store_err)?,
+            None => Vec::new(),
+        };
+        Ok((words, near))
     }
 
     /// A search's hits (SPEC §22.10): the keyword hits, and when meaning search is on, the
@@ -340,48 +520,9 @@ impl Daemon {
         filter: SearchFilter,
         q: &Query,
     ) -> Result<Vec<(RawHit, Found)>, Error> {
-        let by = q.by.as_deref();
         let limit = filter.limit;
-        let on = self.meaning_on();
-        if by == Some("meaning") {
-            self.meaning_ready(on)?;
-        }
-        let words = if by == Some("meaning") {
-            Vec::new()
-        } else {
-            db.search(filter.clone()).await.map_err(store_err)?
-        };
-        let text = q.words.join(" ");
-        let near = if by == Some("words")
-            || !on
-            || !have_model(&self.meaning_dir())
-            || text.is_empty()
-        {
-            Vec::new()
-        } else {
-            match self.meaning_model().await {
-                Ok(m) => {
-                    let v = m.embed(&text);
-                    if v.iter().all(|x| *x == 0.0) {
-                        Vec::new()
-                    } else {
-                        db.meaning(
-                            filter,
-                            v,
-                            MODEL_ID.into(),
-                            q.not.clone(),
-                            ptyro_meaning::MIN_SCORE,
-                        )
-                        .await
-                        .map_err(store_err)?
-                    }
-                }
-                Err(e) if by == Some("meaning") => {
-                    return Err(Error::new(ErrorCode::Internal, format!("meaning search: {e}")));
-                }
-                Err(_) => Vec::new(),
-            }
-        };
+        let (vector, _) = self.meaning_vector(q).await?;
+        let (words, near) = self.chat_lists(db, filter, q, vector).await?;
         if near.is_empty() {
             return Ok(words.into_iter().map(|h| (h, Found::Words)).collect());
         }
@@ -414,7 +555,7 @@ impl Daemon {
             return Err(Error::new(
                 ErrorCode::NeedsConfirmation,
                 format!(
-                    "meaning search is off. Switching it on downloads a {total} model once (chat.meaning in the settings)"
+                    "meaning search is off. Switching it on downloads a {total} model once (Knowledge → meaning in the settings)"
                 ),
             ));
         }

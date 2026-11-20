@@ -515,6 +515,7 @@ mod tests {
             slot: None,
             watch: None,
             scratch: false,
+            private: false,
             lost: false,
             pane: None,
             layout: None,

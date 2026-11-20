@@ -162,12 +162,57 @@ pub struct Query {
     pub not: String,
     /// The same, plain (a title with one of them isn't a hit).
     pub not_words: Vec<String>,
+    /// The knowledge base's words (SPEC §25.8; [`parse_kb_query`] only). `kind:note,doc`.
+    pub kinds: Vec<crate::kb::search::HitKind>,
+    /// `project:` (a name, an id or a path, as typed).
+    pub project: Option<String>,
+    /// `root:` (a root's name).
+    pub root: Option<String>,
+    /// `file:`: a part of a path (a file's own, or one a session or a commit touched).
+    pub file: Option<String>,
+    /// `before:7d`: older than that.
+    pub before_ms: Option<u64>,
+    /// `wrote:you` or `wrote:agent`.
+    pub wrote: Option<String>,
+    /// `machine:` (a linked machine's name).
+    pub machine: Option<String>,
 }
 
 /// Parse a search: plain words (all must match), `"a phrase"`, `-word`, `prefix*`, and the
 /// filters `agent:codex`, `since:7d`, `workspace:work`, `by:words|meaning`. Every term is quoted for FTS5, so no
 /// typed character is an operator by accident.
 pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
+    parse(q, now_ms, false)
+}
+
+/// The knowledge base's search (SPEC §25.8): [`parse_query`]'s words, and
+/// `kind:session|chat|note|doc|comment|code|path|commit|command` (several with commas),
+/// `project:`, `root:`, `file:`, `before:7d`, `wrote:you|agent` and `machine:`.
+pub fn parse_kb_query(q: &str, now_ms: u64) -> Result<Query, String> {
+    parse(q, now_ms, true)
+}
+
+/// A knowledge-base query without its `machine:` words, and the machine the last of them
+/// named: the daemon asked decides where to search, and each machine is sent the rest.
+pub fn take_machine(q: &str) -> (String, Option<String>) {
+    let (mut kept, mut machine) = (Vec::new(), None);
+    let mut rest = q.trim();
+    while !rest.is_empty() {
+        let body = rest.strip_prefix('-').unwrap_or(rest);
+        let end = match body.strip_prefix('"') {
+            Some(r) => rest.len() - r.len() + r.find('"').map_or(r.len(), |i| i + 1),
+            None => rest.find(char::is_whitespace).unwrap_or(rest.len()),
+        };
+        match rest[..end].strip_prefix("machine:") {
+            Some(m) if !m.is_empty() => machine = Some(m.to_owned()),
+            _ => kept.push(&rest[..end]),
+        }
+        rest = rest[end..].trim_start();
+    }
+    (kept.join(" "), machine)
+}
+
+fn parse(q: &str, now_ms: u64, kb: bool) -> Result<Query, String> {
     let mut out = Query::default();
     let (mut yes, mut no): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let mut rest = q.trim();
@@ -211,17 +256,58 @@ pub fn parse_query(q: &str, now_ms: u64) -> Result<Query, String> {
                     out.since_ms = Some(now_ms.saturating_sub(d.as_millis() as u64));
                     continue;
                 }
+                "before" if kb => {
+                    let d =
+                        crate::config::parse_duration(v).map_err(|e| format!("before:{v}: {e}"))?;
+                    out.before_ms = Some(now_ms.saturating_sub(d.as_millis() as u64));
+                    continue;
+                }
+                "kind" if kb => {
+                    for word in v.split(',').filter(|w| !w.is_empty()) {
+                        let kind = crate::kb::search::HitKind::parse(word).ok_or_else(|| {
+                            format!(
+                                "kind:{word}: say one of {}",
+                                crate::kb::search::HitKind::words()
+                            )
+                        })?;
+                        if !out.kinds.contains(&kind) {
+                            out.kinds.push(kind);
+                        }
+                    }
+                    continue;
+                }
+                "wrote" if kb && matches!(v, "you" | "agent") => {
+                    out.wrote = Some(v.to_owned());
+                    continue;
+                }
+                "wrote" if kb => return Err(format!("wrote:{v}: say wrote:you or wrote:agent")),
+                "project" | "root" | "file" | "machine" if kb && !v.is_empty() => {
+                    let slot = match k {
+                        "project" => &mut out.project,
+                        "root" => &mut out.root,
+                        "file" => &mut out.file,
+                        _ => &mut out.machine,
+                    };
+                    *slot = Some(v.to_owned());
+                    continue;
+                }
                 _ => {}
             }
         }
         let prefix = !phrase && term.ends_with('*') && term.len() > 1;
         let bare = if prefix { &term[..term.len() - 1] } else { &term };
-        let quoted = format!("\"{}\"{}", bare.replace('"', ""), if prefix { "*" } else { "" });
+        // Quoted, with no quote inside: nothing typed is an operator. No control character
+        // either: FTS5 reads its query up to the first NUL, which would leave a quote open.
+        let bare: String = bare.chars().filter(|c| *c != '"' && !c.is_control()).collect();
+        if bare.trim().is_empty() {
+            continue;
+        }
+        let quoted = format!("\"{bare}\"{}", if prefix { "*" } else { "" });
         if neg {
-            out.not_words.push(bare.to_owned());
+            out.not_words.push(bare);
             no.push(quoted);
         } else {
-            out.words.push(bare.to_owned());
+            out.words.push(bare);
             yes.push(quoted);
         }
     }
@@ -506,6 +592,48 @@ mod tests {
         assert_eq!(m.words, ["cats"]);
         assert_eq!(m.not_words, ["dog", "bird"]);
         assert!(parse_query("x by:vibes", 0).is_err());
+        // A control character is never part of the expression (a NUL would end it early).
+        assert_eq!(parse_query("a\u{0}b \"c\u{1} d\" \u{0}", 0).unwrap().fts, r#""ab" "c d""#);
+    }
+
+    #[test]
+    fn the_knowledge_bases_words() {
+        use crate::kb::search::HitKind;
+        let day = 86_400_000;
+        let q = parse_kb_query(
+            "retry kind:note,doc kind:session project:web root:docs file:src/retry.rs \
+             since:30d before:7d wrote:agent machine:laptop2 -flaky",
+            100 * day,
+        )
+        .unwrap();
+        assert_eq!(q.fts, r#""retry" NOT "flaky""#);
+        assert_eq!(q.kinds, [HitKind::Note, HitKind::Doc, HitKind::Session]);
+        assert_eq!(q.project.as_deref(), Some("web"));
+        assert_eq!(q.root.as_deref(), Some("docs"));
+        assert_eq!(q.file.as_deref(), Some("src/retry.rs"));
+        assert_eq!((q.since_ms, q.before_ms), (Some(70 * day), Some(93 * day)));
+        assert_eq!(q.wrote.as_deref(), Some("agent"));
+        assert_eq!(q.machine.as_deref(), Some("laptop2"));
+        // The machine is the asked daemon's to act on: the rest goes to each machine.
+        assert_eq!(
+            take_machine(r#"retry machine:laptop2 "machine:x y" -machine:z -"a b" kind:note"#),
+            (
+                r#"retry "machine:x y" -machine:z -"a b" kind:note"#.to_owned(),
+                Some("laptop2".to_owned())
+            )
+        );
+        assert_eq!(take_machine(" retry  policy "), ("retry policy".to_owned(), None));
+        // What isn't one of the words says which are.
+        let e = parse_kb_query("x kind:memo", 0).unwrap_err();
+        assert!(e.starts_with("kind:memo: say one of session, chat, note"), "{e}");
+        assert!(parse_kb_query("x wrote:nobody", 0).is_err());
+        assert!(parse_kb_query("x before:then", 0).is_err());
+        // A phrase, or a word left out, is text and no filter.
+        assert_eq!(parse_kb_query(r#""kind:note" -project:web x"#, 0).unwrap().kinds, []);
+        // In a chat's search they are ordinary words, as they were.
+        let c = parse_query("kind:note project:web", 0).unwrap();
+        assert_eq!(c.fts, r#""kind:note" "project:web""#);
+        assert!(c.kinds.is_empty() && c.project.is_none());
     }
 
     #[test]

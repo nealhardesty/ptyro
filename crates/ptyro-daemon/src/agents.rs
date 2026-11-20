@@ -153,6 +153,11 @@ impl Daemon {
                     let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
                 }
             }
+            Feed::Ran(id, ran) => {
+                if let Some(s) = self.session(id) {
+                    self.kb_shell_ran(&s, *ran);
+                }
+            }
             Feed::Exited(id) => {
                 let Some(s) = self.session(id) else { return };
                 s.engine.locked().clear();
@@ -181,6 +186,8 @@ impl Daemon {
                     self.raise(&s, AttentionKind::Exited, state.label()).await;
                 }
                 let _ = self.events.send(DomainEvent::SessionExited { info: self.info(&s) });
+                // What its agent wrote after its last turn (SPEC §25.6.1).
+                self.kb_session_changed(&s);
                 // `exit` in a quick terminal closes it; the next one starts fresh (UX1.25).
                 // A plain shell too, unless `[ui] shell_exit = "keep"` (a restart's dormant ones
                 // stay: they come back).
@@ -402,6 +409,7 @@ impl Daemon {
         s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).turns += 1;
         if s.kind() == SessionKind::Agent {
             self.checkpoint_turn(s);
+            self.kb_session_changed(s);
         }
     }
 
@@ -601,6 +609,9 @@ impl Daemon {
             });
         }
         s.record_event("hook", serde_json::json!({ "adapter": adapter, "event": event, "tool": payload.get("tool_name") }));
+        // The knowledge base (SPEC §25.6.1): a turn's or the session's end queues a read of
+        // the transcript, below. It only queues: the hook never waits for it.
+        let kb = self.kb_hook(&s, &adapter, event, &payload, &signals);
         // A session starting can't end a turn: Codex 0.166 sends SessionStart only with the
         // first prompt, after OSC 7501 has said working, and its idle ended the turn at once
         // (`wait --for idle` returned before the turn did; WIN8). What else it says (the
@@ -620,6 +631,14 @@ impl Daemon {
             .then(|| self.begin_hold(&s))
             .flatten();
         self.apply_queued(&s, signals).await;
+        if let Some(job) = kb {
+            self.kb_hooked(&s, job);
+        }
+        // What is offered at a prompt (SPEC §25.9, `kb.inject`): the hook's answer, within
+        // its own cut-off. After the signals: the session says "working" first.
+        if let Some(stdout) = self.kb_offer(&s, &adapter, event, &payload).await {
+            return Ok(Reply::HookOutput { stdout });
+        }
         if let Some(h) = hold
             && let Some(reply) = self.finish_hold(&s, h).await
         {
@@ -1161,6 +1180,11 @@ impl Daemon {
         let now = fg.as_deref().and_then(|p| ptyro_agents::adapter_for_program(&config, p));
         let was =
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent.clone();
+        if now.is_some() {
+            // (What the command shows from here on is the agent's, not a command's output.)
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).command_no_output =
+                true;
+        }
         if now != was {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent =
                 now.clone();

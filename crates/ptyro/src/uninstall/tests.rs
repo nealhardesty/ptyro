@@ -160,7 +160,9 @@ fn plan_with(worktrees: Vec<Worktree>) -> Plan {
         }],
         logins: true,
         chats: Some(4096),
+        knowledge: Some(8192),
         notes: Some(512),
+        kb_notes: None,
         uncommitted_total: worktrees.iter().filter(|w| w.uncommitted > 0).count(),
         worktrees,
         service: None,
@@ -191,6 +193,7 @@ fn the_plan_says_what_goes_what_is_lost_and_what_stays() {
         "~/.local/share/ptyro (3.0 MiB)",
         "agent logins",
         "your scratchpad notes",
+        "what the knowledge base kept of your work, kb.db (8.0 KiB)",
         "ptyro/fix",
         "3 uncommitted change(s) will be lost",
         "1 commit(s) not pushed",
@@ -267,4 +270,48 @@ fn the_shell_init_line_leaves_a_path_line_for_setups_tools() {
     let shown = render(&p, &env("/home/me", None));
     assert!(shown.contains("so the tools ptyro setup installed stay on PATH"), "{shown}");
     assert!(shown.contains(adds[1].trim()), "{shown}");
+}
+
+/// SPEC §25.12: notes are your writing. They are named in the plan and left where they are,
+/// unless `--delete-notes`.
+#[test]
+fn notes_stay_where_they_are_unless_told() {
+    let notes = |delete| Notes {
+        path: "/home/me/.local/share/ptyro/kb/notes".into(),
+        count: 3,
+        bytes: 2048,
+        delete,
+    };
+    let mut p = plan_with(Vec::new());
+    p.kb_notes = Some(notes(true));
+    let text = render(&p, &env("/home/me", None));
+    assert!(
+        text.contains(
+            "your notes    3 notes you and your agents wrote, ~/.local/share/ptyro/kb/notes (2.0 KiB)"
+        ),
+        "{text}"
+    );
+    p.kb_notes = Some(notes(false));
+    assert!(!render(&p, &env("/home/me", None)).contains("your notes    "));
+    assert_eq!(serde_json::to_value(&p).unwrap()["kb_notes"]["count"], 3);
+
+    // Everything else in the data directory goes; the notes and the folders above them stay.
+    let t = tempfile::tempdir().unwrap();
+    let data = t.path().join("data");
+    let keep = data.join("kb").join("notes");
+    std::fs::create_dir_all(keep.join("work/_global/_old")).unwrap();
+    std::fs::write(keep.join("work/_global/a.md"), "a").unwrap();
+    std::fs::write(keep.join("work/_global/_old/b.md"), "b").unwrap();
+    std::fs::write(keep.join("work/_global/c.txt"), "c").unwrap();
+    std::fs::write(data.join("kb.db"), "x").unwrap();
+    std::fs::write(data.join("kb").join("other"), "x").unwrap();
+    std::fs::create_dir_all(data.join("profiles/work")).unwrap();
+    assert_eq!(count_notes(&keep), 2);
+    assert_eq!(count_notes(&data.join("nothing")), 0);
+    remove_tree_but(&data, &keep).unwrap();
+    assert!(
+        keep.join("work/_global/a.md").exists() && keep.join("work/_global/_old/b.md").exists()
+    );
+    let left = |d: &std::path::Path| std::fs::read_dir(d).unwrap().count();
+    assert_eq!((left(&data), left(&data.join("kb"))), (1, 1));
 }

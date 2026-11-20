@@ -579,15 +579,152 @@ after a restart too. A linked machine's chats show under its workspaces and are 
 (they run there, on its agents). In a chat, `C-f` finds in it, `/` in the composer lists commands
 (`/retry` and `/edit` replace the last answer or your last message, `/agent`…) and `C-q C-g`
 searches every chat; `Tab` (or `C-i`) makes a new chat incognito (nothing kept). A chat can look up your earlier
-chats itself (`[chat] history_tool`), only those of its own profile unless `history_scope` says
+chats itself (`[chat] history_tool`), only those of its own profile unless `[kb] scope` says
 otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
 
-**Meaning search** is opt-in: `[chat] meaning = true` (the settings panel's Chat section, or say
-yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it) downloads
-a small model once (model2vec `potion-base-8M`, 31 MB, MIT) and reads every chat in the background,
-on this machine only. Searches then also find messages *about* what you typed, marked `≈`, merged
-with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro doctor` shows how far it is.
+**The knowledge base** is one memory of your work, for you and your agents to search. ptyro keeps it in one file, `kb.db`, beside `chat.db`, and **your agent sessions
+go into it as they happen**, with nothing for you to do: at the end of each turn ptyro reads
+what Claude Code or Codex wrote in its own transcript and keeps what you typed, what the agent
+answered and one line for each tool it used (`Bash: cargo test`), under one entry a
+conversation, with a short card (the task, the outcome, the files changed). It never keeps the
+agent's thinking, what a tool printed, or a chat (chats have their own file, and are searched
+beside it). It stays on this computer.
+
+```sh
+ptyro recall retry policy            # search everything kept, and your chats
+ptyro recall flaky test kind:session since:30d -p myrepo
+ptyro recall retry policy --here     # this computer only (linked machines are searched too, otherwise)
+ptyro kb show k:7f3k/12              # a hit with what was said around it (k:7f3k: all of it)
+ptyro kb recent                      # the history, by day
+ptyro kb                             # on or off, what it holds, what was not kept and why
+ptyro kb forget k:7f3k               # delete it for good; nothing of it is kept again
+ptyro new --private -a claude        # a private session: nothing of it is kept at all
+ptyro kb forget --session brisk-rook # forget a running session, and keep nothing more of it
+ptyro kb note "We chose SQLite because there is no server to run" --tag decision   # a note
+ptyro kb notes                       # the notes, by project (kb show REF --open edits one)
+ptyro ingest ~/notes                 # read a folder: its documents, file names, comments, commits
+ptyro ingest --history               # read what your agents kept before ptyro did
+ptyro kb ls                          # what is read (every project is, by itself); kb sync, kb rm
+ptyro kb show k:7f3k/12 --open       # its source: the session, your editor at the line, git show
+```
+
+**Your projects are read too**, with nothing to do: when ptyro knows a project, its documents
+(by heading), the names of its files, the comments in its code and its commit messages become
+searchable; its code itself only with `[kb] code = true`. Only what git doesn't ignore, never a
+file of keys, never a worktree. `ptyro ingest PATH` reads any other folder and keeps it
+current; `ptyro ingest --history` brings in the conversations Claude Code and Codex kept
+before ptyro did (never a private session's, never one you forgot).
+
+**Notes are what someone wrote down**: a decision and its reason, a fact, a how-to. `ptyro kb
+note` writes one (no text: your editor opens), and so do your agents, with their `remember`
+tool, when you say "remember that we chose X because Y". A search lists notes first. They are
+plain Markdown files in ptyro's data folder (`kb/notes/<profile>/<project>/`; `ptyro about`
+names it), so any editor works on them: ptyro watches the folder and finds what you change. A
+note an agent wrote says which agent and which session, lands under that session's profile,
+and never overwrites another (it *replaces* one, and the old file is kept aside). `[kb]
+remember = false` stops agents writing them. Uninstalling ptyro leaves your notes where they
+are.
+
+**Your agents search it too.** Every Claude Code and Codex session ptyro starts is given three
+tools, `recall` (search: it answers pointers), `recall_read` (open one with what was said
+around it) and `remember` (write a note), so an agent can look up what was done before instead
+of working it out again.
+They come with the session, for that session only (ptyro writes nothing into `~/.claude` or
+`~/.codex`), and are there again after a resume. What they answer is marked as retrieved
+history, not instructions, and says who wrote each piece. An agent sees only what happened
+under its own profile, never the session it is in, and can't forget anything. `[kb] tools =
+false` gives no agent the tools; `[agents.codex] kb = false` gives that agent none.
+
+**It can also speak first, if you let it.** `[kb] inject = true` (off as it comes): when you
+give an agent a prompt that is clearly about something kept, ptyro adds up to three pointers
+to it beside your prompt (an address, a date and a title each, never the text), which the
+agent opens with `recall_read` or ignores. It is off unless you switch it on because stored
+titles then reach a model's prompt unasked, it costs about 185 to 300 tokens on such a prompt,
+and a match by words can be beside the point. A private session is offered nothing, nothing
+crosses the wall between profiles, most prompts are offered nothing at all, and `ptyro kb`
+lists what was offered and to which session.
+[`docs/knowledge.md`](docs/knowledge.md#offered-at-a-prompt-off-unless-you-switch-it-on) has
+all of it.
+
+**The commands you run in your shells are kept too, and what they print is not.** Each
+command line of a shell session (the quick terminal, SHELLS) is kept when the command ends,
+with its folder, how it ended and how often you ran it, so `ptyro recall ffmpeg` finds that
+long line again. Never kept: a private shell, a command typed with a space before it, `ls`
+and its kind, a command that names a key file (`cat .env`); and tokens and passwords in a
+command line are redacted (`mysql -p…`, `export FOO_KEY=…`, `Bearer …`). What a command
+*printed* is kept only if you say so: `[kb] shell = "output"` (its first 2 KiB and its last
+6 KiB, for 30 days; never a full-screen program's screen, never a command's that you typed
+into: a password prompt, a REPL, `ssh`).
+`[kb] shell = "off"` keeps nothing of your shells; the Library's Sources tab has both
+switches. [`docs/knowledge.md`](docs/knowledge.md#shells) says all of it.
+
+**A private session** leaves nothing in the knowledge base: no transcript is read and no card
+is kept (the agent still keeps its own history, as it always does); a private shell keeps no
+command. Start one with
+`--private`, or tick **Private** in the TUI's form (`C-o` in the task box) and in the web's New
+task sheet; `[kb] private = true` makes it the default, and `--no-private` keeps one then. A
+private session is marked `◌`. It still has the tools to search with.
+
+**In the TUI it is the Library**: `Ctrl-Q L` (`L` in the sidebar; `kb.open` in the palette). With
+nothing typed it is the history, by day: what your agents did, newest first. `/` searches as you
+type, and the selected hit's text is beside the list with what was said around it. `Tab` reaches
+the filters (kind, project, since, who wrote it). `⏎` opens it: a chat at its message, a
+session in the reader (the stored conversation, read only; `/` finds in it), a note or a file
+in your editor (a file at the line that was found), a commit as `git show`. `2` is the
+**Notes** tab: the notes by project, `n` writes one (a form with every
+option), `x` deletes one. `3` is the **Sources** tab: what is read (your projects, and the
+folders you add), what each holds and how far a read of it is; `i` reads a folder through a
+form with every option, `s` looks at one again, `x` stops reading one, `b` reads your agents'
+own history, and `t`, `c` and `o` switch the keeping of agent sessions, of shell commands and
+of what those print. `r` goes to the session it
+happened in, resuming it if it sleeps; `y` copies its address, `Y` its text; `d` forgets it
+(it asks first); `s` shows how the knowledge base stands. A session's, a worktree's and a
+project's menu (`.`) have `kb.history`: the Library with only that one's. It follows what is
+kept as it happens. Switched off, it says so, and `⏎` switches it on.
+
+**On the web it is More → Library**, made for a phone: the search box, the same filters as
+picks, the history by day (**Older…** brings more); a tap opens the reader, which shows the
+piece with what was said around it, then **All of it**, with a box to find in it, **Its
+session** (resumed if it sleeps) and ⋯ to copy its address or its text and to **Forget…** it. Its
+**Notes** tab lists the notes by project: **New note**, a tap to edit one in the page, ⋯ →
+Delete…. Its **Sources** tab lists what is read and how far a read is: **Read a folder…**
+(every option), **Agents' history…**, a tap on a row to look at it again or stop reading it, and the switches for agent sessions and for shells (**Keep what they print too…** asks first). A session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
+happens, and switched off it offers to switch it on.
+
+**With linked machines** (`ptyro machine add`), each keeps its own knowledge base and nothing
+is copied. A search asks every one that is up and mixes the answers, each hit with its machine
+and an address under it (`laptop2:k:7f3k/12`, which `kb show` reads there); `--here` is this
+computer only, `--machine laptop2` (or `machine:laptop2` in the box) that one only, and the
+Library has a machine filter. What a machine reads is its own: `ptyro ingest PATH --machine
+laptop2` (and `kb ls`, `kb sync`, `kb rm`) act there, as the Sources tab's machine pick does.
+A machine that is down is named under the answer. An agent's
+`recall` asks other machines only when it says so, and each answers within the same wall
+between profiles.
+
+The long form, with what is and is never kept, is [`docs/knowledge.md`](docs/knowledge.md).
+
+What it keeps is yours to bound. Settings → Knowledge (`[kb]` in the config): `enabled = false`
+switches it off (no session is read and nothing is searched; what was kept stays in the file
+until you forget it), `sessions = false` stops keeping agent sessions, `shell = "off"` stops
+keeping shell commands (`"output"` also keeps what they print), `retain_days = 90`
+deletes sessions and shell commands older than that once a day, `redact` adds your own patterns to what is
+redacted before anything is kept (keys, tokens, passwords and your profile's secrets already
+are), and `exclude` adds paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind
+never are). `[agents.codex] kb = false` keeps one agent's sessions out, and a repository keeps
+itself out with `[knowledge] enabled = false` in its `.ptyro.toml`. `ptyro kb forget` really
+deletes: the text is zeroed in the file, and a forgotten session is not read again. An agent
+that runs `ptyro recall` itself sees only what happened under its own profile (`scope`), never
+its own session, and can't forget anything. `ptyro doctor` and `ptyro about` name the file,
+and `ptyro uninstall` lists it (and leaves your notes folder in place unless `--delete-notes`).
+
+**Meaning search** is opt-in: `[kb] meaning = true` (the settings panel's Knowledge section, or say
+yes when `chat search --meaning`, `by:meaning` in the TUI's or web's search box, offers it; `[chat]
+meaning`, its old name, still switches it on) downloads a small model once (model2vec
+`potion-base-8M`, 31 MB, MIT) and reads every chat, and what the knowledge base keeps, in the
+background, on this machine only. Searches then also find messages *about* what you typed, marked
+`≈`, merged with the keyword hits; `--words` (`by:words`) leaves them out. `ptyro recall` searches
+the same way. `ptyro doctor` and `ptyro kb` show how far it is.
 
 ### Your phone and other machines
 
@@ -769,6 +906,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
+| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, shells (commands, and output only if you ask), projects and folders (`ptyro ingest`), the agents' own history, notes, private sessions, the switches, forgetting, the agents' tools, what is offered at a prompt (off unless you switch it on) and its risk, the Library, linked machines |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
@@ -793,7 +931,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux and macOS (on Windows, inside WSL2) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
-| `make test` (`FLAKE_BUDGET=2`) / `make smoke` | all tests: a test that fails runs again once, alone, and if it passes then it's a flake, named in the output and `target/flakes.txt`; a test failing twice, or more flakes than the budget, fails the run; a test binary past `TEST_BINARY_TIMEOUT` (1200 s) is killed / quick end-to-end checks of the PTY and emulator |
+| `make test` (`FLAKE_BUDGET=2`) / `make smoke` | all tests: a test that fails runs again once, alone, and if it passes then it's a flake, named in the output and `target/flakes.txt`; a test failing twice, or more flakes than the budget, fails the run; a test binary past `TEST_BINARY_TIMEOUT` (1200 s) is killed; a test of a real shell says so and leaves that shell out where it isn't installed, unless `PTYRO_REQUIRE_SHELLS="bash zsh"` names it (CI does: a missing one fails there) / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |
 | `make check` / `make ci` | fmt-check, lint, doc, lock-check, ratchet, test, smoke: CI's main job on every platform / those plus `deny`, `web-check`, `web-e2e`, `msrv`, `fuzz-smoke` and `installer-check`: everything CI runs |
 | `make lock-check` / `make ratchet` / `make ratchet-update` | fail if `Cargo.lock` is out of date / fail if a crate has more `unwrap()`/`expect()` in non-test code than `scripts/unwrap-baseline.txt` allows (only ever lower it) / write the current counts as the baseline |
@@ -810,13 +948,19 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
+| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`, `ARGS=--built`, `ARGS=--offer`, `ARGS=--offer-built`) | check what the knowledge base rests on against the real Claude Code and Codex here (`--built`: only that they take the tools exactly as ptyro gives them, from the real `ptyro mcp`; two tiny turns. `--offer`: only that a prompt hook's added context reaches the model, what it costs and what the transcript keeps of it; four tiny turns. `--offer-built`: only what ptyro itself offers at a prompt with `kb.inject` on: its hook timed as a process, then each real agent answering as a session of a throwaway daemon; two tiny turns): that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that ptyro's own reader keeps the conversation of those transcripts and nothing else, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
 | `make spike-chat-meaning` (`NODES=…`) | meaning search's cost over 100k chat messages with a synthetic model the real one's size: embedding, the backfill, a search's scan, the vectors' size (nothing downloaded) |
+| `make spike-kb` (`CHUNKS=…`) | ROADMAP KB0.1: what the knowledge base's search costs over 500k (or `CHUNKS=1000000`) made-up chunks in SPEC §25.4's schema: by words, by meaning with each filter, each fallback with its recall, the merged search, the same through the search as built (KB1.5), the file's size by part, an ingest and a forget (a synthetic model the real one's size, nothing downloaded; about 2 minutes) |
+| `make kb-eval` (`KB_EVAL_VERBOSE=1`) / `make kb-eval-real` (`PTYRO_KB_EVAL_MODEL=…`) | ROADMAP KB1.6: the knowledge base's golden set: 300 made-up items of every kind in two profiles, a few chats, and 63 questions, each with what must be among the first five hits and what must never be found (another profile's, a forgotten one), through the real ingest and search. Prints recall at 5 and the mean reciprocal rank by words alone and with meaning, and fails when one drops two points under the committed numbers (a synthetic model, nothing downloaded, a second; `make test` runs it too) / the same with the real model if it is already on this machine (it reports only, and downloads nothing) |
+| `make spike-kb-comments` (`ARGS="<folder>…"`, `SAMPLE=…`) | ROADMAP KB0.4: the comment table (SPEC §25.6.3) run over real code, read-only: files by extension, comment blocks kept and dropped by each rule (licence headers, tools' directives, code switched off, too short), and a sample of each to judge by eye |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
-| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of ten targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image and every config parser / coverage-guided `cargo fuzz` (nightly) |
+| `make bench-kb-offer` | ROADMAP KB5: how long the search behind what is offered at a prompt takes, optimised, over 20,000 made-up sessions of common words, for 200 prompts: the median, p95, the slowest, and how many passed the 150 ms cut-off after which nothing is offered |
+| `make bench-kb-redact` | ROADMAP KB1.3: how long the knowledge base's redaction takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file before anything is kept) |
+| `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan, a file under a root, the transcript readers) / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
 | `make compat` (`VTTEST=…`) | headless compatibility sweep → a table for `docs/compat.md` |
 | `make bench` / `make criterion` | emulator parse speed, daemon throughput, idle CPU, key latency (Linux) / micro-benchmarks (`target/criterion`) |

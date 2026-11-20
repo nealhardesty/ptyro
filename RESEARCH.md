@@ -30,7 +30,8 @@ watchlist re-checked, 12 new entries, about 30 updated; see §II.6 and the Chang
   [Addendum 2026-11-11](#addendum-2026-11-11-what-three-weeks-changed) · [Landscape map](#landscape-map)
 - **Part I — Product catalogue:** A. TUI/tmux managers · B. GUI workspaces · C. Terminals & multiplexers
   (+ protocol landscape) · D. Cloud/async agents · E. Remote & mobile · F. Orchestration products ·
-  G. Agent CLIs & adjacent tooling · H. Chat clients and conversation history
+  G. Agent CLIs & adjacent tooling · H. Chat clients and conversation history ·
+  I. Knowledge bases and agent memory
 - **Deep dives — herdr and tuios:** DD1 herdr · DD2 tuios (identity, architecture, status model, OSC 7501 interop, head-to-head, ideas)
 - **Deep dive — Windows and PowerShell:** DD3 (how others ship on Windows, platform facts, ptyro's Unix surface, design options, stages)
 - **Part II — Orchestration deep dive:** practitioners · research evidence · workflow engines ·
@@ -1432,6 +1433,53 @@ script or a third-party write-up; [U] = nothing documents it.
 - **Gemini CLI [S 2026-10-30, 0.66.0's source]:** `~/.gemini/tmp/<project>/chats/session-*.jsonl` (JSONL with `$rewindTo`/`$patch`/`$set` records since 0.66; a legacy `.json` before); `--list-sessions`, `--resume latest|index|id` [V].
 - **ACP [V]:** `session/list` (capability `sessionCapabilities.list`; `cwd`, `cursor`), `session_info_update` (`title`, `updatedAt`), `session/load` (replays), `session/resume` (reconnects without replay; RFD completed 2026-04-22 [S/V]); `session/fork` is unstable and not in the spec yet [S].
 - **Ideas:** → R-CHAT-12. The point of ADR 19 is that ptyro does not depend on any of these.
+
+---
+
+### I. Knowledge bases and agent memory *(added 2026-11-19, for the owner's knowledge-base brainstorm)*
+
+> **Headline (2026-11-19):** three shapes exist. **Retrieval over raw history** (orch, claude-mem):
+> chunk what happened, search it by words and meaning, hand the agent pointers. **Extracted
+> facts** (Codex memories, Claude's auto memory, mem0): an LLM pass turns sessions into a small
+> set of statements, loaded at the start of a session. **A compiled wiki** (the "LLM wiki"
+> pattern): an LLM keeps Markdown pages up to date from immutable sources. Nobody ties any of them
+> to the place the work happens across agents, accounts and machines, which is what ptyro is.
+> One pass: I1 read from its code, the rest from web searches (all [S]); the benchmark numbers are
+> the vendors' own.
+
+#### I1. orch (willesq/orchestrator)
+- **URL:** a local clone at commit `02e9f91` (2026-11-16); installed from a private Homebrew tap · **Class:** RAG memory daemon for Claude Code · Go 1.26 plus a Swift menu-bar app · **no LICENSE file**
+- **Maturity [V 2026-11-19, from the code]:** 852 commits since 2026-08-04, 595 of them in November, in practice one author; a Go rewrite of an earlier Python system; migrations, a coverage gate of 80% a file. macOS only.
+- **What it is [V]:** `orchd` (gRPC on a Unix socket), `orch` (CLI, and the stdio MCP servers `rag` and `queue`), `orch-hook` (the agents' lifecycle hook).
+  - **Store:** all memory text is chunks in **Qdrant** (a downloaded binary, v1.17.1): a dense vector and a sparse BM25 one. SQLite `orch.db` holds bookkeeping only. No entities, no graph, no typed memories: chunks keyed by a URI (`session://<id>/transcript`, `session://<id>/record`, `repo://`, `checkout://`, `file://`, web). The point id is `SHA1(uri#index)`, so writing a source again replaces it.
+  - **Ingest:** one choke point (`rag.Service.IngestText`). The SessionEnd hook parses the transcript, redacts it and hands it to the daemon, which stores the transcript and a record; a background `claude -p --model haiku` replaces the record with a summary (Outcome / Decisions / Files / Open items, under 250 words, from the first 8 KB and the last 48 KB). Folders: `*.md` only, from registered repos, GitHub owners and checkouts; web pages on a schedule; docs an agent edits (PostToolUse). Chunks are at most 110 MiniLM tokens with 16 of overlap, split on Markdown headings.
+  - **Retrieval:** all-MiniLM-L6-v2 (384 dimensions, ONNX Runtime) plus BM25, merged by RRF (k = 60, words weighted 0.5); type weights (a transcript 0.85), recency decaying to a floor of 0.85 over a 180-day half-life, at most 2 hits a source; project scope by tags (`repo:`, `checkout:`), the project first and then everything.
+  - **Delivery:** the UserPromptSubmit hook prepends **at most 3 dated pointers**, past a score floor (0.25 for a question, 0.45 for a statement) and a topic "evidence" gate; MCP tools `rag_search`, `rag_ingest_text`, `rag_list_sources`, `rag_delete_source`; a resume brief after compaction.
+  - **Provenance and privacy:** each chunk carries its writer, a trust tier a client can't set, its origin and a content hash; injected text is quoted as data. About 25 redaction rules, and a file with more than 25 hits is skipped as a keystore. "Memory spaces" (a collection per space, about 13k lines) is off by default. `orch rag eval` scores retrieval against a golden set.
+- **Weaknesses vs ptyro:** no licence (ideas only, as always); Qdrant, ONNX Runtime and a logged-in `claude` are required; the parser reads Claude's JSONL only (Codex rollouts likely come out empty [U, inferred, not run]; Gemini's payload is marked unverified in its own source); folders give Markdown only; no consolidation across sessions, no forgetting, no contradiction handling; Slack and Teams connectors exist and never run; some design docs are stale against the code.
+- **Ideas:** → R-KB-01 (one ingest choke point, provenance on every chunk), R-KB-06 (gated injection of a few dated pointers), R-KB-09 (redaction), R-KB-10 (a golden-set eval), R-KB-11 (ranking).
+
+#### I2. The agents' own memory
+- **Codex memories [S 2026-11-19, third-party posts; the official page was not read]:** off by default (`features.memories`). Two phases: a thread idle for hours is summarised (`rollout_summaries/`), then one consolidation agent merges into `~/.codex/memories/` (`MEMORY.md`, `memory_summary.md`), comparing against the last run and pruning what is stale; the summary is put into a new session. Local, per user. One user reports heavy background usage overnight. Key and folder names differ between posts [U].
+- **Claude Code auto memory [S]:** notes per project under `~/.claude/projects/`, a `MEMORY.md` index read at the start of a session (limits of 200 lines and 25 KB reported), a consolidation pass that merges duplicates and replaces stale entries; transcripts are deleted after a retention period and memory files are not.
+- **What it means:** each agent remembers for itself, per account, per machine. Nothing is shared between Claude and Codex, between profiles, or with the person.
+
+#### I3. claude-mem
+- **URL:** docs.claude-mem.ai · **Class:** Claude Code plugin [S 2026-11-19, its own docs]
+- **What it is:** hooks (SessionStart, PreCompact, SessionEnd) feed a worker that compresses tool use into "observations" with an LLM; SQLite with FTS5, Chroma optional, words then meaning then a merge. **Progressive disclosure:** a compact index (50–100 tokens a result), then a timeline, then the full observation (500–1,000 tokens). It went from nine MCP tools to four because the tools' own descriptions cost too much at the start of a session.
+- **Ideas:** → R-KB-05 (few tools; an index first, the text on request).
+
+#### I4. The "LLM wiki" pattern
+- **Source [S 2026-11-19, blog summaries of a gist dated 2026-04-04; the gist was not read]:** three layers: immutable raw sources, a wiki of Markdown pages the model owns, and a schema file (AGENTS.md) that says how to keep it. Three operations: **ingest** (a new source updates the 10–15 pages it touches), **query**, **lint** (orphans, contradictions, stale claims). Two files: `index.md` to navigate by, `log.md` as the trace. Later versions add citations back to the sources.
+- **Ideas:** → R-KB-07 (pages as plain files, written by the agents ptyro already hosts).
+
+#### I5. Atuin: command output
+- **URL:** docs.atuin.sh (`ai/command-output`, `reference/pty-proxy`) [S 2026-11-19]
+- **What it is:** a PTY proxy between the terminal and the shell cuts each command's output out by the shell's prompt marks. **Nothing is captured by default.** A model is given a command's output only when it asks for that command's by id; known credentials are replaced with `****`, `redact_patterns` adds more, a `command_filter` keeps a command and drops its output, and in a matching directory an agent's tool calls keep their name only. An MCP server lets Claude Code and Cursor read it.
+- **Ideas:** → R-KB-08. ptyro already is that proxy and already reads the marks (SPEC §5.7).
+
+#### I6. Memory services and their benchmarks
+- **mem0, Letta, cognee, Graphiti (Zep), supermemory [S/U 2026-11-19]:** fact extraction, self-edited memory blocks, graphs, a temporal graph, "memory as a filesystem". LongMemEval and LoCoMo scores of 88–97% are each vendor's own, run under different conditions; the smaller sets now fit in a context window; what is left is said to be counting across sessions, not recall. **No independent comparison of words, vectors, graphs and files was found**, so nothing here argues for a graph or a vector database.
 
 ---
 
@@ -3378,7 +3426,7 @@ ship themselves, in order:
 | R-ORC-17 | Cloud attempts in fan-out (`--agents codex-cloud`), pulling diffs into local worktrees for compare | Codex cloud | Backlog | M | ★ | new |
 | R-ORC-18 | Ship a **ptyro agent skill / AGENTS.md snippet** teaching `ptyro send/read/wait --json`, before `ptyro mcp` | herdr, Rex, Orca | M5 | S | ★★ | **built M5.9** (2026-10-20): the AGENTS.md/skill snippet in `docs/scripting.md` |
 | R-ORC-19 | Human-driven `ptyro last <session>` and `ptyro handoff <from> <to>`: deliver only when idle, with a provenance header | ccmux | M5 | S | ★★ | new |
-| R-ORC-20 | Shared context: `.ptyro/context/` hand-off folder (git-excluded), run notebook `$PTYRO_RUN_DIR/notes.md`, project `decisions` log via `ptyro mcp log_decision`, opt-in post-run lessons summariser | Conductor `.context`, Nimbalyst wiki, Letta | M7+ | M | ★ | new |
+| R-ORC-20 | Shared context: `.ptyro/context/` hand-off folder (git-excluded), run notebook `$PTYRO_RUN_DIR/notes.md`, project `decisions` log via `ptyro mcp log_decision`, opt-in post-run lessons summariser | Conductor `.context`, Nimbalyst wiki, Letta | M7+ | M | ★ | superseded by R-KB-07 (KB2) |
 | R-ORC-21 | Role briefs as presets (pm, arch, eng, qa, reviewer, frontend/backend) for recipes and change sets; name recipe shapes plainly (fan-out, pipeline, lead/worker, review-loop) | ccswarm, initech, BMAD | M7.8 | S | ★ | new (its change-set half is moot: change sets were removed 2026-11-17, pare-down) |
 | R-ORC-22 | `ptyro wait --match '<regex>'` on screen or scrollback, also via MCP | Cursor Await tool, herdr `wait-output` | M5 | S | ★★ | **built M5.2** (2026-10-20): `wait --match REGEX [--scrollback]` (MCP waits for M7) |
 | R-ORC-23 | **Verified-done**: status splits into `done(claimed)` and `done(verified)`, with stored evidence (command, exit code, output tail); `done_when` Stop-hook `decision:block` bounce for Claude, follow-up send for the others | Anthropic harness posts, Claude hooks, StrongDM | M7 (hooks M4) | M | ★★★ | **→ M7.9, built** (2026-10-20); built, removed 2026-11-17 (pare-down) |
@@ -3524,8 +3572,27 @@ ship themselves, in order:
 | R-CHAT-13 | **Chats in every workspace, including linked machines'**: the mirror lists them, a chat is made and run on its owner, offline chats stay listed | owner (2026-10-29); MM1 (R-REM-13) | CHAT1 | L | ★★★ | → CHAT1.9 |
 | R-CHAT-14 | **Merge chats across all connected machines** (CHAT6): schema ready now (ULIDs, immutable nodes, tombstones, LWW fields, `origin`); needs its own brainstorm | owner (2026-10-29) | CHAT6 | L+ | ★★ | → CHAT6, brainstorm first |
 | R-CHAT-15 | **Make it a task**: a chat becomes a worktree session whose first prompt carries the branch | Claude desktop "task chips" (B) | CHAT4 | S | ★★ | → CHAT4 |
-| R-CHAT-16 | **Per-workspace memory**: facts kept across chats and offered to new ones (Claude's memory refreshes about daily) | Claude memory [V] | Backlog | M | ★ | new |
+| R-CHAT-16 | **Per-workspace memory**: facts kept across chats and offered to new ones (Claude's memory refreshes about daily) | Claude memory [V] | Backlog | M | ★ | superseded by R-KB-07 (KB2) |
 | R-CHAT-17 | **Export** a chat as Markdown or JSON | every app | CHAT2 | S | ★★ | → CHAT2 |
+
+#### Knowledge base (R-KB) *(added 2026-11-19; owner's brainstorm, catalogue section I; promoted the same day to ROADMAP KB, SPEC §25)*
+
+| ID | Idea | Seen in | Fit | Size | Pri | Status |
+|---|---|---|---|---|---|---|
+| R-KB-01 | **One ingest choke point**: every source (chat, agent session, folder, note, shell) becomes chunks through one function that redacts, hashes and stamps provenance (source, writer, trust, profile, project, machine, time); writing a source again replaces it | orch [V] | KB1 | M | ★★★ | → KB1.2 |
+| R-KB-02 | **One search over everything**: chat's FTS5, model2vec vectors and RRF (SPEC §22.10) generalised to a store of its own, with `history_scope`'s profile wall and the machine fan-out | ptyro's own chat search; orch | KB1 | M | ★★★ | → KB1.5 |
+| R-KB-03 | **Agent sessions as a source**: at the end of a turn or a session, read the agent's own transcript (Claude JSONL, Codex rollouts; the parsers R-CHAT-12 had) rather than the terminal's bytes | orch, claude-mem | KB1 | M | ★★★ | → KB1.4 |
+| R-KB-04 | **`ptyro ingest <folder\|file\|url>`**: a registered source, re-read by content hash; documents first (Markdown, text, ADRs), commit messages as a source of their own | orch (`*.md` only) | KB3 | M | ★★ | → KB3 |
+| R-KB-05 | **Recall tools for every agent** through `ptyro mcp`: search (an index of pointers), read (the text of one), remember (write a note); three tools, not nine | claude-mem, orch | KB1 | S | ★★★ | → KB1.10 (`remember`: KB2.3) |
+| R-KB-06 | **Gated injection**: a prompt hook adds at most three dated pointers, only past a score floor and a topic gate; off by default | orch [V] | KB5 | M | ★★ | → KB5 |
+| R-KB-07 | **Notes as plain files**: per-project Markdown pages with an index and a log, written by agents through the tools and by the person in an editor, each claim citing its source; a lint for orphans and stale claims | LLM wiki [S], Codex and Claude memory | KB2 | L | ★★ | → KB2; supersedes R-ORC-20's `decisions` log and R-CHAT-16 |
+| R-KB-08 | **Shell commands as a source**: the command, folder, exit code and duration from the prompt marks; output only when opted in, capped, redacted, never for an unrecorded session | Atuin [S] | KB4 | M | ★ | → KB4; commands on, output off by default (owner, 2026-11-19) |
+| R-KB-09 | **Redaction before anything is stored**: rules for known credential shapes, the user's own patterns, and a file with many hits skipped whole | orch, Atuin | KB1 | S | ★★★ | → KB1.3 |
+| R-KB-10 | **A golden-set retrieval check** (`make kb-eval`): questions with the sources that must come back, run in CI, so ranking changes are measured | orch `rag eval` [V] | KB1 | S | ★★ | → KB1.6 |
+| R-KB-11 | **Ranking**: weights by source kind (a note above a transcript), recency with a floor, at most two hits a source, the project before everything else | orch [V] | KB1 | S | ★★ | → KB1.5 |
+| R-KB-12 | **A digest pass**: an LLM turns finished sessions into notes (Outcome / Decisions / Files / Open items), run as a visible chat on the profile's own account | orch, Codex memories [S] | later | M | ★ | later: the owner allowed it for after KB5 (2026-11-19); not designed (SPEC §25.18, §21.14) |
+| R-KB-13 | **Code in three tiers**: file paths (always) and comments (by default, with the line of code they stand on) are ingested, so "where did I solve this before" works across repositories; full code only on request and by words only; one checkout a project, never its worktrees | the owner (2026-11-19); orch reads `*.md` only | KB3 | M | ★★ | → KB3.2 |
+| R-KB-14 | **A private session**: a switch where a session is created (CLI, TUI form, web); nothing of it is ingested, it can still recall; `kb forget` switches it on later | Claude's incognito chats, Atuin's filters; the owner (2026-11-19) | KB1 | M | ★★★ | → KB1.14 |
 
 #### Windows and PowerShell (R-WIN) *(added 2026-10-31; owner's question, DD3, ROADMAP WIN)*
 
@@ -3610,7 +3677,7 @@ an idea, the row says so and marks it [U] rather than assuming.
 
 ### III.3 Explicitly *not* recommended (with reasons)
 
-- **A vector-DB memory layer** (Ruflo): its own figures are self-reported; a lightweight notes file covers the need.
+- **A vector-DB memory layer** (Ruflo): its own figures are self-reported; a lightweight notes file covers the need. *(2026-11-19: still holds as a rule against a separate vector database. Chat's vectors already live in SQLite, and section I found no independent evidence that a vector database or a graph does better; R-KB-02 keeps to SQLite.)*
 - **Peer-to-peer free-form worker chat:** MAST and Cognition locate failures there. Prefer typed messages and selection tools.
 - **An LLM router or manager inside the engine:** breaks ptyro's "deterministic engine" principle (SPEC §15). Agents plan by emitting data.
 - **Deterministic code replay** (Temporal-style) of agent steps: PTY agents can't be replayed. Fork instead.
@@ -3852,6 +3919,13 @@ vendors' CLIs (F21) is a sign the neutral position is real; it is also a sign it
 
 ## Changelog
 
+- **2026-11-19 (knowledge bases, one pass):** new catalogue **section I** (I1 orch, read from its
+  code at `02e9f91`; I2 the agents' own memory, I3 claude-mem, I4 the LLM-wiki pattern, I5 Atuin's
+  command output, I6 memory services and their benchmarks, all [S] from web searches) and **12
+  ideas** (R-KB-01…12), none promoted. A dated note on III.3's vector-database line.
+  **Later the same day** the owner decided the shape: the ideas are promoted to ROADMAP **KB0…KB5**
+  (SPEC §25), R-KB-13 (code in three tiers) and R-KB-14 (a private session) added, R-KB-12 kept
+  for later.
 - **2026-11-11 (partial sweep, orchestration):** Part of the full review of 2026-11. One research
   pass, web only. The watchlist re-checked (new table in IV.1); **12 new entries** (A19 hcom, A20
   new entrants, D11 Claude Projects, E9 Codex `remote-control`, E10 GitHub Mobile over a

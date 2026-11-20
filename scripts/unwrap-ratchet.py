@@ -17,8 +17,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASE = ROOT / "scripts" / "unwrap-baseline.txt"
 # Crates that are test or development tooling, not shipped logic.
 SKIP = {"ptyro-testkit", "ptyro-drive"}
-# Whole files that are test code (their module is `#[cfg(test)]` in main.rs).
-TEST_FILES = {"ptyro/src/parity.rs"}
+# Whole files that are test code (their module is `#[cfg(test)]` where it is declared).
+TEST_FILES = {"ptyro/src/parity.rs", "ptyro-daemon/src/kb/golden.rs"}
 PAT = re.compile(r"\.unwrap\(\)|\.expect\(")
 
 

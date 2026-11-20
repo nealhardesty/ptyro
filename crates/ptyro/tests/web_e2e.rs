@@ -70,7 +70,7 @@ fn the_web_app_works_in_a_real_browser() {
         .unwrap();
     let hs = hp.to_string_lossy().into_owned();
     let config = format!(
-        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\n[ui]\n# e2e: keep this comment\n"
+        "[attention]\nmin_work = \"1s\"\n[agents.claude]\ncommand = ['{BIN}', \"fake-agent\", \"--as\", \"claude\"]\nenv = {{ PTYRO_FAKE_TRANSCRIPT = \"1\" }}\n[ui]\n# e2e: keep this comment\n"
     );
     // Setup's fake machine (BOOT1): the page installs through `ptyro fake-installer`, never for real.
     let fake = hp.join("fake-setup");

@@ -275,6 +275,28 @@ pub fn editor_command(editor: &str, path: &Path) -> Vec<std::ffi::OsString> {
     argv
 }
 
+/// [`editor_command`] with the editor at `line`, for the editors known to take one: `+12`
+/// before the path (vi and its kin, nano, emacs, micro, kak), `--goto path:12` (VS Code and
+/// its kin), `path:12` (Helix, Zed, Sublime). Any other editor opens the file at its top.
+pub fn editor_command_at(editor: &str, path: &Path, line: Option<u32>) -> Vec<std::ffi::OsString> {
+    let program = editor.split_whitespace().next().unwrap_or_default();
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let Some(n) = line.filter(|n| *n > 1) else { return editor_command(editor, path) };
+    let script = match name {
+        "vi" | "vim" | "nvim" | "view" | "nano" | "emacs" | "emacsclient" | "micro" | "kak"
+        | "joe" | "mg" | "ne" => format!("{editor} +{n} \"$1\""),
+        "code" | "code-insiders" | "codium" | "cursor" | "windsurf" => {
+            format!("{editor} --goto \"$1\":{n}")
+        }
+        "hx" | "helix" | "zed" | "subl" => format!("{editor} \"$1\":{n}"),
+        _ => return editor_command(editor, path),
+    };
+    let mut argv: Vec<std::ffi::OsString> =
+        command_argv("sh", &script).into_iter().map(Into::into).collect();
+    argv.extend(["sh".into(), path.as_os_str().to_owned()]);
+    argv
+}
+
 /// The variables [`integrate`] may set, cleared from every shell's environment first, so none
 /// left over from elsewhere can steer the startup files.
 pub const VARS: [&str; 3] = ["PTYRO_BASH_LOGIN", "PTYRO_ZDOTDIR", "PTYRO_ZDOTDIR_UNSET"];
@@ -479,16 +501,21 @@ if [ -n "$PTYRO" ] && [ -z "$__ptyro_integrated" ]; then
   __ptyro_prompt() {
     local s=$?
     __ptyro_at_prompt=
+    __ptyro_hist=$(HISTTIMEFORMAT= builtin history 1)
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$s" "$HOSTNAME" "$PWD"
     return $s
   }
   PROMPT_COMMAND="__ptyro_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   PS1="$PS1\[\e]133;B\a\]"
   __ptyro_preexec() {
-    local c
+    local c h=
     c=$(HISTTIMEFORMAT= builtin history 1)
+    # The history's last line is what it was at the prompt: this command was kept out of it
+    # (HISTCONTROL: typed with a space before it, or the same as the last one), and that
+    # line is not it. Sent with a space before it, as one typed that way.
+    [ "$c" = "$__ptyro_hist" ] && h=' '
     c="${c#*[0-9] }"; c="${c# }"; c="${c//[[:cntrl:]]/ }"
-    printf '\e]133;C;cmdline=%s\a' "${c:0:200}"
+    printf '\e]133;C;cmdline=%s%s\a' "$h" "${c:0:2000}"
   }
   if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 4 ]; }; then
     # bash 4.4+: PS0 runs as a command starts.
@@ -520,7 +547,7 @@ if [[ -n $PTYRO && -z $__ptyro_integrated ]]; then
   }
   __ptyro_preexec() {
     local c=${1//[[:cntrl:]]/ }
-    printf '\e]133;C;cmdline=%s\a' "${c[1,200]}"
+    printf '\e]133;C;cmdline=%s\a' "${c[1,2000]}"
   }
   add-zsh-hook precmd __ptyro_precmd
   add-zsh-hook preexec __ptyro_preexec
@@ -536,7 +563,7 @@ if set -q PTYRO; and not set -q __ptyro_integrated
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' $status (hostname) $PWD
   end
   function __ptyro_preexec --on-event fish_preexec
-    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 200)
+    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 2000)
   end
 end
 "#;
@@ -585,9 +612,9 @@ if ($env:PTYRO -and -not $global:__ptyro_integrated) {
       $line = & $global:__ptyro_readline
       $global:__ptyro_lec = $global:LASTEXITCODE
       $global:__ptyro_err = if ($global:Error.Count) { $global:Error[0] } else { $null }
-      $c = ("$line" -replace '[\x00-\x1f\x7f]', ' ').Trim()
-      if ($c) {
-        if ($c.Length -gt 200) { $c = $c.Substring(0, 200) }
+      $c = ("$line" -replace '[\x00-\x1f\x7f]', ' ').TrimEnd()
+      if ($c.Trim()) {
+        if ($c.Length -gt 2000) { $c = $c.Substring(0, 2000) }
         [Console]::Write("$([char]27)]133;C;cmdline=$c$([char]7)")
       }
       $line
@@ -709,6 +736,23 @@ mod tests {
         assert_eq!(ShellKind::of_program("pwsh-preview"), Some(ShellKind::Pwsh));
         assert_eq!(ShellKind::of_program("/bin/sh"), None);
         assert_eq!(ShellKind::of_program("bashful"), None);
+    }
+
+    #[test]
+    fn an_editor_is_opened_at_a_line_where_it_is_known_to_take_one() {
+        let script = |editor: &str, line| {
+            let argv = editor_command_at(editor, Path::new("/a b/x.rs"), line);
+            assert_eq!(argv.last().and_then(|p| p.to_str()), Some("/a b/x.rs"));
+            argv[2].to_string_lossy().into_owned()
+        };
+        assert_eq!(script("nvim", Some(12)), "nvim +12 \"$1\"");
+        assert_eq!(script("/usr/bin/vim -u NONE", Some(7)), "/usr/bin/vim -u NONE +7 \"$1\"");
+        assert_eq!(script("code --wait", Some(3)), "code --wait --goto \"$1\":3");
+        assert_eq!(script("hx", Some(3)), "hx \"$1\":3");
+        // An editor that isn't known, no line, or its first: the file, as it is opened anyway.
+        assert_eq!(script("ed", Some(12)), "ed \"$1\"");
+        assert_eq!(script("nvim", None), "nvim \"$1\"");
+        assert_eq!(script("nvim", Some(1)), "nvim \"$1\"");
     }
 
     #[test]

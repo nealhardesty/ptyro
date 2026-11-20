@@ -304,7 +304,6 @@ impl Daemon {
                 }
             }
         });
-        self.start_meaning(db.clone());
         let me = Arc::clone(self);
         tokio::spawn(async move {
             loop {
@@ -613,7 +612,13 @@ impl Daemon {
                 }
                 Some(self.history_scope(&chat).await?)
             }
-            None => None,
+            // An agent's session in a terminal (its `recall_read` of a chat's address, a
+            // command it runs): what it reads of chats is behind the knowledge base's wall
+            // (`kb.scope`, SPEC §25.9), by where its process runs.
+            None => self.kb_agent(caller).map(|s| {
+                let wall = self.kb_session_scope(&s);
+                HistoryScope { profile: wall.profile, workspace: wall.workspace, itself: None }
+            }),
         };
         match req {
             Request::ChatSearch {
@@ -665,16 +670,20 @@ impl Daemon {
                 Ok(Reply::Chat { info })
             }
             // The history tools' list: what the asking chat may see.
-            Request::ChatList { pinned, archived, limit, .. } if scope.is_some() => {
+            Request::ChatList { workspace, all, pinned, archived, limit } if scope.is_some() => {
                 let scope = scope.unwrap_or_default();
                 let db = self.chat_db()?;
                 let ids = db.ids().await.map_err(store_err)?;
+                let workspace = match (&workspace, all) {
+                    (Some(w), false) => Some(self.find_workspace(w)?.id),
+                    _ => None,
+                };
                 let rows = db
                     .list(ListFilter {
+                        workspace,
                         archived,
                         pinned_only: pinned,
                         limit: limit.unwrap_or(0) as usize,
-                        ..ListFilter::default()
                     })
                     .await
                     .map_err(store_err)?;
@@ -924,7 +933,7 @@ impl Daemon {
                 self.chat_task(&chat, project, agent, name, confirmed).await
             }
             Request::ChatExport { chat, format } => {
-                let info = self.find_chat(&chat).await?;
+                let info = self.find_scoped(&chat, scope.as_ref()).await?;
                 let nodes = self.rec_branch(&info.id, None).await?;
                 let text = match format.as_str() {
                     "json" => serde_json::to_string_pretty(
@@ -1188,18 +1197,25 @@ impl Daemon {
 
     /// The chat whose engine `caller` runs in, if it is one.
     pub(crate) fn engine_chat_of(&self, caller: crate::guard::Caller) -> Option<String> {
-        if caller.is_link() {
+        // (A link by its token, which the daemon checked: never by what a client calls
+        // itself, or a chat's engine that said `machine` would be nobody's.)
+        if caller.grant.is_some_and(|g| g.machine) {
             return None;
         }
         let s = self.session_of_pid(caller.pid?)?;
         s.meta.locked().place.chat.clone()
     }
 
+    /// Whether a chat is incognito (one that isn't known is not).
+    pub(crate) async fn chat_incognito(&self, chat: &str) -> bool {
+        self.rec_get(chat).await.ok().flatten().is_some_and(|c| c.incognito)
+    }
+
     /// What a chat's history tools may see (`[chat] history_scope`): its profile's chats, its
     /// workspace's, or all; never an incognito one, nor itself.
     async fn history_scope(&self, chat: &str) -> Result<HistoryScope, Error> {
         let c = self.rec_get(chat).await?.ok_or_else(|| Error::missing("chat", chat))?;
-        let scope = self.config().chat.history_scope;
+        let scope = self.config().kb.scope;
         Ok(HistoryScope {
             profile: (scope == "profile").then(|| c.profile.clone()),
             workspace: (scope == "workspace").then(|| c.workspace.clone()),
@@ -1748,10 +1764,16 @@ impl Daemon {
         let session_id = SessionId::new();
         // The chat history tools (SPEC §22.10), from `ptyro mcp --chat` in the engine itself;
         // the daemon scopes what they see by the engine they run in.
+        // With them, the knowledge base's (`recall`, `recall_read`; SPEC §25.9), unless they
+        // are off or this is `chat find`'s engine, which has the chats and nothing else.
+        let kb = info.tools != FIND_TOOLS
+            && config.kb.enabled
+            && config.kb.tools
+            && !self.kb_agent_off(Some(&info.agent));
         let history = (config.chat.history_tool || info.tools == FIND_TOOLS).then(|| {
             let ptyro = std::env::current_exe()
                 .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
-            serde_json::json!({
+            let mut server = serde_json::json!({
                 "type": "stdio",
                 "command": ptyro,
                 "args": ["mcp", "--chat"],
@@ -1760,10 +1782,19 @@ impl Daemon {
                     "PTYRO_CHAT_ID": info.id,
                     "PTYRO_SOCKET": self.paths.socket.to_string_lossy(),
                 },
-            })
+            });
+            if kb {
+                server["env"]["PTYRO_KB_TOOLS"] = "1".into();
+                if config.kb.remember {
+                    server["env"][ptyro_agents::adapter::KB_REMEMBER_ENV] = "1".into();
+                }
+            }
+            server
         });
         let extra = ChatLaunch {
             incognito: info.incognito,
+            kb: kb && history.is_some(),
+            remember: config.kb.remember,
             history,
             system: (info.tools == FIND_TOOLS).then_some(FIND_PROMPT),
             folders: info.folders.clone(),
@@ -2512,7 +2543,7 @@ fn count_in(
     true
 }
 
-fn human_bytes(n: u64) -> String {
+pub(crate) fn human_bytes(n: u64) -> String {
     match n {
         0..1024 => format!("{n} B"),
         1024..1_048_576 => format!("{:.0} KB", n as f64 / 1024.0),
@@ -2683,15 +2714,19 @@ impl HistoryScope {
 /// Several machines' hits, each list best first, taken one from each in turn (bm25 isn't
 /// comparable across machines), each round newest first.
 fn interleave(lists: Vec<Vec<ChatHit>>) -> Vec<ChatHit> {
-    let mut iters: Vec<std::vec::IntoIter<ChatHit>> =
-        lists.into_iter().map(Vec::into_iter).collect();
+    interleave_by(lists, |h| h.at_ms)
+}
+
+/// [`interleave`] for any hits (the knowledge base's too), `at` saying when each happened.
+pub(crate) fn interleave_by<T>(lists: Vec<Vec<T>>, at: impl Fn(&T) -> u64) -> Vec<T> {
+    let mut iters: Vec<std::vec::IntoIter<T>> = lists.into_iter().map(Vec::into_iter).collect();
     let mut out = Vec::new();
     loop {
-        let mut round: Vec<ChatHit> = iters.iter_mut().filter_map(Iterator::next).collect();
+        let mut round: Vec<T> = iters.iter_mut().filter_map(Iterator::next).collect();
         if round.is_empty() {
             return out;
         }
-        round.sort_by_key(|h| std::cmp::Reverse(h.at_ms));
+        round.sort_by_key(|h| std::cmp::Reverse(at(h)));
         out.extend(round);
     }
 }
@@ -2703,6 +2738,10 @@ struct ChatLaunch {
     incognito: bool,
     /// `ptyro mcp --chat`, as an MCP server entry: the chat history tools (SPEC §22.10).
     history: Option<serde_json::Value>,
+    /// That server has the knowledge base's tools too (SPEC §25.9).
+    kb: bool,
+    /// And among them the one that writes a note (`kb.remember`).
+    remember: bool,
     /// Instead of the chat system prompt (`chat find`'s).
     system: Option<&'static str>,
     /// The chat's own folders (CHAT4).
@@ -2831,6 +2870,10 @@ fn tools_launch(
             }
             if extra.history.is_some() {
                 allowed.extend(HISTORY_TOOLS.map(str::to_owned));
+            }
+            if extra.kb {
+                let tools = ptyro_agents::adapter::kb_tools(extra.remember);
+                allowed.extend(tools.iter().map(|t| format!("mcp__ptyro__{t}")));
             }
             let mut v = vec!["--tools".to_owned(), tools.join(",")];
             if !allowed.is_empty() {
@@ -3089,6 +3132,25 @@ mod tests {
         let (a, _) = tools_launch("stream-json", &read, dir, vec![], &[], &claude);
         assert!(a[3].starts_with("WebSearch,WebFetch,mcp__ptyro__chat_search"));
         assert!(!a.contains(&"--safe-mode".into()));
+        assert!(!a[3].contains("recall"), "the knowledge base's tools only when it gives them");
+        // With the knowledge base's tools (SPEC §25.9): allowed beside the history tools.
+        let with_kb =
+            ChatLaunch { kb: true, history: Some(history.clone()), ..ChatLaunch::default() };
+        let (k, _) = tools_launch("stream-json", &read, dir, vec![], &[], &with_kb);
+        assert!(
+            k[3].ends_with("mcp__ptyro__chat_list,mcp__ptyro__recall,mcp__ptyro__recall_read"),
+            "{k:?}"
+        );
+        // And the one that writes a note, unless `kb.remember` is off.
+        let (k, _) = tools_launch(
+            "stream-json",
+            &read,
+            dir,
+            vec![],
+            &[],
+            &ChatLaunch { remember: true, ..with_kb },
+        );
+        assert!(k[3].ends_with("mcp__ptyro__recall_read,mcp__ptyro__remember"), "{k:?}");
         let cfg = &a[a.iter().position(|x| x == "--mcp-config").unwrap() + 1];
         assert_eq!(std::path::Path::new(cfg), dir.join("mcp.json"));
         assert!(std::fs::read_to_string(cfg).unwrap().contains("/bin/ptyro"));

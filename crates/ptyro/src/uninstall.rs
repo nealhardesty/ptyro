@@ -5,6 +5,9 @@
 //! mend list put in your shell's rc files, a Tailscale mapping it made, and the binary when it is
 //! the one that was installed by hand.
 //!
+//! Your notes (`<data>/kb/notes/`, SPEC §25.12) are your writing: they stay where they are,
+//! unless `--delete-notes`.
+//!
 //! What it never touches: your repositories, their branches, `.ptyro.toml` and
 //! `.ptyro.local.toml`, `.git/info/exclude` lines, and (unless `--purge-refs`) the snapshots under
 //! `refs/ptyro/` in your repositories, which hold checkpoints and the work an older ptyro archived
@@ -35,6 +38,8 @@ pub struct Opts {
     pub keep_data: bool,
     pub keep_binary: bool,
     pub purge_refs: bool,
+    /// The notes folder goes too (it is kept otherwise: SPEC §25.12).
+    pub delete_notes: bool,
 }
 
 /// What the process's surroundings say, gathered once so the planning can be tested.
@@ -71,6 +76,17 @@ pub struct Dir {
     pub bytes: u64,
     /// Kept: `--keep-config` or `--keep-data` said so.
     pub keep: bool,
+}
+
+/// The knowledge base's notes (`<data>/kb/notes/`): Markdown files you and your agents wrote.
+#[derive(Debug, Clone, Serialize)]
+pub struct Notes {
+    pub path: PathBuf,
+    /// How many notes (the ones set aside in `_old/` too).
+    pub count: usize,
+    pub bytes: u64,
+    /// `--delete-notes`: they go. Otherwise they are left in place.
+    pub delete: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,10 +155,17 @@ pub struct Plan {
     /// The size of `chat.db`, your chats' text, which goes with the data directory (SPEC §22.4).
     #[serde(default)]
     pub chats: Option<u64>,
+    /// The size of `kb.db`, the knowledge base: what was kept of your agents' sessions, which
+    /// goes with the data directory (SPEC §25.12).
+    #[serde(default)]
+    pub knowledge: Option<u64>,
     /// The size of `scratchpad.md` and its saved copies: notes from when ptyro had a scratchpad
     /// (removed 2026-11-17), the person's own, which go with the data directory.
     #[serde(default)]
     pub notes: Option<u64>,
+    /// The knowledge base's notes, when there are any: kept unless `--delete-notes`.
+    #[serde(default)]
+    pub kb_notes: Option<Notes>,
     pub worktrees: Vec<Worktree>,
     pub uncommitted_total: usize,
     pub service: Option<PathBuf>,
@@ -493,9 +516,20 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     let chats = std::fs::metadata(paths.data.join("chat.db")).ok().map(|m| {
         m.len() + std::fs::metadata(paths.data.join("chat.db-wal")).map_or(0, |w| w.len())
     });
+    let knowledge = std::fs::metadata(paths.data.join("kb.db"))
+        .ok()
+        .map(|m| m.len() + std::fs::metadata(paths.data.join("kb.db-wal")).map_or(0, |w| w.len()));
     let notes = std::fs::metadata(paths.data.join("scratchpad.md"))
         .ok()
         .map(|m| m.len() + dir_size(&paths.data.join("scratchpad.history")));
+    let kb_notes = notes_dir(paths);
+    let kb_notes = Some(Notes {
+        count: count_notes(&kb_notes),
+        bytes: dir_size(&kb_notes),
+        delete: opts.delete_notes,
+        path: kb_notes,
+    })
+    .filter(|n| n.count > 0);
 
     // Worktrees and snapshot refs: asked of git, off the async threads.
     let wts_in: Vec<_> = if opts.keep_data { Vec::new() } else { k.worktrees.clone() };
@@ -549,6 +583,14 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
     for d in dirs.iter().filter(|d| d.keep) {
         kept.push(format!("{} ({})", d.path.display(), d.name));
     }
+    if let Some(n) = kb_notes.as_ref().filter(|n| !n.delete && !opts.keep_data) {
+        kept.push(format!(
+            "{} ({} you and your agents wrote, {}: your writing; --delete-notes removes them too)",
+            n.path.display(),
+            plural(n.count, "note"),
+            human(n.bytes)
+        ));
+    }
     if opts.keep_data && !k.worktrees.is_empty() {
         kept.push(format!("{} worktree(s), which live with the data", k.worktrees.len()));
     }
@@ -577,7 +619,9 @@ pub async fn plan(ctx: &Ctx, env: &Env, opts: &Opts) -> Result<Plan, Error> {
         dirs,
         logins,
         chats,
+        knowledge,
         notes,
+        kb_notes,
         worktrees,
         uncommitted_total,
         service,
@@ -627,12 +671,34 @@ pub fn render(plan: &Plan, env: &Env) -> String {
         let _ = writeln!(s, "  chats         every chat you kept, chat.db ({})", human(bytes));
     }
     if let Some(bytes) =
+        plan.knowledge.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
+    {
+        let _ = writeln!(
+            s,
+            "  knowledge     what the knowledge base kept of your work, kb.db ({})",
+            human(bytes)
+        );
+    }
+    if let Some(bytes) =
         plan.notes.filter(|_| !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
     {
         let _ = writeln!(
             s,
             "  notes         your scratchpad notes, scratchpad.md ({}): copy them out first, or --keep-data",
             human(bytes)
+        );
+    }
+    if let Some(n) = plan
+        .kb_notes
+        .as_ref()
+        .filter(|n| n.delete && !plan.dirs.iter().any(|d| d.name == "data" && d.keep))
+    {
+        let _ = writeln!(
+            s,
+            "  your notes    {} you and your agents wrote, {} ({})",
+            plural(n.count, "note"),
+            tilde(&n.path, home),
+            human(n.bytes)
         );
     }
     if plan.logins && !plan.dirs.iter().any(|d| d.name == "data" && d.keep) {
@@ -755,6 +821,44 @@ fn step(out: &mut Vec<Step>, json: bool, name: &str, r: Result<String, String>) 
     out.push(Step { step: name.to_owned(), ok, detail });
 }
 
+/// `<data>/kb/notes`: the knowledge base's notes (SPEC §25.4).
+pub fn notes_dir(paths: &Paths) -> PathBuf {
+    paths.data.join("kb").join("notes")
+}
+
+/// How many Markdown files are under `dir`.
+fn count_notes(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => count_notes(&e.path()),
+            Ok(t) if t.is_file() => usize::from(e.path().extension().is_some_and(|x| x == "md")),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn plural(n: usize, what: &str) -> String {
+    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
+}
+
+/// Remove everything in `dir` but `keep` (which is inside it) and the folders it is in.
+fn remove_tree_but(dir: &Path, keep: &Path) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)?.flatten() {
+        let path = e.path();
+        if path == keep {
+            continue;
+        }
+        if keep.starts_with(&path) {
+            remove_tree_but(&path, keep)?;
+        } else {
+            remove_tree(&path)?;
+        }
+    }
+    Ok(())
+}
+
 fn remove_tree(p: &Path) -> std::io::Result<()> {
     match std::fs::symlink_metadata(p) {
         Ok(m) if m.is_dir() => std::fs::remove_dir_all(p),
@@ -870,13 +974,17 @@ async fn execute(ctx: &Ctx, plan: &Plan, opts: &Opts, json: bool) -> (Vec<Step>,
                 );
             }
         }
+        // The notes folder stays where it is (and so the folders above it), unless told.
+        let notes = plan.kb_notes.as_ref().filter(|n| !n.delete).map(|n| n.path.as_path());
         for d in plan.dirs.iter().filter(|d| !d.keep) {
-            step(
-                &mut steps,
-                json,
-                &format!("remove {}", d.path.display()),
-                remove_tree(&d.path).map(|()| String::new()).map_err(|e| e.to_string()),
-            );
+            let (what, done) = match notes.filter(|n| n.starts_with(&d.path)) {
+                Some(n) => (
+                    format!("remove {} (but your notes, {})", d.path.display(), n.display()),
+                    remove_tree_but(&d.path, n),
+                ),
+                None => (format!("remove {}", d.path.display()), remove_tree(&d.path)),
+            };
+            step(&mut steps, json, &what, done.map(|()| String::new()).map_err(|e| e.to_string()));
         }
         // A sandbox's home directory itself, once it is empty.
         if let Some(h) = &plan.sandbox

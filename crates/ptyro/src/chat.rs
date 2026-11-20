@@ -159,7 +159,7 @@ pub enum ChatCmd {
         /// This machine only
         #[arg(long)]
         here: bool,
-        /// Only messages about it, by meaning (≈), not by their words (`[chat] meaning`)
+        /// Only messages about it, by meaning (≈), not by their words (`[kb] meaning`)
         #[arg(long, conflicts_with = "words")]
         meaning: bool,
         /// Only messages with the words, even when meaning search is on
@@ -1297,11 +1297,11 @@ fn meaning_on(ctx: &Ctx, e: Error) -> Result<i32, Error> {
     if ctx.remote.is_some() || !crate::cli::confirm(&format!("{}. Switch it on?", e.message)) {
         return Err(Error::new(
             ErrorCode::Invalid,
-            format!("{} (`ptyro config set chat.meaning true`)", e.message),
+            format!("{} (`ptyro config set kb.meaning true`)", e.message),
         ));
     }
     let layer = ptyro_core::settings::Layer::User(ptyro_core::config::Config::path(&ctx.paths));
-    let op = ptyro_core::settings::Op::Set { key: "chat.meaning".into(), value: "true".into() };
+    let op = ptyro_core::settings::Op::Set { key: "kb.meaning".into(), value: "true".into() };
     ptyro_core::settings::apply(&layer, &op, &crate::config::lookups(), &crate::config::semantic)
         .map_err(|e| Error::new(ErrorCode::Invalid, e))?;
     eprintln!(
@@ -1312,7 +1312,7 @@ fn meaning_on(ctx: &Ctx, e: Error) -> Result<i32, Error> {
 }
 
 /// The chat view: the TUI, opened on this chat.
-async fn open(ctx: &Ctx, chat: &str) -> Result<i32, Error> {
+pub(crate) async fn open(ctx: &Ctx, chat: &str) -> Result<i32, Error> {
     crate::cli::check_attachable()?;
     let c = ctx.connect(true).await?;
     let (info, _) = match c

@@ -20,10 +20,12 @@ use crate::keymap::{Command, Table};
 use crate::palette::{Item, Palette, Target};
 use crate::tree::Row;
 
-/// The chat panel: the list, or one chat.
+/// The chat panel: the list, or one chat; or the Library (`library.rs`), which is shown, put
+/// aside and gone back to as they are.
 pub enum ChatPanel {
     List(ChatList),
     View(Box<ChatViewState>),
+    Library(Box<crate::library::Library>),
 }
 
 pub struct ChatList {
@@ -223,6 +225,7 @@ fn held<'a>(p: &'a ChatPanel, id: &str) -> Option<&'a ChatInfo> {
         ChatPanel::View(v) if v.id.as_deref() == Some(id) && v.info.is_some() => v.info.as_ref(),
         ChatPanel::View(v) => v.back.as_deref().and_then(|b| held(b, id)),
         ChatPanel::List(l) => l.archived.iter().flatten().find(|c| c.id == id),
+        ChatPanel::Library(_) => None,
     }
 }
 
@@ -248,6 +251,7 @@ fn refresh_held(p: &mut ChatPanel, info: &ChatInfo) {
                 }
             }
         }
+        ChatPanel::Library(_) => {}
     }
 }
 
@@ -573,6 +577,8 @@ impl App {
         let mut same = None;
         let back = match self.chat_panel.take() {
             Some(ChatPanel::List(l)) => Some(Box::new(ChatPanel::List(l))),
+            // A hit opened from the Library: Esc goes back to it.
+            Some(p @ ChatPanel::Library(_)) => Some(Box::new(p)),
             // The chat already shown (a hit or citation in it, its menu's open): followed
             // again, as it is.
             Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id) => {
@@ -621,13 +627,13 @@ impl App {
 
     /// A chat (or the list) just opened has the keyboard, wherever the keys were: typing goes
     /// into it, not to the sidebar it was opened from (as a session shown from there does).
-    fn chat_takes_keys(&mut self) {
+    pub(crate) fn chat_takes_keys(&mut self) {
         self.focus = Focus::Pane;
         self.sidebar_zoom = false;
     }
 
     /// Stop following the chat shown, if one is; its draft waits for it to open again.
-    fn leave_chat(&mut self) {
+    pub(crate) fn leave_chat(&mut self) {
         let p = self.chat_panel.take();
         self.let_go(p);
     }
@@ -677,6 +683,8 @@ impl App {
         }
         self.chat_panel = Some(p);
         self.preview_selected();
+        // (The Library, back from a chat or a session: what was kept meanwhile is in it.)
+        self.library_news();
     }
 
     /// A chat's view was left: stop following it.
@@ -724,7 +732,7 @@ impl App {
         match &self.chat_panel {
             Some(ChatPanel::View(v)) => return v.id.clone(),
             Some(ChatPanel::List(l)) => return self.list_target(l),
-            None => {}
+            Some(ChatPanel::Library(_)) | None => {}
         }
         None
     }
@@ -749,6 +757,7 @@ impl App {
                 None => format!("n:{}", v.token),
             },
             Some(ChatPanel::List(_)) => "list".into(),
+            Some(ChatPanel::Library(_)) => "library".into(),
             None => String::new(),
         }
     }
@@ -1384,7 +1393,7 @@ impl App {
     /// sees the change and downloads its model.
     pub(crate) fn meaning_on(&mut self) {
         self.set_config(
-            "chat.meaning",
+            "kb.meaning",
             "true",
             "meaning search is on: its model is downloading (ptyro doctor shows how far)",
         );
@@ -1694,6 +1703,7 @@ impl App {
         match self.chat_panel.take() {
             Some(ChatPanel::List(l)) => self.chat_list_key(l, key),
             Some(ChatPanel::View(v)) => self.chat_view_key(*v, key),
+            Some(ChatPanel::Library(l)) => self.library_key(l, key),
             None => {}
         }
     }
@@ -1709,6 +1719,7 @@ impl App {
                 l.sel = 0;
                 self.search_chats();
             }
+            Some(ChatPanel::Library(_)) => self.library_paste(text),
             None => {}
         }
         self.dirty = true;
@@ -2006,6 +2017,9 @@ impl App {
             None if matches!(&self.chat_panel, Some(ChatPanel::View(v)) if v.id.is_none()) => {
                 ("New chat".to_owned(), NEW_CHAT_ACTIONS.to_vec())
             }
+            None if matches!(&self.chat_panel, Some(ChatPanel::Library(_))) => {
+                ("Library".to_owned(), crate::library::ACTIONS.to_vec())
+            }
             None => return self.no_chat_toast(),
         };
         let items = actions
@@ -2166,6 +2180,7 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
     match panel {
         ChatPanel::List(l) => draw_list(app, f, area, l),
         ChatPanel::View(v) => draw_view(app, f, area, v),
+        ChatPanel::Library(l) => crate::library::draw(app, f, area, l),
     }
 }
 

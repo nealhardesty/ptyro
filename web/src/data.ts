@@ -26,6 +26,8 @@ export const data = {
   workspaces: new Map<string, Workspace>(),
   agents: [] as Agent[],
   defaultAgent: "claude",
+  /// `[kb] private`: a new session starts private (its box ticked; unticked, it is kept).
+  privateDefault: false,
   machines: new Map<string, Machine>(),
   /// What quick new starts in each worktree, by id (UX3.7: its last agent, else the default).
   lastLaunch: new Map<string, LastLaunch | null>(),
@@ -74,7 +76,7 @@ export async function loadAll(): Promise<void> {
   if (p.status === "fulfilled") data.projects = byId<Project>(p.value.projects);
   if (w.status === "fulfilled") data.worktrees = byId<Worktree>(w.value.worktrees);
   if (ws.status === "fulfilled") data.workspaces = byId<Workspace>(ws.value.workspaces);
-  if (ag.status === "fulfilled") { data.agents = ag.value.agents; data.defaultAgent = ag.value.default; }
+  if (ag.status === "fulfilled") { data.agents = ag.value.agents; data.defaultAgent = ag.value.default; data.privateDefault = !!ag.value.private; }
   ui.render();
   // What quick new starts in each worktree ("+ codex@work", "Another …"): asked after the first
   // render, so the page doesn't wait on it; until then the buttons name the default agent.

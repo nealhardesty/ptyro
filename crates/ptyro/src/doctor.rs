@@ -1071,6 +1071,23 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
         };
         r.add(S, "chat meaning", level, m.clone());
     }
+    if let Some(k) = &report.kb {
+        // The knowledge base (SPEC §25.4): `kb.db` opens, its schema, what it holds; or why not.
+        let bad = !k.starts_with("knowledge base: ")
+            || ["integrity", "FTS5", "secure delete"].iter().any(|w| k.contains(w));
+        let level = if bad { Level::Problem } else { Level::Ok };
+        r.add(S, "knowledge base", level, k.clone());
+    }
+    // Each root it can't read is a finding of its own, so that the TUI's mend list and the
+    // web's Health page name it with its fix (SPEC §25.6.3).
+    if let Ok(Reply::KbStatus { status }) = c.request(Request::KbStatus).await {
+        for f in &status.failing {
+            let text = crate::projects::kb_failing(f);
+            let name = crate::kb::printable(f.split_once(": ").map_or(f.as_str(), |(n, _)| n));
+            let text = text.trim_start_matches("knowledge base: ").to_owned();
+            r.add("knowledge base", &format!("root {name}"), Level::Warn, text);
+        }
+    }
     worktrees(&c, config, r).await;
     projects(&c, r).await;
     if quick {

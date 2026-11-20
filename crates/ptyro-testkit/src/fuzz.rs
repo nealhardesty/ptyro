@@ -21,6 +21,7 @@ pub const TARGETS: &[(&str, Target)] = &[
     ("hostjson", hostjson),
     ("handoff", handoff),
     ("parsers", parsers),
+    ("kb", kb),
 ];
 
 pub fn target(name: &str) -> Option<fn(&[u8])> {
@@ -46,6 +47,8 @@ pub fn emulator(data: &[u8]) {
     let cols = 2 + u16::from(data.first().copied().unwrap_or(10) % 120);
     let rows = 1 + u16::from(data.get(1).copied().unwrap_or(5) % 50);
     let mut e = AlacrittyEmulator::new(TermSize::new(cols, rows), 200);
+    // What a command printed is collected too, where the input says so.
+    e.capture_output(data.len() % 2 == 1);
     let mut out = FeedOutput::default();
     let mut row = Vec::new();
     for (i, chunk) in data.chunks(97).enumerate() {
@@ -311,6 +314,7 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
                 "\x1b]7501;?\x07\x1b[c",
                 "\x1b]0;title\x07\x1b[?1049h\x1b[2J\x1b[H",
                 "\x1b]133;A\x07$ \x1b]133;B\x07ls\x1b]133;C\x07\x1b]133;D;0\x07",
+                "\x1b]133;C;cmdline=make\x07a\rb\x08\n\x1b[1mc\x1b[?1049h\x1b]133;D;1\x07",
                 "\x1b]9;4;1;50\x07\x1b]777;notify;a;b\x07",
                 "\x1bP+q544e\x1b\\\x1b[>q\x1b[16t",
                 "\x1b[38;2;1;2;3m\x1b[48;5;200mX\x1b[0m\x1b[?2026h\x1b[?2026l",
@@ -339,6 +343,37 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
             r.extend_from_slice(&[0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 9]);
             r.extend_from_slice(b"hello");
             v.push(r);
+        }
+        "kb" => {
+            for s in [
+                "\0# Title\n\ntext. More text?\n\n## Sub ##\n\n```\n# code\n```\n\nSetext\n===\n\nbody\n---\n",
+                "\x01export API_TOKEN=abc123def456 \"password\": \"hunter2\" token = get_token()\n",
+                "\x02a turn\n\nBearer eyJhbGciOi.eyJzdWIiOiIx.sig and https://u:pw@h/x\n\nsk-ant-api03-aaaaaaaaaaaaaaaa1",
+                "\x06-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n-----BEGIN X-----\nAAAA\n",
+                "\x00---\nby: you\n---\n\n9f8e7d6c5b4a39281706f5e4d3c2b1a0ZZZZYYYY <secret:NAME> <redacted>\n",
+                "\x04*.pem\n.env*\nfixtures/**/keys\n(unclosed[\n",
+                // Transcripts: Claude's lines, then Codex's (the first byte places the cut).
+                concat!(
+                    "\x7f{\"type\":\"custom-title\",\"customTitle\":\"t\"}\n",
+                    "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-11-19T22:38:48.772Z\",\"sessionId\":\"c\",\"message\":{\"content\":\"fix it\"}}\n",
+                    "{\"type\":\"user\",\"uuid\":\"u2\",\"isCompactSummary\":true,\"message\":{\"content\":\"This session is being continued\\n\\nSummary:\\n1. x\\nIf you need specific details from before compaction\"}}\n",
+                    "{\"type\":\"user\",\"uuid\":\"u3\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"out\"},{\"type\":\"text\",\"text\":\"<command-name>/x</command-name><command-args>a</command-args>\"}]}}\n",
+                    "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"model\":\"m\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\"},{\"type\":\"text\",\"text\":\"ok\"},{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"/a\"}}]}}\n",
+                    "{\"type\":\"attachment\",\"uuid\":\"x\"}\n{\"type\":\"assistant\",\"uuid\":\"a2\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"torn"
+                ),
+                concat!(
+                    "\x60{\"timestamp\":\"2026-11-19T22:39:14.764Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"t\",\"cwd\":\"/r\"}}\n",
+                    "{\"type\":\"turn_context\",\"payload\":{\"model\":\"m\"}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"m1\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"do it\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"user.text\"]}}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"name\":\"apply_patch\",\"call_id\":\"c\",\"input\":\"*** Begin Patch\\n*** Add File: a\\n\"}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":[\\\"sh\\\",\\\"-lc\\\",\\\"ls\\\"]}\"}}\n",
+                    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"FileChange\",\"id\":\"e1\",\"changes\":{\"/a\":{}}}}}\n",
+                    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"McpToolCall\",\"server\":\"s\",\"tool\":\"t\",\"arguments\":{\"query\":\"q\"}}}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n"
+                ),
+            ] {
+                v.push(s.as_bytes().to_vec());
+            }
         }
         "settings" => {
             for s in [
@@ -472,6 +507,123 @@ pub fn mutate(rng: &mut Rng, input: &[u8], corpus: &[Vec<u8>]) -> Vec<u8> {
     }
     v.truncate(64 * 1024);
     v
+}
+
+/// The knowledge base's way in (SPEC §25.5) on any text: redaction, the never list, the
+/// cutters and the plan never panic; no piece passes the limit; a cutter loses nothing but
+/// white space; and the same source gives the same plan. And the transcript readers
+/// (§25.6.1) on any bytes: no panic, they stop at the end of a whole line, and a file read in
+/// two pieces at any byte says what reading it at once says.
+pub fn kb(data: &[u8]) {
+    kb_transcripts(data);
+    use ptyro_core::kb::chunk::{self, LIMIT, Part};
+    use ptyro_core::kb::ingest::{self, Body, Gate, Never, Source, Stamp};
+    use ptyro_core::kb::redact::Redactor;
+    use ptyro_core::kb::{ChunkKind, ItemKind, Writer};
+
+    let head = data.first().copied().unwrap_or(0);
+    let text = String::from_utf8_lossy(data.get(1..).unwrap_or_default());
+    // The first line is also tried as a secret's value, a pattern, a glob and a path.
+    let line = text.lines().next().unwrap_or_default().to_owned();
+    let (redactor, _) =
+        Redactor::new(vec![(line.clone(), "<secret:FUZZ>".into())], std::slice::from_ref(&line));
+    let strict = Redactor::strict(vec![(line.clone(), "<secret:FUZZ>".into())]);
+    let _ = redactor.redact(&text);
+    let _ = strict.redact(&text);
+    let never = Never::new(std::slice::from_ref(&line));
+    let _ = never.is_never(std::path::Path::new(&line));
+
+    let strip = |s: &str| s.split_whitespace().collect::<String>();
+    let pieces = chunk::split(&text);
+    assert!(pieces.iter().all(|p| !p.is_empty() && p.chars().count() <= LIMIT));
+    assert_eq!(strip(&pieces.concat()), strip(&text), "the cutter lost text");
+    for part in chunk::markdown("f.md", &text, 0) {
+        assert!(part.text.chars().count() <= LIMIT);
+    }
+
+    // A file under a root (§25.6.3), whatever it is called and holds: its path, then its
+    // text, its comments or its code; and a commit of the same text.
+    let _ = ptyro_core::kb::file::name_parts(&line);
+    let _ = ptyro_core::kb::file::document(&line);
+    let _ = ptyro_core::kb::file::is_binary(data);
+    let names = ["a/RateLimiter.ts", "x.py", "README", "notes.md", "data.json", line.as_str()];
+    let tiers = ptyro_core::kb::file::Tiers { comments: head & 8 != 0, code: head & 16 != 0 };
+    let mut files = vec![
+        ptyro_core::kb::file::source(
+            "file:///fuzz/f",
+            names[usize::from(head) % names.len()],
+            &text,
+            0,
+            tiers,
+            |block| block.len() % 2 == 0,
+        ),
+        ptyro_core::kb::file::commit(
+            "commit://r/abc",
+            &line,
+            &text,
+            std::slice::from_ref(&line),
+            0,
+        ),
+    ];
+
+    let body = match head % 3 {
+        0 => Body::Markdown { name: "f.md".into(), text: text.clone().into_owned(), at_ms: 0 },
+        1 => Body::Plain { name: "f.txt".into(), text: text.clone().into_owned(), at_ms: 0 },
+        _ => Body::Parts(
+            text.split("\n\n")
+                .enumerate()
+                .map(|(i, t)| Part::new(ChunkKind::User, t, i as u64).anchor(format!("a{}", i / 2)))
+                .collect(),
+        ),
+    };
+    let mut source = Source::new(ItemKind::File, "file:///fuzz", body);
+    source.title = Some(line);
+    source.append = head & 4 != 0;
+    let plan = |s: Source| {
+        let passed = ingest::gate(&Gate::open(&never)).ok()?;
+        ingest::plan(passed, s, Stamp::new(Writer::File, None), &redactor).ok()
+    };
+    let a = plan(source.clone());
+    assert_eq!(a, plan(source), "the same source gave another plan");
+    if let Some(p) = a {
+        assert!(p.chunks.iter().all(|c| c.text.chars().count() <= LIMIT && !c.text.is_empty()));
+        // (More than that is refused whole, not kept.)
+        assert!(p.append || p.hits <= ptyro_core::kb::redact::MAX_HITS);
+    }
+    for file in files.drain(..) {
+        let a = plan(file.clone());
+        assert_eq!(a, plan(file), "the same file gave another plan");
+        if let Some(p) = a {
+            assert!(p.chunks.iter().all(|c| c.text.chars().count() <= LIMIT && !c.text.is_empty()));
+        }
+    }
+}
+
+fn kb_transcripts(data: &[u8]) {
+    use ptyro_agents::transcript::{Transcript, claude, codex};
+    use ptyro_core::kb::ChunkKind;
+
+    let head = data.first().copied().unwrap_or(0);
+    let bytes = data.get(1..).unwrap_or_default();
+    let cut = bytes.len() * usize::from(head) / 256;
+    type Reader = fn(&[u8], u64) -> Transcript;
+    for (read, tools) in [(claude as Reader, true), (codex as Reader, false)] {
+        // (Codex's tool titles depend on what else a piece holds; its messages never do.)
+        let said = |t: Transcript| -> Vec<_> {
+            t.parts.into_iter().filter(|p| tools || p.kind != ChunkKind::Tool).collect()
+        };
+        let whole = read(bytes, 0);
+        let end = whole.to as usize;
+        assert!(end <= bytes.len() && (end == 0 || bytes[end - 1] == b'\n'));
+        let first = read(&bytes[..cut], 0);
+        let at = first.to as usize;
+        assert!(at <= cut && (at == 0 || bytes[at - 1] == b'\n'));
+        let second = read(&bytes[at..], first.to);
+        assert_eq!(second.to, whole.to, "the pieces stopped elsewhere");
+        let mut parts = said(first);
+        parts.extend(said(second));
+        assert_eq!(parts, said(whole), "the pieces said something else");
+    }
 }
 
 #[cfg(test)]

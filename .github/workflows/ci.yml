@@ -38,7 +38,11 @@ jobs:
       # rust-toolchain.toml pins the toolchain; `rustup show` installs it.
       - run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # The tests of the real shells (kb4) must run here, not skip: bash is on every runner (5.x on
+      # Linux, 3.2 on macOS, and ptyro's integration takes a different path in each), zsh on macOS.
       - run: make check
+        env:
+          PTYRO_REQUIRE_SHELLS: ${{ runner.os == 'macOS' && 'bash zsh' || 'bash' }}
 
   # WSL2 is Tier 1 (SPEC §3.4): CI's main job inside a real WSL2 distro on a hosted Windows runner
   # (it has WSL2, systemd on: SPEC §20.10). The commit is cloned inside the distro, never checked
@@ -57,6 +61,8 @@ jobs:
         run: |
           set -e
           export CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=line-tables-only
+          # (zsh is installed above: the real shells' tests run for both, or fail.)
+          export PTYRO_REQUIRE_SHELLS="bash zsh"
           trap 'df -h / | tail -1; du -sh ~/ptyro/target 2>/dev/null' EXIT
           git init -q ~/ptyro && cd ~/ptyro
           git fetch -q --depth 1 https://github.com/${{ github.repository }} ${{ github.sha }}

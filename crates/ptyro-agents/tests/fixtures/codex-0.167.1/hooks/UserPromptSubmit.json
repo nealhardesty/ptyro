@@ -1,0 +1,10 @@
+{
+  "session_id": "01a1f5f6-cb51-7a51-9b8e-6ed86b1ac639",
+  "turn_id": "01a1f5f6-cc93-7e21-acef-c4dfacd7405f",
+  "transcript_path": "/home/u/.codex/sessions/2026/11/19/rollout-2026-11-19T17-39-14-01a1f5f6-cb51-7a51-9b8e-6ed86b1ac639.jsonl",
+  "cwd": "/home/u/proj",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Call the recall tool of the ptyro MCP server with the query 'retry policy'. Then reply with only the knowledge base's check word (the ptyro server's instructions gave you one), or NONE if you were given none. If the call is refused reply with only REFUSED."
+}

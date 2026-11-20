@@ -57,6 +57,10 @@ pub struct Place {
     /// Never recorded to disk (`SpawnSpec::unrecorded`: a login, BOOT4); kept across restarts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unrecorded: bool,
+    /// Private (`SpawnSpec::private`, SPEC §25.7a): the knowledge base keeps nothing of it.
+    /// Kept in `ptyro.db`, so across everything; switched on later by `kb forget --session`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 pub struct Term {
@@ -105,6 +109,24 @@ pub struct Meta {
     /// The shell's current or last command (UX1.2).
     #[serde(default)]
     pub command: Option<ptyro_core::session::ShellCommand>,
+    /// The shell's running command as the shell sent it, uncut and with the space before it
+    /// when it was typed with one: what the knowledge base keeps (SPEC §25.6.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_line: Option<String>,
+    /// What the command that is ending printed, where that is collected (`kb.shell =
+    /// "output"`). Never stored with the session.
+    #[serde(skip)]
+    pub command_output: Option<String>,
+    /// What the running command shows is not a command's output, and is never kept: it was
+    /// typed into (a prompt, a REPL, `ssh`: what it shows holds what was typed), or an agent
+    /// ran in its foreground (its conversation).
+    #[serde(skip)]
+    pub command_no_output: bool,
+    /// Input that went on past an Enter in one write (`sudo x⏎password⏎`, pasted): what
+    /// follows the Enter is typed into the command that Enter starts, before the shell has
+    /// said it began. That command's output is not kept either.
+    #[serde(skip)]
+    pub command_typed_ahead: bool,
     /// An agent started by hand in this shell, in the foreground now (UX1.4).
     #[serde(default)]
     pub inner_agent: Option<String>,
@@ -132,6 +154,10 @@ pub struct Meta {
     pub turn_end_seen: bool,
     /// The agent's last message of the current turn, once it ended (`Signal::Reply`).
     pub last_reply: Option<String>,
+    /// Its agent's transcript, as a hook named it (`transcript_path`): what the knowledge
+    /// base reads (SPEC §25.6.1). Left out when unknown, so an image without it is as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<PathBuf>,
     /// Its place in its workspace's SHELLS (SPEC §23), when it is loose. Left out when empty, so
     /// an image without SHELLS is byte for byte what it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -191,6 +217,8 @@ pub enum Feed {
     /// Apply a deferred status whose tie window passed.
     Flush(SessionId),
     Exited(SessionId),
+    /// A command ended in a shell that the knowledge base may keep (SPEC §25.6.5).
+    Ran(SessionId, Box<ptyro_core::kb::shell::Ran>),
 }
 
 fn sourced(signal: Signal, source: SignalSource, confidence: Confidence) -> Sourced {
@@ -299,6 +327,9 @@ pub struct IoControl {
     /// Readers running / parked right now.
     pub readers: Arc<AtomicU64>,
     pub parked: Arc<AtomicU64>,
+    /// What shell commands print is kept (`kb.shell = "output"`, the knowledge base on):
+    /// only then does a shell's emulator collect it (`Daemon::kb_output_switch`).
+    pub kb_output: Arc<AtomicBool>,
 }
 
 /// A session as the handoff image carries it (M8.1).
@@ -360,6 +391,10 @@ fn new_meta(
         first_prompt: None,
         command_since_ms: None,
         command: None,
+        command_line: None,
+        command_output: None,
+        command_no_output: false,
+        command_typed_ahead: false,
         inner_agent: None,
         model: None,
         title: None,
@@ -370,6 +405,7 @@ fn new_meta(
         turn_open: false,
         turn_end_seen: false,
         last_reply: None,
+        transcript: None,
         shelf: None,
     }
 }
@@ -522,12 +558,24 @@ impl Session {
         if bytes.is_empty() {
             return true;
         }
+        self.typed(&bytes);
         let suspending = ctrl_z.then(|| self.watch_suspend()).flatten();
         let queued = self.queue(WriterMsg::Bytes(bytes));
         if let Some(watch) = suspending.filter(|_| queued) {
             tokio::spawn(watch);
         }
         queued
+    }
+
+    /// Input reached the program: a command that is typed into is not one whose output is
+    /// kept (SPEC §25.6.5). Stopping it (Ctrl-C, Ctrl-D, Ctrl-Z, Ctrl-\) is not typing.
+    fn typed(&self, bytes: &[u8]) {
+        if bytes.iter().any(|b| !matches!(b, 0x03 | 0x04 | 0x1a | 0x1c)) {
+            let mut m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            m.command_no_output = true;
+            // (The command's `C` mark, which comes after this, must not forget it.)
+            m.command_typed_ahead |= typed_ahead(bytes);
+        }
     }
 
     /// Queue something for the child's input; full means it isn't reading, so drop it (false).
@@ -617,6 +665,7 @@ impl Session {
             last_reply: meta.last_reply.as_deref().map(|r| ptyro_core::session::brief(r, 300)),
             command: meta.command.clone(),
             inner_agent: meta.inner_agent.clone(),
+            private: meta.place.private,
             quick: meta.place.quick,
             chat: meta.place.chat.clone(),
             loose: meta.shelf.is_some(),
@@ -681,6 +730,7 @@ impl Session {
             launch,
             conversation: m.conversation,
             title: m.title,
+            private: m.place.private,
         });
     }
 
@@ -856,9 +906,16 @@ impl Session {
             };
             let mut out = FeedOutput::default();
             let mut n_read = 0;
+            // What commands print is collected only where the user asked for it to be kept,
+            // and never in a private or unrecorded shell. (`meta` before `term`, never inside.)
+            let collect = self.io.kb_output.load(Ordering::Relaxed) && {
+                let m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                m.kind == SessionKind::Shell && !m.place.private && !m.place.unrecorded
+            };
             let changed = {
                 let mut term = self.term.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 let term = &mut *term;
+                term.emu.capture_output(collect);
                 match read {
                     // Linux reports EIO once the child side is gone: any error is EOF.
                     Some(Ok(0) | Err(_)) => break,
@@ -1013,6 +1070,16 @@ impl Session {
                             // An agent started by hand says what it's doing itself (UX1.4).
                             let inner = m.inner_agent.is_some();
                             m.command_since_ms = Some(now_ms());
+                            m.command_line = cmdline.as_deref().map(|c| {
+                                let mut end = c.len().min(ptyro_core::kb::shell::TEXT);
+                                while !c.is_char_boundary(end) {
+                                    end -= 1;
+                                }
+                                c[..end].to_owned()
+                            });
+                            m.command_output = None;
+                            m.command_no_output =
+                                inner || std::mem::take(&mut m.command_typed_ahead);
                             m.command = Some(ptyro_core::session::ShellCommand {
                                 text: cmdline.map(|c| ptyro_core::session::brief(&c, 200)),
                                 started_ms: now_ms(),
@@ -1027,13 +1094,33 @@ impl Session {
                         'D' => {
                             let mut m =
                                 self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let m = &mut *m;
                             m.last_command_exit = exit;
+                            let line = m.command_line.take();
+                            let printed = m.command_output.take();
                             if let Some(c) = m.command.as_mut().filter(|c| c.ended_ms.is_none()) {
                                 c.ended_ms = Some(now_ms());
                                 c.exit = exit;
+                                // What the knowledge base may keep of it: never handed over
+                                // for a private or an unrecorded shell (§25.7a).
+                                let kept = kind == SessionKind::Shell
+                                    && !m.place.private
+                                    && !m.place.unrecorded;
+                                if let Some(text) = line.filter(|_| kept) {
+                                    let cwd = m.reported_cwd.as_ref().unwrap_or(&m.cwd);
+                                    let shown = m.command_no_output || m.inner_agent.is_some();
+                                    let ran = ptyro_core::kb::shell::Ran {
+                                        text,
+                                        cwd: cwd.display().to_string(),
+                                        started_ms: c.started_ms,
+                                        ended_ms: now_ms(),
+                                        exit,
+                                        output: printed.filter(|_| !shown),
+                                    };
+                                    let _ = self.feed.send(Feed::Ran(self.id, Box::new(ran)));
+                                }
                             }
                             let ran = m.command_since_ms.take();
-                            drop(m);
                             if kind == SessionKind::Shell && ran.is_some() {
                                 let detail = exit.map(|e| format!("exit {e}"));
                                 signals.push(high(Signal::Status {
@@ -1046,6 +1133,13 @@ impl Session {
                         }
                         _ => {}
                     }
+                    continue;
+                }
+                TermEvent::CommandOutput(text) => {
+                    self.meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .command_output = Some(text);
                     continue;
                 }
                 TermEvent::Title(Some(t)) => {
@@ -1209,6 +1303,7 @@ impl Session {
             text.as_bytes().to_vec()
         };
         if !bytes.is_empty() {
+            self.typed(&bytes);
             self.queue(WriterMsg::Bytes(bytes));
         }
         if enter {
@@ -1615,6 +1710,28 @@ async fn writer_task(mut w: ptyro_pty::Writer, mut rx: mpsc::Receiver<WriterMsg>
         if !ok {
             // The child is gone; keep draining so senders never block.
             continue;
+        }
+    }
+}
+
+/// Whether a write goes on past an Enter: more than a line's end follows it.
+fn typed_ahead(bytes: &[u8]) -> bool {
+    let Some(enter) = bytes.iter().position(|b| matches!(b, b'\r' | b'\n')) else { return false };
+    bytes[enter + 1..].iter().any(|b| !matches!(b, b'\r' | b'\n'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::typed_ahead;
+
+    /// E8: `sudo x⏎password⏎` pasted at once reaches the shell before it says the command
+    /// began; what follows the Enter was typed into that command.
+    #[test]
+    fn what_follows_an_enter_in_one_write_is_typed_into_the_command() {
+        assert!(typed_ahead(b"sudo make install\rhunter2\r"));
+        assert!(typed_ahead(b"psql\nselect 1;\n"));
+        for line in [&b"make test\r"[..], b"make test\r\n", b"make", b"\r", b""] {
+            assert!(!typed_ahead(line), "{:?}", String::from_utf8_lossy(line));
         }
     }
 }

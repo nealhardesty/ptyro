@@ -16,6 +16,7 @@ import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js"
 import { moveMaybeSpotted, staleMaybeChanged } from "./projects.js";
 import "./settings.js";
 import "./panel.js";
+import "./library.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
@@ -229,7 +230,7 @@ function sessionCard(s: Session): HTMLElement {
     h("div", { class: "main" },
       // Another machine's (MM1.B): its name without the machine, and the machine's chip.
       h("div", { class: "name" }, s.machine ? splitMachine(s.name)[1] : s.name, s.agent ? h("small", {}, ` ${s.agent}`, s.model ? ` · ${modelLabel(s.model)}` : "") : null, s.machine ? " " : null, machineChip(s.name)),
-      h("div", { class: "sub" }, [statusWord(st), s.project, s.worktree].filter(Boolean).join(" · ")),
+      h("div", { class: "sub" }, [statusWord(st), s.project, s.worktree, s.private && "◌ private"].filter(Boolean).join(" · ")),
       detail ? h("div", { class: "detail" }, detail) : null,
     ),
     h("time", {}, s.status ? ago(s.status.since_ms) : ago(s.created_ms)),
@@ -532,7 +533,7 @@ function sessionView(id: string): HTMLElement {
   const drafted = !!app.drafts.get(id)?.trim();
   patch(sh.el, [
     header(s.name, true, h("button", { class: "icon", title: tipOf("session.menu"), "aria-label": "More", onclick: () => sessionMenu(s) }, "⋯")),
-    h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", statusWord(st), s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", app.screens.get(id)?.title ? ` · ${app.screens.get(id)!.title}` : "", s.machine ? " · " : "", machineChip(s.name)),
+    h("div", { class: `pill ${st}` }, GLYPH[st] ?? "·", " ", statusWord(st), s.model && s.kind === "agent" ? ` · ${modelLabel(s.model)}` : "", s.status?.detail && !blocked ? ` · ${s.status.detail}` : "", s.status ? ` · ${ago(s.status.since_ms)}` : "", s.private ? " · ◌ private" : "", app.screens.get(id)?.title ? ` · ${app.screens.get(id)!.title}` : "", s.machine ? " · " : "", machineChip(s.name)),
     // Its machine is down (MM1.B): this is how it was, and what to do.
     ...(machineOf(s.name) && machineOf(s.name)!.state !== "online" ? [h("p", { class: "banner warn" }, `${machineOf(s.name)!.name} isn't reachable: this is how it was. `, machineOf(s.name)!.fix ?? "")] : []),
     ...(blocked ? [h("section", { class: "prompt" },

@@ -50,6 +50,7 @@ impl Daemon {
             config_error,
             chats: None,
             meaning: None,
+            kb: None,
             left_behind: Vec::new(),
         }
     }

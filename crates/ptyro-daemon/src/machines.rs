@@ -238,6 +238,23 @@ fn here_only(req: &Request) -> bool {
     matches!(
         req,
         List | Status
+            // The knowledge base's are sent on by `handle_kb` itself (`kb/machines.rs`),
+            // which knows who asks: the wall holds across a link.
+            | KbSearch { .. }
+            | KbRead { .. }
+            | KbRecent { .. }
+            | KbForget { .. }
+            | KbStatus
+            // Notes are written and listed on the machine asked (SPEC §25.11).
+            | KbNote { .. }
+            | KbNotes { .. }
+            | KbNoteRead { .. }
+            | KbSync { .. }
+            // Roots are managed on their own machine (SPEC §25.11).
+            | KbRoots { .. }
+            | KbIngest { .. }
+            | KbRemove { .. }
+            | KbHistory { .. }
             | Shutdown { .. }
             | Upgrade { .. }
             | DevicePair { .. }

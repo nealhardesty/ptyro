@@ -223,6 +223,12 @@ pub enum WtCmd {
         agent: Option<String>,
         #[arg(long, add = ArgValueCandidates::new(crate::complete::profiles))]
         profile: Option<String>,
+        /// The agent's session is private: the knowledge base keeps nothing of it
+        #[arg(long, requires = "agent")]
+        private: bool,
+        /// Keep it, though `[kb] private` is on
+        #[arg(long, requires = "agent", conflicts_with = "private")]
+        no_private: bool,
         #[arg(long)]
         override_pin: bool,
         #[arg(short, long)]
@@ -881,6 +887,8 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             no_fetch,
             agent,
             profile,
+            private,
+            no_private,
             override_pin,
             yes,
             detach,
@@ -908,6 +916,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 override_pin,
                 confirmed: yes,
                 agent,
+                private: crate::cli::private_flag(private, no_private),
                 size: if attach { ptyro_tui::pane_size(&ctx.paths) } else { None },
                 env: client_env(),
                 ..WorktreeSpec::default()
@@ -1189,7 +1198,13 @@ pub async fn gc(
         }
         return Ok(0);
     }
-    if entries.is_empty() && scratch.is_empty() {
+    // What the knowledge base reads and no longer can (SPEC §25.6.3): a folder that is gone
+    // is as stale as a worktree whose directory is.
+    let failing = match c.request(Request::KbStatus).await {
+        Ok(Reply::KbStatus { status }) if !only_scratch => status.failing,
+        _ => Vec::new(),
+    };
+    if entries.is_empty() && scratch.is_empty() && failing.is_empty() {
         eprintln!("nothing stale");
         return Ok(0);
     }
@@ -1218,6 +1233,9 @@ pub async fn gc(
             ptyro_core::model::human_bytes(l.bytes),
             l.files
         );
+    }
+    for f in &failing {
+        println!("{}", kb_failing(f));
     }
     if dry_run {
         return Ok(0);
@@ -1253,6 +1271,22 @@ pub async fn gc(
     Ok(0)
 }
 
+/// A root the knowledge base can't read, as `gc` and the doctor name it: the daemon's line
+/// (`docs: /src/docs is gone (…)`), with the command that reads it again when the line
+/// offers none.
+pub fn kb_failing(line: &str) -> String {
+    let line = crate::kb::printable(line);
+    // A daemon from before it said the command itself names only the root: its name, as one
+    // word (a name no command can carry is offered none).
+    let name = line.split_once(": ").map_or("", |(name, _)| name);
+    let word = ptyro_core::kb::root_word(name, "");
+    if line.contains("`ptyro ") || word.is_empty() {
+        format!("knowledge base: {line}")
+    } else {
+        format!("knowledge base: {line} (`ptyro kb sync {word}` reads it again)")
+    }
+}
+
 /// Scratch shells' directories left behind (SPEC §23.8): each said, and deleted after a yes.
 async fn clean_scratch(c: &ptyro_client::Client, list: &[ptyro_core::model::ScratchLeftover]) {
     use std::io::{BufRead, IsTerminal, Write};
@@ -1277,5 +1311,36 @@ async fn clean_scratch(c: &ptyro_client::Client, list: &[ptyro_core::model::Scra
             Ok(_) => {}
             Err(e) => eprintln!("  {}", e.message),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review B4: the command a failing root is named with is run as it stands (by the TUI,
+    /// the web and `doctor --fix`): the root is one word of it, whatever it is called.
+    #[test]
+    fn a_failing_roots_command_names_it_in_one_word() {
+        let words = |text: &str| {
+            let start = text.find("`ptyro ").unwrap() + 1;
+            let end = start + text[start..].find('`').unwrap();
+            ptyro_tui::keymap::shell_words(&text[start..end])
+        };
+        // A daemon that says the command itself is taken at its word.
+        let said = "x --yes: /src/x is gone (`ptyro kb rm 'x --yes'` drops what was kept of it)";
+        assert_eq!(words(&kb_failing(said)), ["ptyro", "kb", "rm", "x --yes"]);
+        // An older one names only the root: the name is cut at `: `, and quoted.
+        assert_eq!(
+            words(&kb_failing("my docs: it could not be read")),
+            ["ptyro", "kb", "sync", "my docs"]
+        );
+        assert_eq!(
+            words(&kb_failing("x --yes: it could not be read")),
+            ["ptyro", "kb", "sync", "x --yes"]
+        );
+        // A name no command can carry is offered none, and no control character is shown.
+        let bad = kb_failing("--yes\x1b[2J: no");
+        assert!(!bad.contains("`ptyro ") && !bad.contains('\x1b'), "{bad:?}");
     }
 }

@@ -18,6 +18,7 @@ use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, str_of, tool_summary,
 };
 use crate::claude::hook_word;
+use crate::transcript::{Transcript, TranscriptAt};
 
 /// Hook events (Codex's own names) → the snake-case names its trust keys use.
 pub const EVENTS: &[(&str, &str)] = &[
@@ -97,8 +98,28 @@ fn project_trusted(home: Option<&Path>, root: &Path) -> bool {
 pub struct Codex;
 
 impl Codex {
+    /// The knowledge base's tools (SPEC §25.9, §20.2): `ptyro mcp` as a server of this launch
+    /// only (`-c`, never the user's `config.toml`), its tools approved: without the last key
+    /// every call asks, and fails where nothing can answer.
+    fn kb_flags(ctx: &LaunchCtx<'_>) -> Vec<String> {
+        let Some(socket) = ctx.kb else { return Vec::new() };
+        let env: Vec<String> = crate::adapter::kb_env(ctx, socket)
+            .into_iter()
+            .map(|(k, v)| format!("{k}={}", toml_str(&v)))
+            .collect();
+        [
+            format!("mcp_servers.ptyro.command={}", toml_str(ctx.ptyro)),
+            "mcp_servers.ptyro.args=[\"mcp\"]".to_owned(),
+            format!("mcp_servers.ptyro.env={{{}}}", env.join(",")),
+            "mcp_servers.ptyro.default_tools_approval_mode=\"approve\"".to_owned(),
+        ]
+        .into_iter()
+        .flat_map(|kv| ["-c".to_owned(), kv])
+        .collect()
+    }
+
     fn flags(ctx: &LaunchCtx<'_>) -> Vec<String> {
-        let mut a = Vec::new();
+        let mut a = Self::kb_flags(ctx);
         if !ctx.def.hooks() {
             return a;
         }
@@ -334,6 +355,37 @@ impl Adapter for Codex {
             StopStep::Wait(Duration::from_secs(5)),
         ]
     }
+
+    fn transcript(&self, at: &TranscriptAt<'_>) -> Option<std::path::PathBuf> {
+        crate::transcript::codex_path(at)
+    }
+
+    fn hook_transcript(&self, event: &str, p: &Value) -> (Option<std::path::PathBuf>, bool) {
+        // (`notify` names no file; it is still the turn's end when the hooks are held back.)
+        let ends = event == "Stop"
+            || (event == "notify" && str_of(p, "type") == Some("agent-turn-complete"));
+        (str_of(p, "transcript_path").map(Into::into), ends)
+    }
+
+    fn transcripts(&self, home: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
+        crate::transcript::codex_all(home)
+    }
+
+    fn hook_prompt(&self, event: &str, p: &Value) -> Option<String> {
+        crate::adapter::prompt_hook(event, p)
+    }
+
+    fn hook_context(&self, event: &str, context: &str) -> Option<String> {
+        crate::adapter::prompt_context(event, context)
+    }
+
+    fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
+        Some(crate::transcript::codex(bytes, from))
+    }
+
+    fn transcript_title(&self, at: &TranscriptAt<'_>) -> Option<String> {
+        crate::transcript::codex_title(at)
+    }
 }
 
 #[cfg(test)]
@@ -439,7 +491,39 @@ mod tests {
             port: None,
             agent_home: Some(dir.path().to_path_buf()),
             project_root: Some(Path::new("/repo")),
+            kb: None,
+            remember: false,
         };
+        assert!(!Codex.launch(&ctx).unwrap().argv.iter().any(|x| x.starts_with("mcp_servers.")));
+        // The knowledge base's tools (SPEC §25.9): at the launch and on a resume, and with the
+        // agent's hooks off too.
+        let off = AgentDef { hooks: Some(false), ..AgentDef::default() };
+        for ctx in [
+            LaunchCtx {
+                kb: Some(Path::new("/run/p.sock")),
+                base_argv: vec!["codex".into()],
+                agent_home: None,
+                ..ctx
+            },
+            LaunchCtx {
+                kb: Some(Path::new("/run/p.sock")),
+                base_argv: vec!["codex".into()],
+                agent_home: None,
+                def: &off,
+                ..ctx
+            },
+        ] {
+            for a in [Codex.launch(&ctx).unwrap().argv, Codex.resume(&ctx, "t1").unwrap().argv] {
+                for want in [
+                    "mcp_servers.ptyro.command=\"/bin/ptyro\"",
+                    "mcp_servers.ptyro.args=[\"mcp\"]",
+                    "mcp_servers.ptyro.env={PTYRO_SESSION_ID=\"s\",PTYRO_SOCKET=\"/run/p.sock\"}",
+                    "mcp_servers.ptyro.default_tools_approval_mode=\"approve\"",
+                ] {
+                    assert!(a.windows(2).any(|w| w[0] == "-c" && w[1] == want), "{want}: {a:?}");
+                }
+            }
+        }
         let a = Codex.launch(&ctx).unwrap().argv;
         assert!(a.iter().any(|x| x == "hooks.PermissionRequest=[{hooks=[{type=\"command\",command=\"/bin/ptyro hook codex PermissionRequest\",timeout=600}]}]"), "{a:?}");
         let state = a.iter().find(|x| x.starts_with("hooks.state=")).unwrap();
