@@ -3,7 +3,7 @@
 // are in a text, an address's parts, what forgetting names, and the daemon's question.
 //   node web/test/library.mjs
 import assert from "node:assert/strict";
-import { PAGE, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, shellsKept, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
+import { PAGE, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, offered, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, shellsKept, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
 
 const DAY = 86_400_000;
 const f = (o = {}) => ({ ...noFilters(), ...o });
@@ -108,6 +108,18 @@ assert.equal(shellsKept(""), null);
   assert.equal(yes, "Keep it");
   assert.equal(output.says, "Shell commands are kept, and what they print.");
   assert.deepEqual(output.switches.map((w) => [w.label, w.to, !!w.ask]), [["Stop keeping what they print", "commands", false], ["Stop keeping both", "off", false]]);
+}
+// What agents are offered at a prompt (`kb.inject`): nothing is said of it while it is off
+// and nothing was offered; on, the status says so; and every offer names its session and
+// what each pointer is, also once it is off again.
+assert.deepEqual(offered(undefined, undefined), { says: null, rows: [] });
+assert.deepEqual(offered(false, []), { says: null, rows: [] });
+assert.equal(offered(true, []).says, "Agents may be given up to three pointers with a prompt (Knowledge → inject)");
+{
+  const offers = [{ at_ms: 5, session: "01JB", name: "fix-login", pointers: [{ addr: "k:7f3k/4", kind: "session", title: "Retry policy" }, { addr: "k:9a2c/0", kind: "note", title: null }] }];
+  assert.deepEqual(offered(true, offers).rows, [{ to: "fix-login", pointers: [{ addr: "k:7f3k/4", label: "session, Retry policy" }, { addr: "k:9a2c/0", label: "note" }] }]);
+  assert.equal(offered(false, offers).says, "Off now (Knowledge → inject); what was offered before is below");
+  assert.equal(offered(false, offers).rows.length, 1);
 }
 // What a read will take, as the command says it.
 assert.equal(planLine({ files: 6, documents: 3, sources: 1, comments: true, code: false, commits: true }), "6 files: 3 documents, 1 source file (comments), its commits");

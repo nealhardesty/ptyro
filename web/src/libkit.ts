@@ -292,6 +292,23 @@ export function ingestRequest(v: Record<string, unknown>): object {
 /// A switch of what is kept of your shells: its button, what `kb.shell` becomes, what is said
 /// once it is, and (for the one that stores what is on your terminal) what is asked first.
 export interface ShellSwitch { label: string; to: string; said: string; ask?: [title: string, text: string, yes: string] }
+/// What one prompt was offered (`kb.inject`, SPEC §25.9): the session that was given it, and
+/// the pointers.
+export interface Offer { at_ms: number; session: string; name: string; pointers: { addr: string; kind: string; title?: string | null }[] }
+
+/// What agents are offered at a prompt, for the status: the sentence that says whether they
+/// are (`null`: they are not, and never were since the daemon started), and each offer as
+/// who was given it and what each pointer is called (its address opens it).
+export function offered(inject: boolean | undefined, offers: Offer[] | undefined): { says: string | null; rows: { to: string; pointers: { addr: string; label: string }[] }[] } {
+  const rows = (offers ?? []).map((o) => ({
+    to: o.name,
+    pointers: o.pointers.map((p) => ({ addr: p.addr, label: p.title ? `${p.kind}, ${p.title}` : p.kind })),
+  }));
+  const says = inject ? "Agents may be given up to three pointers with a prompt (Knowledge → inject)"
+    : rows.length ? "Off now (Knowledge → inject); what was offered before is below" : null;
+  return { says, rows };
+}
+
 /// What is kept of your shells (`kb.shell`: off, commands, output), in a sentence, and the
 /// switches that change it: the commands first, what they print second and only where the
 /// commands are kept. `null`: a daemon from before shells were kept.

@@ -607,6 +607,10 @@ pub struct Kb {
     pub tools: bool,
     /// Agents may write notes (the `remember` tool, §25.6.4).
     pub remember: bool,
+    /// Offered at a prompt (§25.9): when an agent is given a prompt, it may also be given up
+    /// to three pointers to what is kept about it. Off unless you switch it on: it puts
+    /// stored text (titles) into a model's prompt without the model asking.
+    pub inject: bool,
     /// What an agent may see of it (the wall, §25.9): `profile` (its own account's, and what is
     /// nobody's), `workspace` (of those, its workspace's) or `all`. `[chat] history_scope` is
     /// its old name.
@@ -646,6 +650,7 @@ impl Default for Kb {
             private: false,
             tools: true,
             remember: true,
+            inject: false,
             scope: "profile".into(),
             retain_days: 0,
             max_file: "1MiB".into(),

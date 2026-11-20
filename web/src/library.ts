@@ -20,8 +20,8 @@ import { conn, host } from "./conn.js";
 import { data, can } from "./data.js";
 import { Cache, actions, ago, ask, badge, bar, confirm, enc, errText, facts, form, go, h, menu, pending, profileChoices, row, safeDecode, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child, Field } from "./kit.js";
-import { HISTORY_SINCE, PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, shellsKept, snippetParts, split, when, wroteBy } from "./libkit.js";
-import type { Filters, Of, Part, Root, ShellSwitch } from "./libkit.js";
+import { HISTORY_SINCE, PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, offered, searching, shellsKept, snippetParts, split, when, wroteBy } from "./libkit.js";
+import type { Filters, Of, Offer, Part, Root, ShellSwitch } from "./libkit.js";
 
 const ACTIONS = {
   "kb.open": "The Library: everything ptyro kept of your work, searchable in one place (More → Library)",
@@ -47,7 +47,7 @@ interface Item { id: string; uri: string; kind: string; title?: string | null; r
 interface Listed { addr: string; item: Item; project_name?: string | null }
 interface Chunk { idx: number; kind: string; heading?: string | null; text: string }
 interface Doc { item: Listed; chunks: Chunk[]; at?: number | null; stale?: boolean }
-interface Status { enabled: boolean; sessions: boolean; shell?: string | null; retain_days: number; error?: string | null; path: string; notes?: string; bytes: number; kinds: { kind: string; items: number; chunks: number }[]; vectors: number; meaning?: string | null; forgotten: number; queued: number; skipped: { uri: string; why: string; at_ms: number }[] }
+interface Status { enabled: boolean; sessions: boolean; shell?: string | null; retain_days: number; error?: string | null; path: string; notes?: string; bytes: number; kinds: { kind: string; items: number; chunks: number }[]; vectors: number; meaning?: string | null; forgotten: number; queued: number; skipped: { uri: string; why: string; at_ms: number }[]; inject?: boolean; offered?: Offer[] }
 /// What the list holds: hits, the history, or what the daemon said instead of answering.
 type Rows =
   | { t: "hits"; hits: Hit[]; wordsOnly: string; leftOut: string[] }
@@ -235,7 +235,8 @@ function listRows(s: Status): Child[] {
 
 function showStatus(s: Status): void {
   const pieces = s.kinds.reduce((n, k) => n + k.chunks, 0);
-  sheet("The knowledge base", [facts([
+  const gave = offered(s.inject, s.offered);
+  const sh = sheet("The knowledge base", [facts([
     ["It is", s.enabled ? "on" : "off"],
     ["Kept", s.kinds.length ? s.kinds.map((k) => `${plural(k.items, k.kind)} (${plural(k.chunks, "piece")})`).join(", ") : "nothing yet"],
     ["In", `${s.path} (${bytes(s.bytes)})`],
@@ -247,7 +248,13 @@ function showStatus(s: Status): void {
     ["Sessions are kept", s.retain_days ? `${plural(s.retain_days, "day")}, then deleted` : "for good"],
     ["Forgotten", s.forgotten ? `${s.forgotten}: never kept again` : null],
     ["Waiting to be read", s.queued ? String(s.queued) : null],
+    ["Offered at a prompt", gave.says],
   ]),
+  // What agents were given without asking is never out of sight: each offer, and what it
+  // pointed at (a tap opens it).
+  gave.rows.length ? h("h3", {}, `Offered at a prompt (${gave.rows.length})`) : null,
+  ...gave.rows.map((o, i) => h("p", { class: "sub" }, `${ago(s.offered?.[i]?.at_ms ?? 0)} ago · ${o.to}: `,
+    ...o.pointers.flatMap((p, n) => [n ? ", " : "", h("a", { href: `#/library/k/${enc(p.addr)}`, onclick: () => sh.close() }, p.addr), ` (${p.label})`]))),
   s.skipped.length ? h("h3", {}, `Not kept (${s.skipped.length})`) : null,
   ...[...s.skipped].reverse().map((k) => h("p", { class: "sub" }, `${k.uri}: ${k.why} (${ago(k.at_ms)} ago)`))]);
 }

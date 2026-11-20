@@ -128,9 +128,8 @@ impl Daemon {
         ask: KbSearch,
         scope: Option<&KbScope>,
     ) -> Result<KbHits, Error> {
-        let db = self.kb_db()?;
-        let now = now_ms();
-        let q = chats::parse_kb_query(&ask.query, now).map_err(Error::invalid)?;
+        self.kb_db()?;
+        let q = chats::parse_kb_query(&ask.query, now_ms()).map_err(Error::invalid)?;
         if q.fts.is_empty() {
             return Err(Error::invalid("say what to look for (words, \"a phrase\", prefix*)"));
         }
@@ -146,6 +145,19 @@ impl Daemon {
                 "machine:{m}: this looks on this machine only (a search takes `machine:`)"
             )));
         }
+        self.kb_search_for(q, ask, scope).await
+    }
+
+    /// [`Daemon::kb_search`] for a query already taken apart (what is offered at a prompt
+    /// makes its own, `kb/offer.rs`).
+    pub(super) async fn kb_search_for(
+        &self,
+        q: Query,
+        ask: KbSearch,
+        scope: Option<&KbScope>,
+    ) -> Result<KbHits, Error> {
+        let db = self.kb_db()?;
+        let now = now_ms();
         // Kinds asked both ways narrow each other.
         let kinds: Vec<HitKind> = match (ask.kinds.is_empty(), q.kinds.is_empty()) {
             (true, _) => q.kinds.clone(),

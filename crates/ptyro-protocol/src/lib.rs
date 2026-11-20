@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 60 };
+pub const PROTO: Version = Version { major: 1, minor: 61 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -2663,12 +2663,28 @@ mod tests {
                     why: "never read".into(),
                     at_ms: 5,
                 }],
+                inject: true,
+                offered: vec![ptyro_core::kb::offer::KbOffer {
+                    at_ms: 6,
+                    session: "01JB0000000000000000000S01".into(),
+                    name: "fix-login".into(),
+                    pointers: vec![ptyro_core::kb::offer::KbPointer {
+                        addr: "k:7f3k/4".into(),
+                        kind: HitKind::Session,
+                        title: Some("Retry policy".into()),
+                        at_ms: 3,
+                        project: Some("api".into()),
+                    }],
+                }],
             },
         });
-        // 1.60: what is kept of shells; a daemon from before says nothing of it.
+        // 1.60: what is kept of shells; a daemon from before says nothing of it. 1.61: nor
+        // of what is offered at a prompt.
         let old: Reply =
             serde_json::from_str(r#"{"t":"kb_status","status":{"enabled":true}}"#).unwrap();
-        assert!(matches!(old, Reply::KbStatus { status } if status.shell.is_empty()));
+        assert!(
+            matches!(old, Reply::KbStatus { status } if status.shell.is_empty() && !status.inject && status.offered.is_empty())
+        );
         // As a page writes them.
         let (m, _): (Request, _) = decode(br#"{"t":"kb_search","query":"retry"}"#).unwrap();
         assert!(

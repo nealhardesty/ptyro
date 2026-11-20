@@ -11,6 +11,7 @@
 //! - [`note`]: a note's file: its header, its title, where it lives.
 //! - [`shell`]: a shell's commands, and what is never kept of one.
 //! - [`search`]: what a search asks and answers, and the ranking (§25.8).
+//! - [`offer`]: what is offered at a prompt (§25.9): the gates on a prompt, the pointers, the cap.
 //! - The types of what is stored: [`KbItem`], [`KbChunk`], [`KbRoot`].
 
 use serde::{Deserialize, Serialize};
@@ -55,6 +56,7 @@ macro_rules! words {
     };
 }
 
+pub mod offer;
 pub mod search;
 
 words! {

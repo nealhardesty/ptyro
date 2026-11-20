@@ -32,12 +32,18 @@ impl Daemon {
     /// and workspace see, without its own session and chat.
     pub(crate) fn kb_caller_scope(&self, caller: crate::guard::Caller) -> Option<KbScope> {
         let s = self.kb_agent(caller)?;
+        Some(self.kb_session_scope(&s))
+    }
+
+    /// The wall for the agent in `s`: what `kb.scope` lets its profile and workspace see,
+    /// without its own session and chat.
+    pub(crate) fn kb_session_scope(&self, s: &crate::session::Session) -> KbScope {
         let place = s.meta.locked().place.clone();
         let workspace = self.kb_workspace_id(place.workspace.as_deref());
         let mut scope = KbScope::of(&self.config().kb.scope, &place.profile, workspace.as_deref());
         scope.session = Some(s.id.full());
         scope.chat = place.chat;
-        Some(scope)
+        scope
     }
 
     /// What an item's project and workspace are called here, if they still are.
@@ -296,7 +302,14 @@ impl Daemon {
                 let addrs = split.into_iter().map(|(_, a)| a).collect();
                 self.kb_forget(addrs, query, confirmed).await
             }
-            Request::KbStatus => Ok(Reply::KbStatus { status: self.kb_status().await }),
+            Request::KbStatus => {
+                let mut status = self.kb_status().await;
+                // What other sessions were offered is yours to see, not an agent's.
+                if scope.is_some() {
+                    status.offered.clear();
+                }
+                Ok(Reply::KbStatus { status })
+            }
             Request::KbNote { text, title, project, profile, tags, replaces, addr } => {
                 let ask =
                     super::notes::NoteAsk { text, title, project, profile, tags, replaces, addr };
@@ -500,6 +513,7 @@ impl Daemon {
                 .into_iter()
                 .map(|s| KbSkipped { uri: s.uri, why: s.why, at_ms: s.at_ms })
                 .collect(),
+            inject: config.kb.inject,
             ..KbStatusInfo::default()
         };
         if !config.kb.enabled {
@@ -530,6 +544,7 @@ impl Daemon {
             }
             Err(e) => out.error = Some(store_err(e).message),
         }
+        out.offered = self.kb_offered().await;
         out
     }
 

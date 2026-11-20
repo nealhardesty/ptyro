@@ -409,6 +409,14 @@ impl Adapter for Claude {
         crate::transcript::claude_all(home)
     }
 
+    fn hook_prompt(&self, event: &str, p: &Value) -> Option<String> {
+        crate::adapter::prompt_hook(event, p)
+    }
+
+    fn hook_context(&self, event: &str, context: &str) -> Option<String> {
+        crate::adapter::prompt_context(event, context)
+    }
+
     fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
         Some(crate::transcript::claude(bytes, from))
     }

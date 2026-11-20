@@ -34,6 +34,10 @@
 //! | `mcp <file> <tool> <json>` | calls a tool of the `ptyro` MCP server the launch gave it, as the real agent would, and writes the answer to `<file>` (`tools/list`: the tools' names and the server's instructions) |
 //! | `exit` | SessionEnd, exit 0 |
 //! With `PTYRO_FAKE_HOOK_DELAY_MS=N` every hook takes N ms to start (a loaded machine).
+//! A prompt's hook that answers with `hookSpecificOutput.additionalContext` (what ptyro offers
+//! at a prompt, SPEC §25.9) is taken as the real agents take it: the text goes into the
+//! transcript where they keep it, and `PTYRO_FAKE_CONTEXT=<file>` (a test knob) gets a line
+//! of JSON a prompt: `{prompt, context, ms}` (the hook's own time).
 //! With `PTYRO_FAKE_TRANSCRIPT=1` the fake Claude and Codex keep a transcript as the real ones
 //! do (`fake_transcript`), name it in every hook (`transcript_path`), and take two more
 //! commands: `compact <summary>` (Claude's `/compact`: no hook fires) and `rewind` (the file
@@ -371,6 +375,32 @@ impl Fake {
         run_hooks(&cmds, &payload, HOOK_TIMEOUT)
     }
 
+    /// The prompt's hook, as Claude Code and Codex run it: what it answers as
+    /// `hookSpecificOutput.additionalContext` is added to what the model is given (here: kept
+    /// in the transcript the way the real ones keep it). `PTYRO_FAKE_CONTEXT=<file>` (a test
+    /// knob) gets a line of JSON a prompt: the prompt, the context it was given (or null) and
+    /// how long the hook took, in ms.
+    fn prompted(&self, payload: Value) {
+        let started = std::time::Instant::now();
+        let answer = self.hook_out("UserPromptSubmit", payload.clone());
+        let ms = started.elapsed().as_millis() as u64;
+        let context = answer
+            .as_ref()
+            .map(|a| &a["hookSpecificOutput"])
+            .filter(|h| h["hookEventName"] == "UserPromptSubmit")
+            .and_then(|h| h["additionalContext"].as_str())
+            .map(str::to_owned);
+        if let (Some(s), Some(text)) = (&self.script, &context) {
+            s.context("UserPromptSubmit", text);
+        }
+        if let Some(file) = ptyro_core::test_knob("PTYRO_FAKE_CONTEXT")
+            && let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file)
+        {
+            let line = json!({ "prompt": payload["prompt"], "context": context, "ms": ms });
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
     /// The hook commands for `event` and the payload they get.
     fn hook_prep(&self, event: &str, mut payload: Value) -> (Vec<String>, Value) {
         payload["hook_event_name"] = json!(event);
@@ -433,7 +463,7 @@ impl Fake {
         if let Some(s) = &self.script {
             s.user(prompt);
         }
-        self.hook("UserPromptSubmit", p);
+        self.prompted(p);
         self.oc(json!({ "type": "session.status", "properties": { "sessionID": self.session, "status": { "type": "busy" } } }));
         self.report(out, "state=working:msg=d29ya2luZw");
         let msg = body(out);
@@ -839,7 +869,7 @@ pub fn main(args: &[String]) -> i32 {
                 if let Some(s) = &f.script {
                     s.user(&format!("work {rest}"));
                 }
-                f.hook("UserPromptSubmit", prompt);
+                f.prompted(prompt);
                 f.oc(json!({ "type": "session.status", "properties": { "sessionID": f.session, "status": { "type": "busy" } } }));
                 f.report(&mut out, "state=working:msg=d29ya2luZw");
                 let tool = json!({ "tool_name": "Bash", "tool_input": { "command": format!("sleep {secs}") } });

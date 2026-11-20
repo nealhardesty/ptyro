@@ -25,6 +25,7 @@ mod golden;
 mod history;
 mod machines;
 mod notes;
+mod offer;
 mod requests;
 mod roots;
 mod search;
@@ -80,6 +81,8 @@ pub struct Kb {
     notes_refused: Mutex<HashMap<String, serde_json::Value>>,
     /// Notes each session's agent wrote today (the day, how many): `remember`'s limit.
     remembered: Mutex<HashMap<String, (u64, u32)>>,
+    /// What was offered at prompts since the daemon started (`offer`).
+    offers: Mutex<offer::Offers>,
     /// Projects and folders (`roots`).
     roots: roots::Roots,
     /// Conversations of sessions that nothing is kept of, which got their tombstone since
@@ -163,6 +166,7 @@ impl Kb {
             notes_lock: tokio::sync::Mutex::new(()),
             notes_refused: Mutex::new(HashMap::new()),
             remembered: Mutex::new(HashMap::new()),
+            offers: Mutex::new(offer::Offers::default()),
             roots: roots::Roots::default(),
             kept_out: Mutex::new(std::collections::HashSet::new()),
         }

@@ -24,7 +24,7 @@ WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
 .PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
-        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments bench-kb-redact kb-eval kb-eval-real spike-wsl test-wsl tui-parity parity reset
+        run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments bench-kb-redact bench-kb-offer kb-eval kb-eval-real spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -132,7 +132,7 @@ verify-claude: build ## Check the Claude adapter against the real Claude Code he
 verify-structured: build ## Check structured mode, what chats run on, against the real agents here (one tiny chat each)
 	scripts/verify-structured.sh
 
-verify-kb: ## KB0, KB1.4, KB1.10: check what the knowledge base rests on against the real Claude Code and Codex here: hooks, transcripts and ptyro's own reader over them, MCP tools, and the tools as built (ARGS="claude" for one, "--built" for only the as-built tools, "--fixtures" to save sanitized transcripts; a few cents of tokens)
+verify-kb: ## KB0, KB1.4, KB1.10, KB5: check what the knowledge base rests on against the real Claude Code and Codex here: hooks, transcripts and ptyro's own reader over them, MCP tools, and the tools as built (ARGS="claude" for one, "--built" for only the as-built tools, "--offer" for only KB5.1's check of a prompt hook's added context, "--offer-built" for only what ptyro itself offers at a prompt, "--fixtures" to save sanitized transcripts; a few cents of tokens)
 	python3 -B scripts/verify-kb.py $(ARGS)
 
 spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, and an index over NODES (default 100000) chat nodes
@@ -149,6 +149,9 @@ spike-kb-comments: ## KB0.4: run the comment table (SPEC §25.6.3) over real cod
 
 bench-kb-redact: ## KB1.3: how long the knowledge base's redaction (SPEC §25.7) takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file)
 	$(CARGO) test --profile local -p ptyro-core --lib kb::redact::tests::a_mebibyte -- --nocapture
+
+bench-kb-offer: ## KB5: how long the search behind what is offered at a prompt (SPEC §25.9) takes, optimised, over 20,000 made-up sessions (80,000 pieces of common words) for 200 prompts: the median, p95, the slowest, and how many passed the 150 ms cut-off (half a minute)
+	$(CARGO) test --profile local -p ptyro-daemon --lib kb::offer::tests::the_search_behind_an_offer_at_size -- --exact --ignored --nocapture
 
 kb-eval: ## KB1.6: the knowledge base's golden set (SPEC §25.16): 300 made-up items and chats, 63 questions through the real ingest and search; prints recall at 5 and the mean reciprocal rank by words and with meaning (a synthetic model, no download; a second), and fails when one drops two points under the numbers committed in crates/ptyro-daemon/src/kb/golden.rs or something that must never be found is (KB_EVAL_VERBOSE=1 shows every question; `make test` runs it too)
 	$(CARGO) test -p ptyro-daemon --lib kb::golden::the_golden_set -- --exact --nocapture

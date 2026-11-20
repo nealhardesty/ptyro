@@ -34,6 +34,9 @@ use crate::daemon::Daemon;
 /// one that raises it should raise these.
 const COMMITTED: [(&str, f64, f64); 2] = [("words", 0.746, 0.576), ("meaning", 1.0, 0.761)];
 const SLACK: f64 = 0.02;
+/// Of the prompts that must be offered something (KB5, [`prompts`]), the share that was, as
+/// measured on 2026-11-20. A change to the floor of `kb/offer.rs` is made against it.
+const OFFERED: [(&str, f64); 2] = [("words", 1.0), ("meaning", 1.0)];
 
 const DAY: u64 = 86_400_000;
 
@@ -452,6 +455,113 @@ fn questions() -> Vec<Question> {
     qs
 }
 
+/// A prompt an agent is given (KB5, §25.9): what it may be offered, and what it must not.
+struct Prompt {
+    text: String,
+    /// The session's profile: the wall.
+    profile: &'static str,
+    /// The topic it is about: every pointer must be of it. `None`: it must be offered
+    /// nothing at all.
+    topic: Option<usize>,
+    /// Whether something must be offered by words alone too (it says the thing again in
+    /// its own words); else only with meaning.
+    by_words: bool,
+}
+
+/// The prompts: each topic asked again as it was asked, each asked about loosely, and
+/// prompts that are about nothing kept (too short, a command, everyday requests, one
+/// telling word of a topic among words that are nowhere).
+fn prompts() -> Vec<Prompt> {
+    let mut ps = Vec::new();
+    for (i, topic) in TOPICS.iter().enumerate() {
+        let [a, b] = topic.terms;
+        let profile = Topic::profile(i);
+        ps.push(Prompt { text: topic.ask.to_owned(), profile, topic: Some(i), by_words: true });
+        ps.push(Prompt {
+            text: format!("remind me what we settled about {a} and {b}"),
+            profile,
+            topic: Some(i),
+            by_words: false,
+        });
+    }
+    let nothing = [
+        "fix it",
+        "yes go ahead",
+        "continue with the next one please",
+        "/compact keep the retry backoff decision",
+        "<ptyro-message from=\"lead\">the retry backoff cache eviction work is yours</ptyro-message>",
+        "please rename that variable to something clearer and shorter",
+        "can you explain what this function returns when the list is empty",
+        "commit what you have and open a pull request for review",
+        "why is the build red on the main branch this morning",
+        // One telling word of a topic among words that are nowhere: not enough.
+        "the retry button on the checkout page looks misaligned on mobile",
+        "translate the login screen and the footer into german",
+        "what is the capital of france and its population",
+    ];
+    for text in nothing {
+        ps.push(Prompt { text: text.to_owned(), profile: "work", topic: None, by_words: false });
+    }
+    ps
+}
+
+/// Every prompt through [`Daemon::kb_pointers`]: of the prompts that must be offered
+/// something, how many were (the offer rate), and how many pointers were given in all. It
+/// fails on any pointer that is not of the prompt's topic, is behind the wall, is of a kind
+/// never offered or of a forgotten note, on more than three, and on a prompt about nothing
+/// that was offered anything.
+async fn measure_offers(d: &Daemon, mode: &str) -> (f64, usize) {
+    let (mut wanted, mut offered, mut pointers) = (0usize, 0usize, 0usize);
+    for p in prompts() {
+        let scope = KbScope::of("profile", p.profile, None);
+        let seen = std::collections::HashSet::new();
+        let hits = match d.kb_pointers(&p.text, Some(&scope), None, &seen).await {
+            Ok(h) => h,
+            Err(e) => panic!("{mode}: {:?}: {e:?}", p.text),
+        };
+        let got: Vec<String> = hits.iter().filter_map(|h| h.uri.clone()).collect();
+        assert_eq!(got.len(), hits.len(), "{mode}: {:?}: a chat was offered", p.text);
+        assert!(got.len() <= ptyro_core::kb::offer::MAX, "{mode}: {:?}: {got:?}", p.text);
+        if std::env::var_os("KB_EVAL_VERBOSE").is_some() {
+            println!("  {mode:8} offer {:?} as {}: {got:?}", p.text, p.profile);
+        }
+        let Some(i) = p.topic else {
+            assert!(got.is_empty(), "{mode}: {:?} must be offered nothing: {got:?}", p.text);
+            continue;
+        };
+        let topic = &TOPICS[i];
+        let other = if p.profile == "work" { "home" } else { "work" };
+        for (h, uri) in hits.iter().zip(&got) {
+            assert!(uri.contains(topic.slug), "{mode}: {:?} was offered {uri}", p.text);
+            assert_ne!(
+                h.profile.as_deref(),
+                Some(other),
+                "{mode}: {:?}: over the wall: {uri}",
+                p.text
+            );
+            assert!(
+                *uri != topic.src() && !uri.starts_with("shell://"),
+                "{mode}: {:?}: a kind that is never offered: {uri}",
+                p.text
+            );
+            assert!(
+                !(FORGOTTEN.contains(&i) && *uri == topic.note(i)),
+                "{mode}: {:?}: a forgotten note: {uri}",
+                p.text
+            );
+        }
+        if mode == "meaning" || p.by_words {
+            wanted += 1;
+            offered += usize::from(!got.is_empty());
+        } else {
+            // By words alone a loose question shares too few words with anything: silence.
+            assert!(got.is_empty(), "{mode}: {:?}: {got:?}", p.text);
+        }
+        pointers += got.len();
+    }
+    (offered as f64 / wanted as f64, pointers)
+}
+
 /// A daemon with the corpus kept, the chats written and three notes forgotten. Meaning
 /// search is on, so every prose chunk has its vector.
 async fn daemon(t: &tempfile::TempDir, now: u64) -> Arc<Daemon> {
@@ -552,6 +662,17 @@ async fn the_golden_set() {
         set_config(&d, config);
         let got = measure(&d, mode).await;
         report(mode, got);
+        // What is offered at a prompt (KB5): the rate among the prompts that must be
+        // offered something. Its hard rows (nothing for a prompt about nothing, nothing
+        // over the wall, nothing of another topic) fail inside.
+        let (rate, pointers) = measure_offers(&d, mode).await;
+        println!(
+            "kb-eval  {mode:8}  offered {rate:.3} of the prompts that ask, {pointers} pointers"
+        );
+        let Some((_, floor)) = OFFERED.iter().find(|c| c.0 == mode) else { continue };
+        if rate < floor - SLACK {
+            failed.push(format!("{mode} offers fell to {rate:.3} from {floor:.3}"));
+        }
         let Some((_, recall, mrr)) = COMMITTED.iter().find(|c| c.0 == mode) else { continue };
         for (name, got, committed) in [("recall@5", got.0, *recall), ("mrr", got.1, *mrr)] {
             if got < committed - SLACK {

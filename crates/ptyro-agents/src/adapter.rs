@@ -221,6 +221,19 @@ pub trait Adapter: Send + Sync {
         let _ = (event, payload);
         (None, false)
     }
+    /// The prompt a hook carries, when this hook is one whose answer the agent adds to the
+    /// model's context beside that prompt (SPEC §25.9: what is offered at a prompt). `None`:
+    /// this hook can add nothing, or this agent takes nothing.
+    fn hook_prompt(&self, event: &str, payload: &Value) -> Option<String> {
+        let _ = (event, payload);
+        None
+    }
+    /// What the hook must print for the agent to add `context` to what the model is given
+    /// with the prompt. `None`: as [`Adapter::hook_prompt`].
+    fn hook_context(&self, event: &str, context: &str) -> Option<String> {
+        let _ = (event, context);
+        None
+    }
     /// What a piece of that file says: `bytes` are the file from offset `from`. `None`: this
     /// agent's transcripts are not read.
     fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
@@ -292,6 +305,28 @@ pub fn str_of<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str).filter(|s| !s.is_empty())
 }
 
+/// The hook whose answer Claude Code and Codex add to the model's context: the one a prompt
+/// fires. (`SessionStart`'s answer is added too, but there is no prompt then to offer
+/// anything for.) **[verified 2026-11-20, Claude Code 2.1.329 and Codex 0.167.1; `make
+/// verify-kb ARGS=--offer`]**
+const PROMPT_HOOK: &str = "UserPromptSubmit";
+
+/// [`Adapter::hook_prompt`] as Claude Code and Codex have it: `prompt` of `UserPromptSubmit`.
+pub fn prompt_hook(event: &str, p: &Value) -> Option<String> {
+    (event == PROMPT_HOOK).then(|| str_of(p, "prompt").map(str::to_owned)).flatten()
+}
+
+/// [`Adapter::hook_context`] as Claude Code and Codex take it: one line of JSON on the hook's
+/// stdout, `{"hookSpecificOutput": {"hookEventName": …, "additionalContext": …}}`.
+pub fn prompt_context(event: &str, context: &str) -> Option<String> {
+    (event == PROMPT_HOOK).then(|| {
+        serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": event, "additionalContext": context }
+        })
+        .to_string()
+    })
+}
+
 /// The model a hook payload names: its own `model` (Claude's `SessionStart`, every Codex hook).
 pub fn model_in(p: &Value) -> Option<Signal> {
     str_of(p, "model").map(|id| Signal::Model { id: id.to_owned() })
@@ -322,6 +357,42 @@ pub fn transcript_model(path: &str) -> Option<Signal> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real agents' `UserPromptSubmit` payloads (the fixtures the KB0.2 spike wrote) carry
+    /// the prompt, and only that hook's answer is context; every other agent takes none.
+    #[test]
+    fn a_prompt_hook_carries_the_prompt_and_takes_context() {
+        let fixture = |dir: &str| -> Value {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(dir)
+                .join("hooks/UserPromptSubmit.json");
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        for (name, dir, starts) in [
+            ("claude", "claude-2.1.329", "Do these four things"),
+            ("codex", "codex-0.167.1", "Call the recall tool"),
+        ] {
+            let a = crate::adapter(name);
+            let p = fixture(dir);
+            let prompt = a.hook_prompt("UserPromptSubmit", &p).unwrap();
+            assert!(prompt.starts_with(starts), "{name}: {prompt}");
+            assert_eq!(a.hook_prompt("Stop", &p), None, "{name}");
+            assert_eq!(a.hook_prompt("SessionStart", &p), None, "{name}");
+            let out = a.hook_context("UserPromptSubmit", "line one\n\"two\"").unwrap();
+            assert!(!out.contains('\n'), "one line: {out}");
+            let v: Value = serde_json::from_str(&out).unwrap();
+            assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+            assert_eq!(v["hookSpecificOutput"]["additionalContext"], "line one\n\"two\"");
+            assert_eq!(a.hook_context("Stop", "x"), None, "{name}");
+        }
+        for name in ["opencode", "generic", "shell"] {
+            let a = crate::adapter(name);
+            let p = serde_json::json!({ "prompt": "a prompt of several words" });
+            assert_eq!(a.hook_prompt("UserPromptSubmit", &p), None, "{name}");
+            assert_eq!(a.hook_context("UserPromptSubmit", "x"), None, "{name}");
+        }
+    }
 
     #[test]
     fn random_hex_is_32_hex_chars_and_fresh() {

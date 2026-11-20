@@ -206,6 +206,25 @@ impl Script {
         append(&self.path, &lines);
     }
 
+    /// What a prompt's hook added to the model's context (SPEC §25.9), where the real agents
+    /// keep it **[verified 2026-11-20, Claude Code 2.1.329 and Codex 0.167.1; `make verify-kb
+    /// ARGS=--offer`]**: Claude in an `attachment` of type `hook_additional_context` (its
+    /// `content` a list, and again under `rendered`), Codex in a `developer` message. A reader
+    /// must take neither for what the user or the agent said.
+    pub fn context(&self, event: &str, text: &str) {
+        let line = if self.claude {
+            json!({ "type": "attachment", "sessionId": self.session,
+                "attachment": { "type": "hook_additional_context", "content": [text],
+                    "hookName": event, "hookEvent": event },
+                "rendered": [{ "content": text }] })
+        } else {
+            self.codex_item(json!({
+                "type": "message", "id": format!("msg_{}", self.id()), "role": "developer",
+                "content": [{ "type": "input_text", "text": text }] }))
+        };
+        append(&self.path, &[line]);
+    }
+
     /// A tool that ran: Claude's `tool_use` and its result, Codex's `exec` call, what it
     /// really ran, and its output.
     pub fn tool(&self, name: &str, input: &Value, output: &str) {

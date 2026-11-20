@@ -224,6 +224,12 @@ pub struct KbStatusInfo {
     pub queued: u64,
     /// What was not kept since the daemon started, newest last, with why (at most 100).
     pub skipped: Vec<KbSkipped>,
+    /// `kb.inject` (1.61): agents are offered pointers at a prompt (§25.9).
+    pub inject: bool,
+    /// What was offered at prompts since the daemon started, newest first (at most 20;
+    /// 1.61): the trace of what agents were given without asking. Empty for an agent that
+    /// asks.
+    pub offered: Vec<super::offer::KbOffer>,
 }
 
 impl KbStatusInfo {
@@ -293,6 +299,17 @@ impl KbStatusInfo {
         }
         if s.queued > 0 {
             out.push(format!("  {} waiting to be read", s.queued));
+        }
+        if s.inject {
+            out.push(match s.offered.len() {
+                0 => "  agents are offered pointers at a prompt (`kb.inject`): none since the daemon started".to_owned(),
+                n => format!("  agents are offered pointers at a prompt (`kb.inject`); the last {n}:"),
+            });
+        } else if !s.offered.is_empty() {
+            out.push("  offered at prompts before `kb.inject` was switched off:".to_owned());
+        }
+        for o in &s.offered {
+            out.push(format!("    {}", o.line()));
         }
         if !s.skipped.is_empty() {
             out.push(format!("  not kept ({}):", s.skipped.len()));

@@ -634,6 +634,11 @@ impl Daemon {
         if let Some(job) = kb {
             self.kb_hooked(&s, job);
         }
+        // What is offered at a prompt (SPEC §25.9, `kb.inject`): the hook's answer, within
+        // its own cut-off. After the signals: the session says "working" first.
+        if let Some(stdout) = self.kb_offer(&s, &adapter, event, &payload).await {
+            return Ok(Reply::HookOutput { stdout });
+        }
         if let Some(h) = hold
             && let Some(reply) = self.finish_hold(&s, h).await
         {

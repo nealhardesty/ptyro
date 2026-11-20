@@ -265,6 +265,18 @@ export function ingestRequest(v) {
             spec[k] = text(k);
     return { t: "kb_ingest", spec, ...far(text("machine")) };
 }
+/// What agents are offered at a prompt, for the status: the sentence that says whether they
+/// are (`null`: they are not, and never were since the daemon started), and each offer as
+/// who was given it and what each pointer is called (its address opens it).
+export function offered(inject, offers) {
+    const rows = (offers ?? []).map((o) => ({
+        to: o.name,
+        pointers: o.pointers.map((p) => ({ addr: p.addr, label: p.title ? `${p.kind}, ${p.title}` : p.kind })),
+    }));
+    const says = inject ? "Agents may be given up to three pointers with a prompt (Knowledge → inject)"
+        : rows.length ? "Off now (Knowledge → inject); what was offered before is below" : null;
+    return { says, rows };
+}
 /// What is kept of your shells (`kb.shell`: off, commands, output), in a sentence, and the
 /// switches that change it: the commands first, what they print second and only where the
 /// commands are kept. `null`: a daemon from before shells were kept.
