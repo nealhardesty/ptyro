@@ -137,6 +137,7 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 # scope = "workspace"                     # what an agent may see of it and of your chats: profile (default) | workspace | all
 # tools = false                           # don't give agents the tools that search it
 # remember = false                        # agents may not write notes (you still do)
+# inject = true                          # offer an agent up to three pointers with a prompt that matches what is kept (default false)
 # meaning = true                          # also search by meaning (downloads a 31 MB model once)
 # max_file = "2MiB"                       # the largest file read (default 1MiB)
 # redact = ["ACME-[0-9]{6}"]              # more patterns to redact before anything is kept
@@ -171,6 +172,10 @@ session, or keep its agent or project out, when that is not what you want. `scop
 between your accounts' agents (`[chat] history_scope` is its old name, still read; you always
 see everything yourself). `tools = false` gives no agent the tools that search it (`recall`,
 `recall_read`); it is read when a session starts or resumes, so a running one keeps what it has.
+`inject = true` lets ptyro answer an agent's prompt with up to three pointers to what is kept about
+it (addresses, dates and titles, never the text); it is off unless you set it, because stored
+titles then reach a model's prompt unasked ([`knowledge.md`](knowledge.md#offered-at-a-prompt-off-unless-you-switch-it-on) says
+what is offered, to whom, and what it costs), and `ptyro kb` lists what was offered.
 `private = true` makes a new session private unless it says otherwise (`--no-private`, or the
 form's switch): nothing of a private session is kept, and it can't be made un-private later.
 

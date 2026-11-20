@@ -48,7 +48,7 @@ Conventions:
 | **WIN** | Windows and PowerShell | pwsh sessions as good as bash everywhere; WSL2 checked, bridged and doctored (done). `ptyro.exe` in Windows Terminal and the native daemon on ConPTY were built, then removed 2026-11-18 (owner): on Windows, ptyro runs inside WSL2 (RESEARCH DD3) |
 | **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (built 2026-11-04) |
 | **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
-| **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and (optionally) shell commands, searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest (decided 2026-11-19; open, SPEC §25) |
+| **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and (optionally) shell commands, searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest; pointers offered at a prompt where you switch that on (decided 2026-11-19; every task KB0 to KB5 is built, 2026-11-20; open until its "Done when" is run with the real agents in the TUI, on Linux, and from a phone, SPEC §25) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; and KB4 is: a shell's commands, and what they print only where asked for; KB5 is not)
+## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; and KB4 is: a shell's commands, and what they print only where asked for; and KB5 is: pointers offered at a prompt, off unless switched on. Every task is built; the milestone stays open until its "Done when" is run with the real agents in the TUI, on Linux, and from a phone: see the note under it)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -4478,16 +4478,69 @@ Development section), its README and `docs/` text, and the milestone's version b
         `kb4.rs` (`what_a_command_printed_is_kept_only_when_asked_for_…`: bounded, a line
         typed without echo, an alternate screen, a private shell, back to commands).
         SPEC §25 "As built", §25.6.5, §25.12.)*
-- [ ] **KB5 Offered at the prompt** (R-KB-06) — off by default. **M**
-  - [ ] **KB5.1** (spike) A `UserPromptSubmit` hook's added context on the real Claude and
+- [x] **KB5 Offered at the prompt** (R-KB-06) — off by default. **M**
+      *(Built 2026-11-20, narrower than designed where the spike and the default settings
+      said so: by words first (meaning search is off as it comes), never by meaning alone,
+      never a chat, and with a trace the design did not have. It stays off unless switched
+      on: whether it helps an agent more than it distracts on real work is not measured.)*
+  - [x] **KB5.1** (spike) A `UserPromptSubmit` hook's added context on the real Claude and
         Codex, and what the user sees of it. **S**
-  - [ ] **KB5.2** The gates of §25.9 and the 150 ms cut-off; at most three dated pointers; the
+        *(Built 2026-11-20: `make verify-kb ARGS=--offer` (`scripts/verify-kb.py`
+        `offered`): the same tiny prompt twice an agent, with hooks that say nothing and
+        with hooks that answer `{"hookSpecificOutput": {"hookEventName": …,
+        "additionalContext": …}}` carrying three pointers and a check word. On Claude Code
+        2.1.329 and Codex 0.167.1 alike the model replied with the check word of
+        `UserPromptSubmit`'s context, and of `SessionStart`'s. Cost: 231 input tokens a
+        block of 540 characters on Claude, 169 on Codex. Claude keeps it in its transcript
+        as a `hook_additional_context` attachment, Codex as a `developer` message, and
+        ptyro's reader takes neither as something said, so an offer is not ingested again.
+        Time: the hook has 500 ms; the search behind an offer took 11 ms at the median and
+        32 ms at p95 over 80,000 made-up pieces of common words with six telling words, and
+        67 ms and 237 ms with eight (`make bench-kb-offer`), which is why six. **Not
+        established: what the user sees of it in either agent's terminal** (the spike
+        drives `-p` and `exec`; `stream-json` shows a `system/hook_response` event), **and
+        whether offers help or distract on real work**: on the golden set's prompts the
+        floor offers every topic asked again its own items and nothing to twelve prompts
+        about nothing, which says it is quiet, not that it is useful. Four real turns (two
+        an agent). SPEC §20.1, §20.2, §25 "As built", §25.18.)*
+  - [x] **KB5.2** The gates of §25.9 and the 150 ms cut-off; at most three dated pointers; the
         golden set gains prompts that must offer nothing. `kb.inject`. **M**
+        *(Built 2026-11-20: `ptyro_core::kb::offer` (`telling`: which prompt asks for
+        anything and its telling words; `query`: every pick of three, or two, of them as
+        one FTS5 expression; `render`: the fence, three pointers and 1,024 bytes at most;
+        `KbOffer`, `KbPointer`; `fenced`, which `ptyro mcp` now uses too),
+        `Adapter::{hook_prompt, hook_context}` for Claude and Codex
+        (`adapter::{prompt_hook, prompt_context}`), `crates/ptyro-daemon/src/kb/offer.rs`
+        (`kb_offer`, called from `Daemon::hook` after the session's signals: the gates, the
+        150 ms cut-off, the wall through `kb_session_scope`, never the session's own item,
+        never one it was offered before, the `kb_offer` event; `kb_pointers`: three words
+        by words alone, two and found by meaning with meaning on; `kb_offered`: the trace),
+        the setting `kb.inject` (off, in the schema and so in both settings panels and
+        `ptyro config set`), protocol 1.61 (`KbStatusInfo.inject`, `.offered`), the trace in
+        `ptyro kb`, the TUI's Library status and the web's status sheet. **Not built:** an
+        offer by meaning alone; chats, commands, code and comments as pointers; telling
+        words chosen by how rare they are; a per-agent or per-project switch of its own
+        (`[agents.X] kb = false` and `[knowledge] enabled = false` already take one out);
+        a trace that outlives the daemon. Tests: `kb::offer::tests` (core),
+        `a_prompt_hook_carries_the_prompt_and_takes_context` over the real payload fixtures,
+        `kb/offer/tests.rs`, the golden set's 72 prompts in `make kb-eval` (60 that must be
+        offered their topic alone, 12 that must be offered nothing), `kb5.rs` with fake
+        agents that run the hook and keep its answer as the real ones do (off as it comes;
+        on, within the cap and opened by `recall_read`; never twice; the floor; the wall;
+        private; Codex; the trace and its going on a forget; nothing offered is kept again;
+        `kb = false` and `tools = false`), `web/test/library.mjs`. With the real agents
+        (`make verify-kb ARGS=--offer-built`, one turn each, Claude Code 2.1.329 and Codex
+        0.167.1): each ran ptyro's own hook as a session of a throwaway daemon, was offered
+        the pointer, replied with its address and opened it; the hook as a process took 23
+        to 28 ms. SPEC §8.3, §25 "As built", §25.9, §25.13 to §25.16; `docs/knowledge.md`.)*
 
 **Later, each with its own decision** (SPEC §25.18): a model-written digest and a lint of notes
 (R-KB-12; the owner allowed it for later); web pages, PDFs, issues and pull requests as sources;
 OpenCode's sessions and tools; sub-agents' transcripts and tool results; code by meaning;
-merging knowledge across machines (with CHAT6); export.
+merging knowledge across machines (with CHAT6); export. Of what is offered at a prompt (KB5):
+offers by meaning alone, telling words chosen by how rare they are in `kb.db`, chats as
+pointers, a trace kept across a daemon restart, and making it the default, which waits for
+evidence from real use that it helps.
 
 **Done when (milestone):** on Linux and macOS, with nothing set up beyond `ptyro setup`:
 1. *(KB1)* A Claude session and a Codex session each finish a task. `C-q L` shows both in the
@@ -4508,6 +4561,25 @@ merging knowledge across machines (with CHAT6); export.
 4. *(KB4)* With `kb.shell = "commands"`, "that long ffmpeg line" is found by a word of it; with
    `"output"`, by a word it printed; with `"off"`, neither is stored.
 5. The same from the web on a phone, and a search from one machine finds a session on another.
+
+*(Where this stands, 2026-11-20. Steps 1 to 4 were walked by commands against a throwaway
+daemon on macOS with the **fake** Claude and Codex, and every claim held: each session's task
+found by a word of it and listed in the history; a new session of the same profile answered
+by `recall` with no prompt and one of another profile told "nothing found"; `kb forget`
+leaving no hit and no byte of the word in `kb.db`; a private session with `◌` that can
+`recall` and is in neither the history nor a search; `remember` writing a file in the notes
+folder that the next session's `recall` returns first and whose edit by hand is found; `ptyro
+ingest` of a folder saying what it read, a heading, a comment and a file name found from
+elsewhere, a project added and searchable with no command, `ingest --history` reading four
+transcripts put in the agent's own folder; a command found by a word of it with `"commands"`
+and not by what it printed, by what it printed with `"output"`, and neither with `"off"`.
+**Not run, so the milestone stays open:** the same with the real agents in the TUI (`C-q L`,
+`⏎`, `r`, the form's Private switch: end-to-end and TUI tests do these with fake agents; the
+real agents were run only in `-p` and `exec` mode by `make verify-kb`, which showed the
+tools, the transcripts and the prompt hook); a search by a paraphrase with the real model
+(not on this machine; the golden set does it with a synthetic one); anything on Linux by
+hand (CI runs the tests there); step 5 by hand (the web's end-to-end test and
+`kb_machines.rs` stand for it). KB0.3 and KB1 stay unticked for the first of these.)*
 
 ---
 

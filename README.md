@@ -627,6 +627,17 @@ history, not instructions, and says who wrote each piece. An agent sees only wha
 under its own profile, never the session it is in, and can't forget anything. `[kb] tools =
 false` gives no agent the tools; `[agents.codex] kb = false` gives that agent none.
 
+**It can also speak first, if you let it.** `[kb] inject = true` (off as it comes): when you
+give an agent a prompt that is clearly about something kept, ptyro adds up to three pointers
+to it beside your prompt (an address, a date and a title each, never the text), which the
+agent opens with `recall_read` or ignores. It is off unless you switch it on because stored
+titles then reach a model's prompt unasked, it costs about 185 to 300 tokens on such a prompt,
+and a match by words can be beside the point. A private session is offered nothing, nothing
+crosses the wall between profiles, most prompts are offered nothing at all, and `ptyro kb`
+lists what was offered and to which session.
+[`docs/knowledge.md`](docs/knowledge.md#offered-at-a-prompt-off-unless-you-switch-it-on) has
+all of it.
+
 **The commands you run in your shells are kept too, and what they print is not.** Each
 command line of a shell session (the quick terminal, SHELLS) is kept when the command ends,
 with its folder, how it ended and how often you ran it, so `ptyro recall ffmpeg` finds that
@@ -886,7 +897,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
-| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, shells (commands, and output only if you ask), projects and folders (`ptyro ingest`), the agents' own history, notes, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
+| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, shells (commands, and output only if you ask), projects and folders (`ptyro ingest`), the agents' own history, notes, private sessions, the switches, forgetting, the agents' tools, what is offered at a prompt (off unless you switch it on) and its risk, the Library, linked machines |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
@@ -928,7 +939,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
-| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`, `ARGS=--built`) | check what the knowledge base rests on against the real Claude Code and Codex here (`--built`: only that they take the tools exactly as ptyro gives them, from the real `ptyro mcp`; two tiny turns): that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that ptyro's own reader keeps the conversation of those transcripts and nothing else, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
+| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`, `ARGS=--built`, `ARGS=--offer`, `ARGS=--offer-built`) | check what the knowledge base rests on against the real Claude Code and Codex here (`--built`: only that they take the tools exactly as ptyro gives them, from the real `ptyro mcp`; two tiny turns. `--offer`: only that a prompt hook's added context reaches the model, what it costs and what the transcript keeps of it; four tiny turns. `--offer-built`: only what ptyro itself offers at a prompt with `kb.inject` on: its hook timed as a process, then each real agent answering as a session of a throwaway daemon; two tiny turns): that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that ptyro's own reader keeps the conversation of those transcripts and nothing else, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
@@ -938,6 +949,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make spike-kb-comments` (`ARGS="<folder>…"`, `SAMPLE=…`) | ROADMAP KB0.4: the comment table (SPEC §25.6.3) run over real code, read-only: files by extension, comment blocks kept and dropped by each rule (licence headers, tools' directives, code switched off, too short), and a sample of each to judge by eye |
 | `make headless CMD=… ARGS=…` | run a program in ptyro's emulator without a terminal; prints screen and status |
 | `make fixture NAME=… SIZE=… CMD=…` / `make snapshots` | record a golden-test fixture (sanitise it!) / accept golden snapshots (screens, `--json` shapes, rc-file detection) |
+| `make bench-kb-offer` | ROADMAP KB5: how long the search behind what is offered at a prompt takes, optimised, over 20,000 made-up sessions of common words, for 200 prompts: the median, p95, the slowest, and how many passed the 150 ms cut-off after which nothing is offered |
 | `make bench-kb-redact` | ROADMAP KB1.3: how long the knowledge base's redaction takes over 1 MiB of ordinary text, optimised (it runs over every transcript and file before anything is kept) |
 | `make fuzz-smoke` (`FUZZ_SECONDS=5`) / `make fuzz` (`TARGET=… SECONDS=…`) | mutation fuzzing on stable (CI) of eleven targets: the emulator, protocol, input, recordings, the settings editor, other tools' config files, the host API's JSON, the live-upgrade image, every config parser and the knowledge base's way in (redaction, the cutters, the plan, a file under a root, the transcript readers) / coverage-guided `cargo fuzz` (nightly) |
 | `make proptest-deep` | 20k-case property test of the frame protocol |
