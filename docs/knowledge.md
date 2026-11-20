@@ -47,8 +47,10 @@ only. Nothing leaves this computer. Each linked machine keeps its own (see
   contents). Only the line that says which tool ran on what.
 - **A private session** (below): nothing at all, not even its card.
 - **Secrets**: keys, tokens, passwords and private keys are taken out before anything is
-  written, and so are the values of your profile's secret settings. `[kb] redact` adds your
-  own patterns.
+  written, and so are the values of your profile's secret settings (of every profile's,
+  where the source belongs to none: an unpinned project, a folder read for everyone, your
+  notes). `[kb] redact` adds your own patterns. If a profile's secrets can't be read (its
+  command fails), what would need them is not kept until they can, and `ptyro kb` says so.
 - **Files that hold secrets**: `.env*`, `*.pem`, `*.key`, `.ssh/`, `.aws/`, `.gnupg/` and
   their kind are never read. `[kb] exclude` adds paths.
 - **What you forgot** (below), and anything of an agent or a repository you kept out.
@@ -94,12 +96,16 @@ is on your terminal, which is why it is off and why the web asks before it switc
 - the trivial ones, by their first word: `ls cd pwd clear exit ll la fg bg history`
   (`[kb] shell_skip`);
 - **a command that names a key or credential file**: `cat .env`, `ssh-add ~/.ssh/id_ed25519`,
-  anything `[kb] exclude` matches. Neither the line nor its output;
+  anything `[kb] exclude` matches. Neither the line nor its output. The same for **any
+  command run inside such a folder** (`cd ~/.ssh`, then `cat config`);
 - **anything a command showed that you typed into while it ran**: a password prompt, a
   REPL (`python`, `psql`), `ssh`, an installer's questions. What such a command shows holds
   what you typed, so none of it is kept; its command line is. (A password typed where nothing
   is echoed was never printed in the first place, and is no command line either.) Stopping a
-  command with Ctrl-C is not typing: an interrupted build keeps what it printed;
+  command with Ctrl-C is not typing: an interrupted build keeps what it printed. A paste
+  that goes on after its first Enter (`sudo make install⏎password⏎`) counts as typed into
+  that command. What ptyro can't see is an answer typed by hand in the instant before the
+  shell says the command began: if you type that fast, put a space before the command;
 - **what a full-screen program showed** (an editor, a pager, `htop`: the alternate screen, or
   a cursor sent around the screen): its command line is kept, its screen is not;
 - the screen of **an agent you start by hand** in a shell (`claude`, `codex`): its command
@@ -189,8 +195,15 @@ exclude = ["fixtures/**"]
 ```
 
 `ptyro kb rm` drops a folder's root and everything read of it; your files aren't touched, and
-ingesting it again brings it back. A project's root goes when the project is removed from
-ptyro, when its file keeps it out, or when `[kb] projects` is off.
+ingesting it again brings it back, **except what you forgot** (`ptyro kb forget`): a forgotten
+file or commit stays forgotten however often its folder is removed and read again. A
+project's root goes when the project is removed from ptyro, when its file keeps it out, or
+when `[kb] projects` is off.
+
+**A folder inside a folder.** You can ingest `~/work` and also have projects in it. Each file
+belongs to the innermost one: a project pinned to a profile stays that profile's (other
+profiles' agents never see it) although `~/work` is read for everyone, and a project that
+keeps itself out (`[knowledge] enabled = false`) is not read through `~/work` either.
 
 **A folder that is gone** keeps what was read of it (it may come back) and is named until you
 say what to do: in `ptyro kb`, `ptyro kb ls`, the Sources tab, `ptyro gc`, and `ptyro doctor`,
@@ -220,6 +233,12 @@ is marked as never to be kept as soon as ptyro knows its conversation); a chat's
 in your chats); one older than `retain_days` or `--since`; an agent's with `kb = false`; one
 that ran in a project that keeps itself out. Sub-agents' own files are not read.
 
+**One thing ptyro can't know:** an agent you start by hand inside a *private shell* (you type
+`claude` at its prompt). ptyro keeps nothing of that shell, but the conversation is a file
+the agent keeps, and nothing tells ptyro it came from there: `ptyro ingest --history` reads
+it like any other. Start the agent as a private session instead (`ptyro new --private`), or
+forget the conversation afterwards.
+
 ## Private sessions
 
 A private session leaves nothing in the knowledge base: no transcript is read and no card is
@@ -235,6 +254,10 @@ command and no output.
 - **A running session can be made private**: `ptyro kb forget --session NAME`, the TUI's
   `session.private` (the row's menu), the web's ⋯ → Make it private…. Everything kept of it is
   forgotten and nothing more is kept. There is no way back for that session.
+- **Carrying an earlier conversation on in a private session** (the agent's own `/resume`):
+  what was kept of that conversation before stays and is still found; nothing said from then
+  on is ever read, also not later by a session that isn't private. `ptyro kb forget` removes
+  the earlier part too if you want it gone.
 
 ## Searching
 
@@ -352,7 +375,9 @@ marked as retrieved history, not instructions, and says who wrote each piece.
 
 **The wall between profiles.** An agent sees only what happened under its own profile (and
 what belongs to no profile), never the session it is in, and it can't forget anything. An
-agent that runs `ptyro recall` in its terminal is behind the same wall. You see everything.
+agent that runs `ptyro recall` in its terminal is behind the same wall, and so is what it
+reads of your chats there (`recall_read` of a chat's address, `ptyro chat show`). The wall
+goes by where the program runs, not by what it says it is. You see everything.
 `[kb] scope` moves the wall: `profile` (the default), `workspace` (narrower), `all`.
 
 `[kb] tools = false` gives no agent the tools; `[kb] remember = false` gives them the two that
