@@ -215,6 +215,8 @@ async fn dispatch(
             title,
             pr,
             issue,
+            private,
+            no_private,
             argv,
         }) => {
             let prompt = match prompt_file {
@@ -241,6 +243,7 @@ async fn dispatch(
                 title,
                 pr,
                 issue,
+                private: private_flag(private, no_private),
                 welcome: false,
             };
             let new_wt = new_wt.or_else(|| (a.pr.is_some() || a.issue.is_some()).then(String::new));
@@ -707,6 +710,13 @@ pub struct NewArgs {
     pub welcome: bool,
     pub pr: Option<u32>,
     pub issue: Option<String>,
+    /// `--private` / `--no-private` (SPEC §25.7a); `None`: as `kb.private` says.
+    pub private: Option<bool>,
+}
+
+/// `--private` and `--no-private` as the daemon takes them: neither is "as `[kb] private` says".
+pub fn private_flag(private: bool, no_private: bool) -> Option<bool> {
+    (private || no_private).then_some(private)
 }
 
 /// The variables a session should see from this client (SSH agent, display).
@@ -877,6 +887,7 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
         prompt: a.prompt,
         title: a.title,
         again: a.again,
+        private: a.private,
         ..SpawnSpec::default()
     };
     let reply = with_confirmation(&client, Request::Spawn { spec }, false, |r| {
@@ -1253,6 +1264,9 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                 format!("{}{kind}", p.state)
             }),
         };
+        // A private session says so, with incognito's mark (SPEC §25.7a).
+        let status = if s.private { format!("◌ private {status}") } else { status };
+        let status = status.trim_end();
         let place = s
             .worktree
             .as_deref()

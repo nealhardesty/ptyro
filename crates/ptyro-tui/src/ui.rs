@@ -705,6 +705,10 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
                 if s.dangerous {
                     spans.push(Span::styled(" ⚠", fg(app, t.error)));
                 }
+                // Private (SPEC §25.7a): incognito's mark.
+                if s.private {
+                    spans.push(Span::styled(" ◌", fg(app, t.dim)));
+                }
                 // A session under another profile than its place's stands out.
                 let place_profile = s
                     .worktree
@@ -1275,6 +1279,9 @@ fn draw_header(
                     " · ⚠ no permission prompts",
                     base.fg(app.depth.fit(t.error)),
                 ));
+            }
+            if s.private {
+                left.push(Span::styled(" · ◌ private", base.fg(app.depth.fit(t.dim))));
             }
             // Its title, else the program's window title.
             let window = app.caches.get(&s.id).and_then(|c| c.title.as_deref());

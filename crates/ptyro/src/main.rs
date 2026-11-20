@@ -415,6 +415,12 @@ enum Cmd {
         /// first prompt come from the issue
         #[arg(long, conflicts_with = "wt")]
         issue: Option<String>,
+        /// Private: the knowledge base keeps nothing of it (the agent keeps its own history)
+        #[arg(long)]
+        private: bool,
+        /// Keep it, though `[kb] private` is on
+        #[arg(long, conflicts_with = "private")]
+        no_private: bool,
         /// The command to run (default: your $SHELL); with --agent, extra agent arguments
         #[arg(last = true)]
         argv: Vec<String>,

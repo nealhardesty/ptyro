@@ -480,6 +480,10 @@ pub(crate) fn sidebar_line(
             if s.scratch {
                 spans.push(Span::styled(" ◌", fg(t.dim)));
             }
+            // (A scratch shell's mark is the bare ◌ here: private says its word.)
+            if s.private {
+                spans.push(Span::styled(" ◌ private", fg(t.dim)));
+            }
             if let Some(w) = &s.watch {
                 spans.push(Span::styled(format!(" ◎ {}", w.label()), fg(t.dim)));
             }

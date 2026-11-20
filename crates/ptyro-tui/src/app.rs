@@ -159,6 +159,8 @@ pub struct Wizard {
     pub no_fetch: bool,
     pub command: Option<String>,
     pub title: Option<String>,
+    /// Private (SPEC §25.7a), as the form says it; `None` (quick new): as `kb.private` says.
+    pub private: Option<bool>,
 }
 
 /// A PR or an issue named in text (UX1.10): a GitHub URL, or `pr 12` / `issue 12`.
@@ -2651,7 +2653,8 @@ impl App {
                     Err(e) => self.toast_err(e),
                 }
             }
-            "session.resume" | "session.hibernate" | "session.explain" | "session.mute" => {
+            "session.resume" | "session.hibernate" | "session.explain" | "session.mute"
+            | "session.private" => {
                 let target = if self.focus == Focus::Sidebar {
                     self.selected_row().and_then(|r| r.session())
                 } else {
@@ -2676,6 +2679,17 @@ impl App {
                         Pending::Done("notifications muted for 1h".into()),
                         Request::Mute { target: addr, minutes: Some(60), unmute: false },
                     ),
+                    // The daemon asks first, in its words (`kb forget --session`, §25.7a).
+                    "session.private" => {
+                        let req = Request::KbForget {
+                            addrs: Vec::new(),
+                            query: None,
+                            confirmed: false,
+                            session: Some(addr),
+                        };
+                        let done = Pending::Done("private: nothing of it is kept".into());
+                        self.request(Pending::Confirm(Box::new(req.clone()), Box::new(done)), req);
+                    }
                     _ => self.request(Pending::Explain(id), Request::StatusExplain { addr }),
                 }
             }
@@ -3775,6 +3789,9 @@ impl App {
                 if s.kind == SessionKind::Agent && s.state.is_live() {
                     v.extend(["session.hibernate", "session.mute"]);
                 }
+                if !s.private {
+                    v.push("session.private");
+                }
                 if s.worktree.is_some() {
                     v.extend(["worktree.open", "script.run", "script.pick"]);
                 }
@@ -4104,6 +4121,7 @@ impl App {
                     profile: w.profile.clone(),
                     name: w.name.clone().filter(|n| !n.is_empty()),
                     title: w.title.clone(),
+                    private: w.private,
                     ..SpawnSpec::default()
                 };
                 self.spawn_spec(spec, w.split);
@@ -4117,6 +4135,7 @@ impl App {
                     profile: w.profile.clone(),
                     name: w.name.clone().filter(|n| !n.is_empty()),
                     title: w.title.clone(),
+                    private: w.private,
                     ..SpawnSpec::default()
                 };
                 self.spawn_spec(spec, w.split);
@@ -4132,6 +4151,7 @@ impl App {
                         title: w.title.clone().or_else(|| w.prompt.clone()),
                         name: w.name.clone().filter(|n| !n.is_empty()),
                         profile: w.profile.clone(),
+                        private: w.private,
                         ..SpawnSpec::default()
                     },
                     w.split,
@@ -4906,8 +4926,9 @@ impl App {
                 Request::ProjectRemove { addr: id, release: false },
             ),
             Confirmed::Again(mut req, then) => {
-                if let Request::ChatTask { confirmed, .. } | Request::ChatUpdate { confirmed, .. } =
-                    req.as_mut()
+                if let Request::ChatTask { confirmed, .. }
+                | Request::ChatUpdate { confirmed, .. }
+                | Request::KbForget { confirmed, .. } = req.as_mut()
                 {
                     *confirmed = true;
                 }
@@ -6217,6 +6238,7 @@ pub(crate) fn worktree_spec(w: &Wizard, project: &str) -> WorktreeSpec {
         issue: w.issue.clone(),
         existing: w.branch.is_some(),
         branch: w.branch.clone(),
+        private: w.private,
         ..WorktreeSpec::default()
     }
 }
@@ -7287,12 +7309,14 @@ mod tests {
         assert_eq!(f.get("name"), "fix-flaky-test-x-y.");
         assert_eq!(f.get("agent"), "claude");
         assert_eq!(f.get("where"), "new:p1", "a new worktree of the project in context");
+        assert_eq!(f.get("private"), "", "Private is on the form, off unless `kb.private`");
         // The bad name is said on ⏎; fixed, ⏎ creates the worktree with every option.
         key(&mut app, KeyCode::Enter, Mods::NONE);
         assert!(matches!(&app.overlay, Some(Overlay::Form(f)) if f.error.is_some()));
         typed(&mut app, "\x08");
         let Some(Overlay::Form(f)) = &mut app.overlay else { panic!() };
         f.choose("setup", "");
+        f.choose("private", "yes");
         if let Some(crate::form::Field { kind: crate::form::Kind::Text { value, .. }, .. }) =
             f.fields.iter_mut().find(|x| x.key == "base")
         {
@@ -7311,6 +7335,7 @@ mod tests {
         assert_eq!(spec.base.as_deref(), Some("origin/dev"));
         assert!(!spec.setup, "setup unticked");
         assert_eq!(spec.agent.as_deref(), Some("claude"));
+        assert_eq!(spec.private, Some(true), "the form's Private switch (SPEC §25.7a)");
     }
 
     fn profile_info(name: &str) -> ProfileInfo {

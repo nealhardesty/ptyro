@@ -19,7 +19,7 @@
 //! tried again after [`RETRY`], in the background: the hook never waits.
 //!
 //! **Never**: a chat's engine (its text is in `chat.db`), a session that isn't an agent's, one
-//! that isn't recorded, and (KB1.14) a private one.
+//! that isn't recorded, and a private one (§25.7a: never queued, and refused by the gate).
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Read, Seek, SeekFrom};
@@ -219,7 +219,8 @@ impl Daemon {
     fn kb_queue_session(&self, s: &Session, job: SessionJob) {
         let ours = {
             let m = s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            m.kind == SessionKind::Agent && m.place.chat.is_none()
+            // (A private session is never queued, §25.7a: the gate would refuse it too.)
+            m.kind == SessionKind::Agent && m.place.chat.is_none() && !m.place.private
         };
         let kb = self.config().kb;
         if ours && kb.enabled && kb.sessions {
@@ -260,6 +261,11 @@ impl Daemon {
                 self.kb_enqueue(Job::Item(uri));
             }
         }
+    }
+
+    /// The URI `s` is kept under now, if it is a source whose conversation is known.
+    pub(super) fn kb_session_uri(&self, s: &Session) -> Option<String> {
+        self.kb_target(s, None).map(|t| t.uri)
     }
 
     /// What the daemon knows of `s` as a source, or `None` when it is never one: not an
@@ -317,8 +323,7 @@ impl Daemon {
                 // read, `kb_session`, never where a session is only looked at.)
                 project_off: false,
                 unrecorded: m.place.unrecorded,
-                // (§25.7a: the session's flag arrives with KB1.14.)
-                private: false,
+                private: m.place.private,
                 ..Facts::default()
             },
             card,

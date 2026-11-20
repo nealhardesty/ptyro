@@ -135,6 +135,10 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("session.hibernate", "Stop an idle agent, keeping it resumable"),
     a("session.explain", "Why is it in this state? The status engine's recent decisions"),
     a(
+        "session.private",
+        "Make this session private: what the knowledge base kept of it is deleted for good, and nothing more of it is kept (asks first; it can't be switched off again)",
+    ),
+    a(
         "session.mute",
         "Mute this session's notifications for an hour (its row still shows when it wants you)",
     ),

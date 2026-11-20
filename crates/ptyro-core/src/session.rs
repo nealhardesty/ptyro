@@ -192,6 +192,9 @@ pub struct SessionInfo {
     /// foreground (UX1.4): its status then comes from its screen, at low confidence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inner_agent: Option<String>,
+    /// Private (1.54, SPEC §25.7a): the knowledge base keeps nothing of it.
+    #[serde(default)]
+    pub private: bool,
     /// Its worktree's (or directory's) quick terminal (UX1.25): one shell, reused, and quiet.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quick: bool,
@@ -497,6 +500,10 @@ pub struct SpawnSpec {
     /// the person pastes. An older daemon ignores it and records as usual.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unrecorded: bool,
+    /// Private (protocol 1.54, SPEC §25.7a): the knowledge base keeps nothing of it. `None`:
+    /// as `kb.private` says; `Some(false)` keeps it even when that is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<bool>,
     /// The daemon's own: start it as a new pane of this loose session's window (`ShellSplit`,
     /// SPEC §23.17). Never on the wire.
     #[serde(skip)]

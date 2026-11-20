@@ -99,7 +99,7 @@ pub(crate) struct Facts {
     pub project_off: bool,
     /// Its session is not recorded (§7.6).
     pub unrecorded: bool,
-    /// Its session is private (§25.7a; the flag arrives with KB1.14).
+    /// Its session is private (§25.7a).
     pub private: bool,
     /// The file it is read from, for the never list.
     pub path: Option<PathBuf>,

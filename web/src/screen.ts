@@ -73,6 +73,8 @@ export interface Session {
   slot?: number | null;
   watch?: { t: "done" | "output" | "silence" | "match"; ms?: number; re?: string } | null;
   scratch?: boolean;
+  /// Private (SPEC §25.7a): the knowledge base keeps nothing of it.
+  private?: boolean;
   /// Lost in a daemon restart and offered again in its number: Restart starts it.
   lost?: boolean;
   /// Its pane in its SHELLS window (SPEC §23.17), and the window's layout when it has several.

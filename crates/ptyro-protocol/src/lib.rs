@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 53 };
+pub const PROTO: Version = Version { major: 1, minor: 54 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -978,6 +978,9 @@ pub enum Request {
     /// URIs are never kept again. `addrs` (addresses or ids), or every item `query` finds (its
     /// best 100 hits' items). Without `confirmed` nothing is deleted: the answer is
     /// `needs_confirmation`, saying what would go. → `KbForgotten`.
+    ///
+    /// `session` (1.54, SPEC §25.7a): a ptyro session instead. Everything kept of it goes, and
+    /// it is private from then on.
     KbForget {
         #[serde(default)]
         addrs: Vec<String>,
@@ -985,6 +988,8 @@ pub enum Request {
         query: Option<String>,
         #[serde(default)]
         confirmed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
     },
     /// What the knowledge base holds and how it stands (1.53); answered when it is off too.
     /// → `KbStatus`.
@@ -1422,6 +1427,9 @@ pub enum Reply {
     Agents {
         agents: Vec<AgentChoice>,
         default: String,
+        /// A new session is private unless the person says otherwise (`kb.private`; 1.54).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        private: bool,
     },
     /// How the web app's server is, and what a change did (`Request::Web`).
     Web {
@@ -2217,6 +2225,13 @@ mod tests {
             addrs: vec!["k:7f3k".into()],
             query: None,
             confirmed: true,
+            session: None,
+        });
+        round_trip(Request::KbForget {
+            addrs: Vec::new(),
+            query: None,
+            confirmed: true,
+            session: Some("brisk-rook".into()),
         });
         round_trip(Request::KbStatus);
         let item = KbItem {

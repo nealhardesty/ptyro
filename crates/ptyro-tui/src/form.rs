@@ -865,6 +865,7 @@ impl App {
                     loose: true,
                     slot,
                     scratch,
+                    private: Some(!form.get("private").is_empty()),
                     name: form.opt("name"),
                     title: form.opt("title"),
                     workspace: Some(ws),
@@ -1163,6 +1164,12 @@ impl App {
                 false,
                 "A new, empty directory of its own, which goes with it",
             ),
+            Field::yes_no(
+                "private",
+                "Private",
+                self.config.kb.private,
+                "The knowledge base keeps nothing of it",
+            ),
             Field::choice("workspace", "Workspace", wss, 0, "Whose SHELLS it is in"),
         ];
         let mut form = Form::new("New shell", fields, Make::Shell);
@@ -1246,6 +1253,7 @@ pub fn session_wizard(
         no_fetch: form.get("fetch").is_empty(),
         command,
         title: form.opt("title"),
+        private: Some(!form.get("private").is_empty()),
         project: match &target {
             Some(Where::New(p)) => Some(p.clone()),
             _ => w.project.clone(),
@@ -1374,6 +1382,12 @@ impl App {
                 "A new worktree runs its project's setup script (when trusted)",
             ),
             Field::yes_no("fetch", "Fetch first", true, "A new worktree fetches its base first"),
+            Field::yes_no(
+                "private",
+                "Private",
+                self.config.kb.private,
+                "The knowledge base keeps nothing of it (the agent keeps its own history)",
+            ),
         ];
         let title = if w.project.is_some() || w.worktree.is_some() {
             crate::app::wizard_title(&w, &self.projects, &self.worktrees, None)

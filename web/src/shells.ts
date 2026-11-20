@@ -136,10 +136,11 @@ function commandForm(workspace?: string): void {
     { key: "name", label: "Name", slug: "name", placeholder: "a friendly name is picked for you", hint: `Its address. ${NAME_HINT}`, more: true },
     { key: "title", label: "Title", placeholder: "what it's for", hint: "For people to read", more: true },
     { key: "scratch", label: "In a scratch directory", type: "check", hint: "A new, empty directory of its own, which goes with it (instead of Directory)", more: true },
+    { key: "private", label: "Private", type: "check", value: data.privateDefault, hint: "The knowledge base keeps nothing of it" },
   ], "Start", async (v) => {
     const slot = v.slot ? Number(v.slot) : undefined;
     await startSession({ cwd: (v.dir as string) || "~", argv: [], command: (v.cmd as string) || undefined, loose: true, slot: slot ?? null, workspace: (v.workspace as string) || null,
-      name: (v.name as string) || undefined, title: (v.title as string) || undefined, scratch: !!v.scratch });
+      name: (v.name as string) || undefined, title: (v.title as string) || undefined, scratch: !!v.scratch, private: !!v.private });
   });
 }
 
@@ -163,7 +164,7 @@ export function shellsGroup(sessions: Iterable<Session>, card: (s: Session) => H
     const later = (s.pane ?? 1) > 1 && !!s.layout && firsts.every((o) => o.id !== s.id);
     if (later) el.classList.add("pane");
     el.prepend(h("span", { class: "slot", title: tip(later ? "shells.pane" : "shells.go") }, later ? `.${s.pane}` : String(s.slot)));
-    const sub = h("span", { class: "shell-sub" }, shellLabel(s), s.watch ? ` · ◎ ${watchLabel(s.watch)}` : "", s.scratch ? " · scratch" : "", doing(s) ? ` · ${doing(s)}` : "");
+    const sub = h("span", { class: "shell-sub" }, shellLabel(s), s.watch ? ` · ◎ ${watchLabel(s.watch)}` : "", s.scratch ? " · scratch" : "", s.private ? " · ◌ private" : "", doing(s) ? ` · ${doing(s)}` : "");
     el.append(sub);
     return el;
   };

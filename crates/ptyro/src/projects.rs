@@ -203,6 +203,12 @@ pub enum WtCmd {
         agent: Option<String>,
         #[arg(long, add = ArgValueCandidates::new(crate::complete::profiles))]
         profile: Option<String>,
+        /// The agent's session is private: the knowledge base keeps nothing of it
+        #[arg(long, requires = "agent")]
+        private: bool,
+        /// Keep it, though `[kb] private` is on
+        #[arg(long, requires = "agent", conflicts_with = "private")]
+        no_private: bool,
         #[arg(long)]
         override_pin: bool,
         #[arg(short, long)]
@@ -810,6 +816,8 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
             no_fetch,
             agent,
             profile,
+            private,
+            no_private,
             override_pin,
             yes,
             detach,
@@ -837,6 +845,7 @@ pub async fn wt(ctx: &Ctx, cmd: WtCmd) -> Result<i32, Error> {
                 override_pin,
                 confirmed: yes,
                 agent,
+                private: crate::cli::private_flag(private, no_private),
                 size: if attach { ptyro_tui::pane_size(&ctx.paths) } else { None },
                 env: client_env(),
                 ..WorktreeSpec::default()

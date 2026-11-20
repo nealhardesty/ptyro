@@ -409,6 +409,7 @@ impl Daemon {
                     // Not in the store: a login session restarted after the daemon itself restarted is
                     // recorded as usual (it has ended by then).
                     unrecorded: false,
+                    private: r.private,
                 },
                 adapter,
                 conversation: r.conversation.clone(),
@@ -879,6 +880,11 @@ impl Daemon {
             quick: spec.quick && agent.is_none(),
             chat: None,
             unrecorded: spec.unrecorded,
+            // As asked, else as `kb.private` says; a pane of a private shell is private.
+            private: spec.private.unwrap_or(self.config().kb.private)
+                || spec.pane_of.and_then(|src| self.session(src)).is_some_and(|s| {
+                    s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).place.private
+                }),
         };
         // `@review` names a prompt snippet from the project's `[prompts]` (SPEC §13.3).
         let prompt = match spec.prompt.as_deref().and_then(|p| p.strip_prefix('@')) {
@@ -1413,7 +1419,7 @@ impl Daemon {
             }
             Request::Agents => {
                 let (agents, default) = self.agent_choices();
-                Ok(Reply::Agents { agents, default })
+                Ok(Reply::Agents { agents, default, private: self.config().kb.private })
             }
             Request::Editors => {
                 let config = self.config();

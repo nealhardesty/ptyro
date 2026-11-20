@@ -601,6 +601,8 @@ pub struct Kb {
     pub meaning: bool,
     /// Agent sessions are kept, from the agents' own transcripts (§25.6.1).
     pub sessions: bool,
+    /// New sessions start private: nothing of them is kept (§25.7a).
+    pub private: bool,
     /// Agents are given the tools that search it (`recall`, `recall_read`; §25.9).
     pub tools: bool,
     /// What an agent may see of it (the wall, §25.9): `profile` (its own account's, and what is
@@ -621,6 +623,7 @@ impl Default for Kb {
             exclude: Vec::new(),
             meaning: false,
             sessions: true,
+            private: false,
             tools: true,
             scope: "profile".into(),
             retain_days: 0,

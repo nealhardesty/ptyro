@@ -6,6 +6,7 @@
 //! KB1.7: `ptyro recall` finds it, `ptyro kb show`, `recent` and `status` read it, `kb forget`
 //! deletes it for good, and an agent that runs them itself stays behind the wall.
 //! KB1.11: each switch keeps a session out, and retention deletes an old one.
+//! KB1.14: a private session leaves no byte, by any trigger, and stays private.
 
 use std::path::PathBuf;
 use std::process::Output;
@@ -1158,4 +1159,155 @@ async fn an_agent_that_runs_recall_sees_only_its_own_profiles_and_never_forgets(
     for uri in [&work, &home, &same] {
         assert!(uris.contains(&uri.as_str()), "{uri} in {uris:?}");
     }
+}
+
+/// KB1.14 (SPEC §25.7a): a private session leaves no byte in `kb.db` by any trigger (a turn, a
+/// resume, the daemon's start, a live upgrade), says so wherever it is listed, and stays
+/// private; `kb.private` is the default a new session takes; and `kb forget --session` makes
+/// a kept one private for good.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_private_session_leaves_no_byte_and_stays_private() {
+    let mut w = World::new(&agents(""));
+    let c = w.d.client().await.unwrap();
+    let o = w.cli(&["new", "--private", "--detach", "--agent", "claude", "--name", "sp"]);
+    assert!(o.status.success(), "{o:?}");
+    w.d.wait_for_text(&c, "sp", "resumed=", WAIT).await.unwrap();
+    assert!(w.info(&c, "sp").await.private);
+    w.turn(&c, "sp", "edit notes.txt zqprivateword").await;
+    let private = w.info(&c, "sp").await;
+    let conv = private.conversation.clone().expect("its conversation is known");
+    let transcript = find_file(&w.home(), &format!("{conv}.jsonl")).expect("its transcript");
+    assert!(
+        std::fs::read_to_string(&transcript).unwrap().contains("zqprivateword"),
+        "the agent keeps its own history"
+    );
+
+    // A session beside it is kept: the reader ran, and passed the private one by.
+    let kept = w.agent(&c, "sk", "claude").await;
+    let uri = format!("session://claude/{}", kept.conversation.clone().unwrap());
+    w.turn(&c, "sk", "edit notes.txt zqkeptword").await;
+    w.kept(&uri, "the first turn", |k| k.has(ChunkKind::Assistant, "wrote notes.txt")).await;
+    let nothing_of_it = |w: &World, when: &str| {
+        assert!(!w.bytes_hold("zqprivate"), "{when}: a byte of the private session is kept");
+        assert!(w.cli(&["recall", "zqprivateword"]).stdout.is_empty(), "{when}");
+    };
+    nothing_of_it(&w, "after its turn");
+    assert_eq!(w.sessions().await.len(), 1, "no item, and no card either");
+    // Nothing was queued, so nothing was refused: the status names no skipped source.
+    let status = w.json(&["kb", "status", "--json"]);
+    assert_eq!(status["skipped"].as_array().map(Vec::len), Some(0), "{status:#}");
+
+    // It shows: the list's mark, and `private` in its JSON.
+    let ls = w.out(&["ls"]);
+    let row = ls.lines().find(|l| l.contains(" sp ")).unwrap_or_else(|| panic!("{ls}"));
+    assert!(row.contains("◌ private"), "{row}");
+    assert!(!ls.lines().find(|l| l.contains(" sk ")).unwrap().contains('◌'), "{ls}");
+    let rows = w.json(&["ls", "--json"]);
+    let of = |name: &str| {
+        rows.as_array().unwrap().iter().find(|s| s["name"] == name).unwrap()["private"].clone()
+    };
+    assert_eq!((of("sp"), of("sk")), (true.into(), false.into()));
+
+    // A resume: the same conversation, still private.
+    w.resume(&c, "sp").await;
+    assert!(w.info(&c, "sp").await.private);
+    w.turn(&c, "sp", "sh echo zqprivatetwo").await;
+    nothing_of_it(&w, "after a resume");
+
+    // The daemon's start reads every transcript that grew: not this one.
+    drop(c);
+    w.d.stop();
+    claude_lines(&transcript, &conv, "down", "zqprivatedown said", "zqprivatedown heard");
+    w.d.restart().unwrap();
+    let c = w.d.client().await.unwrap();
+    w.dormant(&c, "sp").await;
+    assert!(w.info(&c, "sp").await.private, "kept in ptyro.db across a daemon restart");
+    // (The kept session's catch-up has run by the time the status answers with nothing queued.)
+    w.status("nothing is queued", |s| s["queued"] == 0).await;
+    nothing_of_it(&w, "after the daemon restarted");
+
+    // A live upgrade, then a turn.
+    w.wake(&c, "sp").await;
+    claude_lines(&transcript, &conv, "exec", "zqprivateexec said", "zqprivateexec heard");
+    let up = w.cli(&["daemon", "upgrade"]);
+    assert!(up.status.success(), "{}", String::from_utf8_lossy(&up.stderr));
+    let c = w.d.client().await.unwrap();
+    assert!(w.info(&c, "sp").await.private, "carried across a live upgrade");
+    w.turn(&c, "sp", "sh echo zqprivatethree").await;
+    w.status("nothing is queued", |s| s["queued"] == 0).await;
+    nothing_of_it(&w, "after a live upgrade");
+    assert_eq!(w.sessions().await.len(), 1);
+
+    // A shell can be private too, and a pane split off it is.
+    let o = w.cli(&["shells", "new", "--private", "--detach", "--name", "shp"]);
+    assert!(o.status.success(), "{o:?}");
+    assert!(w.info(&c, "shp").await.private);
+    let pane = match c
+        .request(Request::ShellSplit {
+            addr: "shp".into(),
+            dir: Default::default(),
+            env: Default::default(),
+            size: None,
+        })
+        .await
+        .unwrap()
+    {
+        Reply::Session { info } => info,
+        other => panic!("{other:?}"),
+    };
+    assert!(pane.private, "a split of a private shell is private");
+
+    // `kb.private`: what a new session takes when it doesn't say; `--no-private` keeps one.
+    assert!(w.cli(&["config", "set", "kb.private", "true"]).status.success());
+    let deadline = Instant::now() + WAIT;
+    loop {
+        match c.request(Request::Agents).await.unwrap() {
+            Reply::Agents { private: true, .. } => break,
+            _ => assert!(Instant::now() < deadline, "the daemon never said private is the default"),
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    assert!(w.agent(&c, "sd", "claude").await.private, "the default");
+    let o = w.cli(&["new", "--no-private", "--detach", "--agent", "claude", "--name", "sn"]);
+    assert!(o.status.success(), "{o:?}");
+    assert!(!w.info(&c, "sn").await.private);
+    assert!(w.cli(&["config", "set", "kb.private", "false"]).status.success());
+
+    // `kb forget --session`: what was kept goes, and the session is private from then on.
+    assert!(w.bytes_hold("zqkeptword"));
+    let asked = w.cli(&["kb", "forget", "--session", "sk"]);
+    assert!(!asked.status.success(), "it asks first, and nobody answered: {asked:?}");
+    assert!(w.bytes_hold("zqkeptword") && !w.info(&c, "sk").await.private);
+    let o = w.cli(&["kb", "forget", "--session", "sk", "--yes"]);
+    let said = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(o.status.success() && said.starts_with("sk is private now: forgot 1 item"), "{said}");
+    assert!(w.info(&c, "sk").await.private);
+    // (It has been dormant since the daemon restarted: resumed, it is still private.)
+    w.wake(&c, "sk").await;
+    assert!(w.info(&c, "sk").await.private);
+    w.turn(&c, "sk", "sh echo zqkeptafter").await;
+    w.status("nothing is queued", |s| s["queued"] == 0).await;
+    for gone in ["zqkeptword", "zqkeptafter"] {
+        assert!(!w.bytes_hold(gone), "{gone}");
+    }
+    assert!(w.sessions().await.is_empty(), "{:?}", w.sessions().await);
+    // One nothing was read of yet: its conversation is never kept either.
+    let o = w.cli(&["kb", "forget", "--session", "sn", "--yes"]);
+    assert!(o.status.success(), "{o:?}");
+    assert!(w.info(&c, "sn").await.private);
+}
+
+/// The file called `name` somewhere under `dir`.
+fn find_file(dir: &std::path::Path, name: &str) -> Option<PathBuf> {
+    for e in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            if let Some(found) = find_file(&p, name) {
+                return Some(found);
+            }
+        } else if e.file_name().to_string_lossy() == name {
+            return Some(p);
+        }
+    }
+    None
 }

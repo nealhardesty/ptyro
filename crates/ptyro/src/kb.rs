@@ -139,11 +139,15 @@ pub enum KbCmd {
     /// Delete items and their text for good: nothing of them is kept again. Asks first
     Forget {
         /// Addresses from `ptyro recall` or `ptyro kb recent` (`k:7f3k`)
-        #[arg(value_name = "REF", required_unless_present = "query")]
+        #[arg(value_name = "REF", required_unless_present_any = ["query", "session"])]
         addrs: Vec<String>,
         /// Everything this search finds (it lists them, then asks)
         #[arg(short, long, value_name = "QUERY")]
         query: Option<String>,
+        /// Everything kept of this session, which is private from then on (nothing more of it
+        /// is kept; that can't be switched off again)
+        #[arg(long, value_name = "SESSION", conflicts_with_all = ["addrs", "query"], add = ArgValueCandidates::new(crate::complete::sessions))]
+        session: Option<String>,
         /// Don't ask
         #[arg(short, long)]
         yes: bool,
@@ -343,7 +347,12 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
             }
             Ok(0)
         }
-        KbCmd::Forget { addrs, query, yes, json } => forget(ctx, addrs, query, yes, json).await,
+        KbCmd::Forget { session: Some(session), yes, json, .. } => {
+            forget_session(ctx, session, yes, json).await
+        }
+        KbCmd::Forget { addrs, query, yes, json, session: None } => {
+            forget(ctx, addrs, query, yes, json).await
+        }
     }
 }
 
@@ -557,7 +566,8 @@ async fn forget(
                 return Ok(0);
             }
         }
-        let question = Request::KbForget { addrs: ids.clone(), query: None, confirmed: false };
+        let question =
+            Request::KbForget { addrs: ids.clone(), query: None, confirmed: false, session: None };
         match ask(ctx, &c, question).await {
             Ok(_) => return Err(Error::internal("forgotten without asking")),
             Err(e) if e.code == ErrorCode::NeedsConfirmation => {
@@ -568,7 +578,9 @@ async fn forget(
     }
     let query = query.filter(|_| yes);
     let (items, chunks) =
-        match ask(ctx, &c, Request::KbForget { addrs: ids, query, confirmed: true }).await? {
+        match ask(ctx, &c, Request::KbForget { addrs: ids, query, confirmed: true, session: None })
+            .await?
+        {
             Reply::KbForgotten { items, chunks } => (items, chunks),
             r => return Err(unexpected(r)),
         };
@@ -583,6 +595,40 @@ async fn forget(
         if more {
             eprintln!("the search may find more: run it again");
         }
+    }
+    Ok(0)
+}
+
+/// `kb forget --session`: what was kept of a session goes, and it is private from then on.
+async fn forget_session(ctx: &Ctx, session: String, yes: bool, json: bool) -> Result<i32, Error> {
+    let c = ctx.connect(true).await?;
+    let req = |confirmed| Request::KbForget {
+        addrs: Vec::new(),
+        query: None,
+        confirmed,
+        session: Some(session.clone()),
+    };
+    if !yes {
+        match ask(ctx, &c, req(false)).await {
+            Ok(_) => return Err(Error::internal("forgotten without asking")),
+            Err(e) if e.code == ErrorCode::NeedsConfirmation => {
+                crate::cli::ask_first(&e.message, false)?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let (items, chunks) = match ask(ctx, &c, req(true)).await? {
+        Reply::KbForgotten { items, chunks } => (items, chunks),
+        r => return Err(unexpected(r)),
+    };
+    if json {
+        println!("{}", json!({ "items": items, "chunks": chunks, "private": true }));
+    } else {
+        eprintln!(
+            "{session} is private now: forgot {items} item{} ({}), and nothing more of it is kept",
+            if items == 1 { "" } else { "s" },
+            pieces(u64::from(chunks))
+        );
     }
     Ok(0)
 }

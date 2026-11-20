@@ -133,7 +133,10 @@ impl Daemon {
                 let db = self.kb_db()?;
                 Ok(Reply::KbItems { items: self.kb_listed(&db, items).await? })
             }
-            Request::KbForget { addrs, query, confirmed } => {
+            Request::KbForget { session: Some(session), confirmed, .. } => {
+                self.kb_forget_session(&session, confirmed).await
+            }
+            Request::KbForget { addrs, query, confirmed, session: None } => {
                 self.kb_forget(addrs, query, confirmed).await
             }
             Request::KbStatus => Ok(Reply::KbStatus { status: self.kb_status().await }),
@@ -223,6 +226,48 @@ impl Daemon {
         for item in &items {
             chunks += db.forget(item.id.clone()).await.map_err(store_err)?.unwrap_or(0);
             tracing::info!("knowledge base: {} forgotten", item.uri);
+        }
+        Ok(Reply::KbForgotten { items: items.len() as u32, chunks: chunks as u32 })
+    }
+
+    /// `KbForget` of a session (§25.7a): everything kept of it goes (each conversation it
+    /// had), the conversation it is in is never kept (a tombstone, when nothing was read of
+    /// it yet), and the session is private from then on. Private is never switched off again.
+    async fn kb_forget_session(&self, addr: &str, confirmed: bool) -> Result<Reply, Error> {
+        let s = self.resolve(addr)?;
+        let db = self.kb_db()?;
+        let filter = ptyro_store::kb::ItemFilter {
+            session: Some(s.id.full()),
+            ..ptyro_store::kb::ItemFilter::default()
+        };
+        let items = db.list(filter).await.map_err(store_err)?;
+        if !confirmed {
+            let name = s.meta.locked().name.clone();
+            return Err(Error::new(
+                ErrorCode::NeedsConfirmation,
+                format!(
+                    "Forget what was kept of the session {name} ({}), and keep nothing more of it? It is private from then on, and that can't be switched off again. {}",
+                    match items.len() {
+                        0 => "nothing yet".into(),
+                        1 => "1 item".into(),
+                        n => format!("{n} items"),
+                    },
+                    ptyro_core::removal::KB
+                ),
+            ));
+        }
+        // Private first: nothing is read of it while its items go.
+        s.meta.locked().place.private = true;
+        s.save(None);
+        let _ =
+            self.events.send(ptyro_protocol::DomainEvent::SessionUpdated { info: self.info(&s) });
+        let mut chunks = 0;
+        for item in &items {
+            chunks += db.forget(item.id.clone()).await.map_err(store_err)?.unwrap_or(0);
+            tracing::info!("knowledge base: {} forgotten", item.uri);
+        }
+        if let Some(uri) = self.kb_session_uri(&s) {
+            db.tombstone(uri, ptyro_core::kb::ItemKind::Session).await.map_err(store_err)?;
         }
         Ok(Reply::KbForgotten { items: items.len() as u32, chunks: chunks as u32 })
     }

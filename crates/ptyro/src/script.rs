@@ -712,6 +712,7 @@ mod tests {
             turns: 0,
             last_output_ms: None,
             held: false,
+            private: false,
             structured: None,
             task: None,
             last_reply: None,

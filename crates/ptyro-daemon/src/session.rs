@@ -57,6 +57,10 @@ pub struct Place {
     /// Never recorded to disk (`SpawnSpec::unrecorded`: a login, BOOT4); kept across restarts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unrecorded: bool,
+    /// Private (`SpawnSpec::private`, SPEC §25.7a): the knowledge base keeps nothing of it.
+    /// Kept in `ptyro.db`, so across everything; switched on later by `kb forget --session`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
 }
 
 pub struct Term {
@@ -622,6 +626,7 @@ impl Session {
             last_reply: meta.last_reply.as_deref().map(|r| ptyro_core::session::brief(r, 300)),
             command: meta.command.clone(),
             inner_agent: meta.inner_agent.clone(),
+            private: meta.place.private,
             quick: meta.place.quick,
             chat: meta.place.chat.clone(),
             loose: meta.shelf.is_some(),
@@ -686,6 +691,7 @@ impl Session {
             launch,
             conversation: m.conversation,
             title: m.title,
+            private: m.place.private,
         });
     }
 

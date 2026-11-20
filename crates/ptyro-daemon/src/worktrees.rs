@@ -438,6 +438,7 @@ impl Daemon {
                 workspace: Some(workspace.clone()),
                 confirmed: true,
                 prompt: spec.prompt.clone(),
+                private: spec.private,
                 ..SpawnSpec::default()
             };
             match (&setup, start) {
@@ -564,6 +565,7 @@ impl Daemon {
                 quick: false,
                 chat: None,
                 unrecorded: false,
+                private: false,
             },
             replace: false,
             agent: None,

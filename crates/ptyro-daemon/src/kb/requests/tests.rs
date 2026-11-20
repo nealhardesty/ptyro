@@ -209,6 +209,7 @@ async fn forgetting_asks_first_then_deletes_for_good() {
         d.kb_ingest(session(uri, said, now)).await.unwrap();
     }
     let forget = |addrs: &[&str], query: Option<&str>, confirmed| Request::KbForget {
+        session: None,
         addrs: addrs.iter().map(|a| (*a).to_owned()).collect(),
         query: query.map(str::to_owned),
         confirmed,
