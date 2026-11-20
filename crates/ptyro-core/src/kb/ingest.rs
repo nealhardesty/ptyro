@@ -269,7 +269,7 @@ pub fn gate(g: &Gate<'_>) -> Result<Passed, Skip> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Body {
     /// A Markdown document: cut at its headings ([`chunk::markdown`]). `name` starts every
-    /// heading path (the file's name).
+    /// heading path (the file's name, a note's title): redacted as the text is.
     Markdown { name: String, text: String, at_ms: u64 },
     /// A document with no headings ([`chunk::plain`]).
     Plain { name: String, text: String, at_ms: u64 },
@@ -434,14 +434,14 @@ fn cut(
 ) {
     match body {
         Body::Markdown { name, text, at_ms } => {
-            let r = redactor.redact(&text);
-            *hits += r.hits;
-            out.extend(chunk::markdown(&name, &r.text, at_ms));
+            let (name, r) = (redactor.redact(&name), redactor.redact(&text));
+            *hits += name.hits + r.hits;
+            out.extend(chunk::markdown(&name.text, &r.text, at_ms));
         }
         Body::Plain { name, text, at_ms } => {
-            let r = redactor.redact(&text);
-            *hits += r.hits;
-            out.extend(chunk::plain(&name, &r.text, at_ms));
+            let (name, r) = (redactor.redact(&name), redactor.redact(&text));
+            *hits += name.hits + r.hits;
+            out.extend(chunk::plain(&name.text, &r.text, at_ms));
         }
         Body::Parts(parts) => {
             for mut part in parts {
@@ -660,6 +660,30 @@ mod tests {
         src.body =
             Body::Markdown { name: "deploy.md".into(), text: format!("{text}more"), at_ms: 7 };
         assert_ne!(plan(pass(), src, stamp(), &red()).unwrap().hash, p.hash);
+    }
+
+    /// A body's name starts every heading (a note's is its first line): a secret in it is
+    /// stored in no heading.
+    #[test]
+    fn a_name_is_redacted_in_every_heading() {
+        for body in [
+            Body::Markdown {
+                name: "the key is hunter2-value".into(),
+                text: "Text.\n\n## Why\n\nMore.\n".into(),
+                at_ms: 1,
+            },
+            Body::Plain { name: "password: s3cretvalue9".into(), text: "Text.".into(), at_ms: 1 },
+        ] {
+            let src = Source::new(ItemKind::Note, "note://_all/_global/x", body);
+            let p = plan(pass(), src, stamp(), &red()).unwrap();
+            assert_eq!(p.hits, 1);
+            assert!(!p.chunks.is_empty());
+            for c in &p.chunks {
+                let h = c.heading.as_deref().unwrap_or_default();
+                assert!(!h.contains("hunter2") && !h.contains("s3cret"), "{h}");
+                assert!(h.contains("<secret:DB>") || h.contains("<redacted>"), "{h}");
+            }
+        }
     }
 
     /// §25.7: a file with more than 25 hits is skipped whole; 25 are redacted and kept.

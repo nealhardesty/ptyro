@@ -129,8 +129,13 @@ fn brief(e: &str) -> &str {
     e.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or(e).trim().trim_start_matches("error: ")
 }
 
+/// The secrets that are looked for, longest first: one that holds another whole (a URL with
+/// its password, and the password) is replaced as itself, and nothing of it is left over.
 fn usable(secrets: Vec<(String, String)>) -> Vec<(String, String)> {
-    secrets.into_iter().filter(|(real, shown)| real.len() >= 4 && real != shown).collect()
+    let mut all: Vec<_> =
+        secrets.into_iter().filter(|(real, shown)| real.len() >= 4 && real != shown).collect();
+    all.sort_by_key(|(real, _)| std::cmp::Reverse(real.len()));
+    all
 }
 
 // ── PEM blocks ──────────────────────────────────────────────────────────────────────────────
@@ -192,10 +197,12 @@ fn pem(text: &str, hits: &mut usize) -> Option<String> {
 fn rules(strict: bool) -> Option<Regex> {
     // A key that names a secret. For the knowledge base it must *end* in the word, so that
     // `max_tokens`, `token_count` and `secret_santa` are not keys; strictly, anywhere will do.
+    // (One list of words for both: the strict rules are never the weaker ones.)
+    const WORDS: &str = "password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key";
     let key = if strict {
-        r"[A-Za-z0-9_.-]*(?i:password|passwd|secret|token|api_key|apikey)[A-Za-z0-9_.-]*"
+        format!("[A-Za-z0-9_.-]*(?i:{WORDS})[A-Za-z0-9_.-]*")
     } else {
-        r"[A-Za-z0-9_.-]*(?i:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)"
+        format!("[A-Za-z0-9_.-]*(?i:{WORDS})")
     };
     let run = if strict { r"[A-Za-z0-9_+=.-]{32,}" } else { r"[A-Za-z0-9_+-]{32,}" };
     let all = [

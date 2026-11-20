@@ -368,3 +368,37 @@ fn a_mebibyte_takes_milliseconds() {
     assert!(!out.text.contains(&f.github));
     assert!(took.as_secs() < 20, "{took:?}");
 }
+
+/// A secret that holds another whole is replaced as itself, whichever the profile names first.
+#[test]
+fn the_longer_secret_wins_whatever_the_order() {
+    let (short, long) = ("hunter2".to_owned(), "hunter2-and-the-rest-of-it".to_owned());
+    for secrets in [
+        vec![(short.clone(), "<secret:A>".to_owned()), (long.clone(), "<secret:B>".to_owned())],
+        vec![(long.clone(), "<secret:B>".to_owned()), (short.clone(), "<secret:A>".to_owned())],
+    ] {
+        let r = Redactor::new(secrets, &[]).0.redact(&format!("x {long} y {short} z"));
+        assert_eq!(r.text, "x <secret:B> y <secret:A> z");
+        assert_eq!(r.hits, 2);
+    }
+}
+
+/// What leaves the machine is redacted by every key name the knowledge base's rules know.
+#[test]
+fn the_strict_rules_know_every_key_name_the_loose_ones_do() {
+    for line in [
+        "aws_access_key = wJalrXUtnFEMI",
+        "private-key: abcdefgh",
+        "x-api-key: abcdefgh",
+        "ACCESSKEY=abcdefgh",
+        "api_key = abcdefgh",
+        "password: abcdefgh",
+    ] {
+        let value = line.rsplit([' ', '=']).next().unwrap();
+        let out = Redactor::strict(Vec::new()).redact(line).text;
+        assert!(!out.contains(value) && out.contains(MARK), "{line} -> {out}");
+    }
+    // (The knowledge base's own rules know them too, for a value that looks like one.)
+    let out = kb().redact("aws_access_key = wJalrXUtnFEMI7K7MDENG").text;
+    assert_eq!(out, format!("aws_access_key = {MARK}"));
+}

@@ -231,7 +231,11 @@ pub fn time(v: &str) -> Option<u64> {
     };
     let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
     let (y, m, day) = (d.next()??, d.next()??, d.next()??);
-    if d.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&day) || y < 1970 {
+    if d.next().is_some()
+        || !(1..=12).contains(&m)
+        || !(1..=31).contains(&day)
+        || !(1970..=9999).contains(&y)
+    {
         return None;
     }
     let mut secs = 0;
@@ -348,7 +352,16 @@ mod tests {
         assert_eq!(time("1970-01-02"), Some(86_400_000));
         assert_eq!(time("2026-11-19 22:38"), time("2026-11-19T22:38:00Z"));
         assert_eq!(stamp(time("2024-02-29T23:59:59Z").unwrap()), "2024-02-29T23:59:59Z");
-        for bad in ["", "yesterday", "2026-13-01", "2026-11-19T25:00", "1969-01-01"] {
+        assert!(time("9999-12-31T23:59:59Z").is_some());
+        for bad in [
+            "",
+            "yesterday",
+            "2026-13-01",
+            "2026-11-19T25:00",
+            "1969-01-01",
+            "10000-01-01",
+            "9223372036854775807-01-01",
+        ] {
             assert_eq!(time(bad), None, "{bad}");
         }
     }
