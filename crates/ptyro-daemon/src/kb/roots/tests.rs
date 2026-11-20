@@ -567,7 +567,7 @@ fn a_listing_takes_what_the_rules_take_up_to_the_cap() {
     };
     let never = Never::default();
     let rels = |o: &Opts, cap: usize| {
-        let l = list(&root, o, &never, &dir.join("own"), cap).unwrap();
+        let l = list(&root, o, &never, &[dir.join("own")], cap).unwrap();
         (l.files.iter().map(|f| f.rel.clone()).collect::<Vec<_>>(), l.total)
     };
     assert_eq!(
@@ -594,9 +594,136 @@ fn a_listing_takes_what_the_rules_take_up_to_the_cap() {
             &KbRoot { path: "/nonexistent/ptyro".into(), ..root.clone() },
             &opts(&[], &[]),
             &never,
-            &dir,
+            &[],
             9
         )
         .is_err()
     );
+}
+
+/// E3: roots inside one another. The innermost root owns a file, so a project pinned to a
+/// profile is behind that profile's wall although a folder around it is read for everyone;
+/// and a project that keeps itself out is in no root.
+#[tokio::test]
+async fn the_innermost_root_owns_a_file_and_a_project_kept_out_is_in_no_root() {
+    use super::super::search::tests::set_config;
+    let t = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let work = canon(&home).join("work");
+    let acme = work.join("acme");
+    put(&work, "notes.md", "# Notes\n\nthe marmot's own\n");
+    put(&acme, "README.md", "# Acme\n\nthe pangolin contract\n");
+    put(&acme, "src/lib.rs", "/// Bills the pangolin by the hour.\nfn bill() {}\n");
+    let registry = ptyro_store::Registry {
+        projects: vec![ptyro_core::model::ProjectInfo {
+            id: "p1".into(),
+            machine: None,
+            slug: "acme".into(),
+            root: acme.clone(),
+            default_branch: None,
+            remote_url: None,
+            pin: Some("acme".into()),
+            created_ms: 0,
+            last_used_ms: None,
+        }],
+        ..ptyro_store::Registry::default()
+    };
+    let d = crate::daemon::test_daemon(t.path(), registry);
+    const PROFILE: &str = "[profiles.acme]\nlabel = \"acme\"\n";
+    set_config(&d, &format!("[kb]\nprojects = false\n{PROFILE}"));
+    let whose = async |path: &Path| {
+        let (it, _) = item(&d, path).await?;
+        let root = d.kb_db().unwrap().root(it.root.clone()?).await.unwrap()?;
+        Some((root.name, it.profile, it.id))
+    };
+
+    // The folder around it, read for every profile, before the project is a root.
+    ingest(&d, spec(&work)).await;
+    assert_eq!(files(&d).await, ["acme/README.md", "acme/src/lib.rs", "notes.md"]);
+    let (name, profile, _) = whose(&acme.join("README.md")).await.unwrap();
+    assert_eq!((name.as_str(), profile), ("work", None));
+
+    // The project is a root of its own: its files are its, behind its profile's wall.
+    set_config(&d, PROFILE);
+    d.kb_roots_reconcile().await;
+    d.kb_idle().await;
+    let (name, profile, id) = whose(&acme.join("README.md")).await.unwrap();
+    assert_eq!((name.as_str(), profile.as_deref()), ("acme", Some("acme")));
+    let (name, profile, _) = whose(&work.join("notes.md")).await.unwrap();
+    assert_eq!((name.as_str(), profile), ("work", None));
+    let counts: Vec<(String, u64)> =
+        roots(&d).await.into_iter().map(|r| (r.root.name, r.files)).collect();
+    assert_eq!(counts, [("acme".to_owned(), 2), ("work".to_owned(), 1)]);
+    // And they stay its: another pass over both changes nothing and reads nothing again.
+    sync(&d, &[]).await;
+    sync(&d, &[]).await;
+    assert_eq!(whose(&acme.join("README.md")).await.unwrap().2, id);
+    let (name, profile, _) = whose(&acme.join("src/lib.rs")).await.unwrap();
+    assert_eq!((name.as_str(), profile.as_deref()), ("acme", Some("acme")));
+
+    // It keeps itself out: its root goes, and the folder around it does not read it either.
+    put_later(&acme, ".ptyro.toml", "[knowledge]\nenabled = false\n");
+    d.kb_roots_reconcile().await;
+    d.kb_idle().await;
+    sync(&d, &[]).await;
+    assert_eq!(files(&d).await, ["notes.md"]);
+    assert!(found(&d, "pangolin").await.is_empty());
+
+    // No longer kept out, then no longer a project: the folder around it reads it again.
+    std::fs::remove_file(acme.join(".ptyro.toml")).unwrap();
+    d.kb_roots_reconcile().await;
+    d.kb_idle().await;
+    assert_eq!(whose(&acme.join("README.md")).await.unwrap().0, "acme");
+    d.registry.locked().projects.clear();
+    d.kb_roots_reconcile().await;
+    d.kb_idle().await;
+    let (name, profile, _) = whose(&acme.join("README.md")).await.unwrap();
+    assert_eq!((name.as_str(), profile), ("work", None));
+    assert_eq!(files(&d).await, ["acme/README.md", "acme/src/lib.rs", "notes.md"]);
+}
+
+/// C3, E2: what you forgot under a root stays forgotten when the root is removed and its
+/// folder ingested again (a file by its path, a commit by its repository's).
+#[tokio::test]
+async fn what_was_forgotten_under_a_root_stays_forgotten_when_it_is_read_again() {
+    let t = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let d = daemon(&t, "[kb]\nprojects = false\n");
+    let dir = canon(&home).join("repo");
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    put(&dir, "README.md", "# Feeder\n\nIt feeds the capybara.\n");
+    put(&dir, "PLAN.md", "# Plan\n\nThe tapir comes next.\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "Feed the capybara and the narwhal"]);
+    put(&dir, "MORE.md", "# More\n\nThe dugong.\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "Add the dugong"]);
+    ingest(&d, spec(&dir)).await;
+    assert_eq!(found(&d, "narwhal").await, ["Feed the capybara and the narwhal"]);
+
+    let db = d.kb_db().unwrap();
+    let (readme, _) = item(&d, &dir.join("README.md")).await.unwrap();
+    let commits = db
+        .list(ItemFilter { kinds: vec![ItemKind::Commit], ..ItemFilter::default() })
+        .await
+        .unwrap();
+    let narwhal =
+        commits.iter().find(|c| c.title.as_deref().is_some_and(|t| t.contains("narwhal")));
+    db.forget(readme.id).await.unwrap();
+    db.forget(narwhal.unwrap().id.clone()).await.unwrap();
+
+    for _ in 0..2 {
+        ask(&d, Request::KbRemove { root: "repo".into(), confirmed: true, machine: None })
+            .await
+            .unwrap();
+        d.kb_idle().await;
+        assert!(roots(&d).await.is_empty());
+        ingest(&d, spec(&dir)).await;
+        assert_eq!(files(&d).await, ["MORE.md", "PLAN.md"]);
+        assert!(found(&d, "capybara").await.is_empty());
+        assert!(found(&d, "narwhal").await.is_empty());
+        assert_eq!(found(&d, "dugong").await.len(), 2, "the file and the other commit are back");
+        assert_eq!(db.status().await.unwrap().forgotten, 2);
+    }
 }

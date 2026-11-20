@@ -586,7 +586,10 @@ pub async fn serve(ctx: &Ctx, chat: bool) -> Result<i32, Error> {
                             "recall" | "recall_read" | "remember" => {
                                 kb_call(&client, &name, &args).await.map(Value::String)
                             }
-                            _ => chat_call(&client, &name, &args).await,
+                            // The chat history tools are a chat's agent's alone (a session
+                            // in a terminal reads a chat by `recall_read`, behind the wall).
+                            _ if chat => chat_call(&client, &name, &args).await,
+                            other => Err(Error::invalid(format!("no tool named {other}"))),
                         }
                     };
                     tokio::pin!(call);

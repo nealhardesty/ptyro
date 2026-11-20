@@ -1117,7 +1117,18 @@ impl Daemon {
                 "a chat's agent may search and read chats, not change them",
             ));
         }
-        let federate = !engine && !caller.is_link() && !self.links.locked().is_empty();
+        // An agent's session reading chats is walled the same way (`handle_chat`): never
+        // routed to another machine before the wall is asked.
+        let walled = !engine
+            && matches!(
+                req,
+                Request::ChatSearch { .. }
+                    | Request::ChatRead { .. }
+                    | Request::ChatList { .. }
+                    | Request::ChatExport { .. }
+            )
+            && self.kb_agent(caller).is_some();
+        let federate = !engine && !walled && !caller.is_link() && !self.links.locked().is_empty();
         if federate && let Some(m) = self.machine_for(&req)? {
             self.guard_caller(&req, caller)?;
             self.guard_device(&req, caller)?;
@@ -1520,7 +1531,9 @@ impl Daemon {
                 crate::set_log_level(&c.daemon.log_level);
                 *self.config.writing() = c;
                 self.kb_output_switch();
+                self.kb_keep_out_all();
                 self.secrets.locked().clear();
+                self.kb_secrets_changed();
                 // A web app running with other `[remote]` settings starts again with these.
                 self.serve_child.wake();
                 self.wsl_hold.wake();

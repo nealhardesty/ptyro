@@ -612,7 +612,13 @@ impl Daemon {
                 }
                 Some(self.history_scope(&chat).await?)
             }
-            None => None,
+            // An agent's session in a terminal (its `recall_read` of a chat's address, a
+            // command it runs): what it reads of chats is behind the knowledge base's wall
+            // (`kb.scope`, SPEC §25.9), by where its process runs.
+            None => self.kb_agent(caller).map(|s| {
+                let wall = self.kb_session_scope(&s);
+                HistoryScope { profile: wall.profile, workspace: wall.workspace, itself: None }
+            }),
         };
         match req {
             Request::ChatSearch {
@@ -664,16 +670,20 @@ impl Daemon {
                 Ok(Reply::Chat { info })
             }
             // The history tools' list: what the asking chat may see.
-            Request::ChatList { pinned, archived, limit, .. } if scope.is_some() => {
+            Request::ChatList { workspace, all, pinned, archived, limit } if scope.is_some() => {
                 let scope = scope.unwrap_or_default();
                 let db = self.chat_db()?;
                 let ids = db.ids().await.map_err(store_err)?;
+                let workspace = match (&workspace, all) {
+                    (Some(w), false) => Some(self.find_workspace(w)?.id),
+                    _ => None,
+                };
                 let rows = db
                     .list(ListFilter {
+                        workspace,
                         archived,
                         pinned_only: pinned,
                         limit: limit.unwrap_or(0) as usize,
-                        ..ListFilter::default()
                     })
                     .await
                     .map_err(store_err)?;
@@ -923,7 +933,7 @@ impl Daemon {
                 self.chat_task(&chat, project, agent, name, confirmed).await
             }
             Request::ChatExport { chat, format } => {
-                let info = self.find_chat(&chat).await?;
+                let info = self.find_scoped(&chat, scope.as_ref()).await?;
                 let nodes = self.rec_branch(&info.id, None).await?;
                 let text = match format.as_str() {
                     "json" => serde_json::to_string_pretty(
@@ -1187,7 +1197,9 @@ impl Daemon {
 
     /// The chat whose engine `caller` runs in, if it is one.
     pub(crate) fn engine_chat_of(&self, caller: crate::guard::Caller) -> Option<String> {
-        if caller.is_link() {
+        // (A link by its token, which the daemon checked: never by what a client calls
+        // itself, or a chat's engine that said `machine` would be nobody's.)
+        if caller.grant.is_some_and(|g| g.machine) {
             return None;
         }
         let s = self.session_of_pid(caller.pid?)?;

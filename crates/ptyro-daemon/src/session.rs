@@ -122,6 +122,11 @@ pub struct Meta {
     /// ran in its foreground (its conversation).
     #[serde(skip)]
     pub command_no_output: bool,
+    /// Input that went on past an Enter in one write (`sudo x⏎password⏎`, pasted): what
+    /// follows the Enter is typed into the command that Enter starts, before the shell has
+    /// said it began. That command's output is not kept either.
+    #[serde(skip)]
+    pub command_typed_ahead: bool,
     /// An agent started by hand in this shell, in the foreground now (UX1.4).
     #[serde(default)]
     pub inner_agent: Option<String>,
@@ -389,6 +394,7 @@ fn new_meta(
         command_line: None,
         command_output: None,
         command_no_output: false,
+        command_typed_ahead: false,
         inner_agent: None,
         model: None,
         title: None,
@@ -565,8 +571,10 @@ impl Session {
     /// kept (SPEC §25.6.5). Stopping it (Ctrl-C, Ctrl-D, Ctrl-Z, Ctrl-\) is not typing.
     fn typed(&self, bytes: &[u8]) {
         if bytes.iter().any(|b| !matches!(b, 0x03 | 0x04 | 0x1a | 0x1c)) {
-            self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).command_no_output =
-                true;
+            let mut m = self.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            m.command_no_output = true;
+            // (The command's `C` mark, which comes after this, must not forget it.)
+            m.command_typed_ahead |= typed_ahead(bytes);
         }
     }
 
@@ -1070,7 +1078,8 @@ impl Session {
                                 c[..end].to_owned()
                             });
                             m.command_output = None;
-                            m.command_no_output = inner;
+                            m.command_no_output =
+                                inner || std::mem::take(&mut m.command_typed_ahead);
                             m.command = Some(ptyro_core::session::ShellCommand {
                                 text: cmdline.map(|c| ptyro_core::session::brief(&c, 200)),
                                 started_ms: now_ms(),
@@ -1701,6 +1710,28 @@ async fn writer_task(mut w: ptyro_pty::Writer, mut rx: mpsc::Receiver<WriterMsg>
         if !ok {
             // The child is gone; keep draining so senders never block.
             continue;
+        }
+    }
+}
+
+/// Whether a write goes on past an Enter: more than a line's end follows it.
+fn typed_ahead(bytes: &[u8]) -> bool {
+    let Some(enter) = bytes.iter().position(|b| matches!(b, b'\r' | b'\n')) else { return false };
+    bytes[enter + 1..].iter().any(|b| !matches!(b, b'\r' | b'\n'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::typed_ahead;
+
+    /// E8: `sudo x⏎password⏎` pasted at once reaches the shell before it says the command
+    /// began; what follows the Enter was typed into that command.
+    #[test]
+    fn what_follows_an_enter_in_one_write_is_typed_into_the_command() {
+        assert!(typed_ahead(b"sudo make install\rhunter2\r"));
+        assert!(typed_ahead(b"psql\nselect 1;\n"));
+        for line in [&b"make test\r"[..], b"make test\r\n", b"make", b"\r", b""] {
+            assert!(!typed_ahead(line), "{:?}", String::from_utf8_lossy(line));
         }
     }
 }

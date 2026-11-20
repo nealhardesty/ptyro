@@ -410,3 +410,31 @@ async fn an_address_opens_with_its_neighbours_and_the_history_pages() {
         3
     );
 }
+
+/// A5: `kb.scope = "workspace"` for a caller whose workspace this machine doesn't know (it
+/// was renamed or removed under the session) is a wall around nothing, never its whole
+/// profile.
+#[test]
+fn a_workspace_scope_with_no_workspace_sees_nothing() {
+    use ptyro_core::kb::KbItem;
+    let item = |workspace: Option<&str>| {
+        let mut i: KbItem = serde_json::from_value(serde_json::json!({
+            "id": "i", "uri": "file:///a.md", "kind": "file", "writer": "file", "origin": "m",
+            "chunks": 0,
+        }))
+        .unwrap();
+        i.profile = Some("work".into());
+        i.workspace = workspace.map(str::to_owned);
+        i
+    };
+    let known = KbScope::of("workspace", "work", Some("w1"));
+    assert!(known.sees(&item(Some("w1"))) && !known.sees(&item(Some("w2"))));
+    let unknown = KbScope::of("workspace", "work", None);
+    assert!(unknown.workspace.is_some(), "it is a wall: nothing is asked of other machines");
+    for w in [Some("w1"), Some("w2"), None] {
+        assert!(!unknown.sees(&item(w)), "{w:?}");
+    }
+    // The other settings never had a workspace.
+    assert_eq!(KbScope::of("profile", "work", Some("w1")).workspace, None);
+    assert_eq!(KbScope::of("all", "work", None), KbScope::default());
+}

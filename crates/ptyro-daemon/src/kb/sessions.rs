@@ -44,8 +44,9 @@ use crate::session::Session;
 
 /// When a read that lacks the turn's reply is tried again: twice, then the next trigger has it.
 const RETRY: [Duration; 2] = [Duration::from_millis(250), Duration::from_secs(2)];
-/// The most of a transcript taken in one read; a longer one is read in several.
-const READ_MAX: u64 = 32 << 20;
+/// The most of a transcript taken in one read; a longer one is read in several. (In this
+/// crate's tests a few pages are already several reads.)
+const READ_MAX: u64 = if cfg!(test) { 8 << 10 } else { 32 << 20 };
 
 /// A session to read, as a trigger queued it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +58,9 @@ pub(crate) struct SessionJob {
     pub expect: Option<String>,
     /// How many times it was tried again.
     pub attempt: usize,
+    /// Where the read before this one stopped, when the file held more than it took: read
+    /// on from there, whether or not that piece left an item to keep a cursor in.
+    pub from: Option<Value>,
 }
 
 impl SessionJob {
@@ -163,11 +167,22 @@ fn read(adapter: &dyn Adapter, path: &Path, cursor: Option<&Value>, max: u64) ->
     let full = bytes.len() as u64 == max;
     if full && transcript.to == from {
         // One line longer than a read: passed over, as any line too long is, once it ends.
+        // (Looked through, never held: such a line may be a gigabyte.)
         let mut rest = std::io::BufReader::new(&mut file);
-        let mut line = Vec::new();
-        let n = (&mut rest).take(1 << 30).read_until(b'\n', &mut line).ok()?;
-        if line.last() == Some(&b'\n') {
-            transcript.to = from + max + n as u64;
+        let (mut n, mut ended) = (0u64, false);
+        while !ended && n < (1 << 30) {
+            let buf = rest.fill_buf().ok()?;
+            if buf.is_empty() {
+                break;
+            }
+            let upto = buf.iter().position(|b| *b == b'\n').map(|i| i + 1);
+            ended = upto.is_some();
+            let took = upto.unwrap_or(buf.len());
+            n += took as u64;
+            rest.consume(took);
+        }
+        if ended {
+            transcript.to = from + max + n;
         }
     }
     Some(Piece {
@@ -216,6 +231,7 @@ impl Daemon {
                 _ => None,
             }),
             attempt: 0,
+            from: None,
         })
     }
 
@@ -229,7 +245,7 @@ impl Daemon {
     pub(crate) fn kb_session_changed(&self, s: &Session) {
         self.kb_queue_session(
             s,
-            SessionJob { session: s.id, conversation: None, expect: None, attempt: 0 },
+            SessionJob { session: s.id, conversation: None, expect: None, attempt: 0, from: None },
         );
     }
 
@@ -269,6 +285,8 @@ impl Daemon {
             Ok(c) => c.into_iter().map(|c| (c.uri, c.cursor)).collect(),
             Err(e) => return tracing::warn!("knowledge base: {}", store_err(e).message),
         };
+        // (Before anything is queued: what a private session carried on is closed first.)
+        self.kb_keep_out_all();
         let mut ours = HashSet::new();
         for s in self.sessions() {
             let Some(t) = self.kb_target(&s, None) else { continue };
@@ -409,14 +427,18 @@ impl Daemon {
         let uri = target.uri.clone();
         target.facts.project_off =
             self.kb_project_off(target.stamp.project.as_deref(), target.stamp.worktree.as_deref());
-        let again = match self.kb_read_session(target, job.expect.as_deref()).await {
+        let read = self.kb_read_session(target, job.expect.as_deref(), job.from.clone()).await;
+        let again = match read {
             Ok(again) => again,
             Err(e) => return (uri, Err(e)),
         };
         match again {
             Again::No => {}
-            // (More of a long file: at once, and it is no retry.)
-            Again::More => self.kb_enqueue(Job::Session(job)),
+            // (More of a long file: at once, on from where this read stopped, and it is no
+            // retry. Each such read ends further on, so it comes to the file's end.)
+            Again::More(from) => {
+                self.kb_enqueue(Job::Session(SessionJob { from: Some(from), ..job }));
+            }
             Again::Later => {
                 if let Some(wait) = RETRY.get(job.attempt) {
                     let me = Arc::clone(self);
@@ -438,6 +460,7 @@ impl Daemon {
         self: &Arc<Self>,
         t: Target,
         expect: Option<&str>,
+        from: Option<Value>,
     ) -> Result<Again, Refused> {
         let db = self.kb_db()?;
         let passed = self.kb_gate(&db, &t.uri, &t.facts).await?;
@@ -454,7 +477,7 @@ impl Daemon {
         }
         .or_else(|| ptyro_agents::default_dir(&t.adapter));
         let piece = {
-            let cursor = item.as_ref().and_then(|i| i.cursor.clone());
+            let cursor = from.or_else(|| item.as_ref().and_then(|i| i.cursor.clone()));
             let (adapter, conversation) = (t.adapter.clone(), t.conversation.clone());
             let (cwd, hook) = (t.cwd.clone(), t.hook.clone());
             tokio::task::spawn_blocking(move || {
@@ -494,7 +517,7 @@ impl Daemon {
             }
         };
         let again = match (&piece, expect) {
-            (Some(p), _) if p.more => Again::More,
+            (Some(p), _) if p.more => Again::More(p.cursor.clone()),
             (_, Some(reply)) if reads && found != Some(heard(reply)) => Again::Later,
             _ => Again::No,
         };
@@ -515,7 +538,7 @@ impl Daemon {
         let mut source = Source::new(ItemKind::Session, uri, Body::Parts(Vec::new()));
         source.append = true;
         let mut parts = Vec::new();
-        if let Some(Piece { transcript, cursor, whole, title: kept, .. }) = piece {
+        if let Some(Piece { transcript, cursor, whole, title: kept, more }) = piece {
             if transcript.parts.is_empty() {
                 // Nothing was said since: only where reading stopped moves.
                 if item.as_ref().is_some_and(|i| i.cursor.as_ref() != Some(&cursor)) {
@@ -566,9 +589,12 @@ impl Daemon {
                     .flatten()
             });
             // Too old to keep (`kb.retain_days`): the daily pass deleted it, or would at once.
-            // A session that is carried on is read again from its start, and kept.
+            // A session that is carried on is read again from its start, and kept. (Only
+            // the file's last piece says how old it is: one with more after it is kept, or
+            // a long file would be read from its start again and again.)
             if let (Some(cut), Some(ended)) = (self.kb_retain_cut(), source.ended_ms)
                 && ended < cut
+                && !more
             {
                 return Ok(());
             }
@@ -634,6 +660,7 @@ impl Daemon {
         .await
         .map_err(|e| Error::internal(e.to_string()))?;
         let Some(piece) = piece else { return Ok(()) };
+        let more = piece.more.then(|| piece.cursor.clone());
         let worktree = item.worktree.as_deref().and_then(|id| self.worktree_by_id(id));
         let project = item.project.as_deref().and_then(|id| self.project_by_id(id));
         let target = Target {
@@ -657,15 +684,24 @@ impl Daemon {
             },
             title: None,
         };
-        self.kb_write_session(&db, passed, target, Some(item), Some(piece)).await
+        self.kb_write_session(&db, passed, target, Some(item), Some(piece)).await?;
+        // More of a long file: read on behind everything else, as long as each piece moves
+        // the item's cursor (so it ends).
+        if let Some(at) = more
+            && let Some(now) = db.item_by_uri(uri.to_owned()).await.map_err(store_err)?
+            && now.cursor.as_ref() == Some(&at)
+        {
+            self.kb_enqueue_later(Job::Item(uri.to_owned()));
+        }
+        Ok(())
     }
 }
 
 /// Whether a read is to be made again.
 enum Again {
     No,
-    /// At once: the file held more than one read takes.
-    More,
+    /// At once: the file held more than one read takes. From where this one stopped.
+    More(Value),
     /// After a wait: the turn's reply was not in the file yet.
     Later,
 }

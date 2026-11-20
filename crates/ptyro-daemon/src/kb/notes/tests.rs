@@ -348,3 +348,45 @@ async fn the_wall_holds_for_notes_and_a_refused_file_is_named_once() {
     assert!(path.exists(), "the file is yours: it stays");
     assert!(d.kb_skipped().iter().any(|s| s.uri == all.item.uri));
 }
+
+/// E7: the gate is asked before a note's file is read: one over `kb.max_file` is refused by
+/// its size, whatever it holds (here: bytes that are no text, which reading would trip on).
+#[tokio::test]
+async fn a_note_too_big_is_refused_before_it_is_read() {
+    let t = tempfile::tempdir().unwrap();
+    let d = daemon(&t, "[kb]\nmax_file = '4KiB'\n");
+    let dir = d.kb_notes_dir().join("_all").join("_global");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("huge.md"), vec![0xffu8; 5000]).unwrap();
+    d.kb_notes_sync().await.unwrap();
+    let skipped = d.kb_skipped();
+    let why = skipped.iter().find(|s| s.uri == "note://_all/_global/huge").map(|s| s.why.clone());
+    assert!(why.as_deref().is_some_and(|w| w.contains("too big")), "{skipped:?}");
+}
+
+/// A7: a note's file may have two dots in its name; only a path that leaves the folder is
+/// refused.
+#[tokio::test]
+async fn a_note_called_v1_dot_dot_v2_is_a_note() {
+    let t = tempfile::tempdir().unwrap();
+    let d = daemon(&t, "");
+    let dir = d.kb_notes_dir().join("_all").join("_global");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("v1..v2.md"), "# Upgrade\n\nzqupgrade: run the migration first\n")
+        .unwrap();
+    d.kb_notes_sync().await.unwrap();
+    let Reply::KbItems { items } =
+        ask(&d, Request::KbNotes { project: None, writer: None }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(items[0].item.uri, "note://_all/_global/v1..v2");
+    let Reply::KbNoteText { text, .. } =
+        ask(&d, Request::KbNoteRead { addr: items[0].addr.clone() }).await.unwrap()
+    else {
+        panic!()
+    };
+    assert!(text.contains("zqupgrade"));
+    assert!(d.kb_note_path("note://_all/../x").is_err());
+    assert!(d.kb_note_path("note://../_global/x").is_err());
+}

@@ -12,6 +12,13 @@
 //! switched on. An item whose file is gone is deleted. Then the repository's commits: the
 //! newest 5,000 of its main branch at first, and after that only the new ones.
 //!
+//! **The innermost root owns a file.** Roots may lie inside one another (`ptyro ingest
+//! ~/work`, and a project in it pinned to a profile). A pass leaves alone every folder inside
+//! its root that is another root's, or a project's that keeps itself out
+//! ([`Daemon::kb_root_not`]): a file is one root's, stamped with that root's profile, which
+//! is the wall it is behind. A root made or removed inside another has that one looked at
+//! again, so what it kept there changes hands.
+//!
 //! **One pass at a time, on a task of its own**, never on the ingest queue: a folder of
 //! fifty thousand files is read between the sessions' turns, not before them. A pass that a
 //! restart interrupts leaves its root `syncing`, and the next start carries on: what was read
@@ -171,12 +178,13 @@ fn walk(dir: &Path) -> Vec<String> {
 }
 
 /// What a root holds now: its files that the rules take (at most `cap`), each with its time
-/// and size. Nothing under `own` (ptyro's data directory) is ever one of them.
+/// and size. Nothing under one of `not` (ptyro's data directory, another root inside this
+/// one, a project that keeps itself out) is ever one of them.
 fn list(
     root: &KbRoot,
     opts: &Opts,
     never: &Never,
-    own: &Path,
+    not: &[PathBuf],
     cap: usize,
 ) -> Result<Listing, String> {
     let path = Path::new(&root.path);
@@ -195,7 +203,11 @@ fn list(
     };
     let mut rels: Vec<String> = rels
         .into_iter()
-        .filter(|r| opts.takes(r, never) && !dir.join(r).starts_with(own))
+        .filter(|r| opts.takes(r, never))
+        .filter(|r| {
+            let path = dir.join(r);
+            !not.iter().any(|n| path.starts_with(n))
+        })
         .collect();
     rels.sort_unstable();
     rels.dedup();
@@ -494,7 +506,11 @@ impl Daemon {
                         synced_ms: None,
                     };
                     match db.put_root(root.clone()).await {
-                        Ok(()) => made.push(root.id),
+                        Ok(()) => {
+                            // (Those around it first: what they kept of it is this one's.)
+                            made.extend(Self::kb_roots_around(&roots, &root.path));
+                            made.push(root.id);
+                        }
                         Err(e) => tracing::warn!(
                             "knowledge base: project {} is not read: {}",
                             p.slug,
@@ -525,6 +541,47 @@ impl Daemon {
     /// (its worktrees are checkouts of projects that are read where they are).
     fn kb_own_dir(&self) -> PathBuf {
         ptyro_core::os::canonicalize(&self.paths.data).unwrap_or_else(|_| self.paths.data.clone())
+    }
+
+    /// What a pass over `root` leaves alone: ptyro's own data directory, and every folder
+    /// (or file) inside the root that is another root's, or the checkout of a project that
+    /// keeps itself out (`[knowledge] enabled = false`). The innermost root owns a file.
+    async fn kb_root_not(&self, db: &KbDb, root: &KbRoot) -> Result<Vec<PathBuf>, Error> {
+        let here = Path::new(&root.path);
+        let mut inner: Vec<PathBuf> = db
+            .roots()
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .filter(|r| r.id != root.id)
+            .map(|r| PathBuf::from(r.path))
+            .collect();
+        let projects: Vec<_> = {
+            let reg = self.registry.locked();
+            reg.projects.iter().filter(|p| p.machine.is_none()).cloned().collect()
+        };
+        for p in projects {
+            if self.kb_project_off(Some(&p.id), None) {
+                inner.push(ptyro_core::os::canonicalize(&p.root).unwrap_or(p.root));
+            }
+        }
+        inner.retain(|p| p != here && ptyro_core::os::path_starts_with(p, here));
+        inner.push(self.kb_own_dir());
+        Ok(inner)
+    }
+
+    /// The roots that `path` lies inside (their ids): what they kept under it changes hands
+    /// when a root is made or removed there.
+    fn kb_roots_around(roots: &[KbRoot], path: &str) -> Vec<String> {
+        let path = Path::new(path);
+        roots
+            .iter()
+            .filter(|r| {
+                let outer = Path::new(&r.path);
+                outer != path && ptyro_core::os::path_starts_with(path, outer)
+            })
+            .map(|r| r.id.clone())
+            .collect()
     }
 
     /// What is read of `root`: your settings, its own options, and its project's file (which
@@ -598,9 +655,9 @@ impl Daemon {
         let listing = if opts.off {
             Listing { files: Vec::new(), total: 0, git: false }
         } else {
+            let not = self.kb_root_not(db, root).await?;
             let (root, opts, rules) = (root.clone(), Arc::clone(&opts), Arc::clone(&rules));
-            let own = self.kb_own_dir();
-            tokio::task::spawn_blocking(move || list(&root, &opts, &rules.never, &own, MAX_FILES))
+            tokio::task::spawn_blocking(move || list(&root, &opts, &rules.never, &not, MAX_FILES))
                 .await
                 .map_err(blocking)?
                 .map_err(Error::internal)?
@@ -751,8 +808,16 @@ impl Daemon {
 
         let mut head = None;
         if let Some((tip, commits)) = commits {
+            // A commit forgotten under a root that was here before stays forgotten (this
+            // root's id, and so its commits' URIs, are new).
+            let forgotten: HashSet<String> = db
+                .forgotten_commits(root.path.clone())
+                .await
+                .map_err(store_err)?
+                .into_iter()
+                .collect();
             // Oldest first, so that the history grows in its own order.
-            for c in commits.into_iter().rev() {
+            for c in commits.into_iter().rev().filter(|c| !forgotten.contains(&c.sha)) {
                 let uri = format!("commit://{}/{}", root.id, c.sha);
                 let source = file::commit(uri.clone(), &c.subject, &c.body, &c.files, c.at_ms);
                 let facts = Facts::default();
@@ -1008,14 +1073,17 @@ impl Daemon {
                     synced_ms: None,
                 };
                 db.put_root(root.clone()).await.map_err(store_err)?;
+                // (The roots around it: what they kept of this folder is this root's now.)
+                self.kb_roots_kick(Self::kb_roots_around(&roots, &root.path));
                 (root, false)
             }
         };
         // What will be read, said before it is.
         let opts = Arc::new(self.kb_root_opts(&root));
         let listing = {
+            let not = self.kb_root_not(&db, &root).await?;
             let (root, opts, rules) = (root.clone(), Arc::clone(&opts), Arc::clone(&rules));
-            tokio::task::spawn_blocking(move || list(&root, &opts, &rules.never, &data, MAX_FILES))
+            tokio::task::spawn_blocking(move || list(&root, &opts, &rules.never, &not, MAX_FILES))
                 .await
                 .map_err(blocking)?
                 .map_err(Error::internal)?
@@ -1081,7 +1149,8 @@ impl Daemon {
         })
     }
 
-    /// Remove a root and its items, in the background and in batches (§25.12): no tombstones.
+    /// Remove a root and its items, in the background and in batches (§25.12): no tombstones
+    /// are made, and those there are (what you forgot under it) stay.
     fn kb_root_drop(self: &Arc<Self>, root: KbRoot) {
         if !self.kb.roots.removing.locked().insert(root.id.clone()) {
             return;
@@ -1112,6 +1181,12 @@ impl Daemon {
             me.kb.roots.removing.locked().remove(&root.id);
             drop(one);
             me.kb_changed([ItemKind::File, ItemKind::Commit]);
+            // A root around it reads that folder itself from now on.
+            if let Ok(db) = me.kb_db()
+                && let Ok(roots) = db.roots().await
+            {
+                me.kb_roots_kick(Self::kb_roots_around(&roots, &root.path));
+            }
             // (A project whose root went because its pin changed is made again.)
             if root.kind == RootKind::Project {
                 me.kb_roots_reconcile().await;

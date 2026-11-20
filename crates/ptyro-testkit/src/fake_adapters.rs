@@ -31,6 +31,7 @@
 //! typo in `greeting.txt` (or, told no, leaves it).
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
+//! | `as <kind> <file> <json>` | sends the request `<json>` to the daemon from inside the session, as a client that calls itself `<kind>` (`cli`, `machine`), and writes `ok: <reply>` or `error: <message>` to `<file>` |
 //! | `mcp <file> <tool> <json>` | calls a tool of the `ptyro` MCP server the launch gave it, as the real agent would, and writes the answer to `<file>` (`tools/list`: the tools' names and the server's instructions) |
 //! | `exit` | SessionEnd, exit 0 |
 //! With `PTYRO_FAKE_HOOK_DELAY_MS=N` every hook takes N ms to start (a loaded machine).
@@ -629,6 +630,36 @@ impl Fake {
     }
 }
 
+/// One request to the daemon from this process, as a client of `kind`: `ok: <reply>`, or
+/// `error: <message>`.
+fn request_as(kind: &str, request: &str) -> String {
+    let kind = match kind {
+        "machine" => ptyro_protocol::ClientKind::Machine,
+        _ => ptyro_protocol::ClientKind::Cli,
+    };
+    let req: ptyro_protocol::Request = match serde_json::from_str(request) {
+        Ok(r) => r,
+        Err(e) => return format!("error: not a request: {e}"),
+    };
+    let asked = || -> Result<ptyro_protocol::Reply, String> {
+        let paths = ptyro_core::paths::Paths::from_env().map_err(|e| e.to_string())?;
+        let mut opts = ptyro_client::ConnectOptions::new(paths, kind);
+        opts.autospawn = false;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        rt.block_on(async {
+            let c = ptyro_client::Client::connect(&opts).await.map_err(|e| e.to_string())?;
+            c.request(req).await.map_err(|e| e.message)
+        })
+    };
+    match asked() {
+        Ok(reply) => format!("ok: {}", serde_json::to_string(&reply).unwrap_or_default()),
+        Err(e) => format!("error: {e}"),
+    }
+}
+
 /// A command line run as the real agents run theirs (hooks, status lines, the Bash tool): `sh -c`.
 fn agent_shell(line: &str) -> std::process::Command {
     let mut c = std::process::Command::new("sh");
@@ -1011,6 +1042,15 @@ pub fn main(args: &[String]) -> i32 {
                 let tmp = format!("{file}.tmp");
                 let _ = std::fs::write(&tmp, said).and_then(|()| std::fs::rename(&tmp, file));
                 let _ = writeln!(out, "mcp done {file}");
+            }
+            // `as <kind> <file> <json>`: a request from this process, whatever it says it is.
+            "as" => {
+                let mut parts = rest.splitn(3, ' ');
+                let (kind, file) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let said = request_as(kind, parts.next().unwrap_or(""));
+                let tmp = format!("{file}.tmp");
+                let _ = std::fs::write(&tmp, said).and_then(|()| std::fs::rename(&tmp, file));
+                let _ = writeln!(out, "as done {file}");
             }
             "compact" if f.script.is_some() => {
                 if let Some(s) = &f.script {

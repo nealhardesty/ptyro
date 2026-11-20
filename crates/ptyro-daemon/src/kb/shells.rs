@@ -15,8 +15,10 @@
 //!
 //! **Never.** A private or an unrecorded shell (the session never hands anything over, and
 //! the gate refuses it besides); `kb.shell = "off"`; a command typed with a space before
-//! it, a trivial one (`kb.shell_skip`), one that names a key or credential file
-//! (`ptyro_core::kb::shell::left_out`): of these not even a line in `ptyro kb status`. The
+//! it, a trivial one (`kb.shell_skip`), one that names a key or credential file or was run
+//! in a folder of them (`cd ~/.ssh; cat config`: the never list and `kb.exclude` are asked
+//! of where it ran too; `ptyro_core::kb::shell::left_out`): of these not even a line in
+//! `ptyro kb status`. The
 //! output of a command that drew the screen (an editor, a pager), that was typed into while
 //! it ran (a password prompt, a REPL, `ssh`: what it showed holds what was typed), or that
 //! was an agent started by hand (its conversation is not a command's output). Commands an
@@ -66,7 +68,7 @@ impl Daemon {
         if m.kind != SessionKind::Shell || m.place.private || m.place.unrecorded {
             return;
         }
-        if shell::left_out(&ran.text, &kb.shell_skip, &self.kb_rules().never) {
+        if shell::left_out(&ran.text, &ran.cwd, &kb.shell_skip, &self.kb_rules().never) {
             return;
         }
         // What an agent started by hand showed is its conversation, and its own to keep.

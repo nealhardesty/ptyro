@@ -40,6 +40,9 @@ pub(crate) struct KbScope {
     pub chat: Option<String>,
 }
 
+/// The workspace of a caller that is in none this machine knows: nothing is stamped with it.
+const NOWHERE: &str = "";
+
 impl KbScope {
     /// What a caller of `profile` in `workspace` may see under `scope` (`kb.scope`):
     /// `profile` (its profile's and nobody's), `workspace` (of those, its workspace's) or
@@ -47,7 +50,8 @@ impl KbScope {
     pub(crate) fn of(scope: &str, profile: &str, workspace: Option<&str>) -> Self {
         Self {
             profile: (scope != "all").then(|| profile.to_owned()),
-            workspace: (scope == "workspace").then(|| workspace.map(str::to_owned)).flatten(),
+            // (A caller whose workspace is not known sees none: never its whole profile.)
+            workspace: (scope == "workspace").then(|| workspace.unwrap_or(NOWHERE).to_owned()),
             session: None,
             chat: None,
         }

@@ -295,6 +295,12 @@ impl Daemon {
                             "these are on more than one machine ({m} and another): one at a time"
                         )));
                     }
+                    // (A query finds what is here: said, not dropped.)
+                    if query.as_deref().is_some_and(|q| !q.trim().is_empty()) {
+                        return Err(Error::invalid(format!(
+                            "{m}'s items are forgotten by their addresses alone: a query finds only what is on this machine"
+                        )));
+                    }
                     let addrs = split.into_iter().map(|(_, a)| a).collect();
                     let req = Request::KbForget { addrs, query: None, confirmed, session: None };
                     return self.kb_far(&m, req).await;
@@ -304,9 +310,12 @@ impl Daemon {
             }
             Request::KbStatus => {
                 let mut status = self.kb_status().await;
-                // What other sessions were offered is yours to see, not an agent's.
+                // What other sessions were offered, and which sources (of any profile) were
+                // refused or are failing, is yours to see, not an agent's.
                 if scope.is_some() {
                     status.offered.clear();
+                    status.skipped.clear();
+                    status.failing.clear();
                 }
                 Ok(Reply::KbStatus { status })
             }
@@ -488,7 +497,16 @@ impl Daemon {
             tracing::info!("knowledge base: {} forgotten", item.uri);
         }
         if let Some(uri) = self.kb_session_uri(&s) {
-            db.tombstone(uri, ptyro_core::kb::ItemKind::Session).await.map_err(store_err)?;
+            // Its conversation takes nothing from now on: a tombstone, or (kept before this
+            // session carried it on) closed.
+            db.keep_out(uri.clone(), ItemKind::Session).await.map_err(store_err)?;
+            // What the actor wrote of this session between the list above and here goes too.
+            if let Some(i) = db.item_by_uri(uri).await.map_err(store_err)?
+                && i.forgotten_ms.is_none()
+                && i.session.as_deref() == Some(s.id.full().as_str())
+            {
+                chunks += db.forget(i.id).await.map_err(store_err)?.unwrap_or(0);
+            }
         }
         self.kb_changed(items.iter().map(|i| i.kind));
         Ok(Reply::KbForgotten { items: items.len() as u32, chunks: chunks as u32 })

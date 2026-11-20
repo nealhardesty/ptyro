@@ -49,11 +49,15 @@ pub(crate) struct HistoryJob {
 
 impl Daemon {
     /// A session the knowledge base keeps nothing of (private, or not recorded) is in a
-    /// conversation: that conversation's URI gets a tombstone, so that the history's
-    /// backfill never reads the agent's own copy of it. Once a conversation; only a URI.
+    /// conversation: that conversation is kept out for good (`KbDb::keep_out`), so that
+    /// nothing reads the agent's own copy of it later: not the history's backfill, and not
+    /// the catch-up at the daemon's start once the session is gone. A tombstone when nothing
+    /// was kept of it; when it was kept before (a private session carried an earlier
+    /// conversation on), its item is closed: what it holds stays, and its file, which now
+    /// holds the private turns too, is never read again. Once a conversation; only a URI.
     pub(crate) fn kb_keep_out(&self, s: &Session, conversation: Option<String>) {
         let Some(uri) = self.kb_session_uri_in(s, conversation) else { return };
-        if !self.kb.kept_out.locked().insert(uri.clone()) {
+        if self.kb.kept_out.locked().contains(&uri) {
             return;
         }
         // (Also while the knowledge base is off, when its file is there: it may be switched
@@ -63,11 +67,33 @@ impl Daemon {
         }
         let origin = self.chats.db().ok().map(|d| d.machine_id.clone());
         let Ok(db) = self.kb.open(origin.as_deref()).cloned() else { return };
+        let kept_out = Arc::clone(&self.kb.kept_out);
         tokio::spawn(async move {
-            if let Err(e) = db.tombstone(uri.clone(), ItemKind::Session).await {
-                tracing::warn!("knowledge base: {uri}: {}", store_err(e).message);
+            match db.keep_out(uri.clone(), ItemKind::Session).await {
+                // (Remembered only once it is written: what failed is tried at the next turn.)
+                Ok(()) => {
+                    kept_out.locked().insert(uri);
+                }
+                Err(e) => tracing::warn!("knowledge base: {uri}: {}", store_err(e).message),
             }
         });
+    }
+
+    /// Every session the knowledge base keeps nothing of has its conversation kept out: at
+    /// the daemon's start (a private session may have run while it was down, or its turn's
+    /// end was never seen), and when the settings change (the knowledge base switched on).
+    pub(crate) fn kb_keep_out_all(&self) {
+        for s in self.sessions() {
+            let out = {
+                let m = s.meta.locked();
+                m.kind == ptyro_core::session::SessionKind::Agent
+                    && m.place.chat.is_none()
+                    && (m.place.private || m.place.unrecorded)
+            };
+            if out {
+                self.kb_keep_out(&s, None);
+            }
+        }
     }
 
     /// **`KbHistory`**: what the agents' folders hold, and (unless `dry_run`) the read of

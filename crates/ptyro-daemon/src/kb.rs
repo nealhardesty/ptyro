@@ -87,8 +87,18 @@ pub struct Kb {
     roots: roots::Roots,
     /// Conversations of sessions that nothing is kept of, which got their tombstone since
     /// the daemon started (`history`).
-    kept_out: Mutex<std::collections::HashSet<String>>,
+    kept_out: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Every profile's secret values together, for sources that are no profile's, and when
+    /// they were read: asked for with every such source, so kept for [`EVERYONES`].
+    everyones: Mutex<Option<(std::time::Instant, Secrets)>>,
 }
+
+/// Secret values, each with what is shown in its place.
+type Secrets = Vec<(String, String)>;
+
+/// How long every profile's secrets are kept in memory for redacting nobody's sources (a
+/// secret that is a command is run again after it).
+const EVERYONES: Duration = Duration::from_secs(60);
 
 pub(crate) struct Rules {
     redact: Vec<String>,
@@ -168,7 +178,8 @@ impl Kb {
             remembered: Mutex::new(HashMap::new()),
             offers: Mutex::new(offer::Offers::default()),
             roots: roots::Roots::default(),
-            kept_out: Mutex::new(std::collections::HashSet::new()),
+            kept_out: Arc::new(Mutex::new(std::collections::HashSet::new())),
+            everyones: Mutex::new(None),
         }
     }
 
@@ -276,6 +287,8 @@ impl Daemon {
                 })
             {
                 waiting.expect = new.expect.clone().or(waiting.expect.take());
+                // (More of a long file: the read that waits carries on where that one stopped.)
+                waiting.from = new.from.clone().or(waiting.from.take());
                 return;
             }
             self.kb.pending.send_modify(|n| *n += 1);
@@ -390,6 +403,9 @@ impl Daemon {
     ) -> Result<Passed, Refused> {
         let rules = self.kb_rules();
         let forgotten = db.tombstoned(uri.to_owned()).await.map_err(store_err)?;
+        // Closed: a conversation that was kept, then carried on in a private session
+        // (§25.7a). Its file holds the private turns, so nothing reads it again.
+        let closed = db.closed(uri.to_owned()).await.map_err(store_err)?;
         let config = self.config();
         let gate = Gate {
             enabled: config.kb.enabled,
@@ -398,7 +414,7 @@ impl Daemon {
             agent_off: facts.agent_off,
             project_off: facts.project_off,
             unrecorded: facts.unrecorded,
-            private: facts.private,
+            private: facts.private || closed,
             forgotten,
             path: facts.path.as_deref(),
             never: &rules.never,
@@ -436,20 +452,42 @@ impl Daemon {
 
     /// A profile's secret values, for the redactor: without them a source of that profile is
     /// not kept, since redaction can't be skipped. (It is found again from its cursor when
-    /// they can be read.)
+    /// they can be read.) A source that is **no profile's** (an unpinned project, a folder
+    /// read for everyone, your notes) is shown to every profile's agents, so it is redacted
+    /// with every profile's secrets, and kept out by the same rule while any can't be read.
     pub(crate) async fn kb_secrets(
         self: &Arc<Self>,
         profile: Option<&str>,
     ) -> Result<Vec<(String, String)>, Error> {
-        match profile {
-            Some(profile) => Ok(crate::redact::secrets(&self.profile_plan(profile).await.map_err(|e| {
+        let of = async |profile: &str| {
+            Ok::<_, Error>(crate::redact::secrets(&self.profile_plan(profile).await.map_err(|e| {
                 Error::new(
                     ErrorCode::Invalid,
                     format!("not kept, because profile {profile}'s secrets can't be read to redact them: {}", e.message),
                 )
-            })?)),
-            None => Ok(Vec::new()),
-        }
+            })?))
+        };
+        let Some(profile) = profile else {
+            if let Some((at, all)) = self.kb.everyones.locked().as_ref()
+                && at.elapsed() < EVERYONES
+            {
+                return Ok(all.clone());
+            }
+            let mut all = Vec::new();
+            for profile in ptyro_agents::profile::names(&self.config()) {
+                all.extend(of(&profile).await?);
+            }
+            all.sort();
+            all.dedup();
+            *self.kb.everyones.locked() = Some((std::time::Instant::now(), all.clone()));
+            return Ok(all);
+        };
+        of(profile).await
+    }
+
+    /// The configuration was read again: every profile's secrets are asked for anew.
+    pub(crate) fn kb_secrets_changed(&self) {
+        *self.kb.everyones.locked() = None;
     }
 
     /// The plan and the write of a source the gate let through, redacted with `secrets` (its
@@ -751,5 +789,61 @@ mod tests {
         let Err(Refused::Error(e)) = d.kb_ingest(p).await else { panic!("it was kept") };
         assert!(e.message.contains("profile broken's secrets can't be read"), "{}", e.message);
         assert!(d.kb_db().unwrap().item_by_uri("file:///b.md".into()).await.unwrap().is_none());
+        // Nobody's source is every profile's to see: kept out too, while one can't be read.
+        let p = doc("file:///n.md", "# N\n\nthe password is hunter2-value here");
+        let Err(Refused::Error(e)) = d.kb_ingest(p).await else { panic!("it was kept") };
+        assert!(e.message.contains("profile broken's secrets can't be read"), "{}", e.message);
+    }
+
+    /// C4: a source that is no profile's (an unpinned project, a folder read for everyone,
+    /// your own note) is redacted with every profile's secrets.
+    #[tokio::test]
+    async fn a_source_of_no_profile_is_redacted_with_every_profiles_secrets() {
+        let t = tempfile::tempdir().unwrap();
+        let d = crate::daemon::test_daemon(t.path(), Registry::default());
+        set_config(
+            &d,
+            "[profiles.work.secrets]\nDB_PASS = 'hunter2-value'\n\
+             [profiles.home.secrets]\nWIFI = 'correct-horse-battery'\n",
+        );
+        d.start_kb();
+        let p = doc("file:///n.md", "# N\n\nwork uses hunter2-value, home correct-horse-battery");
+        assert_eq!(p.stamp.profile, None);
+        let w = d.kb_ingest(p).await.unwrap();
+        let chunks = d.kb_db().unwrap().chunks(w.item, 0, 0).await.unwrap();
+        assert_eq!(chunks[0].text, "work uses <secret:DB_PASS>, home <secret:WIFI>");
+        // A profile's own source still goes by its own.
+        let mut p = doc("file:///w.md", "# W\n\nhunter2-value and correct-horse-battery");
+        p.stamp.profile = Some("work".into());
+        let w = d.kb_ingest(p).await.unwrap();
+        let chunks = d.kb_db().unwrap().chunks(w.item, 0, 0).await.unwrap();
+        assert_eq!(chunks[0].text, "<secret:DB_PASS> and correct-horse-battery");
+    }
+
+    /// E1: a conversation that was kept and then carried on by a private session is closed
+    /// (`KbDb::keep_out`): the gate refuses it, whoever asks.
+    #[tokio::test]
+    async fn a_closed_conversation_is_refused_by_the_gate() {
+        let t = tempfile::tempdir().unwrap();
+        let d = crate::daemon::test_daemon(t.path(), Registry::default());
+        d.start_kb();
+        let turns = |text: &str| Prepared {
+            source: Source {
+                append: true,
+                ..Source::new(
+                    ItemKind::Session,
+                    "session://claude/c1",
+                    Body::Parts(vec![Part::new(ChunkKind::User, text, 1).anchor(text)]),
+                )
+            },
+            stamp: Stamp::new(Writer::Agent, None),
+            facts: Facts { session: true, ..Facts::default() },
+        };
+        let w = d.kb_ingest(turns("before")).await.unwrap();
+        let db = d.kb_db().unwrap();
+        db.keep_out("session://claude/c1".into(), ItemKind::Session).await.unwrap();
+        assert!(matches!(d.kb_ingest(turns("private")).await, Err(Refused::Skip(Skip::Private))));
+        let kept = db.chunks(w.item, 0, 0).await.unwrap();
+        assert_eq!(kept.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["before"]);
     }
 }

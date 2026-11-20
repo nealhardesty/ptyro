@@ -130,15 +130,24 @@ impl Daemon {
 
     /// Where a note's file is.
     fn kb_note_path(&self, uri: &str) -> Result<PathBuf, Error> {
+        // (Each part a name: `v1..v2.md` is one, `..` is not.)
+        let inside = |rel: &str| {
+            Path::new(rel).components().all(|c| matches!(c, std::path::Component::Normal(_)))
+        };
         match note::rel(uri) {
-            Some(rel) if !rel.contains("..") => Ok(self.kb_notes_dir().join(rel)),
+            Some(rel) if inside(&rel) => Ok(self.kb_notes_dir().join(rel)),
             _ => Err(Error::internal(format!("{uri} is not a note's"))),
         }
     }
 
     /// The agent's session a request comes from, by the kernel's word (§17): `None` for you.
-    pub(super) fn kb_agent(&self, caller: crate::guard::Caller) -> Option<Arc<Session>> {
-        if caller.grant.is_some() || caller.is_link() {
+    ///
+    /// Only what the daemon itself knows decides: a token it checked (a paired device is a
+    /// person, a machine's token a link, each held to its grant), else where the connecting
+    /// process runs. What a client *calls* itself (`kind` in its hello) is its own word: a
+    /// process in an agent's session that says it is another machine's link is that session.
+    pub(crate) fn kb_agent(&self, caller: crate::guard::Caller) -> Option<Arc<Session>> {
+        if caller.grant.is_some() {
             return None;
         }
         let s = self.session_of_pid(caller.pid?)?;
@@ -285,6 +294,11 @@ impl Daemon {
         had: Option<&KbItem>,
         workspace: Option<String>,
     ) -> Result<Written, Refused> {
+        let db = self.kb_db()?;
+        // (No path for the never list: `credentials-rotation.md` is a note like any other.)
+        let facts = Facts { bytes: Some(f.size), ..Facts::default() };
+        // The gate is asked before the file is read (`kb.max_file`, a forgotten note).
+        let passed = self.kb_gate(&db, &f.uri, &facts).await?;
         let text = std::fs::read_to_string(&f.path).map_err(|e| io("can't read", &f.path, e))?;
         let (mut source, header) = note::source(&f.uri, &text, f.mtime_ms);
         source.cursor = Some(f.cursor());
@@ -312,9 +326,7 @@ impl Daemon {
             session: header.session.clone().filter(|s| s.parse::<SessionId>().is_ok()),
             ..Stamp::new(writer, profile.map(str::to_owned))
         };
-        // (No path for the never list: `credentials-rotation.md` is a note like any other.)
-        let facts = Facts { bytes: Some(f.size), ..Facts::default() };
-        self.kb_ingest(Prepared { source, stamp, facts }).await
+        self.kb_write(&db, passed, Prepared { source, stamp, facts }).await
     }
 
     /// A project a note is about, as it was asked: `None` for none (`_global`, or nothing).
@@ -384,7 +396,6 @@ impl Daemon {
                         ask.text.len()
                     )));
                 }
-                self.kb_remember_count(&s.id.full(), false)?;
                 profile = Some(m.place.profile.clone());
                 project = match &ask.project {
                     Some(p) => self.kb_note_project(Some(p))?,
@@ -431,14 +442,12 @@ impl Daemon {
         };
         let body = note::compose(&ask.text, ask.title.as_deref());
         let mut text = note::render(&header, &body);
+        let redactor =
+            self.kb_rules().redactor.with_secrets(self.kb_secrets(profile.as_deref()).await?);
         // An agent's words are redacted before they are a file (§25.7): the profile's secrets,
         // the credential shapes, your patterns.
         if agent.is_some() {
-            let secrets = match profile.as_deref() {
-                Some(p) => crate::redact::secrets(&self.profile_plan(p).await?),
-                None => Vec::new(),
-            };
-            let r = self.kb_rules().redactor.with_secrets(secrets).redact(&text);
+            let r = redactor.redact(&text);
             if r.hits > MAX_HITS {
                 return Err(Error::invalid(format!(
                     "it holds {} things that look like credentials: a note is for decisions and facts, never for keys",
@@ -447,12 +456,19 @@ impl Daemon {
             }
             text = r.text;
         }
-        let title = note::title(&body).0.unwrap_or_default();
+        // The file's name, and so the note's address, is its title as it is stored: redacted
+        // (yours too: your file keeps your words, its name and `kb.db` hold no secret).
+        let title = note::title(note::parse(&text).1).0.unwrap_or_default();
+        let title = redactor.redact(&title).text;
         let dir = self
             .kb_notes_dir()
             .join(profile.as_deref().unwrap_or(note::EVERYONE))
             .join(project.as_ref().map_or(note::GLOBAL, |(_, slug)| slug.as_str()));
         let _one = self.kb.notes_lock.lock().await;
+        // (Asked and counted under the one lock: two calls at once can't both be the 20th.)
+        if let Some(s) = &agent {
+            self.kb_remember_count(&s.id.full(), false)?;
+        }
         // A name of its own: `retry-policy`, then `retry-policy-2`.
         let base = note::slug(&title);
         let (mut slug, mut k) = (base.clone(), 1);

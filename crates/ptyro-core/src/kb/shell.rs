@@ -51,8 +51,10 @@ pub fn day(ms: u64) -> String {
 }
 
 /// Whether nothing is kept of this command line: it was typed with a space before it, its
-/// first word is one of `skip`, or it names a path that is never read.
-pub fn left_out(text: &str, skip: &[String], never: &Never) -> bool {
+/// first word is one of `skip`, it names a path that is never read, or it ran in a folder
+/// that is never read (`cwd`: there `cat config` names one too, so each word is also asked
+/// about as a path from that folder).
+pub fn left_out(text: &str, cwd: &str, skip: &[String], never: &Never) -> bool {
     if text.starts_with(char::is_whitespace) || text.trim().is_empty() {
         return true;
     }
@@ -61,9 +63,13 @@ pub fn left_out(text: &str, skip: &[String], never: &Never) -> bool {
     if skip.iter().any(|s| s == first) {
         return true;
     }
+    let cwd = Path::new(cwd);
+    if never.is_never(cwd) {
+        return true;
+    }
     text.split(|c: char| c.is_whitespace() || "'\"`=:,;|&<>(){}".contains(c))
         .filter(|w| !w.is_empty())
-        .any(|w| never.is_never(Path::new(w)))
+        .any(|w| never.is_never(Path::new(w)) || never.is_never(&cwd.join(w)))
 }
 
 /// The words in a variable's or a flag's name that say its value is a secret.
@@ -295,7 +301,7 @@ mod tests {
     #[test]
     fn what_is_never_kept_of_a_shell() {
         let never = Never::new(&["*.sqlite".to_owned()]);
-        let out = |text: &str| left_out(text, &skip(), &never);
+        let out = |text: &str| left_out(text, "/work/app", &skip(), &never);
         // Typed with a space before it; nothing; the trivial ones, by their first word.
         for text in
             [" export TOKEN=abc", "\tsecret", "", "  ", "ls", "ls -la src", "cd ..", "/bin/ls"]
@@ -327,7 +333,33 @@ mod tests {
         ] {
             assert!(!out(text), "{text:?}");
         }
-        assert!(!left_out("ls", &[], &never), "an empty list skips nothing");
+        assert!(!left_out("ls", "/work/app", &[], &never), "an empty list skips nothing");
+    }
+
+    /// The never list is asked of where a command ran too: in `~/.ssh`, `cat config` names a
+    /// key file as surely as `cat ~/.ssh/config` does elsewhere.
+    #[test]
+    fn nothing_is_kept_of_a_command_run_in_a_folder_that_is_never_read() {
+        let never = Never::new(&["config/secrets/*.yml".to_owned(), "vault".to_owned()]);
+        for (cwd, text) in [
+            ("/home/me/.ssh", "cat config"),
+            ("/home/me/.aws", "grep key credentials"),
+            ("/home/me/.gnupg/private-keys-v1.d", "make"),
+            ("/srv/vault/prod", "head -3 users.txt"),
+            // A pattern with a folder in it: the word, from that folder.
+            ("/srv/app/config/secrets", "cat prod.yml"),
+            ("/srv/app/config", "cat secrets/prod.yml"),
+        ] {
+            assert!(left_out(text, cwd, &[], &never), "{cwd}: {text}");
+        }
+        for (cwd, text) in [
+            ("/home/me/src/sshd", "cat config"),
+            ("/srv/app/config", "cat app.yml"),
+            ("/srv/app/config/secrets", "make"),
+            ("", "make test"),
+        ] {
+            assert!(!left_out(text, cwd, &[], &never), "{cwd}: {text}");
+        }
     }
 
     #[test]

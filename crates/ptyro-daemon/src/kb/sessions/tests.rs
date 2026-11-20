@@ -108,3 +108,74 @@ fn a_long_file_is_read_in_several_reads_and_a_line_longer_than_a_read_is_passed_
     let p = read(claude.as_ref(), &path, Some(&at), 200).unwrap();
     assert_eq!((p.cursor["offset"].clone(), p.more), (at["offset"].clone(), false));
 }
+
+/// An item of `uri` as a read of `path` up to `upto` bytes left it: its turns, its cursor.
+async fn kept_until(d: &Arc<Daemon>, uri: &str, path: &Path, upto: usize) {
+    let claude = ptyro_agents::adapter("claude");
+    let bytes = std::fs::read(path).unwrap();
+    let transcript = claude.read_transcript(&bytes[..upto], 0).unwrap();
+    let m = std::fs::metadata(path).unwrap();
+    let mut source = Source::new(ItemKind::Session, uri, Body::Parts(transcript.parts));
+    source.append = true;
+    source.cursor =
+        Some(json!({ "path": path, "dev": file_id(&m).0, "ino": file_id(&m).1, "offset": upto }));
+    let stamp = Stamp::new(Writer::Agent, None);
+    let facts = Facts { session: true, ..Facts::default() };
+    d.kb_ingest(Prepared { source, stamp, facts }).await.unwrap();
+}
+
+async fn texts(d: &Arc<Daemon>, uri: &str) -> Vec<String> {
+    let db = d.kb_db().unwrap();
+    let item = db.item_by_uri(uri.into()).await.unwrap().unwrap();
+    db.chunks(item.id, 0, 0).await.unwrap().into_iter().map(|c| c.text).collect()
+}
+
+/// E1: a conversation that was kept, then carried on by a private session, is closed. Once
+/// that session is gone, the daemon's start finds the transcript grown past the item's
+/// cursor: it must not read the private turns. E8: a conversation with more to read than
+/// one read takes is read to its end, piece by piece.
+#[tokio::test]
+async fn the_catch_up_reads_a_long_transcript_to_its_end_and_never_a_closed_one() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let d = crate::daemon::test_daemon(t.path(), ptyro_store::Registry::default());
+    d.start_kb();
+    let first =
+        line("user", "u1", "zqbefore asked") + &line("assistant", "a1", "zqbefore answered");
+    // More than a read takes (`READ_MAX`, small in tests), so it is several pieces.
+    let mut more = String::new();
+    for n in 0..120 {
+        more += &line(
+            "user",
+            &format!("u{n}x"),
+            &format!("zqlater question {n} {}", "word ".repeat(40)),
+        );
+        more += &line("assistant", &format!("a{n}x"), &format!("zqlater answer {n}"));
+    }
+    assert!(more.len() as u64 > 3 * READ_MAX);
+    let (open, closed) = (dir.path().join("open.jsonl"), dir.path().join("closed.jsonl"));
+    for (uri, path) in [("session://claude/open", &open), ("session://claude/closed", &closed)] {
+        std::fs::write(path, &first).unwrap();
+        kept_until(&d, uri, path, first.len()).await;
+        std::fs::write(path, format!("{first}{more}")).unwrap();
+    }
+    // (As `kb_keep_out` does when a private session is in that conversation.)
+    let db = d.kb_db().unwrap();
+    db.keep_out("session://claude/closed".into(), ItemKind::Session).await.unwrap();
+
+    d.kb_catch_up().await;
+    d.kb_idle().await;
+    let all = texts(&d, "session://claude/open").await;
+    assert!(all.iter().any(|t| t == "zqlater answer 119"), "read to its end: {}", all.len());
+    assert_eq!(all.iter().filter(|t| t.starts_with("zqlater answer")).count(), 120);
+    assert_eq!(
+        texts(&d, "session://claude/closed").await,
+        ["zqbefore asked", "zqbefore answered"],
+        "what was kept stays, and nothing said in private is read"
+    );
+    // Asked for by name too (a queue rebuilt, a backfill): still nothing.
+    assert!(matches!(
+        d.kb_item("session://claude/closed").await,
+        Err(Refused::Skip(ptyro_core::kb::ingest::Skip::Private))
+    ));
+}
