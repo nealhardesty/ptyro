@@ -11838,7 +11838,16 @@ One search, used by `ptyro recall`, the Library, the web and the agents' `recall
     project's name, id or path, `root:` a root's name, and one that doesn't exist is an error,
     not an empty answer. A caller's own options (`KbSearch.kinds`, `project`, `since_ms`,
     `before_ms`) narrow what the query says, never widen it. `machine:` names the one machine
-    to search (KB1.12, §25.11). A query needs at least one word to look for, and a prefix three letters.
+    to search (KB1.12, §25.11). A prefix needs three letters.
+  - **A query with no words** (only filters, or a lone `*`, which means "anything"; owner,
+    2026-11-20) is a listing, not an error: the newest `limit` items the filters let through,
+    newest first, each once, as a hit (`how: "newest"`) on its newest piece, whose opening is
+    the snippet (`KbDb::newest`: `GROUP BY` item over `chunk`, under the same `KbFilter` and
+    wall). Nothing ranks it and no chat is in it, as `KbRecent` lists items only; linked
+    machines' answers are merged by time. It is how "what happened in project X lately" is
+    asked: `ptyro recall -p wallpapers --since 7d`, the agents' `recall` with only `project`
+    (its `query` may be left out). `by:meaning` alone is an error (there is nothing to compare),
+    and so is forgetting by such a query (`KbForget`): filters alone would match everything.
   - **Every term is quoted, and no typed text can be an FTS5 syntax error**: a property test
     runs both parsers' output through the real index with every character that means
     something to FTS5 made likely (`no_typed_text_is_an_fts5_syntax_error`). One thing got

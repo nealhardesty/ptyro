@@ -23,8 +23,9 @@ pub struct RecallArgs {
     /// What to look for: words (all must match), "a phrase", prefix*, -word, and the filters
     /// kind:session, project:NAME, since:7d, before:30d, agent:codex, workspace:work,
     /// file:PATH, wrote:you|agent, by:meaning. (A word may start with `-`: it is left out.
-    /// After `--`, every word is a word.)
-    #[arg(required = true, allow_hyphen_values = true)]
+    /// After `--`, every word is a word.) No words (only filters, or `*`): the newest of
+    /// what the filters let through, `recall -p myrepo --since 7d`.
+    #[arg(allow_hyphen_values = true)]
     query: Vec<String>,
     /// Only this project's
     #[arg(short, long, add = ArgValueCandidates::new(complete::projects))]
@@ -363,9 +364,6 @@ fn about(kind: &str, title: Option<&str>, place: &[Option<&str>], at_ms: Option<
 
 pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
     let mut query = a.take_flags()?.join(" ");
-    if query.trim().is_empty() {
-        return Err(Error::invalid("say what to look for (words, \"a phrase\", prefix*)"));
-    }
     for (word, value) in [("since", &a.since), ("before", &a.before), ("wrote", &a.wrote)] {
         if let Some(v) = value {
             query.push_str(&format!(" {word}:{v}"));

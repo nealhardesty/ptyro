@@ -294,6 +294,10 @@ fn parse(q: &str, now_ms: u64, kb: bool) -> Result<Query, String> {
                 _ => {}
             }
         }
+        // A lone `*` is "anything": what the filters let through (a search with no words).
+        if !phrase && term == "*" {
+            continue;
+        }
         let prefix = !phrase && term.ends_with('*') && term.len() > 1;
         let bare = if prefix { &term[..term.len() - 1] } else { &term };
         // Quoted, with no quote inside: nothing typed is an operator. No control character

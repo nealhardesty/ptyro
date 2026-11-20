@@ -530,6 +530,19 @@ async fn recall_finds_a_session_kb_shows_it_and_forgetting_is_for_good() {
         let o = w.cli(args);
         assert_eq!(String::from_utf8_lossy(&o.stdout).lines().count(), 1, "{args:?}: {o:?}");
     }
+    // No words: the newest of what the filters let through, the session among them.
+    for args in [
+        &["recall", "--json", "-k", "session", "--since", "1d"][..],
+        &["recall", "--json", "*", "kind:session"],
+    ] {
+        let listed = w.json(args);
+        let listed = listed.as_array().unwrap();
+        assert!(listed.iter().any(|h| h["uri"] == hit["uri"]), "{args:?}: {listed:?}");
+        assert!(
+            listed.iter().all(|h| h["how"] == "newest" && h["kind"] == "session"),
+            "{listed:?}"
+        );
+    }
     for args in [
         &["recall", "zqrecallme", "--kind", "chat"][..],
         &["recall", "zqrecallme", "--before", "1d"],

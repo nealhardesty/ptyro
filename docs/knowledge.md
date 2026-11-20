@@ -275,6 +275,14 @@ leaves out. In the query: `kind:session` (or `chat`), `project:NAME`, `since:7d`
 `before:30d`, `agent:codex`, `workspace:work`, `file:PATH`, `wrote:you|agent`,
 `machine:NAME`, `by:meaning`, `by:words`. What is of the project you are in ranks higher.
 
+**No words, only filters** (or `*`) lists the newest of what the filters let through, each item
+once: what happened in a project lately.
+
+```sh
+ptyro recall -p wallpapers --since 7d    # everything kept of that project this week, newest first
+ptyro recall kind:session since:2d       # your agents' conversations of the last two days
+```
+
 Each hit has an **address**: `k:7f3k/12` is piece 12 of the item `k:7f3k`; a chat's message is
 `c:7f3k/…`; another machine's has the machine in front (`laptop2:k:7f3k/12`).
 

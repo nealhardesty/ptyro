@@ -291,6 +291,13 @@ impl KbDb {
         self.call(move |db| words(db, &fts, &filter, limit, MATCH_CAP)).await
     }
 
+    /// What a search with no words lists (SPEC §25.8): the newest `limit` items the filter
+    /// lets through, newest first, each once, as a hit on its newest piece (that piece's
+    /// opening is the snippet). How "everything in project X lately" is asked.
+    pub async fn newest(&self, filter: KbFilter, limit: usize) -> Result<Vec<KbHit>> {
+        self.call(move |db| newest(db, &filter, limit)).await
+    }
+
     /// The chunks nearest in meaning to the unit vector `q`: the best `limit` with a cosine
     /// of at least `min`, best first. `not` is an FTS5 expression of the words left out
     /// (`-word`): a chunk with one is not a hit either. Each hit's snippet is its opening.
@@ -458,6 +465,30 @@ pub(super) fn words(
             .optional()?;
         hits.extend(hit);
     }
+    Ok(hits)
+}
+
+fn newest(db: &Connection, f: &KbFilter, limit: usize) -> Result<Vec<KbHit>> {
+    if limit == 0 || f.nothing_here() {
+        return Ok(Vec::new());
+    }
+    let cond = f.row();
+    // One row an item: SQLite takes a group's other columns from the row `max()` picked.
+    let mut st = db.prepare_cached(&format!(
+        "SELECT c.text, {HIT_COLS}, max(c.at_ms) AS newest
+         FROM chunk c JOIN item i ON i.id = c.item
+         WHERE i.forgotten_at IS NULL{}
+         GROUP BY c.item ORDER BY newest DESC, c.seq DESC LIMIT ?1",
+        numbered(&cond.sql, 2)
+    ))?;
+    let mut args = vec![Value::Integer(limit as i64)];
+    args.extend(cond.args.iter().cloned());
+    let hits = st
+        .query_map(params_from_iter(&args), |r| {
+            let text: String = r.get(0)?;
+            hit_row(r, ptyro_meaning::opening(&text, 160), "newest")
+        })?
+        .collect::<rusqlite::Result<_>>()?;
     Ok(hits)
 }
 
