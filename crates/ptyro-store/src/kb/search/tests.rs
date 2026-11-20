@@ -535,3 +535,26 @@ async fn a_term_with_no_word_in_it_does_not_empty_the_search() {
     // Nothing but such terms: nothing is found, and it is no error.
     assert!(by_words(&db, "&& ++", KbFilter::default()).await.is_empty());
 }
+
+#[tokio::test]
+async fn with_no_words_the_newest_items_are_listed_each_once() {
+    let db = KbDb::open_in_memory().unwrap();
+    corpus(&db).await;
+    let all = db.newest(KbFilter::default(), 10).await.unwrap();
+    // Newest first, one hit an item, on its newest piece.
+    assert_eq!(uris(&all), ["2026-11-01", "abc123", "retry", "retry.md", "s-home", "s-work"]);
+    let work = all.iter().find(|h| h.uri.as_deref() == Some("session://claude/s-work")).unwrap();
+    assert_eq!((work.at_ms, work.how.as_str()), (130, "newest"));
+    assert!(work.snippet.contains("Edit src/retry.rs"), "{}", work.snippet);
+    // The filters still hold: a project, a kind, a time, a limit.
+    let p1 = KbFilter { project: Some("p1".into()), ..KbFilter::default() };
+    assert_eq!(
+        uris(&db.newest(p1, 10).await.unwrap()),
+        ["2026-11-01", "abc123", "retry.md", "s-work"]
+    );
+    let commits = KbFilter { kinds: vec![HitKind::Commit], ..KbFilter::default() };
+    assert_eq!(uris(&db.newest(commits, 10).await.unwrap()), ["abc123"]);
+    let lately = KbFilter { since_ms: Some(350), ..KbFilter::default() };
+    assert_eq!(uris(&db.newest(lately, 10).await.unwrap()), ["2026-11-01", "abc123", "retry"]);
+    assert_eq!(db.newest(KbFilter::default(), 2).await.unwrap().len(), 2);
+}

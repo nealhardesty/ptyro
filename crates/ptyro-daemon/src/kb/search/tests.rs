@@ -340,8 +340,17 @@ async fn without_the_model_it_is_by_words_and_says_so() {
     assert!(hits.words_only.as_deref().unwrap().contains("isn't here yet"), "{hits:?}");
     assert_eq!(hits.hits.len(), 6);
     assert_eq!(d.kb_search(ask("cat by:meaning"), None).await.unwrap_err().code, ErrorCode::Busy);
+    // No words: the newest of what the filters let through, each item once.
+    let newest = d.kb_search(ask("kind:note"), None).await.unwrap().hits;
+    assert!(
+        !newest.is_empty() && newest.iter().all(|h| h.how == "newest" && h.kind == HitKind::Note)
+    );
+    assert!(newest.iter().all(|h| h.addr.starts_with("k:")), "{newest:?}");
+    let all = d.kb_search(ask("*"), None).await.unwrap().hits;
+    assert_eq!(all.len(), d.kb_search(ask(""), None).await.unwrap().hits.len());
+    assert!(all.windows(2).all(|w| w[0].at_ms >= w[1].at_ms), "newest first: {all:?}");
     // What a search can't be made of.
-    for q in ["", "kind:note", "-cat", "ca*", "cat kind:memo", "cat since:whenever"] {
+    for q in ["by:meaning", "-cat", "ca*", "cat kind:memo", "cat since:whenever"] {
         let e = d.kb_search(ask(q), None).await.unwrap_err();
         assert_eq!(e.code, ErrorCode::Invalid, "{q}: {e:?}");
     }

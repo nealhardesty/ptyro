@@ -342,6 +342,11 @@ async fn forgetting_asks_first_then_deletes_for_good() {
     assert!(e.message.contains("ptyro chat rm"), "{}", e.message);
     let e = ask(&d, forget(&[], Some("walrus"), true)).await.unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
+    // Filters alone (or `*`) list the newest of everything: never what to forget.
+    for q in ["*", "kind:session", "since:7d"] {
+        let e = ask(&d, forget(&[], Some(q), true)).await.unwrap_err();
+        assert!(e.code == ErrorCode::Invalid && e.message.contains("words"), "{q}: {e:?}");
+    }
 
     // Not agreed to: the question says what would go, and nothing does.
     let e = ask(&d, forget(&[], Some("zebra"), false)).await.unwrap_err();

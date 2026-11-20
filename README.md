@@ -595,6 +595,7 @@ beside it). It stays on this computer.
 ptyro recall retry policy            # search everything kept, and your chats
 ptyro recall flaky test kind:session since:30d -p myrepo
 ptyro recall retry policy --here     # this computer only (linked machines are searched too, otherwise)
+ptyro recall -p myrepo --since 7d    # no words: the newest of what the filters let through
 ptyro kb show k:7f3k/12              # a hit with what was said around it (k:7f3k: all of it)
 ptyro kb recent                      # the history, by day
 ptyro kb                             # on or off, what it holds, what was not kept and why

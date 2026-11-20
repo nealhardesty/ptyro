@@ -134,8 +134,9 @@ impl Daemon {
     ) -> Result<KbHits, Error> {
         self.kb_db()?;
         let q = chats::parse_kb_query(&ask.query, now_ms()).map_err(Error::invalid)?;
-        if q.fts.is_empty() {
-            return Err(Error::invalid("say what to look for (words, \"a phrase\", prefix*)"));
+        // No words (only filters, or `*`): the newest of what they let through.
+        if q.fts.is_empty() && q.by.as_deref() == Some("meaning") {
+            return Err(Error::invalid("by:meaning needs words to compare (`by:meaning retry`)"));
         }
         // A one- or two-letter prefix matches half the index: wait for more (as chats do).
         if q.fts
@@ -220,6 +221,19 @@ impl Daemon {
             0 => LIMIT,
             n => n.min(MAX_LIMIT),
         } as usize;
+        // No words: the newest items, newest first. Nothing to rank by and no chat to match
+        // (a chat has no project or file, and the history lists items, as `KbRecent` does).
+        if q.fts.is_empty() {
+            let mut hits = db.newest(filter, limit).await.map_err(store_err)?;
+            if !hits.is_empty() {
+                let ids = db.ids().await.map_err(store_err)?;
+                for h in &mut hits {
+                    let handle = lookup::handle(&h.item, ids.iter().map(String::as_str));
+                    h.addr = format!("k:{handle}/{}", h.idx.unwrap_or(0));
+                }
+            }
+            return Ok(KbHits { hits, words_only: None });
+        }
         let list = LISTS * limit;
         let (vector, words_only) = self.meaning_vector(&q).await?;
 

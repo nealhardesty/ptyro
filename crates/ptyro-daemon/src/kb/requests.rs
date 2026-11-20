@@ -203,6 +203,10 @@ impl Daemon {
                 lists.extend(theirs);
                 // Interleaved by each machine's own rank: scores don't compare across them.
                 let mut hits = crate::chats::interleave_by(lists, |h| h.at_ms);
+                // A search with no words is a listing: newest first, whichever machine's.
+                if hits.iter().all(|h| h.how == "newest") {
+                    hits.sort_by_key(|h| std::cmp::Reverse(h.at_ms));
+                }
                 hits.truncate(limit.map_or(LIMIT, |n| n.min(MAX_LIMIT)) as usize);
                 Ok(Reply::KbHits { hits, words_only, left_out })
             }
@@ -403,6 +407,15 @@ impl Daemon {
         }
         let mut more = false;
         if let Some(query) = query.filter(|q| !q.trim().is_empty()) {
+            // A search with no words lists the newest of everything: never what to forget.
+            let words = ptyro_core::chats::parse_kb_query(&query, ptyro_core::now_ms())
+                .map_err(Error::invalid)?
+                .fts;
+            if words.is_empty() {
+                return Err(Error::invalid(
+                    "say which words to forget by: filters alone (or `*`) would match everything",
+                ));
+            }
             let ask = KbSearch { query, limit: MAX_LIMIT, ..KbSearch::default() };
             let found = self.kb_search(ask, None).await?;
             more = found.hits.len() >= MAX_LIMIT as usize;
