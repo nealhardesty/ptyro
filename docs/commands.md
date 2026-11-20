@@ -99,6 +99,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro new … -a A[@PROFILE] [--prompt TEXT \| --prompt-file F] [--profile P] [--override-pin] [-y]` | start an agent: `claude`, `codex`, `opencode`, or one from `[agents]` |
 | `ptyro new --again [--wt W] [-d]` | quick new: another of the agent this worktree last started (with its profile and arguments); the project's `default_agent`, else `[agents] default` (claude), when none has |
 | `ptyro new … --wt W \| --new-wt [NAME] [-p P] \| --pr N\|URL \| --issue N\|URL` | where: an existing worktree, a new one, one on a PR's branch, or one for an issue. `-p/--project` picks the new worktree's project, so it needs one of those (it once meant `--prompt`; alone it is refused, never ignored) |
+| `ptyro new … --private \| --no-private` | private: the knowledge base keeps nothing of it (the agent keeps its own history). Neither: as `[kb] private` says. Also on `wt new --agent` and `shells new`. A private session is marked `◌` in `ptyro ls` |
 | `ptyro new … --prompt TEXT\|@SNIPPET \| --prompt-file F` · `--title T` | the first prompt, typed once the agent's input box is really there · its title (default: the prompt; the name comes from it too) |
 | `ptyro attach [SESSION] [-w WS] [--raw] [--view-only] [--tab\|--pane]` | open the TUI on a session; `--raw`: that session only, no chrome; `--tab`/`--pane`: in a new tab or pane of this terminal instead (tmux, Windows Terminal) |
 | `ptyro list` (alias `ls`) `[--all] [--status S] [-p P] [-w WS] [--json]` | sessions: where they run, profile; `--all` adds earlier daemon runs; `--status running` is what is alive, `--status active` what is busy now (working, blocked, or running a command) |
@@ -110,7 +111,7 @@ everywhere: `--scrollback [N]` is the screen and up to N lines above it in `read
 | `ptyro resume SESSIONS…` / `hibernate SESSIONS…` | relaunch dormant agents / stop idle ones, keeping them resumable |
 | `ptyro shell [WORKTREE] [--json] [--read [--scrollback [N]]]` | the worktree's quick terminal (one shell per worktree, or per directory outside one): attach with it in the TUI's drawer, print it as JSON, or print its screen (`--read`, which never starts one; an agent can read your terminal this way) |
 | `ptyro shells [ls] [-w WS] [--all] [--json]` | your workspace's SHELLS (SPEC §23): numbered terminals of any command that belong to the workspace, not a worktree, by number (`Alt-1…9` in the TUI); a window's later panes are listed under it (`└.2`) |
-| `ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--scratch] [-n NAME] [--title T] [-w WS] [-d] [--json]` | start one in SHELLS, here (or `-C DIR`), with the lowest free number or `--slot N`, and attach (unless `-d`); `--scratch`: in a new, empty directory that goes with it |
+| `ptyro shells new [-- CMD…] [-C DIR] [--slot N] [--scratch] [--private] [-n NAME] [--title T] [-w WS] [-d] [--json]` | start one in SHELLS, here (or `-C DIR`), with the lowest free number or `--slot N`, and attach (unless `-d`); `--scratch`: in a new, empty directory that goes with it |
 | `ptyro shells go N [-w WS]` | attach with shell N shown (the same as `ptyro attach %N`); one lost in a restart starts again |
 | `ptyro shells move N M [--workspace WS]` | give shell N the number M; a shell already there swaps with it |
 | `ptyro shells split [S] [--down] [-d] [--json]` | split shell S's window (default: the one you're in) with a copy of it: a shell in the same directory, under the same profile, as a pane of the same number (`%3.2`), beside it or `--down` below it; at most 4 panes (SPEC §23.17); attaches unless `-d` (or inside a session) |
@@ -146,6 +147,7 @@ searched beside it.
 | `ptyro kb [status] [--json]` | whether it is on, what it holds by kind, the file and its size, how much can be found by meaning, how long sessions are kept, how many were forgotten, and what was not kept and why (a forgotten session, an agent or a project kept out, a file too big) |
 | `ptyro kb show REF [--context N] [--json]` / `show REF --open` | open what a search found: `k:7f3k/12` is that piece with N pieces each side (2), `k:7f3k` the whole item / `--open`: its source instead, a session in the TUI (resumed when it can be), a chat in its view |
 | `ptyro kb recent [-k KIND,…] [-p PROJECT] [-l N] [--json]` | the history: what was kept, newest first, by day (UTC) |
+| `ptyro kb forget --session SESSION [-y] [--json]` | forget everything kept of a session and make it private: nothing more of it is kept, and that can't be switched off again. It asks first |
 | `ptyro kb forget REF… \| --query QUERY [-y] [--json]` | delete items and their text for good; nothing of them is kept again (a forgotten session's later turns are not read). It says what will go and asks unless `-y`. An agent can't forget |
 
 ## Scripting
@@ -192,7 +194,7 @@ searched beside it.
 | Command | Does |
 |---|---|
 | `ptyro checkpoint ls [S\|W]` / `diff S N [M] [--stat]` / `restore S\|W [N] [--turn T] [-y]` | the worktree after every agent turn |
-| `ptyro mcp` | the MCP server with the chat history tools a chat's agent gets (started for it) |
+| `ptyro mcp` | the MCP server an agent is started with: the knowledge base's tools (`recall`, `recall_read`) for a session, the chat history tools for a chat (started for it; you never run it) |
 
 ## Remote and phone
 

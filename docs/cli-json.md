@@ -179,7 +179,10 @@ Not pinned by the snapshot yet; new fields may be added.
 - `ptyro kb [status] --json` → `{enabled, sessions, retain_days, error?, path, bytes, kinds:
   [{kind, items, chunks}], vectors, meaning?, roots, forgotten, queued, skipped: [{uri, why,
   at_ms}]}`. Answered when the knowledge base is off too (`enabled: false`).
-- `ptyro kb forget … --json` → `{items, chunks}`: what was deleted.
+- `ptyro kb forget … --json` → `{items, chunks}`: what was deleted. With `--session`:
+  `{items, chunks, private: true}`.
+- A `Session` (`ptyro ls --json`, `ptyro new --json`) has `private`: the knowledge base keeps
+  nothing of it. `ptyro shells --json` rows have it too.
 
 ## Setup, config and the daemon
 

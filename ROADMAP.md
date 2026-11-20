@@ -4117,11 +4117,45 @@ Development section), its README and `docs/` text, and the milestone's version b
         menus. **L**
   - [ ] **KB1.9** The web's Library page: the same, its `ACTIONS`, the phone layout, the reader.
         **L**
-  - [ ] **KB1.10** The agents' tools (§25.9): `recall` and `recall_read` in `ptyro mcp` with the
+  - [x] **KB1.10** The agents' tools (§25.9): `recall` and `recall_read` in `ptyro mcp` with the
         server's `instructions`; given to Claude and Codex terminal sessions (launch and every
         resume) and to every chat (`chat_search`/`chat_read` as old names); the profile wall
         (`kb.scope`, with `chat.history_scope` as its old name) and its test on every tool; the
         fence and the provenance line; never the caller's own session. **M**
+        *(Built 2026-11-19: `crates/ptyro/src/mcp.rs` serves `recall` (pointers: 8 hits, 20
+        at most, a 200-byte snippet each) and `recall_read` (the piece with 2 neighbours each
+        side, 6 KiB at most, under one line of provenance; a chat's address too), each answer
+        one `<retrieved-history note="…">` block that nothing inside it can close, with who
+        wrote each piece, and no structured copy. The instructions' first two sentences (193
+        characters) say what the knowledge base is and to search it with `recall`. They are
+        the same `KbSearch`/`KbRead` the CLI sends: the wall is `Daemon::kb_caller_scope`,
+        which places the calling process by the kernel's word. Given by the adapters wherever
+        a launch is built, so at the launch and on every resume (`LaunchCtx.kb`,
+        `ptyro_agents::adapter::{KB_TOOLS, kb_env}`): Claude's inline `--mcp-config` and
+        `--allowedTools a,b` (one word), Codex's four `-c mcp_servers.ptyro.*` keys with
+        `default_tools_approval_mode="approve"`; never a file of the user's. None for
+        `kb.tools = false`, `kb.enabled = false`, `[agents.X] kb = false` and OpenCode; a
+        private session has them. Chats keep their three history tools and gain the two, all
+        always loaded (`PTYRO_KB_TOOLS`; a chat's engine may send `KbSearch` and `KbRead`);
+        **`chat_search` and `chat_read` are still listed this release**, and `chat find` has
+        the chats only. The fake agent reads the launch's flags as the real ones do and calls
+        the server (`mcp <file> <tool> <json>`): refused without `--allowedTools` or the
+        approval key, absent without the config. Tests: the adapters' flags at launch and
+        resume and with hooks off (`ptyro-agents`), the fence, the instructions' start and
+        the tools' shape (`mcp.rs`), a Claude chat's allow list (`chats.rs`), and `kb1.rs`
+        with a real daemon and two profiles: another profile's session finds nothing by
+        search or by address and never its own session, the same profile's finds it fenced
+        and attributed, again after a resume, for Claude and for Codex, a private session
+        too, `kb.scope = "all"` takes the wall down, `kb.tools = false` and an agent's
+        `kb = false` give no server, and `ptyro mcp` over stdio lists the right tools for a
+        session and a chat. **Checked against the real agents by `make verify-kb
+        ARGS=--built`** (Claude Code 2.1.329, Codex 0.167.1: ptyro's own flags, the real
+        `ptyro mcp`, one `-p`/`exec` turn each: listed, called unasked, the answer read).
+        Unverified: an interactive session and a resume with ptyro's flags on the real
+        agents, the token cost as built (KB0's 228 and 66 were three tools), and a user's
+        own `--mcp-config`/`--allowedTools` beside ptyro's. Not built: `remember` (KB2),
+        `recall` replacing the chats' old names, the tools for OpenCode. SPEC §25 "As
+        built", §25.9, §20.1, §20.2; `docs/commands.md`, `docs/config.md`, README.)*
   - [x] **KB1.11** Settings and switches: the Knowledge section (`enabled`, `sessions`, `tools`,
         `scope`, `meaning`, `retain_days`, `redact`, `exclude`), `[agents.X] kb`, the project's
         `[kb] enabled`; the daily retention pass; switched off says so everywhere and offers to
@@ -4150,13 +4184,41 @@ Development section), its README and `docs/` text, and the milestone's version b
         `kb.tools` is in the schema and read by nothing until KB1.10; switching on again
         reads a session from where reading stopped, including what was said meanwhile (said
         in `docs/config.md`). SPEC §25 "As built", §25.5, §25.7, §25.9, §25.12, §25.13.)*
-  - [ ] **KB1.14** Private sessions (§25.7a; R-KB-14): `new --private` and `shells new
+  - [x] **KB1.14** Private sessions (§25.7a; R-KB-14): `new --private` and `shells new
         --private`, `SpawnSpec.private` and `SessionInfo.private`, the column in `ptyro.db` (kept
         across a restart, a resume, a daemon restart and a live upgrade; a clone is private),
         the gate in the way in, `kb.private` as the default, **the Private switch in the TUI's
         session and shell forms and the web's sheets**, the `◌` mark on rows, in `ls` and in
         the pane's header, `kb forget <session>` switching it on, and the test that `kb.db`
         holds no byte of one. **M**
+        *(Built 2026-11-19, protocol 1.54: `SpawnSpec.private` and `WorktreeSpec.private`
+        (`Option<bool>`: absent is "as `kb.private` says"), `SessionInfo.private`,
+        `Place.private` in the daemon (in the session's meta, so across a restart, a resume
+        and a live upgrade) and the column `session.private` in `ptyro.db` (a daemon restart).
+        `--private` and `--no-private` on `new`, `wt new --agent` and `shells new`; the
+        setting `kb.private`. **The Private switch is on the TUI's session form (`C-o`, `N`)
+        and shell form and on the web's New task and New in SHELLS sheets**, showing the
+        default (`Reply::Agents.private` tells a client that can't read the config). A
+        private session is never queued and the gate refuses it (`Skip::Private`): no item,
+        no card. **Switching it on later is `ptyro kb forget --session NAME`** (not `kb
+        forget <session>`: a name there is an address), the TUI's `session.private` (row
+        menu, palette) and the web's ⋯ → Make it private…: every item of that session is
+        forgotten, its conversation gets a tombstone when nothing was read yet, the flag is
+        set, and there is no way back. The TUI's split of a session and a pane split off a
+        private shell are private. The mark: `◌` on the sidebar's row, `◌ private` in the
+        pane's header, in `ptyro ls`, in `ptyro shells` and on the web's card and page (in
+        the TUI's SHELLS rows too, where a bare `◌` is a scratch shell); `private` in both
+        `--json`. A private session still gets `recall` and `recall_read`. Tests: `kb1.rs`
+        with a real daemon (no byte of a private session in `kb.db`, its log or its index
+        after a turn, a resume, a daemon restart with lines written while it was down and a
+        live upgrade, beside a kept session; the mark and the JSON; a private shell and its
+        split; `kb.private` and `--no-private`; `kb forget --session` on a kept session and
+        on one nothing was read of), the TUI's form (`app.rs`), the store's column. Not
+        built: a shell's commands aren't kept yet (KB4), so a private shell differs only by
+        its mark; `remember` naming "a private session" (KB2); a shell lost in a daemon
+        restart and offered again comes back not private. SPEC §6.4, §11.5a, §14, §25 "As
+        built", §25.7a, §25.13, §25.14; `docs/commands.md`, `docs/config.md`,
+        `docs/parity.md`, README.)*
   - [ ] **KB1.12** Machines (§25.11): the search's fan-out and interleave, a hit read on its
         machine, the profile by name across a link, the scopes on both ends. **M**
   - [ ] **KB1.13** Docs: README (what it is, the three commands, what is and isn't stored, how

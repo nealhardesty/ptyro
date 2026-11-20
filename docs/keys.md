@@ -264,7 +264,8 @@ current project's scripts; each line shows its key, so it teaches them. Actions 
 key include: `project.add`
 (pick from repos under `[discover] roots`), `project.trust`, `worktree.remove`,
 `session.command` (a session running a command line), `session.resume`, `session.hibernate`,
-`session.mute`, `notify.test`,
+`session.mute`, `session.private` (forget what the knowledge base kept of a session and keep
+nothing more of it), `notify.test`,
 `config.edit`.
 
 ## Other overlays

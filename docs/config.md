@@ -132,6 +132,7 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 [kb]                                      # the knowledge base: what ptyro keeps of your work (`ptyro recall`, `ptyro kb`)
 # enabled = false                         # keep nothing more and search nothing (what was kept stays until you forget it)
 # sessions = false                        # don't keep agent sessions
+# private = true                          # new sessions start private: nothing of them is kept (each can say otherwise)
 # retain_days = 90                        # delete kept sessions older than this, once a day (default 0: keep them)
 # scope = "workspace"                     # what an agent may see of it and of your chats: profile (default) | workspace | all
 # tools = false                           # don't give agents the tools that search it
@@ -159,7 +160,10 @@ sessions only (never a tombstone: a session that is carried on afterwards is kep
 read from where reading stopped, so what was said while it was off is kept then too: forget the
 session, or keep its agent or project out, when that is not what you want. `scope` is the wall
 between your accounts' agents (`[chat] history_scope` is its old name, still read; you always
-see everything yourself). `tools` is read once agents are given the tools (ROADMAP KB1.10).
+see everything yourself). `tools = false` gives no agent the tools that search it (`recall`,
+`recall_read`); it is read when a session starts or resumes, so a running one keeps what it has.
+`private = true` makes a new session private unless it says otherwise (`--no-private`, or the
+form's switch): nothing of a private session is kept, and it can't be made un-private later.
 
 Key bindings and the action names you can bind are in [`keys.md`](keys.md). Settings lists
 every key, defaults included, to change, unbind or reset from the panel; in the file only your

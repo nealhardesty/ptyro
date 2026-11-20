@@ -574,8 +574,7 @@ chats itself (`[chat] history_tool`), only those of its own profile unless `[kb]
 otherwise. Chats live in their own file, `chat.db` (`ptyro doctor` checks it). Settings:
 `[chat]` in the config (the Chat section of the settings panel).
 
-**The knowledge base** is one memory of your work, for you to search (and, soon, your agents:
-ROADMAP KB). ptyro keeps it in one file, `kb.db`, beside `chat.db`, and **your agent sessions
+**The knowledge base** is one memory of your work, for you and your agents to search. ptyro keeps it in one file, `kb.db`, beside `chat.db`, and **your agent sessions
 go into it as they happen**, with nothing for you to do: at the end of each turn ptyro reads
 what Claude Code or Codex wrote in its own transcript and keeps what you typed, what the agent
 answered and one line for each tool it used (`Bash: cargo test`), under one entry a
@@ -590,7 +589,24 @@ ptyro kb show k:7f3k/12              # a hit with what was said around it (k:7f3
 ptyro kb recent                      # the history, by day
 ptyro kb                             # on or off, what it holds, what was not kept and why
 ptyro kb forget k:7f3k               # delete it for good; nothing of it is kept again
+ptyro new --private -a claude        # a private session: nothing of it is kept at all
+ptyro kb forget --session brisk-rook # forget a running session, and keep nothing more of it
 ```
+
+**Your agents search it too.** Every Claude Code and Codex session ptyro starts is given two
+tools, `recall` (search: it answers pointers) and `recall_read` (open one with what was said
+around it), so an agent can look up what was done before instead of working it out again.
+They come with the session, for that session only (ptyro writes nothing into `~/.claude` or
+`~/.codex`), and are there again after a resume. What they answer is marked as retrieved
+history, not instructions, and says who wrote each piece. An agent sees only what happened
+under its own profile, never the session it is in, and can't forget anything. `[kb] tools =
+false` gives no agent the tools; `[agents.codex] kb = false` gives that agent none.
+
+**A private session** leaves nothing in the knowledge base: no transcript is read and no card
+is kept (the agent still keeps its own history, as it always does). Start one with
+`--private`, or tick **Private** in the TUI's form (`C-o` in the task box) and in the web's New
+task sheet; `[kb] private = true` makes it the default, and `--no-private` keeps one then. A
+private session is marked `◌`. It still has the tools to search with.
 
 In the TUI these are in the palette (`C-q :`, "kb"); on the web, More → Library. The Library
 view that both get (a panel to search, read and resume from) is being built.
@@ -837,7 +853,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make verify-claude` | check the Claude adapter against the real Claude Code on your machine (one tiny turn) |
 | `make verify-shells` | press Alt-1 and see whether this terminal sends Alt (SHELLS' `Alt-1…9`), or what to change so it does |
 | `make verify-structured` | check structured mode, what chats run on, against the real agents here (one tiny chat each) |
-| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`) | check what the knowledge base rests on against the real Claude Code and Codex here: that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that ptyro's own reader keeps the conversation of those transcripts and nothing else, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
+| `make verify-kb` (`ARGS="claude"`, `ARGS=--fixtures`, `ARGS=--built`) | check what the knowledge base rests on against the real Claude Code and Codex here (`--built`: only that they take the tools exactly as ptyro gives them, from the real `ptyro mcp`; two tiny turns): that `Stop` names the transcript and when the file holds the turn, resume and compaction, the transcript formats, and that ptyro's own reader keeps the conversation of those transcripts and nothing else, and that an MCP server given by flags is started, allowed and cheap (about twenty tiny turns, a few cents; nothing in your agents' settings is touched, and the sessions it makes are removed). `--fixtures` also writes sanitized transcripts for the installed versions to `crates/ptyro-agents/tests/fixtures/` |
 | `make test-wsl` (`DISTRO=…`, `WSL_DIR=…`) | CI's main job (`make check`) inside WSL2, which CI also runs on a hosted Windows runner (the `wsl` job): inside the distro it checks this checkout; on Windows (Git Bash, MSYS2) it runs it in the distro through `wsl.exe` (default `~/dev/ptyro`) |
 | `make spike-wsl` (`ARGS="start [label]"`, `check`, `clean`) | ROADMAP WIN0.1, run inside WSL2: three heartbeats (a plain process, a ptyro daemon started on demand, one run by a systemd user unit), then close every WSL terminal; an hour later `check` says how long each lived and writes a report with the WSL version and settings |
 | `make spike-chat` (`ARGS="claude codex"`) / `make spike-chat-fts` (`NODES=…`) | try the chat engine's claims against the real agents here (a few cents of tokens; OpenCode if installed) / FTS5 and a 100k-node chat index in SQLite |
