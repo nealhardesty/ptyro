@@ -14,6 +14,7 @@ mod health;
 pub mod keymap;
 mod keys;
 pub mod layout;
+mod library;
 mod onboard;
 pub mod tab;
 // The reply parsers are tested everywhere; only Unix asks the terminal yet (outer.rs).

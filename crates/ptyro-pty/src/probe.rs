@@ -212,21 +212,34 @@ pub fn local_time_hm_at(secs: i64) -> Option<(u8, u8)> {
     local_at(secs).map(|t| (t.hour, t.minute))
 }
 
+/// How many seconds local time is ahead of UTC at a moment (seconds since the epoch),
+/// honouring `TZ`: what turns a moment into the local day and time it fell on.
+pub fn local_offset_at(secs: i64) -> Option<i64> {
+    local_at(secs).map(|t| t.offset)
+}
+
 /// A moment in local time.
 struct Local {
     hour: u8,
     minute: u8,
+    /// Seconds east of UTC.
+    offset: i64,
 }
 
 /// libc's `localtime_r`, which honours `TZ`.
 #[cfg(unix)]
 #[allow(unsafe_code)] // localtime_r has no std equivalent; it writes only into `tm`.
+#[allow(clippy::useless_conversion)] // (`tm_gmtoff` is a C long: 32 bits on some targets)
 fn local_at(secs: i64) -> Option<Local> {
     let t = libc::time_t::try_from(secs).ok()?;
     // SAFETY: `tm` is a zeroed out-parameter owned by this frame; localtime_r is reentrant.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let ok = unsafe { !libc::localtime_r(&t, &mut tm).is_null() };
-    ok.then_some(Local { hour: tm.tm_hour as u8, minute: tm.tm_min as u8 })
+    ok.then_some(Local {
+        hour: tm.tm_hour as u8,
+        minute: tm.tm_min as u8,
+        offset: i64::from(tm.tm_gmtoff),
+    })
 }
 
 /// How many processes are in process group `pgid`, its leader (`pid == pgid`) aside. Zombies

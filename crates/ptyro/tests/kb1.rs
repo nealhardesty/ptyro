@@ -9,6 +9,8 @@
 //! KB1.14: a private session leaves no byte, by any trigger, and stays private.
 //! KB1.10: an agent's session is given `recall` and `recall_read` at its launch and on every
 //! resume, and they answer behind the wall between profiles.
+//! KB1.8: the TUI's Library (`C-q L`) shows what is kept as it is kept, searches it, reads an
+//! item in the reader, and forgets it; switched off, it says so and switches it on.
 
 use std::path::PathBuf;
 use std::process::Output;
@@ -1536,4 +1538,84 @@ fn ptyro_mcp_lists_the_tools_for_a_session_and_for_a_chat() {
     // A person who runs it: what it is for, and what to run instead.
     let (says, tools) = list(&[]);
     assert!(tools.is_empty() && says.contains("`ptyro recall` searches"), "{says}");
+}
+
+impl World {
+    /// The TUI, inside the headless emulator.
+    fn tui(&self, args: &[&str]) -> ptyro_testkit::headless::Script {
+        let mut argv = vec![BIN.to_owned()];
+        argv.extend(args.iter().map(|a| (*a).to_owned()));
+        let mut s = ptyro_testkit::headless::Script::new(argv)
+            .size(140, 34)
+            .timeout(45.0)
+            .env("HOME", &self.home().to_string_lossy());
+        for (k, v) in self.d.env() {
+            s = s.env(&k, &v);
+        }
+        s
+    }
+}
+
+/// KB1.8: the real TUI's Library over a real daemon. Opened on the history before the agent
+/// has said anything; the turn that happens meanwhile shows up by itself (`KbUpdated`); it is
+/// searched for, its address copied, the item read in the reader and found in, and forgotten
+/// from there with the daemon's question. Then no byte of it is left.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tuis_library_shows_what_is_kept_as_it_happens_reads_it_and_forgets_it() {
+    let w = World::new(&agents(""));
+    let c = w.d.client().await.unwrap();
+    w.agent(&c, "lb", "claude").await;
+    let script = w
+        .tui(&["attach", "lb"])
+        .send_when("lb", "\x11L")
+        // The history, by day; then the turn's own words, with nothing pressed.
+        .send_when("Today", "")
+        .send_when("edit notes.txt zqlibrary", "/zqlibrary")
+        // The piece that matched, beside the list: leave the box, copy the address.
+        .send_when("\u{25b6}", "\ry")
+        .send_when("copied its address", "\r")
+        // The reader: the stored transcript, found in.
+        .send_when("read only", "/")
+        .send_when("Find in it", "wrote\r")
+        // (The card says it too.)
+        .send_when("1/2 \u{b7} n next", "d")
+        .send_when("Forget 1 item", "y")
+        .until("forgot 1 item");
+    let turn = async {
+        // (Once the Library is up, on any machine that is not crawling.)
+        tokio::time::sleep(ptyro_testkit::headless::scaled(Duration::from_secs(3))).await;
+        w.turn(&c, "lb", "edit notes.txt zqlibrary").await;
+    };
+    let (r, ()) = tokio::join!(ptyro_testkit::headless::run(script), turn);
+    let r = r.expect("headless run");
+    let shown = &r.screen;
+    assert!(shown.contains("forgot 1 item (4 pieces)"), "{shown}\n{:?}", r.log);
+    assert!(shown.contains("Forget 1 item") || shown.contains("Library"), "{shown}");
+    // `y` copied the hit's address to the terminal's clipboard.
+    assert!(r.log.iter().any(|l| l.contains("clipboard") && l.contains("k:")), "{:?}", r.log);
+    // Forgotten for good: no search finds it, and no byte of the file holds it.
+    assert!(w.cli(&["recall", "zqlibrary"]).stdout.is_empty());
+    assert!(!w.bytes_hold("zqlibrary"), "the forgotten text is still in kb.db");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tuis_library_says_it_is_off_and_switches_it_on() {
+    let w = World::new(&format!("[kb]\nenabled = false\n{}", agents("")));
+    let o = w.cli(&["new", "-d", "-n", "plain", "--", "sh", "-c", "sleep 60"]);
+    assert!(o.status.success(), "{o:?}");
+    let r = ptyro_testkit::headless::run(
+        w.tui(&["attach", "plain"])
+            .send_when("plain", "\x11L")
+            .send_when("The knowledge base is off.", "\r")
+            // On: the daemon read the setting, and the panel is the Library, with nothing yet.
+            .until("nothing is kept yet"),
+    )
+    .await
+    .expect("headless run");
+    let shown = &r.screen;
+    assert!(shown.contains("nothing is kept yet") && shown.contains("kind: any"), "{shown}");
+    let file = std::fs::read_to_string(ptyro_core::config::Config::path(&w.d.paths)).unwrap();
+    assert!(file.contains("enabled = true") && !file.contains("enabled = false"), "{file}");
+    let status = w.out(&["kb"]);
+    assert!(status.starts_with("knowledge base: on"), "{status}");
 }

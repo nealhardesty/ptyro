@@ -367,13 +367,31 @@ pub const ACTIONS: &[ActionSpec] = &[
     a("devices.push_test", "Send a test push to your devices"),
     a("config.show", "The effective config, defaults filled in"),
     a(
-        "kb.search",
-        "Search everything ptyro kept of your work, and your chats (words, \"phrases\", kind:, project:, since:)",
+        "kb.open",
+        "The Library: everything ptyro kept of your work (agent sessions) and your chats, searched and read in one place; with nothing typed, the history by day",
     ),
-    a("kb.recent", "The history: what was kept, newest first, by day"),
-    a("kb.show", "Open what a search found: a piece with its neighbours, or a whole item"),
-    a("kb.forget", "Forget something kept: its text is deleted for good and never kept again"),
-    a("kb.status", "The knowledge base: on or off, what it holds, what was not kept and why"),
+    a(
+        "kb.search",
+        "Search what was kept, and your chats, in the Library (words, \"a phrase\", prefix*, kind:session, project:, since:7d, agent:, by:meaning)",
+    ),
+    a("kb.recent", "The Library's history: what was kept, newest first, by day"),
+    a(
+        "kb.history",
+        "What was kept of this session, worktree or project: the Library, with only that",
+    ),
+    a(
+        "kb.show",
+        "Open what the Library found (the selected row; else asks for an address like k:7f3k/12): the item in the reader, at that piece",
+    ),
+    a(
+        "kb.forget",
+        "Forget something kept (the Library's selected row; else asks for an address): its text is deleted for good and never kept again; asks first",
+    ),
+    a(
+        "kb.status",
+        "The knowledge base in the Library: on or off, what it holds, what was not kept and why",
+    ),
+    a("kb.enable", "Switch the knowledge base on: agent sessions are kept from then on"),
     a("nav.collapse", "Sidebar: fold the selected workspace, project or worktree"),
     a("nav.expand", "Sidebar: unfold the selected workspace, project or worktree"),
 ];
@@ -531,6 +549,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Prefix, "G", "worktree.gc"),
     (Table::Prefix, "M", "health"),
     (Table::Prefix, "I", "app.about"),
+    (Table::Prefix, "L", "kb.open"),
     (Table::Prefix, "U", "app.setup"),
     (Table::Prefix, "^", "app.update"),
     (Table::Prefix, "C", "config.panel"),
@@ -601,6 +620,7 @@ const DEFAULTS: &[(Table, &str, &str)] = &[
     (Table::Nav, "H", "home"),
     (Table::Nav, "M", "health"),
     (Table::Nav, "I", "app.about"),
+    (Table::Nav, "L", "kb.open"),
     (Table::Nav, "U", "app.setup"),
     (Table::Nav, "^", "app.update"),
     (Table::Nav, "C", "config.panel"),

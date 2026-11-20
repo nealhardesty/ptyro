@@ -41,16 +41,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("devices.revoke", &["devices", "revoke", "{ask:Device id (devices.list shows them)}"]),
     ("devices.push_test", &["devices", "push-test"]),
     ("config.show", &["config", "show"]),
-    // The knowledge base (KB1.7), until the Library panel (KB1.8) takes these over: each is
-    // its command in a split, where a search's hits can be read and a forget asks first.
-    (
-        "kb.search",
-        &["recall", "{ask:Search what was kept (words, \"a phrase\", kind:session, since:7d)}"],
-    ),
-    ("kb.recent", &["kb", "recent"]),
-    ("kb.show", &["kb", "show", "{ask:Which one (an address from a search, like k:7f3k/12)}"]),
-    ("kb.forget", &["kb", "forget", "{ask:Forget which (an address from a search, like k:7f3k)}"]),
-    ("kb.status", &["kb", "status"]),
     // Setup (BOOT1): the checklist in the split's terminal, where sudo can ask for a password.
     ("app.setup", &["setup"]),
     ("app.install", &["install", "{ask:What to install (e.g. codex, or opencode gh)}"]),

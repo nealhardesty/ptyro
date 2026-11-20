@@ -153,6 +153,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("session.next", "next"),
             ("session.last", "back & forth"),
             ("chat.list", "chats"),
+            ("kb.open", "library"),
             ("home", "home"),
             ("sidebar.zoom", "everything"),
             ("sidebar.fold_all", "fold all"),

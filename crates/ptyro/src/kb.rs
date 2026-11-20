@@ -7,9 +7,8 @@ use clap::{Args, Subcommand};
 use clap_complete::ArgValueCandidates;
 use ptyro_core::chats::{MARK_OFF, MARK_ON};
 use ptyro_core::kb::card::minute;
-use ptyro_core::kb::search::{HitKind, KbHit, KbListed, KbStatusInfo};
+use ptyro_core::kb::search::{HitKind, KbHit, KbListed, KbStatusInfo, pieces};
 use ptyro_core::kb::{ItemKind, KbChunk};
-use ptyro_core::model::human_bytes;
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 use serde_json::json;
@@ -322,7 +321,15 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
         KbCmd::Recent { kind, project, limit, json } => {
             let kinds = kinds(kind.as_deref(), ItemKind::parse, ItemKind::ALL, ItemKind::as_str)?;
             let c = ctx.connect(true).await?;
-            let req = Request::KbRecent { kinds, project, before_ms: None, limit: Some(limit) };
+            let req = Request::KbRecent {
+                kinds,
+                project,
+                session: None,
+                worktree: None,
+                since_ms: None,
+                before_ms: None,
+                limit: Some(limit),
+            };
             let items = match ask(ctx, &c, req).await? {
                 Reply::KbItems { items } => items,
                 r => return Err(unexpected(r)),
@@ -369,10 +376,6 @@ fn listed(i: &KbListed, with_age: bool) -> String {
     format!("{line} · {}", pieces(u64::from(i.item.chunks)))
 }
 
-fn pieces(n: u64) -> String {
-    format!("{n} piece{}", if n == 1 { "" } else { "s" })
-}
-
 async fn status(ctx: &Ctx, json: bool) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let s = match ask(ctx, &c, Request::KbStatus).await? {
@@ -389,55 +392,7 @@ async fn status(ctx: &Ctx, json: bool) -> Result<i32, Error> {
 
 /// `ptyro kb`, in words.
 fn status_text(s: &KbStatusInfo) -> String {
-    let mut out = Vec::new();
-    let file = format!("{} ({})", s.path, human_bytes(s.bytes));
-    if !s.enabled {
-        out.push("knowledge base: off. Nothing is kept and nothing is searched.".to_owned());
-        if s.bytes > 0 {
-            out.push(format!("  what was kept before stays in {file}"));
-        }
-        out.push("  switch it on: `ptyro config set kb.enabled true` (Knowledge → enabled in the settings)".into());
-        return out.join("\n") + "\n";
-    }
-    if let Some(e) = &s.error {
-        return format!("knowledge base: on, but {e}\n");
-    }
-    out.push(format!("knowledge base: on · {file}"));
-    if s.kinds.is_empty() {
-        out.push("  nothing is kept yet: agent sessions are, as they happen".into());
-    }
-    for k in &s.kinds {
-        let plural = if k.items == 1 { "" } else { "s" };
-        out.push(format!("  {} {}{plural} · {}", k.items, k.kind, pieces(k.chunks)));
-    }
-    let chunks: u64 = s.kinds.iter().map(|k| k.chunks).sum();
-    if s.vectors > 0 {
-        out.push(format!("  {} of {} can be found by meaning", s.vectors, pieces(chunks)));
-    }
-    if let Some(m) = &s.meaning {
-        out.push(format!("  {m}"));
-    }
-    if !s.sessions {
-        out.push("  agent sessions are not kept (`kb.sessions` is off)".into());
-    }
-    out.push(match s.retain_days {
-        0 => "  sessions are kept for good (`kb.retain_days` sets how long)".to_owned(),
-        1 => "  sessions older than a day are deleted".to_owned(),
-        n => format!("  sessions older than {n} days are deleted"),
-    });
-    if s.forgotten > 0 {
-        out.push(format!("  {} forgotten: never kept again", s.forgotten));
-    }
-    if s.queued > 0 {
-        out.push(format!("  {} waiting to be read", s.queued));
-    }
-    if !s.skipped.is_empty() {
-        out.push(format!("  not kept ({}):", s.skipped.len()));
-        for k in s.skipped.iter().rev() {
-            out.push(format!("    {}: {} ({} ago)", k.uri, k.why, ago(k.at_ms)));
-        }
-    }
-    out.join("\n") + "\n"
+    s.lines().join("\n") + "\n"
 }
 
 async fn read(

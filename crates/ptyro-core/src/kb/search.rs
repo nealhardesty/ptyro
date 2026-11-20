@@ -218,6 +218,68 @@ pub struct KbStatusInfo {
     pub skipped: Vec<KbSkipped>,
 }
 
+impl KbStatusInfo {
+    /// The status in words, a line each (`ptyro kb`, and the Library's status): on or off,
+    /// the file and its size, what it holds by kind, what was not kept and why.
+    pub fn lines(&self) -> Vec<String> {
+        let s = self;
+        let mut out = Vec::new();
+        let file = format!("{} ({})", s.path, crate::model::human_bytes(s.bytes));
+        if !s.enabled {
+            out.push("knowledge base: off. Nothing is kept and nothing is searched.".to_owned());
+            if s.bytes > 0 {
+                out.push(format!("  what was kept before stays in {file}"));
+            }
+            out.push("  switch it on: `ptyro config set kb.enabled true` (Knowledge → enabled in the settings)".into());
+            return out;
+        }
+        if let Some(e) = &s.error {
+            return vec![format!("knowledge base: on, but {e}")];
+        }
+        out.push(format!("knowledge base: on · {file}"));
+        if s.kinds.is_empty() {
+            out.push("  nothing is kept yet: agent sessions are, as they happen".into());
+        }
+        for k in &s.kinds {
+            let plural = if k.items == 1 { "" } else { "s" };
+            out.push(format!("  {} {}{plural} · {}", k.items, k.kind, pieces(k.chunks)));
+        }
+        let chunks: u64 = s.kinds.iter().map(|k| k.chunks).sum();
+        if s.vectors > 0 {
+            out.push(format!("  {} of {} can be found by meaning", s.vectors, pieces(chunks)));
+        }
+        if let Some(m) = &s.meaning {
+            out.push(format!("  {m}"));
+        }
+        if !s.sessions {
+            out.push("  agent sessions are not kept (`kb.sessions` is off)".into());
+        }
+        out.push(match s.retain_days {
+            0 => "  sessions are kept for good (`kb.retain_days` sets how long)".to_owned(),
+            1 => "  sessions older than a day are deleted".to_owned(),
+            n => format!("  sessions older than {n} days are deleted"),
+        });
+        if s.forgotten > 0 {
+            out.push(format!("  {} forgotten: never kept again", s.forgotten));
+        }
+        if s.queued > 0 {
+            out.push(format!("  {} waiting to be read", s.queued));
+        }
+        if !s.skipped.is_empty() {
+            out.push(format!("  not kept ({}):", s.skipped.len()));
+            for k in s.skipped.iter().rev() {
+                out.push(format!("    {}: {} ({} ago)", k.uri, k.why, crate::ago(k.at_ms)));
+            }
+        }
+        out
+    }
+}
+
+/// `4 pieces`, `1 piece`.
+pub fn pieces(n: u64) -> String {
+    format!("{n} piece{}", if n == 1 { "" } else { "s" })
+}
+
 /// How much of one kind the knowledge base holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KbCount {

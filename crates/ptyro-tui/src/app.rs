@@ -235,6 +235,8 @@ pub enum Purpose {
     Health,
     /// A word of a `ptyro …` command being put together (UX1.21).
     CliPick(Box<crate::cli_actions::CliJob>),
+    /// One of the Library's filters (SPEC §25.10).
+    Library(crate::library::Filter),
     /// The profile to pin this project to.
     Pin(String),
     /// This workspace's profile, or how it notifies.
@@ -292,6 +294,11 @@ pub enum PromptKind {
     ShellMatch(SessionId),
     /// A question for `chat find`.
     ChatFind,
+    /// An address to open in the Library (`kb.show`), or to forget (`kb.forget`).
+    KbShow,
+    KbForget,
+    /// Find in the Library's reader.
+    KbFind,
 }
 
 /// A key that starts a new line in a text box instead of sending it (UX1.26): Shift+Enter
@@ -472,6 +479,15 @@ pub enum Pending {
     ChatPreview(String),
     /// The chat list's message hits, for this query.
     ChatHits(String),
+    /// The Library's (SPEC §25.10): its list (the ask's number), the selected row's text (its
+    /// address), an item for the reader (at this piece), the item whose session `r` goes to,
+    /// how the knowledge base stands, and what a forgetting deleted.
+    KbRows(u64),
+    KbPreview(String),
+    KbReader(Option<u32>),
+    KbResume,
+    KbStatus,
+    KbForgotten,
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
     /// What quick-new would start in the context's worktree (UX3.2), for its label.
@@ -1691,6 +1707,7 @@ impl App {
             }
             DomainEvent::HostLoad { load } => self.host_load = load,
             // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
+            DomainEvent::KbUpdated { .. } => self.library_news(),
             DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
@@ -1761,6 +1778,8 @@ impl App {
                         p.refresh();
                     }
                     self.request(Pending::Registry, Request::ProfileList);
+                    // The knowledge base's switches may have moved.
+                    self.library_news();
                 }
             },
         }
@@ -1789,9 +1808,15 @@ impl App {
                 // Chats switched on: their list is fetched; off: the chat panel goes.
                 match (old.chat.enabled, self.config.chat.enabled) {
                     (false, true) => self.refresh_chats(),
+                    // (The Library is no chat: it stays.)
                     (true, false) => {
-                        self.close_chat();
-                        self.drop_chat_aside();
+                        use crate::chats::ChatPanel::Library;
+                        if !matches!(self.chat_panel, Some(Library(_))) {
+                            self.close_chat();
+                        }
+                        if !matches!(self.chat_aside, Some(Library(_))) {
+                            self.drop_chat_aside();
+                        }
                     }
                     _ => {}
                 }
@@ -1923,6 +1948,21 @@ impl App {
             }
             // A query still being typed: its error is no news (a short prefix, a lone `-`).
             (Pending::ChatHits(_), Err(_)) => {}
+            (Pending::KbRows(asked), res) => self.library_rows(asked, res),
+            (Pending::KbStatus, Ok(Reply::KbStatus { status })) => self.library_status(status),
+            (Pending::KbStatus, Err(_)) => {}
+            (Pending::KbPreview(addr), Ok(Reply::KbDoc { item, chunks, at, .. })) => {
+                self.library_previewed(&addr, item, chunks, at)
+            }
+            // The row went while its text was asked for (forgotten, read again).
+            (Pending::KbPreview(_), Err(_)) => {}
+            (Pending::KbReader(piece), Ok(Reply::KbDoc { item, chunks, .. })) => {
+                self.library_read(piece, item, chunks)
+            }
+            (Pending::KbResume, Ok(Reply::KbDoc { item, .. })) => self.library_resumed(&item),
+            (Pending::KbForgotten, Ok(Reply::KbForgotten { items, chunks })) => {
+                self.library_forgot(items, chunks)
+            }
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
                 match std::fs::write(&path, text) {
                     Ok(()) => self.toast(format!("written to {}", path.display())),
@@ -2817,16 +2857,20 @@ impl App {
                 // With the chat panel over the panes (a chat, the list, a new chat), they mean
                 // its chat, never the hidden session.
                 let chat_shown = self.focus == Focus::Pane && self.chat_panel.is_some();
+                // (The Library has no chat for them to mean.)
+                let library = chat_shown
+                    && matches!(self.chat_panel, Some(crate::chats::ChatPanel::Library(_)));
                 if on_chat_row || chat_shown {
                     let a = match cmd.action {
-                        "session.rename" => "chat.rename",
-                        "session.stop" => "chat.archive",
-                        "session.kill" => "chat.delete",
+                        "session.rename" if !library => "chat.rename",
+                        "session.stop" if !library => "chat.archive",
+                        "session.kill" if !library => "chat.delete",
                         _ if !chat_shown => return,
                         _ => {
                             let back = self.keymap.key_for("session.last").unwrap_or_default();
+                            let what = if library { "Library" } else { "chat" };
                             return self.toast(format!(
-                                "that's a session's: the chat covers it ({back} shows the session)"
+                                "that's a session's: the {what} covers it ({back} shows the session)"
                             ));
                         }
                     };
@@ -2898,6 +2942,7 @@ impl App {
             "row.menu" => self.open_row_menu(),
             "home" => self.open_home(),
             "app.about" => self.open_about(),
+            a if a.starts_with("kb.") => self.library_action(a),
             "health" => self.open_health(),
             "daemon.logs" => self.run_cli(&["daemon".into(), "logs".into(), "-f".into()]),
             "daemon.status" => self.run_cli(&["daemon".into(), "status".into()]),
@@ -3792,6 +3837,9 @@ impl App {
                 if !s.private {
                     v.push("session.private");
                 }
+                if s.kind == SessionKind::Agent {
+                    v.push("kb.history");
+                }
                 if s.worktree.is_some() {
                     v.extend(["worktree.open", "script.run", "script.pick"]);
                 }
@@ -3821,6 +3869,7 @@ impl App {
                 let mut v =
                     vec!["session.new", "session.again", "shell.new", "shell.drawer", "shell.pane"];
                 v.extend(["worktree.open", "script.run", "script.pick", "worktree.rename"]);
+                v.push("kb.history");
                 if !root {
                     v.push("worktree.remove");
                 }
@@ -3838,6 +3887,7 @@ impl App {
                 "project.rename",
                 "script.pick",
                 "worktree.open",
+                "kb.history",
             ],
             // A quick terminal (UX1.25): show or hide it, and what a shell offers.
             Row::Quick(id) => {
@@ -5073,6 +5123,7 @@ impl App {
                     ),
                 });
             }
+            (Target::Path(v), Purpose::Library(f)) => self.library_picked(f, &v.to_string_lossy()),
             (Target::Path(word), Purpose::CliPick(mut job)) => {
                 job.done.push(word.to_string_lossy().into_owned());
                 self.cli_step(*job);
@@ -5278,6 +5329,8 @@ impl App {
                 }
             }
             PromptKind::ChatFindIn(chat) => self.find_in_chat(&chat, text.trim()),
+            PromptKind::KbFind => self.library_find(&text),
+            kind @ (PromptKind::KbShow | PromptKind::KbForget) => self.library_typed(&kind, &text),
             PromptKind::ChatFind => {
                 if !text.trim().is_empty() {
                     self.request(
@@ -5711,6 +5764,12 @@ impl App {
                     }
                     K::ScrollUp => self.chat_key(KeyEvent::new(KeyCode::Up, Mods::NONE)),
                     K::ScrollDown => self.chat_key(KeyEvent::new(KeyCode::Down, Mods::NONE)),
+                    _ => {}
+                },
+                Some(crate::chats::ChatPanel::Library(_)) => match m.kind {
+                    K::Down(crossterm::event::MouseButton::Left) => self.library_mouse(y, None),
+                    K::ScrollUp => self.library_mouse(y, Some(true)),
+                    K::ScrollDown => self.library_mouse(y, Some(false)),
                     _ => {}
                 },
                 None => {}

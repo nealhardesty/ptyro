@@ -38,6 +38,8 @@ pub struct ChatView {
     forced: Cell<Option<usize>>,
     /// The keys the composer's hints name, where they aren't the daemon's line editor's.
     pub hints: Option<Hints>,
+    /// Nothing is typed here (the Library's reader, SPEC §25.10): no composer is drawn.
+    pub read_only: bool,
 }
 
 /// What the composer says about its keys (a chat's are its own, and rebindable).
@@ -416,7 +418,8 @@ pub fn draw(
             );
         }
     }
-    let comp_h = composer.len().min(area.height as usize / 2).max(1);
+    let comp_h =
+        if view.read_only { 0 } else { composer.len().min(area.height as usize / 2).max(1) };
     let body_h = area.height as usize - comp_h;
     view.body_rows.set(body_h);
     let max_scroll = rows.len().saturating_sub(body_h);
