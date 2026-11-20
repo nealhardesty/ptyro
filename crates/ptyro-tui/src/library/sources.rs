@@ -4,7 +4,8 @@
 //! last read, what went wrong, and how far a read of it is (`KbRoots`, asked again while
 //! something is being read; `KbProgress` between the asks). `s` looks at one again, `S` at
 //! all of them, `x` stops reading one (the daemon asks first, in its words), `b` reads what
-//! the agents kept before ptyro did, `t` switches the keeping of agent sessions.
+//! the agents kept before ptyro did, `t` switches the keeping of agent sessions, `c` that of
+//! shell commands and `o` that of what they print (`kb.shell`).
 //!
 //! With machines linked, the machine filter says whose roots are listed and acted on: roots
 //! are each machine's own (SPEC §25.11).
@@ -100,10 +101,30 @@ pub(super) fn about(app: &App, l: &Library) -> Line<'static> {
     Line::styled(format!(" {whose} · {sessions}"), dim)
 }
 
+/// What is kept of your shells, and the keys that change it (`kb.shell`). `None`: a daemon
+/// from before shells were kept, or a linked machine's sources (the switches are this
+/// computer's).
+pub(super) fn shells(l: &Library) -> Option<&'static str> {
+    if l.far().is_some() {
+        return None;
+    }
+    match l.status.as_ref()?.shell.as_str() {
+        "off" => Some("nothing of your shells is kept · c keeps the commands you run in them"),
+        "commands" => Some(
+            "shell commands are kept, not what they print · c stops keeping them · o also keeps what they print",
+        ),
+        "output" => Some(
+            "shell commands are kept, and what they print · o stops keeping what they print · c stops keeping both",
+        ),
+        _ => None,
+    }
+}
+
 /// The keys, for the foot of the panel.
 pub(super) fn keys(app: &App, l: &Library) -> String {
     let mut keys = vec!["i read a folder", "s look again", "S at all of them", "x stop reading it"];
-    keys.extend(["b agents' history", "t keep sessions", "j/k move", "y path"]);
+    keys.extend(["b agents' history", "t keep sessions", "c shell commands", "o their output"]);
+    keys.extend(["j/k move", "y path"]);
     if !app.machines.is_empty() {
         keys.push("Tab machine");
     }
@@ -128,6 +149,9 @@ pub(super) fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     };
     if let Some(note) = &l.note {
         say(&mut out, note, dim);
+    }
+    if let Some(shells) = shells(l) {
+        say(&mut out, shells, dim);
     }
     if l.loading && l.sources.is_empty() {
         say(&mut out, "Looking…", dim);
@@ -306,7 +330,10 @@ impl App {
             (KeyCode::Enter, _) => act = Some('s'),
             (
                 _,
-                Some(c @ ('1' | '2' | '/' | 'i' | 'a' | 's' | 'S' | 'x' | 'd' | 'b' | 't' | 'y')),
+                Some(
+                    c @ ('1' | '2' | '/' | 'i' | 'a' | 's' | 'S' | 'x' | 'd' | 'b' | 't' | 'c'
+                    | 'o' | 'y'),
+                ),
             ) => act = Some(c),
             _ => {}
         }
@@ -322,6 +349,8 @@ impl App {
             Some('x' | 'd') => self.sources_remove(),
             Some('b') => self.open_backfill_form(),
             Some('t') => self.sessions_switch(),
+            Some('c') => self.shells_switch(false),
+            Some('o') => self.shells_switch(true),
             Some('y') => {
                 if let Some(p) = path {
                     crate::osc52(&p);
@@ -410,6 +439,37 @@ impl App {
             "agent sessions are no longer kept (what was kept stays)"
         };
         self.set_config("kb.sessions", if on { "true" } else { "false" }, said);
+        self.library_news();
+    }
+
+    /// `c` and `o`: what is kept of your shells (`kb.shell`). `c` switches the commands
+    /// (`off` ↔ `commands`; from `output` it is off too); `o` switches what they print
+    /// (`commands` ↔ `output`), and never switches the commands on by itself.
+    fn shells_switch(&mut self, output: bool) {
+        let (to, said) = match (self.config.kb.shell.as_str(), output) {
+            ("off", false) => (
+                "commands",
+                "shell commands are kept from here on: the lines you run, not what they print (a private shell keeps nothing)",
+            ),
+            (_, false) => (
+                "off",
+                "nothing more of your shells is kept (what was kept stays until you forget it)",
+            ),
+            ("off", true) => {
+                return self.toast(
+                    "shell commands are not kept: c keeps them, then o keeps what they print too",
+                );
+            }
+            ("output", true) => (
+                "commands",
+                "what shell commands print is no longer kept (the commands still are; what was kept stays)",
+            ),
+            (_, true) => (
+                "output",
+                "what shell commands print is kept from here on: the first 2 KiB and the last 6 KiB of each, never a full-screen program's or a command's you typed into · o stops it",
+            ),
+        };
+        self.set_config("kb.shell", to, said);
         self.library_news();
     }
 

@@ -2,7 +2,7 @@
 // daemon for, the days of the history, the words a hit matched and where they are in a text,
 // an address's parts, the daemon's question before it forgets, the notes (what their list
 // asks, how they are grouped, what a new one sends), and the sources: what is read, how each
-// root stands, what the ingest form and the agents' history ask.
+// root stands, what the ingest form and the agents' history ask, and what is kept of shells.
 /// A search starts at this many characters (a shorter prefix matches everything), as the TUI's
 /// Library and the chat list do; fewer is the history.
 export const MIN_QUERY = 3;
@@ -264,4 +264,31 @@ export function ingestRequest(v) {
         if (text(k))
             spec[k] = text(k);
     return { t: "kb_ingest", spec, ...far(text("machine")) };
+}
+/// What is kept of your shells (`kb.shell`: off, commands, output), in a sentence, and the
+/// switches that change it: the commands first, what they print second and only where the
+/// commands are kept. `null`: a daemon from before shells were kept.
+export function shellsKept(shell) {
+    const off = { label: "", to: "off", said: "Nothing more of your shells is kept (what was kept stays until you forget it)" };
+    if (shell === "off")
+        return {
+            says: "Nothing of your shells is kept.",
+            switches: [{ label: "Keep shell commands", to: "commands", said: "Shell commands are kept from here on: the lines you run, not what they print (a private shell keeps nothing)" }],
+        };
+    if (shell === "commands")
+        return {
+            says: "Shell commands are kept, not what they print.",
+            switches: [{ ...off, label: "Stop keeping commands" }, {
+                    label: "Keep what they print too…", to: "output", said: "What shell commands print is kept from here on",
+                    ask: ["Keep what your commands print?",
+                        "What each command prints in a shell is then stored in the knowledge base beside its command line: the first 2 KiB and the last 6 KiB of it, with tokens and passwords redacted, for 30 days unless the settings say otherwise. This is the one place where what is on your terminal is stored. Never kept: a private shell, a command typed with a space before it, what a full-screen program (an editor, a pager) shows, and anything a command shows that you type into while it runs (a password prompt, a REPL, ssh).",
+                        "Keep it"],
+                }],
+        };
+    if (shell === "output")
+        return {
+            says: "Shell commands are kept, and what they print.",
+            switches: [{ label: "Stop keeping what they print", to: "commands", said: "What shell commands print is no longer kept (the commands still are; what was kept stays)" }, { ...off, label: "Stop keeping both" }],
+        };
+    return null;
 }

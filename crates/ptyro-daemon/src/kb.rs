@@ -17,7 +17,8 @@
 //! Agent sessions, the first source, are in [`sessions`]; notes, which are files, in [`notes`];
 //! projects and folders in [`roots`], which has a task of its own (a folder of fifty thousand
 //! files must not stand in a session's way); what the agents kept before ptyro did in
-//! [`history`], which waits behind everything else on the queue.
+//! [`history`], which waits behind everything else on the queue; a shell's commands in
+//! [`shells`].
 
 #[cfg(test)]
 mod golden;
@@ -28,6 +29,7 @@ mod requests;
 mod roots;
 mod search;
 mod sessions;
+mod shells;
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -104,6 +106,8 @@ pub(crate) enum Job {
     Item(String),
     /// A conversation an agent kept that ptyro never saw (`ingest --history`).
     History(history::HistoryJob),
+    /// A command that ended in a shell (`shells`).
+    Shell(Box<shells::ShellJob>),
 }
 
 pub(crate) struct Prepared {
@@ -119,6 +123,8 @@ pub(crate) struct Prepared {
 pub(crate) struct Facts {
     /// It is an agent's session (`kb.sessions` switches those off).
     pub session: bool,
+    /// It is a shell's command (`kb.shell = "off"` switches those off).
+    pub shell: bool,
     /// The source's agent has `kb = false`.
     pub agent_off: bool,
     /// The source's project has `[knowledge] enabled = false`.
@@ -221,6 +227,7 @@ impl Daemon {
         }
         let me = Arc::clone(self);
         tokio::spawn(async move { me.kb_actor().await });
+        self.kb_output_switch();
         self.start_kb_retention();
         self.start_kb_notes();
         self.start_kb_roots();
@@ -324,6 +331,10 @@ impl Daemon {
                         let uri = j.uri.clone();
                         (uri, self.kb_history_read(j).await)
                     }
+                    Job::Shell(j) => {
+                        let uri = j.uri.clone();
+                        (uri, self.kb_shell(*j).await)
+                    }
                 };
                 match done {
                     Ok(()) => {}
@@ -379,6 +390,7 @@ impl Daemon {
         let gate = Gate {
             enabled: config.kb.enabled,
             sessions_off: facts.session && !config.kb.sessions,
+            shells_off: facts.shell && !config.kb.shell_commands(),
             agent_off: facts.agent_off,
             project_off: facts.project_off,
             unrecorded: facts.unrecorded,

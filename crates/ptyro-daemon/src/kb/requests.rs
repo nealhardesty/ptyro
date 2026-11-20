@@ -489,6 +489,7 @@ impl Daemon {
         let mut out = KbStatusInfo {
             enabled: config.kb.enabled,
             sessions: config.kb.sessions,
+            shell: config.kb.shell.clone(),
             retain_days: config.kb.retain_days,
             path: path.display().to_string(),
             notes: self.kb_notes_dir().display().to_string(),
@@ -543,10 +544,15 @@ impl Daemon {
     }
 
     /// One retention pass: sessions and shells' days older than `kb.retain_days` go, with no
-    /// tombstones. Returns how many items went.
+    /// tombstones, and what commands printed that is older than `kb.shell_output_days`.
+    /// Returns how many items went.
     pub(crate) async fn kb_retention_pass(&self) -> usize {
-        let (Some(cut), true) = (self.kb_retain_cut(), self.config().kb.enabled) else { return 0 };
+        if !self.config().kb.enabled {
+            return 0;
+        }
         let Ok(db) = self.kb_db() else { return 0 };
+        self.kb_shell_output_pass(&db).await;
+        let Some(cut) = self.kb_retain_cut() else { return 0 };
         match db.expire(vec![ItemKind::Session, ItemKind::Shell], cut).await {
             Ok(n) => {
                 if n > 0 {
@@ -566,13 +572,18 @@ impl Daemon {
     }
 
     /// The daily pass: at the daemon's start, once a day, and at once when `kb.retain_days`
-    /// changes (a setting that waited a day to act would look broken).
+    /// or `kb.shell_output_days` changes (a setting that waited a day to act would look
+    /// broken).
     pub(crate) fn start_kb_retention(self: &std::sync::Arc<Self>) {
         let me = std::sync::Arc::clone(self);
         tokio::spawn(async move {
             let mut events = me.events.subscribe();
             loop {
-                let days = me.config().kb.retain_days;
+                let days = |me: &Self| {
+                    let kb = me.config().kb;
+                    (kb.retain_days, kb.shell_output_days)
+                };
+                let was = days(&me);
                 me.kb_retention_pass().await;
                 let day = tokio::time::sleep(std::time::Duration::from_secs(24 * 3600));
                 tokio::pin!(day);
@@ -581,7 +592,7 @@ impl Daemon {
                         () = &mut day => break,
                         e = events.recv() => match e {
                             Ok(ptyro_protocol::DomainEvent::ConfigReloaded { .. })
-                                if me.config().kb.retain_days != days => break,
+                                if days(&me) != was => break,
                             Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                             _ => {}
                         },

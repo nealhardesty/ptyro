@@ -195,6 +195,9 @@ pub struct KbStatusInfo {
     pub enabled: bool,
     /// `kb.sessions`: agent sessions are kept.
     pub sessions: bool,
+    /// `kb.shell` (1.60): `off`, `commands` or `output` (what is kept of your shells). Empty: a
+    /// daemon from before shells were kept.
+    pub shell: String,
     /// `kb.retain_days` (0: for good).
     pub retain_days: u32,
     /// Why `kb.db` can't be opened, with the fix.
@@ -258,6 +261,16 @@ impl KbStatusInfo {
         }
         if !s.sessions {
             out.push("  agent sessions are not kept (`kb.sessions` is off)".into());
+        }
+        match s.shell.as_str() {
+            "off" => out.push("  nothing of your shells is kept (`kb.shell` is off)".into()),
+            "commands" => out.push(
+                "  shell commands are kept, not what they print (`kb.shell`; a private shell keeps nothing)".into(),
+            ),
+            "output" => out.push(
+                "  shell commands are kept, and what they print (`kb.shell = \"output\"`: `commands` keeps only the commands)".into(),
+            ),
+            _ => {}
         }
         if !s.notes.is_empty() {
             out.push(format!("  notes are Markdown files in {}: edit them with anything", s.notes));

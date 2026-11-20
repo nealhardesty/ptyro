@@ -253,7 +253,7 @@ pub async fn run(mut s: Script) -> Result<Report> {
                 TermEvent::ForeignStatus { state, msg } => {
                     report.log.push(format!("{t:>7.3}s status {state} {msg:?}"))
                 }
-                TermEvent::Title(_) => {}
+                TermEvent::Title(_) | TermEvent::CommandOutput(_) => {}
             }
         }
         if let Some((shown, _)) = sends_when.peek() {

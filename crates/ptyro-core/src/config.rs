@@ -626,6 +626,13 @@ pub struct Kb {
     pub commits: bool,
     /// How often every project and folder is looked at again (`1h`).
     pub sync_every: String,
+    /// What is kept of your shells (§25.6.5): `off` nothing, `commands` the command lines you
+    /// run, `output` those and what they printed.
+    pub shell: String,
+    /// Commands too trivial to keep, by their first word.
+    pub shell_skip: Vec<String>,
+    /// What commands printed is deleted after this many days (0: kept as long as its command).
+    pub shell_output_days: u32,
 }
 
 impl Default for Kb {
@@ -647,9 +654,18 @@ impl Default for Kb {
             code: false,
             commits: true,
             sync_every: "1h".into(),
+            shell: "commands".into(),
+            shell_skip: KB_SHELL_SKIP.iter().map(|w| (*w).to_owned()).collect(),
+            shell_output_days: 30,
         }
     }
 }
+
+/// The words `kb.shell` takes.
+pub const KB_SHELLS: [&str; 3] = ["off", "commands", "output"];
+/// `kb.shell_skip` as it comes.
+pub const KB_SHELL_SKIP: [&str; 10] =
+    ["ls", "cd", "pwd", "clear", "exit", "ll", "la", "fg", "bg", "history"];
 
 /// The words `kb.scope` takes.
 pub const KB_SCOPES: [&str; 3] = ["profile", "workspace", "all"];
@@ -661,6 +677,9 @@ impl Kb {
         }
         if !KB_SCOPES.contains(&self.scope.as_str()) {
             return Err(format!("kb.scope: {:?} (profile, workspace or all)", self.scope));
+        }
+        if !KB_SHELLS.contains(&self.shell.as_str()) {
+            return Err(format!("kb.shell: {:?} (off, commands or output)", self.shell));
         }
         match parse_duration(&self.sync_every) {
             Ok(d) if d < std::time::Duration::from_secs(60) => {
@@ -679,6 +698,16 @@ impl Kb {
     /// `kb.sync_every`.
     pub fn sync_every(&self) -> std::time::Duration {
         parse_duration(&self.sync_every).unwrap_or(std::time::Duration::from_secs(3600))
+    }
+
+    /// Shell commands are kept (`kb.shell` is `commands` or `output`).
+    pub fn shell_commands(&self) -> bool {
+        self.shell != "off"
+    }
+
+    /// What shell commands print is kept too (`kb.shell = "output"`).
+    pub fn shell_output(&self) -> bool {
+        self.shell == "output"
     }
 
     /// `kb.max_file` in bytes.

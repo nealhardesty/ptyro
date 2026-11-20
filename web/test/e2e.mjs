@@ -238,6 +238,22 @@ const scenarios = {
     // A project is read by itself: nothing was asked for it.
     await tab.waitFor("the project, as a root", `location.hash === "#/library/sources" && [...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("project") && r.textContent.includes("repo"))`, 20_000);
     await fits("the sources");
+    // What is kept of shells (KB4): the commands, as it comes; what they print only once the
+    // page has said what that stores, and switched back with one press.
+    const shellsSay = (text) => `!!document.querySelector("main.library .kb-shells")?.textContent.includes(${JSON.stringify(text)})`;
+    const shellNow = () => JSON.parse(ptyro("kb", "status", "--json")).shell;
+    await tab.waitFor("what is kept of shells", shellsSay("Shell commands are kept, not what they print."));
+    await press("Keep what they print too…");
+    await tab.waitFor("what that stores, asked first", `document.querySelector(".sheet h2")?.textContent === "Keep what your commands print?" && !!document.querySelector(".sheet p.confirm")?.textContent.includes("the first 2 KiB and the last 6 KiB")`);
+    if (shellNow() !== "commands") throw new Error("kb.shell was switched before the question was answered");
+    await fits("the question about what commands print");
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Keep it").click()`);
+    await tab.waitFor("what they print, kept", shellsSay("Shell commands are kept, and what they print."), 20_000);
+    await until("the daemon to keep what commands print", () => shellNow() === "output", 20_000);
+    await press("Stop keeping what they print");
+    await tab.waitFor("commands only again", shellsSay("Shell commands are kept, not what they print."), 20_000);
+    await until("the daemon to keep commands only", () => shellNow() === "commands", 20_000);
+    await fits("the sources, with the shells' switches");
     // Read a folder…: every option the command takes, as a pick where the answers are known.
     await press("Read a folder…");
     await tab.waitFor("the form", `document.querySelector(".sheet h2")?.textContent === "Read a folder" && document.querySelectorAll(".sheet select").length === 2`);

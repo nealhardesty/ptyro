@@ -1039,7 +1039,7 @@ impl App {
 
     /// The item whose session `r` asked for.
     pub(crate) fn library_resumed(&mut self, item: &KbListed) {
-        if item.item.kind != ItemKind::Session {
+        if !matches!(item.item.kind, ItemKind::Session | ItemKind::Shell) {
             return self.toast(format!(
                 "a {} has no session to go to: ⏎ reads what is kept of it",
                 item.item.kind
@@ -1049,6 +1049,11 @@ impl App {
             self.sessions.iter().find(|s| s.id.full().eq_ignore_ascii_case(id)).cloned()
         });
         let Some(s) = found else {
+            if item.item.kind == ItemKind::Shell {
+                return self.toast_err(
+                    "the shell those commands ran in is no longer in ptyro: ⏎ reads what was kept of them",
+                );
+            }
             let conversation = item.item.uri.rsplit('/').next().unwrap_or_default();
             return self.toast_err(format!(
                 "the session it happened in is no longer in ptyro: ⏎ reads what was kept of it (its agent may still carry it on by its own id, {conversation})"
@@ -1966,8 +1971,10 @@ fn draw_reader(app: &App, f: &mut Frame<'_>, area: Rect, r: &Reader) {
     if !r.found.is_empty() {
         keys.push("n/N next");
     }
-    if r.item.item.kind == ItemKind::Session {
-        keys.push("r its session");
+    match r.item.item.kind {
+        ItemKind::Session => keys.push("r its session"),
+        ItemKind::Shell => keys.push("r its shell"),
+        _ => {}
     }
     keys.extend(["y address", "Y text", "d forget", "Esc the list"]);
     let hint_h = draw_hint(app, f, area, &keys.join(" · "));

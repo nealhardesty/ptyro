@@ -26,9 +26,23 @@ pub struct World {
 
 impl World {
     pub fn new(config: &str) -> Self {
+        Self::with_shell(config, "/bin/sh")
+    }
+
+    /// The same, with `shell` as the program a shell session runs (`$SHELL`): a path, or
+    /// (with a line break in it) the body of a `sh` script.
+    pub fn with_shell(config: &str, shell: &str) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-kb1-").tempdir().unwrap();
         let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
-        let env = [("HOME", hs.as_str()), ("SHELL", "/bin/sh")];
+        #[cfg(unix)]
+        let script = shell.contains('\n').then(|| {
+            let bin = std::path::Path::new(&hs).join(".kbkit");
+            ptyro_testkit::program::program(&bin, "shell", shell).to_string_lossy().into_owned()
+        });
+        #[cfg(not(unix))]
+        let script: Option<String> = None;
+        let shell = script.as_deref().unwrap_or(shell);
+        let env = [("HOME", hs.as_str()), ("SHELL", shell)];
         let d = TempDaemon::start_with(BIN, &env, Some(config)).unwrap();
         Self { home, d }
     }
@@ -368,5 +382,114 @@ impl World {
             s = s.env(&k, &v);
         }
         s
+    }
+}
+
+/// A shell that says what ptyro's shell integration says (OSC 133: `A` at a prompt, `C` with
+/// the command line as it was typed, `D` with how it ended), around commands it really runs.
+/// The programs a test names without wanting them run do nothing.
+#[cfg(unix)]
+pub const MARKED_SHELL: &str = r#"ffmpeg() { :; }; curl() { :; }; mysql() { :; }; make() { :; }
+printf '\033]133;A\007$ '
+while IFS= read -r line; do
+  printf '\033]133;C;cmdline=%s\007' "$line"
+  eval "$line"
+  printf '\033]133;D;%s\007\033]133;A\007$ ' "$?"
+done"#;
+
+#[cfg(unix)]
+impl World {
+    /// A daemon whose shell sessions run [`MARKED_SHELL`].
+    pub fn marked(config: &str) -> Self {
+        Self::with_shell(config, MARKED_SHELL)
+    }
+
+    /// A shell session called `name`, at its first prompt.
+    pub async fn shell(&self, c: &Client, name: &str, private: bool) -> SessionInfo {
+        let spec = SpawnSpec {
+            cwd: self.home(),
+            name: Some(name.into()),
+            size: Some(TermSize::new(100, 20)),
+            private: Some(private),
+            ..SpawnSpec::default()
+        };
+        let info = match c.request(Request::Spawn { spec }).await.expect("spawn") {
+            Reply::Session { info } => info,
+            other => panic!("{other:?}"),
+        };
+        self.d.wait_for_text(c, name, "$", WAIT).await.unwrap();
+        info
+    }
+
+    /// Type a line into a shell without waiting for anything.
+    pub async fn keys(&self, c: &Client, name: &str, line: &str) {
+        c.request(Request::SendText {
+            addr: name.into(),
+            text: line.into(),
+            enter: true,
+            wait_ready_ms: None,
+            once: None,
+        })
+        .await
+        .unwrap();
+    }
+
+    /// Type a command into a shell and wait until it has ended.
+    pub async fn run(&self, c: &Client, name: &str, line: &str) {
+        let before = self.info(c, name).await.command.map(|c| c.started_ms);
+        self.keys(c, name, line).await;
+        self.ended(c, name, before).await;
+    }
+
+    /// Wait until the shell's command that started after `before` has ended.
+    pub async fn ended(&self, c: &Client, name: &str, before: Option<u64>) {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let now = self.info(c, name).await.command;
+            if now.as_ref().is_some_and(|c| Some(c.started_ms) != before && c.ended_ms.is_some()) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{name}: its command never ended: {now:?}");
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+    }
+
+    /// What is kept of a shell session's commands (every day's chunks), once `pred` holds
+    /// of it.
+    pub async fn shell_kept(
+        &self,
+        session: &str,
+        what: &str,
+        pred: impl Fn(&[KbChunk]) -> bool,
+    ) -> Vec<KbChunk> {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            let chunks = self.shell_chunks(session).await;
+            if pred(&chunks) {
+                return chunks;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "shell {session}: never {what}; it holds {:?}; the daemon said:\n{}",
+                chunks.iter().map(|c| format!("{}| {}", c.kind, c.text)).collect::<Vec<_>>(),
+                self.log("knowledge base")
+            );
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+    }
+
+    /// The chunks kept of a shell session now.
+    pub async fn shell_chunks(&self, session: &str) -> Vec<KbChunk> {
+        let db = self.db();
+        let f = ItemFilter {
+            kinds: vec![ItemKind::Shell],
+            session: Some(session.to_owned()),
+            ..ItemFilter::default()
+        };
+        let mut chunks = Vec::new();
+        for item in db.list(f).await.unwrap() {
+            chunks.extend(db.chunks(item.id, 0, 0).await.unwrap());
+        }
+        chunks
     }
 }

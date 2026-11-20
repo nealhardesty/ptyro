@@ -153,6 +153,11 @@ impl Daemon {
                     let _ = self.events.send(DomainEvent::SessionUpdated { info: self.info(&s) });
                 }
             }
+            Feed::Ran(id, ran) => {
+                if let Some(s) = self.session(id) {
+                    self.kb_shell_ran(&s, *ran);
+                }
+            }
             Feed::Exited(id) => {
                 let Some(s) = self.session(id) else { return };
                 s.engine.locked().clear();
@@ -1170,6 +1175,11 @@ impl Daemon {
         let now = fg.as_deref().and_then(|p| ptyro_agents::adapter_for_program(&config, p));
         let was =
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent.clone();
+        if now.is_some() {
+            // (What the command shows from here on is the agent's, not a command's output.)
+            s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).command_no_output =
+                true;
+        }
         if now != was {
             s.meta.lock().unwrap_or_else(std::sync::PoisonError::into_inner).inner_agent =
                 now.clone();

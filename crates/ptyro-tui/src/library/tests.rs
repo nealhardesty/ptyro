@@ -680,6 +680,34 @@ fn r_goes_to_the_session_it_happened_in_and_backtick_comes_back() {
     assert!(app.library().is_some());
 }
 
+/// KB4: a shell's day goes to the shell its commands ran in, while ptyro still has it.
+#[test]
+fn r_on_a_shells_commands_goes_to_that_shell() {
+    let mut t = t();
+    let app = &mut t.app;
+    let s = session("zsh-2", ProcessState::Running);
+    app.sessions.push(s.clone());
+    opened(app);
+    asked(app);
+    let day = |session: &str| {
+        let mut item = listed("7F3K", "zsh-2 · 2026-11-20", now_ms(), Some(session));
+        item.item.kind = ItemKind::Shell;
+        item.item.uri = format!("shell://{session}/2026-11-20");
+        item
+    };
+    press(app, "r");
+    reply(app, Pending::KbResume, doc(day(&s.id.full()), None));
+    assert_eq!(app.focused_session(), Some(s.id));
+    assert!(!asked(app).iter().any(|p| matches!(p, Pending::Done(_))), "a shell is not resumed");
+    run(app, "session.last");
+    press(app, "r");
+    reply(app, Pending::KbResume, doc(day("01jb0000gone"), None));
+    assert_eq!(
+        toast(app),
+        "the shell those commands ran in is no longer in ptyro: ⏎ reads what was kept of them"
+    );
+}
+
 #[test]
 fn tab_reaches_the_filters_and_each_is_a_pick() {
     let mut t = t();
@@ -1401,6 +1429,53 @@ fn a_root_is_looked_at_again_and_removed_in_the_daemons_words() {
     press(app, "t");
     assert!(!app.config.kb.sessions, "{}", toast(app));
     assert!(toast(app).contains("no longer kept"));
+}
+
+/// KB4: the Sources tab says what is kept of your shells and switches it (`kb.shell`): `c`
+/// the commands, `o` what they print, and `o` never switches the commands on by itself.
+#[test]
+fn the_sources_tab_says_and_switches_what_is_kept_of_shells() {
+    let mut t = t();
+    let app = &mut t.app;
+    sources(app);
+    assert!(!screen(app).contains("shell commands are kept"), "a daemon from before shells");
+    let says = |app: &mut App, word: &str| {
+        app.library_mut().unwrap().status.as_mut().unwrap().shell = word.into();
+        screen(app)
+    };
+    let shown = says(app, "commands");
+    // (Beside the list it is as wide as the list.)
+    for want in [
+        "shell commands are kept, not what they print",
+        "c stops keeping them · o also keeps what they",
+        "c shell commands · o their output",
+    ] {
+        assert!(shown.contains(want), "{want:?} in\n{shown}");
+    }
+    assert!(says(app, "off").contains("nothing of your shells is kept"));
+    assert!(says(app, "output").contains("shell commands are kept, and what they print"));
+
+    assert_eq!(app.config.kb.shell, "commands", "as it comes: commands, not what they print");
+    press(app, "o");
+    assert_eq!(app.config.kb.shell, "output");
+    assert!(toast(app).contains("the first 2 KiB and the last 6 KiB of each"), "{}", toast(app));
+    press(app, "o");
+    assert_eq!(app.config.kb.shell, "commands");
+    assert!(toast(app).contains("print is no longer kept"), "{}", toast(app));
+    press(app, "c");
+    assert_eq!(app.config.kb.shell, "off");
+    assert!(toast(app).contains("nothing more of your shells is kept"), "{}", toast(app));
+    // Off: `o` alone keeps nothing, and says which key does.
+    press(app, "o");
+    assert_eq!(app.config.kb.shell, "off");
+    assert!(toast(app).contains("c keeps them, then o"), "{}", toast(app));
+    press(app, "c");
+    assert_eq!(app.config.kb.shell, "commands");
+    assert!(toast(app).contains("not what they print"), "{}", toast(app));
+    // From output, `c` stops both.
+    press(app, "o");
+    press(app, "c");
+    assert_eq!(app.config.kb.shell, "off");
 }
 
 /// The form's fields are what `ptyro ingest PATH` takes (`crates/ptyro/src/ingest.rs`): the

@@ -3,7 +3,7 @@
 // are in a text, an address's parts, what forgetting names, and the daemon's question.
 //   node web/test/library.mjs
 import assert from "node:assert/strict";
-import { PAGE, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
+import { PAGE, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, shellsKept, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
 
 const DAY = 86_400_000;
 const f = (o = {}) => ({ ...noFilters(), ...o });
@@ -91,6 +91,23 @@ assert.deepEqual(rootsRequest("laptop2"), { t: "kb_roots", machine: "laptop2" })
   assert.equal(rootReads(root()), "");
   assert.equal(rootReads(root({ options: { include: ["*.md"], exclude: ["drafts", "old"], comments: false, code: true, once: true } })),
     "no comments · code · only *.md · not drafts, old · read once");
+}
+// What is kept of your shells: the commands first; what they print only where the commands
+// are kept, and only after it was said what that stores.
+assert.equal(shellsKept(undefined), null);
+assert.equal(shellsKept(""), null);
+{
+  const off = shellsKept("off"), commands = shellsKept("commands"), output = shellsKept("output");
+  assert.equal(off.says, "Nothing of your shells is kept.");
+  assert.deepEqual(off.switches.map((w) => [w.label, w.to, !!w.ask]), [["Keep shell commands", "commands", false]]);
+  assert.equal(commands.says, "Shell commands are kept, not what they print.");
+  assert.deepEqual(commands.switches.map((w) => [w.label, w.to, !!w.ask]), [["Stop keeping commands", "off", false], ["Keep what they print too…", "output", true]]);
+  const [title, text, yes] = commands.switches[1].ask;
+  assert.equal(title, "Keep what your commands print?");
+  assert.ok(text.includes("the first 2 KiB and the last 6 KiB") && text.includes("the one place where what is on your terminal is stored") && text.includes("a private shell"));
+  assert.equal(yes, "Keep it");
+  assert.equal(output.says, "Shell commands are kept, and what they print.");
+  assert.deepEqual(output.switches.map((w) => [w.label, w.to, !!w.ask]), [["Stop keeping what they print", "commands", false], ["Stop keeping both", "off", false]]);
 }
 // What a read will take, as the command says it.
 assert.equal(planLine({ files: 6, documents: 3, sources: 1, comments: true, code: false, commits: true }), "6 files: 3 documents, 1 source file (comments), its commits");

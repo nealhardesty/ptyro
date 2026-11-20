@@ -501,16 +501,21 @@ if [ -n "$PTYRO" ] && [ -z "$__ptyro_integrated" ]; then
   __ptyro_prompt() {
     local s=$?
     __ptyro_at_prompt=
+    __ptyro_hist=$(HISTTIMEFORMAT= builtin history 1)
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' "$s" "$HOSTNAME" "$PWD"
     return $s
   }
   PROMPT_COMMAND="__ptyro_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   PS1="$PS1\[\e]133;B\a\]"
   __ptyro_preexec() {
-    local c
+    local c h=
     c=$(HISTTIMEFORMAT= builtin history 1)
+    # The history's last line is what it was at the prompt: this command was kept out of it
+    # (HISTCONTROL: typed with a space before it, or the same as the last one), and that
+    # line is not it. Sent with a space before it, as one typed that way.
+    [ "$c" = "$__ptyro_hist" ] && h=' '
     c="${c#*[0-9] }"; c="${c# }"; c="${c//[[:cntrl:]]/ }"
-    printf '\e]133;C;cmdline=%s\a' "${c:0:200}"
+    printf '\e]133;C;cmdline=%s%s\a' "$h" "${c:0:2000}"
   }
   if [ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 4 ]; }; then
     # bash 4.4+: PS0 runs as a command starts.
@@ -542,7 +547,7 @@ if [[ -n $PTYRO && -z $__ptyro_integrated ]]; then
   }
   __ptyro_preexec() {
     local c=${1//[[:cntrl:]]/ }
-    printf '\e]133;C;cmdline=%s\a' "${c[1,200]}"
+    printf '\e]133;C;cmdline=%s\a' "${c[1,2000]}"
   }
   add-zsh-hook precmd __ptyro_precmd
   add-zsh-hook preexec __ptyro_preexec
@@ -558,7 +563,7 @@ if set -q PTYRO; and not set -q __ptyro_integrated
     printf '\e]133;D;%s\a\e]7;file://%s%s\a\e]133;A\a' $status (hostname) $PWD
   end
   function __ptyro_preexec --on-event fish_preexec
-    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 200)
+    printf '\e]133;C;cmdline=%s\a' (string replace -ra '[[:cntrl:]]' ' ' -- "$argv[1]" | string sub -l 2000)
   end
 end
 "#;
@@ -607,9 +612,9 @@ if ($env:PTYRO -and -not $global:__ptyro_integrated) {
       $line = & $global:__ptyro_readline
       $global:__ptyro_lec = $global:LASTEXITCODE
       $global:__ptyro_err = if ($global:Error.Count) { $global:Error[0] } else { $null }
-      $c = ("$line" -replace '[\x00-\x1f\x7f]', ' ').Trim()
-      if ($c) {
-        if ($c.Length -gt 200) { $c = $c.Substring(0, 200) }
+      $c = ("$line" -replace '[\x00-\x1f\x7f]', ' ').TrimEnd()
+      if ($c.Trim()) {
+        if ($c.Length -gt 2000) { $c = $c.Substring(0, 2000) }
         [Console]::Write("$([char]27)]133;C;cmdline=$c$([char]7)")
       }
       $line

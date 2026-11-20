@@ -20,8 +20,8 @@ import { conn, host } from "./conn.js";
 import { data, can } from "./data.js";
 import { Cache, actions, ago, ask, badge, bar, confirm, enc, errText, facts, form, go, h, menu, pending, profileChoices, row, safeDecode, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child, Field } from "./kit.js";
-import { HISTORY_SINCE, PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, snippetParts, split, when, wroteBy } from "./libkit.js";
-import type { Filters, Of, Part, Root } from "./libkit.js";
+import { HISTORY_SINCE, PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, shellsKept, snippetParts, split, when, wroteBy } from "./libkit.js";
+import type { Filters, Of, Part, Root, ShellSwitch } from "./libkit.js";
 
 const ACTIONS = {
   "kb.open": "The Library: everything ptyro kept of your work, searchable in one place (More → Library)",
@@ -47,7 +47,7 @@ interface Item { id: string; uri: string; kind: string; title?: string | null; r
 interface Listed { addr: string; item: Item; project_name?: string | null }
 interface Chunk { idx: number; kind: string; heading?: string | null; text: string }
 interface Doc { item: Listed; chunks: Chunk[]; at?: number | null; stale?: boolean }
-interface Status { enabled: boolean; sessions: boolean; retain_days: number; error?: string | null; path: string; notes?: string; bytes: number; kinds: { kind: string; items: number; chunks: number }[]; vectors: number; meaning?: string | null; forgotten: number; queued: number; skipped: { uri: string; why: string; at_ms: number }[] }
+interface Status { enabled: boolean; sessions: boolean; shell?: string | null; retain_days: number; error?: string | null; path: string; notes?: string; bytes: number; kinds: { kind: string; items: number; chunks: number }[]; vectors: number; meaning?: string | null; forgotten: number; queued: number; skipped: { uri: string; why: string; at_ms: number }[] }
 /// What the list holds: hits, the history, or what the daemon said instead of answering.
 type Rows =
   | { t: "hits"; hits: Hit[]; wordsOnly: string; leftOut: string[] }
@@ -243,6 +243,7 @@ function showStatus(s: Status): void {
     ["By meaning", s.vectors ? `${s.vectors} of ${plural(pieces, "piece")}` : null],
     ["Meaning search", s.meaning ?? null],
     ["Agent sessions", s.sessions ? null : "not kept (Knowledge → sessions is off)"],
+    ["Shells", shellsKept(s.shell)?.says ?? null],
     ["Sessions are kept", s.retain_days ? `${plural(s.retain_days, "day")}, then deleted` : "for good"],
     ["Forgotten", s.forgotten ? `${s.forgotten}: never kept again` : null],
     ["Waiting to be read", s.queued ? String(s.queued) : null],
@@ -413,6 +414,19 @@ async function keepSessions(on: boolean): Promise<void> {
   } catch (e) { ui.toast(errText(e)); }
 }
 
+/// What is kept of your shells (`kb.shell`), in your config. The switch that stores what
+/// commands print asks first, and says what that is.
+function keepShells(w: ShellSwitch): void {
+  const set = async (): Promise<void> => {
+    try {
+      await host("settings.apply", { scope: "user", change: { t: "set", key: "kb.shell", value: w.to } });
+      ui.toast(w.said);
+      home.refresh("");
+    } catch (e) { ui.toast(errText(e)); }
+  };
+  if (w.ask) confirm(w.ask[0], w.ask[1], w.ask[2], set); else void set();
+}
+
 /// A root, in full: what it is, where, how it stands, what is read of it; and what to do.
 function showRoot(x: Root): void {
   const kind = x.kind === "project" ? "A project: read for as long as ptyro has it" : x.kind === "file" ? "A file you gave" : "A folder you gave";
@@ -444,6 +458,7 @@ function sourcesView(): HTMLElement {
     const list = roots.get(key);
     if (list?.some(rootBusy) || s.queued) poll();
     const machines = [...data.machines.keys()].sort();
+    const shells = shellsKept(s.shell);
     const rows: Child[] = waitList || !list ? [waitList]
       : !list.length ? [h("p", { class: "empty" }, "Nothing is read yet. A project is read when ptyro knows it; a folder or a file when you give it here.")]
       : list.map((x) => row(h("span", {}, badge(x.kind), " ", x.name, h("small", { class: rootBad(x) ? "err" : "" }, ` ${rootState(x, ago)}`)),
@@ -456,6 +471,8 @@ function sourcesView(): HTMLElement {
       h("p", { class: "sub" }, onMachine() ? `What ${onMachine()} reads into its knowledge base. ` : "What is read: your projects by themselves, and the folders and files you add here. ",
         s.sessions ? "Agent sessions are kept as they happen. " : "Agent sessions are not kept. ",
         can("full") && !onMachine() ? h("button", { class: "small", title: tipOf("settings.set"), onclick: () => void keepSessions(!s.sessions) }, s.sessions ? "Stop keeping them" : "Keep them") : null),
+      shells && !onMachine() ? h("p", { class: "sub kb-shells" }, `${shells.says} `,
+        ...(can("full") ? shells.switches.map((w) => h("button", { class: "small", title: tipOf("settings.set"), onclick: () => keepShells(w) }, w.label)) : [])) : null,
       bar(can("control") ? h("button", { class: "primary", title: tip("kb.ingest"), onclick: () => void ingest() }, "Read a folder…") : null,
         can("control") ? h("button", { class: "small", title: tip("kb.sync"), onclick: () => void lookAgain() }, "Look at all again") : null,
         can("control") ? h("button", { class: "small", title: tip("kb.backfill"), onclick: () => void backfill() }, "Agents' history…") : null),
@@ -592,10 +609,12 @@ function docKey(addr: string): string {
 
 const copy = (text: string, what: string): void => void navigator.clipboard?.writeText(text).then(() => ui.toast(`Copied ${what}`), () => ui.toast("Couldn't copy"));
 
-/// The session an item happened in: shown, resumed first when it is hibernated.
+/// The session an item happened in (the shell a day's commands ran in): shown, resumed first
+/// when it is hibernated.
 async function toSession(i: Listed): Promise<void> {
-  if (i.item.kind !== "session") { ui.toast(`A ${i.item.kind} has no session to go to: this is what is kept of it`); return; }
-  const gone = (): void => ui.toast(`The session it happened in is no longer in ptyro: this is what was kept of it (its agent may still carry it on by its own id, ${conversation(i.item.uri)})`);
+  if (i.item.kind !== "session" && i.item.kind !== "shell") { ui.toast(`A ${i.item.kind} has no session to go to: this is what is kept of it`); return; }
+  const gone = (): void => ui.toast(i.item.kind === "shell" ? "The shell those commands ran in is no longer in ptyro: this is what was kept of them"
+    : `The session it happened in is no longer in ptyro: this is what was kept of it (its agent may still carry it on by its own id, ${conversation(i.item.uri)})`);
   if (!i.item.session) { gone(); return; }
   try {
     const s = (await conn.request({ t: "get", addr: i.item.session })).info;
@@ -649,6 +668,7 @@ function readerView(addr: string): HTMLElement {
   }
   const more = (): void => void menu(titleOf(i), [
     i.item.kind === "session" && { title: tip("kb.show"), label: "Go to its session", hint: "Resumed when it is hibernated", run: () => toSession(i) },
+    i.item.kind === "shell" && { title: tip("kb.show"), label: "Go to its shell", hint: "While ptyro still has it", run: () => toSession(i) },
     i.item.kind === "note" && i.addr.startsWith("k:") && { title: tip("kb.notes"), label: "Edit it", hint: "Its file, in the page", run: () => go(`#/library/note/${enc(i.addr)}`) },
     { title: tip("kb.show"), label: "Copy its address", hint: i.addr, run: () => copy(shown === null ? i.addr : `${i.addr}/${shown}`, "its address") },
     { title: tip("kb.show"), label: "Copy its text", hint: whole ? "All of it" : "The pieces shown", run: () => copy(d.chunks.map((c) => (c.kind === "user" ? `› ${c.text}` : c.text)).join("\n\n"), "its text") },
@@ -663,6 +683,7 @@ function readerView(addr: string): HTMLElement {
         hits.length > 1 ? h("button", { class: "small", "aria-label": "The one before", onclick: () => step(-1) }, "↑") : null,
         hits.length > 1 ? h("button", { class: "small", "aria-label": "The next", onclick: () => step(1) }, "↓") : null,
         i.item.kind === "session" ? h("button", { class: "small", title: tip("kb.show"), onclick: () => void toSession(i) }, "Its session") : null,
+        i.item.kind === "shell" ? h("button", { class: "small", title: tip("kb.show"), onclick: () => void toSession(i) }, "Its shell") : null,
         i.item.kind === "note" && i.addr.startsWith("k:") ? h("button", { class: "small", title: tip("kb.notes"), onclick: () => go(`#/library/note/${enc(i.addr)}`) }, "Edit") : null),
       d.stale ? h("p", { class: "sub" }, "It was read again since: that piece is gone, so here it is from its start.") : null,
       !whole && (d.chunks[0]?.idx ?? 0) > 0 ? all("Earlier: all of it") : null,

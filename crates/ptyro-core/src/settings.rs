@@ -602,6 +602,14 @@ const CHAT_TITLE: &[Choice] = &[
     c("auto", "a short title from a small model after the first answer"),
     c("off", "the first line of the first message"),
 ];
+const KB_SHELL: &[Choice] = &[
+    c("off", "nothing of your shells is kept"),
+    c("commands", "the command lines you run, not what they print"),
+    c(
+        "output",
+        "the command lines, and what each command printed on your terminal (its first 2 KiB and its last 6 KiB)",
+    ),
+];
 const KB_SCOPE: &[Choice] = &[
     c(
         "profile",
@@ -708,12 +716,15 @@ pub const SETTINGS: &[Setting] = &[
     s("chat.archive_purge_days", "chat", int(0, 36_500), "Delete archived chats after this many days. 0 keeps them.").unit("days"),
     s("kb.enabled", "knowledge", Kind::Bool, "The knowledge base: what happens in ptyro is kept in one file on this computer (`kb.db`), for you and your agents to search. Off: nothing more is kept and nothing is offered; what is already stored stays.").also("memory recall library history search ingest"),
     s("kb.sessions", "knowledge", Kind::Bool, "Keep agent sessions: what you asked, what the agent answered and which tools it ran, read from the agent's own transcript as it happens (Claude Code and Codex; another agent's session is kept as one summary line). Off: no new session is kept; those already kept stay.").also("transcript history claude codex record"),
+    s("kb.shell", "knowledge", pick(KB_SHELL), "What the knowledge base keeps of your shells (the quick terminal, SHELLS, a shell session). `commands`: each command line you run, with its folder, exit code and how long it took; never what it printed. `output` also keeps what commands print: this is the one place where the contents of your terminal are stored, so it is off unless you choose it. Never kept either way: a private or unrecorded shell, a command typed with a space before it, one that names a key or credential file, what a full-screen program (an editor, a pager) showed, and anything a command showed that you typed into while it ran (a password prompt, a REPL, ssh). Tokens and passwords in a command are redacted. `off`: nothing more is kept; what was kept stays until you forget it.").also("shell command history output terminal capture record privacy"),
     s("kb.private", "knowledge", Kind::Bool, "New sessions start private: the knowledge base keeps nothing of them (the agent still keeps its own history). Each new session can say otherwise where it is created.").new_only().also("incognito privacy history record"),
     s("kb.tools", "knowledge", Kind::Bool, "Give agents the tools that search the knowledge base (`recall`, `recall_read`), so one can look up what was done before instead of working it out again.").new_only().also("mcp recall agents memory"),
     s("kb.remember", "knowledge", Kind::Bool, "Let agents write notes (the `remember` tool): a decision or a fact worth keeping, as a Markdown file in ptyro's notes folder that every later session finds first. Off: agents only read; you still write notes yourself.").new_only().also("mcp notes agents memory write"),
     s("kb.scope", "knowledge", pick(KB_SCOPE), "What an agent may see of the knowledge base and of your chats (a chat looking up other chats, `chat find`). You always see everything: this is the wall between your accounts' agents.").also("privacy wall profile history_scope"),
     s("kb.meaning", "knowledge", Kind::Bool, "Meaning search: also find things by what they are about, not only by their words (marked ≈), in the knowledge base and in your chats. Switching it on downloads a small model once (potion-base-8M, 31 MB, from Hugging Face) into ptyro's data folder; nothing you keep leaves this machine.").also("semantic embeddings ai similar search chat"),
-    s("kb.retain_days", "knowledge", int(0, 36_500), "Delete kept agent sessions older than this many days, once a day. 0 keeps them for good. Notes and files are never aged out.").unit("days").also("retention expire delete old history"),
+    s("kb.retain_days", "knowledge", int(0, 36_500), "Delete kept agent sessions and shell commands older than this many days, once a day. 0 keeps them for good. Notes and files are never aged out.").unit("days").also("retention expire delete old history"),
+    s("kb.shell_skip", "knowledge", Kind::List, "Commands too trivial to keep, by their first word.").also("shell command ignore").or("none").eg("ls").adv(),
+    s("kb.shell_output_days", "knowledge", int(0, 36_500), "Delete what shell commands printed after this many days, once a day (the command lines stay as long as `kb.retain_days` says). 0 keeps it as long as its command. Only matters with `kb.shell = \"output\"`.").unit("days").also("retention expire delete shell output").adv(),
     s("kb.max_file", "knowledge", Kind::Text, "The largest file read into the knowledge base, like 1MiB or 512KiB. A larger one is left out and named in `ptyro kb status`.").eg("2MiB").adv(),
     s("kb.projects", "knowledge", Kind::Bool, "Read every project ptyro knows into the knowledge base: its documents, the names of its files, and what the next three switches allow. A project is read when it is added and looked at again as it changes; only its own checkout, never its worktrees. Off: only what you give `ptyro ingest` is read."),
     s("kb.comments", "knowledge", Kind::Bool, "Read the comments of source files, each with the line of code it stands on. Licence headers, tool directives and switched-off code are left out."),

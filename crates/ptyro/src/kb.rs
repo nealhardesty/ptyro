@@ -131,9 +131,9 @@ pub enum KbCmd {
         /// How many pieces to show each side of the one named (default 2)
         #[arg(long, value_name = "N")]
         context: Option<u32>,
-        /// Open its source instead: a session in the TUI (resumed if it can be), a chat in
-        /// its view, a note or a file in your editor (a file at the line of the piece), a
-        /// commit as `git show`
+        /// Open its source instead: a session in the TUI (resumed if it can be), a shell's
+        /// commands in that shell, a chat in its view, a note or a file in your editor (a
+        /// file at the line of the piece), a commit as `git show`
         #[arg(long, conflicts_with_all = ["context", "json"])]
         open: bool,
         #[arg(long)]
@@ -559,8 +559,8 @@ async fn show(ctx: &Ctx, addr: String, context: Option<u32>, json: bool) -> Resu
 }
 
 /// `kb show --open`: the source itself. A session opens in the TUI (resumed when it is
-/// dormant and can be); a chat in its view; a note and a file in your editor; a commit as
-/// `git show`.
+/// dormant and can be), and so does the shell a day's commands ran in, while ptyro still
+/// has it; a chat in its view; a note and a file in your editor; a commit as `git show`.
 async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
     // (A linked machine's chat is `laptop2:c:7f3k`.)
     if addr.starts_with("c:") || addr.contains(":c:") {
@@ -579,8 +579,18 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
             ),
         )
     };
+    let shell_gone = || {
+        Error::new(
+            ErrorCode::NotFound,
+            format!(
+                "the shell those commands ran in is no longer in ptyro; what was kept of them is `ptyro kb show {}`",
+                item.addr
+            ),
+        )
+    };
     match (item.item.kind, &item.item.session) {
-        (ItemKind::Session, Some(id)) => {
+        (kind @ (ItemKind::Session | ItemKind::Shell), Some(id)) => {
+            let gone = || if kind == ItemKind::Shell { shell_gone() } else { gone() };
             let info = match c.request(Request::Get { addr: id.clone() }).await {
                 Ok(Reply::Session { info }) => info,
                 Ok(r) => return Err(unexpected(r)),
@@ -590,6 +600,7 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
             crate::cli::attach(ctx, c, Some(info), false, false).await
         }
         (ItemKind::Session, None) => Err(gone()),
+        (ItemKind::Shell, None) => Err(shell_gone()),
         (ItemKind::Note, _) => edit_note(ctx, &c, &item.addr).await,
         (ItemKind::File | ItemKind::Commit, _) if ctx.remote.is_some() || far(&item.addr) => {
             Err(Error::invalid(format!(
@@ -602,10 +613,6 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
             open_file(&item, piece)
         }
         (ItemKind::Commit, _) => open_commit(ctx, &c, &item).await,
-        (kind, _) => Err(Error::invalid(format!(
-            "a {kind} has nothing to open from here yet: `ptyro kb show {}` shows what is kept of it",
-            item.addr
-        ))),
     }
 }
 

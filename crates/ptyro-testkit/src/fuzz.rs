@@ -47,6 +47,8 @@ pub fn emulator(data: &[u8]) {
     let cols = 2 + u16::from(data.first().copied().unwrap_or(10) % 120);
     let rows = 1 + u16::from(data.get(1).copied().unwrap_or(5) % 50);
     let mut e = AlacrittyEmulator::new(TermSize::new(cols, rows), 200);
+    // What a command printed is collected too, where the input says so.
+    e.capture_output(data.len() % 2 == 1);
     let mut out = FeedOutput::default();
     let mut row = Vec::new();
     for (i, chunk) in data.chunks(97).enumerate() {
@@ -312,6 +314,7 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
                 "\x1b]7501;?\x07\x1b[c",
                 "\x1b]0;title\x07\x1b[?1049h\x1b[2J\x1b[H",
                 "\x1b]133;A\x07$ \x1b]133;B\x07ls\x1b]133;C\x07\x1b]133;D;0\x07",
+                "\x1b]133;C;cmdline=make\x07a\rb\x08\n\x1b[1mc\x1b[?1049h\x1b]133;D;1\x07",
                 "\x1b]9;4;1;50\x07\x1b]777;notify;a;b\x07",
                 "\x1bP+q544e\x1b\\\x1b[>q\x1b[16t",
                 "\x1b[38;2;1;2;3m\x1b[48;5;200mX\x1b[0m\x1b[?2026h\x1b[?2026l",

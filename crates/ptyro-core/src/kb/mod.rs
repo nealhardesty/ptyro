@@ -9,6 +9,7 @@
 //! - [`comments`]: the comments of a source file.
 //! - [`mod@file`]: what is made of a file under a root, and of a commit.
 //! - [`note`]: a note's file: its header, its title, where it lives.
+//! - [`shell`]: a shell's commands, and what is never kept of one.
 //! - [`search`]: what a search asks and answers, and the ranking (§25.8).
 //! - The types of what is stored: [`KbItem`], [`KbChunk`], [`KbRoot`].
 
@@ -21,6 +22,7 @@ pub mod file;
 pub mod ingest;
 pub mod note;
 pub mod redact;
+pub mod shell;
 
 /// Names that are stored as text (`item.kind`, `chunk.kind`…): each has the word the file
 /// holds, and reads it back.

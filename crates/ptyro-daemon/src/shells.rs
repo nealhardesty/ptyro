@@ -179,6 +179,11 @@ struct Kept {
     pane: u32,
     #[serde(default)]
     layout: Option<WindowLayout>,
+    /// It was private, or unrecorded: it comes back so (SPEC §25.7a).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    private: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unrecorded: bool,
 }
 
 /// What the tick remembers about one loose session between looks.
@@ -1074,6 +1079,8 @@ impl Daemon {
                     pinned: f.pinned,
                     pane: f.pane(),
                     layout: f.layout.clone(),
+                    private: m.place.private,
+                    unrecorded: m.place.unrecorded,
                 })
             })
             .collect()
@@ -1275,6 +1282,8 @@ impl Daemon {
                 place: crate::session::Place {
                     profile: k.profile.clone(),
                     workspace: Some(ws.clone()),
+                    private: k.private,
+                    unrecorded: k.unrecorded,
                     ..crate::session::Place::default()
                 },
                 adapter: None,

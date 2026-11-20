@@ -228,6 +228,7 @@ impl Daemon {
                 pause: pause_rx,
                 readers: Arc::new(AtomicU64::new(0)),
                 parked: Arc::new(AtomicU64::new(0)),
+                kb_output: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             goodbye: watch::Sender::new(None),
             sends: Mutex::new(crate::typed::Sends::default()),
@@ -1518,6 +1519,7 @@ impl Daemon {
             Ok(c) => {
                 crate::set_log_level(&c.daemon.log_level);
                 *self.config.writing() = c;
+                self.kb_output_switch();
                 self.secrets.locked().clear();
                 // A web app running with other `[remote]` settings starts again with these.
                 self.serve_child.wake();

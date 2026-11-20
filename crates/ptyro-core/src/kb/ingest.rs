@@ -32,6 +32,8 @@ pub enum Skip {
     Off,
     /// `[kb] sessions = false`: agent sessions are not kept.
     SessionsOff,
+    /// `[kb] shell = "off"`: nothing of a shell is kept.
+    ShellsOff,
     /// `[agents.<name>] kb = false`.
     AgentOff,
     /// `[knowledge] enabled = false` in the project's `.ptyro.toml`.
@@ -59,6 +61,7 @@ impl std::fmt::Display for Skip {
         match self {
             Skip::Off => f.write_str("the knowledge base is off"),
             Skip::SessionsOff => f.write_str("agent sessions are not kept (`kb.sessions` is off)"),
+            Skip::ShellsOff => f.write_str("shell commands are not kept (`kb.shell` is off)"),
             Skip::AgentOff => f.write_str("its agent is kept out of the knowledge base"),
             Skip::ProjectOff => f.write_str("its project is kept out of the knowledge base"),
             Skip::Unrecorded => f.write_str("the session is not recorded"),
@@ -182,6 +185,8 @@ pub struct Gate<'a> {
     pub enabled: bool,
     /// The source is an agent's session and `kb.sessions` is off.
     pub sessions_off: bool,
+    /// The source is a shell's command and `kb.shell` is `off`.
+    pub shells_off: bool,
     /// The source's agent has `kb = false`.
     pub agent_off: bool,
     /// The source's project has `[kb] enabled = false`.
@@ -207,6 +212,7 @@ impl<'a> Gate<'a> {
         Self {
             enabled: true,
             sessions_off: false,
+            shells_off: false,
             agent_off: false,
             project_off: false,
             unrecorded: false,
@@ -231,6 +237,9 @@ pub fn gate(g: &Gate<'_>) -> Result<Passed, Skip> {
     }
     if g.sessions_off {
         return Err(Skip::SessionsOff);
+    }
+    if g.shells_off {
+        return Err(Skip::ShellsOff);
     }
     if g.agent_off {
         return Err(Skip::AgentOff);
@@ -505,6 +514,7 @@ mod tests {
         let all = Gate {
             enabled: false,
             sessions_off: true,
+            shells_off: true,
             agent_off: true,
             project_off: true,
             unrecorded: true,
@@ -524,6 +534,7 @@ mod tests {
                     match why {
                         Skip::Off => g.enabled = true,
                         Skip::SessionsOff => g.sessions_off = false,
+                        Skip::ShellsOff => g.shells_off = false,
                         Skip::AgentOff => g.agent_off = false,
                         Skip::ProjectOff => g.project_off = false,
                         Skip::Unrecorded => g.unrecorded = false,
@@ -542,6 +553,7 @@ mod tests {
             [
                 Skip::Off,
                 Skip::SessionsOff,
+                Skip::ShellsOff,
                 Skip::AgentOff,
                 Skip::ProjectOff,
                 Skip::Unrecorded,

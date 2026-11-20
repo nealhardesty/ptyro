@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 59 };
+pub const PROTO: Version = Version { major: 1, minor: 60 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -2645,6 +2645,7 @@ mod tests {
             status: KbStatusInfo {
                 enabled: true,
                 sessions: true,
+                shell: "commands".into(),
                 retain_days: 90,
                 error: None,
                 path: "/data/kb.db".into(),
@@ -2664,6 +2665,10 @@ mod tests {
                 }],
             },
         });
+        // 1.60: what is kept of shells; a daemon from before says nothing of it.
+        let old: Reply =
+            serde_json::from_str(r#"{"t":"kb_status","status":{"enabled":true}}"#).unwrap();
+        assert!(matches!(old, Reply::KbStatus { status } if status.shell.is_empty()));
         // As a page writes them.
         let (m, _): (Request, _) = decode(br#"{"t":"kb_search","query":"retry"}"#).unwrap();
         assert!(
