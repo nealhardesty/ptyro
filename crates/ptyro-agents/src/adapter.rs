@@ -52,6 +52,22 @@ pub struct LaunchCtx<'a> {
     pub agent_home: Option<PathBuf>,
     /// The project's main checkout (Codex directory trust).
     pub project_root: Option<&'a Path>,
+    /// Give the session the knowledge base's tools (SPEC §25.9): the daemon's socket, which
+    /// `ptyro mcp` is told with the session's id. `None`: no tools (`kb.tools`, the agent's
+    /// `kb = false`, the knowledge base off).
+    pub kb: Option<&'a Path>,
+}
+
+/// The knowledge base's tools (SPEC §25.9), as `ptyro mcp` names them.
+pub const KB_TOOLS: [&str; 2] = ["recall", "recall_read"];
+
+/// The environment `ptyro mcp` is started with in a session: which session, which daemon.
+/// (Who is asking is the kernel's word, never this: the daemon places the caller's process.)
+pub fn kb_env(ctx: &LaunchCtx<'_>, socket: &Path) -> [(&'static str, String); 2] {
+    [
+        ("PTYRO_SESSION_ID", ctx.session.to_owned()),
+        ("PTYRO_SOCKET", socket.to_string_lossy().into_owned()),
+    ]
 }
 
 /// A side channel the daemon runs next to the session.

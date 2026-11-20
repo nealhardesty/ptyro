@@ -1097,16 +1097,21 @@ impl Daemon {
         // A link is answered with this machine's own, and never routed on (no echoes).
         // A chat's own agent (its history tools) only searches, reads and lists this machine's
         // chats, within its scope (`handle_chat`): never routed, merged with others' or guessed.
+        // The knowledge base's tools search and read too, behind the same wall (`handle_kb`).
         let engine = self.engine_chat_of(caller).is_some();
         if engine
             && !matches!(
                 req,
-                Request::ChatSearch { .. } | Request::ChatRead { .. } | Request::ChatList { .. }
+                Request::ChatSearch { .. }
+                    | Request::ChatRead { .. }
+                    | Request::ChatList { .. }
+                    | Request::KbSearch { .. }
+                    | Request::KbRead { .. }
             )
         {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "a chat's agent may search and read chats, not change them",
+                "a chat's agent may search and read chats and the knowledge base, not change them",
             ));
         }
         let federate = !engine && !caller.is_link() && !self.links.locked().is_empty();

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """KB0.2 and KB0.3 (ROADMAP KB0, SPEC §25.6.1, §25.9, §20.1, §20.2, §20.8): check, against the real
 Claude Code and Codex installed here, every claim the knowledge base rests on, and say PASS / FAIL /
-NOT RUN for each. Since KB1.4 it also runs ptyro's own transcript reader over what the turns leave. Run it with `make verify-kb` (`make verify-kb ARGS=claude` for one agent,
+NOT RUN for each. Since KB1.4 it also runs ptyro's own transcript reader over what the turns leave.
+Since KB1.10 it also checks the tools **as built**: the real agents are started with the very flags
+ptyro's adapters give a session, against the real `ptyro mcp` of a throwaway daemon
+(`ARGS=--built` runs only that: one Claude turn and one Codex turn). Run it with `make verify-kb` (`make verify-kb ARGS=claude` for one agent,
 `ARGS=--fixtures` to also write sanitized transcripts for a new agent version, `ARGS=--tui` to also
 open Codex's TUI for a moment, `ARGS=--keep` to leave the work folders for a look).
 
@@ -18,7 +21,7 @@ rollouts); both are removed at the end unless `--keep` is given.
 This file is also its own helpers: `--mcp` is the stand-in MCP server, `--hook DIR` records a hook's
 payload and how long the transcript took to hold the turn, `--notify DIR` records Codex's notify.
 """
-import collections, hashlib, json, os, pty, re, select, shutil, signal, subprocess, sys, time
+import collections, hashlib, json, os, pty, re, select, shutil, signal, subprocess, sys, tempfile, time
 import concurrent.futures as cf
 
 ME = os.path.abspath(__file__)
@@ -954,6 +957,106 @@ def write_fixtures():
         out("NOTE", f"wrote {len(files)} sanitized fixtures to {os.path.relpath(d, ROOT)}: read them before you commit them")
 
 
+# ── As built (KB1.10) ─────────────────────────────────────────────────────────────────────────────
+BUILT_WORD = "zqverifykb"        # what the seeded session says, and `recall` must find
+
+
+def built(agents):
+    """The tools as ptyro gives them (SPEC §25.9): a throwaway daemon (its own PTYRO_HOME and HOME,
+    under target/verify-kb) whose agents are the fake ones keeps one session; the flags its adapters
+    gave those sessions are read from the sessions themselves, and the real agents are started with
+    exactly them. The real agents run here as you (not inside a ptyro session): the wall between
+    profiles is the daemon's and is tested in crates/ptyro/tests/kb1.rs, not here."""
+    print("\nas built: ptyro's own flags and `ptyro mcp` (KB1.10)")
+    cargo = os.environ.get("CARGO", "cargo")
+    if subprocess.run([cargo, "build", "-q", "-p", "ptyro"], cwd=ROOT).returncode != 0:
+        return out("NOT RUN", "ptyro did not build")
+    ptyro = os.path.join(os.environ.get("CARGO_TARGET_DIR", os.path.join(ROOT, "target")), "debug", "ptyro")
+    # (In the system's temporary folder: a Unix socket's path is short, and target/ may be deep.)
+    phome = os.path.realpath(tempfile.mkdtemp(prefix="ptyro-vkb-"))
+    home = os.path.join(phome, "home")
+    os.makedirs(os.path.join(phome, "config"))
+    os.makedirs(home)
+    q = json.dumps
+    with open(os.path.join(phome, "config", "config.toml"), "w") as f:
+        for a in ("claude", "codex"):
+            f.write(f"[agents.{a}]\ncommand = [{q(ptyro)}, \"fake-agent\", \"--as\", {q(a)}]\n"
+                    "env = { PTYRO_FAKE_TRANSCRIPT = \"1\", PTYRO_FAKE_TURNS = \"1\" }\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("PTYRO_") and k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CONFIG_DIR", "CODEX_HOME")}
+    env.update(PTYRO_HOME=phome, PTYRO_BIN=ptyro, PTYRO_ALLOW_NESTED="1", PTYRO_TEST_LATEST=os.path.join(phome, "no-registry"), HOME=home, SHELL="/bin/sh")
+
+    def run(*args, timeout=60):
+        return subprocess.run([ptyro, *args], cwd=home, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout)
+
+    try:
+        argv = {}
+        for a in ("claude", "codex"):
+            p = run("new", "--detach", "--json", "--agent", a, "--name", f"seed-{a}")
+            if p.returncode != 0:
+                return out("NOT RUN", f"the throwaway daemon did not start a session: {p.stderr.strip()[:200]}")
+            argv[a] = json.loads(p.stdout)["argv"]
+        run("send", "--wait-ready", "30s", "seed-claude", f"edit notes.txt {BUILT_WORD}")
+        t0, hit = time.time(), None
+        while time.time() - t0 < 30 and not hit:
+            p = run("recall", "--json", BUILT_WORD)
+            hits = json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else []
+            hit = hits[0]["addr"] if hits else None
+            time.sleep(0.2)
+        if not check(hit, "the throwaway daemon kept a session to find", "no hit"):
+            return
+        item = hit.split("/")[0]
+        prompt = (f"Call the recall tool of the ptyro MCP server with the query '{BUILT_WORD}'. Then reply with only the "
+                  "first address it returned (it starts with k:) and nothing else.")
+
+        def flag(a, name):
+            return a[a.index(name) + 1] if name in a else None
+
+        if "claude" in agents:
+            exe = binary("claude")
+            cfg, allowed = flag(argv["claude"], "--mcp-config"), flag(argv["claude"], "--allowedTools")
+            if not check(cfg and allowed, "ptyro's Claude adapter gave its session `--mcp-config` and `--allowedTools`", str(argv["claude"])[:200]):
+                pass
+            elif not exe:
+                out("NOT RUN", "claude is not installed: its as-built flags are unchecked")
+            else:
+                proj = workdir("built-claude")
+                made["claude"].add(re.sub(r"[^A-Za-z0-9]", "-", proj))
+                one = claude_turn(exe, "b-claude", proj, prompt, "--mcp-config", cfg, "--allowedTools", allowed, hooks=False)
+                if one["error"]:
+                    out("NOT RUN", f"claude did not answer: {one['error']}")
+                else:
+                    names = ["mcp__ptyro__recall", "mcp__ptyro__recall_read"]
+                    check(all(t in one["tools"] for t in names) and "mcp__ptyro__remember" not in one["tools"],
+                          f"Claude {version(exe)}: ptyro's own `--mcp-config` starts the real `ptyro mcp`, which gives the session recall and recall_read", str([t for t in one["tools"] if "mcp__" in t]))
+                    check("mcp__ptyro__recall" in one["uses"] and not one["denials"],
+                          "ptyro's own `--allowedTools` (one comma-separated word) lets recall run with no permission request", f"uses {one['uses']}, denials {one['denials']}")
+                    check(item in one["text"], "the real server's answer reached the model: it gave the kept session's address", one["text"][:120])
+        if "codex" in agents:
+            exe = binary("codex")
+            a = argv["codex"]
+            flags = [x for i, x in enumerate(a) if x.startswith("mcp_servers.ptyro.") and i and a[i - 1] == "-c"]
+            if not check(len(flags) == 4, "ptyro's Codex adapter gave its session the four `-c mcp_servers.ptyro.…` keys", str(flags)):
+                pass
+            elif not exe:
+                out("NOT RUN", "codex is not installed: its as-built flags are unchecked")
+            else:
+                before = open(codex_config()).read() if os.path.exists(codex_config()) else None
+                model = os.environ.get("VERIFY_KB_CODEX_MODEL", "gpt-6-luna")
+                one = codex_turn(exe, model, "b-codex", workdir("built-codex"), prompt, *[y for x in flags for y in ("-c", x)])
+                after = open(codex_config()).read() if os.path.exists(codex_config()) else None
+                check(before == after, "Codex's config.toml is as it was")
+                if one["error"]:
+                    out("NOT RUN", f"codex did not answer: {one['error']}")
+                else:
+                    calls = [i for i in one["items"] if i.get("type") == "mcp_tool_call" and i.get("server") == "ptyro"]
+                    check(calls and all(c.get("status") == "completed" for c in calls),
+                          f"Codex {version(exe)}: ptyro's own `-c mcp_servers.ptyro.…` flags start the real `ptyro mcp`, and recall is called with no approval", str(calls)[:200] or one["text"][:120])
+                    check(item in one["text"], "the real server's answer reached the model: it gave the kept session's address", one["text"][:120])
+    finally:
+        run("daemon", "stop", "--force", timeout=30)
+        shutil.rmtree(phome, ignore_errors=True)
+
+
 def cleanup(codex_exe):
     """Remove what the agents wrote of their own for these runs: Claude's project folders for the
     work folders, and Codex's rollouts of these threads."""
@@ -974,12 +1077,14 @@ def main():
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK)
     try:
-        if "claude" in agents:
+        # (`--built`: only the tools as built, two turns in all.)
+        if "claude" in agents and "--built" not in flags:
             spike_claude("--fixtures" in flags)
-        if "codex" in agents:
+        if "codex" in agents and "--built" not in flags:
             spike_codex("--fixtures" in flags)
             if "--tui" in flags and binary("codex"):
                 codex_tui(binary("codex"))
+        built(agents)
         if "--fixtures" in flags:
             write_fixtures()
     finally:

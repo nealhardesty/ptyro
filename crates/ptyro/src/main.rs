@@ -629,7 +629,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: checkpoint::CheckpointCmd,
     },
-    /// MCP server with the chat history tools (`chat_search`, `chat_read`, `chat_list`), for a
+    /// MCP server with the knowledge base's tools (`recall`, `recall_read`) for an agent's
+    /// session, and the chat history tools (`chat_search`, `chat_read`, `chat_list`) for a
     /// chat's agent (started for you)
     Mcp {
         /// The chat history tools (what a bare `ptyro mcp` serves too; kept for older chats)

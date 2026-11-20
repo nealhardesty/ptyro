@@ -475,7 +475,13 @@ impl Daemon {
                 adapter_id = Some(id);
                 structured = Some((protocol, opts, http));
             } else {
+                // The knowledge base's tools (SPEC §25.9): unless it is off, `kb.tools` is,
+                // or this agent is kept out (`[agents.X] kb = false`). A private session
+                // reads the knowledge base like any other (§25.7a).
+                let kb_tools =
+                    config.kb.enabled && config.kb.tools && !self.kb_agent_off(Some(&a.name));
                 let ctx = ptyro_agents::LaunchCtx {
+                    kb: kb_tools.then_some(self.paths.socket.as_path()),
                     agent: &a.name,
                     def: &def,
                     base_argv: base,

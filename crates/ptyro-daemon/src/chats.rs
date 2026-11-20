@@ -1747,10 +1747,16 @@ impl Daemon {
         let session_id = SessionId::new();
         // The chat history tools (SPEC §22.10), from `ptyro mcp --chat` in the engine itself;
         // the daemon scopes what they see by the engine they run in.
+        // With them, the knowledge base's (`recall`, `recall_read`; SPEC §25.9), unless they
+        // are off or this is `chat find`'s engine, which has the chats and nothing else.
+        let kb = info.tools != FIND_TOOLS
+            && config.kb.enabled
+            && config.kb.tools
+            && !self.kb_agent_off(Some(&info.agent));
         let history = (config.chat.history_tool || info.tools == FIND_TOOLS).then(|| {
             let ptyro = std::env::current_exe()
                 .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
-            serde_json::json!({
+            let mut server = serde_json::json!({
                 "type": "stdio",
                 "command": ptyro,
                 "args": ["mcp", "--chat"],
@@ -1759,10 +1765,15 @@ impl Daemon {
                     "PTYRO_CHAT_ID": info.id,
                     "PTYRO_SOCKET": self.paths.socket.to_string_lossy(),
                 },
-            })
+            });
+            if kb {
+                server["env"]["PTYRO_KB_TOOLS"] = "1".into();
+            }
+            server
         });
         let extra = ChatLaunch {
             incognito: info.incognito,
+            kb: kb && history.is_some(),
             history,
             system: (info.tools == FIND_TOOLS).then_some(FIND_PROMPT),
             folders: info.folders.clone(),
@@ -2702,6 +2713,8 @@ struct ChatLaunch {
     incognito: bool,
     /// `ptyro mcp --chat`, as an MCP server entry: the chat history tools (SPEC §22.10).
     history: Option<serde_json::Value>,
+    /// That server has the knowledge base's tools too (SPEC §25.9).
+    kb: bool,
     /// Instead of the chat system prompt (`chat find`'s).
     system: Option<&'static str>,
     /// The chat's own folders (CHAT4).
@@ -2830,6 +2843,9 @@ fn tools_launch(
             }
             if extra.history.is_some() {
                 allowed.extend(HISTORY_TOOLS.map(str::to_owned));
+            }
+            if extra.kb {
+                allowed.extend(ptyro_agents::adapter::KB_TOOLS.map(|t| format!("mcp__ptyro__{t}")));
             }
             let mut v = vec!["--tools".to_owned(), tools.join(",")];
             if !allowed.is_empty() {
@@ -3088,6 +3104,15 @@ mod tests {
         let (a, _) = tools_launch("stream-json", &read, dir, vec![], &[], &claude);
         assert!(a[3].starts_with("WebSearch,WebFetch,mcp__ptyro__chat_search"));
         assert!(!a.contains(&"--safe-mode".into()));
+        assert!(!a[3].contains("recall"), "the knowledge base's tools only when it gives them");
+        // With the knowledge base's tools (SPEC §25.9): allowed beside the history tools.
+        let with_kb =
+            ChatLaunch { kb: true, history: Some(history.clone()), ..ChatLaunch::default() };
+        let (k, _) = tools_launch("stream-json", &read, dir, vec![], &[], &with_kb);
+        assert!(
+            k[3].ends_with("mcp__ptyro__chat_list,mcp__ptyro__recall,mcp__ptyro__recall_read"),
+            "{k:?}"
+        );
         let cfg = &a[a.iter().position(|x| x == "--mcp-config").unwrap() + 1];
         assert_eq!(std::path::Path::new(cfg), dir.join("mcp.json"));
         assert!(std::fs::read_to_string(cfg).unwrap().contains("/bin/ptyro"));

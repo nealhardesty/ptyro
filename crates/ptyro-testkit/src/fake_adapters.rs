@@ -3,8 +3,11 @@
 //!
 //! It reads the integration ptyro generated for it, exactly as the real agent would:
 //! - **claude**: the `--plugin-dir`'s `hooks/hooks.json`, the `--settings` statusLine command,
-//!   `--session-id` / `--resume`;
-//! - **codex**: `-c hooks.<Event>=[…]` and `-c notify=[…]`, `resume <id>`;
+//!   `--session-id` / `--resume`, and the `ptyro` server of `--mcp-config` with the tools
+//!   `--allowedTools` names (a tool it doesn't name is refused, as Claude refuses it);
+//! - **codex**: `-c hooks.<Event>=[…]` and `-c notify=[…]`, `resume <id>`, and
+//!   `-c mcp_servers.ptyro.*` (without `default_tools_approval_mode="approve"` a call is
+//!   refused, as `codex exec` fails it);
 //! - **opencode**: serves `GET /event` (SSE, basic auth with `OPENCODE_SERVER_PASSWORD`) on
 //!   `--port`, and the permissions API.
 //!
@@ -28,6 +31,7 @@
 //! typo in `greeting.txt` (or, told no, leaves it).
 //! With `PTYRO_FAKE_PASTE=1` it asks for bracketed paste, as Claude and Codex do: a pasted
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
+//! | `mcp <file> <tool> <json>` | calls a tool of the `ptyro` MCP server the launch gave it, as the real agent would, and writes the answer to `<file>` (`tools/list`: the tools' names and the server's instructions) |
 //! | `exit` | SessionEnd, exit 0 |
 //! With `PTYRO_FAKE_HOOK_DELAY_MS=N` every hook takes N ms to start (a loaded machine).
 //! With `PTYRO_FAKE_TRANSCRIPT=1` the fake Claude and Codex keep a transcript as the real ones
@@ -75,6 +79,93 @@ struct Fake {
     plain_dialog: bool,
     /// `PTYRO_FAKE_TRANSCRIPT=1`: the conversation's file, as the real agent keeps it.
     script: Option<crate::fake_transcript::Script>,
+    /// The `ptyro` MCP server this launch was given.
+    mcp: Option<Mcp>,
+}
+
+/// An MCP server as a launch names it, and which of its tools run unasked.
+#[derive(Default)]
+struct Mcp {
+    command: String,
+    args: Vec<String>,
+    env: Vec<(String, String)>,
+    /// Claude's `--allowedTools` (`mcp__ptyro__recall`, …).
+    allowed: Vec<String>,
+    /// Codex's `default_tools_approval_mode = "approve"`.
+    approve: bool,
+}
+
+impl Mcp {
+    /// One call, as an agent makes it: start the server, `initialize`, then the request.
+    /// Answers the tool's text (`tools/list`: the names, `[always]` where one is always
+    /// loaded, and the server's instructions).
+    fn call(&self, tool: &str, args: &Value) -> String {
+        let mut c = std::process::Command::new(&self.command);
+        c.args(&self.args)
+            .envs(self.env.iter().cloned())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = match c.spawn() {
+            Ok(c) => c,
+            Err(e) => return format!("mcp: the server did not start: {e}"),
+        };
+        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            return "mcp: no pipes".into();
+        };
+        let mut lines = std::io::BufReader::new(stdout).lines();
+        let mut ask = |id: u64, method: &str, params: Value| -> Value {
+            let msg = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+            if writeln!(stdin, "{msg}").is_err() {
+                return Value::Null;
+            }
+            for line in lines.by_ref().map_while(Result::ok) {
+                if let Ok(v) = serde_json::from_str::<Value>(&line)
+                    && v["id"] == id
+                {
+                    return v;
+                }
+            }
+            Value::Null
+        };
+        let init = ask(
+            1,
+            "initialize",
+            json!({ "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": { "name": "fake-agent", "version": "0" } }),
+        );
+        let said = if tool == "tools/list" {
+            let listed = ask(2, "tools/list", json!({}));
+            let names: Vec<String> = listed["result"]["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|t| {
+                    let always = t["_meta"]["anthropic/alwaysLoad"] == true;
+                    format!(
+                        "{}{}",
+                        t["name"].as_str().unwrap_or(""),
+                        if always { " [always]" } else { "" }
+                    )
+                })
+                .collect();
+            format!(
+                "tools: {}\ninstructions: {}",
+                names.join(", "),
+                init["result"]["instructions"].as_str().unwrap_or("")
+            )
+        } else {
+            let r = ask(2, "tools/call", json!({ "name": tool, "arguments": args }));
+            match r["result"]["content"][0]["text"].as_str() {
+                Some(text) if r["result"]["isError"] == true => format!("error: {text}"),
+                Some(text) => text.to_owned(),
+                None => format!("mcp: {}", r["error"]["message"].as_str().unwrap_or("no answer")),
+            }
+        };
+        drop(stdin);
+        let _ = child.wait();
+        said
+    }
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -112,6 +203,7 @@ impl Fake {
                 .map(|v| v.parse().unwrap_or(0)),
             plain_dialog: ptyro_core::test_knob("PTYRO_FAKE_PLAIN_DIALOG").is_some(),
             script: None,
+            mcp: None,
             adapter,
         };
         match f.adapter.as_str() {
@@ -143,6 +235,33 @@ impl Fake {
                         f.resumed = true;
                     }
                     None => f.session = arg_value(args, "--session-id").unwrap_or_else(uuidish),
+                }
+                if let Some(s) = arg_value(args, "--mcp-config")
+                    .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                    .map(|v| v["mcpServers"]["ptyro"].clone())
+                    .filter(|s| s["command"].is_string())
+                {
+                    let strs = |v: &Value| -> Vec<String> {
+                        v.as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|x| x.as_str().map(str::to_owned))
+                            .collect()
+                    };
+                    f.mcp = Some(Mcp {
+                        command: s["command"].as_str().unwrap_or_default().to_owned(),
+                        args: strs(&s["args"]),
+                        env: s["env"]
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+                            .collect(),
+                        allowed: arg_value(args, "--allowedTools")
+                            .map(|a| a.split([',', ' ']).map(str::to_owned).collect())
+                            .unwrap_or_default(),
+                        approve: false,
+                    });
                 }
             }
             "codex" => {
@@ -176,6 +295,33 @@ impl Fake {
                             .flatten()
                             .filter_map(|s| s.as_str().map(str::to_owned))
                             .collect();
+                    } else if let Some(key) = k.strip_prefix("mcp_servers.ptyro.") {
+                        let m = f.mcp.get_or_insert_with(Mcp::default);
+                        match key {
+                            "command" => {
+                                m.command = t["x"].as_str().unwrap_or_default().to_owned();
+                            }
+                            "args" => {
+                                m.args = t["x"]
+                                    .as_array()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|s| s.as_str().map(str::to_owned))
+                                    .collect();
+                            }
+                            "env" => {
+                                m.env = t["x"]
+                                    .as_table()
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_owned())))
+                                    .collect();
+                            }
+                            "default_tools_approval_mode" => {
+                                m.approve = t["x"].as_str() == Some("approve");
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 match args.iter().position(|a| a == "resume") {
@@ -810,6 +956,32 @@ pub fn main(args: &[String]) -> i32 {
                 });
             }
             "/exit" | "/quit" => return 0,
+            // `mcp <file> <tool> <json>`: a tool of the `ptyro` server, as the agent calls it.
+            "mcp" => {
+                let mut parts = rest.splitn(3, ' ');
+                let (file, tool) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+                let args: Value =
+                    parts.next().and_then(|a| serde_json::from_str(a).ok()).unwrap_or(json!({}));
+                let said = match &f.mcp {
+                    None => "no mcp server: this launch was given none".to_owned(),
+                    Some(m) if tool == "tools/list" => m.call(tool, &args),
+                    // Claude refuses a tool its rules don't allow; Codex one nobody approved.
+                    Some(m)
+                        if f.adapter == "claude"
+                            && !m.allowed.contains(&format!("mcp__ptyro__{tool}")) =>
+                    {
+                        format!("refused: mcp__ptyro__{tool} is not allowed")
+                    }
+                    Some(m) if f.adapter == "codex" && !m.approve => {
+                        "refused: the call needs an approval".to_owned()
+                    }
+                    Some(m) => m.call(tool, &args),
+                };
+                // (Written whole or not at all: whoever waits for it reads it once.)
+                let tmp = format!("{file}.tmp");
+                let _ = std::fs::write(&tmp, said).and_then(|()| std::fs::rename(&tmp, file));
+                let _ = writeln!(out, "mcp done {file}");
+            }
             "compact" if f.script.is_some() => {
                 if let Some(s) = &f.script {
                     s.compact(rest);
