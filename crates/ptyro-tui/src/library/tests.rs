@@ -217,15 +217,11 @@ fn it_has_a_key_and_a_place_in_the_palette_the_help_and_which_key() {
     for a in ["kb.status", "kb.enable"].iter().chain(ACTIONS) {
         assert!(crate::keymap::spec(a).is_some(), "{a}");
     }
-    // None of them runs a command in a split any more. (The four of the sources do, until
-    // the Sources tab, KB3.7: they are not the Library's yet.)
-    let split: Vec<&str> = crate::cli_actions::TEMPLATES
-        .iter()
-        .map(|(a, _)| *a)
-        .filter(|a| a.starts_with("kb."))
-        .collect();
-    assert_eq!(split, ["kb.sources", "kb.ingest", "kb.backfill", "kb.remove"]);
-    assert!(split.iter().all(|a| !ACTIONS.contains(a)));
+    // None of them runs a command in a split any more: each is the Library's own.
+    assert!(crate::cli_actions::TEMPLATES.iter().all(|(a, _)| !a.starts_with("kb.")));
+    for a in ["kb.sources", "kb.ingest", "kb.backfill", "kb.remove"] {
+        assert!(ACTIONS.contains(&a) && crate::keymap::spec(a).is_some(), "{a}");
+    }
     app.overlay = Some(Overlay::Help { filter: "kb.open".into(), scroll: 0 });
     let shown = screen(app);
     assert!(shown.contains("C-q L") && shown.contains("The Library"), "{shown}");
@@ -1234,4 +1230,423 @@ fn the_note_actions_and_a_notes_hit() {
         app.last_cli.as_deref(),
         Some(&["kb", "show", "k:AAAA", "--open"].map(str::to_owned)[..])
     );
+}
+
+// ── the Sources tab (KB3.7) ─────────────────────────────────────────────────────────────────
+
+fn root(id: &str, name: &str, kind: &str, state: &str, extra: serde_json::Value) -> KbRootInfo {
+    let mut v = json!({
+        "id": id, "name": name, "kind": kind, "path": format!("/src/{name}"), "state": state,
+        "added_ms": 1, "synced_ms": now_ms() - 120_000, "files": 12, "commits": 3, "chunks": 40,
+    });
+    for (k, x) in extra.as_object().unwrap() {
+        v[k] = x.clone();
+    }
+    serde_json::from_value(v).unwrap()
+}
+
+/// The Sources tab with two roots answered: a project, and a folder that is gone.
+fn sources(app: &mut App) {
+    opened(app);
+    press(app, "3");
+    assert_eq!(lib(app).tab, Tab::Sources);
+    assert_eq!(lib(app).request(None), Some(Request::KbRoots { machine: None }));
+    let n = lib(app).asked;
+    asked(app);
+    let roots = vec![
+        root("R1", "feeder", "project", "ok", json!({ "project": "p1", "project_name": "feeder" })),
+        root(
+            "R2",
+            "handbook",
+            "folder",
+            "missing",
+            json!({
+                "error": "/src/handbook is gone", "profile": "work",
+                "options": { "include": ["*.md"], "code": true, "once": true },
+            }),
+        ),
+    ];
+    reply(app, Pending::KbRows(n), Reply::KbRoots { roots });
+}
+
+#[test]
+fn the_sources_tab_lists_what_is_read_how_it_stands_and_how_far_a_read_is() {
+    let mut t = t();
+    let app = &mut t.app;
+    sources(app);
+    let shown = screen(app);
+    for want in [
+        " 3 Sources ",
+        "what is read: your projects by themselves, and the folders you add",
+        "agent sessions are kept as they happen",
+        "project  feeder ",
+        "read 2m ago",
+        "12 files, 3 commits, 40 pieces",
+        "/src/feeder",
+        "folder   handbook ",
+        "missing",
+        "profile work · /src/handbook",
+        "/src/handbook is gone",
+        // The selected one, in full, beside the list.
+        "a project: read for as long as ptyro has it",
+        "what your settings say",
+        "i read a folder · s look again · S at all of them · x stop reading it",
+        "b agents' history",
+    ] {
+        assert!(shown.contains(want), "{want:?} in\n{shown}");
+    }
+    assert!(!shown.contains("kind: any") && !shown.contains("machine:"), "{shown}");
+    // The folder's own options are said beside it.
+    press(app, "j");
+    let shown = screen(app);
+    for want in ["a folder you gave", "code · only *.md · read once", "seen by   work"] {
+        assert!(shown.contains(want), "{want:?} in\n{shown}");
+    }
+    // A pass over the project: how far it is, from the event; nothing is asked for it.
+    asked(app);
+    let progress = |done, of| ptyro_protocol::ServerMsg::Event {
+        event: DomainEvent::KbProgress { root: "R1".into(), name: "feeder".into(), done, of },
+    };
+    app.on_server(progress(3, 10));
+    assert!(screen(app).contains("reading 3 of 10"), "{}", screen(app));
+    assert!(asked(app).is_empty());
+    // While something is being read the list is asked for again by itself, once a second.
+    app.sources_tick();
+    assert!(asked(app).is_empty(), "not before a second is over");
+    app.library_mut().unwrap().polled -= std::time::Duration::from_secs(2);
+    app.sources_tick();
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbRows(_))));
+    // The pass ended: what it holds now is asked for. The selection stays on its root.
+    app.on_server(progress(10, 10));
+    let n = lib(app).asked;
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbRows(_))));
+    let roots = vec![
+        root("R0", "atlas", "project", "ok", json!({})),
+        root("R1", "feeder", "project", "ok", json!({})),
+        root("R2", "handbook", "folder", "missing", json!({})),
+    ];
+    reply(app, Pending::KbRows(n), Reply::KbRoots { roots });
+    assert_eq!(lib(app).root().map(|r| r.root.name.as_str()), Some("handbook"));
+    // Nothing more is being read: the tick asks nothing.
+    app.library_mut().unwrap().polled -= std::time::Duration::from_secs(2);
+    app.sources_tick();
+    assert!(asked(app).is_empty());
+    // `y` copies the path; `1` is the search again, and `3` comes back.
+    press(app, "y");
+    assert_eq!(toast(app), "copied its path");
+    press(app, "1");
+    assert_eq!(lib(app).tab, Tab::Search);
+    run(app, "kb.sources");
+    assert_eq!(lib(app).tab, Tab::Sources);
+    // Narrow: the list alone.
+    let mut small = sized(60, 20);
+    sources(&mut small.app);
+    let shown = screen(&small.app);
+    assert!(shown.contains("folder   handbook ") && !shown.contains("it is "), "{shown}");
+    // Nothing read yet says how to begin.
+    let n = lib(&small.app).asked;
+    reply(&mut small.app, Pending::KbRows(n), Reply::KbRoots { roots: Vec::new() });
+    assert!(screen(&small.app).contains("nothing is read yet"), "{}", screen(&small.app));
+}
+
+#[test]
+fn a_root_is_looked_at_again_and_removed_in_the_daemons_words() {
+    let mut t = t();
+    let app = &mut t.app;
+    sources(app);
+    // `s`: the selected one; `S`: every one, and the notes.
+    press(app, "js");
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbSynced)));
+    reply(app, Pending::KbSynced, Reply::KbSynced { notes: 0, changed: 0, removed: 0, roots: 1 });
+    assert_eq!(
+        toast(app),
+        "0 notes in the folder: 0 read again, 0 gone; 1 project or folder is looked at again"
+    );
+    asked(app);
+    // `x`: asked, not done, by the root's id.
+    press(app, "x");
+    let Some(Pending::Confirm(req, then)) =
+        asked(app).into_iter().find(|p| matches!(p, Pending::Confirm(..)))
+    else {
+        panic!("nothing asked")
+    };
+    assert_eq!(*req, Request::KbRemove { root: "R2".into(), confirmed: false, machine: None });
+    let words = "Stop reading handbook (/src/handbook) and drop what was kept of it: 12 file(s) and 3 commit(s)? Its files and its repository aren't touched: ingest it again and it is back.";
+    app.on_reply(AppMsg::Reply(
+        Pending::Confirm(req, then),
+        Err(Error::new(ErrorCode::NeedsConfirmation, words)),
+    ));
+    let shown = screen(app);
+    assert!(shown.contains("Stop reading handbook (/src/handbook)"), "{shown}");
+    assert!(shown.contains("[y/N]"), "{shown}");
+    press(app, "y");
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbRemoved)));
+    reply(
+        app,
+        Pending::KbRemoved,
+        Reply::KbRemoved { name: "handbook".into(), items: 15, chunks: 40 },
+    );
+    assert_eq!(
+        toast(app),
+        "handbook is no longer read: dropping 15 items (40 pieces); your files aren't touched"
+    );
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbRows(_))));
+    // `kb.remove` from anywhere else shows where to pick one.
+    press(app, "1");
+    run(app, "kb.remove");
+    assert_eq!(lib(app).tab, Tab::Sources);
+    assert!(toast(app).contains("select what to stop reading"), "{}", toast(app));
+    // `t`: whether agent sessions are kept, in your config.
+    assert!(app.config.kb.sessions);
+    press(app, "t");
+    assert!(!app.config.kb.sessions, "{}", toast(app));
+    assert!(toast(app).contains("no longer kept"));
+}
+
+/// The form's fields are what `ptyro ingest PATH` takes (`crates/ptyro/src/ingest.rs`): the
+/// path, `--name`, `--project`, `--profile`, `--include`, `--exclude`, `--no-comments`,
+/// `--code`, `--no-commits`, `--once`, and `--machine` once one is linked.
+#[test]
+fn the_ingest_form_shows_every_option_and_asks_for_what_was_filled_in() {
+    let mut t = t();
+    let app = &mut t.app;
+    sources(app);
+    // `i`: the path picker first (here, what was found, or a path to type).
+    press(app, "i");
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbPaths)));
+    reply(app, Pending::KbPaths, Reply::Paths { paths: vec!["/src/found-repo".into()] });
+    let Some(Overlay::Picker { palette, purpose: Purpose::KbIngest }) = &app.overlay else {
+        panic!("the path picker")
+    };
+    let labels: Vec<&str> = (0..3).map(|i| palette.item(i).label.as_str()).collect();
+    assert_eq!(labels, ["+ a path…", "here", "found-repo"]);
+    app.picked(Target::Path("/src/found-repo".into()), Purpose::KbIngest);
+    let Some(Overlay::Form(form)) = &app.overlay else { panic!("the ingest form") };
+    let keys: Vec<&str> = form.fields.iter().map(|f| f.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        [
+            "path", "name", "project", "profile", "include", "exclude", "comments", "code",
+            "commits", "once"
+        ]
+    );
+    // The defaults are shown as the settings have them.
+    assert_eq!(form.get("path"), "/src/found-repo");
+    assert_eq!(
+        (form.get("comments"), form.get("code"), form.get("commits")),
+        ("yes".into(), "".into(), "yes".into())
+    );
+    // ⏎ takes the defaults: nothing but the path is sent.
+    press(app, "<Enter>");
+    let mut sent = None;
+    while let Ok(m) = app.rx.try_recv() {
+        if let AppMsg::Reply(Pending::KbIngested(m), _) = m {
+            sent = Some(m);
+        }
+    }
+    assert_eq!(sent, Some(None));
+    // What was filled in is what is asked for.
+    app.picked(Target::NewProjectPath, Purpose::KbIngest);
+    let Some(Overlay::Form(mut form)) = app.overlay.take() else { panic!("the ingest form") };
+    let set = |form: &mut crate::form::Form, key: &str, v: &str| {
+        let f = form.fields.iter_mut().find(|f| f.key == key).unwrap();
+        match &mut f.kind {
+            crate::form::Kind::Text { value, .. } => *value = v.into(),
+            crate::form::Kind::Choice { options, sel } => {
+                *sel = options.iter().position(|o| o.0 == v).unwrap()
+            }
+            crate::form::Kind::Multi { .. } => unreachable!(),
+        }
+    };
+    for (k, v) in [
+        ("path", "~/handbook"),
+        ("name", "handbook"),
+        ("include", "*.md, guides/**"),
+        ("exclude", "drafts"),
+        ("comments", ""),
+        ("code", "yes"),
+        ("commits", ""),
+        ("once", "yes"),
+    ] {
+        set(&mut form, k, v);
+    }
+    assert_eq!(
+        sources::spec_of(&form, true),
+        ptyro_core::kb::RootSpec {
+            path: "~/handbook".into(),
+            name: Some("handbook".into()),
+            project: None,
+            profile: None,
+            options: ptyro_core::kb::RootOptions {
+                include: vec!["*.md".into(), "guides/**".into()],
+                exclude: vec!["drafts".into()],
+                comments: Some(false),
+                code: Some(true),
+                commits: Some(false),
+                once: true,
+            },
+        }
+    );
+    // Its answer is said as the command says it, on the Sources tab.
+    let plan = ptyro_core::kb::KbPlan {
+        files: 6,
+        documents: 3,
+        sources: 1,
+        comments: true,
+        commits: true,
+        ..Default::default()
+    };
+    let made = root("R3", "handbook", "folder", "syncing", json!({}));
+    app.on_reply(AppMsg::Reply(
+        Pending::KbIngested(None),
+        Ok(Reply::KbIngested { root: made, plan }),
+    ));
+    assert_eq!(
+        toast(app),
+        "handbook (/src/handbook): 6 files: 3 documents, 1 source file (comments), its commits"
+    );
+    assert_eq!(lib(app).tab, Tab::Sources);
+    // With a machine linked the form has the pick, and the tab the filter.
+    app.machines.push(
+        serde_json::from_value(json!({
+            "name": "laptop2", "transport": { "t": "ssh", "target": "laptop2" },
+            "state": "online", "added_ms": 0,
+        }))
+        .unwrap(),
+    );
+    assert!(screen(app).contains("machine: any"));
+    press(app, "<Tab><Enter>");
+    app.picked(Target::Path("laptop2".into()), Purpose::Library(Filter::Machine));
+    assert_eq!(lib(app).request(None), Some(Request::KbRoots { machine: Some("laptop2".into()) }));
+    assert!(screen(app).contains("what laptop2 reads"), "{}", screen(app));
+    // Its paths are its own: no picker of this computer's folders, and the machine chosen.
+    app.overlay = None;
+    press(app, "<Esc>");
+    assert_eq!(lib(app).chip, None);
+    asked(app);
+    press(app, "i");
+    let Some(Overlay::Form(form)) = &app.overlay else { panic!("the ingest form") };
+    assert_eq!(form.fields.last().map(|f| f.key.as_str()), Some("machine"));
+    assert_eq!(form.get("machine"), "laptop2");
+}
+
+#[test]
+fn the_agents_history_is_counted_first_and_read_after_a_yes() {
+    let mut t = t();
+    let app = &mut t.app;
+    sources(app);
+    press(app, "b");
+    let Some(Overlay::Form(form)) = &app.overlay else { panic!("the backfill form") };
+    // What `ptyro ingest --history` takes: `--agent`, `--profile`, `--since`, `--dry-run`.
+    let keys: Vec<&str> = form.fields.iter().map(|f| f.key.as_str()).collect();
+    assert_eq!(keys, ["agent", "profile", "since", "dry"]);
+    // A bad age is said on the form.
+    press(app, "<Tab><Tab>soon<Enter>");
+    let Some(Overlay::Form(form)) = &app.overlay else { panic!("the form stays") };
+    assert!(form.error.as_deref().is_some_and(|e| e.contains("soon")), "{:?}", form.error);
+    press(app, "<BS><BS><BS><BS>30d<Enter>");
+    let Some(Pending::KbCounted(Some(read))) =
+        asked(app).into_iter().find(|p| matches!(p, Pending::KbCounted(_)))
+    else {
+        panic!("not counted first")
+    };
+    assert!(
+        matches!(&*read, Request::KbHistory { dry_run: false, since_ms: Some(_), agent: None, .. }),
+        "{read:?}"
+    );
+    let plan = ptyro_core::kb::KbHistoryPlan { found: 12, known: 4, new: 8, ..Default::default() };
+    app.on_reply(AppMsg::Reply(
+        Pending::KbCounted(Some(read)),
+        Ok(Reply::KbHistory { plan: plan.clone() }),
+    ));
+    let shown = screen(app);
+    assert!(shown.contains("12 conversations in your agents' folders"), "{shown}");
+    assert!(shown.contains("Read them? [y/N]"), "{shown}");
+    press(app, "y");
+    let Some(Pending::KbBackfilled(said)) =
+        asked(app).into_iter().find(|p| matches!(p, Pending::KbBackfilled(_)))
+    else {
+        panic!("not read after the yes")
+    };
+    app.on_reply(AppMsg::Reply(Pending::KbBackfilled(said), Ok(Reply::KbHistory { plan })));
+    assert!(toast(app).starts_with("reading 8 conversations behind everything else"));
+    // Only counting, or nothing to read: the count is all there is.
+    app.on_reply(AppMsg::Reply(
+        Pending::KbCounted(None),
+        Ok(Reply::KbHistory { plan: ptyro_core::kb::KbHistoryPlan::default() }),
+    ));
+    assert_eq!(toast(app), "no conversations in your agents' folders");
+    assert!(app.overlay.is_none());
+}
+
+#[test]
+fn the_history_brings_older_pages_at_its_end() {
+    let mut t = t();
+    let app = &mut t.app;
+    opened(app);
+    let n = lib(app).asked;
+    let now = now_ms();
+    let page = |from: u64| -> Vec<KbListed> {
+        (from..from + 100)
+            .map(|i| listed(&format!("{i:04}"), &format!("session {i}"), now - i * 60_000, None))
+            .collect()
+    };
+    reply(app, Pending::KbRows(n), Reply::KbItems { items: page(0) });
+    asked(app);
+    // (The day-old one that was listed before stays under the page: it is older than it.)
+    let listed_now = lib(app).rows.len();
+    assert_eq!(listed_now, 101);
+    // Not at the end: nothing more is asked.
+    press(app, "j");
+    assert!(!asked(app).iter().any(|p| matches!(p, Pending::KbOlder(_))));
+    assert!(lib(app).more);
+    // At the end: the next page, from before the oldest listed.
+    press(app, "G");
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbOlder(a) if *a == n)));
+    assert!(screen(app).contains("Looking for older ones…"), "{}", screen(app));
+    // (Not asked for twice while it is on its way.)
+    press(app, "j");
+    assert!(!asked(app).iter().any(|p| matches!(p, Pending::KbOlder(_))));
+    let mut older = page(100);
+    older.truncate(3);
+    older.push(listed("0099", "session 99", now - 99 * 60_000, None));
+    app.on_reply(AppMsg::Reply(Pending::KbOlder(n), Ok(Reply::KbItems { items: older })));
+    assert_eq!((lib(app).rows.len(), lib(app).more, lib(app).sel), (104, false, 100));
+    // News of a change asks for the newest page again: the older ones stay under it.
+    app.library_news();
+    let n = lib(app).asked;
+    reply(app, Pending::KbRows(n), Reply::KbItems { items: page(0) });
+    assert_eq!(lib(app).rows.len(), 104);
+}
+
+#[test]
+fn enter_on_a_file_or_a_commit_opens_it_in_its_own_tool() {
+    let mut t = t();
+    let app = &mut t.app;
+    opened(app);
+    let mut doc = hit("FFFF", 4, "docs/retry.md", &format!("the {MARK_ON}retry{MARK_OFF} policy"));
+    doc.kind = HitKind::Doc;
+    let mut commit =
+        hit("CCCC", 0, "feeder: retry three times", &format!("{MARK_ON}retry{MARK_OFF}"));
+    commit.kind = HitKind::Commit;
+    let mut far = hit("EEEE", 1, "far.md", &format!("{MARK_ON}retry{MARK_OFF}"));
+    (far.kind, far.machine, far.addr) =
+        (HitKind::Doc, Some("laptop2".into()), "laptop2:k:EEEE/1".into());
+    searched(app, "retry", vec![doc, commit, far], None);
+    // A file: your editor at the piece's line, by the command that opens one.
+    press(app, "<Enter>");
+    assert_eq!(
+        app.last_cli.as_deref(),
+        Some(&["kb", "show", "k:FFFF/4", "--open"].map(str::to_owned)[..])
+    );
+    // A commit: `git show` of it.
+    press(app, "j<Enter>");
+    assert_eq!(
+        app.last_cli.as_deref(),
+        Some(&["kb", "show", "k:CCCC/0", "--open"].map(str::to_owned)[..])
+    );
+    // Another machine's file is not here to open: what was kept of it is read.
+    asked(app);
+    press(app, "j<Enter>");
+    assert!(asked(app).iter().any(|p| matches!(p, Pending::KbReader(Some(1)))));
 }

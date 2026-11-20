@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 58 };
+pub const PROTO: Version = Version { major: 1, minor: 59 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -1077,16 +1077,26 @@ pub enum Request {
     KbSync {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         roots: Vec<String>,
+        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     /// The roots (1.58, SPEC §25.6.3): every project and folder that is read into the
     /// knowledge base, with what each holds and how it stands. → `KbRoots`.
-    KbRoots,
+    KbRoots {
+        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
+    },
     /// Read a folder or a file into the knowledge base and keep reading it (1.58, `ptyro
     /// ingest PATH`). A path that is a root already, or inside one, is read again instead
     /// (and takes the options given, when it is that root's own path). The answer says what
     /// will be read; the reading itself goes on after it. → `KbIngested`.
     KbIngest {
         spec: ptyro_core::kb::RootSpec,
+        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     /// Stop reading a root and drop what was kept of it (1.58, `ptyro kb rm`): its files'
     /// and commits' items go, with no tombstones (ingest it again and it is back). Unless
@@ -1096,6 +1106,9 @@ pub enum Request {
         root: String,
         #[serde(default)]
         confirmed: bool,
+        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     /// Read what the agents kept before ptyro did (1.58, `ptyro ingest --history`): every
     /// conversation in each profile's Claude Code and Codex folders that is not kept
@@ -1112,6 +1125,9 @@ pub enum Request {
         since_ms: Option<u64>,
         #[serde(default)]
         dry_run: bool,
+        /// A linked machine's instead of this one's (1.59, SPEC §25.11): its name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        machine: Option<String>,
     },
     /// Ask your chats a question: an incognito chat whose agent has only the chat history tools
     /// answers it, citing `c:7f3k/node` (SPEC §22.10).
@@ -2428,10 +2444,20 @@ mod tests {
             writer: Some(Writer::Agent),
         });
         round_trip(Request::KbNoteRead { addr: "k:7f3k".into() });
-        round_trip(Request::KbSync { roots: vec!["docs".into()] });
+        round_trip(Request::KbSync { roots: vec!["docs".into()], machine: None });
         let m: Request = serde_json::from_str(r#"{"t":"kb_sync"}"#).unwrap();
-        assert_eq!(m, Request::KbSync { roots: Vec::new() });
-        round_trip(Request::KbRoots);
+        assert_eq!(m, Request::KbSync { roots: Vec::new(), machine: None });
+        round_trip(Request::KbRoots { machine: None });
+        // 1.59: a linked machine's roots; an older client's message is this machine's.
+        round_trip(Request::KbRoots { machine: Some("laptop2".into()) });
+        let m: Request = serde_json::from_str(r#"{"t":"kb_roots"}"#).unwrap();
+        assert_eq!(m, Request::KbRoots { machine: None });
+        round_trip(Request::KbSync { roots: Vec::new(), machine: Some("laptop2".into()) });
+        let m: Request =
+            serde_json::from_str(r#"{"t":"kb_remove","root":"docs","machine":"laptop2"}"#).unwrap();
+        assert!(
+            matches!(m, Request::KbRemove { confirmed: false, machine: Some(m), .. } if m == "laptop2")
+        );
         round_trip(Request::KbIngest {
             spec: ptyro_core::kb::RootSpec {
                 path: "/src/docs".into(),
@@ -2444,17 +2470,19 @@ mod tests {
                 },
                 ..Default::default()
             },
+            machine: Some("laptop2".into()),
         });
         let m: Request = serde_json::from_str(r#"{"t":"kb_ingest","spec":{"path":"/x"}}"#).unwrap();
         assert!(
-            matches!(m, Request::KbIngest { spec } if spec.path == "/x" && spec.options == Default::default())
+            matches!(m, Request::KbIngest { spec, machine: None } if spec.path == "/x" && spec.options == Default::default())
         );
-        round_trip(Request::KbRemove { root: "docs".into(), confirmed: true });
+        round_trip(Request::KbRemove { root: "docs".into(), confirmed: true, machine: None });
         round_trip(Request::KbHistory {
             agent: Some("claude".into()),
             profile: None,
             since_ms: Some(5),
             dry_run: true,
+            machine: None,
         });
         let m: Request = serde_json::from_str(r#"{"t":"kb_history"}"#).unwrap();
         assert!(matches!(m, Request::KbHistory { agent: None, dry_run: false, .. }));

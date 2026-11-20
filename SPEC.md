@@ -1114,6 +1114,12 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-20] Protocol 1.59** (additive; roots on a linked machine, KB3.7, §25.11,
+§25.14): `KbRoots`, `KbIngest`, `KbSync`, `KbRemove` and `KbHistory` gained `machine?` (a
+linked machine's name: the request is answered there, for you only). `KbRoots` became a
+message with a field; an older client's `{"t":"kb_roots"}` still parses. A 1.58 daemon
+ignores the field and answers for itself.
+
 **[built 2026-11-20] Protocol 1.58** (additive; roots, `ingest` and the history's backfill,
 KB3, §25.6.3, §25.14): the requests `KbRoots` → `KbRoots{roots}`, `KbIngest{spec}` →
 `KbIngested{root, plan}`, `KbRemove{root, confirmed}` → `KbRemoved{name, items, chunks}`
@@ -9986,7 +9992,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and KB3.1 to KB3.6: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (engine and CLI; the Sources tab and the ingest form, KB3.7, are not built); KB4 and KB5 (shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and all of KB3: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (KB3.1 to KB3.6), and the Sources tab and the ingest form in the TUI and the web, a file and a commit opened in their own tools, roots on a linked machine (KB3.7, protocol 1.59); KB4 and KB5 (shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -10001,13 +10007,92 @@ list and forget them, agents search them with `recall` and `recall_read`, a sess
 be private, the TUI and the web have the Library, a search asks linked machines too, and
 (KB2) you and your agents write notes, which are files.
 **What KB1 to KB3 did not build**, and nothing below should be read as built: shells (KB4),
-anything offered at a prompt (KB5), the Library's Sources tab and the ingest form (KB3.7),
-and `gc` and mend naming a failing root):
+and anything offered at a prompt (KB5)):
+- **KB3.7 the Sources tab, the ingest form, and a source opened in its own tool (2026-11-20;
+  `crates/ptyro-tui/src/library/sources.rs`, `web/src/library.ts` and `libkit.ts`,
+  `crates/ptyro/src/kb.rs` and `ingest.rs`, `kb/machines.rs`, `ptyro-protocol` 1.59):**
+  - **The third tab, in both Libraries.** TUI: `3` (`kb.sources`): each root in two or three
+    lines (its kind, its name, how it stands; what it holds, its profile, its path; what
+    went wrong), the selected one in full beside the list from 80 columns. `i` reads a
+    folder, `s` (or `⏎`) looks at one again, `S` at all of them and the notes, `x` stops
+    reading one through the daemon's question, `b` is the agents' history, `t` switches
+    `kb.sessions`, `y` copies the path, `v` is the status (`s` is taken). Web:
+    `#/library/sources`: the rows, a tap for one in full with Look at it again and Stop
+    reading it…, and Read a folder…, Look at all again, Agents' history…, and a button that
+    switches `kb.sessions`. **There is no switch for shells** (§25.10 listed one): shells
+    are KB4.
+  - **How far a read is**: `KbProgress` moves a row between two asks; while anything is
+    being read or removed (a root's `progress` or `removing`, or `KbStatus.queued` for the
+    agents' history) the tab asks `KbRoots` again once a second, and when a pass ends. A
+    linked machine's roots are only polled (its events are not mirrored).
+  - **The ingest form is the request, not the command in a split** (the note form runs its
+    command; this one shows its progress in the tab it opens). Its fields are the
+    command's options, one for one: the path, the name, the project and the profile as picks,
+    only and not (globs, comma separated), comments, code, commits and only-now as switches,
+    and the machine as a pick once one is linked. **A switch says something only where the
+    command has a flag** (`--no-comments`, `--code`, `--no-commits`): left as it stands, the
+    settings go on deciding, so a root never pins today's setting. In the TUI the switches
+    start where `[kb]` has them; **on the web they start at the built-in defaults** (the
+    page doesn't read the config for it).
+  - **The path**: in the TUI `i` first offers where it is: a path to type (the first choice,
+    so `i ⏎` is the form), here, or a repository `Discover` found that is no project yet;
+    then the form with the path in it. **No completion of a typed path** (§25.10 said "with
+    completion"): the form's text fields have none anywhere. On the web, and for a linked
+    machine, the path is typed.
+  - **The agents' history is a form too**: whose (`--agent`), the profile, since (typed in
+    the TUI, a pick of four ages on the web), only count (`--dry-run`), the machine. It is
+    always counted first; the count is the question (`KbHistoryPlan::text`, in
+    `ptyro-core`, which the command prints too), and a yes reads.
+  - **Roots on a linked machine (1.59)**: `KbRoots`, `KbIngest`, `KbSync`, `KbRemove` and
+    `KbHistory` have `machine?`; `handle_kb` sends one that names a linked machine on
+    (`Daemon::kb_roots_far`), for you only (an agent's session is refused), and the
+    machine answers as for its own client: its paths, its projects and profiles by name, its
+    question before it removes. The commands take `--machine M` (`ingest`, `ingest
+    --history`, `kb ls`, `kb sync`, `kb rm`); the Libraries' machine filter says whose roots
+    the tab lists and acts on, and both forms have the pick. **The forms' project and
+    profile picks list this machine's**, and go by name: one the other machine lacks is its
+    error. `ingest --history --machine` does not wait for the read (the status asked is
+    this machine's).
+  - **`⏎` opens a file and a commit in their own tools**: `ptyro kb show REF --open` on a
+    file is `$VISUAL`/`$EDITOR` on the file itself, at the piece's line (a comment's and a
+    code window's own `L120`; a document's section by finding its heading in the file),
+    given as `+N` to vi and its kin, nano, emacs, micro and kak, `--goto file:N` to VS Code
+    and its kin, `file:N` to Helix, Zed and Sublime, and not at all to an editor that isn't
+    known (`shell::editor_command_at`). On a commit it is `git -C <its root> show <sha>`,
+    with git's own pager. The TUI runs that command in a split for a note, a file and a
+    commit of this machine (so "a pager session" is the split); a linked machine's, and
+    everything when the TUI is attached to a daemon on another computer, is read in the
+    reader. **Not `o`'s editors** (§25.10 said §10's): those open a worktree, not a file at
+    a line. **The web shows what was kept** of a file and a commit: no editor, no checkout.
+  - **The history is paged in the TUI** (it was the newest 100): the end of the list asks
+    for the 100 before it (`KbRecent.before_ms`), and a re-ask after `KbUpdated` keeps the
+    older pages under the newest.
+  - **A root that is missing or failing is named where stale things are**: `ptyro gc`
+    prints `knowledge base: NAME: … is gone (…)` under the worktrees (not in `--json`, whose
+    shape scripts read), and `ptyro doctor` has a finding of its own for each (`knowledge
+    base` / `root NAME`, a warning, with the command that drops it or reads it again). The
+    TUI's mend list (`M`) and the web's Health page are the doctor's findings: mend runs the
+    command the finding names in a split, Health links to the Sources tab. **The TUI's
+    clean-up list (`worktree.gc`) and the web's are still worktrees only.**
+  - **Tested** by `library/tests.rs` (the tab, its progress and polling, sync and remove in
+    the daemon's words, the form's fields against the command's options and what it sends,
+    the machine pick, the history's form and count, paging, `⏎` on a file and a commit),
+    `web/test/library.mjs` (states, what is held and read, the plan's line, the requests),
+    `web_e2e`'s `sources` at a phone's width, `kb3.rs` (`a_file_and_a_commit_open_in_their_
+    own_tools_and_a_root_that_is_gone_is_named`, and the real TUI:
+    `the_tuis_sources_tab_reads_a_folder_and_stops_reading_it`), `kb_machines.rs` (a folder
+    on laptop2 read, listed, found, looked at again and removed from laptop1),
+    `shell::tests::an_editor_is_opened_at_a_line_where_it_is_known_to_take_one`.
+  - **Not built**: completion of a typed path; the web form's switches read from the
+    config; a far root's live progress by event; `gc`'s own lists naming a root in the TUI
+    and the web; an editor on a linked machine's file; skipping generated files (§25.6.3);
+    sub-agents' transcripts (§25.18: later, with its own decision). **Unverified**: the
+    line given to each editor but `vi`'s kin (the others are from their documentation
+    [unverified]); a real linked machine over the network (two daemons on one computer).
 - **KB3 roots, `ingest` and the history's backfill (2026-11-20; engine and CLI: KB3.1 to
   KB3.6. `ptyro_core::kb::file`, `ptyro-git`'s `log.rs`, `crates/ptyro-daemon/src/kb/roots.rs`
-  and `kb/history.rs`, `ptyro-protocol` 1.58, `crates/ptyro/src/ingest.rs`). Not built: the
-  Sources tab and the ingest form in the TUI and the web (KB3.7), and `gc` and mend naming a
-  failing root:**
+  and `kb/history.rs`, `ptyro-protocol` 1.58, `crates/ptyro/src/ingest.rs`). The Sources tab
+  and the ingest form came with KB3.7 (above), with `gc` and mend naming a failing root:**
   - **A pass has its own task, not the ingest queue** (`Daemon::kb_roots_kick`): one root at
     a time, listing and reading off the async threads, each file its own write. The queue is
     the sessions': eight jobs then 50 ms would be 160 files a second, and fifty thousand
@@ -10153,8 +10238,8 @@ and `gc` and mend naming a failing root):
     [-p P] [--wrote you|agent]`; `kb sync` (the notes now, the roots with KB3); `kb show REF
     --open` on a note is your editor on its text, sent back when it changed (so it works
     against a daemon on another computer); `--wrote you|agent` on `recall` and `kb recent`.
-  - **The TUI's Library has its tab bar** (`1 Search`, `2 Notes` in the title line; Sources
-    with KB3). Notes: every note under what it is about, the ones about no project first,
+  - **The TUI's Library has its tab bar** (`1 Search`, `2 Notes` in the title line; `3
+    Sources` came with KB3.7). Notes: every note under what it is about, the ones about no project first,
     with who wrote it; `n` (in either tab) is the note form, which runs `ptyro kb note` in a
     split as the other command forms do; `⏎` on a note, in either tab, is `kb show REF
     --open` in a split; `x` deletes through the daemon's question; `/` is the search with
@@ -10222,7 +10307,7 @@ and `gc` and mend naming a failing root):
     Library's fourth filter in the TUI (shown once a machine is linked) and on the web.
     With no machine picked the history is this machine's (a history is not merged).
   - **Not built**: merging histories or statuses across machines, `kb status` of another
-    machine, and an editor on a far file (there are no files yet). **Unverified**: going to a
+    machine, and an editor on a far file (its hit is read in the reader, KB3.7). **Unverified**: going to a
     far hit's session from the Library (`r`, Its session) rests on the mirror's routing by
     session id and has no test of its own; a link over the network (the tests' two daemons
     are on one computer, over a fake ssh).
@@ -10285,9 +10370,9 @@ and `gc` and mend naming a failing root):
     whole item, its chunks as chat items (`card` and `summary` as notices, `tool` as a tool
     line whose first word is the tool's name, anything else as text under its heading),
     drawn by the chat view's renderer with no composer (`ChatView.read_only`), at the piece
-    that matched, the first matched word highlighted. `/` finds (`n`/`N`). A file in your
-    editor, a note for editing and a commit as `git show` are KB2's and KB3's: until then
-    the reader shows any item's stored text.
+    that matched, the first matched word highlighted. `/` finds (`n`/`N`). A note for
+    editing came with KB2, and a file in your editor and a commit as `git show` with KB3.7
+    (above): the reader is for sessions, and for whatever is on another machine.
   - **`r` goes to the session** (`KbItem.session`): shown, and resumed when dormant (an
     exited one is shown, where `⏎` restarts it). A session ptyro no longer has is said, with
     its agent's own conversation id; it is **not** started again from the agent's history
@@ -10323,9 +10408,9 @@ and `gc` and mend naming a failing root):
     `the_history_of_a_session_or_a_worktree_and_the_news_of_a_change`, and two in `kb1.rs`
     that drive the real TUI over a real daemon (a turn shows up by itself, is found, read,
     found in and forgotten with no byte left; off, then switched on).
-  - **Not built**: paging the history past 100 items (the web pages it), opening a file,
-    note or commit in its own tool (KB2, KB3), the Notes and Sources tabs, `M` (mend) listing
-    a failing root (KB3). (Machines came with KB1.12.)
+  - **Not built in KB1.8, built since**: paging the history past 100 items, a file and a
+    commit in their own tools, the Sources tab, mend naming a failing root (all KB3.7); a
+    note in your editor and the Notes tab (KB2); machines (KB1.12).
 - **KB1.10 the agents' tools (2026-11-19; `crates/ptyro/src/mcp.rs`, `ptyro_agents::adapter::{KB_TOOLS,
   kb_env}`, the Claude and Codex adapters, `crates/ptyro-daemon/src/launch.rs`; checked against
   Claude Code 2.1.329 and Codex 0.167.1 by `make verify-kb ARGS=--built`):**
@@ -10965,7 +11050,8 @@ rebuilt from the cursors after a restart or a live upgrade, so nothing crosses t
   - The anchor is the line's `uuid` (never repeated). Order is the file's: timestamps around a
     compaction are not in order.
   - Side chains and sub-agents' own files (`<session id>/subagents/agent-*.jsonl`, beside the
-    session) are not read in KB1.
+    session) are not read: not as they happen and not by the backfill (KB1 to KB3 did not
+    build it; §25.18 has it among what comes later, with its own decision).
 - **Codex** **[the format: verified 2026-11-19, 0.167.1, §20.8]**. `response_item` messages: the
   user's own (`content_item_kinds` include `user.text`) and the assistant's `output_text`. Never
   `reasoning`, never `*_output`, never Codex's own context messages (`developer`, and `user`
@@ -11157,7 +11243,8 @@ knowledge base, because it was never in it: delete the chat.
     lacks (`.bat`, `.vim`, assembly).
   - KB3 **stores a block that another file of the root holds only once** (it is the largest
     source of noise that was found; built, "As built" above), and may skip generated files
-    (not built). A real parser can replace the table without changing the schema.
+    (**not built in KB3**: nothing marks a file as generated; `--exclude`, the project's
+    `[knowledge] exclude` and `kb.exclude` are how one is kept out). A real parser can replace the table without changing the schema.
 - **Commits** (`kb.commits`, on): in a git root, the default branch's history, newest 5,000 at
   first and only the new ones after (`root.head`). One item a commit: a `message` chunk (subject
   and body, words and meaning) and a `path` chunk (the files it changed, at most 50, words). Its
@@ -11580,14 +11667,14 @@ Every command has its TUI path and its web action in the same change (§1.3), it
 ptyro recall <query…> [--project P] [--kind K,…] [--since D] [--before D] [--machine M|--here]
                       [--words|--meaning] [-n N] [--json]
 ptyro ingest <path>… [-n NAME] [-p P] [--profile PR] [--include GLOB]… [--exclude GLOB]…
-                     [--code] [--no-comments] [--no-commits] [--once] [--json]         # built, KB3
-ptyro ingest --history [-a claude|codex] [--profile PR] [--since AGE] [--dry-run] [--json]   # built, KB3.6
+                     [--code] [--no-comments] [--no-commits] [--once] [--machine M] [--json]   # built, KB3
+ptyro ingest --history [-a claude|codex] [--profile PR] [--since AGE] [--dry-run] [--machine M] [--json]   # built, KB3.6
 ptyro kb [status] [--json]              # on or off, sizes, items by kind, vectors, each root's state, what was skipped
-ptyro kb ls [--json]                    # the roots: name, path, counts, last read, errors
+ptyro kb ls [--machine M] [--json]      # the roots: name, path, counts, last read, errors
 ptyro kb show <ref> [--context N] [--open]      # a hit with its neighbours; --open: the source (editor, resume, chat)
 ptyro kb recent [--kind K] [--project P] [-n N] # newest first, by day: the history
-ptyro kb sync [<root>…]
-ptyro kb rm <root> [--yes]              # stop ingesting it and drop its items
+ptyro kb sync [<root>…] [--machine M]
+ptyro kb rm <root> [--machine M] [--yes]   # stop ingesting it and drop its items
 ptyro kb forget <ref…>|--query <q> [--yes]      # delete items and their text for good (§25.12)
 ptyro kb note [<text>|-] [--title T] [--project P] [--tag T]… [--edit]
 ptyro kb notes [--project P] [--json]
@@ -11622,7 +11709,9 @@ ptyro new … [--private]                 # nothing of this session is kept (§2
   (name, kind, state or `done/of`, what it holds, last read, profile, path, and the error
   under it); `kb sync [ROOT…]` (the notes and every root, or the roots named; it waits);
   `kb rm ROOT [-y]` (asks in the daemon's words, exit 5 with nobody to ask; waits until it is
-  gone). Each with `--json`.
+  gone). Each with `--json`. *As built (KB3.7)*: `--machine M` on all five (a linked
+  machine's roots, §25.11), and `kb show REF --open` on a file (your editor, at the piece's
+  line) and on a commit (`git show`): "As built" above.
 - *As built, the web*: KB1.7 gave it the Library page's first part and KB1.9 the rest
   (below). (The TUI's five actions ran their command in a split until KB1.8.)
 - `ingest` of a path that is already a root (or inside one) says so and syncs it. It prints what
@@ -11634,9 +11723,9 @@ ptyro new … [--private]                 # nothing of this session is kept (§2
 the reader for every kind of item, and the actions `kb.open`, `kb.search`, `kb.recent`,
 `kb.history`, `kb.show`, `kb.forget`, `kb.status` and `kb.enable`; what differs, and what waits
 for KB3, is in this section's "As built" list. *As built (KB2)*: the tab bar, the Notes tab,
-`n`, `x`, a note in your editor, the note form, the `wrote` filter. **The Sources tab, `i`,
-`M`, opening a file or a commit, and the ingest form below are the design for KB3, not
-built.**
+`n`, `x`, a note in your editor, the note form, the `wrote` filter. *As built (KB3.7)*: the
+Sources tab, `i`, mend naming a failing root, a file and a commit opened in their own tools,
+the ingest form and the history's; what differs from the lines below is in "As built".
 
 - A search box, a row of filters (kind, project, since, who wrote it, machine; `Tab` reaches
   them, each a pick), the hits on the left (a mark for the kind, title, date, project, snippet),
@@ -11656,17 +11745,16 @@ built.**
   filtered to it); `M` (mend) lists a root that is missing or failing.
 - Actions: `kb.open`, `kb.search`, `kb.recent`, `kb.show`, `kb.history` (a row's history),
   `kb.forget`, `kb.status`, `kb.enable`, `kb.notes`, `kb.note`, `kb.sync` (**built**);
-  `kb.sources`, `kb.ingest`, `kb.backfill` (`ingest --history`), `kb.remove` (KB3: **built as
-  a first part**: in the TUI each runs its command in a split, from the palette
-  (`cli_actions.rs` `TEMPLATES`); on the web the Library's Sources… sheet lists the roots,
-  with Read a folder… (a form with every option of `ingest PATH`, as text and switches),
-  Agents' history… (the count, then a question) and Remove…. The tab, the form's picks and
-  `--agent`/`--profile`/`--since` for the history are KB3.7's).
+  `kb.sources`, `kb.ingest`, `kb.backfill` (`ingest --history`), `kb.remove` (**built**,
+  KB3.7: the Sources tab and its forms in both clients; none is a command in a split any
+  more, and `library/tests.rs` holds `TEMPLATES` to having no `kb.` action).
 - **The session form and the shell form** gain **Private** (§25.7a), default off, with what it
   means beside it.
 - **The ingest form** shows every option the command takes, defaults visible (§11.5a): the path
   (with completion), name, project and profile as picks, the four tiers as switches, include and
-  exclude, once. ⏎ takes the defaults.
+  exclude, once. ⏎ takes the defaults. *As built (KB3.7)*: three switches (comments, code,
+  commits: paths and documents have none in the command either), the machine pick, a
+  picker for the path and no completion ("As built").
 
 **Web:** a **Library** page in the navigation with the same three tabs, the same actions in
 `ACTIONS` (`web/src/app.ts`), the reader, and the forms; the new-session and new-shell sheets
@@ -11674,8 +11762,9 @@ gain the Private switch (§25.7a). On a phone the list and the hit are two
 steps. *As built (KB1.9)*: More → Library (`web/src/library.ts`, which registers its own
 `ACTIONS`): the Search part as two pages, the list and the reader, with the filters as picks,
 `Older…`, the find box, Its session, copy, Forget… and History in the row menus. *As built
-(KB2)*: the Search and Notes tabs, New note, a note edited in the page; the Sources tab and
-the ingest form wait for KB3 ("As built" above has the rest). "Open in your editor" is not offered on the web (there is no editor there); a file's hit
+(KB2)*: the Search and Notes tabs, New note, a note edited in the page. *As built (KB3.7)*:
+the Sources tab (`#/library/sources`), Read a folder… and Agents' history… as forms with
+every option, a root's sheet ("As built" above has the rest). "Open in your editor" is not offered on the web (there is no editor there); a file's hit
 shows its text.
 
 **Settings:** a **Knowledge** section in both panels (§25.13). **`ptyro doctor`:** a `kb.db`
@@ -11686,15 +11775,18 @@ each root's last read and error, files skipped and why (§25.12). *Built (KB1.1)
 each a problem when it fails); `off`, or why the file can't be opened with the fix. Vectors,
 *Built (KB3)*: the line ends `; 3 roots`, and names each that is missing or failing
 (`; 3 roots (docs: /src/docs is gone (…))`); `ptyro kb` has the same lines, and what was
-not kept with why (KB1.7).
+not kept with why (KB1.7). *Built (KB3.7)*: each such root is also a finding of its own
+(`knowledge base` / `root NAME`, a warning), which is what mend and the web's Health page
+list; `ptyro gc` prints the same line.
 
 ### 25.11 Many machines
 
 As chats (§22.10, §22.11), with the machinery MM1 built. *As built (KB1.12; this section's
 "As built" list has what differs)*: the fan-out, a far hit read, listed and forgotten on its
 machine, the wall across the link, and the scopes. Roots and ingest are built (KB3) and
-act on the daemon asked, here only; the form's machine pick (KB3.7) and an editor on a
-far file are the design, not built.
+act on the daemon asked, or on a linked machine named in the request (KB3.7, 1.59: the
+commands' `--machine`, the Sources tab's machine filter, the forms' pick). An editor on a
+far file is the design, not built: its hit is read in the reader.
 
 - **Each machine has its own `kb.db`** and ingests its own sessions, roots, notes and shells.
 - **Search fans out**: `KbSearch` goes to this daemon and to every linked machine that is up,
@@ -11863,7 +11955,7 @@ exclude = []              # more paths never to ingest (globs)
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
-### 25.14 Protocol (additive; KB1's, KB2's and KB3's parts are built, 1.53 to 1.58)
+### 25.14 Protocol (additive; KB1's, KB2's and KB3's parts are built, 1.53 to 1.59)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
@@ -11929,6 +12021,11 @@ exclude = []              # more paths never to ingest (globs)
     pass writes, to every watcher; `KbStatusInfo.failing` (the roots that are missing or in
     error, a line each). `KbRoots` needs `read`, `KbIngest`, `KbHistory` and `KbSync`
     `control`, `KbRemove` `full`; all here only. `KbUpdated` still carries no `root`.
+  - **1.59 (KB3.7)**: `machine?` on `KbRoots` (now `KbRoots{machine?}`; `{"t":"kb_roots"}`
+    still parses), `KbIngest`, `KbSync`, `KbRemove` and `KbHistory`: a linked machine's
+    name, and the request is answered there (this machine's own name, or `here`, is this
+    one). You only: from inside an agent's session it is `permission_denied`. The scopes
+    are unchanged, and the general router still leaves all five alone (`here_only`).
   - `Features.kb` is dropped ("As built", KB1.7).
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
   error, times).
@@ -11958,7 +12055,7 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 | `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (**built**, KB2: the watcher, `kb_notes_sync`, `kb_note`, `kb_notes`, `kb_note_read`, `kb_note_forget`), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
 | `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.55): `DomainEvent::KbUpdated`; (1.56): `machines`, `machine`, `profile`, `left_out`; (1.57): `KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`** |
 | `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools. **Built: `kb.rs` (`recall`, `kb status`, `kb show`, `kb recent`, `kb forget`; KB2: `kb note`, `kb notes`, `kb sync`), `mcp.rs` (all three tools)** |
-| `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms. **Built (KB1.8): `library.rs` (`Library`, `ChatPanel::Library`, the reader over `chat::ChatView` with `read_only`), `clock::local_ms`** |
+| `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms. **Built (KB1.8): `library.rs` (`Library`, `ChatPanel::Library`, the reader over `chat::ChatView` with `read_only`), `clock::local_ms`; (KB3.7): `library/sources.rs` (the Sources tab, the ingest form and the history's, `Make::KbIngest`, `Make::KbBackfill`)** |
 | `web/` | `library.ts`, its `ACTIONS`. **Built (KB1.9): `library.ts` (the list and the reader) and `libkit.ts` (its logic with no DOM, tested by `web/test/library.mjs`)** |
 
 No new dependency is needed: `regex`, `sha2`, `notify` and `rusqlite` are in the workspace.

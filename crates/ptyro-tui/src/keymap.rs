@@ -406,19 +406,19 @@ pub const ACTIONS: &[ActionSpec] = &[
     ),
     a(
         "kb.sources",
-        "What is read into the knowledge base: every project and every folder given to it, with what each holds and how it stands",
+        "The Library's Sources: what is read into the knowledge base (every project, every folder or file given to it), what each holds, how it stands and how far a read of it is",
     ),
     a(
         "kb.ingest",
-        "Read a folder or a file into the knowledge base and keep reading it: its documents, its files' names, its source comments, its commits",
+        "Read a folder or a file into the knowledge base and keep reading it (a form with every option): its documents, its files' names, its source comments, its commits",
     ),
     a(
         "kb.backfill",
-        "Read what your agents kept before ptyro did: every conversation in Claude Code's and Codex's own folders that isn't kept yet",
+        "Read what your agents kept before ptyro did: every conversation in Claude Code's and Codex's own folders that isn't kept yet (it counts them first, and asks)",
     ),
     a(
         "kb.remove",
-        "Stop reading a folder or file, and drop what was kept of it (your files aren't touched); asks first",
+        "Stop reading the folder or file selected in the Library's Sources, and drop what was kept of it (your files aren't touched); asks first",
     ),
     a("nav.collapse", "Sidebar: fold the selected workspace, project or worktree"),
     a("nav.expand", "Sidebar: unfold the selected workspace, project or worktree"),

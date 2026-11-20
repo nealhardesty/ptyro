@@ -597,6 +597,7 @@ ptyro kb notes                       # the notes, by project (kb show REF --open
 ptyro ingest ~/notes                 # read a folder: its documents, file names, comments, commits
 ptyro ingest --history               # read what your agents kept before ptyro did
 ptyro kb ls                          # what is read (every project is, by itself); kb sync, kb rm
+ptyro kb show k:7f3k/12 --open       # its source: the session, your editor at the line, git show
 ```
 
 **Your projects are read too**, with nothing to do: when ptyro knows a project, its documents
@@ -636,9 +637,13 @@ private session is marked `◌`. It still has the tools to search with.
 nothing typed it is the history, by day: what your agents did, newest first. `/` searches as you
 type, and the selected hit's text is beside the list with what was said around it. `Tab` reaches
 the filters (kind, project, since, who wrote it). `⏎` opens it: a chat at its message, a
-session in the reader (the stored conversation, read only; `/` finds in it), a note in your
-editor. `2` is the **Notes** tab: the notes by project, `n` writes one (a form with every
-option), `x` deletes one. `r` goes to the session it
+session in the reader (the stored conversation, read only; `/` finds in it), a note or a file
+in your editor (a file at the line that was found), a commit as `git show`. `2` is the
+**Notes** tab: the notes by project, `n` writes one (a form with every
+option), `x` deletes one. `3` is the **Sources** tab: what is read (your projects, and the
+folders you add), what each holds and how far a read of it is; `i` reads a folder through a
+form with every option, `s` looks at one again, `x` stops reading one, `b` reads your agents'
+own history. `r` goes to the session it
 happened in, resuming it if it sleeps; `y` copies its address, `Y` its text; `d` forgets it
 (it asks first); `s` shows how the knowledge base stands. A session's, a worktree's and a
 project's menu (`.`) have `kb.history`: the Library with only that one's. It follows what is
@@ -649,14 +654,17 @@ picks, the history by day (**Older…** brings more); a tap opens the reader, wh
 piece with what was said around it, then **All of it**, with a box to find in it, **Its
 session** (resumed if it sleeps) and ⋯ to copy its address or its text and to **Forget…** it. Its
 **Notes** tab lists the notes by project: **New note**, a tap to edit one in the page, ⋯ →
-Delete…. A session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
+Delete…. Its **Sources** tab lists what is read and how far a read is: **Read a folder…**
+(every option), **Agents' history…**, and a tap on a row to look at it again or stop reading it. A session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
 happens, and switched off it offers to switch it on.
 
 **With linked machines** (`ptyro machine add`), each keeps its own knowledge base and nothing
 is copied. A search asks every one that is up and mixes the answers, each hit with its machine
 and an address under it (`laptop2:k:7f3k/12`, which `kb show` reads there); `--here` is this
 computer only, `--machine laptop2` (or `machine:laptop2` in the box) that one only, and the
-Library has a machine filter. A machine that is down is named under the answer. An agent's
+Library has a machine filter. What a machine reads is its own: `ptyro ingest PATH --machine
+laptop2` (and `kb ls`, `kb sync`, `kb rm`) act there, as the Sources tab's machine pick does.
+A machine that is down is named under the answer. An agent's
 `recall` asks other machines only when it says so, and each answers within the same wall
 between profiles.
 

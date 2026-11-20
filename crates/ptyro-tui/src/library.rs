@@ -6,8 +6,10 @@
 //! renderer). `r` goes to the session it happened in, `d` forgets (the daemon asks first, in
 //! its words), `s` shows how the knowledge base stands.
 //!
-//! Two tabs (`1`, `2`; KB2): **Search**, and **Notes**, the notes by project (`n` writes one
-//! through the note form, `⏎` edits one in your editor, `x` deletes it). Sources is KB3's.
+//! Three tabs (`1`, `2`, `3`): **Search**; **Notes** (KB2), the notes by project (`n` writes
+//! one through the note form, `⏎` edits one in your editor, `x` deletes it); and **Sources**
+//! (KB3.7, `library/sources.rs`), what is read into the knowledge base: every project and
+//! every folder or file given to it, with how it stands and how far a read of it is.
 //!
 //! It is one of the chat panel's shapes (`ChatPanel::Library`), so the keys, the mouse, `` ` ``
 //! back and forth and Esc from a chat opened here work as they do for the chat list. What it
@@ -22,7 +24,7 @@ use ptyro_core::chats::{MARK_OFF, MARK_ON};
 use ptyro_core::input::{KeyCode, KeyEvent, Mods};
 use ptyro_core::kb::card::minute;
 use ptyro_core::kb::search::{HitKind, KbHit, KbListed, KbStatusInfo, pieces};
-use ptyro_core::kb::{ChunkKind, ItemKind, KbChunk, Writer};
+use ptyro_core::kb::{ChunkKind, ItemKind, KbChunk, KbRootInfo, Writer};
 use ptyro_core::session::ProcessState;
 use ptyro_core::{ErrorCode, now_ms};
 use ptyro_protocol::{Reply, Request};
@@ -55,12 +57,18 @@ pub(crate) const ACTIONS: &[&str] = &[
     "kb.note",
     "kb.show",
     "kb.forget",
+    "kb.sources",
+    "kb.ingest",
+    "kb.backfill",
+    "kb.remove",
     "kb.sync",
     "kb.status",
     "kb.open",
 ];
 
-/// The Library's tabs (Sources comes with KB3).
+mod sources;
+
+/// The Library's tabs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tab {
     /// The search box, and with nothing typed the history.
@@ -68,6 +76,8 @@ pub enum Tab {
     Search,
     /// The notes, by project.
     Notes,
+    /// What is read: the projects, and the folders and files given to `ptyro ingest`.
+    Sources,
 }
 
 /// Asks are numbered, so an answer to an older one (the query has moved on) is dropped.
@@ -97,6 +107,14 @@ pub struct Library {
     /// The filter `Tab` is on (`None`: the list has the keys).
     pub chip: Option<Filter>,
     pub rows: Rows,
+    /// The Sources tab's rows: what is read, as `KbRoots` says it.
+    pub sources: Vec<KbRootInfo>,
+    /// When the Sources tab last asked, while something is being read or removed.
+    polled: std::time::Instant,
+    /// The history may hold more than is listed: the end of the list asks for it.
+    more: bool,
+    /// The next page of the history is asked for.
+    older: bool,
     /// The last ask's number: the answer that counts.
     asked: u64,
     /// Nothing has answered yet.
@@ -173,6 +191,9 @@ impl Filter {
             [Filter::Kind, Filter::Project, Filter::Since, Filter::Wrote, Filter::Machine];
         match tab {
             Tab::Notes => &[Self::Project, Self::Wrote],
+            // Roots are each machine's own: the one whose are listed.
+            Tab::Sources if machines => &ALL[4..],
+            Tab::Sources => &[],
             Tab::Search if machines => &ALL,
             Tab::Search => &ALL[..4],
         }
@@ -227,6 +248,10 @@ impl Library {
             of_items: Vec::new(),
             chip: None,
             rows: Rows::History(Vec::new()),
+            sources: Vec::new(),
+            polled: std::time::Instant::now(),
+            more: false,
+            older: false,
             asked: 0,
             loading: true,
             words_only: None,
@@ -264,16 +289,28 @@ impl Library {
 
     /// The selected row is a note of this computer's: its item's address. (`⏎` edits it.)
     fn selected_note(&self) -> Option<String> {
+        self.selected_own(ItemKind::Note)
+            .map(|a| a.split_once('/').map_or(a.as_str(), |(i, _)| i).to_owned())
+    }
+
+    /// The selected row is of this kind and this computer's: its address (a hit's with its
+    /// piece), which the tool that opens it takes.
+    fn selected_own(&self, kind: ItemKind) -> Option<String> {
         match &self.rows {
             Rows::Hits(h) => h
                 .get(self.sel)
-                .filter(|h| h.kind == HitKind::Note && h.machine.is_none())
-                .map(|h| h.addr.split_once('/').map_or(h.addr.as_str(), |(i, _)| i).to_owned()),
+                .filter(|h| h.kind.stored().map(|(k, _)| k) == Some(kind) && h.machine.is_none())
+                .map(|h| h.addr.clone()),
             Rows::History(i) => i
                 .get(self.sel)
-                .filter(|i| i.item.kind == ItemKind::Note && i.addr.starts_with("k:"))
+                .filter(|i| i.item.kind == kind && i.addr.starts_with("k:"))
                 .map(|i| i.addr.clone()),
         }
+    }
+
+    /// How many rows the tab shown lists.
+    fn count(&self) -> usize {
+        if self.tab == Tab::Sources { self.sources.len() } else { self.rows.len() }
     }
 
     /// The selected row is a chat's (it lives in `chat.db`: opened and deleted as a chat).
@@ -291,6 +328,9 @@ impl Library {
         let project = self.project.as_ref().map(|(id, _)| id.clone());
         if self.tab == Tab::Notes {
             return Some(Request::KbNotes { project, writer: self.wrote });
+        }
+        if self.tab == Tab::Sources {
+            return Some(Request::KbRoots { machine: self.far() });
         }
         if self.searching() {
             let mut query = self.query.trim().to_owned();
@@ -548,7 +588,14 @@ impl App {
             }
             "kb.notes" => self.library_tab(Tab::Notes),
             "kb.note" => self.open_note_form(),
-            "kb.sync" => self.request(Pending::KbSynced, Request::KbSync { roots: Vec::new() }),
+            "kb.sync" => {
+                let machine = self.library().and_then(Library::far);
+                self.request(Pending::KbSynced, Request::KbSync { roots: Vec::new(), machine });
+            }
+            "kb.sources" => self.library_tab(Tab::Sources),
+            "kb.ingest" => self.ingest_pick(),
+            "kb.backfill" => self.open_backfill_form(),
+            "kb.remove" => self.sources_remove(),
             "kb.status" => {
                 self.show_library(|l| (l.show_status, l.reader, l.typing) = (true, None, false));
                 self.request(Pending::KbStatus, Request::KbStatus);
@@ -599,10 +646,16 @@ impl App {
         self.library_ask();
     }
 
-    /// `kb.sync` answered: said as the command says it.
-    pub(crate) fn library_synced(&mut self, notes: u32, changed: u32, removed: u32) {
+    /// `kb.sync` answered: said as the command says it. `roots`: how many are looked at
+    /// again (the Sources tab shows how far each is).
+    pub(crate) fn library_synced(&mut self, notes: u32, changed: u32, removed: u32, roots: u32) {
+        let looked = match roots {
+            0 => String::new(),
+            1 => "; 1 project or folder is looked at again".to_owned(),
+            n => format!("; {n} projects and folders are looked at again"),
+        };
         self.toast(format!(
-            "{notes} note{} in the folder: {changed} read again, {removed} gone",
+            "{notes} note{} in the folder: {changed} read again, {removed} gone{looked}",
             if notes == 1 { "" } else { "s" }
         ));
         self.library_news();
@@ -699,9 +752,17 @@ impl App {
             return;
         }
         let before = l.selected().map(|(addr, _)| addr);
-        (l.loading, l.note, l.words_only) = (false, None, None);
+        let root = l.root().map(|r| r.root.id.clone());
+        (l.loading, l.note, l.words_only, l.older) = (false, None, None, false);
         l.left_out.clear();
         match res {
+            Ok(Reply::KbRoots { roots }) => {
+                l.sources = roots;
+                if let Some(at) = root.and_then(|id| l.sources.iter().position(|r| r.root.id == id))
+                {
+                    l.sel = at;
+                }
+            }
             Ok(Reply::KbItems { mut items }) => {
                 // The notes by project, the ones about none first (within one, newest first).
                 if l.tab == Tab::Notes {
@@ -709,6 +770,20 @@ impl App {
                 }
                 if l.of.is_some() {
                     l.of_items = items.iter().map(|i| i.item.id.clone()).collect();
+                }
+                // A full page: there may be older ones. Those already brought (the end of
+                // the list asked for them) stay under the page that was asked for again.
+                let full = items.len() >= ptyro_core::kb::search::MAX_LIMIT as usize;
+                l.more = full && l.tab == Tab::Search;
+                if let (true, Rows::History(old), Some(last)) = (l.more, &mut l.rows, items.last())
+                {
+                    let cut = at(last);
+                    let have: Vec<&str> = items.iter().map(|i| i.item.id.as_str()).collect();
+                    let tail: Vec<KbListed> = std::mem::take(old)
+                        .into_iter()
+                        .filter(|i| at(i) <= cut && !have.contains(&i.item.id.as_str()))
+                        .collect();
+                    items.extend(tail);
                 }
                 l.rows = Rows::History(items);
             }
@@ -744,6 +819,7 @@ impl App {
             Err(e) => {
                 l.rows =
                     if l.searching() { Rows::Hits(Vec::new()) } else { Rows::History(Vec::new()) };
+                l.sources.clear();
                 l.note = Some(e.message);
             }
         }
@@ -753,9 +829,67 @@ impl App {
             Rows::Hits(h) => h.iter().position(|h| h.addr == b),
             Rows::History(i) => i.iter().position(|i| i.addr == b),
         });
-        l.sel = found.unwrap_or(l.sel).min(l.rows.len().saturating_sub(1));
+        l.sel = found.unwrap_or(l.sel).min(l.count().saturating_sub(1));
         self.dirty = true;
         self.library_preview();
+    }
+
+    /// The end of the history is selected and there may be more of it: the next page is
+    /// asked for, from before the oldest item listed.
+    fn library_older(&mut self) {
+        let Some(l) = self.library_mut() else { return };
+        let Rows::History(items) = &l.rows else { return };
+        if !l.more || l.older || l.tab != Tab::Search || l.sel + 1 < items.len() {
+            return;
+        }
+        let Some(before) = items.iter().map(at).min() else { return };
+        let Some(Request::KbRecent {
+            kinds,
+            project,
+            session,
+            worktree,
+            since_ms,
+            limit,
+            machine,
+            writer,
+            ..
+        }) = l.request(None)
+        else {
+            return;
+        };
+        l.older = true;
+        let asked = l.asked;
+        let req = Request::KbRecent {
+            kinds,
+            project,
+            session,
+            worktree,
+            since_ms,
+            before_ms: Some(before),
+            limit,
+            machine,
+            writer,
+        };
+        self.request(Pending::KbOlder(asked), req);
+    }
+
+    /// The next page of the history arrived: under what is listed.
+    pub(crate) fn library_older_rows(&mut self, asked: u64, items: Vec<KbListed>) {
+        let Some(l) = self.library_mut() else { return };
+        if l.asked != asked {
+            return;
+        }
+        l.older = false;
+        let Rows::History(have) = &mut l.rows else { return };
+        let full = items.len() >= ptyro_core::kb::search::MAX_LIMIT as usize;
+        let fresh: Vec<KbListed> =
+            items.into_iter().filter(|i| !have.iter().any(|h| h.item.id == i.item.id)).collect();
+        l.more = full && !fresh.is_empty();
+        if l.of.is_some() {
+            l.of_items.extend(fresh.iter().map(|i| i.item.id.clone()));
+        }
+        have.extend(fresh);
+        self.dirty = true;
     }
 
     pub(crate) fn library_status(&mut self, status: KbStatusInfo) {
@@ -806,14 +940,24 @@ impl App {
         }
     }
 
-    /// `⏎`: the selected row's source. A chat at its message; a note in your editor (the
-    /// command that edits one, in a split); anything else in the reader.
+    /// `⏎`: the selected row's source. A chat at its message; a note in your editor, a file
+    /// in your editor at the piece's line, a commit as `git show` (each the command that
+    /// opens one, in a split); anything else in the reader.
     fn library_open(&mut self) {
         let Some(l) = self.library() else { return };
         if let Some(h) = l.selected_chat().cloned() {
             return self.open_chat_at(&h.item, h.node.as_deref());
         }
-        if let Some(addr) = l.selected_note() {
+        // (A file and a repository are where the daemon is: from another computer, what
+        // was kept of them is read instead.)
+        let here = self.connect.remote.is_none();
+        let own = l.selected_note().or_else(|| {
+            [ItemKind::File, ItemKind::Commit]
+                .into_iter()
+                .filter(|_| here)
+                .find_map(|kind| l.selected_own(kind))
+        });
+        if let Some(addr) = own {
             return self.run_cli(&["kb".into(), "show".into(), addr, "--open".into()]);
         }
         if let Some((addr, _)) = l.selected() {
@@ -1138,6 +1282,9 @@ impl App {
             }
             return;
         }
+        if l.tab == Tab::Sources && l.chip.is_none() {
+            return self.sources_key(l, key);
+        }
         // On the filters: ←/→ and Tab move, ⏎ picks, Backspace clears, Esc goes back.
         if let Some(f) = l.chip {
             let shown = Filter::shown(l.tab, !self.machines.is_empty());
@@ -1180,6 +1327,7 @@ impl App {
             // The tabs. Searching the notes is the search, for notes.
             (_, Some('1')) if l.tab != Tab::Search => act = Some('1'),
             (_, Some('2')) if l.tab != Tab::Notes => act = Some('2'),
+            (_, Some('3')) => act = Some('3'),
             (_, Some('/' | 'i')) if l.tab == Tab::Notes => {
                 l.kind = Some(HitKind::Note);
                 act = Some('/');
@@ -1247,6 +1395,7 @@ impl App {
             Some('a') => self.library_ask(),
             Some('1') => self.library_tab(Tab::Search),
             Some('2') => self.library_tab(Tab::Notes),
+            Some('3') => self.library_tab(Tab::Sources),
             Some('/') => {
                 self.library_tab(Tab::Search);
                 if let Some(l) = self.library_mut() {
@@ -1263,6 +1412,7 @@ impl App {
         if status {
             self.request(Pending::KbStatus, Request::KbStatus);
         }
+        self.library_older();
         self.library_preview();
     }
 
@@ -1287,8 +1437,9 @@ impl App {
                 r.view.scroll_by(if up { 3 } else { -3 });
             }
             (Some(up), None) => {
-                let last = l.rows.len().saturating_sub(1);
+                let last = l.count().saturating_sub(1);
                 l.sel = if up { l.sel.saturating_sub(1) } else { (l.sel + 1).min(last) };
+                self.library_older();
                 self.library_preview();
             }
             (None, None) => {
@@ -1317,7 +1468,9 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     }
     // The title, the tabs, and how much is kept.
     let mut head = vec![Span::styled(" Library ", fg(app, t.accent).add_modifier(Modifier::BOLD))];
-    for (tab, label) in [(Tab::Search, " 1 Search "), (Tab::Notes, " 2 Notes ")] {
+    for (tab, label) in
+        [(Tab::Search, " 1 Search "), (Tab::Notes, " 2 Notes "), (Tab::Sources, " 3 Sources ")]
+    {
         let st = if l.tab == tab {
             fg(app, t.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
@@ -1342,8 +1495,10 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     if l.off() || l.status.as_ref().is_some_and(|s| s.error.is_some()) {
         return draw_off(app, f, area, l);
     }
-    // The search box; over the notes, where they are.
-    let box_line = if l.tab == Tab::Notes {
+    // The search box; over the notes, where they are; over the sources, what they are.
+    let box_line = if l.tab == Tab::Sources {
+        sources::about(app, l)
+    } else if l.tab == Tab::Notes {
         let folder = l.status.as_ref().map(|s| s.notes.as_str()).filter(|n| !n.is_empty());
         Line::styled(
             match folder {
@@ -1398,13 +1553,16 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
         "⏎ or ↓ the list · Esc clears · C-u empties the box".to_owned()
     } else if l.chip.is_some() {
         "←/→ or Tab the filters · ⏎ pick · Backspace clear · Esc the list".to_owned()
+    } else if l.tab == Tab::Sources {
+        sources::keys(app, l)
     } else if l.tab == Tab::Notes {
         let mut keys = vec!["n new note", "⏎ edit in your editor", "x delete", "/ search them"];
-        keys.extend(["Tab filters", "j/k move", "y address", "Y text", "1 Search", "Esc"]);
+        keys.extend(["Tab filters", "j/k move", "y address", "Y text", "1 Search", "3 Sources"]);
+        keys.push("Esc");
         keys.join(" · ")
     } else {
         let mut keys = vec!["/ search", "Tab filters", "j/k move", "⏎ open", "r its session"];
-        keys.extend(["y address", "Y text", "d forget", "n new note", "2 Notes"]);
+        keys.extend(["y address", "Y text", "d forget", "n new note", "2 Notes", "3 Sources"]);
         keys.push(if l.show_status { "s the list" } else { "s status" });
         if l.of.is_some() {
             keys.push("Backspace everything");
@@ -1418,6 +1576,8 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     let left = if two { Rect { width: (body.width * 45 / 100).max(36), ..body } } else { body };
     if l.show_status && !two {
         draw_status(app, f, body, l);
+    } else if l.tab == Tab::Sources {
+        sources::draw_rows(app, f, left, l);
     } else {
         draw_rows(app, f, left, l, !two);
     }
@@ -1432,6 +1592,8 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
         }
         if l.show_status {
             draw_status(app, f, right, l);
+        } else if l.tab == Tab::Sources {
+            sources::draw_root(app, f, right, l);
         } else {
             draw_preview(app, f, right, l);
         }
@@ -1636,6 +1798,12 @@ fn draw_rows(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library, alone: bool)
                 let mut about: Vec<String> = [project, by].into_iter().flatten().collect();
                 about.push(pieces(u64::from(it.item.chunks)));
                 out.push((Line::styled(format!("{INDENT}{}", about.join(" · ")), dim), Some(i)));
+            }
+            if l.more {
+                say(
+                    &mut out,
+                    if l.older { "Looking for older ones…" } else { "(older ones follow)" },
+                );
             }
         }
         Rows::Hits(hits) => {

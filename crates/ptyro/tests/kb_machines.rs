@@ -371,6 +371,42 @@ async fn a_search_finds_another_machines_sessions_reads_them_there_and_keeps_the
     assert!(!file.exists(), "forgotten there: its file is deleted on laptop2");
     assert!(search(&here, "zqfarnote", true, None).await.unwrap().0.is_empty());
 
+    // Roots (KB3.7) are each machine's own too: asked of laptop2 by its name, a folder on
+    // its disk is read there, listed and found from here, looked at again and no longer
+    // read there. Nothing of it is on this machine.
+    let book = far.home.join("handbook");
+    std::fs::create_dir_all(&book).unwrap();
+    std::fs::write(book.join("Guide.md"), "# Guide\n\nThe zqfarbook is on laptop2.\n").unwrap();
+    let said = near.out(&["ingest", &book.to_string_lossy(), "--machine", "laptop2"]);
+    assert!(said.contains("read handbook: 1 file"), "{said}");
+    let there_ls = near.out(&["kb", "ls", "--machine", "laptop2"]);
+    assert!(
+        there_ls.lines().any(|l| l.starts_with("handbook") && l.contains("folder")),
+        "{there_ls}"
+    );
+    assert!(!near.out(&["kb", "ls"]).contains("handbook"));
+    assert!(far.out(&["kb", "ls"]).contains("handbook"));
+    let (hits, _) = search(&here, "zqfarbook", true, None).await.unwrap();
+    assert_eq!(hits.len(), 1, "{hits:#?}");
+    assert_eq!((hits[0].kind, hits[0].machine.as_deref()), (HitKind::Doc, Some("laptop2")));
+    let said = near.out(&["kb", "sync", "handbook", "--machine", "laptop2"]);
+    assert!(said.contains("handbook: 1 file"), "{said}");
+    let e = here.request(Request::KbRoots { machine: Some("laptop9".into()) }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound, "{e:?}");
+    // Its machine asks first, in its words; then it is gone there.
+    let ask = |confirmed| Request::KbRemove {
+        root: "handbook".into(),
+        confirmed,
+        machine: Some("laptop2".into()),
+    };
+    let e = here.request(ask(false)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NeedsConfirmation, "{e:?}");
+    assert!(e.message.starts_with("Stop reading handbook"), "{}", e.message);
+    let said = near.out(&["kb", "rm", "handbook", "--machine", "laptop2", "--yes"]);
+    assert!(said.contains("handbook is no longer read"), "{said}");
+    assert!(!far.out(&["kb", "ls"]).contains("handbook"));
+    assert!(search(&here, "zqfarbook", true, None).await.unwrap().0.is_empty());
+
     // laptop2 goes down: the search is still an answer, and names it; asked for by name, it
     // is the error.
     far.d.stop();

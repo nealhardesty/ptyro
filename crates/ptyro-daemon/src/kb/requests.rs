@@ -103,6 +103,12 @@ impl Daemon {
                 "this session sees its own workspace only (`kb.scope`): {m} isn't asked"
             ))
         };
+        // Roots are managed on their own machine (§25.11): one that names a linked machine
+        // is answered there.
+        let req = match self.kb_roots_far(req, scope.is_some()).await? {
+            Ok(reply) => return Ok(reply),
+            Err(req) => req,
+        };
         match req {
             Request::KbSearch {
                 query,
@@ -302,14 +308,16 @@ impl Daemon {
                 Ok(Reply::KbItems { items: self.kb_listed(&db, items).await? })
             }
             Request::KbNoteRead { addr } => self.kb_note_read(&addr, scope).await,
-            Request::KbSync { roots } => {
+            Request::KbSync { roots, machine: _ } => {
                 // Every root and the notes folder; or only the roots named.
                 let (notes, changed, removed) =
                     if roots.is_empty() { self.kb_notes_sync().await? } else { (0, 0, 0) };
                 let roots = self.kb_roots_sync(&roots).await?;
                 Ok(Reply::KbSynced { notes, changed, removed, roots })
             }
-            Request::KbRoots => Ok(Reply::KbRoots { roots: self.kb_roots(scope).await? }),
+            Request::KbRoots { machine: _ } => {
+                Ok(Reply::KbRoots { roots: self.kb_roots(scope).await? })
+            }
             // What is read, and what is dropped, is yours to say: an agent's session could
             // read another profile's folder in, or drop what you chose to keep.
             Request::KbIngest { .. } | Request::KbRemove { .. } | Request::KbHistory { .. }
@@ -320,9 +328,11 @@ impl Daemon {
                     "an agent's session doesn't add or remove what the knowledge base reads: the user does, with `ptyro ingest` and `ptyro kb rm`",
                 ))
             }
-            Request::KbIngest { spec } => self.kb_ingest_root(spec).await,
-            Request::KbRemove { root, confirmed } => self.kb_remove_root(&root, confirmed).await,
-            Request::KbHistory { agent, profile, since_ms, dry_run } => {
+            Request::KbIngest { spec, machine: _ } => self.kb_ingest_root(spec).await,
+            Request::KbRemove { root, confirmed, machine: _ } => {
+                self.kb_remove_root(&root, confirmed).await
+            }
+            Request::KbHistory { agent, profile, since_ms, dry_run, machine: _ } => {
                 let plan = self.kb_history(agent, profile, since_ms, dry_run).await?;
                 Ok(Reply::KbHistory { plan })
             }

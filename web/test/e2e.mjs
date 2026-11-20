@@ -176,7 +176,7 @@ const scenarios = {
     await fresh("#/library");
     await tab.phone();
     const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
-    await tab.waitFor("the tabs", `document.querySelectorAll(".kb-tabs button").length === 2`);
+    await tab.waitFor("the tabs", `document.querySelectorAll(".kb-tabs button").length === 3`);
     await press("Notes");
     await tab.waitFor("the note, under what it is about", `location.hash === "#/library/notes" && ${rowWith("Web one")} && document.querySelector("main.library h3.day")?.textContent === "Global (about no project)"`);
     await tab.waitFor("who wrote it", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("you ·"))`);
@@ -215,6 +215,72 @@ const scenarios = {
     await press("Search");
     await tab.waitFor("the search's filters", `location.hash === "#/library" && !!document.querySelector('.kb-filters select[aria-label="Wrote"]')`);
     ptyro("kb", "forget", recalled("zqwebnote")[0].addr.split("/")[0], "--yes");
+  },
+
+  // The Library's sources (KB3.7): the project is read by itself and listed; Read a folder…
+  // (every option the command takes) reads one, and what it holds is found; a tap shows it in
+  // full, Look at it again reads what changed; Stop reading it…, asked in the daemon's words,
+  // drops it; Agents' history… counts before it reads.
+  async sources() {
+    const recalled = (word) => JSON.parse(ptyro("recall", "--json", "--here", word));
+    const rowWith = (word) => `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes(${JSON.stringify(word)}))`;
+    const press = (label) => tab.eval(`[...document.querySelectorAll("main.library button, .sheet button")].find((b) => b.textContent.startsWith(${JSON.stringify(label)})).click()`);
+    const tapRow = (word) => tab.eval(`[...document.querySelectorAll("main.library .rows .row")].find((r) => r.textContent.includes(${JSON.stringify(word)})).click()`);
+    const labels = () => tab.eval(`[...document.querySelectorAll(".sheet label.field > span")].map((s) => s.textContent).join()`);
+    const book = join(E.repo, "..", "handbook");
+    mkdirSync(book, { recursive: true });
+    writeFileSync(join(book, "guide.md"), "# Belt tension\n\nzqsourceword: tighten the belt a quarter turn.\n");
+    await fresh("#/library");
+    await tab.phone();
+    const fits = async (what) => { if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error(`${what} is wider than a phone`); };
+    await tab.waitFor("the tabs", `document.querySelectorAll(".kb-tabs button").length === 3`);
+    await press("Sources");
+    // A project is read by itself: nothing was asked for it.
+    await tab.waitFor("the project, as a root", `location.hash === "#/library/sources" && [...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("project") && r.textContent.includes("repo"))`, 20_000);
+    await fits("the sources");
+    // Read a folder…: every option the command takes, as a pick where the answers are known.
+    await press("Read a folder…");
+    await tab.waitFor("the form", `document.querySelector(".sheet h2")?.textContent === "Read a folder" && document.querySelectorAll(".sheet select").length === 2`);
+    const fields = await labels();
+    if (fields !== "Folder or file,Name,Project,Seen by,Only,Not,Source comments,Source code too (it makes the knowledge base large),Commit messages,Only now: never look at it again") throw new Error(`the form's fields: ${fields}`);
+    await fits("the form");
+    await tab.eval(`(() => { const [path, name] = document.querySelectorAll(".sheet input:not([type=checkbox])"); path.value = ${JSON.stringify(book)}; name.value = "handbook"; })()`);
+    await tab.click(".sheet-foot .primary");
+    await until("the folder's document to be found", () => recalled("zqsourceword").length > 0, 20_000);
+    const hit = recalled("zqsourceword")[0];
+    if (hit.kind !== "doc" || !String(hit.title).includes("guide.md")) throw new Error(`found as ${JSON.stringify(hit)}`);
+    // Its row, without a reload: what it holds, and that it was read.
+    await tab.waitFor("the folder's row, read", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("handbook") && r.textContent.includes("1 file") && /read [0-9]+[smh] ago/.test(r.textContent))`, 20_000);
+    await fits("the sources, with a folder");
+    // A tap: all of it, and Look at it again, which finds what changed.
+    await tapRow("handbook");
+    await tab.waitFor("the root, in full", `document.querySelector(".sheet h2")?.textContent === "handbook" && document.querySelector(".sheet .facts")?.textContent.includes("A folder you gave") && document.querySelector(".sheet .facts").textContent.includes(${JSON.stringify(book)})`);
+    await fits("a root's sheet");
+    writeFileSync(join(book, "more.md"), "# More\n\nzqsecondsource: oil the hopper.\n");
+    await press("Look at it again");
+    await until("the new file to be found", () => recalled("zqsecondsource").length > 0, 20_000);
+    await tab.waitFor("two files in its row", `[...document.querySelectorAll("main.library .rows .row")].some((r) => r.textContent.includes("handbook") && r.textContent.includes("2 files"))`, 20_000);
+    // The project's own root is not removed here; the folder's is, asked in the daemon's words.
+    await tapRow("repo");
+    await tab.waitFor("the project's sheet", `document.querySelector(".sheet h2")?.textContent === "repo" && ![...document.querySelectorAll(".sheet button")].some((b) => b.textContent.startsWith("Stop reading it"))`);
+    await tab.click(`.sheet button[aria-label="Close"]`);
+    await tapRow("handbook");
+    await tab.waitFor("the folder's sheet", `[...document.querySelectorAll(".sheet button")].some((b) => b.textContent.startsWith("Stop reading it"))`);
+    await press("Stop reading it…");
+    await tab.waitFor("the question, in the daemon's words", `document.querySelector(".sheet h2")?.textContent.startsWith("Stop reading handbook") && [...document.querySelectorAll(".sheet p.confirm")].some((p) => p.textContent.startsWith("Its files and its repository aren't touched"))`);
+    await tab.eval(`[...document.querySelectorAll(".sheet-foot .deny")].find((b) => b.textContent === "Stop reading it").click()`);
+    await until("what was kept of it to go", () => recalled("zqsourceword").length === 0, 20_000);
+    await tab.waitFor("the sources, without it", `!${rowWith("handbook")} && ${rowWith("repo")}`, 20_000);
+    if (!existsSync(join(book, "guide.md"))) throw new Error("the folder's own files were touched");
+    // Agents' history…: every option, and the count before anything is read.
+    await press("Agents' history…");
+    await tab.waitFor("its form", `document.querySelector(".sheet h2")?.textContent === "Agents' history" && document.querySelectorAll(".sheet select").length === 3`);
+    const asked = await labels();
+    if (asked !== "Whose,Profile,Since,Only count: read nothing") throw new Error(`the history's fields: ${asked}`);
+    await tab.eval(`document.querySelector(".sheet input[type=checkbox]").click()`);
+    await tab.click(".sheet-foot .primary");
+    await tab.waitFor("the count", `/conversations? in your agents' folders/i.test(document.body.innerText)`);
+    rmSync(book, { recursive: true, force: true });
   },
 
   // A switch writes the config file (comments kept), Undo restores it, a bad number is refused

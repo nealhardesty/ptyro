@@ -40,7 +40,7 @@ fn spec(path: &Path) -> RootSpec {
 }
 
 async fn ingest(d: &Arc<Daemon>, spec: RootSpec) -> (KbRootInfo, KbPlan) {
-    let said = match ask(d, Request::KbIngest { spec }).await.unwrap() {
+    let said = match ask(d, Request::KbIngest { spec, machine: None }).await.unwrap() {
         Reply::KbIngested { root, plan } => (root, plan),
         r => panic!("{r:?}"),
     };
@@ -50,7 +50,7 @@ async fn ingest(d: &Arc<Daemon>, spec: RootSpec) -> (KbRootInfo, KbPlan) {
 
 async fn sync(d: &Arc<Daemon>, roots: &[&str]) -> u32 {
     let roots = roots.iter().map(|r| (*r).to_owned()).collect();
-    let n = match ask(d, Request::KbSync { roots }).await.unwrap() {
+    let n = match ask(d, Request::KbSync { roots, machine: None }).await.unwrap() {
         Reply::KbSynced { roots, .. } => roots,
         r => panic!("{r:?}"),
     };
@@ -59,7 +59,7 @@ async fn sync(d: &Arc<Daemon>, roots: &[&str]) -> u32 {
 }
 
 async fn roots(d: &Arc<Daemon>) -> Vec<KbRootInfo> {
-    match ask(d, Request::KbRoots).await.unwrap() {
+    match ask(d, Request::KbRoots { machine: None }).await.unwrap() {
         Reply::KbRoots { roots } => roots,
         r => panic!("{r:?}"),
     }
@@ -201,16 +201,20 @@ async fn a_folder_is_read_by_its_tiers_and_kept_current() {
     assert_eq!(roots(&d).await[0].root.state, RootState::Ok);
 
     // Removed: it asks first, then every item of it goes, and the root.
-    let e =
-        ask(&d, Request::KbRemove { root: "handbook".into(), confirmed: false }).await.unwrap_err();
+    let e = ask(&d, Request::KbRemove { root: "handbook".into(), confirmed: false, machine: None })
+        .await
+        .unwrap_err();
     assert_eq!(e.code, ErrorCode::NeedsConfirmation);
     assert!(e.message.contains("1 file(s)") && e.message.contains(ptyro_core::removal::KB_ROOT));
-    let gone = ask(&d, Request::KbRemove { root: "handbook".into(), confirmed: true }).await;
+    let gone =
+        ask(&d, Request::KbRemove { root: "handbook".into(), confirmed: true, machine: None })
+            .await;
     assert!(matches!(gone, Ok(Reply::KbRemoved { items: 1, chunks: 3, .. })), "{gone:?}");
     d.kb_idle().await;
     assert!(roots(&d).await.is_empty() && files(&d).await.is_empty());
-    let e =
-        ask(&d, Request::KbRemove { root: "handbook".into(), confirmed: true }).await.unwrap_err();
+    let e = ask(&d, Request::KbRemove { root: "handbook".into(), confirmed: true, machine: None })
+        .await
+        .unwrap_err();
     assert_eq!(e.code, ErrorCode::NotFound);
 }
 
@@ -226,16 +230,18 @@ async fn what_is_refused_and_one_file_alone() {
         (PathBuf::from("relative/path"), "not a whole path"),
         (d.kb_own_dir().join("worktrees"), "ptyro's own folder"),
     ] {
-        let e = ask(&d, Request::KbIngest { spec: spec(&path) }).await.unwrap_err();
+        let e = ask(&d, Request::KbIngest { spec: spec(&path), machine: None }).await.unwrap_err();
         assert!(e.message.contains(why), "{}: {}", path.display(), e.message);
     }
     put(&dir, ".ssh/config", "Host x\n");
-    let e = ask(&d, Request::KbIngest { spec: spec(&dir.join(".ssh")) }).await.unwrap_err();
+    let e = ask(&d, Request::KbIngest { spec: spec(&dir.join(".ssh")), machine: None })
+        .await
+        .unwrap_err();
     assert!(e.message.contains("never read"), "{}", e.message);
     let mut other = spec(&dir);
     other.profile = Some("nobody".into());
     assert_eq!(
-        ask(&d, Request::KbIngest { spec: other }).await.unwrap_err().code,
+        ask(&d, Request::KbIngest { spec: other, machine: None }).await.unwrap_err().code,
         ErrorCode::NotFound
     );
 
@@ -264,11 +270,11 @@ async fn what_is_refused_and_one_file_alone() {
     let mut clash = spec(&other);
     clash.name = Some("plan".into());
     assert_eq!(
-        ask(&d, Request::KbIngest { spec: clash }).await.unwrap_err().code,
+        ask(&d, Request::KbIngest { spec: clash, machine: None }).await.unwrap_err().code,
         ErrorCode::Conflict
     );
     one.profile = Some("home".into());
-    let e = ask(&d, Request::KbIngest { spec: one }).await.unwrap_err();
+    let e = ask(&d, Request::KbIngest { spec: one, machine: None }).await.unwrap_err();
     assert!(e.message.contains("ptyro kb rm plan"), "{}", e.message);
 
     // `--once`: read now, and not by the pass that looks at every root; by name it is.
@@ -277,8 +283,16 @@ async fn what_is_refused_and_one_file_alone() {
     ingest(&d, once).await;
     assert_eq!(sync(&d, &[]).await, 1, "only the plan");
     assert_eq!(sync(&d, &["Other.md"]).await, 1);
-    let e = ask(&d, Request::KbSync { roots: vec!["nope".into()] }).await.unwrap_err();
+    let e =
+        ask(&d, Request::KbSync { roots: vec!["nope".into()], machine: None }).await.unwrap_err();
     assert!(e.message.contains("plan"), "{}", e.message);
+    // (1.59) Asked of this machine by its word, it is this machine's; a machine that isn't
+    // linked is said, with the ones there are.
+    let here = ask(&d, Request::KbRoots { machine: Some("here".into()) }).await.unwrap();
+    assert!(matches!(here, Reply::KbRoots { roots } if roots.len() == 2), "this machine's own");
+    let e = ask(&d, Request::KbRoots { machine: Some("laptop9".into()) }).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    assert!(e.message.contains("no linked machine is called \"laptop9\""), "{}", e.message);
 }
 
 #[tokio::test]
@@ -402,8 +416,9 @@ async fn projects_are_roots_by_themselves() {
     d.kb_roots_reconcile().await;
     d.kb_idle().await;
     assert_eq!(roots(&d).await.len(), 1);
-    let e =
-        ask(&d, Request::KbRemove { root: "feeder".into(), confirmed: true }).await.unwrap_err();
+    let e = ask(&d, Request::KbRemove { root: "feeder".into(), confirmed: true, machine: None })
+        .await
+        .unwrap_err();
     assert!(e.message.contains("kb.projects"), "{}", e.message);
     let (same, plan) = ingest(&d, spec(&project.join("src"))).await;
     assert!(plan.existing && same.root.id == r.root.id);

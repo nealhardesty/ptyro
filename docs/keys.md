@@ -225,10 +225,10 @@ narrow for both, the list is alone and a hit shows more of its text).
 |---|---|
 | `/` (or `i`) | type in the search box: words (all must match), `"a phrase"`, `prefix*`, `-word`, `before:30d`, `agent:codex`, `machine:laptop2`, `by:meaning`. Hits come as you type, from 3 letters. `⏎` or `↓` goes to the hits, `Esc` empties the box (the history again), `C-u` clears it |
 | `j` / `k`, `↓` / `↑`, `PgDn` / `PgUp`, `g` / `G` | move (the wheel too; a click selects) |
-| `1` / `2` | the tabs: **Search** (this table), and **Notes**: the notes by project, with their own keys below |
+| `1` / `2` / `3` | the tabs: **Search** (this table); **Notes**: the notes by project; **Sources**: what is read. Each with its own keys below |
 | `n` | write a note: a form with its text (empty: your editor opens), title, the project it is about, whose agents may see it, tags |
 | `Tab` | the filters: kind, project, since, who wrote it (you, or an agent), and with linked machines the machine (`any`: a search asks every one that is up, and the history is this computer's; `here`: this computer only; or one of them). `←` / `→` (or `Tab`) move among them, `⏎` picks from a list, `Backspace` clears one, `Esc` goes back to the list |
-| `⏎` | open it: a chat's hit in the chat, at that message (`Esc` there comes back); a note in your editor (`ptyro kb show REF --open`, in a split); anything else in **the reader** |
+| `⏎` | open it: a chat's hit in the chat, at that message (`Esc` there comes back); a note in your editor, a file in your editor at the line of the piece, a commit as `git show` (each is `ptyro kb show REF --open`, in a split); anything else in **the reader**. At the end of the history, the older items are brought by themselves |
 | `r` | go to the session it happened in (a dormant one is resumed; an exited one is shown, where `⏎` restarts it). `` Ctrl-Q ` `` comes back to the Library |
 | `y` / `Y` | copy its address (`k:7f3k/12`) / its text |
 | `d` | forget it: the daemon says what will go and asks; then its text is deleted for good and never kept again (a chat is deleted from the chat list instead) |
@@ -246,12 +246,29 @@ no project first), each with who wrote it and when. `n` writes one, `⏎` edits 
 in your editor, `x` deletes it (the daemon asks first: its file goes), `/` searches the notes,
 `Tab` reaches its two filters (project, who wrote it), `y` / `Y` copy, `1` is the search again.
 
+**The Sources tab** (`3`, `kb.sources`) lists what is read into the knowledge base: every
+project (by itself, for as long as ptyro has it) and every folder or file you gave, each with
+what it holds, when it was last read, what went wrong, and how far a read of it is (it follows
+the read as it happens). The selected one is beside the list in full.
+
+| Key | Does |
+|---|---|
+| `i` | read a folder or a file (`kb.ingest`): where it is (a path to type, here, or a repository found on this computer), then a form with every option `ptyro ingest` takes: name, project, whose agents may see it, only and not (globs), comments, code, commits, only now, and the machine when one is linked |
+| `s` (or `⏎`) / `S` | look at the selected one again now / at all of them, and the notes folder (`kb.sync`) |
+| `x` | stop reading it and drop what was kept of it (`kb.remove`): the daemon says what goes and asks. Your files aren't touched. A project's own root stays for as long as the project does |
+| `b` | read what your agents kept before ptyro did (`kb.backfill`): whose, which profile's, how far back, or only count; it counts first and asks |
+| `t` | keep agent sessions as they happen, or stop (`kb.sessions`) |
+| `Tab` | with linked machines: whose roots are listed and acted on (roots are each machine's own) |
+| `y` | copy its path |
+| `v` | how the knowledge base stands (the Search tab's `s`) |
+| `1` / `2`, `/` | the other tabs; the search |
+
 **With linked machines**, a hit of another machine has its name on its row, and is read,
 gone to (`r`) and forgotten there; a machine that didn't answer is named under the hits.
 
 **Switched off** (`[kb] enabled = false`), the Library says so and `⏎` switches it on. The
 actions (`kb.open`, `kb.search`, `kb.recent`, `kb.history`, `kb.show`, `kb.forget`, `kb.status`,
-`kb.enable`, `kb.notes`, `kb.note`, `kb.sync`) are in the palette, and `Ctrl-Q .` in the Library lists them. `kb.show` and
+`kb.enable`, `kb.notes`, `kb.note`, `kb.sync`, `kb.sources`, `kb.ingest`, `kb.backfill`, `kb.remove`) are in the palette, and `Ctrl-Q .` in the Library lists them. `kb.show` and
 `kb.forget` from the palette, with nothing selected, ask for an address. The keys inside the
 Library are fixed; `Ctrl-Q L` itself is rebound like any other (`L = "kb.open"` in `[keys]`).
 

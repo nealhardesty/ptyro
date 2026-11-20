@@ -67,7 +67,11 @@ ptyro ingest ~/src/lib --code        # its source code too, found by its words
 ptyro kb ls                          # what is read: each with what it holds and how it stands
 ptyro kb sync                        # look again now, at everything (or: kb sync handbook)
 ptyro kb rm handbook                 # stop reading it and drop what was kept (asks first)
+ptyro kb ls --machine laptop2        # a linked machine's (ingest, kb sync and kb rm take it too)
 ```
+
+In the Library it is the **Sources** tab (below): the same list, with how far a read is as it
+happens, and a form for `ingest` that shows every option.
 
 What is made of a file:
 
@@ -116,10 +120,10 @@ exclude = ["fixtures/**"]
 ingesting it again brings it back. A project's root goes when the project is removed from
 ptyro, when its file keeps it out, or when `[kb] projects` is off.
 
-Not built yet: the Library's Sources tab and its form (today: `kb.sources`, `kb.ingest`,
-`kb.backfill` and `kb.remove` in the TUI's palette run the commands in a split, and the web's
-Library has Sources… with Read a folder…); `ptyro gc` and mend naming a root that is missing
-(`ptyro kb`, `ptyro kb ls` and `ptyro doctor` do).
+**A folder that is gone** keeps what was read of it (it may come back) and is named until you
+say what to do: in `ptyro kb`, `ptyro kb ls`, the Sources tab, `ptyro gc`, and `ptyro doctor`,
+which is what the TUI's mend list (`M`) and the web's Health page show. `ptyro kb rm NAME`
+drops it; `ptyro kb sync NAME` looks again once it is back.
 
 ## The agents' own history
 
@@ -178,7 +182,9 @@ Each hit has an **address**: `k:7f3k/12` is piece 12 of the item `k:7f3k`; a cha
 ```sh
 ptyro kb show k:7f3k/12     # that piece with what was said around it
 ptyro kb show k:7f3k        # the whole item
-ptyro kb show k:7f3k --open # the session it happened in, resumed when it can be
+ptyro kb show k:7f3k --open # its source: the session it happened in (resumed when it can be),
+                            # a note or a file in your editor (a file at the piece's line),
+                            # a commit as `git show`
 ptyro kb recent             # the history, by day
 ```
 
@@ -233,15 +239,24 @@ The same, to look at.
 
 - **TUI**: `Ctrl-Q L` (`L` in the sidebar). The history by day when nothing is typed; `/`
   searches as you type; `Tab` reaches the filters (kind, project, since, and the machine when
-  others are linked, and who wrote it); `⏎` opens the reader (a note: your editor); `r` goes
+  others are linked, and who wrote it); `⏎` opens the reader (a note or a file: your editor,
+  a file at the piece's line; a commit: `git show`); `r` goes
   to the session it happened in; `y` / `Y` copy; `d` forgets; `s` shows the status. `2` is
   the **Notes** tab: the notes by project, `n` writes one (a form with every option), `⏎`
-  edits one in your editor, `x` deletes it; `1` is the search again.
+  edits one in your editor, `x` deletes it; `1` is the search again. `3` is the **Sources**
+  tab: what is read, each with what it holds, how it stands and how far a read of it is; `i`
+  reads a folder (a form with every option of `ptyro ingest`), `s` looks at one again and
+  `S` at all, `x` stops reading one (it asks first), `b` reads your agents' own history
+  (it counts first), `t` switches the keeping of agent sessions.
 - **Web**: More → Library, built for a phone. The search box, the same filters as picks, the
   history by day with **Older…** for more; a tap opens the reader (the piece with what was said
   around it, then **All of it**, a box to find in it, **Its session**, and ⋯ for copying and
   Forget…). It follows what is kept as it happens. **Notes** is its second tab: the notes by
-  project, **New note**, a tap to edit one in the page (Save), ⋯ → Delete….
+  project, **New note**, a tap to edit one in the page (Save), ⋯ → Delete…. **Sources** is its
+  third: what is read and how far a read is, **Read a folder…** (every option), **Look at all
+  again**, **Agents' history…**, and a tap on a row for all of it, **Look at it again** and
+  **Stop reading it…**. A file's and a commit's hit show what was kept of them: a phone has
+  no editor to open them in.
 - A session's, a worktree's and a project's menu has **History**: the Library with only that
   one's.
 - Switched off, both say so and offer to switch it on.
@@ -330,6 +345,10 @@ copied between them.
 - **A search asks every linked machine that is up**, and the answers are mixed, each hit with
   its machine. `ptyro recall --here` (or `machine:here`) is this computer only; `--machine
   laptop2` is that one only. The Library has a machine filter.
+- **What a machine reads is its own.** `ptyro ingest PATH --machine laptop2` reads a folder
+  on laptop2 into laptop2's knowledge base (the path is laptop2's); `kb ls`, `kb sync` and
+  `kb rm` take `--machine` too, and so does `ingest --history`. In the Library's Sources tab
+  the machine filter says whose are listed, and the forms have the pick.
 - **A machine that is down** (or runs another version of ptyro) is named under the answer;
   the search still answers.
 - **A hit there is read there**: `ptyro kb show laptop2:k:7f3k/12`. `kb recent --machine

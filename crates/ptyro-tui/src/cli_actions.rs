@@ -46,13 +46,6 @@ pub const TEMPLATES: &[(&str, &[&str])] = &[
     ("app.install", &["install", "{ask:What to install (e.g. codex, or opencode gh)}"]),
     // Logins (BOOT4): each tool's own sign-in in the split's terminal, where its code shows.
     ("app.login", &["login"]),
-    // The knowledge base's sources (KB3), until the Library's Sources tab and the ingest form
-    // (KB3.7) take these over: each is its command in a split, where it says what it reads
-    // and asks before it removes.
-    ("kb.sources", &["kb", "ls"]),
-    ("kb.ingest", &["ingest", "{ask:Read which folder or file (a whole path, like ~/notes)}"]),
-    ("kb.backfill", &["ingest", "--history"]),
-    ("kb.remove", &["kb", "rm", "{ask:Stop reading which (a name from kb.sources)}"]),
     // Detach first: the daemon stops, and this screen with it. It asks in the split.
     ("app.uninstall", &["uninstall"]),
 ];

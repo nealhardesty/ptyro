@@ -50,6 +50,7 @@ async fn history(d: &Arc<Daemon>, agent: Option<&str>, dry_run: bool) -> KbHisto
         profile: Some("work".into()),
         since_ms: None,
         dry_run,
+        machine: None,
     };
     let plan = match ask(d, req).await.unwrap() {
         Reply::KbHistory { plan } => plan,
@@ -145,6 +146,7 @@ async fn what_the_agents_kept_is_counted_then_read_once() {
             profile: None,
             since_ms: None,
             dry_run: true,
+            machine: None,
         },
     )
     .await
@@ -234,6 +236,7 @@ async fn what_the_agents_kept_is_counted_then_read_once() {
             profile: Some("work".into()),
             since_ms: None,
             dry_run: true,
+            machine: None,
         },
     )
     .await
@@ -281,6 +284,7 @@ async fn since_and_a_project_that_keeps_itself_out() {
         profile: Some("work".into()),
         since_ms: Some(since),
         dry_run: false,
+        machine: None,
     };
     let Reply::KbHistory { plan } = ask(&d, req).await.unwrap() else { panic!() };
     assert_eq!((plan.found, plan.old, plan.new), (3, 1, 2), "{plan:?}");

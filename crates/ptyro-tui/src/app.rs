@@ -237,6 +237,8 @@ pub enum Purpose {
     CliPick(Box<crate::cli_actions::CliJob>),
     /// One of the Library's filters (SPEC §25.10).
     Library(crate::library::Filter),
+    /// The folder to read into the knowledge base (`kb.ingest`): then its form.
+    KbIngest,
     /// The profile to pin this project to.
     Pin(String),
     /// This workspace's profile, or how it notifies.
@@ -490,6 +492,17 @@ pub enum Pending {
     KbForgotten,
     /// `kb.sync`: the notes folder was read again.
     KbSynced,
+    /// The next page of the Library's history (the ask's number).
+    KbOlder(u64),
+    /// The Sources tab's (SPEC §25.10): the repositories found, for the ingest form's path
+    /// picker; a root added (on this machine); a root being removed; the agents' history
+    /// counted (and the request that reads it, unless it was only to count); it being read
+    /// (what to say).
+    KbPaths,
+    KbIngested(Option<String>),
+    KbRemoved,
+    KbCounted(Option<Box<Request>>),
+    KbBackfilled(String),
     /// A chat's Markdown, to write here.
     ChatExport(std::path::PathBuf),
     /// What quick-new would start in the context's worktree (UX3.2), for its label.
@@ -1454,6 +1467,7 @@ impl App {
             self.refresh_again();
         }
         self.health_tick(self.started);
+        self.sources_tick();
         self.setup_tick();
         self.sync_window();
     }
@@ -1710,8 +1724,10 @@ impl App {
             DomainEvent::HostLoad { load } => self.host_load = load,
             // The web's setup runs (the TUI runs its own, `ptyro setup` in a split).
             DomainEvent::KbUpdated { .. } => self.library_news(),
-            // (A pass over a root: the Sources tab, KB3.7, shows how far it is.)
-            DomainEvent::KbProgress { .. } => {}
+            // A pass over a root: the Sources tab shows how far it is.
+            DomainEvent::KbProgress { root, done, of, .. } => {
+                self.sources_progress(&root, done, of)
+            }
             DomainEvent::SetupProgress { .. } => {}
             DomainEvent::ChatUpdated { info } => self.chat_updated(info),
             DomainEvent::ChatRemoved { id, machine } => self.chat_removed(&id, machine.as_deref()),
@@ -1967,8 +1983,26 @@ impl App {
             (Pending::KbForgotten, Ok(Reply::KbForgotten { items, chunks })) => {
                 self.library_forgot(items, chunks)
             }
-            (Pending::KbSynced, Ok(Reply::KbSynced { notes, changed, removed, .. })) => {
-                self.library_synced(notes, changed, removed)
+            (Pending::KbSynced, Ok(Reply::KbSynced { notes, changed, removed, roots })) => {
+                self.library_synced(notes, changed, removed, roots)
+            }
+            (Pending::KbOlder(asked), Ok(Reply::KbItems { items })) => {
+                self.library_older_rows(asked, items)
+            }
+            (Pending::KbPaths, Ok(Reply::Paths { paths })) => self.ingest_paths(paths),
+            (Pending::KbPaths, Err(_)) => self.ingest_paths(Vec::new()),
+            (Pending::KbIngested(machine), Ok(Reply::KbIngested { root, plan })) => {
+                self.ingested(machine, &root, &plan)
+            }
+            (Pending::KbRemoved, Ok(Reply::KbRemoved { name, items, chunks })) => {
+                self.sources_removed(&name, items, chunks)
+            }
+            (Pending::KbCounted(read), Ok(Reply::KbHistory { plan })) => {
+                self.backfill_counted(read, &plan)
+            }
+            (Pending::KbBackfilled(said), Ok(Reply::KbHistory { .. })) => {
+                self.toast(said);
+                self.library_news();
             }
             (Pending::ChatExport(path), Ok(Reply::Text { text })) => {
                 match std::fs::write(&path, text) {
@@ -4985,7 +5019,8 @@ impl App {
             Confirmed::Again(mut req, then) => {
                 if let Request::ChatTask { confirmed, .. }
                 | Request::ChatUpdate { confirmed, .. }
-                | Request::KbForget { confirmed, .. } = req.as_mut()
+                | Request::KbForget { confirmed, .. }
+                | Request::KbRemove { confirmed, .. } = req.as_mut()
                 {
                     *confirmed = true;
                 }
@@ -5131,6 +5166,8 @@ impl App {
                 });
             }
             (Target::Path(v), Purpose::Library(f)) => self.library_picked(f, &v.to_string_lossy()),
+            (Target::Path(path), Purpose::KbIngest) => self.open_ingest_form(Some(path)),
+            (Target::NewProjectPath, Purpose::KbIngest) => self.open_ingest_form(None),
             (Target::Path(word), Purpose::CliPick(mut job)) => {
                 job.done.push(word.to_string_lossy().into_owned());
                 self.cli_step(*job);

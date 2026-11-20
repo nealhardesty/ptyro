@@ -156,6 +156,10 @@ function fixesFor(c) {
         fix(`Unset ${c.data.unset}`, "ptyro no longer has the one it named", { t: "unset", key: c.data.unset }, `${c.data.unset} unset`);
     if (c.data?.remove)
         fix(`Remove [${c.data.remove}.${c.data.name}]`, "Or give it a command in the config, to run it as your own", { t: "remove", path: c.data.remove, name: c.data.name }, "Removed");
+    // A folder the knowledge base can't read (SPEC §25.6.3): the Library's Sources has it, with
+    // Look at it again and Stop reading it….
+    if (c.section === "knowledge base" && String(c.name).startsWith("root "))
+        out.push({ label: "The Library's sources", hint: "Look at it again, or stop reading it", run: () => go("#/library/sources") });
     if (c.section === "ptyro" && c.name.startsWith("config"))
         out.push({ label: "Edit the config", run: () => go("#/config") });
     if (c.section === "remote" || /restart/.test(c.text))

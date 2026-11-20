@@ -251,7 +251,7 @@ fn here_only(req: &Request) -> bool {
             | KbNoteRead { .. }
             | KbSync { .. }
             // Roots are managed on their own machine (SPEC §25.11).
-            | KbRoots
+            | KbRoots { .. }
             | KbIngest { .. }
             | KbRemove { .. }
             | KbHistory { .. }

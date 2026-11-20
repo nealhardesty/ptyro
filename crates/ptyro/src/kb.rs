@@ -132,7 +132,8 @@ pub enum KbCmd {
         #[arg(long, value_name = "N")]
         context: Option<u32>,
         /// Open its source instead: a session in the TUI (resumed if it can be), a chat in
-        /// its view, a note in your editor
+        /// its view, a note or a file in your editor (a file at the line of the piece), a
+        /// commit as `git show`
         #[arg(long, conflicts_with_all = ["context", "json"])]
         open: bool,
         #[arg(long)]
@@ -198,6 +199,9 @@ pub enum KbCmd {
     /// What is read into the knowledge base: every project and every folder or file given to
     /// `ptyro ingest`, with what each holds, when it was last read, and what went wrong
     Ls {
+        /// A linked machine's instead of this computer's
+        #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
+        machine: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -208,6 +212,9 @@ pub enum KbCmd {
         /// Only these (names from `ptyro kb ls`, or paths)
         #[arg(value_name = "ROOT")]
         roots: Vec<String>,
+        /// A linked machine's instead of this computer's
+        #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
+        machine: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -217,6 +224,9 @@ pub enum KbCmd {
         /// Its name from `ptyro kb ls`, or its path
         #[arg(value_name = "ROOT")]
         root: String,
+        /// A linked machine's instead of this computer's
+        #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
+        machine: Option<String>,
         /// Don't ask
         #[arg(short, long)]
         yes: bool,
@@ -423,9 +433,13 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
             note(ctx, text, title, project, profile, tag, edit, json).await
         }
         KbCmd::Notes { project, wrote: who, json } => notes(ctx, project, who, json).await,
-        KbCmd::Ls { json } => crate::ingest::list(ctx, json).await,
-        KbCmd::Sync { roots, json } => crate::ingest::sync(ctx, roots, json).await,
-        KbCmd::Rm { root, yes, json } => crate::ingest::remove(ctx, root, yes, json).await,
+        KbCmd::Ls { machine, json } => crate::ingest::list(ctx, machine, json).await,
+        KbCmd::Sync { roots, machine, json } => {
+            crate::ingest::sync(ctx, roots, machine, json).await
+        }
+        KbCmd::Rm { root, machine, yes, json } => {
+            crate::ingest::remove(ctx, root, machine, yes, json).await
+        }
         KbCmd::Recent { kind, project, machine, wrote: who, limit, json } => {
             let kinds = kinds(kind.as_deref(), ItemKind::parse, ItemKind::ALL, ItemKind::as_str)?;
             let c = ctx.connect(true).await?;
@@ -545,7 +559,8 @@ async fn show(ctx: &Ctx, addr: String, context: Option<u32>, json: bool) -> Resu
 }
 
 /// `kb show --open`: the source itself. A session opens in the TUI (resumed when it is
-/// dormant and can be); a chat in its view.
+/// dormant and can be); a chat in its view; a note and a file in your editor; a commit as
+/// `git show`.
 async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
     // (A linked machine's chat is `laptop2:c:7f3k`.)
     if addr.starts_with("c:") || addr.contains(":c:") {
@@ -553,7 +568,7 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
         return crate::chat::open(ctx, &chat).await;
     }
     let c = ctx.connect(true).await?;
-    let (item, ..) = read(ctx, &c, addr.to_owned(), Some(0)).await?;
+    let (item, chunks, at, _) = read(ctx, &c, addr.to_owned(), Some(0)).await?;
     let gone = || {
         let conversation = item.item.uri.rsplit('/').next().unwrap_or_default();
         Error::new(
@@ -576,11 +591,91 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
         }
         (ItemKind::Session, None) => Err(gone()),
         (ItemKind::Note, _) => edit_note(ctx, &c, &item.addr).await,
+        (ItemKind::File | ItemKind::Commit, _) if ctx.remote.is_some() || far(&item.addr) => {
+            Err(Error::invalid(format!(
+                "that {} is on another computer: `ptyro kb show {}` shows what is kept of it",
+                item.item.kind, item.addr
+            )))
+        }
+        (ItemKind::File, _) => {
+            let piece = at.and_then(|at| chunks.iter().find(|c| c.idx == at));
+            open_file(&item, piece)
+        }
+        (ItemKind::Commit, _) => open_commit(ctx, &c, &item).await,
         (kind, _) => Err(Error::invalid(format!(
             "a {kind} has nothing to open from here yet: `ptyro kb show {}` shows what is kept of it",
             item.addr
         ))),
     }
+}
+
+/// An address under a linked machine's name (`laptop2:k:7f3k`).
+fn far(addr: &str) -> bool {
+    !addr.starts_with("k:")
+}
+
+/// The line of a file a piece stands at: a comment's or a window of code's own (`L120-L161`),
+/// else the line of the heading a document's section is under.
+fn line_of(path: &std::path::Path, piece: &KbChunk) -> Option<u32> {
+    if let Some(n) = piece.anchor.as_deref().and_then(|a| a.strip_prefix('L')) {
+        return n.split('-').next()?.parse().ok();
+    }
+    let heading = piece.heading.as_deref()?.rsplit(" › ").next()?.trim();
+    let text = std::fs::read_to_string(path).ok()?;
+    let at = text.lines().position(|l| {
+        l.starts_with('#') && l.trim_start_matches('#').trim().eq_ignore_ascii_case(heading)
+    })?;
+    Some(at as u32 + 1)
+}
+
+/// `kb show REF --open` of a file: the file itself in your editor, at the piece's line.
+fn open_file(item: &KbListed, piece: Option<&KbChunk>) -> Result<i32, Error> {
+    let path = std::path::PathBuf::from(item.item.uri.strip_prefix("file://").unwrap_or_default());
+    if !path.is_file() {
+        return Err(Error::new(
+            ErrorCode::NotFound,
+            format!(
+                "{} is no longer there: `ptyro kb show {}` shows what was kept of it",
+                path.display(),
+                item.addr
+            ),
+        ));
+    }
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+    let line = piece.and_then(|p| line_of(&path, p));
+    let argv = ptyro_core::shell::editor_command_at(&editor, &path, line);
+    let status = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
+        .status()
+        .map_err(|e| Error::internal(format!("{editor}: {e}")))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// `kb show REF --open` of a commit: `git show` of it, in its repository (git's own pager).
+async fn open_commit(ctx: &Ctx, c: &ptyro_client::Client, item: &KbListed) -> Result<i32, Error> {
+    // `commit://<root id>/<sha>`: the root says where the repository is.
+    let rest = item.item.uri.strip_prefix("commit://").unwrap_or_default();
+    let (root, sha) = rest.split_once('/').unwrap_or((rest, ""));
+    let roots = match ask(ctx, c, Request::KbRoots { machine: None }).await? {
+        Reply::KbRoots { roots } => roots,
+        r => return Err(unexpected(r)),
+    };
+    let Some(dir) = roots.iter().find(|r| r.root.id == root).map(|r| r.root.path.clone()) else {
+        return Err(Error::new(
+            ErrorCode::NotFound,
+            format!(
+                "its repository is no longer read: `ptyro kb show {}` shows what was kept of it",
+                item.addr
+            ),
+        ));
+    };
+    let status = std::process::Command::new("git")
+        .args(["-C", &dir, "show", sha])
+        .status()
+        .map_err(|e| Error::internal(format!("git: {e}")))?;
+    Ok(status.code().unwrap_or(1))
 }
 
 async fn forget(

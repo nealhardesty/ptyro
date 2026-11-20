@@ -7,6 +7,9 @@
 //! - A pass that the daemon's end interrupts is carried on at its next start.
 //! - `ptyro ingest --history` counts, then brings in what the agents kept: never a private
 //!   session's conversation, never one that was forgotten.
+//! - KB3.7: `kb show REF --open` opens a file in your editor at the piece's line and a commit
+//!   as `git show`; `ptyro gc` and the doctor name a root whose folder is gone; and the real
+//!   TUI's Sources tab reads a folder through its form and stops reading it.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -245,7 +248,8 @@ async fn a_pass_that_the_daemons_end_interrupts_is_carried_on() {
     }
     // Asked for, and the daemon is killed while it reads.
     let spec = RootSpec { path: dir.to_string_lossy().into_owned(), ..RootSpec::default() };
-    let Reply::KbIngested { plan, .. } = c.request(Request::KbIngest { spec }).await.unwrap()
+    let Reply::KbIngested { plan, .. } =
+        c.request(Request::KbIngest { spec, machine: None }).await.unwrap()
     else {
         panic!("not ingested")
     };
@@ -370,4 +374,130 @@ async fn ingest_history_brings_in_what_the_agents_kept_and_never_a_private_sessi
     w.out(&["ingest", "--history"]);
     assert_eq!(w.sessions().await.len(), 3);
     assert!(!w.bytes_hold("zqprivateword"));
+}
+
+/// KB3.7: what a search found is opened in its own tool, and a root that can no longer be
+/// read is named where stale things are (`gc`, and the doctor that the TUI's mend list and
+/// the web's Health page show).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_and_a_commit_open_in_their_own_tools_and_a_root_that_is_gone_is_named() {
+    let w = World::new(&agents(""));
+    let _c = w.d.client().await.unwrap();
+    let home = w.home();
+    let book = home.join("handbook");
+    std::fs::create_dir_all(&book).unwrap();
+    git(&book, &["init", "-q"]);
+    put(
+        &book,
+        "docs/Guide.md",
+        "# Guide\n\nHow the belts run.\n\n## Tension\n\nTighten the zqbelt a quarter turn.\n",
+    );
+    put(
+        &book,
+        "src/feed.ts",
+        "export const a = 1;\n\n// The zqhopper is fed every morning, never twice.\nexport function feed() {}\n",
+    );
+    git(&book, &["add", "."]);
+    git(&book, &["commit", "-q", "-m", "Run the zqconveyor slower"]);
+    let o = w.cli(&["ingest", "handbook"]);
+    assert!(o.status.success(), "{o:?}");
+    let addr = |word: &str| -> String {
+        let hits = w.json(&["recall", "--json", "--here", word]);
+        hits[0]["addr"].as_str().unwrap_or_else(|| panic!("{word}: {hits}")).to_owned()
+    };
+    // An editor that says what it was given (called nvim: one known to take a line).
+    let bin = home.join("bin");
+    let said = home.join("editor-said");
+    let nvim = ptyro_testkit::program::program(
+        &bin,
+        "nvim",
+        &format!("echo \"$@\" > '{}'", said.display()),
+    );
+    let open = |addr: &str| {
+        w.d.cmd()
+            .args(["kb", "show", addr, "--open"])
+            .env("HOME", &home)
+            .env("EDITOR", &nvim)
+            .env_remove("VISUAL")
+            .env("GIT_PAGER", "cat")
+            .current_dir(&home)
+            .output()
+            .unwrap()
+    };
+    // A document's section: at its heading's line. A comment: at its own.
+    let o = open(&addr("zqbelt"));
+    assert!(o.status.success(), "{o:?}");
+    let guide = book.join("docs/Guide.md");
+    assert_eq!(std::fs::read_to_string(&said).unwrap().trim(), format!("+5 {}", guide.display()));
+    let o = open(&addr("zqhopper"));
+    assert!(o.status.success(), "{o:?}");
+    let feed = book.join("src/feed.ts");
+    assert_eq!(std::fs::read_to_string(&said).unwrap().trim(), format!("+3 {}", feed.display()));
+    // A commit: `git show` of it, in its repository.
+    let o = open(&addr("zqconveyor"));
+    let shown = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{o:?}");
+    assert!(
+        shown.contains("Run the zqconveyor slower") && shown.contains("docs/Guide.md"),
+        "{shown}"
+    );
+
+    // Nothing stale yet. Its folder goes: `gc` and the doctor name it, with what to do.
+    assert!(!w.out(&["gc", "--dry-run"]).contains("knowledge base"));
+    std::fs::rename(&book, home.join("elsewhere")).unwrap();
+    w.cli(&["kb", "sync", "handbook"]);
+    let deadline = Instant::now() + WAIT;
+    while !w.roots().iter().any(|r| r["name"] == "handbook" && r["state"] == "missing") {
+        assert!(Instant::now() < deadline, "never missing: {:#?}", w.roots());
+        tokio::time::sleep(Duration::from_millis(80)).await;
+    }
+    let gc = w.out(&["gc", "--dry-run"]);
+    assert!(gc.contains("knowledge base: handbook: ") && gc.contains("is gone"), "{gc}");
+    assert!(gc.contains("`ptyro kb rm handbook`"), "{gc}");
+    let checks = w.json(&["doctor", "--quick", "--json"]);
+    let list = checks.as_array().or_else(|| checks["checks"].as_array()).unwrap();
+    let named = list
+        .iter()
+        .find(|c| c["section"] == "knowledge base" && c["name"] == "root handbook")
+        .unwrap_or_else(|| panic!("the doctor doesn't name it: {checks:#}"));
+    assert_eq!(named["level"], "warn", "{named}");
+    assert!(named["text"].as_str().unwrap().contains("`ptyro kb rm handbook`"), "{named}");
+    // What was kept of it is still found (it may come back); opening the file says it is gone.
+    let o = open(&addr("zqbelt"));
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("is no longer there"), "{o:?}");
+}
+
+/// KB3.7, in the real TUI over a real daemon: the Library's Sources tab starts empty, `i`
+/// offers where the folder is and then the form with every option, the folder is read and
+/// its row says what it holds, and `x` stops reading it through the daemon's question.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_tuis_sources_tab_reads_a_folder_and_stops_reading_it() {
+    let w = World::new(&agents(""));
+    let c = w.d.client().await.unwrap();
+    w.agent_in(&c, "sb", "claude", None).await;
+    let book = w.home().join("handbook");
+    put(&book, "Guide.md", "# Guide\n\nTighten the zqtuibelt a quarter turn.\n");
+    let script = w
+        .tui(&["attach", "sb"])
+        .send_when("sb", "\x11L")
+        .send_when("3 Sources", "3")
+        .send_when("nothing is read yet", "i")
+        // Where it is: a path to type (the first choice), then the form.
+        .send_when("Read which folder", "\r")
+        .send_when("Only now", &format!("{}\r", book.display()))
+        // Read: its row says what it holds. Then `x`, asked in the daemon's words.
+        .send_when("1 file, 2 pieces", "x")
+        .send_when("Stop reading handbook", "y")
+        .until("handbook is no longer read: dropping 1 item");
+    let r = ptyro_testkit::headless::run(script).await.expect("headless run");
+    let shown = &r.screen;
+    assert!(shown.contains("3 Sources"), "{shown}");
+    let deadline = Instant::now() + WAIT;
+    while !w.roots().is_empty() {
+        assert!(Instant::now() < deadline, "never gone: {:#?}", w.roots());
+        tokio::time::sleep(Duration::from_millis(80)).await;
+    }
+    assert!(w.found("zqtuibelt").is_empty());
+    assert!(book.join("Guide.md").exists(), "the folder's own files aren't touched");
 }

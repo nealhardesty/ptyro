@@ -138,7 +138,7 @@ pub fn needed(req: &Request) -> Scope {
         | KbRecent { .. }
         | KbNotes { .. }
         | KbNoteRead { .. }
-        | KbRoots
+        | KbRoots { .. }
         | KbStatus => Scope::Read,
         ChatNew { .. }
         | ChatTask { .. }

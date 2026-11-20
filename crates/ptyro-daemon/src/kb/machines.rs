@@ -2,6 +2,8 @@
 //! its own `kb.db`; nothing is copied. A search asks every linked machine that is up as well
 //! and interleaves the answers (each machine's own ranking, as chat search does, §22.10); an
 //! address under a machine's name (`laptop2:k:7f3k/12`) is read, listed or forgotten there.
+//! What a machine reads (its roots) is listed, added to, looked at again and removed there too,
+//! when a request names it (`machine`, 1.59).
 //!
 //! The requests are never routed by `handle_as` (they are `here_only`): `handle_kb` sends them
 //! on from here, because it knows who asks. An agent's search reaches another machine with its
@@ -69,6 +71,34 @@ impl Daemon {
                 format!("{machine} didn't answer within {}s", FAR_WAIT.as_secs()),
             )),
         }
+    }
+
+    /// A request about roots (`KbRoots`, `KbIngest`, `KbSync`, `KbRemove`, `KbHistory`) that
+    /// names a linked machine: asked there, and its answer. `Err`: the request, which is this
+    /// machine's own. Only you may: an agent's session (`agent`) is told so.
+    pub(super) async fn kb_roots_far(
+        &self,
+        mut req: Request,
+        agent: bool,
+    ) -> Result<Result<Reply, Request>, Error> {
+        let named = match &mut req {
+            Request::KbRoots { machine }
+            | Request::KbSync { machine, .. }
+            | Request::KbIngest { machine, .. }
+            | Request::KbRemove { machine, .. }
+            | Request::KbHistory { machine, .. } => machine.take(),
+            _ => None,
+        };
+        let Some(m) = named.map(|m| self.kb_machine(&m)).transpose()?.flatten() else {
+            return Ok(Err(req));
+        };
+        if agent {
+            return Err(Error::new(
+                ErrorCode::PermissionDenied,
+                format!("an agent's session asks about what this machine reads, not {m}"),
+            ));
+        }
+        self.kb_far(&m, req).await.map(Ok)
     }
 
     /// The same search on each of `machines`, all at once. Returns each one's hits, best

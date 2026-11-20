@@ -1078,6 +1078,16 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
         let level = if bad { Level::Problem } else { Level::Ok };
         r.add(S, "knowledge base", level, k.clone());
     }
+    // Each root it can't read is a finding of its own, so that the TUI's mend list and the
+    // web's Health page name it with its fix (SPEC §25.6.3).
+    if let Ok(Reply::KbStatus { status }) = c.request(Request::KbStatus).await {
+        for f in &status.failing {
+            let name = f.split(':').next().unwrap_or_default();
+            let text = crate::projects::kb_failing(f);
+            let text = text.trim_start_matches("knowledge base: ").to_owned();
+            r.add("knowledge base", &format!("root {name}"), Level::Warn, text);
+        }
+    }
     worktrees(&c, config, r).await;
     if quick {
         return;

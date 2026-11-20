@@ -5,10 +5,13 @@
 // with what was said around it, then all of it, with a find box, the way to the session it
 // happened in, copying and forgetting. On a phone the list and the reader are two steps.
 //
-// Two tabs (KB2): Search, and Notes (`#/library/notes`): the notes by project, New note (every
+// Three tabs: Search; Notes (KB2, `#/library/notes`): the notes by project, New note (every
 // option the command takes), a tap edits one in the page (`#/library/note/<address>`: its file
-// as it is, Save, Delete…). Sources (KB3) is a sheet for now: the roots, Read a folder…,
-// Agents' history…, Remove… (the tab and the form's picks are KB3.7's).
+// as it is, Save, Delete…); and Sources (KB3.7, `#/library/sources`): what is read into the
+// knowledge base (every project, every folder or file given to it), how each stands and how far
+// a read of it is, Read a folder… (every option `ptyro ingest` takes), Agents' history…, and
+// on a root's own sheet Look at it again and Stop reading it…. With machines linked, the
+// machine pick says whose roots are listed and acted on.
 //
 // What it shows is asked of the daemon (`kb_search`, `kb_recent`, `kb_read`, `kb_status`), and
 // asked again when the daemon says the knowledge base changed (`kb_updated`).
@@ -16,9 +19,9 @@
 import { conn, host } from "./conn.js";
 import { data, can } from "./data.js";
 import { Cache, actions, ago, ask, badge, bar, confirm, enc, errText, facts, form, go, h, menu, pending, profileChoices, row, safeDecode, sheet, tipOf, ui, views } from "./kit.js";
-import type { Child } from "./kit.js";
-import { PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, plural, question, request, searching, snippetParts, split, when, wroteBy } from "./libkit.js";
-import type { Filters, Of, Part } from "./libkit.js";
+import type { Child, Field } from "./kit.js";
+import { HISTORY_SINCE, PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, snippetParts, split, when, wroteBy } from "./libkit.js";
+import type { Filters, Of, Part, Root } from "./libkit.js";
 
 const ACTIONS = {
   "kb.open": "The Library: everything ptyro kept of your work, searchable in one place (More → Library)",
@@ -32,10 +35,10 @@ const ACTIONS = {
   "kb.notes": "The notes: what you and your agents wrote down, by project. A tap opens one to edit; ⋯ deletes it. They are Markdown files in ptyro's notes folder on the computer",
   "kb.note": "Write a note (a decision, a fact, a how-to): its text, its title, the project it is about, whose agents may see it, its tags. Every search and every agent's recall finds notes first",
   "kb.sync": "Look again now: the notes folder is read (what was written, changed or deleted there by hand is found), and every project and folder is looked at for files that changed (the computer also does both by itself)",
-  "kb.sources": "What is read into the knowledge base: every project, and every folder or file given to it, with what each holds and how it stands",
-  "kb.ingest": "Read a folder or a file on the computer into the knowledge base, and keep reading it: its documents, its files' names, its source comments, its commits",
-  "kb.backfill": "Read what your agents kept before ptyro did: every conversation in Claude Code's and Codex's own folders that isn't kept yet (it says how many first)",
-  "kb.remove": "Stop reading a folder or file, and drop what was kept of it (the files themselves aren't touched)",
+  "kb.sources": "The Library's Sources: what is read into the knowledge base (every project, and every folder or file given to it), what each holds, how it stands and how far a read of it is. A tap shows one in full, with Look at it again and Stop reading it…",
+  "kb.ingest": "Read a folder or a file on the computer into the knowledge base, and keep reading it: its documents, its files' names, its source comments, its commits. The form has every option: its name, its project, whose agents may see it, which files, comments, code, commits, only now, and the machine",
+  "kb.backfill": "Read what your agents kept before ptyro did: every conversation in Claude Code's and Codex's own folders that isn't kept yet. Whose, which profile's, how far back; it says how many first, and asks",
+  "kb.remove": "Stop reading a folder or file, and drop what was kept of it (the files themselves aren't touched); the computer says what goes and asks first",
 } as const;
 const tip = actions(ACTIONS);
 
@@ -279,8 +282,7 @@ function listView(): HTMLElement {
       tabs("search"),
       findBox,
       filters(s),
-      h("p", { class: "sub" }, h("button", { class: "small", title: tip("kb.status"), onclick: () => showStatus(s) }, about(kept, bytes(s.bytes), s.queued ? `${s.queued} waiting to be read` : null)),
-        " ", h("button", { class: "small", title: tip("kb.sources"), onclick: () => void sources() }, "Sources…")),
+      h("p", { class: "sub" }, h("button", { class: "small", title: tip("kb.status"), onclick: () => showStatus(s) }, about(kept, bytes(s.bytes), s.queued ? `${s.queued} waiting to be read` : null))),
       h("div", { class: "rows", title: tip(searching(state.f.query) ? "kb.search" : "kb.recent") }, ...listRows(s)),
     ];
   }
@@ -288,73 +290,180 @@ function listView(): HTMLElement {
 }
 
 /// The tabs, under the header.
-function tabs(on: "search" | "notes"): HTMLElement {
+function tabs(on: "search" | "notes" | "sources"): HTMLElement {
   const tab = (id: string, label: string, hash: string, title: string): HTMLElement =>
     h("button", { class: `small${on === id ? " on" : ""}`, title, "aria-pressed": String(on === id), onclick: () => go(hash) }, label);
-  return h("div", { class: "kb-tabs" }, tab("search", "Search", "#/library", tip("kb.search")), tab("notes", "Notes", "#/library/notes", tip("kb.notes")));
+  return h("div", { class: "kb-tabs" }, tab("search", "Search", "#/library", tip("kb.search")), tab("notes", "Notes", "#/library/notes", tip("kb.notes")), tab("sources", "Sources", "#/library/sources", tip("kb.sources")));
 }
 
-// ── sources (a first part: KB3.7 makes them a tab, and the ingest form's picks) ──────────────
+// ── sources (SPEC §25.10, KB3.7) ────────────────────────────────────────────────────────────
 
-interface Root { id: string; name: string; kind: string; path: string; state: string; error?: string | null; files: number; commits: number; chunks: number; progress?: [number, number] | null; removing?: boolean }
+/// What is read, by what was asked (this computer's roots, or a linked machine's).
+const roots = new Cache<Root[]>(async (key) => (await conn.request(JSON.parse(key))).roots as Root[]);
+/// The linked machine whose roots the tab lists ("": this computer's).
+const onMachine = (): string => (state.f.machine && state.f.machine !== "here" ? state.f.machine : "");
+const rootsKey = (): string => JSON.stringify(rootsRequest(onMachine()));
+const far = (): { machine?: string } => (onMachine() ? { machine: onMachine() } : {});
 
-/// `kb.ingest`: what `ptyro ingest PATH` takes.
-function ingest(): void {
+/// What is read changed: asked for again, wherever it shows.
+function sourcesChanged(): void {
+  home.refresh(""); roots.refresh(rootsKey()); lists.reload(); docs.reload();
+}
+
+/// While something is being read or removed the tab asks again, once a second.
+let polling = 0;
+function poll(): void {
+  if (polling) return;
+  polling = window.setTimeout(() => {
+    polling = 0;
+    if (location.hash !== "#/library/sources") return;
+    roots.refresh(rootsKey());
+    home.refresh("");
+  }, 1000);
+}
+
+/// This computer's profiles, as a form's pick.
+async function profilesHere(): Promise<[string, string][]> {
+  let list: any[] = [];
+  try { list = (await conn.request({ t: "profile_list" })).profiles ?? []; } catch { /* `default` is always there */ }
+  const profiles = profileChoices(list, null);
+  if (!profiles.some(([v]) => v === "default")) profiles.unshift(["default", "default"]);
+  return profiles;
+}
+
+/// The machine a form acts on, as its pick: only where others are linked.
+function machineField(hint: string): Field[] {
+  const machines = [...data.machines.keys()].sort();
+  if (!machines.length) return [];
+  return [{ key: "machine", label: "On", type: "select", options: [["", "This computer"], ...machines.map((m): [string, string] => [m, m])], value: onMachine(), hint }];
+}
+
+/// `kb.ingest`: everything `ptyro ingest PATH` takes.
+async function ingest(): Promise<void> {
+  const profiles = await profilesHere();
   form("Read a folder", [
-    { key: "path", label: "Folder or file", required: true, placeholder: "~/notes", hint: "A whole path on the computer" },
-    { key: "name", label: "Name", placeholder: "the folder's name", more: true },
-    { key: "project", label: "Project", placeholder: "none", hint: "The project it belongs to", more: true },
-    { key: "profile", label: "Profile", placeholder: "every profile", hint: "Only this profile's agents may see it", more: true },
-    { key: "include", label: "Only", placeholder: "docs/**, *.md", hint: "Globs, comma separated", more: true },
-    { key: "exclude", label: "Not", placeholder: "drafts", hint: "Globs, comma separated", more: true },
-    { key: "comments", label: "Source comments", type: "check", value: true, more: true },
-    { key: "code", label: "Source code too (it makes the knowledge base large)", type: "check", value: false, more: true },
-    { key: "commits", label: "Commit messages", type: "check", value: true, more: true },
-    { key: "once", label: "Only now: never look at it again", type: "check", value: false, more: true },
+    { key: "path", label: "Folder or file", required: true, placeholder: "~/notes", hint: "A whole path on the computer, or one under ~. It is read now, and looked at again as it changes" },
+    { key: "name", label: "Name", placeholder: "the folder's name", hint: "What this list calls it" },
+    { key: "project", label: "Project", type: "select", options: [["", "None"], ...localProjects().map(([, slug]): [string, string] => [slug, slug])], value: "", hint: "The project it belongs to" },
+    { key: "profile", label: "Seen by", type: "select", options: [["", "Every profile's agents"], ...profiles], value: "", hint: "Whose agents may find it with recall (you always find it)" },
+    { key: "include", label: "Only", placeholder: "docs/**, *.md", hint: "Only files that match: globs, comma separated" },
+    { key: "exclude", label: "Not", placeholder: "drafts", hint: "Not the files that match" },
+    { key: "comments", label: "Source comments", type: "check", value: true },
+    { key: "code", label: "Source code too (it makes the knowledge base large)", type: "check", value: false },
+    { key: "commits", label: "Commit messages", type: "check", value: true },
+    { key: "once", label: "Only now: never look at it again", type: "check", value: false },
+    ...machineField("The computer whose folder it is: read there, into its knowledge base"),
   ], "Read it", async (v) => {
     const r = await conn.request(ingestRequest(v));
-    ui.toast(`${r.root.name}: ${r.plan.existing ? "read again" : "being read"} (${plural(r.plan.files, "file")})`);
-    home.refresh("");
+    ui.toast(`${r.root.name}: ${planLine(r.plan)}`);
+    // Shown where it was added.
+    if (typeof v.machine === "string") state.f.machine = v.machine;
+    if (location.hash !== "#/library/sources") go("#/library/sources");
+    sourcesChanged();
   });
 }
 
-/// `kb.backfill`: counted first, then asked.
+/// `kb.backfill`: everything `ptyro ingest --history` takes; counted first, then asked.
 async function backfill(): Promise<void> {
-  const r = await ask<{ plan: { found: number; new: number; known: number; old: number } }>({ t: "kb_history", dry_run: true });
-  if (!r) return;
-  const p = r.plan;
-  if (!p.new) { ui.toast(p.found ? `${plural(p.found, "conversation")} in your agents' folders, none to read` : "No conversations in your agents' folders"); return; }
-  confirm("Read your agents' history", `${plural(p.found, "conversation")} in your agents' own folders: ${p.new} to read (${p.known} kept already, ${p.old} too old). They are read in the background.`, "Read them", async () => {
-    if (await ask({ t: "kb_history" }, `Reading ${plural(p.new, "conversation")}`)) home.refresh("");
-  }, false);
+  const profiles = await profilesHere();
+  form("Agents' history", [
+    { key: "agent", label: "Whose", type: "select", options: [["", "Claude Code's and Codex's"], ["claude", "Claude Code's"], ["codex", "Codex's"]], value: "", hint: "Every conversation in the agents' own folders that isn't kept yet" },
+    { key: "profile", label: "Profile", type: "select", options: [["", "Every profile's folders"], ...profiles], value: "" },
+    { key: "since", label: "Since", type: "select", options: [["", "Everything not too old to keep"], ...HISTORY_SINCE], value: "", hint: "Only conversations written to since then" },
+    { key: "dry", label: "Only count: read nothing", type: "check", value: false },
+    ...machineField("The computer whose agents' folders are read"),
+  ], "Count them", async (v) => {
+    const p = (await conn.request(historyRequest(v, Date.now(), true))).plan;
+    const text = historyText(p);
+    if (v.dry === true || !p.new) { ui.toast(text); return; }
+    confirm("Read your agents' history?", `${text}. They are read in the background, behind everything else.`, "Read them", async () => {
+      if (await ask(historyRequest(v, Date.now(), false), `Reading ${plural(p.new, "conversation")}`)) sourcesChanged();
+    }, false);
+  });
 }
 
 /// `kb.remove`: the daemon says what goes, and is asked again with a yes.
 async function removeRoot(root: Root): Promise<void> {
+  const req = { t: "kb_remove", root: root.id, ...far() };
   try {
-    await conn.request({ t: "kb_remove", root: root.id, confirmed: false });
+    await conn.request({ ...req, confirmed: false });
   } catch (e) {
     if ((e as { code?: string }).code !== "needs_confirmation") { ui.fail(errText(e)); return; }
-    confirm(`Stop reading ${root.name}`, errText(e), "Stop reading it", async () => {
-      if (await ask({ t: "kb_remove", root: root.id, confirmed: true }, `${root.name} is no longer read`)) home.refresh("");
+    const q = question(errText(e));
+    confirm(q?.[0] ?? `Stop reading ${root.name}?`, q?.[1] ?? errText(e), "Stop reading it", async () => {
+      if (await ask({ ...req, confirmed: true }, `${root.name} is no longer read`)) sourcesChanged();
     });
   }
 }
 
-/// `kb.sources`: the roots, in a sheet.
-async function sources(): Promise<void> {
-  const r = await ask<{ roots: Root[] }>({ t: "kb_roots" });
+/// `kb.sync`, of the roots: one of them, or (none named) every one and the notes folder.
+async function lookAgain(root?: Root): Promise<void> {
+  const r = await ask<{ notes: number; changed: number; removed: number; roots: number }>({ t: "kb_sync", ...(root ? { roots: [root.id] } : {}), ...far() });
   if (!r) return;
-  const how = (x: Root): string => (x.removing ? "being removed" : x.progress ? (x.progress[1] ? `reading ${x.progress[0]} of ${x.progress[1]}` : "waiting to be read") : x.state);
-  const s = sheet("Sources", [
-    r.roots.length ? null : h("p", { class: "empty" }, "Nothing is read yet. A project is read when ptyro knows it; a folder when you give it here."),
-    h("div", { class: "rows", title: tip("kb.sources") }, ...r.roots.map((x) => row(h("span", {}, badge(x.kind), " ", x.name),
-      about(how(x), plural(x.files, "file"), x.commits ? plural(x.commits, "commit") : null, x.path, x.error),
-      x.kind !== "project" && can("full") ? h("button", { class: "small", title: tip("kb.remove"), onclick: () => { s.close(); void removeRoot(x); } }, "Remove…") : null))),
-  ], [
-    can("control") ? h("button", { title: tip("kb.backfill"), onclick: () => { s.close(); void backfill(); } }, "Agents' history…") : null,
-    can("control") ? h("button", { class: "primary", title: tip("kb.ingest"), onclick: () => { s.close(); ingest(); } }, "Read a folder…") : null,
+  ui.toast(root ? `Looking at ${root.name} again` : `Looking at ${r.roots === 1 ? "1 project or folder" : `${r.roots} projects and folders`} again; ${plural(r.notes, "note")} in the folder: ${r.changed} read again, ${r.removed} gone`);
+  sourcesChanged();
+}
+
+/// Whether agent sessions are kept as they happen (`kb.sessions`), in your config.
+async function keepSessions(on: boolean): Promise<void> {
+  try {
+    await host("settings.apply", { scope: "user", change: { t: "set", key: "kb.sessions", value: String(on) } });
+    ui.toast(on ? "Agent sessions are kept from here on" : "Agent sessions are no longer kept (what was kept stays)");
+    home.refresh("");
+  } catch (e) { ui.toast(errText(e)); }
+}
+
+/// A root, in full: what it is, where, how it stands, what is read of it; and what to do.
+function showRoot(x: Root): void {
+  const kind = x.kind === "project" ? "A project: read for as long as ptyro has it" : x.kind === "file" ? "A file you gave" : "A folder you gave";
+  const s = sheet(x.name, [facts([
+    ["It is", kind],
+    ["At", x.path],
+    ["State", rootState(x, ago)],
+    ["Holds", rootHolds(x)],
+    ["Project", x.project_name ?? null],
+    ["Seen by", x.profile ?? "every profile's agents"],
+    ["Reads", rootReads(x) || "what your settings say (Knowledge: comments, code, commits)"],
+    ["Last read", x.synced_ms ? new Date(x.synced_ms).toLocaleString() : null],
+    [rootBad(x) ? "What went wrong" : "It says", x.error ?? null],
+  ])], [
+    x.kind !== "project" && can("full") ? h("button", { class: "deny", title: tip("kb.remove"), onclick: () => { s.close(); void removeRoot(x); } }, "Stop reading it…") : null,
+    can("control") ? h("button", { class: "primary", title: tip("kb.sync"), onclick: () => { s.close(); void lookAgain(x); } }, "Look at it again") : null,
   ]);
+}
+
+function sourcesView(): HTMLElement {
+  const wait = pending(home, "");
+  const s = home.get("");
+  let body: Child[];
+  if (wait || !s) body = [wait];
+  else {
+    const f = state.f;
+    const key = rootsKey();
+    const waitList = pending(roots, key);
+    const list = roots.get(key);
+    if (list?.some(rootBusy) || s.queued) poll();
+    const machines = [...data.machines.keys()].sort();
+    const rows: Child[] = waitList || !list ? [waitList]
+      : !list.length ? [h("p", { class: "empty" }, "Nothing is read yet. A project is read when ptyro knows it; a folder or a file when you give it here.")]
+      : list.map((x) => row(h("span", {}, badge(x.kind), " ", x.name, h("small", { class: rootBad(x) ? "err" : "" }, ` ${rootState(x, ago)}`)),
+        h("span", {}, about(rootHolds(x), x.profile ? `profile ${x.profile}` : null, x.path), x.error ? h("span", { class: rootBad(x) ? "kb-root-err err" : "kb-root-err" }, x.error) : null),
+        null, { onclick: () => showRoot(x), cls: "wrap" }));
+    body = offBody(s) ?? [
+      tabs("sources"),
+      machines.length || onMachine() ? h("div", { class: "kb-filters", title: tip("kb.sources") },
+        pick("Machine", onMachine(), "This computer", machines.map((m): [string, string] => [m, m]), (v) => { f.machine = v; })) : null,
+      h("p", { class: "sub" }, onMachine() ? `What ${onMachine()} reads into its knowledge base. ` : "What is read: your projects by themselves, and the folders and files you add here. ",
+        s.sessions ? "Agent sessions are kept as they happen. " : "Agent sessions are not kept. ",
+        can("full") && !onMachine() ? h("button", { class: "small", title: tipOf("settings.set"), onclick: () => void keepSessions(!s.sessions) }, s.sessions ? "Stop keeping them" : "Keep them") : null),
+      bar(can("control") ? h("button", { class: "primary", title: tip("kb.ingest"), onclick: () => void ingest() }, "Read a folder…") : null,
+        can("control") ? h("button", { class: "small", title: tip("kb.sync"), onclick: () => void lookAgain() }, "Look at all again") : null,
+        can("control") ? h("button", { class: "small", title: tip("kb.backfill"), onclick: () => void backfill() }, "Agents' history…") : null),
+      s.queued && !onMachine() ? h("p", { class: "sub" }, `${s.queued} waiting to be read (agent sessions, and their history)`) : null,
+      h("div", { class: "rows", title: tip("kb.sources") }, ...rows),
+    ];
+  }
+  return h("div", {}, ui.header("Library", "#/more"), h("main", { class: "stack library", title: tip("kb.sources") }, ...body));
 }
 
 // ── notes ───────────────────────────────────────────────────────────────────────────────────
@@ -567,8 +676,11 @@ function readerView(addr: string): HTMLElement {
 // did: what is shown is asked for again.
 conn.listeners.add((msg: any) => {
   if (msg.t !== "event" || !location.hash.startsWith("#/library")) return;
+  // (A pass over a root: the Sources tab shows how far it is.)
+  if (msg.event.t === "kb_progress" && location.hash === "#/library/sources") { roots.refresh(rootsKey()); return; }
   if (msg.event.t !== "kb_updated" && msg.event.t !== "config_reloaded") return;
   home.refresh("");
+  if (location.hash === "#/library/sources") roots.refresh(rootsKey());
   const key = listKey();
   if (key) lists.refresh(key);
   const m = /^#\/library\/k\/(.+)$/.exec(location.hash);
@@ -578,4 +690,5 @@ conn.listeners.add((msg: any) => {
 
 views.set("library", (rest) => (rest.startsWith("k/") ? readerView(safeDecode(rest.slice(2)))
   : rest.startsWith("note/") ? noteView(safeDecode(rest.slice(5)))
-  : rest === "notes" ? notesView() : listView()));
+  : rest === "notes" ? notesView()
+  : rest === "sources" ? sourcesView() : listView()));

@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; of KB3 the engine and the commands are (KB3.1 to KB3.6: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill), its Sources tab and form (KB3.7) are not; KB4 and KB5 are not)
+## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; KB4 and KB5 are not)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -4345,7 +4345,17 @@ Development section), its README and `docs/` text, and the milestone's version b
         around it (`remove_tree_but`); `--delete-notes` takes it too. `ptyro about` has
         `notes`. Tests: `notes_stay_where_they_are_unless_told`, and `kb2.rs`'s commands
         test runs both uninstalls. SPEC §14.5, §25.12.)*
-- [ ] **KB3 Ingest** (R-KB-04, 13) — the owner's `ptyro ingest newProjectFolder/`. **L**
+- [x] **KB3 Ingest** (R-KB-04, 13) — the owner's `ptyro ingest newProjectFolder/`. **L**
+      *(Built 2026-11-20. Its "Done when" was tried by hand against a throwaway daemon
+      (its own `PTYRO_HOME` and `HOME`): `ptyro ingest ~/some/folder` said `2 files: 1
+      document, 1 source file (comments)` and `read folder: 2 files, 4 pieces`; from
+      another project a heading's word, a comment's and `rate limiter` (for
+      `RateLimiter.ts`) each found their file; a project added with `project add` was found
+      by a word of its README and of a commit two seconds later, with no command; and
+      `ptyro ingest --history` counted, then read, four Claude Code conversations put in the
+      agent's own folder (the fixtures' real transcripts), which `kb recent` then listed.
+      The same in the TUI and on a phone's width is `kb3.rs`'s real-TUI test and `web_e2e`'s
+      `sources`. Not tried: a real agent's own folder with a month of sessions, and Linux.)*
   - [x] **KB3.1** Roots (§25.6.3): `ptyro ingest <path>` with every option, `kb ls`, `kb sync`,
         `kb rm`; listing files through git or the walk; include, exclude, the never list, the
         size and binary checks, the 50,000 cap; `KbIngest` with its plan, `KbProgress`. **M**
@@ -4387,8 +4397,8 @@ Development section), its README and `docs/` text, and the milestone's version b
         agent's turn ends in the project (once in 5 minutes); stat first, then the hash; a
         missing root; `gc` and mend name one that fails. **M**
         *(Built 2026-11-20: `start_kb_roots`, `kb_root_turn`; `missing` keeps its items;
-        `ptyro kb`, `kb ls` and `doctor` name a root that is missing or failing. **Not
-        built: `gc` and mend naming one** (their entries are worktrees; it goes with KB3.7).
+        `ptyro kb`, `kb ls` and `doctor` name a root that is missing or failing. (`gc`
+        and mend naming one came with KB3.7.)
         No watcher on a root (SPEC "As built"). Tests:
         `a_pass_that_was_interrupted_is_carried_on_and_a_turn_has_a_project_looked_at`,
         `a_pass_that_the_daemons_end_interrupts_is_carried_on`.)*
@@ -4400,10 +4410,29 @@ Development section), its README and `docs/` text, and the milestone's version b
         `kb_keep_out`). Sub-agents' files are not read. Tests: `kb/history/tests.rs`,
         `kb3.rs`'s `ingest_history_…`, `every_conversation_an_agent_kept_and_where_it_ran`.
         Unverified: a real agent's folder. SPEC §25 "As built", §25.6.1, §25.7a.)*
-  - [ ] **KB3.7** The Sources tab in the TUI and the web, and the ingest form (every option, the
+  - [x] **KB3.7** The Sources tab in the TUI and the web, and the ingest form (every option, the
         machine pick); it replaces the palette's `kb.sources`, `kb.ingest`, `kb.backfill` and
         `kb.remove` templates and the web's Sources… sheet, shows `KbProgress`, and has `gc`
         and mend name a root that is missing or failing (left by KB3.5). **M**
+        *(Built 2026-11-20: `crates/ptyro-tui/src/library/sources.rs` (`3`: the roots, how
+        each stands and how far its read is, by `KbProgress` and a poll while anything is
+        read; `i` the path picker and the ingest form, `s`/`S`, `x` in the daemon's words,
+        `b` the history's form, counted first, `t` `kb.sessions`), `Make::KbIngest` and
+        `Make::KbBackfill` in `form.rs`, no `kb.` action left in `TEMPLATES`;
+        `web/src/library.ts` (`#/library/sources`, a root's sheet, both forms) and
+        `libkit.ts`. Protocol 1.59: `machine?` on `KbRoots`, `KbIngest`, `KbSync`,
+        `KbRemove` and `KbHistory` (`Daemon::kb_roots_far`), `--machine` on the five
+        commands, the machine filter and the forms' pick. Also: `kb show REF --open` on a
+        file (your editor at the piece's line, `shell::editor_command_at`) and on a commit
+        (`git show`), which `⏎` runs in a split in the TUI; the TUI's history paged past
+        100; `ptyro gc` and a doctor finding of its own name a root that is missing or
+        failing (mend and the web's Health page list the doctor's). Tests:
+        `library/tests.rs` (six new), `web/test/library.mjs`, `web_e2e`'s `sources`,
+        `kb3.rs` (`a_file_and_a_commit_open_…`, `the_tuis_sources_tab_reads_a_folder_…`),
+        `kb_machines.rs`. Not built: completion of a typed path, the web form's switches
+        from the config, a far root's progress by event, `worktree.gc`'s list naming a
+        root, generated files, sub-agents' transcripts. SPEC §25 "As built", §25.10, §25.11,
+        §25.14, §6.4.)*
 - [ ] **KB4 Shells** (R-KB-08) — the debatable one, last and switchable. **M**
   - [ ] **KB4.1** Commands (§25.6.5): from `SessionInfo.command` at `D`, an item per shell and
         day, the skips, the count for repeats; `kb.shell`, `kb.shell_skip`. **S**

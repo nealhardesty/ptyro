@@ -32,6 +32,10 @@ pub enum Make {
     Session(Box<crate::app::Wizard>),
     /// `ptyro <these words>` and then each field's own argument ([`Arg`]), in a split.
     Cli(Vec<String>),
+    /// A folder or a file to read into the knowledge base (`KbIngest`, SPEC §25.10).
+    KbIngest,
+    /// What the agents kept before ptyro did (`KbHistory`): counted, then read.
+    KbBackfill,
 }
 
 /// How a field goes on the command line of a [`Make::Cli`] form.
@@ -794,6 +798,11 @@ impl App {
     pub(crate) fn form_submit(&mut self, mut form: Box<Form>) {
         match form.make.clone() {
             Make::Cli(base) => return self.run_cli(&form.cli_args(&base)),
+            Make::KbIngest => return self.ingest_submit(&form),
+            Make::KbBackfill => match self.backfill_submit(&form) {
+                Ok(()) => return,
+                Err((key, e)) => form.fail(key, e),
+            },
             Make::ProjectAdd => {
                 let path = form.get("path").trim().to_owned();
                 let path = match path.strip_prefix("~/") {

@@ -400,9 +400,68 @@ pub struct KbHistoryPlace {
     pub new: u64,
 }
 
+impl KbHistoryPlan {
+    /// The count in words, as every client says it before anything is read: `12
+    /// conversations in your agents' folders: 3 kept already…, 8 to read`, then a line a
+    /// place.
+    pub fn text(&self) -> String {
+        if self.found == 0 {
+            return "no conversations in your agents' folders\n".into();
+        }
+        let mut parts = Vec::new();
+        for (n, what) in [
+            (self.known, "kept already (or forgotten, or private)"),
+            (self.chats, "a chat's (its text is in your chats)"),
+            (self.old, "too old to keep"),
+            (self.new, "to read"),
+        ] {
+            if n > 0 {
+                parts.push(format!("{n} {what}"));
+            }
+        }
+        let mut out = format!(
+            "{} conversation{} in your agents' folders: {}\n",
+            self.found,
+            if self.found == 1 { "" } else { "s" },
+            parts.join(", ")
+        );
+        for place in &self.places {
+            out.push_str(&format!(
+                "  {} ({}): {} in {}, {} to read\n",
+                place.agent, place.profile, place.found, place.dir, place.new
+            ));
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_history_in_words() {
+        assert_eq!(KbHistoryPlan::default().text(), "no conversations in your agents' folders\n");
+        let plan = KbHistoryPlan {
+            found: 12,
+            known: 3,
+            old: 1,
+            chats: 0,
+            new: 8,
+            places: vec![KbHistoryPlace {
+                agent: "claude".into(),
+                profile: "work".into(),
+                dir: "/h/.claude".into(),
+                found: 12,
+                new: 8,
+            }],
+            reading: false,
+        };
+        assert_eq!(
+            plan.text(),
+            "12 conversations in your agents' folders: 3 kept already (or forgotten, or private), 1 too old to keep, 8 to read\n  claude (work): 12 in /h/.claude, 8 to read\n"
+        );
+    }
 
     #[test]
     fn stored_words_read_back_and_match_serde() {

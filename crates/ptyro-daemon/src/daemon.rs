@@ -1179,7 +1179,7 @@ impl Daemon {
             | Request::KbNotes { .. }
             | Request::KbNoteRead { .. }
             | Request::KbSync { .. }
-            | Request::KbRoots
+            | Request::KbRoots { .. }
             | Request::KbIngest { .. }
             | Request::KbRemove { .. }
             | Request::KbHistory { .. }) => self.handle_kb(req, caller).await,

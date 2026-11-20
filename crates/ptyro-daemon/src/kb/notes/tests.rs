@@ -189,7 +189,7 @@ async fn what_is_written_changed_or_deleted_by_hand_is_found() {
 
     // `KbSync` is the same reading, asked for.
     let Reply::KbSynced { notes: n, changed, removed, .. } =
-        ask(&d, Request::KbSync { roots: Vec::new() }).await.unwrap()
+        ask(&d, Request::KbSync { roots: Vec::new(), machine: None }).await.unwrap()
     else {
         panic!()
     };

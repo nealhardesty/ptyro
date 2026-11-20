@@ -3,7 +3,7 @@
 // are in a text, an address's parts, what forgetting names, and the daemon's question.
 //   node web/test/library.mjs
 import assert from "node:assert/strict";
-import { PAGE, byProject, clock, conversation, day, forgetAddr, found, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, question, request, searching, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
+import { PAGE, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
 
 const DAY = 86_400_000;
 const f = (o = {}) => ({ ...noFilters(), ...o });
@@ -63,6 +63,45 @@ assert.deepEqual(ingestRequest({ path: " ~/notes ", comments: true, code: false,
   { t: "kb_ingest", spec: { path: "~/notes", options: {} } });
 assert.deepEqual(ingestRequest({ path: "/src/docs", name: "docs", project: "feeder", profile: "work", include: "*.md, guides/**", exclude: "drafts", comments: false, code: true, commits: false, once: true }),
   { t: "kb_ingest", spec: { path: "/src/docs", name: "docs", project: "feeder", profile: "work", options: { include: ["*.md", "guides/**"], exclude: ["drafts"], comments: false, code: true, commits: false, once: true } } });
+// On a linked machine: named in the request; this computer needs no name.
+assert.equal(ingestRequest({ path: "/x", machine: "laptop2" }).machine, "laptop2");
+assert.ok(!("machine" in ingestRequest({ path: "/x", machine: "" })));
+
+// ── sources ─────────────────────────────────────────────────────────────────────────────────
+assert.deepEqual(rootsRequest(), { t: "kb_roots" });
+assert.deepEqual(rootsRequest("here"), { t: "kb_roots" });
+assert.deepEqual(rootsRequest("laptop2"), { t: "kb_roots", machine: "laptop2" });
+{
+  const root = (o = {}) => ({ id: "R1", name: "docs", kind: "folder", path: "/src/docs", state: "ok", files: 12, commits: 3, chunks: 40, ...o });
+  const since = () => "2m";
+  // How it stands: a read under way says how far, before anything else.
+  assert.equal(rootState(root({ synced_ms: 5 }), since), "read 2m ago");
+  assert.equal(rootState(root(), since), "not read yet");
+  assert.equal(rootState(root({ state: "syncing" }), since), "being read");
+  assert.equal(rootState(root({ state: "syncing", progress: [3, 10] }), since), "reading 3 of 10");
+  assert.equal(rootState(root({ progress: [0, 0] }), since), "waiting to be read");
+  assert.equal(rootState(root({ state: "missing", progress: [0, 0], removing: true }), since), "being removed");
+  assert.equal(rootState(root({ state: "missing" }), since), "missing");
+  assert.equal(rootState(root({ state: "error" }), since), "failing");
+  assert.ok(rootBad(root({ state: "missing" })) && rootBad(root({ state: "error" })) && !rootBad(root({ state: "syncing" })));
+  assert.ok(rootBusy(root({ progress: [0, 0] })) && rootBusy(root({ removing: true })) && !rootBusy(root()));
+  assert.equal(rootHolds(root()), "12 files, 3 commits, 40 pieces");
+  assert.equal(rootHolds(root({ files: 1, commits: 0, chunks: 1 })), "1 file, 1 piece");
+  // What it says of its own reading; nothing where the settings decide.
+  assert.equal(rootReads(root()), "");
+  assert.equal(rootReads(root({ options: { include: ["*.md"], exclude: ["drafts", "old"], comments: false, code: true, once: true } })),
+    "no comments · code · only *.md · not drafts, old · read once");
+}
+// What a read will take, as the command says it.
+assert.equal(planLine({ files: 6, documents: 3, sources: 1, comments: true, code: false, commits: true }), "6 files: 3 documents, 1 source file (comments), its commits");
+assert.equal(planLine({ files: 1, documents: 0, sources: 0, comments: true, code: false, commits: false, existing: true }), "1 file (read already: looked at again)");
+assert.equal(planLine({ files: 2, documents: 0, sources: 2, comments: false, code: false, commits: false }), "2 files: 2 source files (names only)");
+// The agents' history: counted first (`dry_run`), with only what was picked.
+assert.deepEqual(historyRequest({ agent: "", profile: "", since: "", dry: false, machine: "" }, 0, true), { t: "kb_history", dry_run: true });
+assert.deepEqual(historyRequest({ agent: "codex", profile: "work", since: "30d", machine: "laptop2" }, 40 * DAY, false),
+  { t: "kb_history", dry_run: false, agent: "codex", profile: "work", since_ms: 10 * DAY, machine: "laptop2" });
+assert.equal(historyText({ found: 0, known: 0, old: 0, chats: 0, new: 0 }), "No conversations in your agents' folders");
+assert.equal(historyText({ found: 12, known: 3, old: 1, chats: 0, new: 8 }), "12 conversations in your agents' folders: 3 kept already (or forgotten, or private), 1 too old to keep, 8 to read");
 assert.equal(wroteBy({ writer: "user", agent: null }), "you");
 assert.equal(wroteBy({ writer: "agent", agent: "claude@work" }), "claude@work");
 assert.equal(wroteBy({ writer: "agent" }), "agent");

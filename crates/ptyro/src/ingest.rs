@@ -9,7 +9,7 @@ use std::time::Duration;
 use clap::Args;
 use clap_complete::ArgValueCandidates;
 use ptyro_core::kb::search::pieces;
-use ptyro_core::kb::{KbHistoryPlan, KbRootInfo, RootOptions, RootSpec, RootState};
+use ptyro_core::kb::{KbRootInfo, RootOptions, RootSpec, RootState};
 use ptyro_core::{Error, ErrorCode};
 use ptyro_protocol::{Reply, Request};
 use serde_json::json;
@@ -69,12 +69,20 @@ pub struct IngestArgs {
     /// With `--history`: count, and read nothing
     #[arg(long)]
     dry_run: bool,
+    /// On a linked machine instead of this computer: its folders, read into its knowledge
+    /// base (the paths are that machine's)
+    #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
+    machine: Option<String>,
     #[arg(long)]
     json: bool,
 }
 
-async fn roots(ctx: &Ctx, c: &ptyro_client::Client) -> Result<Vec<KbRootInfo>, Error> {
-    match ask(ctx, c, Request::KbRoots).await? {
+async fn roots(
+    ctx: &Ctx,
+    c: &ptyro_client::Client,
+    machine: &Option<String>,
+) -> Result<Vec<KbRootInfo>, Error> {
+    match ask(ctx, c, Request::KbRoots { machine: machine.clone() }).await? {
         Reply::KbRoots { roots } => Ok(roots),
         r => Err(unexpected(r)),
     }
@@ -103,9 +111,10 @@ async fn settled(
     ctx: &Ctx,
     c: &ptyro_client::Client,
     ids: &[String],
+    machine: &Option<String>,
 ) -> Result<Vec<KbRootInfo>, Error> {
     loop {
-        let all = roots(ctx, c).await?;
+        let all = roots(ctx, c, machine).await?;
         let busy: Vec<&KbRootInfo> = all
             .iter()
             .filter(|r| ids.is_empty() || ids.contains(&r.root.id))
@@ -170,8 +179,10 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
     let mut out = Vec::new();
     let mut code = 0;
     for path in a.paths {
-        // A path as the daemon knows it: whole. (A remote daemon's paths are its own.)
-        let path = if path.is_relative() && !path.starts_with("~") && ctx.remote.is_none() {
+        // A path as the daemon knows it: whole. (A remote daemon's paths are its own, and so
+        // are a linked machine's.)
+        let here = ctx.remote.is_none() && a.machine.is_none();
+        let path = if path.is_relative() && !path.starts_with("~") && here {
             std::env::current_dir().map_err(|e| Error::internal(e.to_string()))?.join(path)
         } else {
             path
@@ -183,7 +194,8 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
             profile: a.profile.clone(),
             options: options.clone(),
         };
-        let (root, plan) = match ask(ctx, &c, Request::KbIngest { spec }).await? {
+        let req = Request::KbIngest { spec, machine: a.machine.clone() };
+        let (root, plan) = match ask(ctx, &c, req).await? {
             Reply::KbIngested { root, plan } => (root, plan),
             r => return Err(unexpected(r)),
         };
@@ -198,7 +210,7 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
             }
             eprintln!("{} ({}): {}", root.root.name, root.root.path, plan.line());
         }
-        let all = settled(ctx, &c, std::slice::from_ref(&root.root.id)).await?;
+        let all = settled(ctx, &c, std::slice::from_ref(&root.root.id), &a.machine).await?;
         let Some(now) = all.into_iter().find(|r| r.root.id == root.root.id) else {
             return Err(Error::new(ErrorCode::NotFound, format!("{} is gone", root.root.name)));
         };
@@ -222,8 +234,10 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
                 }
             }
         }
-        // What was not kept of it, and why.
-        if let Ok(Reply::KbStatus { status }) = ask(ctx, &c, Request::KbStatus).await {
+        // What was not kept of it, and why (this machine's: the status is).
+        if a.machine.is_none()
+            && let Ok(Reply::KbStatus { status }) = ask(ctx, &c, Request::KbStatus).await
+        {
             let under = format!("file://{}", now.root.path);
             let skipped: Vec<_> =
                 status.skipped.iter().filter(|s| s.uri.starts_with(&under)).collect();
@@ -242,37 +256,6 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
     Ok(code)
 }
 
-/// The count in words: `12 conversations: 3 kept already, 1 too old, 8 to read`.
-fn history_text(p: &KbHistoryPlan) -> String {
-    let mut out = String::new();
-    if p.found == 0 {
-        return "no conversations in your agents' folders\n".into();
-    }
-    let mut parts = Vec::new();
-    for (n, what) in [
-        (p.known, "kept already (or forgotten, or private)"),
-        (p.chats, "a chat's (its text is in your chats)"),
-        (p.old, "too old to keep"),
-        (p.new, "to read"),
-    ] {
-        if n > 0 {
-            parts.push(format!("{n} {what}"));
-        }
-    }
-    out.push_str(&format!(
-        "{} in your agents' folders: {}\n",
-        plural(p.found, "conversation", "conversations"),
-        parts.join(", ")
-    ));
-    for place in &p.places {
-        out.push_str(&format!(
-            "  {} ({}): {} in {}, {} to read\n",
-            place.agent, place.profile, place.found, place.dir, place.new
-        ));
-    }
-    out
-}
-
 async fn history(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
     let since_ms = match a.since.as_deref() {
         Some(age) => {
@@ -288,6 +271,7 @@ async fn history(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
         profile: a.profile.clone(),
         since_ms,
         dry_run,
+        machine: a.machine.clone(),
     };
     // Counted first, and said, before anything is read.
     let plan = match ask(ctx, &c, req(true)).await? {
@@ -298,19 +282,20 @@ async fn history(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
         if a.json {
             println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
         } else {
-            print!("{}", history_text(&plan));
+            print!("{}", plan.text());
         }
         return Ok(0);
     }
     if !a.json {
-        eprint!("{}", history_text(&plan));
+        eprint!("{}", plan.text());
     }
     let plan = match ask(ctx, &c, req(false)).await? {
         Reply::KbHistory { plan } => plan,
         r => return Err(unexpected(r)),
     };
-    // Read behind everything else: wait until nothing is waiting.
-    loop {
+    // Read behind everything else: wait until nothing is waiting. (A linked machine reads
+    // at its own pace; its own `ptyro kb` says how far it is.)
+    while a.machine.is_none() {
         let queued = match ask(ctx, &c, Request::KbStatus).await? {
             Reply::KbStatus { status } => status.queued,
             r => return Err(unexpected(r)),
@@ -334,9 +319,9 @@ async fn history(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
 }
 
 /// `ptyro kb ls`.
-pub async fn list(ctx: &Ctx, json: bool) -> Result<i32, Error> {
+pub async fn list(ctx: &Ctx, machine: Option<String>, json: bool) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let all = roots(ctx, &c).await?;
+    let all = roots(ctx, &c, &machine).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&all).unwrap_or_default());
         return Ok(0);
@@ -375,18 +360,23 @@ pub async fn list(ctx: &Ctx, json: bool) -> Result<i32, Error> {
 }
 
 /// `ptyro kb sync [ROOT…]`.
-pub async fn sync(ctx: &Ctx, named: Vec<String>, json: bool) -> Result<i32, Error> {
+pub async fn sync(
+    ctx: &Ctx,
+    named: Vec<String>,
+    machine: Option<String>,
+    json: bool,
+) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
     let all_of_it = named.is_empty();
-    let (notes, changed, removed, n) =
-        match ask(ctx, &c, Request::KbSync { roots: named.clone() }).await? {
-            Reply::KbSynced { notes, changed, removed, roots } => (notes, changed, removed, roots),
-            r => return Err(unexpected(r)),
-        };
+    let req = Request::KbSync { roots: named.clone(), machine: machine.clone() };
+    let (notes, changed, removed, n) = match ask(ctx, &c, req).await? {
+        Reply::KbSynced { notes, changed, removed, roots } => (notes, changed, removed, roots),
+        r => return Err(unexpected(r)),
+    };
     let ids: Vec<String> = if all_of_it {
         Vec::new()
     } else {
-        let all = roots(ctx, &c).await?;
+        let all = roots(ctx, &c, &machine).await?;
         all.into_iter()
             .filter(|r| {
                 named.iter().any(|n| n == &r.root.name || n == &r.root.id || n == &r.root.path)
@@ -394,7 +384,11 @@ pub async fn sync(ctx: &Ctx, named: Vec<String>, json: bool) -> Result<i32, Erro
             .map(|r| r.root.id)
             .collect()
     };
-    let after = if n > 0 { settled(ctx, &c, &ids).await? } else { roots(ctx, &c).await? };
+    let after = if n > 0 {
+        settled(ctx, &c, &ids, &machine).await?
+    } else {
+        roots(ctx, &c, &machine).await?
+    };
     if json {
         println!(
             "{}",
@@ -420,9 +414,16 @@ pub async fn sync(ctx: &Ctx, named: Vec<String>, json: bool) -> Result<i32, Erro
 }
 
 /// `ptyro kb rm ROOT`.
-pub async fn remove(ctx: &Ctx, root: String, yes: bool, json: bool) -> Result<i32, Error> {
+pub async fn remove(
+    ctx: &Ctx,
+    root: String,
+    machine: Option<String>,
+    yes: bool,
+    json: bool,
+) -> Result<i32, Error> {
     let c = ctx.connect(true).await?;
-    let req = |confirmed| Request::KbRemove { root: root.clone(), confirmed };
+    let req =
+        |confirmed| Request::KbRemove { root: root.clone(), confirmed, machine: machine.clone() };
     if !yes {
         match ask(ctx, &c, req(false)).await {
             Ok(_) => return Err(Error::internal("removed without asking")),
@@ -438,7 +439,7 @@ pub async fn remove(ctx: &Ctx, root: String, yes: bool, json: bool) -> Result<i3
     };
     // It goes in batches, off the request: wait until it is gone.
     loop {
-        let all = roots(ctx, &c).await?;
+        let all = roots(ctx, &c, &machine).await?;
         if !all.iter().any(|r| r.root.name == name) {
             progress_end();
             break;
@@ -460,10 +461,8 @@ pub async fn remove(ctx: &Ctx, root: String, yes: bool, json: bool) -> Result<i3
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
-    use ptyro_core::kb::KbHistoryPlace;
-
     use super::*;
+    use clap::Parser;
 
     #[derive(Parser, Debug)]
     struct Ingest {
@@ -510,32 +509,5 @@ mod tests {
         assert!(h.check().is_ok() && a.check().is_ok());
         assert!(args(&["--history", "--code"]).is_err());
         assert!(args(&["--history", "--agent", "opencode"]).is_err());
-    }
-
-    #[test]
-    fn the_history_in_words() {
-        assert_eq!(
-            history_text(&KbHistoryPlan::default()),
-            "no conversations in your agents' folders\n"
-        );
-        let plan = KbHistoryPlan {
-            found: 12,
-            known: 3,
-            old: 1,
-            chats: 0,
-            new: 8,
-            places: vec![KbHistoryPlace {
-                agent: "claude".into(),
-                profile: "work".into(),
-                dir: "/h/.claude".into(),
-                found: 12,
-                new: 8,
-            }],
-            reading: false,
-        };
-        assert_eq!(
-            history_text(&plan),
-            "12 conversations in your agents' folders: 3 kept already (or forgotten, or private), 1 too old to keep, 8 to read\n  claude (work): 12 in /h/.claude, 8 to read\n"
-        );
     }
 }

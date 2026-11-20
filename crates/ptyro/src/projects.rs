@@ -1127,7 +1127,13 @@ pub async fn gc(
         }
         return Ok(0);
     }
-    if entries.is_empty() && scratch.is_empty() {
+    // What the knowledge base reads and no longer can (SPEC §25.6.3): a folder that is gone
+    // is as stale as a worktree whose directory is.
+    let failing = match c.request(Request::KbStatus).await {
+        Ok(Reply::KbStatus { status }) if !only_scratch => status.failing,
+        _ => Vec::new(),
+    };
+    if entries.is_empty() && scratch.is_empty() && failing.is_empty() {
         eprintln!("nothing stale");
         return Ok(0);
     }
@@ -1156,6 +1162,9 @@ pub async fn gc(
             ptyro_core::model::human_bytes(l.bytes),
             l.files
         );
+    }
+    for f in &failing {
+        println!("{}", kb_failing(f));
     }
     if dry_run {
         return Ok(0);
@@ -1189,6 +1198,18 @@ pub async fn gc(
     }
     clean_scratch(&c, &scratch_list).await;
     Ok(0)
+}
+
+/// A root the knowledge base can't read, as `gc` and the doctor name it: the daemon's line
+/// (`docs: /src/docs is gone (…)`), with the command that reads it again when the line
+/// offers none.
+pub fn kb_failing(line: &str) -> String {
+    let name = line.split(':').next().unwrap_or_default();
+    if line.contains("`ptyro ") {
+        format!("knowledge base: {line}")
+    } else {
+        format!("knowledge base: {line} (`ptyro kb sync {name}` reads it again)")
+    }
 }
 
 /// Scratch shells' directories left behind (SPEC §23.8): each said, and deleted after a yes.

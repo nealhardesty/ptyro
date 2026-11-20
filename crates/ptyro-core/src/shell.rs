@@ -275,6 +275,28 @@ pub fn editor_command(editor: &str, path: &Path) -> Vec<std::ffi::OsString> {
     argv
 }
 
+/// [`editor_command`] with the editor at `line`, for the editors known to take one: `+12`
+/// before the path (vi and its kin, nano, emacs, micro, kak), `--goto path:12` (VS Code and
+/// its kin), `path:12` (Helix, Zed, Sublime). Any other editor opens the file at its top.
+pub fn editor_command_at(editor: &str, path: &Path, line: Option<u32>) -> Vec<std::ffi::OsString> {
+    let program = editor.split_whitespace().next().unwrap_or_default();
+    let name = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let Some(n) = line.filter(|n| *n > 1) else { return editor_command(editor, path) };
+    let script = match name {
+        "vi" | "vim" | "nvim" | "view" | "nano" | "emacs" | "emacsclient" | "micro" | "kak"
+        | "joe" | "mg" | "ne" => format!("{editor} +{n} \"$1\""),
+        "code" | "code-insiders" | "codium" | "cursor" | "windsurf" => {
+            format!("{editor} --goto \"$1\":{n}")
+        }
+        "hx" | "helix" | "zed" | "subl" => format!("{editor} \"$1\":{n}"),
+        _ => return editor_command(editor, path),
+    };
+    let mut argv: Vec<std::ffi::OsString> =
+        command_argv("sh", &script).into_iter().map(Into::into).collect();
+    argv.extend(["sh".into(), path.as_os_str().to_owned()]);
+    argv
+}
+
 /// The variables [`integrate`] may set, cleared from every shell's environment first, so none
 /// left over from elsewhere can steer the startup files.
 pub const VARS: [&str; 3] = ["PTYRO_BASH_LOGIN", "PTYRO_ZDOTDIR", "PTYRO_ZDOTDIR_UNSET"];
@@ -709,6 +731,23 @@ mod tests {
         assert_eq!(ShellKind::of_program("pwsh-preview"), Some(ShellKind::Pwsh));
         assert_eq!(ShellKind::of_program("/bin/sh"), None);
         assert_eq!(ShellKind::of_program("bashful"), None);
+    }
+
+    #[test]
+    fn an_editor_is_opened_at_a_line_where_it_is_known_to_take_one() {
+        let script = |editor: &str, line| {
+            let argv = editor_command_at(editor, Path::new("/a b/x.rs"), line);
+            assert_eq!(argv.last().and_then(|p| p.to_str()), Some("/a b/x.rs"));
+            argv[2].to_string_lossy().into_owned()
+        };
+        assert_eq!(script("nvim", Some(12)), "nvim +12 \"$1\"");
+        assert_eq!(script("/usr/bin/vim -u NONE", Some(7)), "/usr/bin/vim -u NONE +7 \"$1\"");
+        assert_eq!(script("code --wait", Some(3)), "code --wait --goto \"$1\":3");
+        assert_eq!(script("hx", Some(3)), "hx \"$1\":3");
+        // An editor that isn't known, no line, or its first: the file, as it is opened anyway.
+        assert_eq!(script("ed", Some(12)), "ed \"$1\"");
+        assert_eq!(script("nvim", None), "nvim \"$1\"");
+        assert_eq!(script("nvim", Some(1)), "nvim \"$1\"");
     }
 
     #[test]

@@ -1,7 +1,8 @@
 // The Library's logic with no DOM in it (web/test/library.mjs runs it): what the list asks the
 // daemon for, the days of the history, the words a hit matched and where they are in a text,
-// an address's parts, the daemon's question before it forgets, and the notes: what their list
-// asks, how they are grouped, and what a new one sends.
+// an address's parts, the daemon's question before it forgets, the notes (what their list
+// asks, how they are grouped, what a new one sends), and the sources: what is read, how each
+// root stands, what the ingest form and the agents' history ask.
 
 /// A search starts at this many characters (a shorter prefix matches everything), as the TUI's
 /// Library and the chat list do; fewer is the history.
@@ -188,6 +189,87 @@ export const conversation = (uri: string): string => uri.slice(uri.lastIndexOf("
 export const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 export const bytes = (n: number): string => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
+// ── sources (SPEC §25.6.3, §25.10) ──────────────────────────────────────────────────────────
+
+/// A root as `kb_roots` lists it: a project, or a folder or file given to be read.
+export interface Root {
+  id: string; name: string; kind: string; path: string; state: string; error?: string | null;
+  project_name?: string | null; profile?: string | null; added_ms?: number | null; synced_ms?: number | null;
+  options?: { include?: string[]; exclude?: string[]; comments?: boolean | null; code?: boolean | null; commits?: boolean | null; once?: boolean };
+  files: number; commits: number; chunks: number; progress?: [number, number] | null; removing?: boolean;
+}
+
+/// The machine a pick names, as a request carries it: none for this computer.
+const far = (machine: string | undefined): { machine?: string } => (machine && machine !== "here" ? { machine } : {});
+
+/// What the Sources tab asks: this computer's roots, or a linked machine's.
+export const rootsRequest = (machine = ""): Record<string, unknown> => ({ t: "kb_roots", ...far(machine) });
+
+/// Something of it is being read or removed: the list is asked for again until it is done.
+export const rootBusy = (r: Root): boolean => !!r.progress || !!r.removing;
+
+/// How a root stands, in a word or two. `since`: how long ago, in words (`2m`).
+export function rootState(r: Root, since: (ms: number) => string): string {
+  if (r.removing) return "being removed";
+  if (r.progress) return r.progress[1] > 0 ? `reading ${r.progress[0]} of ${r.progress[1]}` : "waiting to be read";
+  if (r.state === "missing") return "missing";
+  if (r.state === "error") return "failing";
+  if (r.state === "syncing") return "being read";
+  return r.synced_ms ? `read ${since(r.synced_ms)} ago` : "not read yet";
+}
+
+/// It is missing or could not be read.
+export const rootBad = (r: Root): boolean => r.state === "missing" || r.state === "error";
+
+/// What a root holds: `12 files, 40 commits, 300 pieces`.
+export const rootHolds = (r: Root): string => [plural(r.files, "file"), r.commits ? plural(r.commits, "commit") : "", plural(r.chunks, "piece")].filter(Boolean).join(", ");
+
+/// What is read of a root's files where it says so itself (else the settings decide).
+export function rootReads(r: Root): string {
+  const o = r.options ?? {};
+  const out: string[] = [];
+  for (const [what, v] of [["comments", o.comments], ["code", o.code], ["commits", o.commits]] as const) {
+    if (v === true) out.push(what);
+    if (v === false) out.push(`no ${what}`);
+  }
+  if (o.include?.length) out.push(`only ${o.include.join(", ")}`);
+  if (o.exclude?.length) out.push(`not ${o.exclude.join(", ")}`);
+  if (o.once) out.push("read once");
+  return out.join(" · ");
+}
+
+/// What a root's read will take, as the command says it (`KbPlan::line`).
+export function planLine(p: { files: number; documents: number; sources: number; comments: boolean; code: boolean; commits: boolean; existing?: boolean }): string {
+  const parts: string[] = [];
+  if (p.documents) parts.push(plural(p.documents, "document"));
+  if (p.sources) parts.push(`${plural(p.sources, "source file")} (${p.comments && p.code ? "comments and code" : p.comments ? "comments" : p.code ? "code" : "names only"})`);
+  if (p.commits) parts.push("its commits");
+  return plural(p.files, "file") + (parts.length ? `: ${parts.join(", ")}` : "") + (p.existing ? " (read already: looked at again)" : "");
+}
+
+/// How far back the agents' history may be read: what the pick offers.
+export const HISTORY_SINCE: [string, string][] = [["7d", "The last week"], ["30d", "The last 30 days"], ["90d", "The last 90 days"], ["365d", "The last year"]];
+
+/// `kb_history`, from the form's values: what `ptyro ingest --history` takes. `dryRun`: count,
+/// and read nothing (always asked first).
+export function historyRequest(v: Record<string, unknown>, now: number, dryRun: boolean): Record<string, unknown> {
+  const text = (k: string): string => (typeof v[k] === "string" ? (v[k] as string).trim() : "");
+  return {
+    t: "kb_history", dry_run: dryRun,
+    ...(text("agent") ? { agent: text("agent") } : {}),
+    ...(text("profile") ? { profile: text("profile") } : {}),
+    ...(text("since") ? { since_ms: now - parseInt(text("since"), 10) * 86_400_000 } : {}),
+    ...far(text("machine")),
+  };
+}
+
+/// The count, in the words every client uses (`KbHistoryPlan::text`'s first line).
+export function historyText(p: { found: number; known: number; old: number; chats: number; new: number }): string {
+  if (!p.found) return "No conversations in your agents' folders";
+  const parts = [[p.known, "kept already (or forgotten, or private)"], [p.chats, "a chat's (its text is in your chats)"], [p.old, "too old to keep"], [p.new, "to read"]] as const;
+  return `${plural(p.found, "conversation")} in your agents' folders: ${parts.filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}`).join(", ")}`;
+}
+
 /// `kb_ingest`, from the form's values: what `ptyro ingest PATH` takes. A switch left as it
 /// stands by default is not sent (the computer's own settings then decide).
 export function ingestRequest(v: Record<string, unknown>): object {
@@ -202,5 +284,5 @@ export function ingestRequest(v: Record<string, unknown>): object {
   if (v.once === true) options.once = true;
   const spec: Record<string, unknown> = { path: text("path") ?? "", options };
   for (const k of ["name", "project", "profile"]) if (text(k)) spec[k] = text(k);
-  return { t: "kb_ingest", spec };
+  return { t: "kb_ingest", spec, ...far(text("machine")) };
 }
