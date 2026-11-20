@@ -1908,10 +1908,12 @@ async fn serve_keeps_its_own_certificate_when_tailscale_cannot_give_one() {
 fn an_installed_app_is_named_after_the_machine() {
     let w = World::new("[daemon]\nmachine_name = \"studio\"\n", &[]);
     let serve = w.serve();
+    // A loaded CI runner can take a while over the first page (it asks the daemon).
     let get = |path: &str| {
-        http(
+        http_within(
             serve.port,
             &format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"),
+            Duration::from_secs(30),
         )
     };
     let (code, page) = get("/");
