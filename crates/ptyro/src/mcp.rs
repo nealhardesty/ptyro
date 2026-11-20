@@ -4,7 +4,7 @@
 //! `mcp_servers.ptyro.*`); the daemon decides what its calls may see, from the connecting
 //! process's ancestry. Nothing here is trusted.
 //!
-//! **Which tools.** In a chat (`PTYRO_CHAT_ID`): the chat history tools, and the knowledge
+//! **Which tools.** In a chat (`--chat`, or `PTYRO_CHAT_ID`): the chat history tools, and the knowledge
 //! base's when the daemon gave them (`PTYRO_KB_TOOLS`). In an agent's terminal session: the
 //! knowledge base's, left deferred (no `alwaysLoad`: 228 tokens a session in Claude, §25.9).
 //!
@@ -431,7 +431,7 @@ fn error(id: &Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-pub async fn serve(ctx: &Ctx) -> Result<i32, Error> {
+pub async fn serve(ctx: &Ctx, chat: bool) -> Result<i32, Error> {
     if std::env::var_os("PTYRO_SESSION_ID").is_none() {
         return Err(Error::invalid(
             "`ptyro mcp` serves the knowledge base's tools to an agent's session and the chat history tools to a chat's agent, which start it for you: there is nothing to run it for here (`ptyro recall` searches)",
@@ -439,7 +439,7 @@ pub async fn serve(ctx: &Ctx) -> Result<i32, Error> {
     }
     // A chat's agent has the chat history tools, and the knowledge base's when the daemon
     // gave them; an agent's session has the knowledge base's, deferred.
-    let chat = std::env::var_os("PTYRO_CHAT_ID").is_some();
+    let chat = chat || std::env::var_os("PTYRO_CHAT_ID").is_some();
     let kb = !chat || std::env::var_os("PTYRO_KB_TOOLS").is_some();
     let tools: Vec<Value> = kb
         .then(|| kb_tools(chat))

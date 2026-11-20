@@ -633,7 +633,8 @@ enum Cmd {
     /// session, and the chat history tools (`chat_search`, `chat_read`, `chat_list`) for a
     /// chat's agent (started for you)
     Mcp {
-        /// The chat history tools (what a bare `ptyro mcp` serves too; kept for older chats)
+        /// The chat history tools, as a chat's agent gets them (a bare `ptyro mcp` in an
+        /// agent's session serves the knowledge base's)
         #[arg(long, hide = true)]
         chat: bool,
     },

@@ -1111,7 +1111,7 @@ impl Daemon {
         {
             return Err(Error::new(
                 ErrorCode::PermissionDenied,
-                "a chat's agent may search and read chats and the knowledge base, not change them",
+                "a chat's agent may search and read chats, not change them",
             ));
         }
         let federate = !engine && !caller.is_link() && !self.links.locked().is_empty();

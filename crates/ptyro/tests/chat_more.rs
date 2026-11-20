@@ -304,8 +304,9 @@ fn search_scopes_find_and_the_history_tools() {
     assert!(out.contains("you said: what did we decide?"), "{out}");
     assert_eq!(w.chats().len(), before);
 
-    // The history tools themselves: what `ptyro mcp` serves (`--chat`, which older chats pass,
-    // is the same), over JSON-RPC. Outside a chat's agent it says so.
+    // The history tools themselves: what `ptyro mcp --chat` serves a chat's agent (a bare
+    // `ptyro mcp` is an agent session's, with the knowledge base's tools: `kb1.rs`), over
+    // JSON-RPC. Outside an agent it says so.
     let outside = w.d.cmd().arg("mcp").env_remove("PTYRO_SESSION_ID").output().unwrap();
     assert!(
         !outside.status.success()
@@ -315,7 +316,7 @@ fn search_scopes_find_and_the_history_tools() {
     );
     let mut mcp =
         w.d.cmd()
-            .args(["mcp"])
+            .args(["mcp", "--chat"])
             .env("PTYRO_SESSION_ID", "01testsessionid000000000000")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -455,7 +455,7 @@ async fn dispatch(
         }
         Some(Cmd::Project { cmd }) => crate::projects::project(&ctx, cmd).await,
         Some(Cmd::Checkpoint { cmd }) => crate::checkpoint::checkpoint(&ctx, cmd).await,
-        Some(Cmd::Mcp { chat: _ }) => crate::mcp::serve(&ctx).await,
+        Some(Cmd::Mcp { chat }) => crate::mcp::serve(&ctx, chat).await,
         Some(Cmd::Proxy) => crate::remote::proxy(&ctx).await,
         Some(Cmd::Chat { cmd, new }) => crate::chat::run(&ctx, cmd, new).await,
         Some(Cmd::Recall { args }) => crate::kb::recall(&ctx, args).await,
