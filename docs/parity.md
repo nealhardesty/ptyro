@@ -96,17 +96,17 @@ workspace has a CHATS section in the sidebar; a chat is opened over the panes.
 ## The knowledge base (SPEC §25)
 
 What ptyro keeps of your work, searchable in one place: agent sessions as they happen, and your
-chats beside them. The TUI's Library panel (ROADMAP KB1.8) and the rest of the web's Library
-page (KB1.9) are being built: until then the TUI runs each command in a split, and the web has
-the page's first part.
+chats beside them. In the TUI it is the Library (`kb.open`, `L`: a panel over the panes, like
+the chat list); on the web, More → Library, whose first part is built and the rest is being
+(ROADMAP KB1.9).
 
 | Command | In the TUI | On the web |
 |---|---|---|
-| `recall` | `kb.search` (the palette): asks what to look for (the search box's words: `"a phrase"`, `kind:session`, `project:`, `since:7d`, `by:meaning`), then the hits in a split, each with its address | `kb.search`: More → Library, the search box (`kb.open`): hits as you type, each with what it is, where and when, the match marked, `≈` for one found by meaning; a chat's hit opens the chat at its message |
-| `kb status` | `kb.status` (the palette): on or off, what it holds, how long sessions are kept, what was not kept and why, in a split | `kb.status`: the line under the Library's search box (how much is kept): tap it for the rest; switched off, the page says so and `kb.enable` switches it on |
-| `kb show` | `kb.show` (the palette): asks for an address (`k:7f3k/12` from a search), then the piece with its neighbours in a split | `kb.show`: tap a hit or a row of the history: the piece with what was said around it, and All of it |
-| `kb recent` | `kb.recent` (the palette): the history by day, in a split | `kb.recent`: the Library with nothing typed: what was kept, newest first, by day |
-| `kb forget` | `kb.forget` (the palette): asks for an address, then says what will go and asks, in a split; `--session` is `session.private` (a session's row menu and the palette): forget what was kept of it and make it private, asked first in the daemon's words | `kb.forget`: Forget… under an opened hit (asks, in the same words; a device paired with `--scope full`); `--session` is `session.private`: a session's ⋯ → Make it private… (asks the same way) |
+| `recall` | `kb.search` (the palette; `/` in the Library, `kb.open`, `L`): the Library's search box, hits as you type (from 3 letters), each with what it is, its title, where it is from and when, and the text around the match (`≈`: found by meaning; why it was by words alone is said under them); the selected hit's piece is beside the list with its neighbours, the match marked. `--kind`, `--project` and `--since` are the filters (`Tab`, each a pick); the rest are the box's words (`before:`, `agent:`, `by:meaning`, `by:words`); `by:meaning` while it is off asks to switch it on. `⏎` opens a chat's hit at its message and anything else in the reader | `kb.search`: More → Library, the search box (`kb.open`): hits as you type, each with what it is, where and when, the match marked, `≈` for one found by meaning; a chat's hit opens the chat at its message |
+| `kb status` | `kb.status` (the palette; `s` in the Library): the command's words beside the list (on or off, what it holds, how long sessions are kept, what was not kept and why); how much is kept is always in the Library's title. Switched off, the Library says so and `⏎` switches it on (`kb.enable`) | `kb.status`: the line under the Library's search box (how much is kept): tap it for the rest; switched off, the page says so and `kb.enable` switches it on |
+| `kb show` | `kb.show` (`⏎` in the Library; from the palette with nothing selected it asks for an address like `k:7f3k/12`): the item in the reader, at that piece: its stored pieces as a transcript, read only, `/` finds in it (`n`/`N` on), `y` copies its address and `Y` its text; `--open` is `r`: the session it happened in, resumed when it is dormant (a chat's address opens the chat); `--context` is the piece beside the list with two neighbours each side | `kb.show`: tap a hit or a row of the history: the piece with what was said around it, and All of it |
+| `kb recent` | `kb.recent` (the palette; the Library with nothing typed): the history by day, newest first; `--kind` and `--project` are the filters. `kb.history` (a session's, a worktree's and a project's row menu, `.`) is the history of that one alone | `kb.recent`: the Library with nothing typed: what was kept, newest first, by day |
+| `kb forget` | `kb.forget` (`d` in the Library and in its reader; from the palette with nothing selected it asks for an address): the daemon says what will go and asks, then it is gone from the list; `--query` is a search, then `d` on each hit; `--session` is `session.private` (a session's row menu and the palette): forget what was kept of it and make it private, asked first in the daemon's words | `kb.forget`: Forget… under an opened hit (asks, in the same words; a device paired with `--scope full`); `--session` is `session.private`: a session's ⋯ → Make it private… (asks the same way) |
 
 ## Attention and notifications
 

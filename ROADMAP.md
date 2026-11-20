@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: the spikes, the store, the way in, redaction and agent sessions are built, KB0 and KB1.1 to KB1.4; sessions are kept, nothing shows them yet)
+## KB — Knowledge base (decided 2026-11-19; open: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions and the TUI's Library are built, KB0 and KB1.1 to KB1.8, KB1.10, KB1.11, KB1.14; the web's Library is its first part)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -4111,10 +4111,35 @@ Development section), its README and `docs/` text, and the milestone's version b
         and notes (KB2, KB3). Found on the way: a session's item was stamped with its
         workspace's name, not its id, so `workspace:` never matched one; fixed. SPEC §6.4, §25 "As built", §25.9, §25.10, §25.12, §25.14 to
         §25.16; `docs/commands.md`, `docs/parity.md`, README.)*
-  - [ ] **KB1.8** The TUI's Library (`C-q L`): Search with its filters and the history when
+  - [x] **KB1.8** The TUI's Library (`C-q L`): Search with its filters and the history when
         nothing is typed, the hit beside the list, the session reader, `⏎` opens the source, `r`
         resumes a session, forget; the "history" entry in the session, worktree and project row
         menus. **L**
+        *(Built 2026-11-19: `crates/ptyro-tui/src/library.rs`, a panel over the panes
+        (`ChatPanel::Library`: the sidebar stays, `` ` `` goes back and forth, Esc from a chat
+        opened in it comes back). `kb.open` is `C-q L` and `L` in the sidebar, in the palette,
+        the help and which-key. The search box (hits from 3 letters, each with its kind, title,
+        age, where it is from and its snippet, `≈` by meaning, and why it was by words alone);
+        with nothing typed the history by day (local days); the filters kind, project and since
+        (`Tab`, each a pick; the kinds offered are those kept); the selected row's piece with
+        its neighbours beside the list from 80 columns, the match marked; `⏎` a chat at its
+        message, anything else in the reader (the stored pieces drawn by the chat view's
+        renderer, read only, `/` finds); `r` the session it happened in, resumed when dormant;
+        `y`/`Y` copy; `d` forgets with the daemon's question; `s` the status in the command's
+        words (`KbStatusInfo::lines`, now in `ptyro-core`); switched off, one screen that says
+        so and `⏎` switches it on (`kb.enable`). `kb.history` in a session's, a worktree's and
+        a project's row menu is the Library with only that one's. The five placeholder actions
+        that ran a command in a split are gone; `kb.show` and `kb.forget` from the palette ask
+        for an address when nothing is selected. **Protocol 1.55**: the event
+        `KbUpdated{kinds}` (the daemon says when something was written, forgotten or expired;
+        the Library asks again), and `KbRecent.session`, `.worktree`, `.since_ms`. Tests: 17 in
+        `library/tests.rs` (narrow and tiny terminals, off, the notice, forgetting, the reader
+        among them), the daemon's history-of-a-session and news test, the store's worktree
+        filter, and two in `kb1.rs` driving the real TUI over a real daemon. Not built: the
+        Notes and Sources tabs (KB2, KB3), opening a file, note or commit in its own tool,
+        paging past 100 items, machines (KB1.12); KB3's backfill action is `kb.backfill`, since
+        `kb.history` is the row's history. SPEC §6.4, §25 "As built", §25.10, §25.14, §25.15;
+        `docs/keys.md`, `docs/parity.md`, README.)*
   - [ ] **KB1.9** The web's Library page: the same, its `ACTIONS`, the phone layout, the reader.
         **L**
   - [x] **KB1.10** The agents' tools (§25.9): `recall` and `recall_read` in `ptyro mcp` with the

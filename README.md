@@ -608,8 +608,16 @@ is kept (the agent still keeps its own history, as it always does). Start one wi
 task sheet; `[kb] private = true` makes it the default, and `--no-private` keeps one then. A
 private session is marked `◌`. It still has the tools to search with.
 
-In the TUI these are in the palette (`C-q :`, "kb"); on the web, More → Library. The Library
-view that both get (a panel to search, read and resume from) is being built.
+**In the TUI it is the Library**: `Ctrl-Q L` (`L` in the sidebar; `kb.open` in the palette). With
+nothing typed it is the history, by day: what your agents did, newest first. `/` searches as you
+type, and the selected hit's text is beside the list with what was said around it. `Tab` reaches
+the filters (kind, project, since). `⏎` opens it: a chat at its message, a session in the
+reader (the stored conversation, read only; `/` finds in it). `r` goes to the session it
+happened in, resuming it if it sleeps; `y` copies its address, `Y` its text; `d` forgets it
+(it asks first); `s` shows how the knowledge base stands. A session's, a worktree's and a
+project's menu (`.`) have `kb.history`: the Library with only that one's. It follows what is
+kept as it happens. Switched off, it says so, and `⏎` switches it on. On the web it is More →
+Library (its first part; the rest is being built).
 
 What it keeps is yours to bound. Settings → Knowledge (`[kb]` in the config): `enabled = false`
 switches it off (no session is read and nothing is searched; what was kept stays in the file

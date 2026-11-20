@@ -117,6 +117,9 @@ Conventions:
 - projects and worktrees: `project_updated`/`removed`, `workspace_updated`/`removed`,
   `worktree_updated`/`removed`, `worktree_progress`;
 - `alert` (a session wants you: `{session, session_name, at_ms, kind, title, body, workspace?, profile?}`; what a linked machine's daemon delivers), `usage_updated`, `config_reloaded`, `host_load` (`load`: the computer's load average, or null once `[ui] load` is off);
+- `kb_updated` (`kinds`: the kinds of the items that changed, like `["session"]`): the
+  knowledge base changed: something new can be found by `ptyro recall`, or something went
+  (forgotten, expired);
 - `events_lost` (`count`): this stream fell behind and skipped events, so re-read state with
   `ls --json`.
 

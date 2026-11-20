@@ -72,6 +72,7 @@ action by name, finds any setting, and switches the theme (`theme ptyro-light`; 
 | `U` | set up agents and tools: the setup checklist (Agents, Tools, Already here). `Space` ticks, `⏎` installs what's ticked in a split (live output, sudo's prompt there, then the logins), `s` not now. The first run opens with the same checklist at its top |
 | `^` | update: your agents and ptyro itself, when newer versions are out (looked for once a day), in a split. It shows each update's command and asks first; ptyro's own is checked against its SHA256SUMS, the daemon upgrades live, and every open TUI restarts into the new ptyro with its view kept |
 | `G` | clean up: stale worktrees (merged or squash-merged, gone or unused), biggest on disk first; `⏎` removes one, after a yes (it refuses to lose work, saying what it would lose: `y` removes it anyway, `n` keeps it); `C-k` keeps one: it isn't offered again until it is unused for another `worktrees.stale_days`, or its branch moves on. The health badge says when there are some |
+| `L` | the Library: everything ptyro kept of your work (agent sessions), and your chats, searched and read in one place; with nothing typed, the history by day. Its keys are under [The Library](#the-library-ctrl-q-l). Again closes it |
 | `I` | about ptyro: its version and protocol, the repository and where to report a problem (links: `⏎` opens, `y` copies), where config, data, logs and the socket live, whether the daemon and the web app run (`U` switches a daemon of another version to this one), the tools found, and `c` copies all of it for a bug report |
 | `C` | settings: every option, searchable, edited in place (`/` search · `m` only what you changed · `u` undo · `r` reset · `n` add · `d` remove · `R` rename · `s` save a repository's settings to the shared file · `!` restart the daemon when a setting needs it) |
 | `.` | what you can do with the focused session (its menu) |
@@ -155,6 +156,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `c` | a new shell in SHELLS, in the selected row's directory (on a SHELLS heading: that workspace's) |
 | `C-t` / `T` | its quick terminal in a drawer / full sized (`⏎` on its `›_ quick shell` line shows or hides it too) |
 | `H` / `M` / `I` / `U` / `^` | home / mend what the health badge found / about ptyro / set up agents and tools / update them and ptyro |
+| `L` | the Library: what was kept of your work, and your chats, to search and read (a session's, a worktree's and a project's menu, `.`, has `kb.history`: only that one's) |
 | `w` `o` `r` | workspace / editor / run script |
 | `v` `s` | split |
 | `1` … `9`, `/` | jump to a session / find one |
@@ -211,6 +213,37 @@ Every key in this section, the view's and the list's, is in the key map: the `ch
 `chatlist` tables, rebound in `[keys]` as `"chat:C-f" = "chat.find_in"` or `"chatlist:p" =
 "chat.pin"` (`"none"` unbinds), and in the settings panel's Keys section. The hints on screen
 show the keys as they are bound.
+
+## The Library (`Ctrl-Q L`)
+
+What ptyro kept of your work (your agents' sessions, as they happen) and your chats, in one
+panel over the panes, like the chat list. With nothing typed it is **the history**, by day;
+type and it is **a search**. The selected row's text is beside the list (on a terminal too
+narrow for both, the list is alone and a hit shows more of its text).
+
+| Key | Does |
+|---|---|
+| `/` (or `i`) | type in the search box: words (all must match), `"a phrase"`, `prefix*`, `-word`, `before:30d`, `agent:codex`, `by:meaning`. Hits come as you type, from 3 letters. `⏎` or `↓` goes to the hits, `Esc` empties the box (the history again), `C-u` clears it |
+| `j` / `k`, `↓` / `↑`, `PgDn` / `PgUp`, `g` / `G` | move (the wheel too; a click selects) |
+| `Tab` | the filters: kind, project, since. `←` / `→` (or `Tab`) move among them, `⏎` picks from a list, `Backspace` clears one, `Esc` goes back to the list |
+| `⏎` | open it: a chat's hit in the chat, at that message (`Esc` there comes back); anything else in **the reader** |
+| `r` | go to the session it happened in (a dormant one is resumed; an exited one is shown, where `⏎` restarts it). `` Ctrl-Q ` `` comes back to the Library |
+| `y` / `Y` | copy its address (`k:7f3k/12`) / its text |
+| `d` | forget it: the daemon says what will go and asks; then its text is deleted for good and never kept again (a chat is deleted from the chat list instead) |
+| `s` | how the knowledge base stands, as `ptyro kb` says it; again shows the selected row's text |
+| `Backspace` | in a row's history (`kb.history`): everything again |
+| `Esc` / `q` | close |
+
+**The reader** shows an item's stored pieces as a transcript, read only, at the piece you
+opened: `j` / `k`, `PgUp` / `PgDn`, `Space`, `g` / `G` and the wheel scroll, `/` finds in it
+(`n` / `N` the next one and the one before), `r`, `y`, `Y` and `d` as in the list, `Esc` goes
+back to the list.
+
+**Switched off** (`[kb] enabled = false`), the Library says so and `⏎` switches it on. The
+actions (`kb.open`, `kb.search`, `kb.recent`, `kb.history`, `kb.show`, `kb.forget`, `kb.status`,
+`kb.enable`) are in the palette, and `Ctrl-Q .` in the Library lists them. `kb.show` and
+`kb.forget` from the palette, with nothing selected, ask for an address. The keys inside the
+Library are fixed; `Ctrl-Q L` itself is rebound like any other (`L = "kb.open"` in `[keys]`).
 
 ## Several lines in one prompt
 
