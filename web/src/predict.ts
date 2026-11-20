@@ -158,11 +158,14 @@ export class Predictor {
       }
       changed = this.anchor(look, now);
     }
-    return this.place(kind, n, now, null, look) || changed;
+    return this.place(kind, n, now, null, look, false) || changed;
   }
 
   /// Predict `kind` after the chain (or at the cursor). False when it can't be (a barrier then).
-  private place(kind: Kind, n: number | null, at: number, typed: number | null, look: Look): boolean {
+  /// `late`: a letter held since a barrier, placed now; its round trip isn't the echo's (it is
+  /// never measured). Said by the caller, never guessed from the clock: two reads of it a moment
+  /// apart differ on a slow machine, which made every guess there "late" and never measured.
+  private place(kind: Kind, n: number | null, at: number, typed: number | null, look: Look, late: boolean): boolean {
     const now = this.io.now();
     const chain = this.chain();
     let x: number, y: number, ok: boolean;
@@ -185,7 +188,7 @@ export class Predictor {
       if (x >= look.cols - 1) return this.barrier(n, now);
       // Drawn only where it types into a blank (as it will be: a Backspace predicted before it may
       // have blanked it), never over text that is there (in the middle of a line, the rest moves).
-      p = { n, x, y, ch: kind.c, from: x, after: x + 1, was: look.cell(x, y), at, typed, ok: ok && ahead(x).t === " ", late: at !== now, free: null };
+      p = { n, x, y, ch: kind.c, from: x, after: x + 1, was: look.cell(x, y), at, typed, ok: ok && ahead(x).t === " ", late, free: null };
     } else {
       const tx = x - 1;
       if (tx < 0 || tx >= look.cols) return this.barrier(n, now);
@@ -194,7 +197,7 @@ export class Predictor {
       // end of the text (in the middle the rest of the line moves left).
       const ours = target.pred ? target.pred.ch !== " " : this.mineRow === y && this.mine.has(tx) && target.t !== " ";
       if (!ours || ahead(x).t !== " ") return this.barrier(n, now);
-      p = { n, x: tx, y, ch: " ", from: x, after: tx, was: look.cell(tx, y), at, typed, ok, late: at !== now, free: null };
+      p = { n, x: tx, y, ch: " ", from: x, after: tx, was: look.cell(tx, y), at, typed, ok, late, free: null };
     }
     this.preds.push(p);
     this.stats.predicted++;
@@ -224,7 +227,7 @@ export class Predictor {
     for (let i = 0; i < j; i++) this.mine.add(x - j + i);
     let placed = false;
     for (const h of held.slice(j)) {
-      if (!this.place({ t: "char", c: h.c }, h.n, h.at, h.typed, look)) break;
+      if (!this.place({ t: "char", c: h.c }, h.n, h.at, h.typed, look, true)) break;
       placed = true;
     }
     return placed;

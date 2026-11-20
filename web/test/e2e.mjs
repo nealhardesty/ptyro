@@ -160,6 +160,8 @@ const scenarios = {
     await tab.eval(`localStorage.setItem("ptyro.debug", "1")`);
     await tab.phone();
     await tab.send("Page.reload");
+    // `E2E_THROTTLE=6`: a slow machine (CI), to reproduce timing bugs here.
+    if (process.env.E2E_THROTTLE) await tab.send("Emulation.setCPUThrottlingRate", { rate: Number(process.env.E2E_THROTTLE) });
     await tab.waitFor("the terminal", `!!window.ptyroTerm && document.querySelector("canvas.term")?.width > 0`);
     if (!(await tab.eval(`matchMedia("(pointer: coarse)").matches`))) throw new Error("the phone emulation has no coarse pointer: the page would take this for a computer");
     await tab.eval(`document.querySelector(".term-input").focus()`);
@@ -488,7 +490,7 @@ const scenarios = {
     for (const c of "ec") { await trusted(); await key(c); await settled(); await sleep(150); }
     await trusted();
     const auto = await key("h");
-    if (auto.srtt === null) throw new Error("the echo's round trip wasn't measured");
+    if (auto.srtt === null) throw new Error(`the echo's round trip wasn't measured: ${JSON.stringify(await tab.eval(`(() => { const p = ptyroTerm.predict; return { now: p.io.now(), trustAt: p.trustAt, waitN: p.waitN, upto: p.upto, held: p.held, preds: p.preds, stats: p.stats, mode: p.mode, slow: p.slow, epoch: p.epoch, proof: p.proof, outbox: (() => { const o = ptyroTerm.host.outbox(); return { online: o.online, mode: o.mode, shown: o.shown }; })(), canType: ptyroTerm.host.canType(), cursor: ptyroTerm.host.screen()?.cursor }; })()`))}`);
     if (!auto.slow && auto.cells) throw new Error(`a prediction was drawn on a fast link: ${JSON.stringify(auto)}`);
     await settled();
     await tab.eval(`ptyroTerm.predict.force = true`);
