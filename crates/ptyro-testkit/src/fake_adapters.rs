@@ -30,6 +30,10 @@
 //! prompt over several lines is one short turn that says it back (`prompt over N lines: …`).
 //! | `exit` | SessionEnd, exit 0 |
 //! With `PTYRO_FAKE_HOOK_DELAY_MS=N` every hook takes N ms to start (a loaded machine).
+//! With `PTYRO_FAKE_TRANSCRIPT=1` the fake Claude and Codex keep a transcript as the real ones
+//! do (`fake_transcript`), name it in every hook (`transcript_path`), and take two more
+//! commands: `compact <summary>` (Claude's `/compact`: no hook fires) and `rewind` (the file
+//! goes back to the end of the first turn).
 //! The fake Claude's terminal doesn't echo: as Claude does, it draws a prompt into the
 //! conversation once it takes it, and empties its box. So it never shows a typed-but-unsent
 //! draft: a dropped Enter on Claude's box isn't modelled (Codex's is,
@@ -69,6 +73,8 @@ struct Fake {
     laggy: Option<u64>,
     /// `PTYRO_FAKE_PLAIN_DIALOG=1`: `ask`'s dialog in words no adapter recognises.
     plain_dialog: bool,
+    /// `PTYRO_FAKE_TRANSCRIPT=1`: the conversation's file, as the real agent keeps it.
+    script: Option<crate::fake_transcript::Script>,
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -105,6 +111,7 @@ impl Fake {
                 .filter(|_| adapter == "claude")
                 .map(|v| v.parse().unwrap_or(0)),
             plain_dialog: ptyro_core::test_knob("PTYRO_FAKE_PLAIN_DIALOG").is_some(),
+            script: None,
             adapter,
         };
         match f.adapter.as_str() {
@@ -202,6 +209,7 @@ impl Fake {
                 None => f.session = uuidish(),
             },
         }
+        f.script = crate::fake_transcript::Script::open(&f.adapter, &f.session);
         f
     }
 
@@ -227,6 +235,9 @@ impl Fake {
             _ => Vec::new(),
         };
         payload["session_id"] = json!(self.session);
+        if let Some(s) = &self.script {
+            payload["transcript_path"] = json!(s.path);
+        }
         (cmds, payload)
     }
 
@@ -256,6 +267,9 @@ impl Fake {
             return Err(why);
         }
         let out = work();
+        if let Some(s) = &self.script {
+            s.tool(name, &tool["tool_input"], &out);
+        }
         self.hook("PostToolUse", tool);
         Ok(out)
     }
@@ -270,6 +284,9 @@ impl Fake {
     ) {
         let p = json!({ "prompt": prompt });
         self.late_session_start(out);
+        if let Some(s) = &self.script {
+            s.user(prompt);
+        }
         self.hook("UserPromptSubmit", p);
         self.oc(json!({ "type": "session.status", "properties": { "sessionID": self.session, "status": { "type": "busy" } } }));
         self.report(out, "state=working:msg=d29ya2luZw");
@@ -384,6 +401,14 @@ impl Fake {
     }
 
     fn turn_complete(&self, msg: &str, out: &mut std::io::Stdout) {
+        // Codex has the reply in its file before `Stop`; Claude writes it just after.
+        let late = self.script.as_ref().and_then(|s| {
+            if self.adapter == "claude" {
+                return Some(s.reply_late(msg));
+            }
+            s.reply(msg);
+            None
+        });
         match self.adapter.as_str() {
             "codex" => {
                 self.hook("Stop", json!({}));
@@ -404,10 +429,10 @@ impl Fake {
                 for _ in 0..10 {
                     let stop = json!({ "stop_hook_active": active, "last_assistant_message": msg });
                     let Some(a) = self.hook_out("Stop", stop) else {
-                        return;
+                        break;
                     };
                     if a["decision"] != "block" {
-                        return;
+                        break;
                     }
                     let reason = a["reason"].as_str().unwrap_or_default();
                     let _ = writeln!(out, "stop hook: {}", reason.lines().next().unwrap_or(""));
@@ -420,6 +445,10 @@ impl Fake {
                     active = true;
                 }
             }
+        }
+        if let (Some(late), Some(s)) = (late, &self.script) {
+            let _ = late.join();
+            s.turn_ended();
         }
     }
 }
@@ -661,6 +690,9 @@ pub fn main(args: &[String]) -> i32 {
                 let secs: f64 = secs.parse().unwrap_or(1.0);
                 let prompt = json!({ "prompt": format!("work {rest}") });
                 f.late_session_start(&mut out);
+                if let Some(s) = &f.script {
+                    s.user(&format!("work {rest}"));
+                }
                 f.hook("UserPromptSubmit", prompt);
                 f.oc(json!({ "type": "session.status", "properties": { "sessionID": f.session, "status": { "type": "busy" } } }));
                 f.report(&mut out, "state=working:msg=d29ya2luZw");
@@ -778,6 +810,18 @@ pub fn main(args: &[String]) -> i32 {
                 });
             }
             "/exit" | "/quit" => return 0,
+            "compact" if f.script.is_some() => {
+                if let Some(s) = &f.script {
+                    s.compact(rest);
+                }
+                let _ = writeln!(out, "compacted");
+            }
+            "rewind" if f.script.is_some() => {
+                if let Some(s) = &f.script {
+                    s.rewind();
+                }
+                let _ = writeln!(out, "rewound");
+            }
             "" => {}
             // `PTYRO_FAKE_TASK=1`: any prose is a task, done like an agent would.
             _ if std::env::var("PTYRO_FAKE_TASK").is_ok()

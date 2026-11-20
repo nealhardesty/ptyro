@@ -132,6 +132,10 @@ pub struct Meta {
     pub turn_end_seen: bool,
     /// The agent's last message of the current turn, once it ended (`Signal::Reply`).
     pub last_reply: Option<String>,
+    /// Its agent's transcript, as a hook named it (`transcript_path`): what the knowledge
+    /// base reads (SPEC §25.6.1). Left out when unknown, so an image without it is as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<PathBuf>,
     /// Its place in its workspace's SHELLS (SPEC §23), when it is loose. Left out when empty, so
     /// an image without SHELLS is byte for byte what it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,6 +374,7 @@ fn new_meta(
         turn_open: false,
         turn_end_seen: false,
         last_reply: None,
+        transcript: None,
         shelf: None,
     }
 }

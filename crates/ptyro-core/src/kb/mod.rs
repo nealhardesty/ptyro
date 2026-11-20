@@ -4,12 +4,14 @@
 //! - [`ingest`]: the one way in (§25.5). A [`ingest::Source`] is gated, redacted, chunked and
 //!   hashed into an [`ingest::Plan`], which is the only thing `kb.db` writes.
 //! - [`redact`]: secrets out of text (§25.7), also used for what a chat's titler is sent.
+//! - [`card`]: a session's first chunk, made from what is known of it.
 //! - [`chunk`]: the cutters: any text, Markdown by its headings, messages by their turns.
 //! - [`comments`]: the comments of a source file.
 //! - The types of what is stored: [`KbItem`], [`KbChunk`], [`KbRoot`].
 
 use serde::{Deserialize, Serialize};
 
+pub mod card;
 pub mod chunk;
 pub mod comments;
 pub mod ingest;

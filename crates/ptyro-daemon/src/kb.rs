@@ -11,10 +11,14 @@
 //! 3. writes the plan (`KbDb::write`), one transaction an item.
 //!
 //! The queue is memory only. After a restart or a live upgrade it is rebuilt from what the
-//! readers find past each item's cursor (`KbDb::cursors`), so nothing crosses the exec; a job
-//! that was queued and not yet written is found again that way.
+//! readers find past each item's cursor (`KbDb::cursors`, [`Daemon::kb_catch_up`]), so nothing
+//! crosses the exec; a job that was queued and not yet written is found again that way.
+//!
+//! Agent sessions, the first source, are in [`sessions`].
 
-use std::collections::VecDeque;
+mod sessions;
+
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -48,6 +52,9 @@ pub struct Kb {
     skipped: Mutex<VecDeque<Skipped>>,
     /// `kb.redact` and `kb.exclude`, compiled for the lists they were made from.
     rules: Mutex<Option<Arc<Rules>>>,
+    /// The last assistant message read of each session (its URI), hashed: how a read knows
+    /// that the reply a `Stop` hook named was taken already (`sessions`).
+    replies: Mutex<HashMap<String, u64>>,
 }
 
 struct Rules {
@@ -57,12 +64,16 @@ struct Rules {
     never: Never,
 }
 
-/// One thing to ingest. KB1.4 adds a transcript to read; a job never holds text that the gate
-/// has not been asked about, except one that was read for another reason already.
-#[allow(dead_code)] // (Queued by KB1.4's hooks; until then by this module's tests.)
+/// One thing to ingest. A job never holds text that the gate has not been asked about,
+/// except one that was read for another reason already.
 pub(crate) enum Job {
     /// A source that is already in memory, with what the daemon knows about it.
+    #[allow(dead_code)] // (KB2's notes are its first users; until then this module's tests.)
     Prepared(Box<Prepared>),
+    /// An agent session whose transcript may have grown (a turn's end, its exit).
+    Session(sessions::SessionJob),
+    /// A session's item whose session ptyro no longer has, by its URI (the daemon's start).
+    Item(String),
 }
 
 pub(crate) struct Prepared {
@@ -108,6 +119,7 @@ impl Kb {
             pending: watch::Sender::new(0),
             skipped: Mutex::new(VecDeque::new()),
             rules: Mutex::new(None),
+            replies: Mutex::new(HashMap::new()),
         }
     }
 
@@ -172,16 +184,29 @@ impl Daemon {
         tokio::spawn(async move { me.kb_actor().await });
     }
 
-    /// Queue something to ingest, and return at once.
-    #[allow(dead_code)] // (KB1.4's hooks are its first callers.)
+    /// Queue something to ingest, and return at once. A session that is already waiting is
+    /// not queued twice (a turn's end is often said by several signals).
     pub(crate) fn kb_enqueue(&self, job: Job) {
-        self.kb.pending.send_modify(|n| *n += 1);
-        self.kb.queue.locked().push_back(job);
+        {
+            let mut q = self.kb.queue.locked();
+            if let Job::Session(new) = &job
+                && let Some(waiting) = q.iter_mut().find_map(|j| match j {
+                    Job::Session(w) if w.same(new) => Some(w),
+                    _ => None,
+                })
+            {
+                waiting.expect = new.expect.clone().or(waiting.expect.take());
+                return;
+            }
+            self.kb.pending.send_modify(|n| *n += 1);
+            q.push_back(job);
+        }
         self.kb.wake.notify_one();
     }
 
-    /// Wait until the queue is empty and nothing is being written (a test, `kb sync`).
-    #[allow(dead_code)] // (KB3's `kb sync`.)
+    /// Wait until the queue is empty and nothing is being written or waiting to be tried
+    /// again (a test, `kb sync`).
+    #[allow(dead_code)] // (KB3's `kb sync`; this module's tests.)
     pub(crate) async fn kb_idle(&self) {
         let mut rx = self.kb.pending.subscribe();
         let _ = rx.wait_for(|n| *n == 0).await;
@@ -205,19 +230,24 @@ impl Daemon {
                 continue;
             }
             for job in batch {
-                match job {
+                let (uri, done) = match job {
                     Job::Prepared(p) => {
-                        let uri = p.source.uri.clone();
-                        match self.kb_ingest(*p).await {
-                            Ok(_) => {}
-                            Err(Refused::Skip(why)) => self.kb.skip(&uri, why.to_string()),
-                            // Off is not a source's trouble, and a file that can't be opened
-                            // was said once at start.
-                            Err(Refused::Error(e)) if e.code == ErrorCode::Unsupported => {}
-                            Err(Refused::Error(e)) => {
-                                tracing::warn!("knowledge base: {uri}: {}", e.message);
-                            }
-                        }
+                        (p.source.uri.clone(), self.kb_ingest(*p).await.map(|_| ()))
+                    }
+                    Job::Session(j) => self.kb_session(j).await,
+                    Job::Item(uri) => {
+                        let done = self.kb_item(&uri).await;
+                        (uri, done)
+                    }
+                };
+                match done {
+                    Ok(()) => {}
+                    Err(Refused::Skip(why)) => self.kb.skip(&uri, why.to_string()),
+                    // Off is not a source's trouble, and a file that can't be opened was
+                    // said once at start.
+                    Err(Refused::Error(e)) if e.code == ErrorCode::Unsupported => {}
+                    Err(Refused::Error(e)) => {
+                        tracing::warn!("knowledge base: {uri}: {}", e.message);
                     }
                 }
                 self.kb.done();
@@ -280,6 +310,17 @@ impl Daemon {
     pub(crate) async fn kb_ingest(self: &Arc<Self>, p: Prepared) -> Result<Written, Refused> {
         let db = self.kb_db()?;
         let passed = self.kb_gate(&db, &p.source.uri, &p.facts).await?;
+        self.kb_write(&db, passed, p).await
+    }
+
+    /// A source the gate let through (it was asked before the source was read): the plan and
+    /// the write.
+    async fn kb_write(
+        self: &Arc<Self>,
+        db: &KbDb,
+        passed: Passed,
+        p: Prepared,
+    ) -> Result<Written, Refused> {
         // The profile's secret values: without them the source is not kept, since redaction
         // can't be skipped. (It is found again from its cursor when they can be read.)
         let secrets = match p.stamp.profile.as_deref() {

@@ -18,6 +18,7 @@ use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, str_of, tool_summary,
 };
 use crate::claude::hook_word;
+use crate::transcript::{Transcript, TranscriptAt};
 
 /// Hook events (Codex's own names) → the snake-case names its trust keys use.
 pub const EVENTS: &[(&str, &str)] = &[
@@ -333,6 +334,25 @@ impl Adapter for Codex {
             StopStep::Keys(b"\x15/quit\r".to_vec()),
             StopStep::Wait(Duration::from_secs(5)),
         ]
+    }
+
+    fn transcript(&self, at: &TranscriptAt<'_>) -> Option<std::path::PathBuf> {
+        crate::transcript::codex_path(at)
+    }
+
+    fn hook_transcript(&self, event: &str, p: &Value) -> (Option<std::path::PathBuf>, bool) {
+        // (`notify` names no file; it is still the turn's end when the hooks are held back.)
+        let ends = event == "Stop"
+            || (event == "notify" && str_of(p, "type") == Some("agent-turn-complete"));
+        (str_of(p, "transcript_path").map(Into::into), ends)
+    }
+
+    fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
+        Some(crate::transcript::codex(bytes, from))
+    }
+
+    fn transcript_title(&self, at: &TranscriptAt<'_>) -> Option<String> {
+        crate::transcript::codex_title(at)
     }
 }
 

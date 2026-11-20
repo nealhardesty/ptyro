@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """KB0.2 and KB0.3 (ROADMAP KB0, SPEC §25.6.1, §25.9, §20.1, §20.2, §20.8): check, against the real
 Claude Code and Codex installed here, every claim the knowledge base rests on, and say PASS / FAIL /
-NOT RUN for each. Run it with `make verify-kb` (`make verify-kb ARGS=claude` for one agent,
+NOT RUN for each. Since KB1.4 it also runs ptyro's own transcript reader over what the turns leave. Run it with `make verify-kb` (`make verify-kb ARGS=claude` for one agent,
 `ARGS=--fixtures` to also write sanitized transcripts for a new agent version, `ARGS=--tui` to also
 open Codex's TUI for a moment, `ARGS=--keep` to leave the work folders for a look).
 
@@ -332,6 +332,30 @@ def jsonl(data):
     return rows
 
 
+def ptyro_reads(agent, data):
+    """What ptyro's own reader (crates/ptyro-agents/src/transcript.rs, KB1.4) makes of a transcript's
+    bytes: its parts as (kind, text), or None when it can't be run."""
+    p = subprocess.run([os.environ.get("CARGO", "cargo"), "run", "-q", "-p", "ptyro-agents", "--example", "transcript", "--", agent],
+                       input=data, capture_output=True, cwd=ROOT)
+    if p.returncode != 0:
+        return None
+    return [tuple(json.loads(l)) for l in p.stdout.decode("utf-8", "replace").splitlines()]
+
+
+def check_reader(agent, data, users, replies, tools, never):
+    """ptyro's reader keeps the user's words, the replies and a title a tool, and none of `never`."""
+    parts = ptyro_reads(agent, data)
+    if parts is None:
+        return out("NOT RUN", "ptyro's own reader over this transcript (the example `transcript` of ptyro-agents didn't build)")
+    said = lambda kind: [t for k, t in parts if k == kind]
+    check(said("user") == users and all(r in said("assistant") for r in replies),
+          f"ptyro's reader (KB1.4) keeps the user's words and every turn's reply ({len(parts)} parts)", str(said("user"))[:300])
+    check(len(said("tool")) == tools, f"…and one title for each tool that ran ({tools})", str(said("tool"))[:300])
+    text = json.dumps(parts)
+    held = [n for n in never if n in text] + re.findall(r"[\w.+-]+@[\w-]+\.\w+", text.replace("noreply@anthropic.com", ""))
+    check(not held, "…and nothing else: no tool's result, no thinking, no line that is not conversation (no email address)", str(held)[:200])
+
+
 def claude_words(rows):
     """What SPEC §20.8 says a reader keeps: (the user's own words, the assistant's text, tool titles)."""
     users, texts, tools = [], [], []
@@ -490,6 +514,8 @@ def spike_claude(want_fixtures):
           "a tool call is a `tool_use` block: `Write` with `input.file_path`, `Bash` with `input.command`, an MCP tool as `mcp__<server>__<tool>`", str(list(by)))
     repeats = collections.Counter(o["type"] for o in rows if o["type"] not in ("user", "assistant") and p1 in json.dumps(o))
     check(repeats, "GOTCHA: the prompt is also repeated in other lines (" + ", ".join(sorted(repeats)) + "): a reader takes `user` and `assistant` lines only")
+    check_reader("claude", snap["compacted"], users, [s["payload"]["last_assistant_message"] for s in stops],
+                 sum(1 for n, _ in tools if n != "ToolSearch"), ["local-command", "queue-operation", "stop_hook_summary"])
     one_block = all(len(o["message"]["content"]) == 1 for o in rows if o["type"] == "assistant")
     uu = [o["uuid"] for o in rows if o.get("uuid")]
     check(one_block and len(uu) == len(set(uu)), "each `assistant` line holds one block, and no `uuid` appears twice (a good anchor)")
@@ -721,6 +747,9 @@ def spike_codex(want_fixtures):
     check(users == [p_tools, "Reply with only the word OK2."], "the user's own words are the `user` messages whose `content_item_kinds` include `user.text`", str(users)[:300])
     said = [h["payload"]["last_assistant_message"] for h in t_hooks + r_hooks if h["event"] == "Stop"]
     check(said and all(s in texts for s in said), "the assistant's words are `assistant` messages' `output_text`; each turn's last is `Stop`'s reply", str(texts)[:200])
+    ran = sum(1 for o in rows if o["type"] == "event_msg" and o["payload"].get("type") == "item_completed"
+              and (o["payload"].get("item") or {}).get("type") in ("CommandExecution", "FileChange", "McpToolCall"))
+    check_reader("codex", snap["resumed"], users, said, ran, ["tools.apply_patch", "AGENTS.md", "environment_context", "aggregated_output"])
     names = collections.Counter(n for n, _ in calls)
     check(calls and all(isinstance(i, str) for _, i in calls), "tool calls are `function_call {name, arguments}` and `custom_tool_call {name, input}` items: here " + ", ".join(f"{n} ×{c}" for n, c in names.items()))
     if set(names) == {"exec"}:

@@ -170,6 +170,17 @@ pub struct Cursor {
     pub cursor: Option<serde_json::Value>,
 }
 
+/// What an item's stored chunks say of its session ([`KbDb::session_facts`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionFacts {
+    /// The start of its first user message.
+    pub task: Option<String>,
+    /// The start of its last assistant message.
+    pub outcome: Option<String>,
+    /// Its user messages.
+    pub turns: u32,
+}
+
 /// Counts and sizes, for `ptyro kb status` ([`KbDb::status`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KbStatus {
@@ -453,6 +464,33 @@ impl KbDb {
             Ok(st
                 .query_map(params![item, i64::from(from), limit], chunk_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// What a session's card is made of, from the item's stored (so redacted) chunks: the
+    /// start of its first user message, the start of its last assistant message, and how many
+    /// user messages it holds (SPEC §25.6.1).
+    pub async fn session_facts(&self, item: String) -> Result<SessionFacts> {
+        self.call(move |db| {
+            let one = |sql: &str| -> Result<Option<String>> {
+                Ok(db.prepare_cached(sql)?.query_row([&item], |r| r.get(0)).optional()?)
+            };
+            let task = one(
+                "SELECT text FROM chunk WHERE item = ?1 AND kind = 'user' ORDER BY idx LIMIT 1",
+            )?;
+            // (A long message is several chunks under one anchor: its first one.)
+            let last = one("SELECT text FROM chunk WHERE item = ?1 AND kind = 'assistant'
+                   AND anchor IS (SELECT anchor FROM chunk WHERE item = ?1 AND kind = 'assistant'
+                                  ORDER BY idx DESC LIMIT 1)
+                 ORDER BY idx LIMIT 1")?;
+            let turns: i64 = db
+                .prepare_cached(
+                    "SELECT count(DISTINCT COALESCE(anchor, idx)) FROM chunk
+                     WHERE item = ?1 AND kind = 'user'",
+                )?
+                .query_row([&item], |r| r.get(0))?;
+            Ok(SessionFacts { task, outcome: last, turns: turns.max(0) as u32 })
         })
         .await
     }

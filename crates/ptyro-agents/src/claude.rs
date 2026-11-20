@@ -15,6 +15,7 @@ use crate::adapter::{
     Adapter, Caps, Decision, LaunchCtx, LaunchPlan, StopStep, integration_dir, model_in, str_of,
     tool_summary, transcript_model, uuid_v4,
 };
+use crate::transcript::{Transcript, TranscriptAt};
 
 /// The hook events ptyro listens to.
 pub const EVENTS: &[&str] = &[
@@ -370,6 +371,19 @@ impl Adapter for Claude {
             StopStep::Keys(b"\x15/exit\r".to_vec()),
             StopStep::Wait(Duration::from_secs(5)),
         ]
+    }
+
+    fn transcript(&self, at: &TranscriptAt<'_>) -> Option<std::path::PathBuf> {
+        crate::transcript::claude_path(at)
+    }
+
+    fn hook_transcript(&self, event: &str, p: &Value) -> (Option<std::path::PathBuf>, bool) {
+        // (A compaction fires neither: its lines are read with the next turn's.)
+        (str_of(p, "transcript_path").map(Into::into), matches!(event, "Stop" | "SessionEnd"))
+    }
+
+    fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
+        Some(crate::transcript::claude(bytes, from))
     }
 }
 

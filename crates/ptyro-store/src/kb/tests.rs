@@ -255,6 +255,31 @@ async fn a_transcript_grows_piece_by_piece_and_a_piece_twice_doubles_nothing() {
     assert_eq!(vecs, [a1]);
     assert_eq!((found(&db, "outcome").await, found(&db, "assertion").await), (1, 1));
 
+    // What the next card is made of: the first prompt, the last answer from its start (a
+    // long one is several chunks), the user's messages counted once each.
+    let facts = db.session_facts(id.clone()).await.unwrap();
+    assert_eq!(facts.task.as_deref(), Some("fix the test"));
+    assert_eq!(facts.outcome.as_deref(), Some("Fixed: the assertion was wrong."));
+    assert_eq!(facts.turns, 1);
+    let long = format!("Done. {}", "It works now. ".repeat(300));
+    let w = db
+        .write(piece(
+            uri,
+            vec![
+                turn(ChunkKind::User, "u2", &"and the other test? ".repeat(200), 10),
+                turn(ChunkKind::Assistant, "a3", &long, 11),
+                turn(ChunkKind::Tool, "a3", "Bash: cargo test", 11),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert!(w.added > 5, "{w:?}");
+    let facts = db.session_facts(id.clone()).await.unwrap();
+    assert_eq!(facts.task.as_deref(), Some("fix the test"));
+    assert!(facts.outcome.as_deref().unwrap().starts_with("Done. It works now."), "{facts:?}");
+    assert_eq!(facts.turns, 2);
+    assert_eq!(db.session_facts("nobody".into()).await.unwrap(), SessionFacts::default());
+
     // What a queue is rebuilt from.
     let cursors = db.cursors(ItemKind::Session).await.unwrap();
     assert_eq!(cursors.len(), 1);

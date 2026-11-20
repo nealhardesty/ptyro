@@ -349,6 +349,25 @@ pub fn seeds(target: &str) -> Vec<Vec<u8>> {
                 "\x06-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n-----BEGIN X-----\nAAAA\n",
                 "\x00---\nby: you\n---\n\n9f8e7d6c5b4a39281706f5e4d3c2b1a0ZZZZYYYY <secret:NAME> <redacted>\n",
                 "\x04*.pem\n.env*\nfixtures/**/keys\n(unclosed[\n",
+                // Transcripts: Claude's lines, then Codex's (the first byte places the cut).
+                concat!(
+                    "\x7f{\"type\":\"custom-title\",\"customTitle\":\"t\"}\n",
+                    "{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-11-19T22:38:48.772Z\",\"sessionId\":\"c\",\"message\":{\"content\":\"fix it\"}}\n",
+                    "{\"type\":\"user\",\"uuid\":\"u2\",\"isCompactSummary\":true,\"message\":{\"content\":\"This session is being continued\\n\\nSummary:\\n1. x\\nIf you need specific details from before compaction\"}}\n",
+                    "{\"type\":\"user\",\"uuid\":\"u3\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"out\"},{\"type\":\"text\",\"text\":\"<command-name>/x</command-name><command-args>a</command-args>\"}]}}\n",
+                    "{\"type\":\"assistant\",\"uuid\":\"a1\",\"message\":{\"model\":\"m\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"\"},{\"type\":\"text\",\"text\":\"ok\"},{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"/a\"}}]}}\n",
+                    "{\"type\":\"attachment\",\"uuid\":\"x\"}\n{\"type\":\"assistant\",\"uuid\":\"a2\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"torn"
+                ),
+                concat!(
+                    "\x60{\"timestamp\":\"2026-11-19T22:39:14.764Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"t\",\"cwd\":\"/r\"}}\n",
+                    "{\"type\":\"turn_context\",\"payload\":{\"model\":\"m\"}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"id\":\"m1\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"do it\"}],\"internal_chat_message_metadata_passthrough\":{\"content_item_kinds\":[\"user.text\"]}}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"custom_tool_call\",\"name\":\"apply_patch\",\"call_id\":\"c\",\"input\":\"*** Begin Patch\\n*** Add File: a\\n\"}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"shell\",\"arguments\":\"{\\\"command\\\":[\\\"sh\\\",\\\"-lc\\\",\\\"ls\\\"]}\"}}\n",
+                    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"FileChange\",\"id\":\"e1\",\"changes\":{\"/a\":{}}}}}\n",
+                    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"item_completed\",\"item\":{\"type\":\"McpToolCall\",\"server\":\"s\",\"tool\":\"t\",\"arguments\":{\"query\":\"q\"}}}}\n",
+                    "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"done\"}]}}\n"
+                ),
             ] {
                 v.push(s.as_bytes().to_vec());
             }
@@ -489,8 +508,11 @@ pub fn mutate(rng: &mut Rng, input: &[u8], corpus: &[Vec<u8>]) -> Vec<u8> {
 
 /// The knowledge base's way in (SPEC §25.5) on any text: redaction, the never list, the
 /// cutters and the plan never panic; no piece passes the limit; a cutter loses nothing but
-/// white space; and the same source gives the same plan.
+/// white space; and the same source gives the same plan. And the transcript readers
+/// (§25.6.1) on any bytes: no panic, they stop at the end of a whole line, and a file read in
+/// two pieces at any byte says what reading it at once says.
 pub fn kb(data: &[u8]) {
+    kb_transcripts(data);
     use ptyro_core::kb::chunk::{self, LIMIT, Part};
     use ptyro_core::kb::ingest::{self, Body, Gate, Never, Source, Stamp};
     use ptyro_core::kb::redact::Redactor;
@@ -539,6 +561,33 @@ pub fn kb(data: &[u8]) {
         assert!(p.chunks.iter().all(|c| c.text.chars().count() <= LIMIT && !c.text.is_empty()));
         // (More than that is refused whole, not kept.)
         assert!(p.append || p.hits <= ptyro_core::kb::redact::MAX_HITS);
+    }
+}
+
+fn kb_transcripts(data: &[u8]) {
+    use ptyro_agents::transcript::{Transcript, claude, codex};
+    use ptyro_core::kb::ChunkKind;
+
+    let head = data.first().copied().unwrap_or(0);
+    let bytes = data.get(1..).unwrap_or_default();
+    let cut = bytes.len() * usize::from(head) / 256;
+    type Reader = fn(&[u8], u64) -> Transcript;
+    for (read, tools) in [(claude as Reader, true), (codex as Reader, false)] {
+        // (Codex's tool titles depend on what else a piece holds; its messages never do.)
+        let said = |t: Transcript| -> Vec<_> {
+            t.parts.into_iter().filter(|p| tools || p.kind != ChunkKind::Tool).collect()
+        };
+        let whole = read(bytes, 0);
+        let end = whole.to as usize;
+        assert!(end <= bytes.len() && (end == 0 || bytes[end - 1] == b'\n'));
+        let first = read(&bytes[..cut], 0);
+        let at = first.to as usize;
+        assert!(at <= cut && (at == 0 || bytes[at - 1] == b'\n'));
+        let second = read(&bytes[at..], first.to);
+        assert_eq!(second.to, whole.to, "the pieces stopped elsewhere");
+        let mut parts = said(first);
+        parts.extend(said(second));
+        assert_eq!(parts, said(whole), "the pieces said something else");
     }
 }
 

@@ -10,6 +10,8 @@ use ptyro_core::config::AgentDef;
 use ptyro_core::status::Signal;
 use serde_json::Value;
 
+use crate::transcript::{Transcript, TranscriptAt};
+
 /// What an adapter can do (SPEC §8.1 capabilities).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Caps {
@@ -173,6 +175,30 @@ pub trait Adapter: Send + Sync {
     }
     fn stop(&self) -> Vec<StopStep> {
         vec![StopStep::Wait(Duration::ZERO)]
+    }
+    /// The file this agent keeps a conversation in, for the knowledge base (SPEC §25.6.1):
+    /// the one a hook named when it is that conversation's, else where the agent puts it.
+    /// `None`: there is none to read (yet).
+    fn transcript(&self, at: &TranscriptAt<'_>) -> Option<PathBuf> {
+        let _ = at;
+        None
+    }
+    /// What a hook says of the transcript: the file it names (`transcript_path`), and whether
+    /// this hook is a time to read it (a turn's end, the session's end).
+    fn hook_transcript(&self, event: &str, payload: &Value) -> (Option<PathBuf>, bool) {
+        let _ = (event, payload);
+        (None, false)
+    }
+    /// What a piece of that file says: `bytes` are the file from offset `from`. `None`: this
+    /// agent's transcripts are not read.
+    fn read_transcript(&self, bytes: &[u8], from: u64) -> Option<Transcript> {
+        let _ = (bytes, from);
+        None
+    }
+    /// A conversation's title, when the agent keeps it outside the transcript.
+    fn transcript_title(&self, at: &TranscriptAt<'_>) -> Option<String> {
+        let _ = at;
+        None
     }
 }
 

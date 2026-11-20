@@ -2531,6 +2531,7 @@ name = "ptyro-testkit"
 version = "0.0.89"
 dependencies = [
  "anyhow",
+ "ptyro-agents",
  "ptyro-client",
  "ptyro-core",
  "ptyro-daemon",

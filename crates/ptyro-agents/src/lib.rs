@@ -16,6 +16,7 @@ pub mod others;
 pub mod own;
 pub mod profile;
 pub mod setup;
+pub mod transcript;
 pub mod updates;
 
 use std::path::PathBuf;
@@ -23,6 +24,7 @@ use std::path::PathBuf;
 use ptyro_core::config::{AgentDef, Config, expand_home};
 
 pub use adapter::{Adapter, Caps, Decision, LaunchCtx, LaunchPlan, Sidecar, StopStep};
+pub use transcript::{Transcript, TranscriptAt};
 
 /// Agents ptyro knows without configuration: name → the CLI on `PATH`.
 pub const BUILTIN: &[(&str, &str)] =

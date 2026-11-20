@@ -403,6 +403,9 @@ async fn serve(
     }
     daemon.restore_dormant().await;
     daemon.restore_shells().await;
+    // The knowledge base's queue is not carried over a restart or a live upgrade: it is made
+    // again from the transcripts that grew past their cursors (SPEC §25.5).
+    daemon.kb_catch_up().await;
     daemon.start_auto_register();
     daemon.start_shells();
     let _watcher = watch_config(&daemon, &config_path);

@@ -132,7 +132,7 @@ verify-claude: build ## Check the Claude adapter against the real Claude Code he
 verify-structured: build ## Check structured mode, what chats run on, against the real agents here (one tiny chat each)
 	scripts/verify-structured.sh
 
-verify-kb: ## KB0: check what the knowledge base rests on against the real Claude Code and Codex here: hooks, transcripts, MCP tools (ARGS="claude" for one, "--fixtures" to save sanitized transcripts; a few cents of tokens)
+verify-kb: ## KB0, KB1.4: check what the knowledge base rests on against the real Claude Code and Codex here: hooks, transcripts and ptyro's own reader over them, MCP tools (ARGS="claude" for one, "--fixtures" to save sanitized transcripts; a few cents of tokens)
 	python3 -B scripts/verify-kb.py $(ARGS)
 
 spike-chat-fts: ## CHAT0: FTS5 and the porter tokenizer in the bundled SQLite, and an index over NODES (default 100000) chat nodes
