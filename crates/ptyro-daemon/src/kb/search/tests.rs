@@ -116,7 +116,8 @@ async fn daemon(t: &tempfile::TempDir) -> Arc<Daemon> {
     let d = crate::daemon::test_daemon(t.path(), Registry::default());
     put_model(&d, &[("cat", &[1.0, 0.0]), ("kitten", &[0.95, 0.05]), ("dog", &[0.0, 1.0])]);
     set_config(&d, "[kb]\nmeaning = true\n");
-    d.start_kb();
+    // (Not `start_kb`: its pass over the notes folder drops a note that has no file, as the
+    // one below, whenever it happens to run.)
     let now = now_ms();
     let session = prepared(
         ItemKind::Session,

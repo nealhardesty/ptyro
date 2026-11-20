@@ -567,7 +567,8 @@ async fn measure_offers(d: &Daemon, mode: &str) -> (f64, usize) {
 async fn daemon(t: &tempfile::TempDir, now: u64) -> Arc<Daemon> {
     let d = crate::daemon::test_daemon(t.path(), Registry::default());
     set_config(&d, "[kb]\nmeaning = true\n");
-    d.start_kb();
+    // (Not `start_kb`: its passes are a running daemon's. The one over the notes folder drops
+    // every note that has no file, which is each of these, whenever it happens to run.)
     let corpus = corpus(now);
     assert_eq!(corpus.len(), 300);
     for p in corpus {
@@ -657,6 +658,11 @@ async fn the_golden_set() {
         CHATS,
         questions().len()
     );
+    let kept = || async {
+        let all = ptyro_store::kb::ItemFilter::default();
+        d.kb_db().unwrap().list(all).await.unwrap().len()
+    };
+    let before = kept().await;
     let mut failed = Vec::new();
     for (mode, config) in [("meaning", "[kb]\nmeaning = true\n"), ("words", "")] {
         set_config(&d, config);
@@ -684,6 +690,9 @@ async fn the_golden_set() {
             }
         }
     }
+    // The numbers are of this corpus: nothing took an item away while it was asked (a pass
+    // of a running daemon would, and the numbers would then say the ranking fell).
+    assert_eq!(kept().await, before, "the corpus changed under the questions");
     assert!(failed.is_empty(), "the golden set: {}", failed.join("; "));
 }
 
