@@ -269,18 +269,26 @@ pub(super) fn doctor(roots: &[KbRoot]) -> String {
     out
 }
 
-/// Each root that is missing or failing, in a line.
+/// Each root that is missing or failing, in a line, with the command that mends it. The
+/// clients run that command as it stands, so the root is one word of it whatever it is
+/// called (`ptyro_core::kb::root_word`).
 pub(super) fn failing(roots: &[KbRoot]) -> Vec<String> {
     roots
         .iter()
         .filter(|r| matches!(r.state, RootState::Missing | RootState::Error))
-        .map(|r| match (&r.state, &r.error) {
-            (RootState::Missing, _) => format!(
-                "{}: {} is gone (`ptyro kb rm {}` drops what was kept of it)",
-                r.name, r.path, r.name
-            ),
-            (_, Some(e)) => format!("{}: {e}", r.name),
-            _ => format!("{}: it could not be read", r.name),
+        .map(|r| {
+            let word = ptyro_core::kb::root_word(&r.name, &r.id);
+            let again = format!("(`ptyro kb sync {word}` reads it again)");
+            match (&r.state, &r.error) {
+                (RootState::Missing, _) => format!(
+                    "{}: {} is gone (`ptyro kb rm {word}` drops what was kept of it)",
+                    r.name, r.path
+                ),
+                // (An error that names its own way through keeps it.)
+                (_, Some(e)) if e.contains("`ptyro ") => format!("{}: {e}", r.name),
+                (_, Some(e)) => format!("{}: {e} {again}", r.name),
+                _ => format!("{}: it could not be read {again}", r.name),
+            }
         })
         .collect()
 }
@@ -1024,7 +1032,7 @@ impl Daemon {
                                 r.profile
                                     .as_deref()
                                     .map_or("every profile".to_owned(), |p| format!("profile {p}")),
-                                r.name
+                                ptyro_core::kb::root_word(&r.name, &r.id)
                             )));
                         }
                     }
@@ -1037,7 +1045,11 @@ impl Daemon {
             None => {
                 let meta = std::fs::metadata(&path)
                     .map_err(|e| Error::new(ErrorCode::NotFound, format!("{text}: {e}")))?;
-                let name = match spec.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                // (A name is shown in lists and said in messages: no control character of a
+                // folder's name, or of what was typed, is part of it.)
+                let clean = |n: &str| -> String { n.chars().filter(|c| !c.is_control()).collect() };
+                let given = spec.name.as_deref().map(clean);
+                let name = match given.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
                     Some(n) if roots.iter().any(|r| r.name == n) => {
                         return Err(Error::new(
                             ErrorCode::Conflict,
@@ -1048,7 +1060,8 @@ impl Daemon {
                     None => {
                         let base = path
                             .file_name()
-                            .map(|n| n.to_string_lossy().into_owned())
+                            .map(|n| clean(&n.to_string_lossy()))
+                            .filter(|n| !n.trim().is_empty())
                             .unwrap_or_else(|| "root".into());
                         let (mut name, mut k) = (base.clone(), 1);
                         while roots.iter().any(|r| r.name == name) {

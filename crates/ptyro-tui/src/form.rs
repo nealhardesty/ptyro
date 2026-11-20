@@ -226,9 +226,16 @@ impl Form {
         self.fields.iter().find(|f| f.key == key).map(Field::value).unwrap_or_default()
     }
 
-    /// The command line of a [`Make::Cli`] form: `base`, then each field's [`Arg`].
+    /// The command line of a [`Make::Cli`] form: `base`, then each field's [`Arg`]. What was
+    /// typed is never taken for a flag: the words of their own ([`Arg::Pos`]) go last, after
+    /// `--`, and a flag's value that starts with `-` is joined to its flag (`--title=-x`).
     pub fn cli_args(&self, base: &[String]) -> Vec<String> {
         let mut args = base.to_vec();
+        let mut words = Vec::new();
+        let flagged = |flag: &str, v: &str| match v.starts_with('-') {
+            true => vec![format!("{flag}={v}")],
+            false => vec![flag.to_owned(), v.to_owned()],
+        };
         for f in &self.fields {
             let v = f.value();
             let v = v.trim();
@@ -237,11 +244,11 @@ impl Form {
             }
             match &f.arg {
                 Arg::None => {}
-                Arg::Pos => args.push(v.to_owned()),
-                Arg::Flag(flag) => args.extend([(*flag).to_owned(), v.to_owned()]),
+                Arg::Pos => words.push(v.to_owned()),
+                Arg::Flag(flag) => args.extend(flagged(flag, v)),
                 Arg::Each(flag) => {
                     for one in v.split(',').map(str::trim).filter(|x| !x.is_empty()) {
-                        args.extend([(*flag).to_owned(), one.to_owned()]);
+                        args.extend(flagged(flag, one));
                     }
                 }
                 Arg::Switch(flag) => args.push((*flag).to_owned()),
@@ -249,6 +256,10 @@ impl Form {
                     args.extend([(*flag).to_owned(), format!("{prefix}{v}")])
                 }
             }
+        }
+        if !words.is_empty() {
+            args.push("--".to_owned());
+            args.extend(words);
         }
         args
     }
@@ -606,7 +617,6 @@ mod tests {
             [
                 "thing",
                 "new",
-                "billing",
                 "--projects",
                 "a,b",
                 "--agent",
@@ -615,11 +625,22 @@ mod tests {
                 "web=claude",
                 "--adopt",
                 "claude=~/.claude-work",
-                "--overlay"
+                "--overlay",
+                "--",
+                "billing"
             ]
         );
         tick(&mut f, "projects", &[false, true]);
-        assert_eq!(f.cli_args(&base)[3..5], ["--projects".to_owned(), "b".to_owned()]);
+        assert_eq!(f.cli_args(&base)[2..4], ["--projects".to_owned(), "b".to_owned()]);
+        // What was typed is never taken for a flag (review B3): a word of its own goes last,
+        // after `--`, and a flag's value that starts with `-` is joined to its flag.
+        set(&mut f, "name", "--yes");
+        set(&mut f, "agents", "-x");
+        set(&mut f, "unused", "-n");
+        let args = f.cli_args(&base);
+        assert_eq!(args[args.len() - 2..], ["--".to_owned(), "--yes".to_owned()]);
+        assert!(args.contains(&"--agent=-x".to_owned()), "{args:?}");
+        assert!(args.contains(&"--never=-n".to_owned()), "{args:?}");
     }
 }
 

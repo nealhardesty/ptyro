@@ -182,6 +182,14 @@ async fn an_agent_remembers_a_note_the_next_session_recalls_it_first_and_an_edit
     assert!(hits(&said)[0].ends_with(" · written by you (the user)"), "{said}");
     std::fs::remove_file(&mine).unwrap();
     w.eventually("the deleted file is gone", || w.found("zqbyhand").is_empty()).await;
+    // A folder of notes moved in whole is one event, and of a folder: its notes are found
+    // (review D5).
+    let aside = w.home().join("moved-in");
+    std::fs::create_dir_all(&aside).unwrap();
+    std::fs::write(aside.join("moved.md"), "# Moved\n\nzqmovedin\n").unwrap();
+    std::fs::rename(&aside, w.notes_dir().join("work/moved-in")).unwrap();
+    w.eventually("the folder moved in is read", || w.found("zqmovedin").len() == 1).await;
+    assert_eq!(w.found("zqmovedin"), ["note://work/moved-in/moved"]);
 }
 
 fn text_with(text: &str, from: &str, to: &str) -> String {
@@ -340,6 +348,18 @@ async fn the_commands_write_list_edit_sync_and_forget_notes_and_uninstall_keeps_
     assert_eq!(j["item"]["item"]["uri"], "note://work/_global/belt-tension");
     assert_eq!(j["item"]["item"]["writer"], "user");
     assert!(j["path"].as_str().unwrap().ends_with("work/_global/belt-tension.md"), "{j}");
+    // What the TUI's note form sends for a text and a title that start with `-` (review B3):
+    // the words last, after `--`, and the value joined to its flag.
+    let o =
+        w.cli(&["kb", "note", "--title=-zqdash-", "--json", "--", "-zqminus one is the offset"]);
+    assert!(o.status.success(), "{o:?}");
+    let j: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    let dashed = j["path"].as_str().unwrap().to_owned();
+    assert!(std::fs::read_to_string(&dashed).unwrap().contains("-zqminus one is the offset"));
+    assert!(
+        w.cli(&["kb", "forget", j["item"]["addr"].as_str().unwrap(), "--yes"]).status.success()
+    );
+    assert!(!std::path::Path::new(&dashed).exists());
     // With nothing to say and nobody to ask: how to say it.
     let o = w.cli(&["kb", "note"]);
     assert!(!o.status.success());
@@ -392,6 +412,36 @@ async fn the_commands_write_list_edit_sync_and_forget_notes_and_uninstall_keeps_
     assert!(String::from_utf8_lossy(&o.stdout).contains("Belt tension"), "{o:?}");
     assert_eq!(w.found("zqwarm"), ["note://work/_global/belt-tension"]);
     assert!(w.found("zqbelt").is_empty(), "the old words are gone");
+    // The file changed underneath while the editor was open (review D2): it is not written
+    // over, and what you wrote is kept aside.
+    let belt_file = w.notes_dir().join("work/_global/belt-tension.md");
+    let slow = ptyro_testkit::program::program(
+        &bin,
+        "slow-ed",
+        &format!(
+            "printf '%s\\n' '# Belt tension' '' 'zqelsewhere sixty newtons' > '{}'\nprintf '%s\\n' '# Belt tension' '' 'zqmine seventy newtons' > \"$1\"",
+            belt_file.display()
+        ),
+    );
+    let o =
+        w.d.cmd()
+            .args(["kb", "show", &belt, "--open"])
+            .env("HOME", w.home())
+            .env("EDITOR", &slow)
+            .env_remove("VISUAL")
+            .output()
+            .unwrap();
+    let said = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert_eq!(o.status.code(), Some(5), "{o:?}");
+    assert!(said.contains("changed since it was read") && said.contains("is kept in "), "{said}");
+    let aside = said.split("is kept in ").nth(1).unwrap().trim();
+    assert!(std::fs::read_to_string(aside).unwrap().contains("zqmine"), "{said}");
+    std::fs::remove_file(aside).unwrap();
+    assert!(std::fs::read_to_string(&belt_file).unwrap().contains("zqelsewhere"));
+    w.eventually("what was written elsewhere is found", || w.found("zqelsewhere").len() == 1).await;
+    assert!(w.found("zqmine").is_empty());
+    std::fs::write(&belt_file, "# Belt tension\n\nzqwarm fifty-five newtons\n").unwrap();
+    w.eventually("the note is as it was", || w.found("zqwarm").len() == 1).await;
     // `kb show`: what is kept of it.
     let shown = w.out(&["kb", "show", &belt]);
     assert!(

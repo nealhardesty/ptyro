@@ -14,6 +14,15 @@ use ptyro_protocol::{ClientInfo, ClientKind, PROTO, decode};
 use ptyro_protocol::{ClientMsg, Encoding, Request, ServerMsg, encode};
 
 const BUDGET: Duration = Duration::from_millis(500);
+
+/// [`BUDGET`], unless a test gives the daemon longer (`PTYRO_TEST_HOOK_BUDGET_MS`, read by
+/// debug builds only): an end-to-end test of what a hook is answered must not depend on a
+/// loaded machine answering within half a second.
+fn budget() -> Duration {
+    ptyro_core::test_knob("PTYRO_TEST_HOOK_BUDGET_MS")
+        .and_then(|ms| ms.parse().ok())
+        .map_or(BUDGET, Duration::from_millis)
+}
 /// A held permission prompt (`[remote] approval_wait`, capped by the hook's own 3600 s).
 const APPROVAL_BUDGET: Duration = Duration::from_secs(3600);
 const MAX_STDIN: u64 = 4 * 1024 * 1024;
@@ -112,7 +121,7 @@ pub fn hook(adapter: &str, event: &str, args: &[String]) -> i32 {
     // A Claude permission prompt may be held for a phone's answer (M9.5); the daemon bounds it.
     let budget = match event {
         "PermissionRequest" if adapter == "claude" => APPROVAL_BUDGET,
-        _ => BUDGET,
+        _ => budget(),
     };
     let req = Request::Hook { session, adapter: adapter.into(), event: event.into(), payload, env };
     // The daemon may answer for the agent: a phone's answer to its permission prompt.

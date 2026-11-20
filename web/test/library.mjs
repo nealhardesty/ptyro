@@ -3,7 +3,7 @@
 // are in a text, an address's parts, what forgetting names, and the daemon's question.
 //   node web/test/library.mjs
 import assert from "node:assert/strict";
-import { PAGE, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, offered, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, searching, shellsKept, snippetParts, split, tagsOf, when, wroteBy } from "../dist/libkit.js";
+import { PAGE, SHELL_OUTPUT_ASK, TIERS, asksFirst, byProject, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, keepDraft, kindsOffered, lit, matched, noDraft, noFilters, noteDraft, noteRequest, notesRequest, offered, planLine, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, saveRequest, searching, shellsKept, snippetParts, split, tagsOf, tiersOf, when, wroteBy } from "../dist/libkit.js";
 
 const DAY = 86_400_000;
 const f = (o = {}) => ({ ...noFilters(), ...o });
@@ -27,14 +27,19 @@ assert.ok(!("machine" in request(f({ machine: "here" }), 0)));
 // Chats have no history here.
 assert.equal(request(f({ kind: "chat" }), 0), null);
 // A search: the box's words, `since:` in them, the kind and the project beside them; every
-// linked machine too unless one is picked; more within a row's history.
+// linked machine too unless one is picked; within a row's history, that row's alone.
 assert.deepEqual(request(f({ query: "  retry policy ", kind: "comment", project: "p1", since: "7d" }), 0),
   { t: "kb_search", query: "retry policy since:7d", project: "p1", kinds: ["comment"], limit: 30, machines: true });
 assert.deepEqual(request(f({ query: "retry", machine: "laptop2" }), 0),
   { t: "kb_search", query: "retry", project: null, kinds: [], limit: 30, machines: false, machine: "laptop2" });
 assert.equal(request(f({ query: "retry", machine: "here" }), 0).machine, "here");
 assert.equal(request(f({ query: "retry", kind: "chat" }), 0).t, "kb_search", "chats are searched");
-assert.equal(request(f({ query: "retry", of: { t: "session", id: "s1", name: "x" } }), 0).limit, 100);
+// Review D3: the computer keeps a search within a row's history to that row (the page used to
+// filter what was found against the first page of the history, and said "Nothing matches").
+assert.deepEqual(request(f({ query: "retry", of: { t: "session", id: "s1", name: "x" } }), 0),
+  { t: "kb_search", query: "retry", project: null, kinds: [], limit: 30, machines: true, session: "s1" });
+assert.equal(request(f({ query: "retry", of: { t: "worktree", id: "w1", name: "x" } }), 0).worktree, "w1");
+assert.ok(!("session" in request(f({ query: "retry" }), 0)) && !("worktree" in request(f({ query: "retry" }), 0)));
 // Who wrote it: the history asks for that writer's; a search says it in the query's own word.
 assert.equal(request(f({ wrote: "you" }), 0).writer, "user");
 assert.equal(request(f({ wrote: "agent" }), 0).writer, "agent");
@@ -58,11 +63,49 @@ assert.deepEqual(tagsOf(""), []);
 assert.deepEqual(noteRequest({ text: "we chose X" }), { t: "kb_note", text: "we chose X" });
 assert.deepEqual(noteRequest({ text: "x", title: "X", project: "p1", profile: "work", tags: "db decision" }),
   { t: "kb_note", text: "x", title: "X", project: "p1", profile: "work", tags: ["db", "decision"] });
+// Review D2: a note edited in the page is saved from the text it was read as, and its file
+// changing on the computer meanwhile is never written over without a choice.
+{
+  const file = (text, version) => ({ text, version });
+  // Opened: the draft is the file.
+  let { draft, stale } = noteDraft(noDraft(), "k:1", file("one", "v1"));
+  assert.deepEqual([draft, stale], [{ of: "k:1", text: "one", base: "v1", from: "one" }, false]);
+  assert.deepEqual(saveRequest("ID", { ...draft, text: "mine" }), { t: "kb_note", addr: "ID", text: "mine", base: "v1" });
+  // The same file again (the list was refreshed): nothing moves, typed or not.
+  assert.equal(noteDraft({ ...draft, text: "mine" }, "k:1", file("one", "v1")).draft.text, "mine");
+  // The file changed and nothing was typed: the page follows it.
+  ({ draft, stale } = noteDraft(draft, "k:1", file("two", "v2")));
+  assert.deepEqual([draft.text, draft.base, stale], ["two", "v2", false]);
+  // It changed under what was typed: the draft is kept, still from the old text, and said stale.
+  const typed = { ...draft, text: "two and mine" };
+  ({ draft, stale } = noteDraft(typed, "k:1", file("three", "v3")));
+  assert.deepEqual([draft.text, draft.base, stale], ["two and mine", "v2", true]);
+  // Keep mine: saved from the file as it is now, knowingly over it; and no longer stale.
+  const kept = keepDraft(draft, file("three", "v3"));
+  assert.deepEqual(saveRequest("ID", kept), { t: "kb_note", addr: "ID", text: "two and mine", base: "v3" });
+  assert.equal(noteDraft(kept, "k:1", file("three", "v3")).stale, false);
+  // Another note: its own draft. A computer that says no version is written to as before.
+  assert.equal(noteDraft(kept, "k:2", file("other", "v9")).draft.text, "other");
+  assert.deepEqual(saveRequest("ID", noteDraft(noDraft(), "k:1", { text: "x" }).draft), { t: "kb_note", addr: "ID", text: "x" });
+}
 // Reading a folder: its path, and only what was changed from how the form stood.
-assert.deepEqual(ingestRequest({ path: " ~/notes ", comments: true, code: false, commits: true, once: false }),
+assert.deepEqual(ingestRequest({ path: " ~/notes ", comments: true, code: false, commits: true, once: false }, TIERS),
   { t: "kb_ingest", spec: { path: "~/notes", options: {} } });
-assert.deepEqual(ingestRequest({ path: "/src/docs", name: "docs", project: "feeder", profile: "work", include: "*.md, guides/**", exclude: "drafts", comments: false, code: true, commits: false, once: true }),
+assert.deepEqual(ingestRequest({ path: "/src/docs", name: "docs", project: "feeder", profile: "work", include: "*.md, guides/**", exclude: "drafts", comments: false, code: true, commits: false, once: true }, TIERS),
   { t: "kb_ingest", spec: { path: "/src/docs", name: "docs", project: "feeder", profile: "work", options: { include: ["*.md", "guides/**"], exclude: ["drafts"], comments: false, code: true, commits: false, once: true } } });
+// Review B2: the switches start where the settings have them, whatever those are: left alone
+// they say nothing, moved they say the opposite of the setting.
+{
+  const odd = tiersOf([{ key: "kb.comments", value: false }, { key: "kb.code", value: "true" }, { key: "kb.commits", value: false }, { key: "kb.shell", value: "off" }]);
+  assert.deepEqual(odd, { comments: false, code: true, commits: false });
+  assert.deepEqual(tiersOf([]), TIERS, "a key the list lacks is as built in");
+  assert.equal(tiersOf(null), null);
+  assert.deepEqual(ingestRequest({ path: "/x", comments: false, code: true, commits: false }, odd).spec.options, {});
+  assert.deepEqual(ingestRequest({ path: "/x", comments: true, code: false, commits: true }, odd).spec.options, { comments: true, code: false, commits: true });
+  // Settings this device can't read, or another computer's: what the form shows is what is asked.
+  assert.deepEqual(ingestRequest({ path: "/x", comments: true, code: false, commits: true }, null).spec.options, { comments: true, code: false, commits: true });
+  assert.deepEqual(ingestRequest({ path: "/x", machine: "laptop2", comments: false, code: true, commits: false }, odd).spec.options, { comments: false, code: true, commits: false });
+}
 // On a linked machine: named in the request; this computer needs no name.
 assert.equal(ingestRequest({ path: "/x", machine: "laptop2" }).machine, "laptop2");
 assert.ok(!("machine" in ingestRequest({ path: "/x", machine: "" })));
@@ -191,3 +234,12 @@ assert.deepEqual(question("Forget 2 items: session “a”, session “b”? The
 assert.equal(question("no question here"), null);
 
 console.log("ok");
+
+// Review D7: keeping what commands print is asked first wherever the page switches it on: the
+// Library's switch and the settings' pick say the same words.
+{
+  const toOutput = shellsKept("commands").switches.find((w) => w.to === "output");
+  assert.equal(toOutput.ask, SHELL_OUTPUT_ASK);
+  assert.ok(asksFirst("kb.shell", "output", "commands") && asksFirst("kb.shell", "output", "off"));
+  assert.ok(!asksFirst("kb.shell", "output", "output") && !asksFirst("kb.shell", "commands", "output") && !asksFirst("kb.sessions", "output", ""));
+}

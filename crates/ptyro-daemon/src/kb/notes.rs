@@ -49,6 +49,14 @@ pub(crate) struct NoteAsk {
     pub tags: Vec<String>,
     pub replaces: Option<String>,
     pub addr: Option<String>,
+    pub base: Option<String>,
+}
+
+/// Whether an event in the notes folder may have changed what it holds: anything but a file
+/// or a folder being opened (which reading it is).
+fn counts(kind: &notify::EventKind) -> bool {
+    use notify::event::{AccessKind, EventKind};
+    !matches!(kind, EventKind::Access(AccessKind::Open(_) | AccessKind::Read))
 }
 
 /// One note's file, as the folder has it.
@@ -162,20 +170,17 @@ impl Daemon {
             tracing::warn!("notes folder {}: {e}", root.display());
         }
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
-        // (Opening a folder to list it is itself an event where opens are reported (inotify):
-        // only what isn't a folder that is there counts, or reading would never end.)
-        let watcher = notify_debouncer_mini::new_debouncer(
-            DEBOUNCE,
-            move |res: notify_debouncer_mini::DebounceEventResult| {
-                if let Ok(events) = res
-                    && events.iter().any(|e| !e.path.is_dir())
-                {
-                    let _ = tx.send(());
-                }
-            },
-        )
+        // Everything counts but an open: where opens are reported (inotify), listing the
+        // folder and reading a note are events themselves, and reading would never end. (By
+        // the event's kind, not by what its path is: a folder moved in whole is one event,
+        // of a folder, and its notes are read.)
+        let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if res.is_ok_and(|e| counts(&e.kind)) {
+                let _ = tx.send(());
+            }
+        })
         .and_then(|mut w| {
-            w.watcher().watch(&root, notify::RecursiveMode::Recursive)?;
+            notify::Watcher::watch(&mut w, &root, notify::RecursiveMode::Recursive)?;
             Ok(w)
         });
         match watcher {
@@ -196,7 +201,22 @@ impl Daemon {
                 loop {
                     tokio::select! {
                         changed = rx.recv() => match changed {
-                            Some(()) => break,
+                            // Read once the folder is quiet (an editor's save is several
+                            // events, and so is a folder being copied in), and after a few
+                            // seconds whether it is or not.
+                            Some(()) => {
+                                for _ in 0..6 {
+                                    tokio::time::sleep(DEBOUNCE).await;
+                                    let mut more = false;
+                                    while rx.try_recv().is_ok() {
+                                        more = true;
+                                    }
+                                    if !more {
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
                             // (Not watched: the settings and `kb sync` still read it.)
                             None => std::future::pending::<()>().await,
                         },
@@ -372,6 +392,25 @@ impl Daemon {
             }
             let path = self.kb_note_path(&item.uri)?;
             let _one = self.kb.notes_lock.lock().await;
+            // Written from the text it was read as: a file that is no longer that text was
+            // edited elsewhere meanwhile (an editor on the computer, another page), and is
+            // not written over.
+            if let Some(base) = &ask.base {
+                let now = std::fs::read_to_string(&path).ok();
+                if now.as_deref().map(note::version).as_ref() != Some(base) {
+                    return Err(Error::new(
+                        ErrorCode::Conflict,
+                        match now {
+                            Some(_) => {
+                                "the note's file changed since it was read (it was edited elsewhere): nothing was written. Read it again, then make your change"
+                            }
+                            None => {
+                                "the note's file is gone since it was read: nothing was written"
+                            }
+                        },
+                    ));
+                }
+            }
             write(&path, &ask.text).map_err(|e| io("can't write", &path, e))?;
             return self.kb_noted(&db, item.uri.clone(), path, Some(&item), None).await;
         }
@@ -610,7 +649,8 @@ impl Daemon {
         let path = self.kb_note_path(&item.uri)?;
         let text = std::fs::read_to_string(&path).map_err(|e| io("can't read", &path, e))?;
         let item = self.kb_listed(&db, vec![item]).await?.remove(0);
-        Ok(Reply::KbNoteText { item, text, path: path.display().to_string() })
+        let version = note::version(&text);
+        Ok(Reply::KbNoteText { item, text, path: path.display().to_string(), version })
     }
 }
 

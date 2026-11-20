@@ -127,9 +127,13 @@ impl Daemon {
                 machines,
                 machine,
                 profile: _,
+                session,
+                worktree,
             } => {
                 // Where to look: one machine by name (the option, or the query's `machine:`),
-                // every linked one too (`machines`), else here.
+                // every linked one too (`machines`), else here. A session or a worktree is
+                // one machine's own: with one named, only a machine that is named is asked.
+                let machines = machines && session.is_none() && worktree.is_none();
                 let (query, named) = ptyro_core::chats::take_machine(&query);
                 let only = match machine.or(named) {
                     Some(m) => Some(self.kb_machine(&m)?),
@@ -156,6 +160,8 @@ impl Daemon {
                         before_ms,
                         limit: limit.unwrap_or(0),
                         here,
+                        session: session.clone(),
+                        worktree: worktree.clone(),
                     };
                     match self.kb_search(ask, scope).await {
                         Ok(mut found) => {
@@ -187,6 +193,8 @@ impl Daemon {
                     machines: false,
                     machine: None,
                     profile: scope.and_then(|s| s.profile.clone()),
+                    session,
+                    worktree,
                 };
                 let (theirs, left_out) = self.kb_search_far(&far, &ask, alone).await?;
                 if let (Some(e), true) = (missing, theirs.is_empty()) {
@@ -319,9 +327,17 @@ impl Daemon {
                 }
                 Ok(Reply::KbStatus { status })
             }
-            Request::KbNote { text, title, project, profile, tags, replaces, addr } => {
-                let ask =
-                    super::notes::NoteAsk { text, title, project, profile, tags, replaces, addr };
+            Request::KbNote { text, title, project, profile, tags, replaces, addr, base } => {
+                let ask = super::notes::NoteAsk {
+                    text,
+                    title,
+                    project,
+                    profile,
+                    tags,
+                    replaces,
+                    addr,
+                    base,
+                };
                 self.kb_note(ask, caller, scope).await
             }
             Request::KbNotes { project, writer } => {
@@ -362,9 +378,6 @@ impl Daemon {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) mod tests;
 
 impl Daemon {
     /// `KbForget` (§25.12): the items the addresses name and those the query finds. Unless
@@ -635,3 +648,7 @@ impl Daemon {
         });
     }
 }
+
+// (Last in the file: `scripts/unwrap-ratchet.py` stops counting at the first `#[cfg(test)]`.)
+#[cfg(test)]
+pub(crate) mod tests;

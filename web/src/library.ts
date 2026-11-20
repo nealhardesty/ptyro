@@ -20,7 +20,7 @@ import { conn, host } from "./conn.js";
 import { data, can } from "./data.js";
 import { Cache, actions, ago, ask, badge, bar, confirm, enc, errText, facts, form, go, h, menu, pending, profileChoices, row, safeDecode, sheet, tipOf, ui, views } from "./kit.js";
 import type { Child, Field } from "./kit.js";
-import { HISTORY_SINCE, PAGE, SINCE, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, kindsOffered, lit, matched, noFilters, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, offered, searching, shellsKept, snippetParts, split, when, wroteBy } from "./libkit.js";
+import { HISTORY_SINCE, PAGE, SINCE, TIERS, WROTE, byProject, bytes, clock, conversation, day, forgetAddr, found, historyRequest, historyText, ingestRequest, keepDraft, kindsOffered, lit, matched, noDraft, noFilters, noteDraft, noteRequest, notesRequest, planLine, plural, question, request, rootBad, rootBusy, rootHolds, rootReads, rootState, rootsRequest, offered, saveRequest, searching, shellsKept, snippetParts, split, tiersOf, when, wroteBy } from "./libkit.js";
 import type { Filters, Of, Offer, Part, Root, ShellSwitch } from "./libkit.js";
 
 const ACTIONS = {
@@ -91,7 +91,7 @@ const docs = new Cache<Doc>(async (key) => await conn.request(JSON.parse(key)) a
 
 /// The notes, by what was asked; and a note's file, by its address.
 const notes = new Cache<Listed[]>(async (key) => (await conn.request(JSON.parse(key))).items as Listed[]);
-interface NoteFile { item: Listed; text: string; path: string }
+interface NoteFile { item: Listed; text: string; path: string; version?: string }
 const files = new Cache<NoteFile>(async (addr) => await conn.request({ t: "kb_note_read", addr }) as NoteFile);
 
 const about = (...parts: (string | null | undefined)[]): string => parts.filter(Boolean).join(" · ");
@@ -148,9 +148,8 @@ function open(addr: string, words: string[] = []): void {
   go(`#/library/k/${enc(addr)}`);
 }
 
-function hitRows(r: Extract<Rows, { t: "hits" }>, ofItems: Set<string> | null): Child[] {
-  // A row's history: of what was found, only that session's or worktree's.
-  const hits = ofItems ? r.hits.filter((x) => ofItems.has(x.item)).slice(0, 30) : r.hits;
+function hitRows(r: Extract<Rows, { t: "hits" }>): Child[] {
+  const hits = r.hits;
   const notes = [
     r.wordsOnly ? h("p", { class: "sub" }, `(${r.wordsOnly})`) : null,
     ...r.leftOut.map((m) => h("p", { class: "sub" }, `(not searched: ${m})`)),
@@ -222,12 +221,8 @@ function listRows(s: Status): Child[] {
     if (r.code === "needs_confirmation") return [h("p", { class: "sub" }, `${r.text}. `, can("full") ? h("button", { class: "small", title: tipOf("chat.meaning"), onclick: () => void meaningOn() }, "Switch it on") : null)];
     return [h("p", { class: "sub" }, r.text)];
   }
-  if (r.t === "hits") {
-    // (Which items a row's history holds: the history asked for before the typing began.)
-    const histKey = f.of ? keyFor({ ...f, query: "" }) : null;
-    const hist = histKey ? lists.get(histKey) : undefined;
-    return hitRows(r, f.of ? new Set(hist?.t === "items" ? hist.items.map((i) => i.item.id) : []) : null);
-  }
+  // (Within a row's history the computer itself keeps a search to that row: `request`.)
+  if (r.t === "hits") return hitRows(r);
   const items = [...r.items, ...(state.olderFor === key ? state.older : [])];
   const more = r.items.length >= PAGE && (state.olderFor !== key || state.more);
   return [...historyRows(items, s), more ? h("button", { class: "small", title: tip("kb.recent"), onclick: () => void older(key, items) }, "Older…") : null];
@@ -346,9 +341,12 @@ function machineField(hint: string): Field[] {
   return [{ key: "machine", label: "On", type: "select", options: [["", "This computer"], ...machines.map((m): [string, string] => [m, m])], value: onMachine(), hint }];
 }
 
-/// `kb.ingest`: everything `ptyro ingest PATH` takes.
+/// `kb.ingest`: everything `ptyro ingest PATH` takes. The switches start where the computer's
+/// settings have them (Knowledge: comments, code, commits), where this device may read them.
 async function ingest(): Promise<void> {
   const profiles = await profilesHere();
+  const start = conn.scope === "full" ? tiersOf((await host("settings.view", { scope: "user" }).catch(() => null))?.entries) : null;
+  const shown = start ?? TIERS;
   form("Read a folder", [
     { key: "path", label: "Folder or file", required: true, placeholder: "~/notes", hint: "A whole path on the computer, or one under ~. It is read now, and looked at again as it changes" },
     { key: "name", label: "Name", placeholder: "the folder's name", hint: "What this list calls it" },
@@ -356,13 +354,13 @@ async function ingest(): Promise<void> {
     { key: "profile", label: "Seen by", type: "select", options: [["", "Every profile's agents"], ...profiles], value: "", hint: "Whose agents may find it with recall (you always find it)" },
     { key: "include", label: "Only", placeholder: "docs/**, *.md", hint: "Only files that match: globs, comma separated" },
     { key: "exclude", label: "Not", placeholder: "drafts", hint: "Not the files that match" },
-    { key: "comments", label: "Source comments", type: "check", value: true },
-    { key: "code", label: "Source code too (it makes the knowledge base large)", type: "check", value: false },
-    { key: "commits", label: "Commit messages", type: "check", value: true },
+    { key: "comments", label: "Source comments", type: "check", value: shown.comments },
+    { key: "code", label: "Source code too (it makes the knowledge base large)", type: "check", value: shown.code },
+    { key: "commits", label: "Commit messages", type: "check", value: shown.commits },
     { key: "once", label: "Only now: never look at it again", type: "check", value: false },
     ...machineField("The computer whose folder it is: read there, into its knowledge base"),
   ], "Read it", async (v) => {
-    const r = await conn.request(ingestRequest(v));
+    const r = await conn.request(ingestRequest(v, start));
     ui.toast(`${r.root.name}: ${planLine(r.plan)}`);
     // Shown where it was added.
     if (typeof v.machine === "string") state.f.machine = v.machine;
@@ -554,8 +552,8 @@ function notesView(): HTMLElement {
   return h("div", {}, ui.header("Library", "#/more"), h("main", { class: "stack library", title: tip("kb.notes") }, ...body));
 }
 
-/// The text being edited, and the note it is of (kept while the page redraws).
-const draft = { of: "", text: "" };
+/// The note being edited (kept while the page redraws, and while its file is asked for again).
+let draft = noDraft();
 
 /// A note, edited in the page: its file as it is (its header too), Save, and ⋯.
 function noteView(addr: string): HTMLElement {
@@ -563,18 +561,34 @@ function noteView(addr: string): HTMLElement {
   const n = files.get(addr);
   if (wait || !n) return h("div", {}, ui.header("Note", "#/library/notes"), h("main", { class: "stack library" }, wait));
   const i = n.item;
-  if (draft.of !== addr) [draft.of, draft.text] = [addr, n.text];
+  // The file as it is now: a draft with no edits follows it; one with edits is kept, and the
+  // page says the file changed under it.
+  const now = noteDraft(draft, addr, n);
+  draft = now.draft;
   const box = h("textarea", { class: "kb-note", rows: 16, "aria-label": "The note", spellcheck: "false", autocapitalize: "off", title: tip("kb.notes") });
   box.value = draft.text;
   box.readOnly = !can("control");
   box.addEventListener("input", () => { draft.text = box.value; });
   const save = async (): Promise<void> => {
     if (!box.value.trim()) { ui.toast("An empty note is not saved: ⋯ → Delete… removes it"); return; }
-    const r = await ask({ t: "kb_note", addr: i.item.id, text: box.value }, "Saved");
-    if (!r) return;
-    draft.of = "";
+    if (now.stale) { ui.toast("This note changed on the computer: choose above which text to keep"); return; }
+    draft.text = box.value;
+    try {
+      await conn.request(saveRequest(i.item.id, draft));
+    } catch (e) {
+      // Changed on the computer since it was read: nothing was written. Its file is asked for
+      // again, and the page then says so, with the draft kept.
+      if ((e as { code?: string }).code === "conflict") { ui.toast("Not saved: this note changed on the computer since you opened it"); files.refresh(addr); } else ui.fail(errText(e));
+      return;
+    }
+    ui.toast("Saved");
+    draft = noDraft();
     notesChanged();
   };
+  const changed = now.stale ? h("div", { class: "banner warn kb-note-changed" },
+    h("p", {}, "This note changed on the computer while you were editing it (an editor there, an agent, another page). Nothing is saved over it until you choose."),
+    bar(h("button", { class: "small", onclick: () => { draft = noDraft(); ui.render(); } }, "Load it as it is now (drop my changes)"),
+      h("button", { class: "small", onclick: () => { draft = keepDraft(draft, n); ui.render(); } }, "Keep mine (Save then writes over it)"))) : null;
   const more = (): void => void menu(titleOf(i), [
     { title: tip("kb.show"), label: "Read it", hint: "As it is kept and found", run: () => open(i.addr) },
     { title: tip("kb.show"), label: "Copy its address", hint: i.addr, run: () => copy(i.addr, "its address") },
@@ -584,6 +598,7 @@ function noteView(addr: string): HTMLElement {
     ui.header(titleOf(i), "#/library/notes", h("button", { class: "icon", "aria-label": "More", title: tip("kb.notes"), onclick: more }, "⋯")),
     h("main", { class: "stack library", title: tip("kb.notes") },
       h("p", { class: "sub" }, about("note", i.project_name ?? "global", `written by ${wroteBy(i.item)}`, new Date(when(i.item)).toLocaleString(), i.addr)),
+      changed,
       box,
       bar(can("control") ? h("button", { class: "primary", title: tip("kb.notes"), onclick: () => void save() }, "Save") : h("span", { class: "sub" }, "read only"),
         h("span", { class: "sub" }, n.path))));
@@ -714,6 +729,10 @@ conn.listeners.add((msg: any) => {
   const m = /^#\/library\/k\/(.+)$/.exec(location.hash);
   if (m) docs.refresh(docKey(safeDecode(m[1])));
   if (location.hash === "#/library/notes") notes.refresh(JSON.stringify(notesRequest(state.f)));
+  // A note open in the editor: its file is asked for again (the page follows it, or says it
+  // changed under what was typed).
+  const note = /^#\/library\/note\/(.+)$/.exec(location.hash);
+  if (note) files.refresh(safeDecode(note[1]));
 });
 
 views.set("library", (rest) => (rest.startsWith("k/") ? readerView(safeDecode(rest.slice(2)))

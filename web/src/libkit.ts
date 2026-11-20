@@ -41,8 +41,9 @@ export function request(f: Filters, now: number, before?: number): Record<string
   if (searching(f.query)) {
     const query = f.query.trim() + (f.since ? ` since:${f.since}` : "") + (f.wrote ? ` wrote:${f.wrote}` : "");
     // A search asks every linked machine that is up too, unless one is picked. Within a row's
-    // history it asks for more: only that row's are kept of what is found.
-    return { t: "kb_search", query, project, kinds: f.kind ? [f.kind] : [], limit: f.of ? 100 : 30, machines: !f.machine, ...(f.machine ? { machine: f.machine } : {}) };
+    // history it asks for that session's or worktree's alone (the computer filters: what is
+    // found is the row's, however much else holds the words).
+    return { t: "kb_search", query, project, kinds: f.kind ? [f.kind] : [], limit: 30, machines: !f.machine, ...(f.machine ? { machine: f.machine } : {}), ...(f.of ? { [f.of.t]: f.of.id } : {}) };
   }
   if (f.kind && KINDS[f.kind] === null) return null;
   const far = f.machine && f.machine !== "here" ? { machine: f.machine } : {};
@@ -82,6 +83,31 @@ export function noteRequest(v: { text: string; title?: string; project?: string;
   const tags = tagsOf(v.tags ?? "");
   return { t: "kb_note", text: v.text, ...(v.title ? { title: v.title } : {}), ...(v.project ? { project: v.project } : {}), ...(v.profile ? { profile: v.profile } : {}), ...(tags.length ? { tags } : {}) };
 }
+
+/// A note being edited in the page: the note it is of, what the box holds, and the file it
+/// was started from (its text, and the version the computer knows that text by).
+export interface NoteDraft { of: string; text: string; base: string; from: string }
+export const noDraft = (): NoteDraft => ({ of: "", text: "", base: "", from: "" });
+
+/// The draft for the note at `addr`, now that its file is `file`. A draft of another note
+/// starts over from the file. The same note's file changed on the computer since the draft
+/// was started (an editor there, another page): a draft with nothing typed in it follows the
+/// file; one with edits is kept, and `stale` says the file moved under it (saving would
+/// write over what changed, so the computer refuses until the reader chooses).
+export function noteDraft(d: NoteDraft, addr: string, file: { text: string; version?: string }): { draft: NoteDraft; stale: boolean } {
+  const fresh = { of: addr, text: file.text, base: file.version ?? "", from: file.text };
+  if (d.of !== addr) return { draft: fresh, stale: false };
+  if (file.text === d.from) return { draft: d, stale: false };
+  return d.text === d.from ? { draft: fresh, stale: false } : { draft: d, stale: true };
+}
+
+/// The draft once the reader chose to keep it over the file as it is now: saved from that
+/// file's version, knowingly over it.
+export const keepDraft = (d: NoteDraft, file: { text: string; version?: string }): NoteDraft => ({ ...d, base: file.version ?? "", from: file.text });
+
+/// `kb_note` for a note written again: the whole file, and the version it was read as (none
+/// from a computer that says none: it writes as it always did).
+export const saveRequest = (id: string, d: NoteDraft): Record<string, unknown> => ({ t: "kb_note", addr: id, text: d.text, ...(d.base ? { base: d.base } : {}) });
 
 /// Who wrote an item, in a word: `you`, or the agent.
 export const wroteBy = (i: { writer?: string | null; agent?: string | null }): string => (i.writer === "user" ? "you" : i.agent ?? i.writer ?? "");
@@ -270,17 +296,38 @@ export function historyText(p: { found: number; known: number; old: number; chat
   return `${plural(p.found, "conversation")} in your agents' folders: ${parts.filter(([n]) => n > 0).map(([n, what]) => `${n} ${what}`).join(", ")}`;
 }
 
-/// `kb_ingest`, from the form's values: what `ptyro ingest PATH` takes. A switch left as it
-/// stands by default is not sent (the computer's own settings then decide).
-export function ingestRequest(v: Record<string, unknown>): object {
+/// What the settings say is read of a source file (`kb.comments`, `kb.code`, `kb.commits`):
+/// where the ingest form's switches start.
+export interface Tiers { comments: boolean; code: boolean; commits: boolean }
+/// The built-in settings: where the switches start when the computer's can't be read.
+export const TIERS: Tiers = { comments: true, code: false, commits: true };
+
+/// The tiers from the settings as `settings.view` lists them (each key's value in effect);
+/// `null` when they can't be read (this device may not read the config).
+export function tiersOf(entries: { key: string; value: unknown }[] | null | undefined): Tiers | null {
+  if (!entries) return null;
+  const on = (key: keyof Tiers): boolean => {
+    const e = entries.find((x) => x.key === `kb.${key}`);
+    return e ? String(e.value) === "true" : TIERS[key];
+  };
+  return { comments: on("comments"), code: on("code"), commits: on("commits") };
+}
+
+/// `kb_ingest`, from the form's values: what `ptyro ingest PATH` takes. A switch (comments,
+/// code, commits) says something only when it was moved from where the settings had it
+/// (`start`): one left as it stood leaves the settings deciding. Where the settings are not
+/// known (`start` is `null`: this device can't read them), or are another computer's (a
+/// machine is picked), every switch says what it shows.
+export function ingestRequest(v: Record<string, unknown>, start: Tiers | null = null): object {
   const text = (k: string): string | undefined => (typeof v[k] === "string" && (v[k] as string).trim() ? (v[k] as string).trim() : undefined);
   const globs = (k: string): string[] => (text(k) ?? "").split(",").map((g) => g.trim()).filter(Boolean);
   const options: Record<string, unknown> = {};
   if (globs("include").length) options.include = globs("include");
   if (globs("exclude").length) options.exclude = globs("exclude");
-  if (v.comments === false) options.comments = false;
-  if (v.code === true) options.code = true;
-  if (v.commits === false) options.commits = false;
+  const known = far(text("machine")).machine ? null : start;
+  for (const k of ["comments", "code", "commits"] as const) {
+    if (typeof v[k] === "boolean" && v[k] !== known?.[k]) options[k] = v[k];
+  }
   if (v.once === true) options.once = true;
   const spec: Record<string, unknown> = { path: text("path") ?? "", options };
   for (const k of ["name", "project", "profile"]) if (text(k)) spec[k] = text(k);
@@ -309,6 +356,16 @@ export function offered(inject: boolean | undefined, offers: Offer[] | undefined
   return { says, rows };
 }
 
+/// What is asked before `kb.shell` becomes `output`, wherever the page switches it (the
+/// Library's Sources, and Settings → Knowledge → shell): the one setting that stores what is
+/// on your terminal is never switched on by one tap.
+export const SHELL_OUTPUT_ASK: [title: string, text: string, yes: string] = ["Keep what your commands print?",
+  "What each command prints in a shell is then stored in the knowledge base beside its command line: the first 2 KiB and the last 6 KiB of it, with tokens and passwords redacted, for 30 days unless the settings say otherwise. This is the one place where what is on your terminal is stored. Never kept: a private shell, a command typed with a space before it, what a full-screen program (an editor, a pager) shows, and anything a command shows that you type into while it runs (a password prompt, a REPL, ssh).",
+  "Keep it"];
+
+/// Whether setting `key` to `value` is that switch: asked first, unless it is `output` already.
+export const asksFirst = (key: string, value: string, current: unknown): boolean => key === "kb.shell" && value === "output" && current !== "output";
+
 /// What is kept of your shells (`kb.shell`: off, commands, output), in a sentence, and the
 /// switches that change it: the commands first, what they print second and only where the
 /// commands are kept. `null`: a daemon from before shells were kept.
@@ -322,9 +379,7 @@ export function shellsKept(shell: string | null | undefined): { says: string; sw
     says: "Shell commands are kept, not what they print.",
     switches: [{ ...off, label: "Stop keeping commands" }, {
       label: "Keep what they print too…", to: "output", said: "What shell commands print is kept from here on",
-      ask: ["Keep what your commands print?",
-        "What each command prints in a shell is then stored in the knowledge base beside its command line: the first 2 KiB and the last 6 KiB of it, with tokens and passwords redacted, for 30 days unless the settings say otherwise. This is the one place where what is on your terminal is stored. Never kept: a private shell, a command typed with a space before it, what a full-screen program (an editor, a pager) shows, and anything a command shows that you type into while it runs (a password prompt, a REPL, ssh).",
-        "Keep it"],
+      ask: SHELL_OUTPUT_ASK,
     }],
   };
   if (shell === "output") return {

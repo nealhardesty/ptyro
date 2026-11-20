@@ -58,6 +58,8 @@ fn search(query: &str) -> Request {
         machines: false,
         machine: None,
         profile: None,
+        session: None,
+        worktree: None,
     }
 }
 
@@ -70,6 +72,7 @@ fn note(text: &str) -> Request {
         tags: Vec::new(),
         replaces: None,
         addr: None,
+        base: None,
     }
 }
 

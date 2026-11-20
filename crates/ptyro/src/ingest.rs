@@ -16,7 +16,7 @@ use serde_json::json;
 
 use crate::cli::{Ctx, ago, unexpected};
 use crate::complete;
-use crate::kb::ask;
+use crate::kb::{ask, printable, printable_lines};
 
 /// How often a command that waits for a read asks how far it is.
 const POLL: Duration = Duration::from_millis(250);
@@ -91,8 +91,17 @@ async fn roots(
 /// A line that is written over while something is read, on a terminal only.
 fn progress(text: &str) {
     if std::io::stderr().is_terminal() {
-        eprint!("\r\x1b[K{text}");
+        eprint!("\r\x1b[K{}", printable(text));
     }
+}
+
+/// A file that was not kept (`uri`), as the path it has under the root at `root`: `None`
+/// when it is not under it (by whole names: `/a/docs2/x` is not under `/a/doc`). The root
+/// itself, a file that was given, is its own whole path.
+fn under(root: &str, uri: &str) -> Option<String> {
+    let path = std::path::Path::new(uri.strip_prefix("file://")?);
+    let rel = path.strip_prefix(root).ok()?;
+    Some(if rel.as_os_str().is_empty() { uri.to_owned() } else { rel.display().to_string() })
 }
 
 fn progress_end() {
@@ -204,33 +213,36 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
                 eprintln!(
                     "{} is read already, as {} ({}): reading it again",
                     path.display(),
-                    root.root.name,
-                    root.root.path
+                    printable(&root.root.name),
+                    printable(&root.root.path)
                 );
             }
-            eprintln!("{} ({}): {}", root.root.name, root.root.path, plan.line());
+            let line = format!("{} ({}): {}", root.root.name, root.root.path, plan.line());
+            eprintln!("{}", printable(&line));
         }
         let all = settled(ctx, &c, std::slice::from_ref(&root.root.id), &a.machine).await?;
         let Some(now) = all.into_iter().find(|r| r.root.id == root.root.id) else {
-            return Err(Error::new(ErrorCode::NotFound, format!("{} is gone", root.root.name)));
+            let name = printable(&root.root.name);
+            return Err(Error::new(ErrorCode::NotFound, format!("{name} is gone")));
         };
+        let name = printable(&now.root.name);
         if a.json {
             out.push(json!({ "root": now, "plan": plan }));
             continue;
         }
         match (&now.root.state, &now.root.error) {
             (RootState::Error | RootState::Missing, e) => {
+                let why = e.as_deref().map(printable);
                 eprintln!(
-                    "{} could not be read: {}",
-                    now.root.name,
-                    e.as_deref().unwrap_or("`ptyro kb` says more")
+                    "{name} could not be read: {}",
+                    why.as_deref().unwrap_or("`ptyro kb` says more")
                 );
                 code = 1;
             }
             (_, note) => {
-                println!("read {}: {}", now.root.name, holds(&now));
+                println!("read {name}: {}", holds(&now));
                 if let Some(note) = note {
-                    eprintln!("  {note}");
+                    eprintln!("  {}", printable(note));
                 }
             }
         }
@@ -238,12 +250,13 @@ pub async fn run(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
         if a.machine.is_none()
             && let Ok(Reply::KbStatus { status }) = ask(ctx, &c, Request::KbStatus).await
         {
-            let under = format!("file://{}", now.root.path);
-            let skipped: Vec<_> =
-                status.skipped.iter().filter(|s| s.uri.starts_with(&under)).collect();
-            for s in skipped.iter().rev().take(10) {
-                let rel = s.uri[under.len()..].trim_start_matches('/');
-                eprintln!("  not kept: {}: {}", if rel.is_empty() { &s.uri } else { rel }, s.why);
+            let skipped: Vec<(String, &str)> = status
+                .skipped
+                .iter()
+                .filter_map(|s| Some((under(&now.root.path, &s.uri)?, s.why.as_str())))
+                .collect();
+            for (rel, why) in skipped.iter().rev().take(10) {
+                eprintln!("  not kept: {}", printable(&format!("{rel}: {why}")));
             }
             if skipped.len() > 10 {
                 eprintln!("  and {} more: `ptyro kb` lists them", skipped.len() - 10);
@@ -282,12 +295,12 @@ async fn history(ctx: &Ctx, a: IngestArgs) -> Result<i32, Error> {
         if a.json {
             println!("{}", serde_json::to_string_pretty(&plan).unwrap_or_default());
         } else {
-            print!("{}", plan.text());
+            print!("{}", printable_lines(&plan.text()));
         }
         return Ok(0);
     }
     if !a.json {
-        eprint!("{}", plan.text());
+        eprint!("{}", printable_lines(&plan.text()));
     }
     let plan = match ask(ctx, &c, req(false)).await? {
         Reply::KbHistory { plan } => plan,
@@ -347,13 +360,13 @@ pub async fn list(ctx: &Ctx, machine: Option<String>, json: bool) -> Result<i32,
         about.push(r.root.path.clone());
         println!(
             "{:wide$}  {:7}  {:8}  {}",
-            r.root.name,
+            printable(&r.root.name),
             r.root.kind.to_string(),
             state,
-            about.join(" · ")
+            printable(&about.join(" · "))
         );
         if let Some(e) = &r.root.error {
-            println!("{:wide$}  {e}", "");
+            println!("{:wide$}  {}", "", printable(e));
         }
     }
     Ok(0)
@@ -403,11 +416,13 @@ pub async fn sync(
         );
     }
     for r in after.iter().filter(|r| ids.is_empty() || ids.contains(&r.root.id)) {
+        let name = printable(&r.root.name);
         match (&r.root.state, &r.root.error) {
             (RootState::Missing | RootState::Error, e) => {
-                println!("{}: {}", r.root.name, e.as_deref().unwrap_or("it could not be read"))
+                let why = e.as_deref().map(printable);
+                println!("{name}: {}", why.as_deref().unwrap_or("it could not be read"))
             }
-            _ => println!("{}: {}", r.root.name, holds(r)),
+            _ => println!("{name}: {}", holds(r)),
         }
     }
     Ok(0)
@@ -428,7 +443,7 @@ pub async fn remove(
         match ask(ctx, &c, req(false)).await {
             Ok(_) => return Err(Error::internal("removed without asking")),
             Err(e) if e.code == ErrorCode::NeedsConfirmation => {
-                crate::cli::ask_first(&e.message, false)?;
+                crate::cli::ask_first(&printable_lines(&e.message), false)?;
             }
             Err(e) => return Err(e),
         }
@@ -450,6 +465,7 @@ pub async fn remove(
     if json {
         println!("{}", json!({ "name": name, "items": items, "chunks": chunks }));
     } else {
+        let name = printable(&name);
         eprintln!(
             "{name} is no longer read: dropped {} ({}); your files aren't touched",
             plural(items, "item", "items"),
@@ -509,5 +525,15 @@ mod tests {
         assert!(h.check().is_ok() && a.check().is_ok());
         assert!(args(&["--history", "--code"]).is_err());
         assert!(args(&["--history", "--agent", "opencode"]).is_err());
+    }
+
+    /// Review B7: a file that was not kept is a root's by whole names, not by how its path
+    /// begins.
+    #[test]
+    fn a_skipped_file_is_under_its_own_root_only() {
+        assert_eq!(under("/a/doc", "file:///a/doc/x/y.md").as_deref(), Some("x/y.md"));
+        assert_eq!(under("/a/doc", "file:///a/docs2/y.md"), None);
+        assert_eq!(under("/a/doc.md", "file:///a/doc.md").as_deref(), Some("file:///a/doc.md"));
+        assert_eq!(under("/a/doc", "session://claude/1"), None);
     }
 }

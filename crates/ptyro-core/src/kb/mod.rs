@@ -248,6 +248,23 @@ pub struct RootOptions {
     pub once: bool,
 }
 
+/// A root as one word of a command a message offers (`` `ptyro kb sync WORD` ``): its name
+/// where that is one plain word, the name between single quotes where a shell (and the
+/// clients, which run such a command for you) would take the quoted text for one word, else
+/// its id. A name is never split into words of its own: one that ends in ` --yes` must not
+/// answer the question the command asks. Empty when the name can't be said and no id is known.
+pub fn root_word(name: &str, id: &str) -> String {
+    let plain = |c: char| c.is_alphanumeric() || "-_./+@%,=".contains(c);
+    let quotable = |c: char| !c.is_control() && !"'\"`\\".contains(c);
+    if name.is_empty() || name.starts_with('-') || !name.chars().all(quotable) {
+        id.to_owned()
+    } else if name.chars().all(plain) {
+        name.to_owned()
+    } else {
+        format!("'{name}'")
+    }
+}
+
 /// A place that was registered (`root`, SPEC §25.3): a project, or a folder or file given to
 /// `ptyro ingest`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -442,6 +459,19 @@ impl KbHistoryPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review B4: a root's name in a command is one word, whatever it holds.
+    #[test]
+    fn a_root_in_a_command_is_one_word() {
+        assert_eq!(root_word("docs-2.md", "R1"), "docs-2.md");
+        assert_eq!(root_word("my docs", "R1"), "'my docs'");
+        assert_eq!(root_word("x --yes", "R1"), "'x --yes'");
+        assert_eq!(root_word("a:b", "R1"), "'a:b'");
+        for name in ["--yes", "it's", "a`b", "a\"b", "a\\b", "a\x1bb", ""] {
+            assert_eq!(root_word(name, "R1"), "R1", "{name:?}");
+        }
+        assert_eq!(root_word("it's", ""), "");
+    }
 
     #[test]
     fn the_history_in_words() {

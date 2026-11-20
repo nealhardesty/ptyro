@@ -173,6 +173,8 @@ async fn kb_call(client: &Client, name: &str, a: &Value) -> Result<String, Error
                 machines: a["machines"].as_bool().unwrap_or(false),
                 machine: None,
                 profile: None,
+                session: None,
+                worktree: None,
             };
             let Reply::KbHits { hits, left_out, .. } = client.request(req).await? else {
                 return Err(Error::internal("unexpected reply"));
@@ -298,6 +300,7 @@ async fn kb_call(client: &Client, name: &str, a: &Value) -> Result<String, Error
                 tags,
                 replaces: arg(a, "replaces").map(str::to_owned),
                 addr: None,
+                base: None,
             };
             let Reply::KbNoted { item, .. } = client.request(req).await? else {
                 return Err(Error::internal("unexpected reply"));

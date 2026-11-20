@@ -116,6 +116,8 @@ pub(crate) fn search(query: &str) -> Request {
         machines: false,
         machine: None,
         profile: None,
+        session: None,
+        worktree: None,
     }
 }
 
@@ -270,6 +272,32 @@ async fn the_history_of_a_session_or_a_worktree_and_the_news_of_a_change() {
         ["session://claude/c1"]
     );
     assert!(uris(ask(&d, of(Some("nobody"), None, None)).await.unwrap()).is_empty());
+
+    // A search within one (1.62, review D3): the store filters, so what is found is that
+    // session's or worktree's whatever else holds the words, however much else there is.
+    let within = |query: &str, session: Option<&str>, worktree: Option<&str>| {
+        let mut req = search(query);
+        if let Request::KbSearch { session: s, worktree: w, machines, .. } = &mut req {
+            (*s, *w) = (session.map(str::to_owned), worktree.map(str::to_owned));
+            *machines = true;
+        }
+        req
+    };
+    let found = |r: Reply| match r {
+        Reply::KbHits { hits, .. } => hits.into_iter().filter_map(|h| h.uri).collect::<Vec<_>>(),
+        r => panic!("{r:?}"),
+    };
+    assert_eq!(found(ask(&d, search("the")).await.unwrap()).len(), 2);
+    assert_eq!(
+        found(ask(&d, within("the", Some(c2), None)).await.unwrap()),
+        ["session://claude/c2"]
+    );
+    assert_eq!(
+        found(ask(&d, within("the", None, Some("wt1"))).await.unwrap()),
+        ["session://claude/c1"]
+    );
+    assert!(found(ask(&d, within("hopper", Some(c2), None)).await.unwrap()).is_empty());
+    assert!(found(ask(&d, within("the", Some("nobody"), None)).await.unwrap()).is_empty());
 
     // Forgetting is news too.
     let forget = Request::KbForget {

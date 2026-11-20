@@ -312,26 +312,51 @@ pub(crate) async fn ask(ctx: &Ctx, c: &ptyro_client::Client, req: Request) -> Re
     }
 }
 
-/// Matches bold on a terminal; between `*` elsewhere.
+/// Text that was stored, or that another machine sent, as a terminal may show it on one
+/// line: without its control characters (an ESC, a BEL or a C1 control in a README, a comment
+/// or a commit message would otherwise reach the terminal as an escape sequence: the
+/// clipboard's, the title's), a line break or a tab as a space. Everything these commands
+/// print for people goes through it or [`printable_lines`]; JSON escapes its own.
+pub(crate) fn printable(text: &str) -> String {
+    let flat = |c| if matches!(c, '\n' | '\t') { ' ' } else { c };
+    text.chars().map(flat).filter(|c| !c.is_control()).collect()
+}
+
+/// [`printable`] for text of several lines: its line breaks and tabs stay.
+pub(crate) fn printable_lines(text: &str) -> String {
+    text.chars().filter(|c| matches!(c, '\n' | '\t') || !c.is_control()).collect()
+}
+
+/// A snippet on one line: matches bold on a terminal, between `*` elsewhere.
 fn marked(snippet: &str) -> String {
     let (on, off) =
         if std::io::stdout().is_terminal() { ("\x1b[1m", "\x1b[0m") } else { ("*", "*") };
-    snippet.replace('\n', " ").replace(MARK_ON, on).replace(MARK_OFF, off)
+    // (The marks are control characters themselves: they are the only ones kept, and become
+    // this command's own.)
+    let clean: String = snippet
+        .chars()
+        .map(|c| if matches!(c, '\n' | '\t') { ' ' } else { c })
+        .filter(|c| !c.is_control() || matches!(*c, MARK_ON | MARK_OFF))
+        .collect();
+    clean.replace(MARK_ON, on).replace(MARK_OFF, off)
 }
 
 /// A hit's address as people type it: a chat's message by the last 8 characters of its id.
 fn cite(h: &KbHit) -> String {
     match (&h.node, h.addr.split_once('/')) {
-        (Some(n), Some((chat, _))) => format!("{chat}/{}", &n[n.len().saturating_sub(8)..]),
-        _ => h.addr.clone(),
+        (Some(n), Some((chat, _))) => {
+            let from = n.char_indices().rev().nth(7).map_or(0, |(i, _)| i);
+            printable(&format!("{chat}/{}", &n[from..]))
+        }
+        _ => printable(&h.addr),
     }
 }
 
 /// What a hit is and where it is from, on one line: `session · retry policy · feeder · claude · 3d`.
 fn about(kind: &str, title: Option<&str>, place: &[Option<&str>], at_ms: Option<u64>) -> String {
     let mut parts = vec![kind.to_owned()];
-    parts.extend(title.map(|t| t.replace('\n', " ")));
-    parts.extend(place.iter().flatten().map(|p| (*p).to_owned()));
+    parts.extend(title.map(printable));
+    parts.extend(place.iter().flatten().map(|p| printable(p)));
     parts.extend(at_ms.map(ago));
     parts.join(" · ")
 }
@@ -363,6 +388,8 @@ pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
         machines: !a.here,
         machine: a.machine,
         profile: None,
+        session: None,
+        worktree: None,
     };
     let (hits, words_only, left_out) = match ask(ctx, &c, req).await {
         Ok(Reply::KbHits { hits, words_only, left_out }) => (hits, words_only, left_out),
@@ -373,7 +400,7 @@ pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
     };
     // A machine that didn't answer is said, and the search is still an answer.
     for m in &left_out {
-        eprintln!("(not searched: {m})");
+        eprintln!("(not searched: {})", printable(m));
     }
     if a.json {
         println!("{}", serde_json::to_string_pretty(&hits).unwrap_or_default());
@@ -402,7 +429,7 @@ pub async fn recall(ctx: &Ctx, mut a: RecallArgs) -> Result<i32, Error> {
         return Ok(0);
     }
     if let Some(why) = words_only.filter(|_| lines) {
-        eprintln!("({why})");
+        eprintln!("({})", printable(&why));
     }
     Ok(0)
 }
@@ -474,7 +501,7 @@ pub async fn run(ctx: &Ctx, cmd: Option<KbCmd>, json: bool) -> Result<i32, Error
                     println!("{date}");
                     day = date.to_owned();
                 }
-                println!("  {time}  {}  {}", i.addr, listed(i, false));
+                println!("  {time}  {}  {}", printable(&i.addr), listed(i, false));
             }
             Ok(0)
         }
@@ -516,7 +543,8 @@ async fn status(ctx: &Ctx, json: bool) -> Result<i32, Error> {
 
 /// `ptyro kb`, in words.
 fn status_text(s: &KbStatusInfo) -> String {
-    s.lines().join("\n") + "\n"
+    // (Its lines name files, roots and what agents were offered: stored text.)
+    s.lines().iter().map(|l| printable(l) + "\n").collect()
 }
 
 async fn read(
@@ -542,16 +570,18 @@ async fn show(ctx: &Ctx, addr: String, context: Option<u32>, json: bool) -> Resu
         println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default());
         return Ok(0);
     }
-    println!("{}  {}", item.addr, listed(&item, true));
-    println!("    {} · {}", item.item.uri, minute(self::at(&item)));
+    let addr = printable(&item.addr);
+    println!("{addr}  {}", listed(&item, true));
+    println!("    {} · {}", printable(&item.item.uri), minute(self::at(&item)));
     if stale {
         println!("    (it was read again since: that piece is gone, so here it is from its start)");
     }
     for ch in &chunks {
         let mark = if at == Some(ch.idx) { "▶" } else { " " };
-        let place = ch.heading.as_deref().map(|h| format!(" · {h}")).unwrap_or_default();
-        println!("\n{mark} {}/{}  {}{place}", item.addr, ch.idx, ch.kind);
-        for line in ch.text.lines() {
+        let place =
+            ch.heading.as_deref().map(|h| format!(" · {}", printable(h))).unwrap_or_default();
+        println!("\n{mark} {addr}/{}  {}{place}", ch.idx, ch.kind);
+        for line in printable_lines(&ch.text).lines() {
             println!("    {line}");
         }
     }
@@ -574,8 +604,9 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
         Error::new(
             ErrorCode::NotFound,
             format!(
-                "the session it happened in is no longer in ptyro; what was kept of it is `ptyro kb show {}`, and its agent may still carry it on by its own id ({conversation})",
-                item.addr
+                "the session it happened in is no longer in ptyro; what was kept of it is `ptyro kb show {}`, and its agent may still carry it on by its own id ({})",
+                printable(&item.addr),
+                printable(conversation)
             ),
         )
     };
@@ -584,7 +615,7 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
             ErrorCode::NotFound,
             format!(
                 "the shell those commands ran in is no longer in ptyro; what was kept of them is `ptyro kb show {}`",
-                item.addr
+                printable(&item.addr)
             ),
         )
     };
@@ -605,7 +636,8 @@ async fn open(ctx: &Ctx, addr: &str) -> Result<i32, Error> {
         (ItemKind::File | ItemKind::Commit, _) if ctx.remote.is_some() || far(&item.addr) => {
             Err(Error::invalid(format!(
                 "that {} is on another computer: `ptyro kb show {}` shows what is kept of it",
-                item.item.kind, item.addr
+                item.item.kind,
+                printable(&item.addr)
             )))
         }
         (ItemKind::File, _) => {
@@ -643,8 +675,8 @@ fn open_file(item: &KbListed, piece: Option<&KbChunk>) -> Result<i32, Error> {
             ErrorCode::NotFound,
             format!(
                 "{} is no longer there: `ptyro kb show {}` shows what was kept of it",
-                path.display(),
-                item.addr
+                printable(&path.display().to_string()),
+                printable(&item.addr)
             ),
         ));
     }
@@ -674,12 +706,13 @@ async fn open_commit(ctx: &Ctx, c: &ptyro_client::Client, item: &KbListed) -> Re
             ErrorCode::NotFound,
             format!(
                 "its repository is no longer read: `ptyro kb show {}` shows what was kept of it",
-                item.addr
+                printable(&item.addr)
             ),
         ));
     };
     let status = std::process::Command::new("git")
-        .args(["-C", &dir, "show", sha])
+        // (What follows is a commit, never an option of git's, whatever the URI holds.)
+        .args(["-C", &dir, "show", "--end-of-options", sha])
         .status()
         .map_err(|e| Error::internal(format!("git: {e}")))?;
     Ok(status.code().unwrap_or(1))
@@ -725,6 +758,8 @@ async fn forget(
                 machines: false,
                 machine: None,
                 profile: None,
+                session: None,
+                worktree: None,
             };
             let hits = match ask(ctx, &c, req).await? {
                 Reply::KbHits { hits, .. } => hits,
@@ -738,6 +773,10 @@ async fn forget(
             }
             if ids.is_empty() {
                 eprintln!("nothing in the knowledge base matches");
+                // (`--json` always answers on stdout: nothing went.)
+                if json {
+                    println!("{}", json!({ "items": 0, "chunks": 0 }));
+                }
                 return Ok(0);
             }
         }
@@ -746,7 +785,8 @@ async fn forget(
         match ask(ctx, &c, question).await {
             Ok(_) => return Err(Error::internal("forgotten without asking")),
             Err(e) if e.code == ErrorCode::NeedsConfirmation => {
-                crate::cli::ask_first(&e.message, false)?;
+                // (The question names what goes, by its stored title.)
+                crate::cli::ask_first(&printable_lines(&e.message), false)?;
             }
             Err(e) => return Err(e),
         }
@@ -808,7 +848,8 @@ fn edited(name: &str, text: &str) -> Result<Option<String>, Error> {
 
 /// What a note that was written is called, on one line.
 fn noted(item: &KbListed, path: &str) -> String {
-    format!("{}  {}  {path}", item.addr, item.item.title.as_deref().unwrap_or("(no title)"))
+    let title = item.item.title.as_deref().unwrap_or("(no title)");
+    printable(&format!("{}  {title}  {path}", item.addr))
 }
 
 /// `kb note`: write one. The daemon says whose it is (yours; inside an agent's session, that
@@ -848,7 +889,16 @@ async fn note(
     }
     let title = title.filter(|_| !edit);
     let c = ctx.connect(true).await?;
-    let req = Request::KbNote { text, title, project, profile, tags, replaces: None, addr: None };
+    let req = Request::KbNote {
+        text,
+        title,
+        project,
+        profile,
+        tags,
+        replaces: None,
+        addr: None,
+        base: None,
+    };
     let (item, path) = match ask(ctx, &c, req).await? {
         Reply::KbNoted { item, path } => (item, path),
         r => return Err(unexpected(r)),
@@ -861,17 +911,31 @@ async fn note(
     Ok(0)
 }
 
+/// What was written in the editor and could not be saved, kept in a file of its own (the
+/// editor's was a temporary one): where it is.
+fn kept_aside(name: &str, text: &str) -> Option<String> {
+    use std::io::Write;
+    let mut file =
+        tempfile::Builder::new().prefix(&format!("{name}-")).suffix(".md").tempfile().ok()?;
+    file.write_all(text.as_bytes()).ok()?;
+    let (_, path) = file.keep().ok()?;
+    Some(path.display().to_string())
+}
+
 /// `kb show REF --open` of a note: its file in your editor, written back when it changed.
+/// Written from the text the editor was given: when the file changed meanwhile (another
+/// editor, a page of the web app), it is not written over, and what you wrote is kept aside.
 async fn edit_note(ctx: &Ctx, c: &ptyro_client::Client, addr: &str) -> Result<i32, Error> {
-    let (item, text) = match ask(ctx, c, Request::KbNoteRead { addr: addr.to_owned() }).await? {
-        Reply::KbNoteText { item, text, .. } => (item, text),
-        r => return Err(unexpected(r)),
-    };
+    let (item, text, version) =
+        match ask(ctx, c, Request::KbNoteRead { addr: addr.to_owned() }).await? {
+            Reply::KbNoteText { item, text, version, .. } => (item, text, version),
+            r => return Err(unexpected(r)),
+        };
     let name = item.item.uri.rsplit('/').next().unwrap_or("note");
     let Some(new) = edited(&format!("{name}.md"), &text)? else {
         eprintln!(
             "left as it was (an empty note is not written: `ptyro kb forget {}` deletes it)",
-            item.addr
+            printable(&item.addr)
         );
         return Ok(1);
     };
@@ -881,16 +945,33 @@ async fn edit_note(ctx: &Ctx, c: &ptyro_client::Client, addr: &str) -> Result<i3
     }
     let req = Request::KbNote {
         addr: Some(item.item.id.clone()),
-        text: new,
+        text: new.clone(),
         title: None,
         project: None,
         profile: None,
         tags: Vec::new(),
         replaces: None,
+        // (A daemon from before 1.62 says no version, and writes as it always did.)
+        base: Some(version).filter(|v| !v.is_empty()),
     };
-    match ask(ctx, c, req).await? {
-        Reply::KbNoted { item, path } => println!("{}", noted(&item, &path)),
-        r => return Err(unexpected(r)),
+    match ask(ctx, c, req).await {
+        Ok(Reply::KbNoted { item, path }) => println!("{}", noted(&item, &path)),
+        Ok(r) => return Err(unexpected(r)),
+        Err(e) if e.code == ErrorCode::Conflict => {
+            let kept = match kept_aside(name, &new) {
+                Some(path) => format!("what you wrote is kept in {path}"),
+                None => "what you wrote could not be kept aside".to_owned(),
+            };
+            return Err(Error::new(
+                e.code,
+                format!(
+                    "{}. `ptyro kb show {} --open` opens the note as it is now; {kept}",
+                    e.message,
+                    printable(&item.addr)
+                ),
+            ));
+        }
+        Err(e) => return Err(e),
     }
     Ok(0)
 }
@@ -922,11 +1003,12 @@ async fn notes(
     for i in &items {
         let project = i.project_name.as_deref();
         if last != Some(project) {
-            println!("{}", project.unwrap_or("global"));
+            println!("{}", printable(project.unwrap_or("global")));
             last = Some(project);
         }
-        let title = i.item.title.as_deref().unwrap_or(i.item.uri.as_str()).replace('\n', " ");
-        println!("  {}  {title} · {} · {}", i.addr, by(i), ago(at(i)));
+        let title = i.item.title.as_deref().unwrap_or(i.item.uri.as_str());
+        let line = format!("  {}  {title} · {} · {}", i.addr, by(i), ago(at(i)));
+        println!("{}", printable(&line));
     }
     Ok(0)
 }
@@ -944,7 +1026,7 @@ async fn forget_session(ctx: &Ctx, session: String, yes: bool, json: bool) -> Re
         match ask(ctx, &c, req(false)).await {
             Ok(_) => return Err(Error::internal("forgotten without asking")),
             Err(e) if e.code == ErrorCode::NeedsConfirmation => {
-                crate::cli::ask_first(&e.message, false)?;
+                crate::cli::ask_first(&printable_lines(&e.message), false)?;
             }
             Err(e) => return Err(e),
         }
@@ -957,7 +1039,8 @@ async fn forget_session(ctx: &Ctx, session: String, yes: bool, json: bool) -> Re
         println!("{}", json!({ "items": items, "chunks": chunks, "private": true }));
     } else {
         eprintln!(
-            "{session} is private now: forgot {items} item{} ({}), and nothing more of it is kept",
+            "{} is private now: forgot {items} item{} ({}), and nothing more of it is kept",
+            printable(&session),
             if items == 1 { "" } else { "s" },
             pieces(u64::from(chunks))
         );
@@ -1018,6 +1101,38 @@ mod tests {
         let mut a = args(&["x", "-l"]);
         assert!(a.take_flags().unwrap_err().message.contains("needs a value"));
         assert!(Recall::try_parse_from(["recall"]).is_err(), "it needs something to look for");
+    }
+
+    /// Review B1: what was stored (a README, a comment, a commit message) reaches the
+    /// terminal with no control character of its own: no ESC, no BEL, no C1 control.
+    #[test]
+    fn stored_text_is_printed_without_its_control_characters() {
+        let evil = "a\x1b]52;c;ZXZpbA==\x07b\u{9b}31mc\rd";
+        let snippet = format!("x {MARK_ON}{evil}{MARK_OFF}\ny");
+        let out = marked(&snippet);
+        let ours = out.replace("\x1b[1m", "*").replace("\x1b[0m", "*");
+        assert_eq!(ours, "x *a]52;c;ZXZpbA==b31mcd* y");
+        let line = about("doc", Some("t\x1b[2Jitle\nmore"), &[Some("pro\x07ject")], None);
+        assert_eq!(line, "doc · t[2Jitle more · project");
+        let s = KbStatusInfo {
+            enabled: true,
+            failing: vec!["do\x1b[31mcs: gone".into()],
+            ..KbStatusInfo::default()
+        };
+        assert!(!status_text(&s).contains('\x1b'), "{:?}", status_text(&s));
+    }
+
+    /// Review B7: a chat message's id is cut by characters, never inside one.
+    #[test]
+    fn a_hits_address_is_cut_by_characters() {
+        let mut h: KbHit = serde_json::from_value(json!({
+            "addr": "c:7f3k/x", "item": "i", "kind": "chat", "part": "user", "snippet": "",
+            "at_ms": 0,
+            "how": "words", "score": 0.0,
+        }))
+        .unwrap();
+        h.node = Some("é".repeat(9));
+        assert_eq!(cite(&h), format!("c:7f3k/{}", "é".repeat(8)));
     }
 
     #[test]

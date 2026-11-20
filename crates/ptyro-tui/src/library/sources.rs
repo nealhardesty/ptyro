@@ -267,15 +267,20 @@ pub(super) fn draw_root(app: &App, f: &mut Frame<'_>, area: Rect, l: &Library) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-/// What the ingest form asks for, as `ptyro ingest` would: a switch says something only where
-/// the command has a flag for it (`--no-comments`, `--code`, `--no-commits`), so that one left
-/// as it stands leaves the settings deciding. `here`: the path is this computer's, so one
-/// that is not whole is made whole (another computer's paths are its own).
-pub(super) fn spec_of(form: &Form, here: bool) -> RootSpec {
+/// What the ingest form asks for. A switch (comments, code, commits) starts at what the
+/// settings say (`kb`), and says something only when it was moved from there: one left as it
+/// stands leaves the settings deciding, now and when they change. `kb` is `None` for another
+/// computer, whose settings are its own: there every switch says what it shows. `here`: the
+/// path is this computer's, so one that is not whole is made whole (another computer's paths
+/// are its own).
+pub(super) fn spec_of(form: &Form, here: bool, kb: Option<&ptyro_core::config::Kb>) -> RootSpec {
     let globs = |key: &str| -> Vec<String> {
         form.get(key).split(',').map(str::trim).filter(|g| !g.is_empty()).map(Into::into).collect()
     };
     let on = |key: &str| !form.get(key).is_empty();
+    let said = |key: &str, set: fn(&ptyro_core::config::Kb) -> bool| {
+        Some(on(key)).filter(|v| kb.map(set) != Some(*v))
+    };
     let mut path = form.get("path").trim().to_owned();
     if here
         && !path.starts_with('~')
@@ -292,9 +297,9 @@ pub(super) fn spec_of(form: &Form, here: bool) -> RootSpec {
         options: RootOptions {
             include: globs("include"),
             exclude: globs("exclude"),
-            comments: (!on("comments")).then_some(false),
-            code: on("code").then_some(true),
-            commits: (!on("commits")).then_some(false),
+            comments: said("comments", |kb| kb.comments),
+            code: said("code", |kb| kb.code),
+            commits: said("commits", |kb| kb.commits),
             once: on("once"),
         },
     }
@@ -607,7 +612,10 @@ impl App {
     /// The ingest form's ⏎: `KbIngest`, with what was filled in.
     pub(crate) fn ingest_submit(&mut self, form: &Form) {
         let machine = form.opt("machine");
-        let spec = spec_of(form, machine.is_none() && self.connect.remote.is_none());
+        // (The settings shown are the daemon's, which a remote one has its own of too: the
+        // config this TUI holds is the one it was started with, as the form's defaults are.)
+        let kb = machine.is_none().then_some(&self.config.kb);
+        let spec = spec_of(form, machine.is_none() && self.connect.remote.is_none(), kb);
         self.request(Pending::KbIngested(machine.clone()), Request::KbIngest { spec, machine });
     }
 
@@ -616,6 +624,10 @@ impl App {
     pub(crate) fn ingested(&mut self, machine: Option<String>, root: &KbRootInfo, plan: &KbPlan) {
         self.show_library(|l| {
             (l.typing, l.reader, l.show_status, l.chip) = (false, None, false, None);
+            // (As `library_tab` leaves another tab: its rows are not this one's.)
+            if l.tab != Tab::Sources {
+                (l.rows, l.sel, l.preview) = (Rows::History(Vec::new()), 0, None);
+            }
             (l.tab, l.of) = (Tab::Sources, None);
             if machine.is_some() {
                 l.machine = machine;

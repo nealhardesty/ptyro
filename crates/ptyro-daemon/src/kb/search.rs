@@ -213,6 +213,8 @@ impl Daemon {
             since_ms,
             before_ms,
             not_session: scope.and_then(|s| s.session.clone()),
+            session: ask.session.clone(),
+            worktree: ask.worktree.clone(),
         };
         let limit = match ask.limit {
             0 => LIMIT,
@@ -245,7 +247,9 @@ impl Daemon {
             && project.is_none()
             && root.is_none()
             && q.file.is_none()
-            && q.wrote.is_none();
+            && q.wrote.is_none()
+            && ask.session.is_none()
+            && ask.worktree.is_none();
         let (chat_words, chat_near) = match self.meaning_chats() {
             Some(chat_db) if chats_too => {
                 self.kb_chat_lists(

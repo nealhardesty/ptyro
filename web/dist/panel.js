@@ -10,7 +10,8 @@
 import { conn, host } from "./conn.js";
 import { APPLY, ORIGIN, article, fieldsOf, fromLines, gist, hexOf, keyLabel, labelOf, moveChanges, nameIn, needed, ownerOf, relevant, score, summary, toLines, withUnit } from "./cfgkit.js";
 import { data } from "./data.js";
-import { actions, NAME_HINT, badge, bar, confirm, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
+import { actions, NAME_HINT, badge, bar, confirm, confirmed, enc, errText, form, go, h, row, sheet, tipOf, ui, views } from "./kit.js";
+import { SHELL_OUTPUT_ASK, asksFirst } from "./libkit.js";
 import { cfgChanged, editConfigAt } from "./settings.js";
 const ACTIONS = {
     "settings": "Settings: every option in sections, with what it does, its default and where its value comes from",
@@ -226,7 +227,12 @@ function card(e, s, scope, view) {
     const set = (text) => change(scope, { t: "set", key: e.key, value: text }, `${e.key} = ${shownText(text)}`, { at: showErr });
     const reset = () => change(scope, { t: "unset", key: e.key }, `${e.key} reset`, { shared: resetShared(e), at: showErr });
     const refresh = () => page?.repaint(e.key);
-    const ctl = control(e, s, scope, view, id, async (text) => { if (await set(text))
+    // (The one setting that stores what is on your terminal asks first, here as in the Library.)
+    const agreed = async (text) => !asksFirst(e.key, text, e.value) || confirmed(...SHELL_OUTPUT_ASK, false);
+    const ctl = control(e, s, scope, view, id, async (text) => { if (!(await agreed(text))) {
+        refresh();
+        return;
+    } if (await set(text))
         refresh(); }, async () => { if (await reset())
         refresh(); }, showErr);
     const from = `${ORIGIN[e.origin]}${e.line ? `, line ${e.line}` : ""}`;

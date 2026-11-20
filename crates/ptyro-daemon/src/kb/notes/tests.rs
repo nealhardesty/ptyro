@@ -20,6 +20,7 @@ fn note_in(text: &str, project: Option<&str>, profile: Option<&str>) -> Request 
         tags: Vec::new(),
         replaces: None,
         addr: None,
+        base: None,
     }
 }
 
@@ -70,6 +71,7 @@ async fn a_note_is_a_file_in_its_folder_and_is_found_before_a_session() {
         tags: vec!["gotcha".into(), " #two words ".into()],
         replaces: None,
         addr: None,
+        base: None,
     };
     let (item, path) = noted(&d, req).await;
     assert_eq!(path, d.kb_notes_dir().join("work/feeder/hopper-jams.md"));
@@ -204,7 +206,8 @@ async fn a_note_is_read_edited_replaced_and_forgotten_with_its_file() {
 
     // Its file as it is, for an editor.
     let read = |addr: &str| Request::KbNoteRead { addr: addr.into() };
-    let Reply::KbNoteText { text, path: p, item: same } = ask(&d, read(&item.addr)).await.unwrap()
+    let Reply::KbNoteText { text, path: p, item: same, .. } =
+        ask(&d, read(&item.addr)).await.unwrap()
     else {
         panic!()
     };
@@ -226,6 +229,7 @@ async fn a_note_is_read_edited_replaced_and_forgotten_with_its_file() {
             profile: None,
             tags: Vec::new(),
             replaces: None,
+            base: None,
         },
     )
     .await;
@@ -245,6 +249,7 @@ async fn a_note_is_read_edited_replaced_and_forgotten_with_its_file() {
             profile: None,
             tags: Vec::new(),
             addr: None,
+            base: None,
         },
     )
     .await;
@@ -389,4 +394,78 @@ async fn a_note_called_v1_dot_dot_v2_is_a_note() {
     assert!(text.contains("zqupgrade"));
     assert!(d.kb_note_path("note://_all/../x").is_err());
     assert!(d.kb_note_path("note://../_global/x").is_err());
+}
+
+/// Review D5: what the watcher counts is told by the event's kind. A folder made or moved in
+/// counts (its notes are in it); an open, which reading the folder is, never does.
+#[test]
+fn the_watcher_counts_everything_but_an_open() {
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode,
+    };
+    for kind in [
+        EventKind::Create(CreateKind::Folder),
+        EventKind::Create(CreateKind::File),
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+        EventKind::Modify(ModifyKind::Any),
+        EventKind::Remove(RemoveKind::Folder),
+        EventKind::Access(AccessKind::Close(AccessMode::Write)),
+        EventKind::Any,
+    ] {
+        assert!(counts(&kind), "{kind:?}");
+    }
+    for kind in [
+        EventKind::Access(AccessKind::Open(AccessMode::Any)),
+        EventKind::Access(AccessKind::Open(AccessMode::Read)),
+        EventKind::Access(AccessKind::Read),
+    ] {
+        assert!(!counts(&kind), "{kind:?}");
+    }
+}
+
+/// Review D2: a note written again says which text it was read as, and one that changed
+/// underneath (an editor on the computer, an agent's sync) is not written over.
+#[tokio::test]
+async fn a_note_that_changed_underneath_is_not_written_over() {
+    let t = tempfile::tempdir().unwrap();
+    let d = daemon(&t, "");
+    let (item, path) = noted(&d, note("# Belt\n\nzqfirst\n")).await;
+    let read = || async {
+        match ask(&d, Request::KbNoteRead { addr: item.addr.clone() }).await.unwrap() {
+            Reply::KbNoteText { text, version, .. } => (text, version),
+            r => panic!("{r:?}"),
+        }
+    };
+    let (text, base) = read().await;
+    assert_eq!(base, note::version(&text));
+    let again = |text: &str, base: Option<String>| Request::KbNote {
+        text: text.to_owned(),
+        title: None,
+        project: None,
+        profile: None,
+        tags: Vec::new(),
+        replaces: None,
+        addr: Some(item.item.id.clone()),
+        base,
+    };
+    // Changed by hand since it was read: refused, in words, and the file is as it was left.
+    let theirs = text.replace("zqfirst", "zqtheirs");
+    std::fs::write(&path, &theirs).unwrap();
+    let mine = text.replace("zqfirst", "zqmine");
+    let e = ask(&d, again(&mine, Some(base.clone()))).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert!(e.message.contains("changed since it was read"), "{}", e.message);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+    // Read again, it is written; a client from before 1.62 names no text and writes as before.
+    let (_, base) = read().await;
+    ask(&d, again(&mine, Some(base.clone()))).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), mine);
+    ask(&d, again(&theirs, None)).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), theirs);
+    // Its file gone meanwhile is a change too.
+    let (_, base) = read().await;
+    std::fs::remove_file(&path).unwrap();
+    let e = ask(&d, again(&mine, Some(base))).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Conflict, "{e:?}");
+    assert!(!path.exists());
 }

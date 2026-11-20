@@ -247,11 +247,6 @@ async fn a_private_shell_is_still_private_when_a_restart_offers_it_back() {
     assert!(!w.bytes_hold("zqprivateagain"));
 }
 
-fn which(prog: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(prog).is_file()))
-}
-
 /// The real shells, with the integration ptyro gives them and no setup: a command line comes
 /// along whole, and one typed with a space before it is kept out, whether the shell's own
 /// history takes it (`HISTCONTROL` unset) or not (`ignorespace`). With output asked for,
@@ -260,11 +255,14 @@ fn which(prog: &str) -> bool {
 async fn a_real_shells_commands_are_kept_and_a_space_before_one_keeps_it_out() {
     let w = World::new("[kb]\nshell = \"output\"\n");
     let c = w.d.client().await.unwrap();
+    let mut checked = 0;
     for shell in ["bash", "zsh"] {
-        if !which(shell) {
-            eprintln!("kb4: {shell} not installed, its commands not checked");
+        // (bash before 4.4, macOS's, sees a command start by a DEBUG trap; a newer one, every
+        // Linux's, by `PS0`: `PTYRO_REQUIRE_SHELLS` in CI makes sure each machine runs its own.)
+        if !shell_here("kb4", shell) {
             continue;
         }
+        checked += 1;
         let spec = ptyro_core::session::SpawnSpec {
             argv: vec![shell.to_owned()],
             cwd: w.home(),
@@ -304,4 +302,5 @@ async fn a_real_shells_commands_are_kept_and_a_space_before_one_keeps_it_out() {
             "{shell}"
         );
     }
+    assert!(checked > 0, "neither bash nor zsh is installed: nothing was checked");
 }

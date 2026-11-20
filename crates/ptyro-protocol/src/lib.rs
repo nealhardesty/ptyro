@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 61 };
+pub const PROTO: Version = Version { major: 1, minor: 62 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -966,6 +966,15 @@ pub enum Request {
         /// never widens.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
+        /// Only what was kept of this ptyro session (its id; 1.62): a search within a row's
+        /// history, as `KbRecent.session` lists it. A session is one machine's: with it (or
+        /// `worktree`) no other machine is asked unless `machine` names one, and no chat is
+        /// found.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<String>,
+        /// Only what happened in this worktree (its id; 1.62).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
     },
     /// Open an address a search gave (1.53): `k:7f3k/12` with `before` and `after` of its
     /// neighbours (`None`: 2 each), or `k:7f3k`, the item from its start (`after`: how many
@@ -1041,7 +1050,10 @@ pub enum Request {
     /// takes the place of (an address), which is moved to `_old/` and out of search.
     ///
     /// `addr`: write an existing note again instead (you only): `text` is then the whole
-    /// file, header and all, and nothing else is read. → `KbNoted`.
+    /// file, header and all, and nothing else is read. `base` (1.62) is the `version` its
+    /// text was read with (`KbNoteText`): when the file is no longer that text (it was
+    /// edited elsewhere meanwhile, or is gone) nothing is written and the answer is
+    /// `conflict`. Without it the file is written whatever it holds. → `KbNoted`.
     KbNote {
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1056,6 +1068,8 @@ pub enum Request {
         replaces: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         addr: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
     },
     /// The notes (1.57), newest first: all of them, or a project's (`_global`: those about
     /// none), or one writer's. → `KbItems`.
@@ -1688,6 +1702,10 @@ pub enum Reply {
         item: ptyro_core::kb::search::KbListed,
         text: String,
         path: String,
+        /// What this text is known by (1.62): `KbNote.base` when it is written again. Empty
+        /// from a daemon before it.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        version: String,
     },
     /// The notes folder was read again (1.57): how many notes it holds, how many of them
     /// were new or changed, and how many that were kept are gone.
@@ -2412,6 +2430,22 @@ mod tests {
             machines: true,
             machine: Some("laptop2".into()),
             profile: Some("work".into()),
+            session: Some("01JB0000000000000000000S01".into()),
+            worktree: Some("w1".into()),
+        });
+        // 1.62: a search within a row's history, and a note written again from the text it
+        // was read as; an older client's messages say neither.
+        let m: Request = serde_json::from_str(r#"{"t":"kb_search","query":"x"}"#).unwrap();
+        assert!(matches!(m, Request::KbSearch { session: None, worktree: None, .. }));
+        round_trip(Request::KbNote {
+            text: "# X\n".into(),
+            title: None,
+            project: None,
+            profile: None,
+            tags: Vec::new(),
+            replaces: None,
+            addr: Some("k:7f3k".into()),
+            base: Some("9f2c".into()),
         });
         round_trip(Request::KbRead {
             addr: "laptop2:k:7f3k/12".into(),
@@ -2438,6 +2472,7 @@ mod tests {
             tags: vec!["decision".into()],
             replaces: Some("k:7f3k".into()),
             addr: None,
+            base: None,
         });
         round_trip(Request::KbNotes {
             project: Some("_global".into()),
@@ -2633,11 +2668,18 @@ mod tests {
             stale: false,
         });
         round_trip(Reply::KbNoted { item: listed.clone(), path: "/data/kb/notes/x.md".into() });
-        round_trip(Reply::KbNoteText {
+        let text = Reply::KbNoteText {
             item: listed.clone(),
             text: "# X\n".into(),
             path: "/data/kb/notes/x.md".into(),
-        });
+            version: "9f2c".into(),
+        };
+        // (A daemon from before 1.62 says no version: read as none.)
+        let mut older = serde_json::to_value(&text).unwrap();
+        older.as_object_mut().unwrap().remove("version");
+        let m: Reply = serde_json::from_value(older).unwrap();
+        assert!(matches!(m, Reply::KbNoteText { version, .. } if version.is_empty()));
+        round_trip(text);
         round_trip(Reply::KbSynced { notes: 3, changed: 1, removed: 0, roots: 2 });
         round_trip(Reply::KbItems { items: vec![listed] });
         round_trip(Reply::KbForgotten { items: 1, chunks: 3 });

@@ -727,3 +727,41 @@ async fn what_was_forgotten_under_a_root_stays_forgotten_when_it_is_read_again()
         assert_eq!(db.status().await.unwrap().forgotten, 2);
     }
 }
+
+/// Review B4: a failing root's line carries the command that mends it, and the root is one
+/// word of that command whatever it is called (the clients run it as it stands).
+#[test]
+fn a_failing_roots_line_names_it_in_one_word() {
+    let root = |name: &str, state, error: Option<&str>| KbRoot {
+        id: "01ROOT".into(),
+        name: name.into(),
+        kind: RootKind::Folder,
+        path: "/src/x".into(),
+        project: None,
+        profile: None,
+        options: RootOptions::default(),
+        head: None,
+        state,
+        error: error.map(str::to_owned),
+        added_ms: None,
+        synced_ms: None,
+    };
+    let lines = failing(&[
+        root("docs", RootState::Ok, None),
+        root("docs", RootState::Missing, None),
+        root("x -y", RootState::Missing, None),
+        root("my docs", RootState::Error, Some("no")),
+        root("--yes", RootState::Error, None),
+        root("own", RootState::Error, Some("locked (`ptyro doctor` says more)")),
+    ]);
+    assert_eq!(
+        lines,
+        [
+            "docs: /src/x is gone (`ptyro kb rm docs` drops what was kept of it)",
+            "x -y: /src/x is gone (`ptyro kb rm 'x -y'` drops what was kept of it)",
+            "my docs: no (`ptyro kb sync 'my docs'` reads it again)",
+            "--yes: it could not be read (`ptyro kb sync 01ROOT` reads it again)",
+            "own: locked (`ptyro doctor` says more)",
+        ]
+    );
+}

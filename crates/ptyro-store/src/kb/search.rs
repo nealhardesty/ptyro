@@ -52,6 +52,10 @@ pub struct KbFilter {
     pub before_ms: Option<u64>,
     /// A ptyro session whose own item is left out (an agent is not shown what it is saying).
     pub not_session: Option<String>,
+    /// Only that ptyro session's items (its id): a search within a row's history.
+    pub session: Option<String>,
+    /// Only that worktree's items (its id).
+    pub worktree: Option<String>,
 }
 
 /// A filter as SQL, and its arguments in order (`?` placeholders, numbered by [`numbered`]).
@@ -139,6 +143,12 @@ impl KbFilter {
             // (A note it wrote is not what it is saying: it finds its own notes.)
             c.and("(i.session IS NOT ? OR i.kind = 'note')", [text(s)]);
         }
+        if let Some(s) = &self.session {
+            c.and("i.session = ?", [text(s)]);
+        }
+        if let Some(w) = &self.worktree {
+            c.and("i.worktree = ?", [text(w)]);
+        }
         c
     }
 
@@ -219,6 +229,8 @@ impl KbFilter {
             || self.writer.is_some()
             || self.file.is_some()
             || self.not_session.is_some()
+            || self.session.is_some()
+            || self.worktree.is_some()
     }
 }
 

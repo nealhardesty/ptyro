@@ -185,6 +185,8 @@ async fn search(
         machines,
         machine: machine.map(Into::into),
         profile: None,
+        session: None,
+        worktree: None,
     };
     match c.request(req).await? {
         Reply::KbHits { hits, left_out, .. } => Ok((hits, left_out)),

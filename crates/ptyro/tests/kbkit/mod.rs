@@ -32,6 +32,11 @@ impl World {
     /// The same, with `shell` as the program a shell session runs (`$SHELL`): a path, or
     /// (with a line break in it) the body of a `sh` script.
     pub fn with_shell(config: &str, shell: &str) -> Self {
+        Self::with_env(config, shell, &[])
+    }
+
+    /// The same, with `more` in the daemon's environment (a test's knobs).
+    pub fn with_env(config: &str, shell: &str, more: &[(&str, &str)]) -> Self {
         let home = tempfile::Builder::new().prefix("ptyro-kb1-").tempdir().unwrap();
         let hs = ptyro_core::os::canonicalize(home.path()).unwrap().to_string_lossy().into_owned();
         #[cfg(unix)]
@@ -42,7 +47,8 @@ impl World {
         #[cfg(not(unix))]
         let script: Option<String> = None;
         let shell = script.as_deref().unwrap_or(shell);
-        let env = [("HOME", hs.as_str()), ("SHELL", shell)];
+        let mut env = vec![("HOME", hs.as_str()), ("SHELL", shell)];
+        env.extend_from_slice(more);
         let d = TempDaemon::start_with(BIN, &env, Some(config)).unwrap();
         Self { home, d }
     }
@@ -75,6 +81,23 @@ impl World {
 }
 
 pub const WAIT: Duration = Duration::from_secs(20);
+
+/// Whether a test of the real `shell` runs here. Where it isn't installed the test says so
+/// and leaves it out, unless `PTYRO_REQUIRE_SHELLS` names it (CI names the shells its
+/// machines have, so that a missing one fails there instead of passing with nothing checked).
+pub fn shell_here(test: &str, shell: &str) -> bool {
+    let here = std::env::var_os("PATH")
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(shell).is_file()));
+    let required = std::env::var("PTYRO_REQUIRE_SHELLS")
+        .is_ok_and(|list| list.split([' ', ',']).any(|s| s == shell));
+    assert!(here || !required, "PTYRO_REQUIRE_SHELLS names {shell}, and it isn't installed");
+    if !here {
+        eprintln!(
+            "{test}: SKIPPED for {shell}: it isn't installed here, so nothing of it is checked"
+        );
+    }
+    here
+}
 
 /// Every agent is the fake one, keeping a transcript; `env` is more of its environment.
 pub fn agents(env: &str) -> String {

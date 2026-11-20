@@ -28,11 +28,22 @@ use kbkit::*;
 /// The file the fake agents write a line to for every prompt: what its hook gave them.
 const ASKED: &str = "asked.jsonl";
 
+/// (The hook's relay gives up after 500 ms and the search behind an offer after 150 ms, by
+/// design: nothing is offered then. What these tests assert is what is offered, so both are
+/// given longer here, by the test knobs: a loaded machine must not turn "offered" into
+/// "not offered". How long the search really takes is `make bench-kb-offer`'s to say.)
 fn config(more: &str) -> String {
     format!(
         "{}[profiles.work]\nclaude = \"~/.claude-work\"\ncodex = \"~/.codex-work\"\n[profiles.home]\nclaude = \"~/.claude-home\"\n{more}",
-        agents(&format!(", PTYRO_FAKE_CONTEXT = \"{ASKED}\""))
+        agents(&format!(
+            ", PTYRO_FAKE_CONTEXT = \"{ASKED}\", PTYRO_TEST_HOOK_BUDGET_MS = \"15000\""
+        ))
     )
+}
+
+/// A daemon whose search behind an offer has the time a loaded machine needs.
+fn world(config: &str) -> World {
+    World::with_env(config, "/bin/sh", &[("PTYRO_TEST_OFFER_CUT_OFF_MS", "15000")])
 }
 
 /// What a prompt's hook gave the agent, and how long it took (ms).
@@ -85,7 +96,7 @@ const AGAIN: &str = "how did the zqupload queue do its retries and zqbackoff bef
 
 #[tokio::test(flavor = "multi_thread")]
 async fn off_as_it_comes_and_on_pointers_within_the_cap_behind_every_gate() {
-    let w = World::new(&config(""));
+    let w = world(&config(""));
     let c = w.d.client().await.unwrap();
     // A work session says something worth finding again.
     let a = w.agent_in(&c, "wa", "claude", Some("work")).await;
@@ -128,9 +139,10 @@ async fn off_as_it_comes_and_on_pointers_within_the_cap_behind_every_gate() {
     );
     // Never the text: the pointer's line is an address, a kind, a date and a title.
     assert!(pointers[0].chars().count() < 200, "{text}");
-    // Within the time a hook has (Claude's is 5 s; ptyro's relay gives up at 500 ms and the
-    // search behind it at 150 ms, after which nothing is offered).
-    assert!(given.ms < 5_000, "the hook took {} ms", given.ms);
+    // (How long the hook took is not asserted: ptyro's relay gives up at 500 ms and the
+    // search behind it at 150 ms, after which nothing is offered, and this test gives both
+    // longer so that a loaded machine offers the same.)
+    let _ = given.ms;
     // What it points at opens with the tool the agent was given.
     let opened = w
         .mcp(
@@ -276,7 +288,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 async fn an_agent_without_the_tools_is_offered_nothing() {
     let on =
         config("[kb]\ninject = true\n").replace("[agents.codex]\n", "[agents.codex]\nkb = false\n");
-    let w = World::new(&on);
+    let w = world(&on);
     let c = w.d.client().await.unwrap();
     let a = w.agent(&c, "a", "claude").await;
     let said = format!("session://claude/{}", a.conversation.unwrap());

@@ -81,6 +81,10 @@ pub struct KbSearch {
     pub limit: u32,
     /// The project you are in (its id): its hits rank higher. A boost, never a filter.
     pub here: Option<String>,
+    /// Only what was kept of this ptyro session (its id): a filter. No chat is one's.
+    pub session: Option<String>,
+    /// Only what happened in this worktree (its id): a filter.
+    pub worktree: Option<String>,
 }
 
 /// Hits a search returns when it isn't told how many.

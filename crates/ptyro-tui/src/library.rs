@@ -102,8 +102,6 @@ pub struct Library {
     pub left_out: Vec<String>,
     /// A row's history: only what was kept of this session or worktree.
     pub of: Option<Of>,
-    /// The items that history holds (their ids): what a search within it keeps.
-    of_items: Vec<String>,
     /// The filter `Tab` is on (`None`: the list has the keys).
     pub chip: Option<Filter>,
     pub rows: Rows,
@@ -245,7 +243,6 @@ impl Library {
             machine: None,
             left_out: Vec::new(),
             of: None,
-            of_items: Vec::new(),
             chip: None,
             rows: Rows::History(Vec::new()),
             sources: Vec::new(),
@@ -278,6 +275,11 @@ impl Library {
 
     /// The selected row's address (a piece's, an item's, a chat's message), and the item's.
     fn selected(&self) -> Option<(String, String)> {
+        // (The Sources tab lists roots: a row left from another tab is not shown, so it is
+        // not what `kb.show` or `kb.forget` means.)
+        if self.tab == Tab::Sources {
+            return None;
+        }
         match &self.rows {
             Rows::Hits(h) => h.get(self.sel).map(|h| {
                 let item = h.addr.split_once('/').map_or(h.addr.as_str(), |(i, _)| i);
@@ -332,6 +334,12 @@ impl Library {
         if self.tab == Tab::Sources {
             return Some(Request::KbRoots { machine: self.far() });
         }
+        // A row's history: that session's or worktree's alone, listed or searched.
+        let (session, worktree) = match &self.of {
+            Some(Of::Session(id, _)) => (Some(id.clone()), None),
+            Some(Of::Worktree(id, _)) => (None, Some(id.clone())),
+            None => (None, None),
+        };
         if self.searching() {
             let mut query = self.query.trim().to_owned();
             if let Some(s) = self.since {
@@ -340,20 +348,20 @@ impl Library {
             if let Some(w) = self.wrote {
                 query.push_str(&format!(" wrote:{}", wrote_word(w)));
             }
-            // A row's history keeps only its own of what is found: ask for more.
-            let limit = if self.of.is_some() { ptyro_core::kb::search::MAX_LIMIT } else { 30 };
             return Some(Request::KbSearch {
                 query,
                 project,
                 kinds: self.kind.into_iter().collect(),
                 since_ms: None,
                 before_ms: None,
-                limit: Some(limit),
+                limit: Some(30),
                 here,
                 // Every linked machine that is up searches its own too, unless one is picked.
                 machines: self.machine.is_none(),
                 machine: self.machine.clone(),
                 profile: None,
+                session,
+                worktree,
             });
         }
         let kinds = match self.kind.map(HitKind::stored) {
@@ -365,11 +373,6 @@ impl Library {
             .since
             .and_then(|s| ptyro_core::config::parse_duration(s).ok())
             .map(|d| now_ms().saturating_sub(d.as_millis() as u64));
-        let (session, worktree) = match &self.of {
-            Some(Of::Session(id, _)) => (Some(id.clone()), None),
-            Some(Of::Worktree(id, _)) => (None, Some(id.clone())),
-            None => (None, None),
-        };
         Some(Request::KbRecent {
             kinds,
             project,
@@ -637,7 +640,6 @@ impl App {
         self.show_library(|l| {
             (l.typing, l.reader, l.show_status, l.chip) = (false, None, false, None);
             (l.tab, l.sel, l.of, l.loading) = (tab, 0, None, true);
-            l.of_items.clear();
             l.rows = Rows::History(Vec::new());
             if tab == Tab::Notes {
                 l.query.clear();
@@ -715,7 +717,6 @@ impl App {
             (l.of, l.project, l.kind, l.since) = (of, project, None, None);
             (l.tab, l.wrote) = (Tab::Search, None);
             (l.typing, l.reader, l.show_status, l.chip) = (false, None, false, None);
-            l.of_items.clear();
             l.query.clear();
         });
         self.library_ask();
@@ -768,9 +769,6 @@ impl App {
                 if l.tab == Tab::Notes {
                     items.sort_by(|a, b| a.project_name.cmp(&b.project_name));
                 }
-                if l.of.is_some() {
-                    l.of_items = items.iter().map(|i| i.item.id.clone()).collect();
-                }
                 // A full page: there may be older ones. Those already brought (the end of
                 // the list asked for them) stay under the page that was asked for again.
                 let full = items.len() >= ptyro_core::kb::search::MAX_LIMIT as usize;
@@ -787,14 +785,8 @@ impl App {
                 }
                 l.rows = Rows::History(items);
             }
-            Ok(Reply::KbHits { mut hits, words_only, left_out }) => {
+            Ok(Reply::KbHits { hits, words_only, left_out }) => {
                 l.left_out = left_out;
-                // A row's history: of what was found, only that session's or worktree's (the
-                // history asked for before the typing began says which items those are).
-                if l.of.is_some() {
-                    hits.retain(|h| l.of_items.contains(&h.item));
-                    hits.truncate(30);
-                }
                 l.words_only = words_only;
                 l.rows = Rows::Hits(hits);
             }
@@ -885,9 +877,6 @@ impl App {
         let fresh: Vec<KbListed> =
             items.into_iter().filter(|i| !have.iter().any(|h| h.item.id == i.item.id)).collect();
         l.more = full && !fresh.is_empty();
-        if l.of.is_some() {
-            l.of_items.extend(fresh.iter().map(|i| i.item.id.clone()));
-        }
         have.extend(fresh);
         self.dirty = true;
     }
@@ -1300,7 +1289,8 @@ impl App {
                     l.chip = shown.get(at + 1).copied();
                 }
                 (KeyCode::Left, _) | (_, Some('h')) => {
-                    l.chip = Some(shown[at.saturating_sub(1)]);
+                    // (A filter may have gone since `Tab` reached it: the last linked machine.)
+                    l.chip = shown.get(at.saturating_sub(1)).copied();
                 }
                 (KeyCode::Enter, _) | (_, Some(' ')) => pick = true,
                 (KeyCode::Backspace, _) | (_, Some('x')) => {
@@ -1353,7 +1343,6 @@ impl App {
             // A row's history ends: everything again.
             (KeyCode::Backspace, _) if l.of.is_some() => {
                 l.of = None;
-                l.of_items.clear();
                 act = Some('a');
             }
             (KeyCode::Enter, _) => act = Some('o'),

@@ -1204,11 +1204,15 @@ pub async fn gc(
 /// (`docs: /src/docs is gone (…)`), with the command that reads it again when the line
 /// offers none.
 pub fn kb_failing(line: &str) -> String {
-    let name = line.split(':').next().unwrap_or_default();
-    if line.contains("`ptyro ") {
+    let line = crate::kb::printable(line);
+    // A daemon from before it said the command itself names only the root: its name, as one
+    // word (a name no command can carry is offered none).
+    let name = line.split_once(": ").map_or("", |(name, _)| name);
+    let word = ptyro_core::kb::root_word(name, "");
+    if line.contains("`ptyro ") || word.is_empty() {
         format!("knowledge base: {line}")
     } else {
-        format!("knowledge base: {line} (`ptyro kb sync {name}` reads it again)")
+        format!("knowledge base: {line} (`ptyro kb sync {word}` reads it again)")
     }
 }
 
@@ -1236,5 +1240,36 @@ async fn clean_scratch(c: &ptyro_client::Client, list: &[ptyro_core::model::Scra
             Ok(_) => {}
             Err(e) => eprintln!("  {}", e.message),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review B4: the command a failing root is named with is run as it stands (by the TUI,
+    /// the web and `doctor --fix`): the root is one word of it, whatever it is called.
+    #[test]
+    fn a_failing_roots_command_names_it_in_one_word() {
+        let words = |text: &str| {
+            let start = text.find("`ptyro ").unwrap() + 1;
+            let end = start + text[start..].find('`').unwrap();
+            ptyro_tui::keymap::shell_words(&text[start..end])
+        };
+        // A daemon that says the command itself is taken at its word.
+        let said = "x --yes: /src/x is gone (`ptyro kb rm 'x --yes'` drops what was kept of it)";
+        assert_eq!(words(&kb_failing(said)), ["ptyro", "kb", "rm", "x --yes"]);
+        // An older one names only the root: the name is cut at `: `, and quoted.
+        assert_eq!(
+            words(&kb_failing("my docs: it could not be read")),
+            ["ptyro", "kb", "sync", "my docs"]
+        );
+        assert_eq!(
+            words(&kb_failing("x --yes: it could not be read")),
+            ["ptyro", "kb", "sync", "x --yes"]
+        );
+        // A name no command can carry is offered none, and no control character is shown.
+        let bad = kb_failing("--yes\x1b[2J: no");
+        assert!(!bad.contains("`ptyro ") && !bad.contains('\x1b'), "{bad:?}");
     }
 }

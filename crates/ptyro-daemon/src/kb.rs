@@ -20,8 +20,6 @@
 //! [`history`], which waits behind everything else on the queue; a shell's commands in
 //! [`shells`].
 
-#[cfg(test)]
-mod golden;
 mod history;
 mod machines;
 mod notes;
@@ -73,7 +71,7 @@ pub struct Kb {
     /// that the reply a `Stop` hook named was taken already (`sessions`).
     replies: Mutex<HashMap<String, u64>>,
     /// The notes folder's watcher (`notes`), kept for as long as the daemon runs.
-    notes_watch: Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
+    notes_watch: Mutex<Option<notify::RecommendedWatcher>>,
     /// One reader or writer of the notes folder at a time.
     notes_lock: tokio::sync::Mutex<()>,
     /// Note files that were refused, each as it was then (its time and size): not read
@@ -618,6 +616,11 @@ pub(crate) fn store_err(e: ptyro_store::StoreError) -> Error {
         None => Error::new(ErrorCode::Internal, format!("kb.db: {e}")),
     }
 }
+
+// (The golden set is declared here, not with the other modules: `scripts/unwrap-ratchet.py`
+// stops counting at the first `#[cfg(test)]`, so nothing that ships may come after one.)
+#[cfg(test)]
+mod golden;
 
 #[cfg(test)]
 mod tests {

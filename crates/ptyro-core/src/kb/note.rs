@@ -216,6 +216,13 @@ pub fn source(uri: &str, text: &str, at_ms: u64) -> (Source, Header) {
     (source, header)
 }
 
+/// What a note's file is known by while it is edited (`KbNoteText.version`, `KbNote.base`):
+/// a hash of its whole text. Two texts with the same version are the same text.
+pub fn version(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect()
+}
+
 /// `2026-11-19T22:38:07Z`.
 pub fn stamp(ms: u64) -> String {
     let m = super::card::minute(ms);

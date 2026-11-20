@@ -1082,8 +1082,8 @@ async fn daemon(ctx: &Ctx, config: &Config, quick: bool, r: &mut Report) {
     // web's Health page name it with its fix (SPEC §25.6.3).
     if let Ok(Reply::KbStatus { status }) = c.request(Request::KbStatus).await {
         for f in &status.failing {
-            let name = f.split(':').next().unwrap_or_default();
             let text = crate::projects::kb_failing(f);
+            let name = crate::kb::printable(f.split_once(": ").map_or(f.as_str(), |(n, _)| n));
             let text = text.trim_start_matches("knowledge base: ").to_owned();
             r.add("knowledge base", &format!("root {name}"), Level::Warn, text);
         }

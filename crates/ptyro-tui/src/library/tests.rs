@@ -326,7 +326,7 @@ fn what_is_asked_follows_the_box_and_the_filters() {
         matches!(l.request(None), Some(Request::KbRecent { session: Some(s), .. }) if s == "s1")
     );
     // A search: the box's words, `since:` in them, the kind and the project beside them, and
-    // where you are. Within a row's history it asks for more (it keeps only that row's).
+    // where you are. Within a row's history it asks for that row's alone.
     l.query = "  retry policy ".into();
     assert_eq!(
         l.request(Some("p9".into())),
@@ -336,15 +336,25 @@ fn what_is_asked_follows_the_box_and_the_filters() {
             kinds: vec![HitKind::Comment],
             since_ms: None,
             before_ms: None,
-            limit: Some(100),
+            limit: Some(30),
             here: Some("p9".into()),
             machines: true,
             machine: None,
             profile: None,
+            session: Some("s1".into()),
+            worktree: None,
         })
     );
+    l.of = Some(Of::Worktree("w1".into(), "feeder/fix".into()));
+    assert!(matches!(
+        l.request(None),
+        Some(Request::KbSearch { session: None, worktree: Some(w), .. }) if w == "w1"
+    ));
     l.of = None;
-    assert!(matches!(l.request(None), Some(Request::KbSearch { limit: Some(30), .. })));
+    assert!(matches!(
+        l.request(None),
+        Some(Request::KbSearch { limit: Some(30), session: None, worktree: None, .. })
+    ));
     // Chats have no history here.
     l.query.clear();
     l.kind = Some(HitKind::Chat);
@@ -822,12 +832,17 @@ fn a_rows_history_is_the_library_with_only_that() {
     let shown = screen(app);
     assert!(shown.contains(" only session brisk-rook "), "{shown}");
     assert!(shown.contains("nothing is kept of session brisk-rook"), "{shown}");
-    // A search within it keeps only what is that session's.
+    // A search within it asks the daemon for that session's alone (review D3): what it finds
+    // is listed, whether or not the page of history shown before holds its item.
     let items = vec![listed("7F3K", "retry policy for the feeder", now_ms(), None)];
     reply(app, Pending::KbRows(n), Reply::KbItems { items });
-    let hits = vec![hit("7F3K", 1, "retry policy", "retry"), hit("9999", 1, "another's", "retry")];
+    let hits = vec![hit("7F3K", 1, "retry policy", "retry"), hit("9999", 1, "long ago", "retry")];
     searched(app, "retry", hits, None);
-    assert!(matches!(&lib(app).rows, Rows::Hits(h) if h.len() == 1 && h[0].addr == "k:7F3K/1"));
+    assert!(matches!(
+        lib(app).request(None),
+        Some(Request::KbSearch { session: Some(id), worktree: None, .. }) if id == s.id.full()
+    ));
+    assert!(matches!(&lib(app).rows, Rows::Hits(h) if h.len() == 2 && h[1].addr == "k:9999/1"));
     // Backspace: everything again.
     assert!(screen(app).contains("Backspace everything"));
     press(app, "<BS>");
@@ -1177,7 +1192,6 @@ fn the_notes_tab_lists_by_project_and_writes_edits_and_deletes() {
         [
             "kb",
             "note",
-            "we chose X because Y",
             "--title",
             "X",
             "--project",
@@ -1186,7 +1200,9 @@ fn the_notes_tab_lists_by_project_and_writes_edits_and_deletes() {
             "db",
             "--tag",
             "decision",
-            "--edit"
+            "--edit",
+            "--",
+            "we chose X because Y"
         ]
     );
     press(app, "<Esc>");
@@ -1546,7 +1562,7 @@ fn the_ingest_form_shows_every_option_and_asks_for_what_was_filled_in() {
         set(&mut form, k, v);
     }
     assert_eq!(
-        sources::spec_of(&form, true),
+        sources::spec_of(&form, true, Some(&Config::default().kb)),
         ptyro_core::kb::RootSpec {
             path: "~/handbook".into(),
             name: Some("handbook".into()),
@@ -1724,4 +1740,74 @@ fn enter_on_a_file_or_a_commit_opens_it_in_its_own_tool() {
     asked(app);
     press(app, "j<Enter>");
     assert!(asked(app).iter().any(|p| matches!(p, Pending::KbReader(Some(1)))));
+}
+
+/// A switch of the ingest form says something only where it was moved from the setting it
+/// started at: with settings that are not the built-in ones, left alone it still says
+/// nothing, and moved it says the opposite of the setting (review B2).
+#[test]
+fn the_ingest_forms_switches_follow_settings_that_are_not_the_defaults() {
+    let mut t = t();
+    let app = &mut t.app;
+    (app.config.kb.comments, app.config.kb.code, app.config.kb.commits) = (false, true, false);
+    sources(app);
+    app.picked(Target::NewProjectPath, Purpose::KbIngest);
+    let Some(Overlay::Form(mut form)) = app.overlay.take() else { panic!("the ingest form") };
+    assert_eq!(
+        (form.get("comments"), form.get("code"), form.get("commits")),
+        ("".into(), "yes".into(), "".into())
+    );
+    let kb = app.config.kb.clone();
+    let o = sources::spec_of(&form, true, Some(&kb)).options;
+    assert_eq!((o.comments, o.code, o.commits), (None, None, None), "left as the settings are");
+    for key in ["comments", "code", "commits"] {
+        let f = form.fields.iter_mut().find(|f| f.key == key).unwrap();
+        let crate::form::Kind::Choice { sel, .. } = &mut f.kind else { panic!("a switch") };
+        *sel = 1 - *sel;
+    }
+    let o = sources::spec_of(&form, true, Some(&kb)).options;
+    assert_eq!((o.comments, o.code, o.commits), (Some(true), Some(false), Some(true)));
+    // Another computer's settings are its own: what the form shows is what is asked for.
+    let o = sources::spec_of(&form, false, None).options;
+    assert_eq!((o.comments, o.code, o.commits), (Some(true), Some(false), Some(true)));
+}
+
+/// A filter that is no longer shown (the last linked machine went while `Tab` was on it)
+/// takes a key without a panic (review B5).
+#[test]
+fn a_filter_that_went_away_takes_a_key() {
+    let mut t = t();
+    let app = &mut t.app;
+    app.machines.push(
+        serde_json::from_value(json!({
+            "name": "laptop2", "transport": { "t": "ssh", "target": "laptop2" },
+            "state": "online", "added_ms": 0,
+        }))
+        .unwrap(),
+    );
+    sources(app);
+    press(app, "<Tab>");
+    assert_eq!(lib(app).chip, Some(Filter::Machine));
+    app.machines.clear();
+    press(app, "h");
+    assert_eq!(lib(app).chip, None);
+}
+
+/// A folder read from the palette while a search is listed: the Sources tab is shown, and
+/// `kb.forget` and `kb.show` have no hidden row to act on (review B6).
+#[test]
+fn after_an_ingest_the_palette_acts_on_no_hidden_row() {
+    let mut t = t();
+    let app = &mut t.app;
+    opened(app);
+    searched(app, "hopper", vec![hit("AAAA", 0, "Hopper jams", "the hopper jams")], None);
+    assert!(lib(app).selected().is_some());
+    let made = root("R3", "handbook", "folder", "syncing", json!({}));
+    let plan = ptyro_core::kb::KbPlan::default();
+    reply(app, Pending::KbIngested(None), Reply::KbIngested { root: made, plan });
+    assert_eq!(lib(app).tab, Tab::Sources);
+    assert!(lib(app).selected().is_none(), "a row of a tab that is not shown");
+    asked(app);
+    run(app, "kb.forget");
+    assert!(matches!(&app.overlay, Some(Overlay::Prompt { kind: PromptKind::KbForget, .. })));
 }

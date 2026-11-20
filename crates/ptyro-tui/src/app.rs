@@ -7470,7 +7470,7 @@ mod tests {
         typed(&mut app, "\tAcme Corp\n");
         assert_eq!(
             app.last_cli.as_deref(),
-            Some(&["profile", "new", "acme", "--label", "Acme Corp"].map(String::from)[..])
+            Some(&["profile", "new", "--label", "Acme Corp", "--", "acme"].map(String::from)[..])
         );
         assert!(app.after_profile.is_some(), "waits for it to show up");
         app.overlay = None;

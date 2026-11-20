@@ -126,18 +126,22 @@ impl Daemon {
         let scope = self.kb_session_scope(s);
         let seen = self.kb.offers.locked().seen.get(&id).cloned().unwrap_or_default();
         let search = self.kb_pointers(&prompt, Some(&scope), place.project.clone(), &seen);
-        let hits =
-            match tokio::time::timeout(Duration::from_millis(offer::CUT_OFF_MS), search).await {
-                Ok(Ok(hits)) => hits,
-                Ok(Err(e)) => {
-                    tracing::debug!("nothing offered to {name}: {}", e.message);
-                    return None;
-                }
-                Err(_) => {
-                    tracing::debug!("nothing offered to {name}: the search took too long");
-                    return None;
-                }
-            };
+        // (A test may give the search longer, `PTYRO_TEST_OFFER_CUT_OFF_MS`, debug builds
+        // only: what is offered is then the same on a loaded machine.)
+        let cut_off = ptyro_core::test_knob("PTYRO_TEST_OFFER_CUT_OFF_MS")
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(offer::CUT_OFF_MS);
+        let hits = match tokio::time::timeout(Duration::from_millis(cut_off), search).await {
+            Ok(Ok(hits)) => hits,
+            Ok(Err(e)) => {
+                tracing::debug!("nothing offered to {name}: {}", e.message);
+                return None;
+            }
+            Err(_) => {
+                tracing::debug!("nothing offered to {name}: the search took too long");
+                return None;
+            }
+        };
         let pointers: Vec<KbPointer> = hits
             .iter()
             .map(|h| KbPointer {
