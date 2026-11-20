@@ -3834,7 +3834,7 @@ Other ideas:
 - **Pre-trusted Claude worktrees** (M11.0): every new worktree shows Claude's folder-trust dialog
   (ptyro can answer it now). Codex worktrees inherit their project's trust (§20.2); Claude has no
   flag, so this would mean writing `hasTrustDialogAccepted` into the profile's `.claude.json`,
-## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; KB4 and KB5 are not)
+## KB — Knowledge base (decided 2026-11-19; open: KB0, KB1 and KB2 are built: the spikes, the store, the way in, redaction, agent sessions, search, the commands, the agents' tools, private sessions, the Library in the TUI and on the web, linked machines, and notes with `remember`; and KB3 is: roots, `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill, and the Sources tab and the ingest form in the TUI and on the web; and KB4 is: a shell's commands, and what they print only where asked for; KB5 is not)
 
 *Why:* the owner has long wanted one knowledge base around all of the work done with agents and
 the state of the projects: tracking, history, memory and ingest. Everything that happens in
@@ -4255,9 +4255,9 @@ Development section), its README and `docs/` text, and the milestone's version b
         live upgrade, beside a kept session; the mark and the JSON; a private shell and its
         split; `kb.private` and `--no-private`; `kb forget --session` on a kept session and
         on one nothing was read of), the TUI's form (`app.rs`), the store's column. Not
-        built: a shell's commands aren't kept yet (KB4), so a private shell differs only by
-        its mark; `remember` naming "a private session" (KB2); a shell lost in a daemon
-        restart and offered again comes back not private. SPEC §6.4, §11.5a, §14, §25 "As
+        built then, built since: a shell's commands (KB4), so a private shell keeps
+        nothing; `remember` naming "a private session" (KB2); a shell lost in a daemon
+        restart and offered again comes back private (KB4). SPEC §6.4, §11.5a, §14, §25 "As
         built", §25.7a, §25.13, §25.14; `docs/commands.md`, `docs/config.md`,
         `docs/parity.md`, README.)*
   - [x] **KB1.12** Machines (§25.11): the search's fan-out and interleave, a hit read on its
@@ -4433,12 +4433,51 @@ Development section), its README and `docs/` text, and the milestone's version b
         from the config, a far root's progress by event, `worktree.gc`'s list naming a
         root, generated files, sub-agents' transcripts. SPEC §25 "As built", §25.10, §25.11,
         §25.14, §6.4.)*
-- [ ] **KB4 Shells** (R-KB-08) — the debatable one, last and switchable. **M**
-  - [ ] **KB4.1** Commands (§25.6.5): from `SessionInfo.command` at `D`, an item per shell and
+- [x] **KB4 Shells** (R-KB-08) — the debatable one, last and switchable. **M**
+  - [x] **KB4.1** Commands (§25.6.5): from `SessionInfo.command` at `D`, an item per shell and
         day, the skips, the count for repeats; `kb.shell`, `kb.shell_skip`. **S**
-  - [ ] **KB4.2** Output, off by default: the text between the marks, the head and the tail,
+        *(Built 2026-11-20: `ptyro_core::kb::shell` (`Ran`, `left_out`: a space before it,
+        `kb.shell_skip` by first word, a word on the never list; `hide`: a command line's
+        own secrets, `export FOO_KEY=…`, `--password …`, `mysql -p…`, `curl -u me:…`;
+        `anchor`, `parts`), the session's side in `crates/ptyro-daemon/src/session.rs` (the
+        `C` mark's line uncut in `Meta.command_line`, handed over at `D` as `Feed::Ran`,
+        never for a private or unrecorded shell), `crates/ptyro-daemon/src/kb/shells.rs`
+        (`kb_shell_ran`, `Job::Shell`, `kb_shell`: the gate with `Skip::ShellsOff`, the
+        count by the redacted line's anchor, one item a shell and local day). Not from
+        `SessionInfo.command`, which is cut to 200 characters: the snippets
+        (`ptyro_core::shell`) send 2,000 now, a space before a line survives the emulator,
+        and bash says which commands its history skipped. `kb.shell`, `kb.shell_skip`,
+        `KbStatusInfo.shell` (protocol 1.60), `ptyro kb`'s line. The Sources tab's switches:
+        TUI `c` and `o` (`library/sources.rs`), the web's sentence and buttons
+        (`libkit.ts` `shellsKept`); `kb show --open`, `r` and **Its shell** go to the shell.
+        A shell of SHELLS lost in a restart comes back private (`shells.rs` `Kept`). Tests:
+        `kb::shell::tests`, `kb/shells/tests.rs`, `crates/ptyro/tests/kb4.rs`
+        (`a_shells_commands_are_kept_…`, `a_private_shell_is_still_private_…`,
+        `a_real_shells_commands_…` with bash and zsh), `library/tests.rs` (two),
+        `web/test/library.mjs`, `web_e2e`'s `sources`. Not built: a per-project switch of
+        its own; a repeat counted under bash's `ignoredups`. Unverified: fish, pwsh, and
+        bash ≥ 4.4's `PS0` path (bash 3.2 and zsh 5.9 were run). SPEC §8.7, §25 "As built",
+        §25.6.5, §25.13, §25.14, §6.4; `docs/knowledge.md` "Shells".)*
+  - [x] **KB4.2** Output, off by default: the text between the marks, the head and the tail,
         never an alternate-screen command or an unrecorded session, `kb.shell_output_days`; the
         setting's help says it keeps what commands print. **M**
+        *(Built 2026-11-20: `crates/ptyro-term/src/capture.rs` (`Capture`: the bytes between
+        `C` and `D` as the emulator is fed them, escape sequences out, the first 2 KiB and
+        the last 6 KiB in whole lines with `… N lines left out …`; nothing for a command
+        that used the alternate screen or placed the cursor), `TermEvent::CommandOutput`
+        before the `D` mark, switched on in a shell's emulator only while `kb.shell =
+        "output"` and the shell is neither private nor unrecorded (`IoControl.kb_output`,
+        `Daemon::kb_output_switch`); never a command that was typed into while it ran (a
+        prompt, a REPL, `ssh`: `Meta.command_no_output`) or an agent started by hand;
+        `output` chunks beside
+        their command, deleted after `kb.shell_output_days` in the daily pass
+        (`kb_shell_output_pass`, which no longer needs `kb.retain_days`). From the stream,
+        not the grid (SPEC says why). The web asks before it switches output on. Tests:
+        `capture::tests`, `emulator::tests::a_commands_output_is_told_…`, the fuzz target
+        `emulator` with capture on, `kb/shells/tests.rs` (`output_is_kept_only_when_asked_for_…`),
+        `kb4.rs` (`what_a_command_printed_is_kept_only_when_asked_for_…`: bounded, a line
+        typed without echo, an alternate screen, a private shell, back to commands).
+        SPEC §25 "As built", §25.6.5, §25.12.)*
 - [ ] **KB5 Offered at the prompt** (R-KB-06) — off by default. **M**
   - [ ] **KB5.1** (spike) A `UserPromptSubmit` hook's added context on the real Claude and
         Codex, and what the user sees of it. **S**

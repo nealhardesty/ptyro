@@ -258,6 +258,8 @@ the read as it happens). The selected one is beside the list in full.
 | `x` | stop reading it and drop what was kept of it (`kb.remove`): the daemon says what goes and asks. Your files aren't touched. A project's own root stays for as long as the project does |
 | `b` | read what your agents kept before ptyro did (`kb.backfill`): whose, which profile's, how far back, or only count; it counts first and asks |
 | `t` | keep agent sessions as they happen, or stop (`kb.sessions`) |
+| `c` | keep the commands you run in your shells, or stop (`kb.shell`: `commands` or `off`) |
+| `o` | also keep what those commands print, or stop (`kb.shell`: `output` or `commands`); it never switches the commands on by itself |
 | `Tab` | with linked machines: whose roots are listed and acted on (roots are each machine's own) |
 | `y` | copy its path |
 | `v` | how the knowledge base stands (the Search tab's `s`) |

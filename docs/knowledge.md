@@ -31,6 +31,9 @@ messages; their code itself only if you ask.
 **What your agents kept before ptyro did**, when you ask for it: `ptyro ingest --history`
 (see [The agents' own history](#the-agents-own-history)).
 
+**The commands you run in your shells**: the command lines, and not what they print. See
+[Shells](#shells) for exactly what that is and how to switch it off.
+
 **Your chats are searched beside it.** They live in their own file (`chat.db`) and are not
 copied; one search answers from both.
 
@@ -49,9 +52,80 @@ only. Nothing leaves this computer. Each linked machine keeps its own (see
 - **Files that hold secrets**: `.env*`, `*.pem`, `*.key`, `.ssh/`, `.aws/`, `.gnupg/` and
   their kind are never read. `[kb] exclude` adds paths.
 - **What you forgot** (below), and anything of an agent or a repository you kept out.
-- Terminal contents. ptyro's database (`ptyro.db`) holds no text of your work at all.
+- **What is on your terminal.** Not an agent's screen, and not what a shell command printed,
+  unless you switch that on yourself (`[kb] shell = "output"`, see [Shells](#shells)): that
+  one setting is the only way terminal contents reach `kb.db`. ptyro's database (`ptyro.db`)
+  holds no text of your work at all.
 
-Not built yet: shell commands, and pointers offered at a prompt (ROADMAP KB4, KB5).
+Not built yet: pointers offered at a prompt (ROADMAP KB5).
+
+## Shells
+
+This is the part of the knowledge base most worth a second thought, so here is all of it.
+
+**What is kept, as it comes** (`[kb] shell = "commands"`): each command line you run in a
+shell session of ptyro (the quick terminal, SHELLS, a shell in a worktree), when the command
+ends. With it: the folder it ran in, its exit code when it failed, how long it took, and how
+often you ran that same line in that folder that day (a hundred `make test` are one row that
+says `100 times`). A shell has one entry a day. That is how "that long ffmpeg line" is found
+again by one of its words:
+
+```sh
+ptyro recall ffmpeg scale kind:command
+ptyro kb recent --kind shell
+```
+
+ptyro learns the command line from its own shell integration (bash, zsh, fish, PowerShell: the
+shell tells it), so a shell with `[shell] integration = false`, and a program that is not a
+shell, keep nothing. Commands your *agents* run are not here: they are in the agent's session.
+
+**What is not kept unless you ask**: what a command *printed*. `[kb] shell = "output"` keeps
+it beside the command: the first 2 KiB and the last 6 KiB of it, as plain text, with a line
+that says how much was left out between. It is deleted after 30 days
+(`[kb] shell_output_days`), the command line stays. This is the one setting that stores what
+is on your terminal, which is why it is off and why the web asks before it switches it on.
+
+**Never kept, whatever the setting:**
+
+- anything of a **private** shell (`ptyro shells new --private`, the Private switch of the
+  forms) or of an unrecorded one;
+- **a command typed with a space before it**: the habit that keeps a line out of the shell's
+  own history keeps it out of ptyro's too, with what it printed. (In bash, a command the
+  shell's history skips for any reason, a repeat under `HISTCONTROL=ignoredups` for one, is
+  treated the same way: ptyro can't tell which line it was.)
+- the trivial ones, by their first word: `ls cd pwd clear exit ll la fg bg history`
+  (`[kb] shell_skip`);
+- **a command that names a key or credential file**: `cat .env`, `ssh-add ~/.ssh/id_ed25519`,
+  anything `[kb] exclude` matches. Neither the line nor its output;
+- **anything a command showed that you typed into while it ran**: a password prompt, a
+  REPL (`python`, `psql`), `ssh`, an installer's questions. What such a command shows holds
+  what you typed, so none of it is kept; its command line is. (A password typed where nothing
+  is echoed was never printed in the first place, and is no command line either.) Stopping a
+  command with Ctrl-C is not typing: an interrupted build keeps what it printed;
+- **what a full-screen program showed** (an editor, a pager, `htop`: the alternate screen, or
+  a cursor sent around the screen): its command line is kept, its screen is not;
+- the screen of **an agent you start by hand** in a shell (`claude`, `codex`): its command
+  line is kept, its conversation is the agent's own.
+
+**Secrets in a command line** are taken out before it is stored: `Bearer …`, tokens by their
+shape, `password=…`, a URL's password, your profile's secret values, your own `[kb] redact`
+patterns, and the shapes a command line has: `export FOO_KEY=…`, `--password …`,
+`--api-key=…`, `mysql -p…`, `sshpass -p …`, `docker login -p …`, `curl -u user:…`. They are
+stored as `<redacted>`. This is a net, not a proof: a secret in no known shape gets through.
+Put a space before such a command, or run it in a private shell.
+
+**Switching it off**, any of these:
+
+- Settings → Knowledge → **shell** → `off` (TUI and web), or `ptyro config set kb.shell off`;
+- in the Library's **Sources** tab: `c` in the TUI (`o` switches the output), **Stop keeping
+  commands** on the web;
+- one shell: start it private;
+- one project: `[knowledge] enabled = false` in its `.ptyro.toml`.
+
+Off keeps nothing more. What was kept stays until you forget it: `ptyro kb forget k:…` for a
+day of a shell, `ptyro kb forget --session NAME` for all of a shell's days (the shell is
+private from then on), `ptyro kb forget --query "…"` for what a search finds. `ptyro kb` says
+which of the three settings is on.
 
 ## Projects and folders
 
@@ -151,7 +225,8 @@ that ran in a project that keeps itself out. Sub-agents' own files are not read.
 ## Private sessions
 
 A private session leaves nothing in the knowledge base: no transcript is read and no card is
-kept. The agent still keeps its own history, as it always does.
+kept. The agent still keeps its own history, as it always does. A private shell keeps no
+command and no output.
 
 - Start one with `ptyro new --private` (also `wt new --agent … --private` and `shells new
   --private`), or tick **Private** in the TUI's form (`C-o` in the task box) or the web's New
@@ -247,7 +322,9 @@ The same, to look at.
   tab: what is read, each with what it holds, how it stands and how far a read of it is; `i`
   reads a folder (a form with every option of `ptyro ingest`), `s` looks at one again and
   `S` at all, `x` stops reading one (it asks first), `b` reads your agents' own history
-  (it counts first), `t` switches the keeping of agent sessions.
+  (it counts first), `t` switches the keeping of agent sessions, `c` that of shell commands
+  and `o` that of what they print (the tab says which is on). A shell's day opens in the
+  reader like anything else, and `r` there goes to the shell, while ptyro still has it.
 - **Web**: More → Library, built for a phone. The search box, the same filters as picks, the
   history by day with **Older…** for more; a tap opens the reader (the piece with what was said
   around it, then **All of it**, a box to find in it, **Its session**, and ⋯ for copying and
@@ -255,8 +332,10 @@ The same, to look at.
   project, **New note**, a tap to edit one in the page (Save), ⋯ → Delete…. **Sources** is its
   third: what is read and how far a read is, **Read a folder…** (every option), **Look at all
   again**, **Agents' history…**, and a tap on a row for all of it, **Look at it again** and
-  **Stop reading it…**. A file's and a commit's hit show what was kept of them: a phone has
-  no editor to open them in.
+  **Stop reading it…**; and what is kept of agent sessions and of shells, each with its
+  switch (**Keep what they print too…** says what that stores and asks first). A file's and
+  a commit's hit show what was kept of them: a phone has no editor to open them in. A
+  shell's day has **Its shell**.
 - A session's, a worktree's and a project's menu has **History**: the Library with only that
   one's.
 - Switched off, both say so and offer to switch it on.
@@ -290,12 +369,15 @@ Settings → Knowledge in the TUI and on the web; `[kb]` in the config.
 |---|---|
 | `enabled` | off: nothing is read, kept or searched. What was kept stays in the file |
 | `sessions` | off: agent sessions are no longer kept |
+| `shell` | what is kept of your shells: `commands` (the command lines; as it comes), `output` (those and what they print), `off` (nothing). See [Shells](#shells) |
+| `shell_skip` | commands too trivial to keep, by their first word |
+| `shell_output_days` | delete what commands printed after this many days (`30`; `0` keeps it as long as its command) |
 | `private` | new sessions start private |
 | `tools` | off: no agent is given `recall`, `recall_read` and `remember` |
 | `remember` | off: agents don't write notes (you still do) |
 | `scope` | what an agent's search may see: `profile`, `workspace`, `all` |
 | `meaning` | search by meaning too (downloads a model once) |
-| `retain_days` | delete agent sessions older than this, once a day; `0` keeps them |
+| `retain_days` | delete agent sessions and shell commands older than this, once a day; `0` keeps them |
 | `redact` | more patterns to take out before anything is kept |
 | `exclude` | more paths that are never read |
 | `max_file` | the largest file that is read |
@@ -315,21 +397,28 @@ what was forgotten, and what was not kept and why.
 
 Files, commits and notes are never aged out: they are current by being read again.
 
-`retain_days = 90` deletes agent sessions older than 90 days. It acts when you set it, at the
-daemon's start and once a day. A session deleted this way may be kept again if it goes on.
+`retain_days = 90` deletes agent sessions, and shells' days, older than 90 days. It acts when
+you set it, at the daemon's start and once a day. A session deleted this way may be kept again
+if it goes on.
+
+What shell commands printed (only kept with `shell = "output"`) goes sooner: after
+`shell_output_days` (30), in the same daily pass. The command lines stay.
 
 ## Forgetting
 
 ```sh
 ptyro kb forget k:7f3k              # one item
 ptyro kb forget --query "acme"      # everything a search finds (it lists them, then asks)
-ptyro kb forget --session NAME      # a session, which is private from then on
+ptyro kb forget --session NAME      # a session or a shell, which is private from then on
 ```
 
 It says what will go and asks first. Then the text is really deleted: overwritten in the
 file, gone from the search index, and **never kept again** (a forgotten session's later turns
 are not read). Your files and the agents' own transcripts are not touched. In the Library it
 is `d` (TUI) or ⋯ → Forget… (web; a device paired with `--scope full`).
+
+**Forgetting a day of a shell** keeps nothing more of that shell that day; the next day is
+kept again. `--session` forgets all of its days and keeps nothing more of it at all.
 
 **Forgetting a note deletes its file** (the question says so), and that is all of it: a note
 you write later under the same name is a new note.

@@ -145,6 +145,9 @@ approval_wait = "10m"                     # held Claude permission prompts wait 
 # comments = false                        # don't read source files' comments
 # code = true                             # read source code too, found by its words (it makes kb.db large)
 # commits = false                         # don't read commit messages
+# shell = "commands"                      # what is kept of your shells: off | commands (the command lines; default) | output (those and what they print)
+# shell_skip = ["ls", "cd", "pwd"]         # commands too trivial to keep, by their first word (default: ls cd pwd clear exit ll la fg bg history)
+# shell_output_days = 30                   # with shell = "output": delete what commands printed after this many days (0: as long as its command)
 # sync_every = "30m"                      # how often projects and folders are looked at again (default 1h)
 
 [clipboard]

@@ -1114,6 +1114,11 @@ How the wire stays compatible both ways, with nothing kept for the dead fields:
   v0.0.10 becomes "the scratchpad's editor" and still shows the old project file; quit it
   (`:q`) and the next `C-q ;` starts the global one.
 
+**[built 2026-11-20] Protocol 1.60** (additive; what is kept of shells, KB4, §25.6.5,
+§25.14): `KbStatusInfo` gained `shell` (`kb.shell`'s word: `off`, `commands` or `output`).
+A 1.59 daemon sends none, which a client reads as "says nothing of shells" and shows no
+switch for.
+
 **[built 2026-11-20] Protocol 1.59** (additive; roots on a linked machine, KB3.7, §25.11,
 §25.14): `KbRoots`, `KbIngest`, `KbSync`, `KbRemove` and `KbHistory` gained `machine?` (a
 linked machine's name: the request is answered there, for you only). `KbRoots` became a
@@ -2194,6 +2199,13 @@ runs), so a restart integrates afresh:
   - **bash before 4.4** (macOS's 3.2) has no `PS0`. A DEBUG trap sends 133;C for the first
     command after a prompt, but only when no other DEBUG trap is set. Before WIN1, bash on a Mac
     never said `working`.
+  - **The command line** (`133;C;cmdline=…`) is the line as it was typed: control characters
+    as spaces, at most 2,000 characters (200 before KB4: the knowledge base keeps the line,
+    §25.6.5; a list still shows 200), and **a space before it is sent too**, because that
+    space keeps the command out of the knowledge base. bash reads the line from its history,
+    so a command its history skipped (`HISTCONTROL`) would be told as the one before it: the
+    snippet compares the history's last line with what it was at the prompt and sends an
+    unchanged one with a space before it.
 
   Every snippet guards on `PTYRO` and `__ptyro_integrated`, so the rc file line `ptyro setup`
   adds (§24.2: the internal, hidden `ptyro shell-init`, for the tools it installed) and the
@@ -9992,7 +10004,7 @@ What the whole-feature review found, and the rulings carried into one change (PR
 
 ---
 
-## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and all of KB3: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (KB3.1 to KB3.6), and the Sources tab and the ingest form in the TUI and the web, a file and a commit opened in their own tools, roots on a linked machine (KB3.7, protocol 1.59); KB4 and KB5 (shells, what is offered at a prompt) proposed and not built: wherever a paragraph below describes them, it is the design]**
+## 25. Knowledge base: one memory for you and your agents **[decided 2026-11-19 (owner, ROADMAP KB): the shape, §25.1 and its defaults; built 2026-11-19: all of KB1: `kb.db`, the way in, redaction, agent sessions, search and its golden set (KB1.1 to KB1.6), the protocol's messages and the commands (KB1.7), the settings, the switches and retention (KB1.11), private sessions (KB1.14), the agents' tools (KB1.10), the TUI's Library (KB1.8), the web's (KB1.9), linked machines (KB1.12); built 2026-11-20: all of KB2: notes as files, `remember`, the note commands, the Notes tab in both Libraries, uninstall keeps the notes; and all of KB3: roots and `ptyro ingest`, the tiers, commits, projects by themselves, staying current, the history's backfill (KB3.1 to KB3.6), and the Sources tab and the ingest form in the TUI and the web, a file and a commit opened in their own tools, roots on a linked machine (KB3.7, protocol 1.59); and all of KB4: a shell's commands, and what they print only where asked for (KB4.1, KB4.2, protocol 1.60); KB5 (what is offered at a prompt) proposed and not built: wherever a paragraph below describes it, it is the design]**
 
 Everything that happens in ptyro, and anything you point it at, becomes searchable in one place:
 agent sessions, chats, the documents, comments, file names and commits of your projects, notes,
@@ -10006,8 +10018,77 @@ task; agent sessions are kept as they happen, `ptyro recall` and `ptyro kb` sear
 list and forget them, agents search them with `recall` and `recall_read`, a session can
 be private, the TUI and the web have the Library, a search asks linked machines too, and
 (KB2) you and your agents write notes, which are files.
-**What KB1 to KB3 did not build**, and nothing below should be read as built: shells (KB4),
-and anything offered at a prompt (KB5)):
+**What KB1 to KB4 did not build**, and nothing below should be read as built: anything
+offered at a prompt (KB5)):
+- **KB4 shells (2026-11-20; `ptyro_core::kb::shell`, `ptyro_term::capture`,
+  `crates/ptyro-daemon/src/kb/shells.rs`, `ptyro-protocol` 1.60; §25.6.5 has it whole):**
+  - **The command line comes from the `C` mark itself, not from `SessionInfo.command`**: that
+    one is cut to 200 characters for a list. The session keeps the line as the shell sent it
+    (`Meta.command_line`, at most 4 KiB) and hands it over at `D` (`Feed::Ran`). ptyro's
+    snippets now send 2,000 characters of it (they sent 200), **and a space before it
+    survives** (the emulator trimmed it): that space is how a command is kept out.
+  - **bash says which commands its history skipped.** Its snippet reads the line from
+    `history 1`; a command that `HISTCONTROL` kept out (`ignorespace`, `ignoredups`) left
+    the *previous* line there, which was then taken for it. The snippet now remembers the
+    history's last line at each prompt and sends an unchanged one with a space before it:
+    never kept. The cost: under `ignoredups` a repeated command is not counted in bash.
+  - **Output is collected from the stream, not read back from the grid** (the design said
+    the grid between the marks): `C`, the output and `D` often arrive in one read, the grid's
+    marks are the prompt's, and scrollback is finite. `ptyro_term::capture::Capture` takes
+    the bytes between `C` and `D` as the emulator is fed them, drops the escape sequences,
+    lets a line that writes itself over (`\r`) end as its last state, and keeps whole lines:
+    the first 2 KiB and the last 6 KiB, each line at most 1 KiB, with `… N lines left out …`
+    between. It is **switched on in a shell's emulator only while `kb.shell = "output"`**, the
+    knowledge base is on, and the shell is neither private nor unrecorded
+    (`IoControl.kb_output`, `Daemon::kb_output_switch`); otherwise nothing is collected at all.
+  - **"Used the alternate screen" is wider**: also a command that put the cursor at a place
+    on the screen (`CSI H`, `CSI f`: `clear`, `watch`, a full-screen program that doesn't
+    switch screens), **a command that was typed into while it ran** (the design had no word
+    on a REPL, `ssh` or a prompt that echoes: what such a command shows is what you typed;
+    type-ahead for the next command counts too, which errs on the side of keeping less), and
+    **an agent started by hand** in the shell (`claude`, `codex`: by the
+    command's first word, and by the foreground process the daemon already watches for
+    UX1.4). Their command lines are kept; nothing they showed is.
+  - **`kb.exclude`'s patterns are path globs, so "a command that matches them" is a command
+    that names such a path**: any word of the line (split at blanks, quotes and `= : , ; | &
+    < > ( )`) on the never list. `cat .env`, `ssh-add ~/.ssh/id_ed25519` and `scp
+    host:.netrc .` keep neither the line nor its output.
+  - **A command line has secrets in shapes §25.7's rules don't know**, so it has rules of its
+    own, applied before them (`kb::shell::hide`): the value of a variable or a flag whose
+    name has a part ending in `password`, `passwd`, `passphrase`, `pass`, `pw`, `secret`,
+    `token`, `key`, `apikey`, `auth` or `credential(s)` (`export FOO_KEY=…`, `--api-key=…`,
+    `--password …`); `-p…` written against `mysql`, `mysqldump`, `mysqladmin`, `mariadb`;
+    `-p …` of `sshpass`, `docker`, `podman`, `helm`, `mongosh`, `smbclient`; `redis-cli -a`;
+    the password after `curl -u user:`. What stands for a value (`$TOKEN`, `$(…)`) stays.
+  - **The count is found by the line as stored**: the chunk's anchor is a hash of the folder
+    and the *redacted* line, so it says nothing of a secret, and the same request with
+    another token is the same row. A repeat's output replaces the one before it (one row,
+    its last output); a repeat that printed nothing leaves none.
+  - **Where and how it ran is the chunk's heading too** (`in /repo · exit 2 · took 12s · 3
+    times`), beside `meta` (`cwd`, `exit`, `ms`, `count`): every reader shows a heading, and
+    the folder's words find the command. An output chunk's heading is its command.
+  - **A private shell is real now, and stays so**: its session hands nothing over (and the
+    gate refuses it besides). A shell of SHELLS lost in a daemon restart came back not
+    private: its kept record now carries `private` and `unrecorded` (`shells.rs` `Kept`).
+  - **The switches.** `kb.shell` (`off`, `commands`, `output`), `kb.shell_skip`,
+    `kb.shell_output_days` in the schema; `KbStatusInfo.shell` (1.60) says which is on, in
+    `ptyro kb`'s lines and to the Libraries. The Sources tab: TUI `c` (the commands: `off` ↔
+    `commands`, and from `output` off too) and `o` (what they print: `commands` ↔ `output`;
+    from `off` it switches nothing and says `c` comes first); web: the sentence with **Keep
+    shell commands** / **Stop keeping commands** / **Keep what they print too…** (a question
+    first, which says what that stores) / **Stop keeping what they print** / **Stop keeping
+    both**. **No per-shell capture option**: a shell's own switch is Private.
+  - **Going to it**: `kb show REF --open`, `r` in the TUI's reader and **Its shell** on the
+    web go to the shell a day's commands ran in, while ptyro still has it.
+  - **Forgetting**: a day's item is forgotten like any item (its URI's tombstone keeps the
+    rest of that day out; the next day is kept again). `kb forget --session` on a shell
+    forgets every day and makes it private.
+  - **Not built**: a per-project switch of its own (a project's `[knowledge] enabled = false`
+    keeps its shells' commands out, as it keeps everything of it out); output of a command
+    that spans a live upgrade (its line is kept); knowing a hidden command from a repeat in
+    bash; PowerShell's and fish's snippets are changed as bash's and zsh's are but only
+    bash 3.2 and zsh 5.9 were run here **[verified 2026-11-20, macOS: bash 3.2.57, zsh 5.9;
+    fish, pwsh and bash ≥ 4.4's `PS0` path unverified]**.
 - **KB3.7 the Sources tab, the ingest form, and a source opened in its own tool (2026-11-20;
   `crates/ptyro-tui/src/library/sources.rs`, `web/src/library.ts` and `libkit.ts`,
   `crates/ptyro/src/kb.rs` and `ingest.rs`, `kb/machines.rs`, `ptyro-protocol` 1.59):**
@@ -10019,8 +10100,7 @@ and anything offered at a prompt (KB5)):
     `kb.sessions`, `y` copies the path, `v` is the status (`s` is taken). Web:
     `#/library/sources`: the rows, a tap for one in full with Look at it again and Stop
     reading it…, and Read a folder…, Look at all again, Agents' history…, and a button that
-    switches `kb.sessions`. **There is no switch for shells** (§25.10 listed one): shells
-    are KB4.
+    switches `kb.sessions`. (The switches for shells came with KB4: above.)
   - **How far a read is**: `KbProgress` moves a row between two asks; while anything is
     being read or removed (a root's `progress` or `removing`, or `KbStatus.queued` for the
     agents' history) the tab asks `KbRoots` again once a second, and when a pass ends. A
@@ -10486,10 +10566,9 @@ and anything offered at a prompt (KB5)):
     means a scratch shell.
   - **`Reply::Agents` carries `private`** (the default), as `Chats` carries `incognito`: a
     client that can't read the config (a paired phone) shows the form's switch right.
-  - **Not built**: a shell's commands are not kept yet (KB4), so a private shell differs
-    from another only by its mark (`remember` from a private session came with KB2); a session lost
-    in a daemon restart and offered again in SHELLS comes back not private (its kept record
-    has no flag).
+  - (`remember` from a private session came with KB2. Since KB4 a private shell keeps no
+    command, and one lost in a daemon restart and offered again in SHELLS comes back
+    private: its kept record carries the flag.)
 - **KB1.7 the protocol's messages and the commands, KB1.11 the settings, the switches and
   retention (2026-11-19; `ptyro-protocol` 1.53, `crates/ptyro-daemon/src/kb/requests.rs`,
   `crates/ptyro/src/kb.rs`, `ptyro_core::config::Kb`):**
@@ -11283,31 +11362,50 @@ are the only part of the knowledge base that someone *writes*, so they rank firs
   by a key. Notes are many, mostly written by agents, and found by search.
 - This supersedes R-ORC-20's `decisions` log and R-CHAT-16's per-workspace memory.
 
-#### 25.6.5 Shells (KB4; not built)
+#### 25.6.5 Shells **[built 2026-11-20, KB4]**
 
-- **Commands** (`kb.shell = "commands"`): when a command ends in a shell session (the quick
-  terminal, SHELLS, a `shell` session), the daemon already has it:
-  `SessionInfo.command` (`ShellCommand{text, started_ms, ended_ms, exit}`, from OSC 133 `C` and
-  `D`, §8.7). It becomes a `command` chunk of that shell's item for the day: `$ <text>`, with
-  its folder, exit code and duration in `meta`. A command with no text (bash 3.2 sends none) is
-  skipped.
-  - Skipped: one that starts with a space (the `HISTCONTROL` habit), the trivial ones
-    (`kb.shell_skip`: `ls cd pwd clear exit ll la fg bg history`), and any that match
-    `kb.exclude`'s patterns.
-  - The same command in the same folder on the same day is one chunk with a count, so a hundred
-    `make test` are one row.
-  - Commands an *agent* runs are not shell commands: its transcript's tool titles have them.
-- **Output** (`kb.shell = "output"`, **off by default**, owner 2026-11-19): at `D`, the text
-  between the command's `C` mark and its `D` mark is taken from the session's grid and
-  scrollback (the marks are in the grid, §5.7), as plain text.
-  - Kept: the first 2 KiB and the last 6 KiB, with `… N lines left out …` between.
-  - Never: a command that used the alternate screen (an editor, a pager, `htop`), an unrecorded
-    session, a command the rules above skip.
-  - Redacted like everything else, stored as an `output` chunk beside its command, searched by
-    words only, ranked last, and deleted after `kb.shell_output_days` (30).
-  - This is the one place terminal contents reach a database, which is why it is its own
-    switch and says so in its help.
-- **`off`** records neither.
+The debatable source (owner, 2026-11-19), so the one that keeps least and whose every switch
+is in plain sight. Only shell sessions (the quick terminal, SHELLS, a `shell` session): a
+command an *agent* runs is in its transcript's tool titles.
+
+- **Commands** (`kb.shell = "commands"`, as it comes): when a command ends in a shell session
+  (OSC 133 `D`, from ptyro's shell integration, §8.7) its session hands the daemon the line
+  the `C` mark carried (as typed, at most 4 KiB), the folder the shell was in, when it started
+  and ended, and its exit code (`Feed::Ran`, `Daemon::kb_shell_ran`). It becomes a `command`
+  chunk of that shell's item for the **local** day, `shell://<session id>/<YYYY-MM-DD>`: `$
+  <line>`, under a heading that says where and how it ran, with `cwd`, `exit`, `ms` and
+  `count` in `meta`. The item is the user's (`writer = user`), stamped with the shell's
+  profile, project, workspace, worktree and session, titled `<the shell's name> ·
+  <day>`. A command with no line (a shell with no integration, a `C` mark without `cmdline`)
+  is not kept.
+  - **Never kept** (`kb::shell::left_out`), and not named in `ptyro kb status` either: one
+    that starts with a space; the trivial ones by their first word (`kb.shell_skip`: `ls cd
+    pwd clear exit ll la fg bg history`); one that names a path on the never list (§25.7,
+    `kb.exclude`).
+  - **The same line in the same folder on the same day is one chunk with a count**, so a
+    hundred `make test` are one row.
+  - **Its own secrets are taken out first** (`kb::shell::hide`, "As built"), then §25.7's
+    rules like everything else.
+- **Output** (`kb.shell = "output"`, **off unless chosen**, owner 2026-11-19): what the
+  command printed between its `C` and its `D`, as plain text (`ptyro_term::capture`).
+  - Kept: the first 2 KiB and the last 6 KiB, whole lines, with `… N lines left out …`
+    between; a line is at most 1 KiB.
+  - Never: a command that used the alternate screen or sent the cursor to a place on the
+    screen (an editor, a pager, `htop`); **a command that was typed into while it ran** (a
+    password prompt, a REPL, `ssh`, an installer's questions: what it shows holds what was
+    typed, echoed or not; `Meta.command_no_output`, set by any input but Ctrl-C, Ctrl-D,
+    Ctrl-Z and Ctrl-\, so an interrupted build keeps what it printed); an agent started by
+    hand; a private or an unrecorded shell; a command the rules above keep out. What is
+    typed where nothing is echoed was never printed, so it is in no output by itself; the
+    rule above is for what *is* echoed.
+  - Stored as `output` chunks beside its command (the same anchor), redacted like everything
+    else, searched by words only, ranked last, and deleted after `kb.shell_output_days` (30;
+    0: as long as its command) in the daily pass (`Daemon::kb_shell_output_pass`).
+  - It is collected only while the setting is on. This is the one place terminal contents
+    reach a database, which is why it is its own word of the setting, says so in its help,
+    and is asked about before the web switches it on.
+- **`off`** keeps neither, and the gate refuses what still arrives (`Skip::ShellsOff`). What
+  was kept stays until it is forgotten.
 
 ### 25.7 Redaction, and what is never stored
 
@@ -11725,7 +11823,10 @@ the reader for every kind of item, and the actions `kb.open`, `kb.search`, `kb.r
 for KB3, is in this section's "As built" list. *As built (KB2)*: the tab bar, the Notes tab,
 `n`, `x`, a note in your editor, the note form, the `wrote` filter. *As built (KB3.7)*: the
 Sources tab, `i`, mend naming a failing root, a file and a commit opened in their own tools,
-the ingest form and the history's; what differs from the lines below is in "As built".
+the ingest form and the history's; what differs from the lines below is in "As built". *As
+built (KB4)*: the Sources tab says what is kept of shells and `c` and `o` switch it; a
+shell's day is read in the reader (each command under where and how it ran, its output under
+its command), and `r` there goes to the shell.
 
 - A search box, a row of filters (kind, project, since, who wrote it, machine; `Tab` reaches
   them, each a pick), the hits on the left (a mark for the kind, title, date, project, snippet),
@@ -11764,7 +11865,8 @@ steps. *As built (KB1.9)*: More → Library (`web/src/library.ts`, which registe
 `Older…`, the find box, Its session, copy, Forget… and History in the row menus. *As built
 (KB2)*: the Search and Notes tabs, New note, a note edited in the page. *As built (KB3.7)*:
 the Sources tab (`#/library/sources`), Read a folder… and Agents' history… as forms with
-every option, a root's sheet ("As built" above has the rest). "Open in your editor" is not offered on the web (there is no editor there); a file's hit
+every option, a root's sheet ("As built" above has the rest). *As built (KB4)*: the Sources
+tab's sentence and switches for shells, and **Its shell** in the reader. "Open in your editor" is not offered on the web (there is no editor there); a file's hit
 shows its text.
 
 **Settings:** a **Knowledge** section in both panels (§25.13). **`ptyro doctor`:** a `kb.db`
@@ -11862,7 +11964,9 @@ far file is the design, not built: its hit is read in the reader.
     session too old to keep is not written when its transcript is read again (the daemon's
     start reads every session that has no item): the read stops at the same cut. A session
     that is carried on has a new last message, is read from its start and kept whole.
-    `kb.shell_output_days` comes with shells (KB4).
+    *As built (KB4)*: the same pass deletes `output` chunks older than
+    `kb.shell_output_days` (their commands stay), runs whether or not `kb.retain_days` is
+    set, and runs again at once when either setting changes.
 - **Switched off** (`kb.enabled = false`): nothing is ingested, the tools are not given, the
   Library and the commands say it is off and offer to switch it on. What is stored stays.
   - *As built (KB1.7, KB1.11)*: no trigger queues a read, the gate refuses what is queued
@@ -11900,8 +12004,8 @@ KB1.14): `enabled`, `sessions`, `private`, `tools`, `scope`, `meaning`, `retain_
 `max_file` (a size like `1MiB`; 0 and what isn't a size are refused when the file loads),
 `redact` (a pattern that isn't a regex is refused the same way) and `exclude`; (KB2)
 `remember`; (KB3) `projects`, `comments`, `code`, `commits`, `sync_every` (a duration of a
-minute or more)**; the others come with the tasks that read them (the `shell` keys KB4,
-`inject` KB5).
+minute or more); (KB4) `shell` (`off`, `commands` or `output`: another word is refused when
+the file loads), `shell_skip`, `shell_output_days`**; `inject` comes with KB5.
 
 ```toml
 [kb]
@@ -11955,7 +12059,7 @@ exclude = []              # more paths never to ingest (globs)
 - Help text says what each switch stores: `shell = "output"` says that it keeps what your
   commands print, and `code` that it makes the index large.
 
-### 25.14 Protocol (additive; KB1's, KB2's and KB3's parts are built, 1.53 to 1.59)
+### 25.14 Protocol (additive; KB1's to KB4's parts are built, 1.53 to 1.60)
 
 - `KbSearch{query, project?, kinds?, since?, before?, limit, machines, here}` → `KbHits{hits}`
   (`KbHit`, §25.8). An agent's tool call carries no profile: the daemon takes it from the
@@ -12026,6 +12130,9 @@ exclude = []              # more paths never to ingest (globs)
     name, and the request is answered there (this machine's own name, or `here`, is this
     one). You only: from inside an agent's session it is `permission_denied`. The scopes
     are unchanged, and the general router still leaves all five alone (`here_only`).
+  - **1.60 (KB4)**: `KbStatusInfo.shell` (`off`, `commands`, `output`; empty from a daemon
+    before it). No request is new: a shell's commands are kept by the daemon itself, read,
+    listed and forgotten as every item is, and switched by the setting.
   - `Features.kb` is dropped ("As built", KB1.7).
 - `KbRoots` → `KbRoots{roots}` (`KbRoot`: name, path, kind, options, counts by tier, state,
   error, times).
@@ -12047,12 +12154,12 @@ Within §3.3's boundaries: only `ptyro-store` talks SQL, only `ptyro-agents` kno
 
 | Crate | What it gains |
 |---|---|
-| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`, `kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, `rank` and its weights), `chats::parse_kb_query`; (KB2) `kb::note` (a note's header, title, URI and its `Source`)**; it now depends on `regex` |
+| `ptyro-core` | `kb`: the types (`KbHit`, `KbItem`, `KbRoot`, `RootSpec`), the query's new words, the chunkers (messages, Markdown, the comment table, paths), `redact`, the ranking, the card. **Built: `kb::{KbItem, KbChunk, KbRoot, ItemKind, ChunkKind, Writer}`, `kb::ingest` (the gate, `Source`, `Stamp`, `Plan`, the never list), `kb::chunk` (`split`, `markdown`, `plain`, `message`), `kb::redact`, `kb::comments`, `kb::card`, `kb::search` (`KbSearch`, `KbHits`, `KbHit`, `KbDoc`, `HitKind`, `rank` and its weights), `chats::parse_kb_query`; (KB2) `kb::note` (a note's header, title, URI and its `Source`); (KB4) `kb::shell` (`Ran`, `left_out`, `hide`, `anchor`, `parts`)**; it now depends on `regex`. (`ptyro-term` gained `capture`, KB4: what a command printed, bounded.) |
 | `ptyro-store` | `kb/`: the schema and migrations, `KbDb` (its writer thread), the search SQL, forget. **Built: `kb.rs` (`session_facts` for a session's card), `kb/search.rs` (`KbFilter`, `search_words`, `search_meaning`, `MATCH_CAP`, the vectors' upkeep: `vec_todo`, `vec_todo_of`, `put_vecs`, `vec_counts`, `drop_other_vecs`)** |
 | `ptyro-agents` | `Adapter::transcript` and `read_transcript`; `claude::transcript`, `codex::transcript`; the MCP launch arguments. **Built: `transcript.rs` (`Transcript`, `TranscriptAt`, the readers `claude` and `codex`, where each agent keeps its file), `Adapter::{transcript, hook_transcript, read_transcript, transcript_title}`; the example `transcript` prints what a reader makes of a file** |
 | `ptyro-git` | listing files (`ls-files`), the commit log since a head. **Built (KB3): `log.rs` (`Git::ls_files`, `history_tip`, `log`, `parse_log`, `Commit`)** |
 | `ptyro-meaning` | `fuse` over several lists; nothing else changes. **Built: `fuse_lists` (`fuse` is it for two lists), and `score` in eight running sums** |
-| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (**built**, KB2: the watcher, `kb_notes_sync`, `kb_note`, `kb_notes`, `kb_note_read`, `kb_note_forget`), `kb/shell.rs`; `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
+| `ptyro-daemon` | `kb.rs` (the ingest actor and queue; **built**, with `kb_db`, `kb_gate`, `kb_ingest`, `kb_doctor`), `kb/sessions.rs` (**built**: `kb_hook`, `kb_hooked`, `kb_session_changed`, `kb_catch_up`, the read from a cursor, the card), `kb/roots.rs` (walk and sync), `kb/notes.rs` (**built**, KB2: the watcher, `kb_notes_sync`, `kb_note`, `kb_notes`, `kb_note_read`, `kb_note_forget`), `kb/shells.rs` (**built**, KB4: `kb_shell_ran`, `kb_shell`, `kb_output_switch`, `kb_shell_output_pass`; the session's side is `Feed::Ran` in `session.rs`); `meaning.rs` backfills both tables (**built**, with `kb_embed`, `meaning_vector`, `chat_lists`); `kb/search.rs` (**built**: `kb_search`, `kb_read`, `kb_recent`, `KbScope`), `kb/requests.rs` (**built**: `handle_kb`, `kb_caller_scope`, `kb_forget`, `kb_status`, the retention pass) and `kb/golden.rs` (the golden set, a test); the fan-out in `kb/machines.rs` (**built**, KB1.12: `kb_machine`, `kb_split`, `kb_far`, `kb_search_far`; interleaved by `chats::interleave_by`). `redact.rs` keeps only what titles need and calls `ptyro_core::kb::redact` |
 | `ptyro-protocol` | the messages of §25.14. **Built (1.53): `KbSearch`, `KbRead`, `KbRecent`, `KbForget`, `KbStatus` and their replies; (1.55): `DomainEvent::KbUpdated`; (1.56): `machines`, `machine`, `profile`, `left_out`; (1.57): `KbNote`, `KbNotes`, `KbNoteRead`, `KbSync`** |
 | `ptyro` | `recall`, `ingest`, `kb`; `mcp.rs`'s three tools. **Built: `kb.rs` (`recall`, `kb status`, `kb show`, `kb recent`, `kb forget`; KB2: `kb note`, `kb notes`, `kb sync`), `mcp.rs` (all three tools)** |
 | `ptyro-tui` | `library.rs` (the panel, the reader), the ingest and note forms. **Built (KB1.8): `library.rs` (`Library`, `ChatPanel::Library`, the reader over `chat::ChatView` with `read_only`), `clock::local_ms`; (KB3.7): `library/sources.rs` (the Sources tab, the ingest form and the history's, `Make::KbIngest`, `Make::KbBackfill`)** |

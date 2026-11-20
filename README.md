@@ -627,8 +627,21 @@ history, not instructions, and says who wrote each piece. An agent sees only wha
 under its own profile, never the session it is in, and can't forget anything. `[kb] tools =
 false` gives no agent the tools; `[agents.codex] kb = false` gives that agent none.
 
+**The commands you run in your shells are kept too, and what they print is not.** Each
+command line of a shell session (the quick terminal, SHELLS) is kept when the command ends,
+with its folder, how it ended and how often you ran it, so `ptyro recall ffmpeg` finds that
+long line again. Never kept: a private shell, a command typed with a space before it, `ls`
+and its kind, a command that names a key file (`cat .env`); and tokens and passwords in a
+command line are redacted (`mysql -p…`, `export FOO_KEY=…`, `Bearer …`). What a command
+*printed* is kept only if you say so: `[kb] shell = "output"` (its first 2 KiB and its last
+6 KiB, for 30 days; never a full-screen program's screen, never a command's that you typed
+into: a password prompt, a REPL, `ssh`).
+`[kb] shell = "off"` keeps nothing of your shells; the Library's Sources tab has both
+switches. [`docs/knowledge.md`](docs/knowledge.md#shells) says all of it.
+
 **A private session** leaves nothing in the knowledge base: no transcript is read and no card
-is kept (the agent still keeps its own history, as it always does). Start one with
+is kept (the agent still keeps its own history, as it always does); a private shell keeps no
+command. Start one with
 `--private`, or tick **Private** in the TUI's form (`C-o` in the task box) and in the web's New
 task sheet; `[kb] private = true` makes it the default, and `--no-private` keeps one then. A
 private session is marked `◌`. It still has the tools to search with.
@@ -643,7 +656,8 @@ in your editor (a file at the line that was found), a commit as `git show`. `2` 
 option), `x` deletes one. `3` is the **Sources** tab: what is read (your projects, and the
 folders you add), what each holds and how far a read of it is; `i` reads a folder through a
 form with every option, `s` looks at one again, `x` stops reading one, `b` reads your agents'
-own history. `r` goes to the session it
+own history, and `t`, `c` and `o` switch the keeping of agent sessions, of shell commands and
+of what those print. `r` goes to the session it
 happened in, resuming it if it sleeps; `y` copies its address, `Y` its text; `d` forgets it
 (it asks first); `s` shows how the knowledge base stands. A session's, a worktree's and a
 project's menu (`.`) have `kb.history`: the Library with only that one's. It follows what is
@@ -655,7 +669,7 @@ piece with what was said around it, then **All of it**, with a box to find in it
 session** (resumed if it sleeps) and ⋯ to copy its address or its text and to **Forget…** it. Its
 **Notes** tab lists the notes by project: **New note**, a tap to edit one in the page, ⋯ →
 Delete…. Its **Sources** tab lists what is read and how far a read is: **Read a folder…**
-(every option), **Agents' history…**, and a tap on a row to look at it again or stop reading it. A session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
+(every option), **Agents' history…**, a tap on a row to look at it again or stop reading it, and the switches for agent sessions and for shells (**Keep what they print too…** asks first). A session's, a worktree's and a project's ⋯ menu has **History**. It follows what is kept as it
 happens, and switched off it offers to switch it on.
 
 **With linked machines** (`ptyro machine add`), each keeps its own knowledge base and nothing
@@ -672,8 +686,9 @@ The long form, with what is and is never kept, is [`docs/knowledge.md`](docs/kno
 
 What it keeps is yours to bound. Settings → Knowledge (`[kb]` in the config): `enabled = false`
 switches it off (no session is read and nothing is searched; what was kept stays in the file
-until you forget it), `sessions = false` stops keeping agent sessions, `retain_days = 90`
-deletes sessions older than that once a day, `redact` adds your own patterns to what is
+until you forget it), `sessions = false` stops keeping agent sessions, `shell = "off"` stops
+keeping shell commands (`"output"` also keeps what they print), `retain_days = 90`
+deletes sessions and shell commands older than that once a day, `redact` adds your own patterns to what is
 redacted before anything is kept (keys, tokens, passwords and your profile's secrets already
 are), and `exclude` adds paths that are never read (`.env*`, `*.pem`, `.ssh/` and their kind
 never are). `[agents.codex] kb = false` keeps one agent's sessions out, and a repository keeps
@@ -871,7 +886,7 @@ notifications, profiles and where ptyro keeps its files, is [`docs/config.md`](d
 | [`docs/keys.md`](docs/keys.md) | Every key: prefix, sidebar, copy mode, mouse, rebinding |
 | [`docs/parity.md`](docs/parity.md) | Every command, and how to do it in the TUI and on the web |
 | [`docs/config.md`](docs/config.md) | Configuration: your config, profiles, notifications, `.ptyro.toml`, file locations |
-| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, projects and folders (`ptyro ingest`), the agents' own history, notes, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
+| [`docs/knowledge.md`](docs/knowledge.md) | The knowledge base: what is kept and what never is, shells (commands, and output only if you ask), projects and folders (`ptyro ingest`), the agents' own history, notes, private sessions, the switches, forgetting, the agents' tools, the Library, linked machines |
 | [`docs/scripting.md`](docs/scripting.md) | Scripting recipes, and a snippet that teaches agents to use ptyro |
 | [`docs/cli-json.md`](docs/cli-json.md) | Every `--json` output and the exit codes |
 | [`docs/remote.md`](docs/remote.md) | Phones and other machines: setup, scopes, remote approvals, threat model |
