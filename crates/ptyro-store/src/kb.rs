@@ -103,6 +103,9 @@ const MIGRATIONS: &[M] = &[
     ),
 ];
 
+/// The cursor of an item nothing more is read into ([`KbDb::keep_out`]).
+const CLOSED: &str = r#"{"closed":true}"#;
+
 /// How many chunks one writer job deletes: about a third of a second with FTS5's
 /// `secure-delete` on (1.7 ms a chunk at 500k chunks, KB0.1), then other writes get their turn.
 pub const DELETE_BATCH: usize = 200;
@@ -140,7 +143,8 @@ pub enum Outcome {
     Updated,
     /// The plan's hash is the item's: nothing was written (but a moved cursor).
     Unchanged,
-    /// The URI was forgotten: nothing was written, and nothing will be (§25.12).
+    /// The URI was forgotten, or its item is closed ([`KbDb::keep_out`]): nothing was
+    /// written, and nothing will be (§25.12).
     Forgotten,
 }
 
@@ -329,6 +333,9 @@ impl KbDb {
         // A kb.db from an older ptyro is copied beside it first (`kb.db.bak-v<N>`, private): a
         // migration never costs the record. One from a newer ptyro is refused untouched.
         crate::prepare(path, MIGRATIONS.len())?;
+        // Made private (SQLite would make it by the umask, readable until the next line).
+        let _ = ptyro_core::os::private(std::fs::OpenOptions::new().append(true).create(true))
+            .open(path);
         let conn = Connection::open(path)?;
         // Private every time (a restored copy may not be), and before the WAL is made: SQLite
         // gives its -wal and -shm files the main file's mode.
@@ -383,7 +390,41 @@ impl KbDb {
                 }
             })
             .map_err(|_| StoreError::Closed)?;
-        Ok(Self { tx, machine_id, path })
+        let db = Self { tx, machine_id, path };
+        db.finish_forgets();
+        Ok(db)
+    }
+
+    /// A forget that a crash or a restart cut short left a tombstone with some of its text
+    /// (the tombstone is written first, the chunks go in batches): the rest goes now, before
+    /// anything else is asked of the file (§25.12).
+    fn finish_forgets(&self) {
+        let me = self.clone();
+        let _ = self.tx.send(Box::new(move |db| {
+            let done = (|| -> Result<usize> {
+                let n = db.execute(
+                    "DELETE FROM chunk WHERE item IN
+                       (SELECT id FROM item WHERE forgotten_at IS NOT NULL)",
+                    [],
+                )?;
+                if n > 0 {
+                    db.execute(
+                        "UPDATE item SET chunks = 0 WHERE forgotten_at IS NOT NULL AND chunks > 0",
+                        [],
+                    )?;
+                    db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+                }
+                Ok(n)
+            })();
+            match done {
+                Ok(0) => {}
+                Ok(n) => {
+                    me.remove_backups();
+                    tracing::info!("kb.db: {n} piece(s) of forgotten items deleted at open");
+                }
+                Err(e) => tracing::warn!("kb.db: finishing what was forgotten: {e}"),
+            }
+        }));
     }
 
     /// Run `f` on the writer thread and wait for its result.
@@ -590,10 +631,65 @@ impl KbDb {
     pub async fn set_cursor(&self, uri: String, cursor: Option<serde_json::Value>) -> Result<()> {
         self.call(move |db| {
             db.execute(
-                "UPDATE item SET cursor = ?2 WHERE uri = ?1 AND forgotten_at IS NULL",
-                params![uri, cursor.map(|c| c.to_string())],
+                "UPDATE item SET cursor = ?2
+                 WHERE uri = ?1 AND forgotten_at IS NULL AND cursor IS NOT ?3",
+                params![uri, cursor.map(|c| c.to_string()), CLOSED],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Nothing is ever read of `uri` from now on (a private session's conversation, §25.7a):
+    /// a tombstone when nothing was kept of it; when an item is there (the conversation was
+    /// kept before it was carried on in private), that item is **closed**: what it holds
+    /// stays, and no write reaches it again, across restarts too.
+    pub async fn keep_out(&self, uri: String, kind: ItemKind) -> Result<()> {
+        let origin = self.machine_id.clone();
+        self.call(move |db| {
+            let tx = db.transaction()?;
+            tx.execute(
+                "INSERT INTO item (id, uri, kind, writer, origin, ingested_at, forgotten_at)
+                 VALUES (?1, ?2, ?3, 'ptyro', ?4, ?5, ?5) ON CONFLICT(uri) DO NOTHING",
+                params![ptyro_core::chats::new_id(), uri, kind.as_str(), origin, now()],
+            )?;
+            tx.execute(
+                "UPDATE item SET cursor = ?2 WHERE uri = ?1 AND forgotten_at IS NULL",
+                params![uri, CLOSED],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Whether `uri`'s item is closed ([`KbDb::keep_out`]): the gate's other question.
+    pub async fn closed(&self, uri: String) -> Result<bool> {
+        self.call(move |db| {
+            Ok(db
+                .query_row(
+                    "SELECT 1 FROM item WHERE uri = ?1 AND forgotten_at IS NULL AND cursor = ?2",
+                    params![uri, CLOSED],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some())
+        })
+        .await
+    }
+
+    /// The commits that were forgotten under a root that was at `path` and is gone (their
+    /// shas): a root made there again has another id, and so other URIs for them (§25.12).
+    pub async fn forgotten_commits(&self, path: String) -> Result<Vec<String>> {
+        self.call(move |db| {
+            let mut st = db.prepare(
+                "SELECT uri FROM item
+                 WHERE kind = 'commit' AND forgotten_at IS NOT NULL AND root IS NULL AND rel = ?1",
+            )?;
+            Ok(st
+                .query_map([path], |r| r.get::<_, String>(0))?
+                .filter_map(|uri| Some(uri.ok()?.rsplit('/').next()?.to_owned()))
+                .collect())
         })
         .await
     }
@@ -750,8 +846,10 @@ impl KbDb {
     }
 
     /// Remove a root and its items, with no tombstones: ingest it again and it is back
-    /// (§25.12). In batches; `progress` hears how many chunks are gone so far. Returns that
-    /// number at the end.
+    /// (§25.12). **What was forgotten under it stays forgotten**: its tombstones are kept,
+    /// no longer the root's; a file's is its path, and a commit's remembers where the
+    /// repository was ([`KbDb::forgotten_commits`]). In batches; `progress` hears how many
+    /// chunks are gone so far. Returns that number at the end.
     pub async fn remove_root(
         &self,
         id: String,
@@ -779,7 +877,14 @@ impl KbDb {
         self.call(move |db| {
             let tx = db.transaction()?;
             // (Chunks written meanwhile go with their items, by the foreign key.)
-            tx.execute("DELETE FROM item WHERE root = ?1", [&id])?;
+            tx.execute("DELETE FROM item WHERE root = ?1 AND forgotten_at IS NULL", [&id])?;
+            tx.execute(
+                "UPDATE item SET root = NULL,
+                   rel = CASE WHEN kind = 'commit' THEN (SELECT path FROM root WHERE id = ?1)
+                              ELSE rel END
+                 WHERE root = ?1",
+                [&id],
+            )?;
             tx.execute("DELETE FROM root WHERE id = ?1", [&id])?;
             tx.commit()?;
             Ok(())
@@ -864,28 +969,33 @@ impl KbDb {
     }
 
     /// Retention (§25.12, `kb.retain_days`): delete the items of `kinds` whose time (ended,
-    /// else started, else ingested) is before `before_ms`, with no tombstones. Returns how
+    /// else started, else ingested) is before `before_ms`, with no tombstones; but a closed
+    /// one ([`KbDb::keep_out`]) leaves its tombstone, so that it stays unread. Returns how
     /// many items went.
     pub async fn expire(&self, kinds: Vec<ItemKind>, before_ms: u64) -> Result<usize> {
         if kinds.is_empty() {
             return Ok(0);
         }
-        let old: Vec<String> = self
+        let old: Vec<(String, bool)> = self
             .call(move |db| {
                 let kinds: Vec<String> = kinds.iter().map(|k| format!("'{k}'")).collect();
                 let mut st = db.prepare(&format!(
-                    "SELECT id FROM item WHERE kind IN ({}) AND forgotten_at IS NULL
+                    "SELECT id, cursor IS ?2 FROM item WHERE kind IN ({}) AND forgotten_at IS NULL
                        AND COALESCE(ended_at, started_at, ingested_at, 0) < ?1",
                     kinds.join(", ")
                 ))?;
                 Ok(st
-                    .query_map([before_ms as i64], |r| r.get(0))?
-                    .collect::<rusqlite::Result<Vec<String>>>()?)
+                    .query_map(params![before_ms as i64, CLOSED], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .await?;
         let n = old.len();
-        for id in old {
-            self.delete_item(id).await?;
+        for (id, closed) in old {
+            if closed {
+                self.forget(id).await?;
+            } else {
+                self.delete_item(id).await?;
+            }
         }
         if n > 0 {
             self.checkpoint().await?;
@@ -1033,17 +1143,26 @@ fn count_chunks(tx: &Connection, item: &str) -> Result<()> {
 
 // ── writing a plan ──────────────────────────────────────────────────────────────────────────
 
-/// What the item at a plan's URI is now: its id, hash, tombstone and cursor, and whose it is
-/// (its profile and project).
-type Was = (String, Option<String>, Option<i64>, Option<String>, (Option<String>, Option<String>));
+/// What the item at a plan's URI is now: its id, hash, tombstone and cursor, whose it is
+/// (its profile and project), and its root.
+type Was = (
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    (Option<String>, Option<String>),
+    Option<String>,
+);
 
 fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
     let tx = db.transaction()?;
     let found: Option<Was> = tx
         .query_row(
-            "SELECT id, hash, forgotten_at, cursor, profile, project FROM item WHERE uri = ?1",
+            "SELECT id, hash, forgotten_at, cursor, profile, project, root FROM item WHERE uri = ?1",
             [&p.uri],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, (r.get(4)?, r.get(5)?))),
+            |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, (r.get(4)?, r.get(5)?), r.get(6)?))
+            },
         )
         .optional()?;
     // Whose the item was, when it changes hands: its vectors carry a copy (below).
@@ -1062,8 +1181,18 @@ fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
     let s = &p.stamp;
     let (id, outcome) = match found {
         Some((id, _, Some(_), ..)) => return Ok(done(id, Outcome::Forgotten)),
-        Some((id, hash, None, old_cursor, _))
-            if !p.append && p.hash.is_some() && hash == p.hash =>
+        // Closed (`keep_out`): what it holds stays, and nothing more is written to it.
+        Some((id, _, None, Some(c), ..)) if c == CLOSED => {
+            return Ok(done(id, Outcome::Forgotten));
+        }
+        // (The same text under another profile, project or root is not the same item: the
+        // wall goes by those, so they are written again.)
+        Some((id, hash, None, old_cursor, whose, root))
+            if !p.append
+                && p.hash.is_some()
+                && hash == p.hash
+                && whose == (s.profile.clone(), s.project.clone())
+                && root == s.root =>
         {
             if cursor.is_some() && cursor != old_cursor {
                 tx.execute("UPDATE item SET cursor = ?2 WHERE id = ?1", params![id, cursor])?;
@@ -1071,7 +1200,7 @@ fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
             }
             return Ok(done(id, Outcome::Unchanged));
         }
-        Some((id, .., whose)) if p.append => {
+        Some((id, .., whose, _)) if p.append => {
             moved = Some(whose);
             // More of the same item: what the piece doesn't say stays as it was.
             tx.execute(
@@ -1095,7 +1224,7 @@ fn write(db: &mut Connection, p: &Plan, origin: &str) -> Result<Written> {
             )?;
             (id, Outcome::Updated)
         }
-        Some((id, .., whose)) => {
+        Some((id, .., whose, _)) => {
             moved = Some(whose);
             tx.execute(
                 "UPDATE item SET

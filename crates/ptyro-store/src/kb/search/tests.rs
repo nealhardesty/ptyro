@@ -515,3 +515,23 @@ fn db_for_fuzz() -> KbDb {
     })
     .clone()
 }
+
+/// A term the tokenizer makes nothing of (`&&`, `->`) is no word to look for: FTS5 leaves a
+/// phrase with no token out of the query, so what the other words find is still found.
+#[tokio::test]
+async fn a_term_with_no_word_in_it_does_not_empty_the_search() {
+    let db = KbDb::open_in_memory().unwrap();
+    put(
+        &db,
+        ItemKind::File,
+        "file:///langs.md",
+        vec![part(ChunkKind::Text, "we moved the parser from C++ to rust && kept the tests", 1)],
+        stamp(Writer::File, None, None),
+    )
+    .await;
+    for q in ["C++ && rust", "rust &&", "&& rust", "rust -> tests", "rust -&&", "\"&&\" rust"] {
+        assert_eq!(by_words(&db, q, KbFilter::default()).await.len(), 1, "{q:?} → {:?}", fts(q));
+    }
+    // Nothing but such terms: nothing is found, and it is no error.
+    assert!(by_words(&db, "&& ++", KbFilter::default()).await.is_empty());
+}

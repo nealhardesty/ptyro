@@ -796,3 +796,135 @@ proptest! {
         prop_assert_eq!(&rows(&db), &first);
     }
 }
+
+/// §25.12: a forget that was cut short (the tombstone is written first, the chunks go in
+/// batches) is finished when the file is next opened: no text of a tombstone outlives a
+/// restart.
+#[tokio::test]
+async fn a_forget_that_was_interrupted_is_finished_at_the_next_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("kb.db");
+    let uri = "session://claude/half";
+    let id = {
+        let db = KbDb::open(&path, None).unwrap();
+        db.write(doc("file:///kept.md", "# Kept\n\nordinary filler words")).await.unwrap();
+        let turns = (0..DELETE_BATCH + 20)
+            .map(|n| turn(ChunkKind::Assistant, &format!("a{n}"), "zqhalfxyzzy stays", 1))
+            .collect();
+        let id = db.write(piece(uri, turns)).await.unwrap().item;
+        // As `forget` leaves it when the daemon dies after its first batch.
+        let item = id.clone();
+        db.call(move |c| {
+            c.execute("UPDATE item SET forgotten_at = 5, title = NULL WHERE id = ?1", [&item])?;
+            c.execute(
+                "DELETE FROM chunk WHERE seq IN (SELECT seq FROM chunk WHERE item = ?1 LIMIT ?2)",
+                params![item, DELETE_BATCH as i64],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(found(&db, "zqhalfxyzzy").await, 20);
+        db.flush().await.unwrap();
+        id
+    };
+    std::fs::copy(&path, dir.path().join("kb.db.bak-v0")).unwrap();
+    let db = KbDb::open(&path, None).unwrap();
+    assert_eq!(found(&db, "zqhalfxyzzy").await, 0);
+    assert!(texts(&db, &id).await.is_empty());
+    let tomb = db.item(id).await.unwrap().unwrap();
+    assert_eq!((tomb.chunks, tomb.forgotten_ms), (0, Some(5)));
+    assert_eq!(in_files(dir.path(), "zqhalfxyzzy"), Vec::<String>::new());
+    assert_eq!(found(&db, "filler").await, 1, "the others are untouched");
+}
+
+/// §25.12: what was forgotten under a root stays forgotten when the root is removed and made
+/// again: a file by its path, a commit by where its repository was.
+#[tokio::test]
+async fn removing_a_root_keeps_what_was_forgotten_under_it() {
+    let db = KbDb::open_in_memory().unwrap();
+    db.put_root(root("r1", "ptyro", "/src/ptyro")).await.unwrap();
+    let mut ids = Vec::new();
+    for uri in ["file:///src/ptyro/a.md", "file:///src/ptyro/b.md", "commit://r1/abc123"] {
+        let mut p = doc(uri, "# T\n\nsome forgettable text");
+        p.stamp.root = Some("r1".into());
+        if uri.starts_with("commit") {
+            p.kind = ItemKind::Commit;
+        }
+        ids.push(db.write(p).await.unwrap().item);
+    }
+    db.forget(ids[0].clone()).await.unwrap();
+    db.forget(ids[2].clone()).await.unwrap();
+    db.remove_root("r1".into(), |_| {}).await.unwrap();
+    assert!(db.roots().await.unwrap().is_empty());
+    assert!(db.list(ItemFilter::default()).await.unwrap().is_empty());
+    assert_eq!(db.status().await.unwrap().forgotten, 2);
+    // The same folder, a root again (another id): the forgotten file is not read back, the
+    // other is, and the forgotten commit is known by the repository's path.
+    db.put_root(root("r2", "ptyro", "/src/ptyro")).await.unwrap();
+    assert!(db.tombstoned("file:///src/ptyro/a.md".into()).await.unwrap());
+    assert!(!db.tombstoned("file:///src/ptyro/b.md".into()).await.unwrap());
+    let mut again = doc("file:///src/ptyro/a.md", "# T\n\nsome forgettable text");
+    again.stamp.root = Some("r2".into());
+    assert_eq!(db.write(again).await.unwrap().outcome, Outcome::Forgotten);
+    assert_eq!(db.forgotten_commits("/src/ptyro".into()).await.unwrap(), ["abc123"]);
+    assert!(db.forgotten_commits("/src/other".into()).await.unwrap().is_empty());
+    // Removing that root too loses nothing of it.
+    db.remove_root("r2".into(), |_| {}).await.unwrap();
+    assert_eq!(db.status().await.unwrap().forgotten, 2);
+    assert_eq!(db.forgotten_commits("/src/ptyro".into()).await.unwrap(), ["abc123"]);
+}
+
+/// §25.7a: a conversation that was kept and is carried on in a private session is closed:
+/// what it holds stays, nothing more is written to it, and retention leaves its tombstone.
+#[tokio::test]
+async fn a_closed_item_keeps_what_it_has_and_takes_nothing_more() {
+    let db = KbDb::open_in_memory().unwrap();
+    let uri = "session://claude/resumed";
+    let mut first = piece(uri, vec![turn(ChunkKind::User, "u1", "before it was private", 100)]);
+    first.cursor = Some(serde_json::json!({"path": "/t.jsonl", "offset": 10}));
+    first.ended_ms = Some(100);
+    let id = db.write(first).await.unwrap().item;
+    assert!(!db.closed(uri.into()).await.unwrap());
+    db.keep_out(uri.into(), ItemKind::Session).await.unwrap();
+    assert!(db.closed(uri.into()).await.unwrap());
+    assert!(!db.tombstoned(uri.into()).await.unwrap(), "what was kept is still found");
+    let mut more = piece(uri, vec![turn(ChunkKind::User, "u2", "zqprivatexyzzy", 200)]);
+    more.cursor = Some(serde_json::json!({"path": "/t.jsonl", "offset": 99}));
+    assert_eq!(db.write(more).await.unwrap().outcome, Outcome::Forgotten);
+    db.set_cursor(uri.into(), Some(serde_json::json!({"offset": 99}))).await.unwrap();
+    assert!(db.closed(uri.into()).await.unwrap(), "a cursor does not open it again");
+    assert_eq!(texts(&db, &id).await, ["before it was private"]);
+    assert_eq!(found(&db, "zqprivatexyzzy").await, 0);
+    // Nothing kept yet: a tombstone, as before.
+    db.keep_out("session://claude/new".into(), ItemKind::Session).await.unwrap();
+    assert!(db.tombstoned("session://claude/new".into()).await.unwrap());
+    // Too old to keep: its text goes, its URI stays out.
+    assert_eq!(db.expire(vec![ItemKind::Session], 1_000).await.unwrap(), 1);
+    assert!(db.tombstoned(uri.into()).await.unwrap());
+    assert!(texts(&db, &id).await.is_empty());
+}
+
+/// The same text under another profile or root is written again: the wall goes by the stamp.
+#[tokio::test]
+async fn an_unchanged_document_that_changes_hands_is_stamped_again() {
+    let db = KbDb::open_in_memory().unwrap();
+    db.put_root(root("r1", "outer", "/work")).await.unwrap();
+    db.put_root(root("r2", "inner", "/work/acme")).await.unwrap();
+    let of = |root: &str, profile: Option<&str>| {
+        let mut p = doc("file:///work/acme/a.md", "# A\n\nthe same text");
+        p.stamp.root = Some(root.into());
+        p.stamp.profile = profile.map(str::to_owned);
+        p
+    };
+    let w = db.write(of("r1", None)).await.unwrap();
+    assert_eq!(db.write(of("r1", None)).await.unwrap().outcome, Outcome::Unchanged);
+    let again = db.write(of("r2", Some("acme"))).await.unwrap();
+    assert_eq!(
+        (again.outcome, again.added, again.removed, again.kept),
+        (Outcome::Updated, 0, 0, 1)
+    );
+    let item = db.item(w.item).await.unwrap().unwrap();
+    assert_eq!((item.root.as_deref(), item.profile.as_deref()), (Some("r2"), Some("acme")));
+    assert_eq!(db.write(of("r2", Some("acme"))).await.unwrap().outcome, Outcome::Unchanged);
+}
