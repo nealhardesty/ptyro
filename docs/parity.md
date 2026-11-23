@@ -120,6 +120,7 @@ reader). Both have three tabs: Search, Notes (what you and your agents wrote dow
 |---|---|---|
 | `mute` | `session.mute`; a whole project or workspace: `project.mute`, `workspace.mute` | `session.mute`: ⋯ → Mute notifications |
 | `notify test` | `notify.test` | `notify.test`: More → Notifications → Send a test |
+| `home` | `home` (`H`, the palette; a bare `ptyro` opens on it unless `[ui] home_at_start = false`): a panel over the panes with a row a project, ranked: what needs you, what was left hanging, what is being worked on, what is quiet, and every profile's usage under it. `⏎` goes there (the session, the worktree's quick terminal, what was kept of a session that is gone); `→` unfolds a project (`ptyro home <project>`): where it was left off, what happened there, its hot files; `n` a new task there, `c` one that continues, `p` peeks, `/` its history; `x` puts a thing away (`--put-away`), `u` or `home.restore` brings everything back (`--restore`); `a` is `home.add`: add a repository or start somewhere new | `home`: the Home tab (`g h`; a page opened with no address opens on it unless `[ui] home_at_start = false`): the same rows by section, with `home.usage` under them; `home.go`: tap a row; `home.unfold`: ▸ on a row, its trail, with New task, `home.continue`, Its history and `home.put_away`; `home.restore`: Bring back what was put away |
 | `usage` | shown: the status bar and the sidebar title show the rate limits of the focused session's profile | `usage`: More → Usage: each account's limits as meters |
 
 ## Projects, worktrees, workspaces

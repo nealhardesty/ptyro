@@ -513,6 +513,9 @@ async fn dispatch(
             crate::agents::mute(&ctx, target, duration, off).await
         }
         Some(Cmd::Usage { json }) => crate::agents::usage(&ctx, json).await,
+        Some(Cmd::Home { project, json, put_away, restore }) => {
+            crate::home::run(&ctx, crate::home::Args { project, json, put_away, restore }).await
+        }
         Some(Cmd::Notify { cmd }) => crate::agents::notify(&ctx, cmd).await,
         Some(Cmd::Hook { .. } | Cmd::StatuslineRelay) => {
             unreachable!("handled in main")
@@ -684,7 +687,10 @@ async fn default_action(ctx: &Ctx) -> Result<i32, Error> {
     let client = ctx.connect(true).await?;
     match most_recent(&client).await? {
         // The TUI restores the last workspace and its view (newest live session if none).
-        Some(_) => attach(ctx, client, None, false, false).await,
+        Some(_) => {
+            attach_with(ctx, client, None, ptyro_tui::Options { home: true, ..Default::default() })
+                .await
+        }
         None => {
             drop(client);
             new(ctx, NewArgs { welcome: true, ..NewArgs::default() }).await
@@ -903,7 +909,8 @@ pub async fn new(ctx: &Ctx, a: NewArgs) -> Result<i32, Error> {
     .await?;
     let info = session_of(reply)?;
     if attaching {
-        let tui = ptyro_tui::Options { welcome: a.welcome, ..Default::default() };
+        // (A bare `ptyro` that had to start the first session: home, as any bare `ptyro`.)
+        let tui = ptyro_tui::Options { welcome: a.welcome, home: a.welcome, ..Default::default() };
         return attach_with(ctx, client, Some(info), tui).await;
     }
     if a.json {

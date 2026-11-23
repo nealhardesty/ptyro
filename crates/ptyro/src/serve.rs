@@ -67,6 +67,8 @@ const ASSETS: &[(&str, &str, &[u8])] = &[
     js!("data"),
     js!("flow"),
     js!("grid"),
+    js!("home"),
+    js!("homekit"),
     js!("keys"),
     js!("kit"),
     js!("machine"),
@@ -1275,7 +1277,7 @@ mod tests {
         .unwrap();
         assert_eq!(manifest["name"], "ptyro studio");
         assert_eq!(manifest["short_name"], "ptyro studio");
-        assert_eq!(manifest["start_url"], "/#/", "the rest is kept");
+        assert_eq!(manifest["start_url"], "/", "the rest is kept");
     }
 
     use super::*;

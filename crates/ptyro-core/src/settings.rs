@@ -653,6 +653,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.load", "interface", Kind::Bool, "Show the load average of the computer ptyro runs on (1, 5 and 15 minutes) in the status bar and the web app's header. It turns amber once it passes the number of CPUs.").also("cpu busy uptime system"),
     s("ui.mouse", "interface", Kind::Bool, "Let ptyro take the mouse: click to focus, wheel to scroll, drag borders. Off leaves it to your terminal, so you can select and copy text with it.").also("click scroll select copy"),
     s("ui.confirm_kill", "interface", Kind::Bool, "Ask before ending a running session: Stop, Kill, and Stop and remove, in the terminal and the web app alike.").also("confirm ask stop kill remove"),
+    s("ui.home_at_start", "interface", Kind::Bool, "Open on home: what needs you, what was left hanging, what is being worked on and every profile's usage, a row a project. A bare `ptyro` shows it over your panes (Esc puts it away), and the web app opens on its Home tab. Off, home shows when you ask for it (H in the terminal, the Home tab on the web).").also("home dashboard start landing overview status"),
     s("ui.tint_borders", "interface", Kind::Bool, "Tint pane borders with the session's profile colour."),
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),

@@ -2,7 +2,7 @@
   "name": "ptyro",
   "short_name": "ptyro",
   "description": "Your coding agents, from anywhere: status, approvals, replies.",
-  "start_url": "/#/",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "background_color": "#0d1117",

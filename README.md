@@ -309,9 +309,48 @@ ptyro                   # open the TUI (a shell session to start with)
 
 The very first time, with no config yet, ptyro shows what it found as a list to tick: the agents
 and tools to install (the setup checklist, [above](#agents-and-tools-ptyro-setup)), the accounts
-in your shell setup and your repositories, and writes the config from that. Outside a
-repository, it opens **home**: who needs you, recent projects and repositories found, each a
-`⏎` away from a task (`Ctrl-Q H` brings it back).
+in your shell setup and your repositories, and writes the config from that.
+
+After that, a bare `ptyro` opens on **home** (`Ctrl-Q H` brings it back, Esc puts it away):
+
+```
+ Home  2 need you · 2 left hanging · 1 working · away 2h10m: 3 finished, 1 failed
+
+ NEEDS YOU  2
+ ▸ ptyro     ··▃█··▁  answer     wants permission: Bash: cargo run -- migrate   fix-kb-lock · 14m
+   walrus    ······▂  review     finished: Added retry to the uploader         retry-upload · 1h
+ LEFT HANGING  2
+   blog      ▁▃······  it asked   Publish as draft, or wait for the images?                     9d
+   dotfiles           commit     2 files not committed (+84 −12), nothing running  main · ● 2 · 3d
+ WORKING  1
+   api       ·····▂█  working    Bash: cargo test (turn 6)                        flaky-test · 3m
+ QUIET  1
+   infra              left off   rotate the tailscale cert                                      3w
+
+ work/claude 5h 62% ↻2h10m · 7d 31% ↻3d   work/codex ?
+```
+
+- **A row a project, ranked by what is next there.** What needs you comes first (the oldest
+  wait on top), then what was **left hanging**: a question nobody answered, a prompt that got
+  no reply, work that isn't committed or pushed with nothing running, an agent idle for hours.
+  Then what is being worked on, then what is quiet.
+- **It remembers.** A project with nothing running still says where it was left off, from the
+  knowledge base (what `ptyro recall` searches): the sessions don't have to exist any more.
+- **`⏎` goes there**: the session, the worktree's quick terminal, or what was kept of a
+  session that is gone. **`→` unfolds a project**: the last thing you said and the last reply,
+  its recent sessions, commits and notes by day, and the files that work touched most.
+- **`n`** starts a task in that project, **`c`** one that picks up where it was left off,
+  **`p`** peeks and answers, **`x`** puts a hanging thing away until it changes (**`u`**
+  brings everything back), **`a`** adds a repository.
+- **Every profile's usage is under it**: each window, how full, when it resets, and `full
+  ~15m` when one is on pace to run out early. A usage limit shows as `limit` under Working,
+  with when it lifts: it isn't yours to answer.
+- **Say what is next yourself**: `ptyro kb note --project blog --tag next "publish once the
+  images are in"` (an agent can, with its `remember` tool), and that is the project's next.
+- `ptyro home` prints the same (`ptyro home blog` unfolds one, `--json` for scripts), and the
+  web app has it as its **Home** tab.
+- Rather land in your panes? Settings → Interface → **Open on home**, or
+  `ptyro config set ui.home_at_start false`.
 
 The repository you're in becomes a **project** by itself, so it shows in the sidebar ready for
 worktrees. The status bar says so, and `Ctrl-Q u` undoes it (it then stays out until you add
@@ -808,6 +847,7 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `d` | detach (everything keeps running) |
 | `C-d` | quit ptyro: stop every session and the daemon (asks first; agents hibernate) |
 | `n` / `C-n` / `N` | new task (say what to do) / quick new (another of this worktree's agent, no questions) / new worktree |
+| `H` | home: everything, ranked. What needs you, what was left hanging, what is being worked on, every profile's usage |
 | `a` / `p` | next session that needs you / peek and answer |
 | `j` `k` / `1`…`9` / `/` | next / previous / Nth session / find one |
 | `v` / `s` | split side by side / stacked: `⏎` clones this pane's session, or pick `+ new shell` or any session (an agent with a shell beside it: `v`, `+ new shell`) |

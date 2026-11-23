@@ -956,3 +956,118 @@ async fn a_write_waits_for_another_writer() {
     let n: i64 = other.query_row("SELECT count(*) FROM item", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 3);
 }
+
+/// A session of `project` whose transcript is `parts`.
+fn session_of(project: &str, uri: &str, parts: Vec<Part>, ended: u64) -> Plan {
+    let mut s = Source::new(ItemKind::Session, uri, Body::Parts(parts));
+    s.append = true;
+    s.ended_ms = Some(ended);
+    let never = Never::default();
+    let passed = ingest::gate(&Gate::open(&never)).unwrap();
+    let stamp = Stamp { project: Some(project.into()), ..stamp() };
+    ingest::plan(passed, s, stamp, &Redactor::default()).unwrap()
+}
+
+#[tokio::test]
+async fn home_reads_how_a_project_was_left_and_its_week() {
+    const DAY: u64 = 86_400_000;
+    let now = 100 * DAY;
+    let db = KbDb::open_in_memory().unwrap();
+    // An older session, then the one the project was left in: it ends on a question.
+    db.write(session_of(
+        "blog",
+        "claude://a",
+        vec![
+            turn(ChunkKind::User, "u1", "outline the post", now - 3 * DAY),
+            turn(ChunkKind::Assistant, "a1", "Here is the outline.", now - 3 * DAY + 5),
+        ],
+        now - 3 * DAY + 5,
+    ))
+    .await
+    .unwrap();
+    db.write(session_of(
+        "blog",
+        "claude://b",
+        vec![
+            turn(ChunkKind::User, "u1", "write the first draft", now - DAY - 50),
+            turn(ChunkKind::Assistant, "a1", "Drafted.", now - DAY - 40),
+            turn(ChunkKind::User, "u2", "tighten the intro", now - DAY - 30),
+            turn(ChunkKind::Tool, "t1", "Edit content/worktrees.md", now - DAY - 20),
+            turn(
+                ChunkKind::Assistant,
+                "a2",
+                "Done.\n\nPublish as draft, or wait for the images?",
+                now - DAY - 10,
+            ),
+        ],
+        now - DAY - 10,
+    ))
+    .await
+    .unwrap();
+    // Another project's last word is yours: nothing answered it.
+    db.write(session_of(
+        "dots",
+        "claude://c",
+        vec![
+            turn(ChunkKind::User, "u1", "set up zsh", now - 2 * DAY),
+            turn(ChunkKind::Assistant, "a1", "Set up.", now - 2 * DAY + 1),
+            turn(ChunkKind::User, "u2", "now do the same for fish", now - 2 * DAY + 2),
+        ],
+        now - 2 * DAY + 2,
+    ))
+    .await
+    .unwrap();
+    let tails =
+        db.home_tails(vec!["blog".into(), "dots".into(), "none".into()], now).await.unwrap();
+    let [blog, dots, none] = &tails[..] else { panic!("{tails:?}") };
+    assert_eq!(blog.item.as_ref().map(|i| i.uri.as_str()), Some("claude://b"));
+    assert_eq!(blog.you.as_deref(), Some("tighten the intro"));
+    assert_eq!(blog.reply.as_deref(), Some("Done.\n\nPublish as draft, or wait for the images?"));
+    assert_eq!(blog.last, Some(ChunkKind::Assistant));
+    assert!(blog.reply_end.as_deref().unwrap().ends_with("images?"));
+    assert_eq!(blog.at_ms, now - DAY - 10);
+    // Three prompts in the week: one three days ago, two yesterday (a tool's line is no prompt).
+    assert_eq!(blog.week, [0, 0, 0, 1, 0, 2, 0]);
+    assert_eq!(dots.last, Some(ChunkKind::User));
+    assert_eq!(dots.you.as_deref(), Some("now do the same for fish"));
+    assert_eq!(dots.reply.as_deref(), Some("Set up."));
+    assert_eq!(dots.reply_end, None);
+    assert_eq!((none.item.clone(), none.week.clone()), (None, vec![0; 7]));
+
+    let trail = db.home_trail("blog".into(), 10).await.unwrap();
+    let said: Vec<(&str, u32)> = trail.iter().map(|t| (t.item.uri.as_str(), t.turns)).collect();
+    assert_eq!(said, [("claude://b", 2), ("claude://a", 1)]);
+}
+
+#[tokio::test]
+async fn home_finds_the_note_that_says_what_is_next() {
+    let db = KbDb::open_in_memory().unwrap();
+    let note = |uri: &str, text: &str, at: u64| {
+        let mut s = Source::new(
+            ItemKind::Note,
+            uri,
+            Body::Markdown { name: "n.md".into(), text: text.into(), at_ms: at },
+        );
+        s.title = Some("A note".into());
+        s.ended_ms = Some(at);
+        let never = Never::default();
+        let passed = ingest::gate(&Gate::open(&never)).unwrap();
+        let stamp = Stamp { project: Some("infra".into()), ..Stamp::new(Writer::User, None) };
+        ingest::plan(passed, s, stamp, &Redactor::default()).unwrap()
+    };
+    db.write(note("note://_all/infra/a", "The cert is Tailscale's.\n\ntags: decision", 10))
+        .await
+        .unwrap();
+    db.write(note(
+        "note://_all/infra/b",
+        "Rotate the cert before December.\n\ntags: ops, next",
+        20,
+    ))
+    .await
+    .unwrap();
+    db.write(note("note://_all/infra/c", "The next release is 0.1.", 30)).await.unwrap();
+    let tails = db.home_tails(vec!["infra".into()], 1000).await.unwrap();
+    let (item, line) = tails[0].planned.clone().expect("a planned note");
+    assert_eq!(item.uri, "note://_all/infra/b");
+    assert_eq!(line, "Rotate the cert before December.");
+}

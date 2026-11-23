@@ -13,6 +13,7 @@ import { moveMaybeSpotted, staleMaybeChanged } from "./projects.js";
 import "./settings.js";
 import "./panel.js";
 import "./library.js";
+import { landOnHome } from "./home.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
@@ -132,7 +133,7 @@ function route() {
     return { view: "list" };
 }
 /// The tabs along the bottom of a top-level page; the active one is the page's.
-const TABS = [["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["more", "#/more", "More"]];
+const TABS = [["home", "#/home", "Home"], ["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["more", "#/more", "More"]];
 function withTabs(view, page) {
     // Chats switched off (`[chat] enabled = false`) have no tab.
     const tabs = TABS.filter(([v]) => v !== "chats" || chatsShown());
@@ -723,6 +724,8 @@ conn.listeners.add((msg) => {
         }
         void refresh();
         void loadAll();
+        // Opened with nowhere to go: home, when `[ui] home_at_start` says so (SPEC §26.10).
+        void landOnHome();
         void syncPush();
         void readAltDigits();
         setupConnected();
@@ -832,7 +835,7 @@ document.addEventListener("keydown", (e) => {
     }
     if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token())
         return;
-    const tabs = { s: "#/", c: "#/chats", p: "#/p", m: "#/more" };
+    const tabs = { h: "#/home", s: "#/", c: "#/chats", p: "#/p", m: "#/more" };
     if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) {
         goKey = 0;
         location.hash = tabs[e.key];
@@ -880,7 +883,7 @@ document.addEventListener("keydown", (e) => {
         setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector("input.search"))?.focus(), 50);
     }
     else if (e.key === "?")
-        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["Alt+1…9", "Shell N of SHELLS, from anywhere, while typing in a terminal too (Option on a Mac; Alt+0: shell 10)"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+        sheet("Keys", [h("dl", { class: "facts" }, ...[["n", "New task"], ["m", "New chat"], ["Alt+1…9", "Shell N of SHELLS, from anywhere, while typing in a terminal too (Option on a Mac; Alt+0: shell 10)"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g h", "Home"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]].flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
 takePairCode();

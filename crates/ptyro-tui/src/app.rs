@@ -545,6 +545,10 @@ pub enum Pending {
     /// The repositories for the first run, and for home (UX1.19).
     FirstRunRepos,
     Home,
+    /// Home's view (`home.rs`).
+    HomeView,
+    /// The view a bare `ptyro` asks for as it starts: home opens on it if it has a row.
+    HomeStart,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1147,7 +1151,7 @@ impl App {
         }
     }
 
-    fn client(&self) -> Option<&Arc<Client>> {
+    pub(crate) fn client(&self) -> Option<&Arc<Client>> {
         self.client.as_ref()
     }
 
@@ -1483,6 +1487,7 @@ impl App {
         }
         self.health_tick(self.started);
         self.sources_tick();
+        self.home_tick();
         self.setup_tick();
         self.sync_window();
     }
@@ -1626,6 +1631,8 @@ impl App {
     }
 
     fn on_event(&mut self, event: DomainEvent) {
+        // Home shows all of it: whatever changed, it asks again shortly.
+        self.home_news();
         match event {
             // We fell behind: what we know may be stale.
             DomainEvent::EventsLost { .. } => {
@@ -2296,6 +2303,8 @@ impl App {
             (Pending::FirstRunRepos, Ok(Reply::Paths { paths })) => self.first_run_repos(paths),
             (Pending::Home, Ok(Reply::Paths { paths })) => self.show_home(paths),
             (Pending::Home, Err(_)) => self.show_home(Vec::new()),
+            (Pending::HomeView, res) => self.home_got(res),
+            (Pending::HomeStart, res) => self.home_started(res),
             (Pending::Discovered(then), Ok(Reply::Paths { paths })) => {
                 self.open_add_project(paths, then)
             }
@@ -3014,7 +3023,15 @@ impl App {
                 self.chat_menu()
             }
             "row.menu" => self.open_row_menu(),
-            "home" => self.open_home(),
+            "home" => self.toggle_home(),
+            "home.add" => self.open_home(),
+            "home.restore" => {
+                self.request(
+                    Pending::HomeView,
+                    Request::Home { trail: None, dismiss: None, restore: true, here: true },
+                );
+                self.toast("everything put away on home is back");
+            }
             "app.about" => self.open_about(),
             a if a.starts_with("kb.") => self.library_action(a),
             "health" => self.open_health(),
@@ -5887,6 +5904,12 @@ impl App {
                     K::ScrollDown => self.library_mouse(y, Some(false)),
                     _ => {}
                 },
+                Some(crate::chats::ChatPanel::Home(_)) => match m.kind {
+                    K::Down(crossterm::event::MouseButton::Left) => self.home_mouse(y, None),
+                    K::ScrollUp => self.home_mouse(y, Some(true)),
+                    K::ScrollDown => self.home_mouse(y, Some(false)),
+                    _ => {}
+                },
                 None => {}
             }
             return;
@@ -6244,7 +6267,7 @@ impl App {
         out
     }
 
-    fn open_peek(&mut self, id: SessionId) {
+    pub(crate) fn open_peek(&mut self, id: SessionId) {
         self.overlay =
             Some(Overlay::Peek { session: id, screen: String::new(), reply: String::new() });
         self.request(

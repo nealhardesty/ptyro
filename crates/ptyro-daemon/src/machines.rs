@@ -238,6 +238,8 @@ fn here_only(req: &Request) -> bool {
     matches!(
         req,
         List | Status
+            // Home is this daemon's own look at everything, its mirrors included (SPEC §26.7).
+            | Home { .. }
             // The knowledge base's are sent on by `handle_kb` itself (`kb/machines.rs`),
             // which knows who asks: the wall holds across a link.
             | KbSearch { .. }

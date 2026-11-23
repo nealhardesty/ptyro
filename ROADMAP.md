@@ -49,6 +49,7 @@ Conventions:
 | **SH** | Shells | tmux's windows in ptyro: every workspace gets a SHELLS section of numbered terminals for any command, made with `C-q C-c` and reached with `Alt-1…9`, the numbers stay put, and long commands say when they end (built 2026-11-04) |
 | **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
 | **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and shell commands (what they print only where you ask for it), searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest; pointers offered at a prompt where you switch that on (decided 2026-11-19; the code of every task KB0 to KB5 is built, 2026-11-20, and reviewed, PR #121; open: three things were not run, and the boxes of KB0, KB0.3 and KB1 stay unticked for them: a real agent inside the TUI (KB0.3's flags in an interactive Claude session; step 1 of the "Done when" with the real Claude and Codex), the golden set with the real embedding model (KB1.6's `make kb-eval-real`: the model was not on the machine), and anything on Linux by hand (CI runs the tests there); SPEC §25) |
+| **HOME** | Home | One look at everything, ranked: what needs you, what was left hanging, what is being worked on and what is quiet, a row a project, with where each was left off (from the knowledge base) and every profile's usage; where a bare `ptyro` and the web app open (done 2026-11-23; the owner's hand check open) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -3833,6 +3834,48 @@ creation form is SPEC §11.5a.
   -- <args>` has no counterpart in `WorktreeSpec`, so neither the TUI nor the web can offer
   extra agent arguments for a new worktree (the web offers them for an existing one). Add
   `argv` to `WorktreeSpec`, then the field to both forms.
+
+## HOME — Home: everything, ranked (decided 2026-11-23 by the owner; built 2026-11-23)
+
+**Goal:** one look that answers three questions: what are we working on, what needs attention,
+and what did we forget. SPEC §26. RESEARCH R-UX-47, R-UX-48, R-USE-01 (the strip).
+
+**Decided by the owner (2026-11-20 to 2026-11-23):** rows are projects ranked by the next thing
+there; the knowledge base stands behind it (where each project was left off, what was left
+hanging); "left hanging" is its own section; a note tagged `next` is a project's next; a bare
+`ptyro` and the web app open on it; every workspace and linked machine at once; the usage
+strip is small and complete. No model writes any of it.
+
+- [x] **HOME.1 The rule** — M. `ptyro_core::home`: sections, the ladder of what is next, the
+  question a reply ends with, the usage meters with pace and age, the week's marks, the text.
+  *Done (2026-11-23):* 18 unit tests on the ranking, the meters and the text (SPEC §26.2,
+  §26.3, §26.8).
+- [x] **HOME.2 Memory** — M. `KbDb::home_tails` and `home_trail`: how each project's newest
+  session ended, its week of prompts, its note tagged `next`; a project's trail. *Done
+  (2026-11-23):* store tests (SPEC §26.4, §26.5).
+- [x] **HOME.3 The daemon and protocol 1.64** — M. `Request::Home`: the view from everything
+  the daemon knows, its mirrors included; put away and bring back (`kv`); the last sign of
+  you and "while you were away"; an agent's session gets live state only. *Done
+  (2026-11-23):* `crates/ptyro-daemon/src/home.rs` with its tests; the scope table (SPEC
+  §26.6, §26.7).
+- [x] **HOME.4 `ptyro home`** — S. `[PROJECT] [--json] [--put-away] [--restore]`. *Done
+  (2026-11-23):* `tests/home.rs` against a real daemon and fake agents.
+- [x] **HOME.5 The TUI's home** — M. A panel over the panes on `H`; a bare `ptyro` opens on
+  it (`[ui] home_at_start`); rows unfold into trails; the selection follows its line; the
+  usage strip; `home.add` keeps the old list of places to start. *Done (2026-11-23):*
+  `crates/ptyro-tui/src/home.rs` with its tests (SPEC §26.9).
+- [x] **HOME.6 The web's Home tab** — M. The same view as cards; a page with no address opens
+  on it. *Done (2026-11-23):* `web/src/home.ts`; the `home` scenario of `make web-e2e`
+  (ranked under Needs you, unfolds, fits a phone, leaves by itself once answered, the bare
+  address lands on it).
+- [ ] **HOME.7 By hand** — S. The owner's own look, on real agents: the question heuristic
+  (§26.3) over a week of real replies, the thresholds (10 minutes, 2 hours, 30 days), and the
+  strip with several profiles. Not run here: every test uses the fake agent.
+
+**Later (SPEC §26.10):** tokens a project; an end-of-day sweep and ranking by risk of loss
+(R-UX-49); linked machines' trails; chats on home; Allow and Deny on the web's rows.
+
+---
 
 ## Backlog (unscheduled; ideas welcome)
 

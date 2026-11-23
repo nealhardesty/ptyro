@@ -9,6 +9,7 @@ pub mod chat;
 pub mod chats;
 pub mod config;
 pub mod error;
+pub mod home;
 pub mod ids;
 pub mod imports;
 pub mod input;

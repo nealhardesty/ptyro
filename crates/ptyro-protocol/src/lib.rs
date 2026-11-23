@@ -35,7 +35,7 @@ pub struct Version {
 }
 
 /// This build's protocol version. A different `major` is rejected (SPEC §6.3).
-pub const PROTO: Version = Version { major: 1, minor: 63 };
+pub const PROTO: Version = Version { major: 1, minor: 64 };
 
 /// Requests an older ptyro answered and this one no longer has (the pare-down, 2026-11-17): the
 /// request's `t`, and what went. A client that still sends one is told so, not "unreadable".
@@ -1050,6 +1050,27 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
     },
+    /// Home (1.64, SPEC §26): everything, ranked. A row per project (this machine's and every
+    /// linked one's), by what is next there: what needs you, what was left hanging, what is
+    /// being worked on, what is quiet; with every profile's usage. Answered by the daemon
+    /// asked. A caller inside an agent's session gets live state only (§25.9). → `Home`.
+    Home {
+        /// Unfold this row (its key, or its project's name): the reply carries its trail.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trail: Option<String>,
+        /// Put a thing away until it changes: its `key` and `stamp` as the view gave them.
+        /// Only what was left hanging can be. Needs `control`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dismiss: Option<HomeDismiss>,
+        /// Bring back everything that was put away. Needs `control`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        restore: bool,
+        /// A person is looking: they opened home, or came back to it. Set by a client when it
+        /// asks because of something you did, never when it asks again because something
+        /// changed. It is the sign that ends being away (§26.6).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        here: bool,
+    },
     /// What the knowledge base holds and how it stands (1.54); answered when it is off too.
     /// → `KbStatus`.
     KbStatus,
@@ -1234,6 +1255,13 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         confirmed: bool,
     },
+}
+
+/// A thing of home's put away (`Request::Home.dismiss`, 1.64).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HomeDismiss {
+    pub key: String,
+    pub stamp: String,
 }
 
 /// One persisted session event (`session_event`, SPEC §14.3).
@@ -1704,6 +1732,10 @@ pub enum Reply {
     KbForgotten {
         items: u32,
         chunks: u32,
+    },
+    /// Home (1.64): the ranked view, with the trail that was asked for.
+    Home {
+        home: Box<ptyro_core::home::HomeView>,
     },
     /// The knowledge base's state (1.54).
     KbStatus {
@@ -2609,6 +2641,25 @@ mod tests {
             session: Some("brisk-rook".into()),
         });
         round_trip(Request::KbStatus);
+        // 1.64: home.
+        round_trip(Request::Home { trail: None, dismiss: None, restore: false, here: false });
+        round_trip(Request::Home {
+            trail: Some("ptyro".into()),
+            dismiss: Some(HomeDismiss { key: "commit:w1".into(), stamp: "2:0:abc".into() }),
+            restore: true,
+            here: true,
+        });
+        assert_eq!(
+            serde_json::to_string(&Request::Home {
+                trail: None,
+                dismiss: None,
+                restore: false,
+                here: false
+            })
+            .unwrap(),
+            r#"{"t":"home"}"#
+        );
+        round_trip(Reply::Home { home: Box::default() });
         let item = KbItem {
             id: "01JB0000000000000000007F3K".into(),
             uri: "session://claude/c1".into(),

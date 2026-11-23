@@ -139,7 +139,11 @@ pub fn needed(req: &Request) -> Scope {
         | KbNotes { .. }
         | KbNoteRead { .. }
         | KbRoots { .. }
-        | KbStatus => Scope::Read,
+        | KbStatus
+        // Home (SPEC §26) is what the lists already show, ranked; putting a thing away changes
+        // what every client sees.
+        | Home { dismiss: None, restore: false, .. } => Scope::Read,
+        Home { .. } => Scope::Control,
         ChatNew { .. }
         | ChatTask { .. }
         | ChatRetry { .. }
