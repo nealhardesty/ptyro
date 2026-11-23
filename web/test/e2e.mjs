@@ -99,6 +99,34 @@ const scenarios = {
     await tab.waitFor("the Allow buttons to go", `!document.querySelector(".blocked-wrap .actions .allow")`);
   },
 
+  // Home (SPEC §26.10): an agent that asks is the first row under "Needs you", with what it
+  // asks; the headline counts it; the row unfolds into its trail (with what to do there) and
+  // fits a phone; a tap goes to the session; answered, it leaves "Needs you" without a reload;
+  // and a page opened with no address at all opens on home.
+  async home() {
+    ptyro("new", "-d", "-n", "homeask", "--agent", "claude");
+    ptyro("send", "homeask", "ask rm -rf dist", "--wait-ready");
+    await fresh("#/home");
+    const asker = `[...document.querySelectorAll("main.home .home-sec.needs .home-row")].find((r) => r.textContent.includes("homeask"))`;
+    await tab.waitFor("the asker under Needs you, with what it asks", `(() => { const r = ${asker}; return !!r && r.textContent.includes("answer") && r.textContent.includes("rm -rf dist"); })()`, 20_000);
+    await tab.waitFor("the headline to count it", `/need(s)? you/.test(document.querySelector(".home-headline")?.textContent ?? "")`);
+    if (!(await tab.eval(`document.querySelector("nav.tabs a.on")?.textContent`) === "Home")) throw new Error("Home isn't the tab shown");
+    await tab.phone();
+    await tab.eval(`${asker}.querySelector(".unfold").click()`);
+    await tab.waitFor("its trail, with what to do there", `[...document.querySelectorAll(".home-row.open .home-trail .bar button")].some((b) => b.textContent === "New task")`);
+    if (!(await tab.eval(`document.documentElement.scrollWidth <= innerWidth`))) throw new Error("home is wider than a phone");
+    await tab.eval(`${asker}.querySelector(".home-head").click()`);
+    await tab.waitFor("its session", `location.hash === "#/s/" + ${JSON.stringify(encodeURIComponent(find("homeask").id))}`);
+    await tab.eval(`location.hash = "#/home"`);
+    await tab.waitFor("home again", `!!${asker}`);
+    ptyro("answer", "homeask", "deny");
+    await tab.waitFor("it to leave Needs you by itself", `!${asker}`, 20_000);
+    ptyro("rm", "--stop", "-y", "homeask");
+    // No address at all: home (`[ui] home_at_start`, on unless switched off). `#/` is the sessions.
+    await fresh("");
+    await tab.waitFor("a bare address to open on home", `location.hash === "#/home" && !!document.querySelector("main.home")`, 15_000);
+  },
+
   // The Library (KB1.9): a session's turn is kept and the page lists it under its day, another
   // one's shows as it is kept (no reload); the search finds it with the match marked; a tap
   // opens the reader at that piece, All of it reads the rest, the find box looks in it, Its

@@ -224,6 +224,7 @@ web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/shells.mjs
 	node web/test/chats.mjs
 	node web/test/library.mjs
+	node web/test/home.mjs
 	node web/test/assets.mjs
 	node web/test/setup.mjs
 

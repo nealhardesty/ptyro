@@ -26,6 +26,8 @@ pub enum ChatPanel {
     List(ChatList),
     View(Box<ChatViewState>),
     Library(Box<crate::library::Library>),
+    /// Home (`home.rs`): everything, ranked.
+    Home(Box<crate::home::HomeScreen>),
 }
 
 pub struct ChatList {
@@ -225,7 +227,7 @@ fn held<'a>(p: &'a ChatPanel, id: &str) -> Option<&'a ChatInfo> {
         ChatPanel::View(v) if v.id.as_deref() == Some(id) && v.info.is_some() => v.info.as_ref(),
         ChatPanel::View(v) => v.back.as_deref().and_then(|b| held(b, id)),
         ChatPanel::List(l) => l.archived.iter().flatten().find(|c| c.id == id),
-        ChatPanel::Library(_) => None,
+        ChatPanel::Library(_) | ChatPanel::Home(_) => None,
     }
 }
 
@@ -251,7 +253,7 @@ fn refresh_held(p: &mut ChatPanel, info: &ChatInfo) {
                 }
             }
         }
-        ChatPanel::Library(_) => {}
+        ChatPanel::Library(_) | ChatPanel::Home(_) => {}
     }
 }
 
@@ -578,7 +580,7 @@ impl App {
         let back = match self.chat_panel.take() {
             Some(ChatPanel::List(l)) => Some(Box::new(ChatPanel::List(l))),
             // A hit opened from the Library: Esc goes back to it.
-            Some(p @ ChatPanel::Library(_)) => Some(Box::new(p)),
+            Some(p @ (ChatPanel::Library(_) | ChatPanel::Home(_))) => Some(Box::new(p)),
             // The chat already shown (a hit or citation in it, its menu's open): followed
             // again, as it is.
             Some(ChatPanel::View(v)) if v.id.as_deref() == Some(id) => {
@@ -732,7 +734,7 @@ impl App {
         match &self.chat_panel {
             Some(ChatPanel::View(v)) => return v.id.clone(),
             Some(ChatPanel::List(l)) => return self.list_target(l),
-            Some(ChatPanel::Library(_)) | None => {}
+            Some(ChatPanel::Library(_) | ChatPanel::Home(_)) | None => {}
         }
         None
     }
@@ -758,6 +760,7 @@ impl App {
             },
             Some(ChatPanel::List(_)) => "list".into(),
             Some(ChatPanel::Library(_)) => "library".into(),
+            Some(ChatPanel::Home(_)) => "home".into(),
             None => String::new(),
         }
     }
@@ -1704,6 +1707,7 @@ impl App {
             Some(ChatPanel::List(l)) => self.chat_list_key(l, key),
             Some(ChatPanel::View(v)) => self.chat_view_key(*v, key),
             Some(ChatPanel::Library(l)) => self.library_key(l, key),
+            Some(ChatPanel::Home(h)) => self.home_key(h, key),
             None => {}
         }
     }
@@ -1720,7 +1724,7 @@ impl App {
                 self.search_chats();
             }
             Some(ChatPanel::Library(_)) => self.library_paste(text),
-            None => {}
+            Some(ChatPanel::Home(_)) | None => {}
         }
         self.dirty = true;
     }
@@ -2181,6 +2185,7 @@ pub(crate) fn draw(app: &App, f: &mut Frame<'_>, area: Rect) {
         ChatPanel::List(l) => draw_list(app, f, area, l),
         ChatPanel::View(v) => draw_view(app, f, area, v),
         ChatPanel::Library(l) => crate::library::draw(app, f, area, l),
+        ChatPanel::Home(h) => crate::home::draw(app, f, area, h),
     }
 }
 

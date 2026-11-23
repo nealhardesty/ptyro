@@ -174,7 +174,15 @@ pub const ACTIONS: &[ActionSpec] = &[
         "Sidebar: list only the active sessions (an agent working or waiting for you, a shell running a command)",
     ),
     a("toast.act", "Do what the last message offers: undo it, or fix what it reports"),
-    a("home", "Home: who needs you, recent projects and repositories found, in one list"),
+    a(
+        "home",
+        "Home: everything, ranked. What needs you, what was left hanging, what is being worked on and what is quiet, a row a project, with every profile's usage; → unfolds a project's trail",
+    ),
+    a(
+        "home.add",
+        "Add a repository, or start somewhere new: recent projects and repositories found, in one list",
+    ),
+    a("home.restore", "Home: bring back everything that was put away"),
     a(
         "app.about",
         "About ptyro: version, repository, where its files live, the daemon and web app, a bug report to copy",

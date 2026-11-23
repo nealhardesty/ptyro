@@ -11,6 +11,7 @@ mod clock;
 pub mod copy;
 mod form;
 mod health;
+mod home;
 pub mod keymap;
 mod keys;
 pub mod layout;
@@ -88,6 +89,8 @@ pub struct Options {
     pub follow_worktree: Option<String>,
     /// `ptyro` started the first session itself: the first run (no config yet) or home (UX1.19).
     pub welcome: bool,
+    /// A bare `ptyro`: open on home (SPEC §26.9), unless `[ui] home_at_start = false`.
+    pub home: bool,
     /// Open this chat's view (`ptyro chat open`).
     pub chat: Option<String>,
     /// Started in an older TUI's place (`from`, `to`: the version it meant to start).
@@ -211,6 +214,7 @@ async fn event_loop(
     app.restore_view().await;
     if !app.restarted() {
         app.welcome();
+        app.home_at_start();
     }
     // Typed while we asked the terminal for its colours, before anything read keys.
     for k in &typed {

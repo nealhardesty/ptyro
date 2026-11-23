@@ -201,6 +201,37 @@ pub struct SessionFacts {
     pub turns: u32,
 }
 
+/// What home shows of a project ([`KbDb::home_tails`], SPEC §26.4): how its newest session
+/// ended, a week of prompts, and the newest note tagged `next`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HomeTail {
+    /// The project's id.
+    pub project: String,
+    /// Its newest session.
+    pub item: Option<KbItem>,
+    /// The start of the last thing you said in it, and of the last reply.
+    pub you: Option<String>,
+    pub reply: Option<String>,
+    /// How the last reply ends (its last piece): where a question would be.
+    pub reply_end: Option<String>,
+    /// Which spoke last: `User` or `Assistant`.
+    pub last: Option<ChunkKind>,
+    /// When the last of them was said, else the item's own time.
+    pub at_ms: u64,
+    /// Your messages a day over the seven days before `now`, oldest first.
+    pub week: Vec<u16>,
+    /// The newest note tagged `next`, with its text's first line.
+    pub planned: Option<(KbItem, String)>,
+}
+
+/// One line of a project's trail ([`KbDb::home_trail`]): an item and, for a session, how many
+/// times you spoke in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrailItem {
+    pub item: KbItem,
+    pub turns: u32,
+}
+
 /// Counts and sizes, for `ptyro kb status` ([`KbDb::status`]).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KbStatus {
@@ -604,6 +635,164 @@ impl KbDb {
             Ok(st
                 .query_map(params_from_iter(args.iter().map(|a| a.as_ref())), item_row)?
                 .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    /// What home shows of each of `projects` (their ids): see [`HomeTail`]. A project nothing
+    /// is kept of comes back empty. Cheap: a handful of indexed reads a project, and the week
+    /// reads only the sessions that ended in it.
+    pub async fn home_tails(&self, projects: Vec<String>, now_ms: u64) -> Result<Vec<HomeTail>> {
+        self.call(move |db| {
+            const AT: &str = "COALESCE(ended_at, started_at, ingested_at, 0)";
+            const DAY: u64 = 86_400_000;
+            let since = now_ms.saturating_sub(7 * DAY);
+            let mut out = Vec::with_capacity(projects.len());
+            for project in projects {
+                let mut t =
+                    HomeTail { project: project.clone(), week: vec![0; 7], ..HomeTail::default() };
+                t.item = db
+                    .prepare_cached(&format!(
+                        "SELECT {ITEM_COLS} FROM item WHERE kind = 'session' AND project = ?1
+                           AND forgotten_at IS NULL ORDER BY {AT} DESC, id DESC LIMIT 1"
+                    ))?
+                    .query_row([&project], item_row)
+                    .optional()?;
+                if let Some(item) = &t.item {
+                    t.at_ms = item.ended_ms.or(item.started_ms).or(item.ingested_ms).unwrap_or(0);
+                    // The last message of either: its kind, and its last piece (how it ends).
+                    let last: Option<(String, String, i64)> = db
+                        .prepare_cached(
+                            "SELECT kind, text, at_ms FROM chunk WHERE item = ?1
+                               AND kind IN ('user', 'assistant') ORDER BY idx DESC LIMIT 1",
+                        )?
+                        .query_row([&item.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                        .optional()?;
+                    if let Some((kind, text, at)) = last {
+                        t.last = ChunkKind::parse(&kind);
+                        t.at_ms = t.at_ms.max(at.max(0) as u64);
+                        if t.last == Some(ChunkKind::Assistant) {
+                            t.reply_end = Some(text);
+                        }
+                    }
+                    // The start of each one's last message (a long one is several pieces
+                    // under one anchor: its first).
+                    let head = |kind: &str| -> Result<Option<String>> {
+                        Ok(db
+                            .prepare_cached(
+                                "SELECT text FROM chunk WHERE item = ?1 AND kind = ?2
+                                   AND idx >= COALESCE((SELECT min(c.idx) FROM chunk c
+                                         WHERE c.item = ?1 AND c.kind = ?2 AND c.anchor IS NOT NULL
+                                           AND c.anchor = (SELECT anchor FROM chunk
+                                                 WHERE item = ?1 AND kind = ?2
+                                                 ORDER BY idx DESC LIMIT 1)),
+                                       (SELECT max(idx) FROM chunk WHERE item = ?1 AND kind = ?2))
+                                 ORDER BY idx LIMIT 1",
+                            )?
+                            .query_row(params![item.id, kind], |r| r.get(0))
+                            .optional()?)
+                    };
+                    t.you = head("user")?;
+                    t.reply = head("assistant")?;
+                }
+                // The week: your messages in the sessions that ended in it, each once.
+                let mut st = db.prepare_cached(
+                    "SELECT DISTINCT c.item, COALESCE(c.anchor, c.idx), min(c.at_ms)
+                       FROM chunk c JOIN item i ON i.id = c.item
+                      WHERE i.kind = 'session' AND i.project = ?1 AND i.forgotten_at IS NULL
+                        AND COALESCE(i.ended_at, i.started_at, i.ingested_at, 0) >= ?2
+                        AND c.kind = 'user' AND c.at_ms >= ?2
+                      GROUP BY c.item, COALESCE(c.anchor, c.idx)",
+                )?;
+                let said = st
+                    .query_map(params![project, since as i64], |r| r.get::<_, i64>(2))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for at in said {
+                    let day = now_ms.saturating_sub(at.max(0) as u64) / DAY;
+                    if day < 7 {
+                        let slot = &mut t.week[6 - day as usize];
+                        *slot = slot.saturating_add(1);
+                    }
+                }
+                // The newest note tagged `next` (a note's tags are its text's last line).
+                let mut st = db.prepare_cached(&format!(
+                    "SELECT {ITEM_COLS} FROM item WHERE kind = 'note' AND project = ?1
+                       AND forgotten_at IS NULL ORDER BY {AT} DESC, id DESC LIMIT 40"
+                ))?;
+                let notes =
+                    st.query_map([&project], item_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+                for note in notes {
+                    let end: Option<String> = db
+                        .prepare_cached(
+                            "SELECT text FROM chunk WHERE item = ?1 ORDER BY idx DESC LIMIT 1",
+                        )?
+                        .query_row([&note.id], |r| r.get(0))
+                        .optional()?;
+                    let tagged = end.as_deref().is_some_and(|e| {
+                        e.lines()
+                            .next_back()
+                            .and_then(|l| l.trim().strip_prefix("tags:"))
+                            .is_some_and(|tags| {
+                                tags.split(',').any(|w| w.trim().eq_ignore_ascii_case("next"))
+                            })
+                    });
+                    if !tagged {
+                        continue;
+                    }
+                    let first: Option<String> = db
+                        .prepare_cached(
+                            "SELECT text FROM chunk WHERE item = ?1 ORDER BY idx LIMIT 1",
+                        )?
+                        .query_row([&note.id], |r| r.get(0))
+                        .optional()?;
+                    let line = first
+                        .as_deref()
+                        .and_then(|f| {
+                            f.lines()
+                                .map(str::trim)
+                                .find(|l| !l.is_empty() && !l.starts_with("tags:"))
+                        })
+                        .map(str::to_owned)
+                        .or_else(|| note.title.clone())
+                        .unwrap_or_default();
+                    t.planned = Some((note, line));
+                    break;
+                }
+                out.push(t);
+            }
+            Ok(out)
+        })
+        .await
+    }
+
+    /// A project's trail (SPEC §26.5): its newest sessions, commits and notes, at most
+    /// `limit`, each session with how many times you spoke in it.
+    pub async fn home_trail(&self, project: String, limit: usize) -> Result<Vec<TrailItem>> {
+        self.call(move |db| {
+            const AT: &str = "COALESCE(ended_at, started_at, ingested_at, 0)";
+            let mut st = db.prepare_cached(&format!(
+                "SELECT {ITEM_COLS} FROM item WHERE kind IN ('session', 'commit', 'note')
+                   AND project = ?1 AND forgotten_at IS NULL ORDER BY {AT} DESC, id DESC LIMIT ?2"
+            ))?;
+            let items = st
+                .query_map(params![project, limit as i64], item_row)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            items
+                .into_iter()
+                .map(|item| {
+                    let turns = if item.kind == ItemKind::Session {
+                        db.prepare_cached(
+                            "SELECT count(DISTINCT COALESCE(anchor, idx)) FROM chunk
+                              WHERE item = ?1 AND kind = 'user'",
+                        )?
+                        .query_row([&item.id], |r| r.get::<_, i64>(0))?
+                        .max(0) as u32
+                    } else {
+                        0
+                    };
+                    Ok(TrailItem { item, turns })
+                })
+                .collect()
         })
         .await
     }

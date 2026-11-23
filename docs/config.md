@@ -60,6 +60,7 @@ tint_borders = true       # colour pane dividers with the session's profile
 # which_key_delay = 0     # ms after the prefix before the menu of next keys shows; 0: never (default 400)
 # mouse = false           # let the terminal own the mouse (native selection)
 # confirm_kill = false    # stop, kill, and stop and remove end a session without asking (TUI and web)
+# home_at_start = false   # a bare `ptyro` (and the web app with no address) opens on your panes, not on home (`H` shows it)
 # sidebar = false         # start with the sidebar hidden (`\` toggles it)
 # sidebar_width = 30      # at least 12
 # status_bar = false

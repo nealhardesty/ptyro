@@ -57,6 +57,7 @@ fn table() -> Vec<Sample> {
         s(json!({"t":"status_explain","addr":a}), READ, true),
         s(json!({"t":"events","session":null,"limit":5}), READ, true),
         s(json!({"t":"usage"}), READ, true),
+        s(json!({"t":"home"}), READ, true),
         s(json!({"t":"machine_list"}), READ, true),
         // Reads the machine, but runs each agent's `--version`: not sent to the test daemon.
         s(json!({"t":"setup_plan","picks":null}), READ, false),

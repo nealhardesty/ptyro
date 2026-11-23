@@ -16,6 +16,7 @@ mod cli;
 mod complete;
 mod config;
 mod doctor;
+mod home;
 mod host;
 mod ingest;
 mod kb;
@@ -1037,6 +1038,21 @@ enum Cmd {
         /// Unmute instead
         #[arg(long)]
         off: bool,
+    },
+    /// Everything, ranked: what needs you, what was left hanging, what is being worked on
+    /// and what is quiet, a line a project, with every profile's usage. `ptyro home <project>`
+    /// unfolds one: where it was left off, what happened there, the files it touched most
+    Home {
+        /// Unfold this project (its name, or the start of it)
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
+        /// Put the project's next thing away until it changes (only what was left hanging)
+        #[arg(long, requires = "project")]
+        put_away: bool,
+        /// Bring back everything that was put away
+        #[arg(long)]
+        restore: bool,
     },
     /// Rate limits and usage per profile (Claude, Codex)
     Usage {

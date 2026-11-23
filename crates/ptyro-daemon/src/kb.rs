@@ -24,9 +24,9 @@ mod history;
 mod machines;
 mod notes;
 mod offer;
-mod requests;
+pub(crate) mod requests;
 mod roots;
-mod search;
+pub(crate) mod search;
 mod sessions;
 mod shells;
 

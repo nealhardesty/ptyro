@@ -16,6 +16,7 @@ mod engine;
 mod github;
 mod guard;
 mod handoff;
+mod home;
 mod kb;
 mod kept;
 mod launch;

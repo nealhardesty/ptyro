@@ -177,6 +177,7 @@ searched beside it. The long form is [`knowledge.md`](knowledge.md).
 | `ptyro mute SESSION\|project:P\|workspace:W [--for D] [--off]` | silence notifications (its row still shows when it wants you) |
 | `ptyro notify test` | send a test through every channel and sink |
 | `ptyro usage [--json]` | rate limits per profile (Claude, Codex) |
+| `ptyro home [PROJECT] [--json] [--put-away] [--restore]` | everything, ranked: what needs you, what was left hanging (a question nobody answered, a prompt with no reply, work that isn't committed or pushed, an agent idle for hours), what is being worked on and what is quiet, a line a project, with every profile's usage. `PROJECT` (its name, or the start of it) unfolds one: where it was left off, its recent sessions, commits and notes, the files they touched most. `--put-away` puts the project's next thing away until it changes; `--restore` brings everything back |
 
 ## Projects, worktrees, workspaces, profiles
 

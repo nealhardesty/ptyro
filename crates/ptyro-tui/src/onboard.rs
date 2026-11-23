@@ -78,6 +78,21 @@ impl App {
         }
     }
 
+    /// Whether this start opens on home: a bare `ptyro`, with `[ui] home_at_start` on.
+    fn opens_on_home(&self) -> bool {
+        self.opts.home && self.config.ui.home_at_start
+    }
+
+    /// After attaching: a bare `ptyro` opens on home (SPEC §26.9), over whatever the view
+    /// restored; Esc puts it away. Never over the first run, and only when home has a row to
+    /// show: the view is asked for first (`home_started`).
+    pub fn home_at_start(&mut self) {
+        if self.opens_on_home() && self.overlay.is_none() && self.first_run.is_none() {
+            let req = Request::Home { trail: None, dismiss: None, restore: false, here: true };
+            self.request(Pending::HomeStart, req);
+        }
+    }
+
     pub fn open_first_run(&mut self) {
         if self.setup_running() {
             return;
@@ -426,7 +441,8 @@ impl App {
 
     // ── home ────────────────────────────────────────────────────────────────
 
-    /// Home (`H`): what to do next, in one list. Discovery fills in the repositories.
+    /// `home.add` (`a` on home): somewhere to start, in one list: recent projects and the
+    /// repositories found. Discovery fills those in.
     pub fn open_home(&mut self) {
         self.request(Pending::Home, Request::Discover { refresh: false });
     }
@@ -472,7 +488,7 @@ impl App {
             target: Target::NewShell,
         });
         self.overlay = Some(Overlay::Picker {
-            palette: Palette::new("Home: what next?", items),
+            palette: Palette::new("Start somewhere", items),
             purpose: Purpose::Home,
         });
     }

@@ -92,6 +92,8 @@ pub struct Daemon {
     pub(crate) last_launch: Mutex<HashMap<String, ptyro_core::session::LastLaunch>>,
     /// Worktrees kept from clean-up, by worktree id (`kept.rs`).
     pub(crate) kept: Mutex<HashMap<String, crate::kept::Kept>>,
+    /// What home keeps (`home.rs`): the last sign of you, and what was put away.
+    pub(crate) home: Mutex<crate::home::HomeState>,
     /// Usage per (profile, agent).
     pub(crate) usage: Mutex<HashMap<(String, String), ptyro_core::status::Usage>>,
     pub(crate) codex_usage: Mutex<std::collections::HashSet<String>>,
@@ -230,6 +232,7 @@ impl Daemon {
             used_links: Mutex::new(HashMap::new()),
             last_launch: Mutex::new(HashMap::new()),
             kept: Mutex::new(HashMap::new()),
+            home: Mutex::new(crate::home::HomeState::default()),
             usage: Mutex::new(HashMap::new()),
             codex_usage: Mutex::new(std::collections::HashSet::new()),
             sidecars: Mutex::new(HashMap::new()),
@@ -1532,6 +1535,12 @@ impl Daemon {
             }
             Request::Mute { target, minutes, unmute } => self.mute(&target, minutes, unmute).await,
             Request::Usage => Ok(self.usage_list()),
+            Request::Home { trail, dismiss, restore, here } => {
+                if here {
+                    self.human_here();
+                }
+                self.home(trail, dismiss, restore, caller).await
+            }
             Request::NotifyTest => self.notify_test().await,
             other => self.handle_registry(other, caller).await,
         }

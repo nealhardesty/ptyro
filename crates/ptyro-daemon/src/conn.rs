@@ -334,6 +334,11 @@ impl Conn {
             Some(m) => m,
             None => return,
         };
+        // A sign of you (home's "while you were away", SPEC §26.6): typing, or looking.
+        if matches!(msg, ClientMsg::Input { .. } | ClientMsg::Keys { .. } | ClientMsg::Focus { .. })
+        {
+            self.daemon.human_seen(self.caller.kind);
+        }
         match msg {
             ClientMsg::Hello { .. } => {}
             ClientMsg::Request { id, req } => {

@@ -31,6 +31,9 @@ pub struct Ui {
     pub mouse: bool,
     /// Ask before stopping, killing, or stopping and removing a session (the TUI and the web).
     pub confirm_kill: bool,
+    /// A bare `ptyro` opens on home (SPEC §26.9), and the web app on its Home tab; off, home
+    /// shows when asked for (`H`).
+    pub home_at_start: bool,
     /// Tint pane borders with the session's profile colour (SPEC §10.10).
     pub tint_borders: bool,
     /// What a pane shows after you stop its session from the TUI (UX1.23).
@@ -140,6 +143,7 @@ impl Default for Ui {
             load: true,
             mouse: true,
             confirm_kill: true,
+            home_at_start: true,
             tint_borders: false,
             on_stop: OnStop::Next,
             sidebar_detail: SidebarDetail::Auto,

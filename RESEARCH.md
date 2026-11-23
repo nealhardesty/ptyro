@@ -1198,6 +1198,22 @@ Agentastic Companion (iPhone + Mac host, E2E, TestFlight) · Nimbalyst Mobile (E
 
 ---
 
+#### F26. Flightdeck (justinchuby) *(added 2026-11-23, for the owner's home-screen brainstorm)*
+- **URL:** https://github.com/justinchuby/flightdeck · npm `@flightdeck-ai/flightdeck` · **Class:** orchestrator for crews of coding agents, web UI on localhost
+- **What it is [V 2026-11-20, README]:** a **Home Dashboard** (active projects, decisions awaiting approval, action-required items, milestones); a Lead Dashboard (chat with a "Project Lead", a decisions panel, tabs for crew, comms, DAG and tokens); **Mission Control** (health summary, fleet, token economics, alerts, activity feed, DAG minimap, panels reordered by drag); a swim-lane timeline with idle time hatched and a replay scrubber; tasks as DAG, Kanban or Gantt.
+- **Special:** a **"While you were away" banner** (completed tasks, pending decisions, failures); a persistent **attention bar** (green/yellow/red); an **approval queue** with batch approval and an auto-deny timer that pauses while you review; a **trust dial** (supervised, balanced, autonomous) with a per-project override; budgets that warn at 0.7, go critical at 0.9 and pause at 1.0.
+- **Gaps:** a home that starts from projects and decisions (ptyro: built 2026-11-23, HOME); a catch-up line (built, §26.6); batch approval.
+- **Weaknesses vs ptyro:** an orchestrator's view of its own crew, not of sessions you started; no ranking rule is documented; nothing remembers a project once its run ends.
+- **Ideas:** → R-UX-47 (home as a ranked table of projects), R-UX-48 (the "away" line, from state not from a model).
+
+#### F27. Flightdeck (flightdeckhq) *(added 2026-11-23)*
+- **URL:** https://github.com/flightdeckhq/flightdeck · **Class:** self-hosted observability and control plane, with a Claude Code plugin
+- **What it is [V 2026-11-20, README]:** a **fleet view** with every agent a row on one live timeline (LLM, tool, MCP, policy and error events), sub-agents nested under their parent; an agents table with seven-day trends for tokens, latency, errors, sessions and cost.
+- **Special:** a kill switch for one agent or a whole "flavor"; token budgets a flavor that **warn, then degrade to a cheaper model, then block**; MCP allow and block policy.
+- **Gaps:** timelines; budgets that act.
+- **Weaknesses vs ptyro:** no inbox or "needs you"; no status model documented; it watches, it doesn't host the terminals.
+- **Ideas:** a week of activity a row (taken, as seven marks: §26.4); the budget ladder stays with R-USE-01.
+
 ### G. The agent CLIs themselves, and adjacent tooling
 
 > **Headline (2026-10-20):**
@@ -3655,6 +3671,9 @@ an idea, the row says so and marks it [U] rather than assuming.
 | R-SEC-06 | **Credentials the agent never holds.** A per-session egress proxy that adds the profile's tokens (model key, `gh` token) to outgoing requests, so nothing secret sits in the session's environment or files; pairs with the sandbox tiers. `srt`'s proxy only limits destinations | Docker `sbx` credential proxy [S]; `srt` [V]; MCP roadmap on agent identity and delegation [V] | Backlog (with R-SEC-05) | L | ★★ | new |
 | R-SEC-07 | **Quarantine agent configuration that a repository supplies.** When a worktree's repository declares MCP servers, hooks, skills or agent settings (`.mcp.json`, `.claude/`, `.codex/`, `.agents/`, `.github/hooks`), show what would load and ask once, under the same trust fingerprint as setup scripts; re-ask when it changes | October 2026 advisories: agents that ran or connected to MCP servers declared by an untrusted repository; a config check bypassed by a trailing-dot file name; Codex's hash-pinned hook trust [S for the advisories] | M3 trust (SPEC §10.5) | M | ★★ | new |
 | R-SEC-08 | **Standing tests for cross-session authority.** Four properties as regression tests: one session cannot answer another session's approval; a paired machine cannot read or write outside its sessions; repository hooks run only inside the worktree; text shown in a pane can never be typed at a prompt | tuios advisories, 2026-10-25 to 10-30 (A3) [V] | H-series hardening | S | ★★ | new |
+| R-UX-49 | **An end-of-day sweep, and ranking by risk of loss.** Walk every open thing (uncommitted work, unpushed commits, idle agents, stale worktrees) and choose for each: park, push or remove. And a second order for home: by what would be lost (uncommitted lines, commits that are nowhere else, days diverged) | Sunsama's shutdown ritual [V 2026-11-20]; WSJF and Taskwarrior's urgency [V] | HOME (SPEC §26.10) | M | ★★ | new |
+| R-UX-48 | **Memory behind home.** A project with nothing running says where it was left off (the last thing you said, the last reply), whether its last reply was a question nobody answered or its last prompt got no reply, a week of prompts as seven marks, a trail of its sessions, commits and notes, and its hot files; a note tagged `next` is its next. All from `kb.db`, nothing written by a model | nobody has it (no competitor keeps a knowledge base); resumption-lag research: cues from just before the interruption shorten the restart [V 2026-11-20] | HOME | M | ★★★ | → HOME.2, built 2026-11-23 |
+| R-UX-47 | **Home as a ranked table of projects.** One row a project, by whose move it is: needs you, left hanging, working, quiet; one "next" a row with the reason in the words that were said; ⏎ does it; a row unfolds; the selection follows its row; a line of what happened while you were away; quiet is dim | Graphite's inbox (sections by whose move) [V]; Claude Code agent view's groups [V]; herdr's done-unseen [V]; Flightdeck's Home and "while you were away" (F26) [V]; ParallelPilot (+63% tickets, and awareness alone is not control) [V]; the dark cockpit [V]; Few: one screen, what needs attention first [V] | HOME | L | ★★★ | → HOME.1 to HOME.6, built 2026-11-23 |
 | R-UX-46 | **Real typing on the web.** Letters reach the session as they are typed, also while a phone keyboard composes a word (a diff of the composition, not its end); dictation sent once settled, as a paste; terminal first on the session page; keystrokes sequenced, acked and de-duplicated across reconnects, with a guarded replay; mosh-style predicted local echo shown only while it proves right | owner (2026-11-19: "a real terminal typing experience… needs to be bulletproof", "must still work with dictation software, including third party like superwhisper"); mosh's speculative echo [V], Termux's no-suggestions keyboard [V], hterm's IME handling [S] | WEB | L | ★★★ | → WEB2 |
 | R-UX-45 | **Settled shelf, calm mode, return notes.** Finished-and-seen sessions move to a shelf out of the working list; a calm mode holds everything but `blocked`; on return to a session or to ptyro, a short note of what happened while away, built from the event log | tuios 0.12 (A3); ParallelPilot's run logger and ambient dashboard (+1 concurrent agent, +63% tickets) [V] | UX (beside R-STA-04, the digest) | M | ★★ | new |
 | R-OBS-04 | **Per-turn cost on the timeline, and supervision metrics.** Attach model and token cost to each turn checkpoint where the agent reports it; in `ptyro stats`, add the human side: sessions run at once, switches per hour, time from `blocked` to answered, share of time reviewing | aGiTrack, OrcaReplay [S]; Chou et al. (0–101.6 switches an hour); METR (cannot measure multi-agent productivity) [V/S] | M8 (extends R-OBS-02) | M | ★ | new |
@@ -3919,6 +3938,21 @@ vendors' CLIs (F21) is a sign the neutral position is real; it is also a sign it
 
 ## Changelog
 
+- **2026-11-23 (home, one pass for the owner's brainstorm of 2026-11-20):** two web passes.
+  **New entries F26 and F27**, the two products called Flightdeck (an orchestrator with a Home
+  Dashboard and a "while you were away" banner; an observability plane with a fleet timeline),
+  both [V] from their READMEs. What other tools put on their first screen, read on 2026-11-20:
+  Claude Code's agent view groups Pinned, Ready for review, Needs input, Working, Completed
+  [V]; herdr rolls a workspace up to its most urgent state and keeps "done" unread until seen
+  [V]; agent-deck orders its waiting queue by who started waiting most recently [V]; Conductor
+  groups workspaces by backlog, in progress, in review, done and added a status matrix to Home
+  (0.85.0) [V]; Cursor's "Needs attention" joins blocked agents with finished, unseen work
+  [S]; Warp's panel has the launch source as a column [V]; cost and tokens are almost always
+  a separate screen. From adjacent tools: Graphite's sections by whose move it is [V],
+  Taskwarrior's urgency sum [V], Sentry's "for review" that ages out [V], the dark cockpit
+  and its hazard (dark read as healthy) [V], Stephen Few's one screen [V]. **Three ideas**:
+  R-UX-47 and R-UX-48 promoted and built the same day (ROADMAP HOME, SPEC §26), R-UX-49 new.
+  R-USE-01's meters are now on home, complete. Not re-verified: every claim marked [S].
 - **2026-11-19 (knowledge bases, one pass):** new catalogue **section I** (I1 orch, read from its
   code at `02e9f91`; I2 the agents' own memory, I3 claude-mem, I4 the LLM-wiki pattern, I5 Atuin's
   command output, I6 memory services and their benchmarks, all [S] from web searches) and **12

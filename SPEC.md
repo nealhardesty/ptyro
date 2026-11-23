@@ -50,6 +50,7 @@ Status markers used below:
 23. Shells: a workspace's numbered terminals
 24. Bootstrap: agents, tools and updates
 25. Knowledge base: one memory for you and your agents
+26. Home: everything, ranked
 
 ---
 
@@ -1123,6 +1124,11 @@ refused with `conflict` when its file has changed since. A 1.62 daemon ignores t
 fields (a search within a history then answers with everything that matches, and a note is
 written over as before) and sends no `version`, which a client reads as "none": it sends no
 `base`. A 1.62 client sends neither, and is answered as before.
+
+**[built 2026-11-23] Protocol 1.64** (additive; home, §26.7): `Home{trail?, dismiss?, restore,
+here}` → `Home{home: HomeView}`: everything, ranked, by the daemon asked. `read`; with
+`dismiss` or `restore`, `control`. A daemon before it answers "unknown request", which the
+clients say with the fix (upgrade the daemon).
 
 **[built 2026-11-20] Protocol 1.62** (additive; what is offered at a prompt, KB5, §25.9,
 §25.14): `KbStatusInfo` gained `inject` (`kb.inject`) and `offered` (the last 20 offers, each
@@ -4343,6 +4349,7 @@ prefix = ["C-q", "C-Space"]  # or one key: "C-]"
 theme = "ptyro-dark"
 sidebar_width = 30
 confirm_kill = true              # Stop, Kill, and Stop and remove ask first (TUI and web)
+home_at_start = true             # a bare `ptyro`, and the web app with no address, open on home (§26.9)
 shell_exit = "close"             # a shell that exits: close (disappears; agents stay) | keep
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
@@ -12789,3 +12796,211 @@ stand, and notes stay in ptyro's data folder.
 - **Notes in the repository** (a committed `.ptyro/notes/`): decided against, 2026-11-19.
 - **Sharing with a team**, and **merging across machines** (with CHAT6).
 - **Export** of the knowledge base as files.
+
+---
+
+## 26. Home: everything, ranked **[decided 2026-11-23 (owner, ROADMAP HOME); built 2026-11-23]**
+
+One look at everything: what is being worked on, what needs you, and what was forgotten. A row
+a project, ranked by the next thing to do there, with every profile's usage under it. RESEARCH
+R-UX-47 (the ranked table), R-UX-48 (what memory adds), R-USE-01 (the meters); B13 and F26
+(the two Flightdecks) and Part III's notes on dashboards are where the ideas came from.
+
+### 26.1 Decided by the owner (2026-11-20 to 2026-11-23)
+
+- **Rows are projects, ranked by whose move it is**, each with one "next". Not a feed, not a
+  board, not a second session list.
+- **Memory stands behind it.** A project with nothing running still says where it was left
+  off, and whether something was left hanging, from the knowledge base (§25).
+- **"Left hanging" is a section of its own**, between what needs you and what is working.
+- **A note tagged `next` is a project's next** when nothing more urgent is: only a note you or
+  an agent wrote on purpose (`ptyro kb note --tag next`, the agents' `remember`), never inferred.
+- **It is where a bare `ptyro` opens**, and the web app when it has no address to go to.
+  `[ui] home_at_start = false` leaves it to its key.
+- **Every workspace and every linked machine at once.**
+- **The usage strip is small and complete**: every profile, every agent, every window.
+- **No model writes any of it.** Every line is something that was typed, answered or
+  committed. (Summaries were dropped on 2026-11-17 and stay dropped.)
+
+### 26.2 Sections and the ladder
+
+`ptyro_core::home` is the one rule: `build(Inputs) -> HomeView`. The daemon gathers the inputs
+(§26.7); the CLI, the TUI and the web only draw the view. Every thing has a `next`, and the
+order of the ladder is the order of urgency:
+
+| Section | `next` | Verb shown | When |
+|---|---|---|---|
+| **Needs you** | `answer` | answer | an agent is blocked on you (it stays here after you looked: it still waits) |
+| | `failed` | failed | it stopped with an error, or exited non-zero, and you haven't looked |
+| | `review` | review | a turn finished (or it exited 0) and you haven't looked (§9.4's attention) |
+| | `look` | look | a shell you asked to be told about has something (§23.9) |
+| **Left hanging** | `asked` | it asked | its last reply ends in a question (§26.3) and nobody answered: a seen agent idle 10 minutes, a sleeping one, or a session that is gone (from memory) |
+| | `cut_off` | cut off | your last prompt has no reply, in a session that is gone |
+| | `planned` | next | a note tagged `next` in the project |
+| | `commit` | commit | a worktree with uncommitted work and no live session in it |
+| | `push` | push | a worktree with commits that are nowhere else, and no live session in it |
+| | `stale` | idle | a seen agent, idle for 2 hours |
+| **Working** | `working` | working | an agent at work (its activity, and the turn) |
+| | `limit` | limit | stopped by a usage limit: not yours to answer; says when the window resets |
+| | `open` | your turn | a seen agent waiting for your next prompt |
+| **Quiet** | `left_off` | left off | nothing open; the last thing you said there, from memory |
+| | `nothing` | | nothing is known of it |
+
+- **A row is a project** (its key is the project's id). Sessions of no project share one row,
+  `no project` (key `~`, `~<machine>` for another machine's), which exists only while one of
+  them has something to say. A plain shell, a worktree's quick terminal and a chat's own agent
+  say nothing unless they want attention.
+- **A row's things** are ranked by the ladder; the first is its next, and its section is that
+  thing's. Among what needs you the oldest wait comes first; elsewhere the newest.
+  `left_off` is only said when nothing else is.
+- **Rows** go by section, then by their next, then: needs you, the oldest wait first; left
+  hanging, the newest first; working, the row that moved last first; quiet, the most recently
+  used first.
+- **What only memory holds stops hanging after 30 days**: it is then where the project was
+  left off. Uncommitted and unpushed work never ages out.
+- **The counts** in the headline are things, not rows (`2 need you · 1 left hanging · 3
+  working`, or `all quiet`); `working` counts agents at work.
+
+### 26.3 The question
+
+`home::question(text)`: the text's last non-empty line, when it ends in `?` (Markdown's closing
+marks don't hide it), from where its sentence starts; a sentence under 12 characters keeps the
+whole line. It is a heuristic, so the row shows the words themselves: a wrong guess is plain to
+see, and `x` puts it away. For a live session the daemon reads the whole last reply (the wire
+carries only its first 300 characters); for a mirrored one, what the mirror has; for a session
+that is gone, the last piece of its last assistant message in `kb.db`.
+
+### 26.4 What memory gives
+
+`KbDb::home_tails(projects, now)` (ptyro-store), a handful of indexed reads a project:
+- **its newest session**: the start of the last thing you said and of the last reply, which of
+  the two came last, and how that reply ends (for §26.3);
+- **its week**: your messages a day over the last seven 24-hour spans, oldest first, counted
+  in the sessions that ended in them. Drawn as seven marks (`··▃█··▁`, `home::spark`); a week
+  of nothing is no week;
+- **its newest note tagged `next`** (a note's tags are its text's last line, §25.6.4), with
+  the note's first line.
+
+A session ptyro still lists speaks for itself: memory's line about it is left out. Private
+sessions (§25.7a) are not in `kb.db`, so they show live state only. Chats are not on home.
+
+**Who asks.** You see all of it. A request from inside an agent's session gets live state only
+(`memory: withheld`): the lists already tell it that much, and nothing said in other sessions
+crosses the wall (§25.9). With the knowledge base off (`kb.enabled`), `memory: off` and the
+view says once how to switch it on.
+
+### 26.5 The trail
+
+`Request::Home{trail: <row>}` unfolds one row (by its key, its name, or the start of its
+name): `HomeView.trail`.
+- **left off**: the two lines of §26.4, with the agent's name, the item's address, and the
+  ptyro session when it is still listed;
+- **entries**: the project's 14 newest sessions, commits and notes (`KbDb::home_trail`),
+  newest first: a session with its agent, how many times you spoke and how many files it
+  touched; a commit with its short hash; a note with who wrote it. The clients group them by
+  local day;
+- **hot files**: the five files that the project's last 42 sessions and commits touched most
+  (more than once), relative to the project's root.
+
+Only this machine's projects have a trail; a linked machine's row says its trail is there.
+
+### 26.6 Put away, and away
+
+- **Put away.** A thing left hanging can be put away (`x`; `Request::Home{dismiss: {key,
+  stamp}}`). Its `key` names it (`asked:<session or item>`, `commit:<worktree>`…), its `stamp`
+  is how it looked: a time, or for work in a worktree `<uncommitted>:<unpushed>:<head>`. It
+  stays away while the stamp is the same, so new work or a new reply brings it back. Kept in
+  the store's `kv` (`home:dismissed`); `restore` clears it. Anything else is refused: what
+  needs you can't be put away.
+- **While you were away.** The daemon keeps the last sign of you: a person's client (TUI, web)
+  typing or looking at a session, or home asked for by hand (`Request::Home.here`, which a
+  client sets when it asks because of something you did, never when it asks again because
+  something changed). After 20 minutes without one, the next is coming back, and for 30
+  minutes the view carries `away {since_ms, back_ms, finished, failed, asked, commits}`: the
+  sessions that came to want you meanwhile, by kind, and the commits made (from `kb.db`). Its
+  line: `away 2h10m: 3 finished, 1 failed, 2 commits`. Memory only: a restarted daemon starts
+  over.
+
+### 26.7 The daemon, the protocol, many machines
+
+`crates/ptyro-daemon/src/home.rs`. Protocol **1.64** (additive):
+- `Home{trail?, dismiss?: HomeDismiss{key, stamp}, restore, here}` → `Home{home: HomeView}`.
+  `HomeView{at_ms, rows: [HomeRow], meters: [Meter], away?, memory, trail?, at_start}`;
+  `HomeRow{key, project?, name, workspace?, machine?, section, things: [Thing], live, working,
+  last_ms, week}`; `Thing{next, text, at_ms, session?, session_name?, worktree?,
+  worktree_name?, item?, left?, key, stamp}`. `at_start` is `[ui] home_at_start`, for a
+  client with no config of its own (the web).
+- Scope: `read`; with `dismiss` or `restore`, `control`.
+- **Answered by the daemon asked** (`here_only`): its own sessions, projects, worktrees and
+  usage, plus every linked machine's as its mirror has them (hidden workspaces left out,
+  §16.4b). Memory and trails are this machine's.
+- The view is built when asked for: no cache. A client that shows home asks again about 0.7 s
+  after any event, and every 30 s for the ages.
+- What is shown was said by an agent or read from a file: `home::clean` drops control
+  characters before it reaches a terminal.
+
+### 26.8 Usage on home
+
+`home::meters`: one meter for every (machine, profile, agent) the daemon has a reading for
+(§9.7), and one for every agent that runs here and has none.
+- Each window as `5h 62% ↻2h10m` (used, and how long until it resets); a window whose reset
+  has passed since the reading as `5h reset`.
+- `limited ↻40m` first while the profile is rate-limited.
+- `full ~15m` after a window that is half used and on pace to run out at least five minutes
+  before it resets (linear from the window's start, its length read from its name).
+- `(8h old)` after a reading older than six hours; `?` for an agent that reports nothing
+  (Codex's feed is opt-in, §9.7).
+- Levels: `limited` (red), `warn` (a window at 80% or more), `old`, `unknown`, `quiet`. Quiet
+  is dim: colour is for what needs a look.
+- The profile is left out of the label when there is only one. Nothing is left out for room:
+  the strip wraps.
+- Percent and resets are the vendors' own; token counts are not in their feeds (`ptyro usage`
+  adds `ccusage`'s daily totals when it is installed).
+
+### 26.9 Surfaces
+
+**CLI.** `ptyro home [PROJECT] [--json] [--put-away] [--restore]` (`crates/ptyro/src/home.rs`;
+it starts the daemon if none runs). The text is `home::text`: the headline, the away line, a
+line a row under its section's title, the unfolded project's trail, the meters, and a line
+when memory is off. `--put-away` puts the project's next thing away; `--json` is the view.
+
+**TUI** (`crates/ptyro-tui/src/home.rs`): `home` (`H` after the prefix and in the sidebar, the
+palette), a panel over the panes, one of the chat panel's shapes (so `` ` `` goes back and
+forth, as for the Library).
+- **A bare `ptyro` opens on it** (`Options::home`; never over the first run), unless `[ui]
+  home_at_start = false`. It asks for the view first and opens only when there is a row to
+  show, so nothing covers a restored layout to say "no projects yet" (with no project the
+  list of places to start shows, as before). `ptyro attach <session>` and `ptyro new` do
+  not.
+- A row: `▸ name  week  verb  what was said … where · ↑3 ● 2 · +N · age`. Sections are capped
+  (left hanging 8, quiet 6) behind `… N more`.
+- **The selection is what a line is**, not where: a row that moves takes the cursor with it.
+- Keys: `j`/`k`, `g`/`G`; `⏎` goes there (a session is shown, a sleeping one woken; `commit`
+  and `push` open the worktree's quick terminal; what only memory holds is read in the
+  Library; a row with nothing open gets the task box); `→`/`Tab`/`Space` unfold, `←` folds;
+  `n` a new task in the project; `c` one whose box starts with where to read what was left
+  (`ptyro kb show <addr>`); `p` peek and answer; `x` put away, `u` (`home.restore`) bring
+  back; `/` the Library with only that project's history; `a` (`home.add`): the list of
+  recent projects and repositories found that was home before; `m` every section whole; `r`
+  again; `Esc`/`q` close.
+- The foot is the usage strip, wrapped, then the keys that apply to the selected line.
+
+**Web** (`web/src/home.ts`): the **Home** tab (`#/home`, `g h`), first of the tabs.
+- A page opened with no address at all (the installed app's `start_url` is `/`) asks for the
+  view and goes to home when `at_start` says so. `#/` is always the sessions.
+- A card a row, by section; a tap goes there (`home.go`), ▸ unfolds (`home.unfold`): the other
+  things, left off, the trail by day, hot files, and New task, Continue (`home.continue`), Its
+  history, The project, Put away (`home.put_away`). Usage under the rows (`home.usage`);
+  Bring back what was put away (`home.restore`).
+- It asks again when the page becomes visible (`here`), 0.7 s after any event, and every 30 s.
+
+### 26.10 Not here, and open
+
+- **Tokens a project.** The feeds give percent of a window; counting tokens from transcripts
+  is separate work.
+- **An end-of-day sweep** (each open thing: park, push or remove), and **ranking by risk of
+  loss** (RESEARCH R-UX-49).
+- **Trails and memory of linked machines** on this one's home.
+- **Chats** on home.
+- **Answering from home** on the web (Allow and Deny on the row); the TUI has `p`.
+- **A row's selection on the web** has no keyboard of its own yet.

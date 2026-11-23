@@ -17,6 +17,7 @@ import { moveMaybeSpotted, staleMaybeChanged } from "./projects.js";
 import "./settings.js";
 import "./panel.js";
 import "./library.js";
+import { landOnHome } from "./home.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
 import { machineChip } from "./machines.js";
 import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
@@ -140,7 +141,7 @@ function route(): { view: string; id?: string } {
 }
 
 /// The tabs along the bottom of a top-level page; the active one is the page's.
-const TABS: [string, string, string][] = [["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["more", "#/more", "More"]];
+const TABS: [string, string, string][] = [["home", "#/home", "Home"], ["list", "#/", "Sessions"], ["chats", "#/chats", "Chats"], ["p", "#/p", "Projects"], ["more", "#/more", "More"]];
 function withTabs(view: string, page: HTMLElement): HTMLElement {
   // Chats switched off (`[chat] enabled = false`) have no tab.
   const tabs = TABS.filter(([v]) => v !== "chats" || chatsShown());
@@ -740,6 +741,8 @@ conn.listeners.add((msg) => {
     }
     void refresh();
     void loadAll();
+    // Opened with nowhere to go: home, when `[ui] home_at_start` says so (SPEC §26.10).
+    void landOnHome();
     void syncPush();
     void readAltDigits();
     setupConnected();
@@ -822,7 +825,7 @@ document.addEventListener("keydown", (e) => {
   // C-g: find across every chat (not in a terminal, whose program has the key).
   if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "g" && token() && chatsShown() && route().view !== "session" && !document.querySelector(".scrim")) { e.preventDefault(); findAllChats(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector(".scrim") || !token()) return;
-  const tabs: Record<string, string> = { s: "#/", c: "#/chats", p: "#/p", m: "#/more" };
+  const tabs: Record<string, string> = { h: "#/home", s: "#/", c: "#/chats", p: "#/p", m: "#/more" };
   if (goKey && Date.now() - goKey < 1500 && tabs[e.key]) { goKey = 0; location.hash = tabs[e.key]; e.preventDefault(); return; }
   goKey = 0;
   if (e.key === "g") goKey = Date.now();
@@ -842,7 +845,7 @@ document.addEventListener("keydown", (e) => {
     if (r) { e.preventDefault(); if (!r.value) { r.value = "/"; r.dispatchEvent(new Event("input")); } r.focus(); }
   }
   else if (e.key === "/") { e.preventDefault(); if (route().view !== "list") location.hash = "#/"; setTimeout(() => (searchBox.isConnected ? searchBox : document.querySelector<HTMLInputElement>("input.search"))?.focus(), 50); }
-  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["Alt+1…9", "Shell N of SHELLS, from anywhere, while typing in a terminal too (Option on a Mac; Alt+0: shell 10)"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
+  else if (e.key === "?") sheet("Keys", [h("dl", { class: "facts" }, ...([["n", "New task"], ["m", "New chat"], ["Alt+1…9", "Shell N of SHELLS, from anywhere, while typing in a terminal too (Option on a Mac; Alt+0: shell 10)"], ["1…9", "Shell N of SHELLS (on the list, and a shell's page you only watch)"], ["any key", "On a session you may type to: typed into its terminal (Tab still moves between buttons)"], ["/", "Find a session (in the chats: a chat; in a chat: a command)"], ["Ctrl-G", "Search every chat"], ["Enter", "In a chat: send (Shift+Enter: a new line)"], ["@", "In a chat's box: its folders"], ["g h", "Home"], ["g s", "Sessions"], ["g c", "Chats"], ["g p", "Projects"], ["g m", "More"], ["Esc", "Close a dialog"]] as [string, string][]).flatMap(([k, d]) => [h("dt", {}, h("kbd", {}, k)), h("dd", {}, d)]))]);
 });
 
 window.addEventListener("hashchange", () => { takePairCode(); render(); });
