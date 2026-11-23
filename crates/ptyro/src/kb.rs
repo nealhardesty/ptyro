@@ -1098,7 +1098,12 @@ mod tests {
         assert!(a.take_flags().unwrap_err().message.contains("can't go together"));
         let mut a = args(&["x", "-l"]);
         assert!(a.take_flags().unwrap_err().message.contains("needs a value"));
-        assert!(Recall::try_parse_from(["recall"]).is_err(), "it needs something to look for");
+        // No words: only filters, which list the newest of what they let through (v0.0.94).
+        let mut a = args(&[]);
+        assert!(a.take_flags().unwrap().is_empty());
+        let mut a = args(&["-p", "ptyro", "--since", "7d"]);
+        assert!(a.take_flags().unwrap().is_empty());
+        assert_eq!((a.project.as_deref(), a.since.as_deref()), (Some("ptyro"), Some("7d")));
     }
 
     /// Review B1: what was stored (a README, a comment, a commit message) reaches the
