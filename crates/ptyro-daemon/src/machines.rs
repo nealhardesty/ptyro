@@ -448,7 +448,9 @@ impl Daemon {
                     .ok()
                     .filter(|b| !b.is_empty())
                     .or_else(|| {
-                        std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned())
+                        std::env::current_exe().ok().map(|p| {
+                            ptyro_agents::own::installed_name(&p).to_string_lossy().into_owned()
+                        })
                     })
                     .unwrap_or_else(|| "ptyro".into());
                 let mut argv = vec![exe, "machine-bridge".into(), "--url".into(), url.clone()];

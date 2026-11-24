@@ -8726,8 +8726,9 @@ for a page and a phone:
   says `&`, Alt+2 `é`; off a Mac Alt makes no character, AltGr does and is left out); on a Mac, not
   when Option makes one of the layout's own ASCII characters (a German Mac's Option+5 `[`, a
   British one's Option+3 `#`, a French one's Option+5 `{`: typed, as `keyOf` sends them); not with
-  Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, not in another field (a
-  chat's box: Option-digit types there), not under a dialog. `[shell] alt_digits = false` (read
+  Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, on a Mac not in another
+  field (a chat's box: Option-digit types there; off a Mac, where Alt types nothing, a chat's box
+  gives them up as the TUI's does, 2026-11-24), not under a dialog. `[shell] alt_digits = false` (read
   from the daemon's `status.alt_digits`, 1.52, which every device may read whatever its scope, on
   connecting and on opening a session's page; from an older daemon with `settings.view` where this
   device may read the config) leaves them to the program, as in the TUI. The workspace is the TUI's `shells_ws`: the page's session's (a shell's, its
