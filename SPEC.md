@@ -5554,6 +5554,9 @@ installed app is named after the machine (owner, 2026-11-20, so a phone with sev
 tells them apart): `ptyro serve` asks the daemon for the name when it serves the page (iOS's
 `apple-mobile-web-app-title` and `<title>`) and the manifest (Android's `name`, and `short_name`,
 which is the machine alone when `ptyro <machine>` passes the 12 characters a launcher label shows).
+A name in capitals (`WALRUS`: Windows' and WSL's host names) is lowercased there, `ptyro walrus`
+(owner, 2026-11-24); one with any lowercase letter (`Neal's MacBook`, a `machine_name` you typed)
+is kept as it is.
 Those requests carry no device token, so whoever can reach the server (loopback, the tailnet, the
 configured names) sees the machine's name before signing in, as the certificate already shows its
 host name; set `[daemon] machine_name` for a name other than the macOS ComputerName. Android picks a

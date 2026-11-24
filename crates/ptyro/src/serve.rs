@@ -852,8 +852,14 @@ async fn daemon_machine(st: &State) -> Option<String> {
 
 /// An installed app's name for `machine`: `ptyro studio`. A launcher label shows about 12
 /// characters, so when that is too long the short name is the machine alone: the part that tells
-/// the apps apart is never what gets cut.
+/// the apps apart is never what gets cut. A name in capitals (`WALRUS`, Windows' and WSL's host
+/// names) is lowercased, `ptyro walrus`; one with any lowercase letter (`Neal's MacBook`) is kept.
 fn app_names(machine: &str) -> (String, String) {
+    let machine = if machine.chars().any(char::is_lowercase) {
+        machine.to_owned()
+    } else {
+        machine.to_lowercase()
+    };
     let name = format!("ptyro {machine}");
     let short = if name.chars().count() <= 12 { name.clone() } else { machine.to_owned() };
     (name, short)
@@ -1256,6 +1262,9 @@ mod tests {
     #[test]
     fn an_installed_app_is_named_after_its_machine() {
         assert_eq!(app_names("devbox"), ("ptyro devbox".into(), "ptyro devbox".into()));
+        // A host name in capitals is lowercased; a mixed-case one is the owner's, kept.
+        assert_eq!(app_names("WALRUS"), ("ptyro walrus".into(), "ptyro walrus".into()));
+        assert_eq!(app_names("DESKTOP-7FQ2").1, "desktop-7fq2");
         // Too long for a launcher label: the machine alone, so it is never what gets cut.
         assert_eq!(
             app_names("Neals-MacBook-Pro"),
