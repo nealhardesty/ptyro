@@ -3567,8 +3567,10 @@ learning anything up front.
     shows or hides it, adopts, renames, explains and stops it.
   - **Quick means brief:** the drawer goes away when another session
     or workspace shows: a pane that now shows a session it didn't (`App::tuck_away`, after every
-    command and mouse event, compares what every pane shows); the shell and the editor keep
-    running. **[changed 2026-10-30]** Moving focus between panes that were already showing
+    command, key, mouse event, reply and daemon message, compares what every pane shows; a reply
+    counts because what a command asked for, a new shell, shows when the daemon answers,
+    2026-11-24; a workspace's saved view doesn't, as it brings its drawer back); the shell and
+    the editor keep running. **[changed 2026-10-30]** Moving focus between panes that were already showing
     (back up to the agent the drawer hangs from, say) leaves them open: they are used together.
     Before, focus landing on another pane closed the drawer. Focus in the sidebar doesn't count
     either, so you can pick the next thing. While its drawer is open the shell's sidebar line is
