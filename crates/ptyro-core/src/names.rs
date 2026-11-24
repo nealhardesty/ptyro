@@ -42,18 +42,15 @@ pub fn friendly(seed: u128, taken: impl Fn(&str) -> bool) -> String {
     (2..).map(|k| numbered(&base, k)).find(|n| !taken(n)).expect("infinite")
 }
 
-/// `claude-rook`: `prefix` and a corvid, not `claude-2` (UX1.24). Falls back to
-/// [`friendly`]'s two-word names, then numbers, when every corvid is taken.
-pub fn corvid(seed: u128, prefix: &str, taken: impl Fn(&str) -> bool) -> String {
-    let c = CORVIDS.len() as u128;
-    for i in 0..c {
-        let name = format!("{prefix}-{}", CORVIDS[((seed + i) % c) as usize]);
-        if !taken(&name) {
-            return name;
-        }
-    }
-    let base = friendly(seed, |n| taken(&format!("{prefix}-{n}")));
-    format!("{prefix}-{base}")
+/// `ptyro-claude-1`: an agent session's default name, its project's slug (when it has one), the
+/// agent and the lowest free number from 1, so the name alone says where it is and what runs
+/// there, even in a list as narrow as a phone's (owner, 2026-11-24).
+pub fn counted(project: Option<&str>, agent: &str, taken: impl Fn(&str) -> bool) -> String {
+    let base = match project {
+        Some(p) => format!("{p}-{agent}"),
+        None => agent.to_owned(),
+    };
+    (1..).map(|k| numbered(&base, k)).find(|n| !taken(n)).expect("infinite")
 }
 
 /// Words a name made from a sentence leaves out.
@@ -316,15 +313,17 @@ mod tests {
         assert_eq!(from_text("日本語のテスト"), None);
         let long = from_text("supercalifragilisticexpialidocious antidisestablishment").unwrap();
         assert!(long.len() <= 32 && !long.ends_with('-'), "{long}");
-        // An agent and a corvid, never `claude-2`.
-        let taken = ["claude-rook".to_owned()];
-        let n = corvid(0, "claude", |n| taken.iter().any(|t| t == n));
-        assert!(n.starts_with("claude-") && n != "claude-rook", "{n}");
-        let all = |n: &str| n.split('-').count() == 2;
-        assert!(
-            corvid(3, "claude", all).split('-').count() > 2,
-            "every corvid taken: a longer name"
-        );
+    }
+
+    #[test]
+    fn an_agent_session_is_named_for_its_project_and_counted() {
+        assert_eq!(counted(Some("ptyro"), "claude", |_| false), "ptyro-claude-1");
+        let taken = ["ptyro-claude-1", "ptyro-claude-3"];
+        assert_eq!(counted(Some("ptyro"), "claude", |n| taken.contains(&n)), "ptyro-claude-2");
+        assert_eq!(counted(None, "codex", |_| false), "codex-1", "outside a project");
+        // A project's slug is at most 40, an agent's name at most 64: still a name.
+        let long = counted(Some(&"p".repeat(40)), &"a".repeat(64), |_| false);
+        assert!(validate(&long).is_ok() && long.ends_with("-1"), "{long}");
     }
 
     #[test]

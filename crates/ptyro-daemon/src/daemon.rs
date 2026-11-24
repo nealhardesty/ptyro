@@ -879,11 +879,12 @@ impl Daemon {
                 n
             }
             // A name says what it's for: from its title or prompt (`fix-flaky-test`), else the
-            // agent and a corvid (`claude-rook`, never `claude-2`), else a friendly pair.
+            // project, the agent and a number (`ptyro-claude-1`), else a friendly pair.
             None => match (wording.as_deref().and_then(names::from_text), &agent) {
                 (Some(n), _) => self.free_name(project, &n),
                 (None, Some(a)) if names::validate(a).is_ok() => {
-                    names::corvid(id.seed(), a, |n| self.name_taken(project, n))
+                    let slug = target.as_ref().map(|(_, p)| p.slug.as_str());
+                    names::counted(slug, a, |n| self.name_taken(project, n))
                 }
                 _ => names::friendly(id.seed(), |n| self.name_taken(project, n)),
             },
