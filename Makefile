@@ -23,7 +23,7 @@ STRICT ?= 1
 WEB_STRICT ?= 1
 
 .DEFAULT_GOAL := help
-.PHONY: help rust-install build release install install-release test fmt fmt-check lint deny doc check ci clean tools \
+.PHONY: help rust-install build release install install-release daemon-upgrade test fmt fmt-check lint deny doc check ci clean tools \
         run try headless smoke fixture snapshots proptest-deep fuzz-smoke fuzz check-macos web web-test web-e2e web-check ratchet ratchet-update catalog-fixtures lock-check msrv sbom installer-check dist-check brew-check bench criterion latency soak compat dist changelog homebrew-formula bump sandbox sandbox-clean verify-claude verify-structured verify-kb verify-shells spike-chat spike-chat-fts spike-kb spike-kb-comments bench-kb-redact bench-kb-offer kb-eval kb-eval-real spike-wsl test-wsl tui-parity parity reset
 
 help: ## List targets
@@ -47,6 +47,9 @@ install: ## Install the ptyro binary into ~/.cargo/bin (a fast build: seconds af
 	mkdir -p $(HOME)/.cargo/bin
 	install -m 755 target/local/ptyro $(HOME)/.cargo/bin/ptyro.new
 	mv -f $(HOME)/.cargo/bin/ptyro.new $(HOME)/.cargo/bin/ptyro
+
+daemon-upgrade: install ## Install, then move the running daemon onto the new binary (a live upgrade: sessions keep running)
+	$(HOME)/.cargo/bin/ptyro daemon upgrade
 
 install-release: ## Install the fully optimized build (what a release ships: slow, thin LTO)
 	$(CARGO) install --locked --path crates/ptyro

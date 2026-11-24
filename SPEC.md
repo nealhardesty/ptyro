@@ -3569,8 +3569,10 @@ learning anything up front.
     shows or hides it, adopts, renames, explains and stops it.
   - **Quick means brief:** the drawer goes away when another session
     or workspace shows: a pane that now shows a session it didn't (`App::tuck_away`, after every
-    command and mouse event, compares what every pane shows); the shell and the editor keep
-    running. **[changed 2026-10-30]** Moving focus between panes that were already showing
+    command, key, mouse event, reply and daemon message, compares what every pane shows; a reply
+    counts because what a command asked for, a new shell, shows when the daemon answers,
+    2026-11-24; a workspace's saved view doesn't, as it brings its drawer back); the shell and
+    the editor keep running. **[changed 2026-10-30]** Moving focus between panes that were already showing
     (back up to the agent the drawer hangs from, say) leaves them open: they are used together.
     Before, focus landing on another pane closed the drawer. Focus in the sidebar doesn't count
     either, so you can pick the next thing. While its drawer is open the shell's sidebar line is
@@ -8728,8 +8730,9 @@ for a page and a phone:
   says `&`, Alt+2 `é`; off a Mac Alt makes no character, AltGr does and is left out); on a Mac, not
   when Option makes one of the layout's own ASCII characters (a German Mac's Option+5 `[`, a
   British one's Option+3 `#`, a French one's Option+5 `{`: typed, as `keyOf` sends them); not with
-  Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, not in another field (a
-  chat's box: Option-digit types there), not under a dialog. `[shell] alt_digits = false` (read
+  Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, on a Mac not in another
+  field (a chat's box: Option-digit types there; off a Mac, where Alt types nothing, a chat's box
+  gives them up as the TUI's does, 2026-11-24), not under a dialog. `[shell] alt_digits = false` (read
   from the daemon's `status.alt_digits`, 1.52, which every device may read whatever its scope, on
   connecting and on opening a session's page; from an older daemon with `settings.view` where this
   device may read the config) leaves them to the program, as in the TUI. The workspace is the TUI's `shells_ws`: the page's session's (a shell's, its

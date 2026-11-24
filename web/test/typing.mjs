@@ -369,6 +369,7 @@ function altDigits() {
   // From the page, a button, the terminal: all of them. Not another field, a dialog, or switched off.
   for (const focus of ["none", "control"]) assert.equal(shellDigit(alt("2", "Digit2"), { ...term, focus, terminal: false }), 2, focus);
   assert.equal(shellDigit(alt("¡", "Digit1"), { ...term, terminal: false }), null, "a chat's box types ¡");
+  assert.equal(shellDigit(alt("2", "Digit2"), { ...term, terminal: false, mac: false }), 2, "off a Mac a chat's box types nothing for Alt+2: the shell");
   assert.equal(shellDigit(alt("1", "Digit1"), { ...term, dialog: true }), null);
   assert.equal(shellDigit(alt("1", "Digit1"), { ...term, on: false }), null, "[shell] alt_digits off: the program's");
   // The layout's own characters type (German Mac Option+5 `[`, British Option+3 `#`), as keyOf sends them.

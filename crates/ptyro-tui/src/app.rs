@@ -1546,7 +1546,15 @@ impl App {
 
     // ── server messages ─────────────────────────────────────────────────────
 
+    /// What the daemon says: a pane that now shows another session (another device's window,
+    /// a session gone and its pane refilled) tucks the drawer away, as a command does.
     pub fn on_server(&mut self, msg: ServerMsg) {
+        let before = self.quick_stance();
+        self.server_msg(msg);
+        self.tuck_away(before);
+    }
+
+    fn server_msg(&mut self, msg: ServerMsg) {
         self.dirty = true;
         match msg {
             ServerMsg::Screen { frame } => {
@@ -1883,7 +1891,19 @@ impl App {
         }
     }
 
+    /// A reply: what it shows (a new shell, a session a command asked for) arrives after the
+    /// command returned, so it tucks the drawer away here. Not a workspace's saved view, which
+    /// brings back the drawer it was left with.
     pub fn on_reply(&mut self, msg: AppMsg) {
+        if matches!(msg, AppMsg::View(..)) {
+            return self.reply(msg);
+        }
+        let before = self.quick_stance();
+        self.reply(msg);
+        self.tuck_away(before);
+    }
+
+    fn reply(&mut self, msg: AppMsg) {
         self.dirty = true;
         let (pending, res, retry) = match msg {
             AppMsg::Reply(p, r) => (p, r, None),
@@ -2548,6 +2568,14 @@ impl App {
     // ── terminal input ──────────────────────────────────────────────────────
 
     pub fn on_key(&mut self, ck: &crossterm::event::KeyEvent) {
+        // Not every key goes through `run` (a chat's, an overlay's pick): whatever it shows
+        // tucks the drawer away too.
+        let before = self.quick_stance();
+        self.key_event(ck);
+        self.tuck_away(before);
+    }
+
+    fn key_event(&mut self, ck: &crossterm::event::KeyEvent) {
         self.last_input = Instant::now();
         self.dirty = true;
         let Some(key) = crate::keys::key(ck) else { return };
@@ -2590,6 +2618,9 @@ impl App {
         {
             if self.keymap.is_prefix(key) {
                 self.start_prefix(key);
+            } else if let Some(cmd) = self.keymap.lookup(Table::Global, key).cloned() {
+                // Global keys (`Alt-1`…, shells) mean anywhere, a chat that's typing included.
+                self.run(&cmd);
             } else {
                 self.chat_key(key);
             }
@@ -9273,6 +9304,33 @@ mod tests {
     }
 
     #[test]
+    fn a_session_the_daemon_answers_with_later_tucks_the_drawer_away_too() {
+        let mut app = app();
+        auto_shell(&mut app);
+        with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        app.run(&Command { action: "shell.here", arg: None });
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(app.config.ui.shell_style),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
+        assert!(app.drawer.is_some());
+        // `C-q C-c`: the new shell shows when the daemon answers, after the command returned.
+        app.run(&Command { action: "shells.new", arg: None });
+        assert!(app.drawer.is_some(), "nothing new on screen yet");
+        let two = loose("zsh", 2);
+        app.sessions.push(two.clone());
+        app.on_reply(AppMsg::Reply(
+            Pending::Spawned { split: None, spec: Box::default(), back: false },
+            Ok(Reply::Session { info: two.clone() }),
+        ));
+        assert_eq!(app.focused_session(), Some(two.id));
+        assert!(app.drawer.is_none(), "the drawer tucked away");
+        assert!(app.sessions.iter().any(|s| s.id == shell.id), "its shell keeps running");
+    }
+
+    #[test]
     fn moving_focus_between_shown_panes_keeps_the_drawer() {
         let mut app = app();
         auto_shell(&mut app);
@@ -10921,6 +10979,14 @@ mod tests {
         let alt3 = KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT));
         let c = app.keymap.lookup(Table::Global, alt3).expect("M-3");
         assert_eq!((c.action, c.number()), ("shells.go", Some(3)));
+        // Global means anywhere: a chat that has the keyboard doesn't swallow them, and the
+        // chat waits aside for `session.last`.
+        app.run(&Command { action: "chat.new", arg: None });
+        assert!(app.chat_panel.is_some() && app.focus == Focus::Pane);
+        press(&mut app, '2', crossterm::event::KeyModifiers::ALT);
+        assert!(app.chat_panel.is_none(), "the chat stepped aside");
+        assert_eq!(app.focused_session(), Some(two.id));
+        assert!(app.chat_aside.is_some(), "`session.last` brings it back");
         let mut config = Config::default();
         config.shell.alt_digits = false;
         let (off, _) = crate::keymap::Keymap::new(&config);

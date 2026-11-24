@@ -67,6 +67,7 @@ Google, or any other tool named here; their names and trademarks belong to their
 ```bash
 git clone https://github.com/nealhardesty/ptyro.git && cd ptyro
 make install            # builds and installs ~/.cargo/bin/ptyro
+make daemon-upgrade     # the same, then moves a running daemon onto it (sessions keep running)
 ```
 
 Or, without a checkout, the latest prebuilt release (Linux and macOS, x86_64 and aarch64):
@@ -976,6 +977,7 @@ never raw `cargo`, so local runs and CI behave the same.
 | `make help` | list the targets (the default) |
 | `make rust-install` | install rustup (checksum-verified, no `curl \| sh`) and the toolchain pinned in `rust-toolchain.toml`: Linux and macOS (on Windows, inside WSL2) |
 | `make build` / `release` / `install` / `install-release` | debug build / optimized `target/release/ptyro` / install into `~/.cargo/bin` (a fast incremental build: seconds after the first) / the same with the full release optimizations (slow) |
+| `make daemon-upgrade` | `make install`, then `ptyro daemon upgrade`: the running daemon hands over to the new binary without stopping a session |
 | `make run ARGS="ls"` / `make try CMD=claude` | run the dev build with arguments / start `CMD` in a new session and attach |
 | `make test` (`FLAKE_BUDGET=2`) / `make smoke` | all tests: a test that fails runs again once, alone, and if it passes then it's a flake, named in the output and `target/flakes.txt`; a test failing twice, or more flakes than the budget, fails the run; a test binary past `TEST_BINARY_TIMEOUT` (1200 s) is killed; a test of a real shell says so and leaves that shell out where it isn't installed, unless `PTYRO_REQUIRE_SHELLS="bash zsh"` names it (CI does: a missing one fails there) / quick end-to-end checks of the PTY and emulator |
 | `make fmt` / `fmt-check` / `lint` | format / fail if unformatted / clippy with warnings as errors |

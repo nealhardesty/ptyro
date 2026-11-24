@@ -528,11 +528,12 @@ export function autoFocus(o) {
 /// terminal it shows the shell and the program never sees it. On a Mac (`mac`), not when Option
 /// types one of the layout's own characters (a German Mac's Option+5 is `[`, a British one's
 /// Option+3 is `#`: `keyOf` sends those as typed); elsewhere Alt types none (AltGr does, and is
-/// left out). Not with Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, not in
-/// another field (a chat's box, a form: Option-digit types there), not under a dialog, and not
-/// with `[shell] alt_digits` off (`on`), which leaves them to the program.
+/// left out). Not with Ctrl (AltGr on Windows), Shift, Cmd or AltGr, not while composing, on a Mac
+/// not in another field (a chat's box, a form: Option-digit types there; off a Mac Alt types
+/// nothing, so a chat's box gives them up as the TUI's does), not under a dialog, and not with
+/// `[shell] alt_digits` off (`on`), which leaves them to the program.
 export function shellDigit(e, where) {
-    if (!where.on || where.dialog || (where.focus === "field" && !where.terminal))
+    if (!where.on || where.dialog || (where.mac && where.focus === "field" && !where.terminal))
         return null;
     if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.getModifierState?.("AltGraph") === true || composing(e))
         return null;

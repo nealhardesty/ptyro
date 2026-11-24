@@ -1771,8 +1771,10 @@ impl Daemon {
             && config.kb.tools
             && !self.kb_agent_off(Some(&info.agent));
         let history = (config.chat.history_tool || info.tools == FIND_TOOLS).then(|| {
-            let ptyro = std::env::current_exe()
-                .map_or_else(|_| "ptyro".into(), |p| p.to_string_lossy().into_owned());
+            let ptyro = std::env::current_exe().map_or_else(
+                |_| "ptyro".into(),
+                |p| ptyro_agents::own::installed_name(&p).to_string_lossy().into_owned(),
+            );
             let mut server = serde_json::json!({
                 "type": "stdio",
                 "command": ptyro,
