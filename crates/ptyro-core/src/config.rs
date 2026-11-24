@@ -42,6 +42,9 @@ pub struct Ui {
     pub sidebar_detail: SidebarDetail,
     /// What happens to a shell that exits: removed, or kept as an exited row. Agents stay.
     pub shell_exit: ShellExit,
+    /// What happens to an agent that exits cleanly or that you stopped: kept (to restart), or
+    /// removed. One that crashed always stays.
+    pub agent_exit: AgentExit,
     /// What the shell key (`!`) shows: a drawer when the project is open, else a panel (UX2.3).
     pub shell_style: ShellStyle,
     /// Milliseconds after the prefix before the menu of next keys appears (UX1.14); 0: never.
@@ -120,6 +123,18 @@ pub enum ShellExit {
     Keep,
 }
 
+/// What becomes of an agent session when it ends (`[ui] agent_exit`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentExit {
+    /// It stays in the sidebar as exited, with its last screen, to restart or remove.
+    #[default]
+    Keep,
+    /// It disappears once it exits cleanly or you stop it; one that crashed stays. Its worktree
+    /// is untouched.
+    Close,
+}
+
 /// What a pane does once you stop the session it shows (`[ui] on_stop`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -149,6 +164,7 @@ impl Default for Ui {
             sidebar_detail: SidebarDetail::Auto,
             shell_style: ShellStyle::Pane,
             shell_exit: ShellExit::Close,
+            agent_exit: AgentExit::Keep,
             which_key_delay: 400,
             progress_blocked: ProgressLook::Yellow,
             progress_errored: ProgressLook::Red,

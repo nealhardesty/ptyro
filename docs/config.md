@@ -54,6 +54,7 @@ prefix = "C-]"            # one key or a list; default ["C-q", "C-Space"]
 theme = "ptyro-light"     # ptyro-dark (default), ptyro-light or high-contrast (Settings → Interface); NO_COLOR turns colour off
 tint_borders = true       # colour pane dividers with the session's profile
 # shell_exit = "keep"     # an exited shell stays in the sidebar as exited (default: it disappears)
+# agent_exit = "close"    # an agent that exits cleanly or that you stop disappears (default: it stays, to restart); a crash stays
 # on_stop = "stay"        # after you stop a pane's session, keep showing it (default: the next one)
 # sidebar_detail = "full" # lines under each row (task, now, last…): auto (default) | compact | full
 # shell_style = "pane"    # what ⏎ on the quick terminal's line shows: full sized (pane, default) | a drawer when the project is open (auto) | drawer

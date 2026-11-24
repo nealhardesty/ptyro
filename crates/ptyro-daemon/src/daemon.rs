@@ -1250,6 +1250,9 @@ impl Daemon {
             }
             Request::Kill { addr, signal } => {
                 let s = self.resolve(&addr)?;
+                if s.is_live() {
+                    s.stop_asked.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 match signal {
                     None => self.stop_session(&s).await,
                     Some(_) => s.kill(signal).await.map_err(|e| Error::invalid(e.to_string()))?,

@@ -889,6 +889,7 @@ fn whose_setting_it_is() {
     }
     for k in [
         "ui.shell_exit",
+        "ui.agent_exit",
         "worktrees.root",
         "daemon.hold_wsl",
         "agents.claude.command",

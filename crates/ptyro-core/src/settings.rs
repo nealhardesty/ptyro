@@ -479,6 +479,10 @@ const SHELL_EXIT: &[Choice] = &[
     c("close", "the shell disappears from the sidebar and its pane"),
     c("keep", "the shell stays as an exited row, with its last screen"),
 ];
+const AGENT_EXIT: &[Choice] = &[
+    c("keep", "the agent stays as an exited row, with its last screen, to restart"),
+    c("close", "the agent disappears when it exits cleanly or you stop it; a crashed one stays"),
+];
 const SHELLS_SECTION: &[Choice] = &[
     c("always", "always, with ＋ new shell when the workspace has none"),
     c("when-used", "only once the workspace has a shell there"),
@@ -658,6 +662,7 @@ pub const SETTINGS: &[Setting] = &[
     s("ui.on_stop", "interface", pick(ON_STOP), "What a pane shows after you stop its session."),
     s("ui.which_key_delay", "interface", int(0, 5000), "How long after the prefix key the menu of next keys waits before it pops up. 0 never shows it.").unit("ms").also("hints popup help menu"),
     s("ui.shell_exit", "interface", pick(SHELL_EXIT), "What happens to a shell when you exit it: it disappears (the default, and easy to reopen), or stays in the sidebar as an exited row. Agents always stay.").also("close remove exit terminal"),
+    s("ui.agent_exit", "interface", pick(AGENT_EXIT), "What happens to an agent session when it ends: it stays in the sidebar as an exited row you can restart (the default), or it disappears once it exits cleanly or you stop it. One that crashed always stays, so you can see why. Its worktree stays either way.").also("close remove exit agent session auto"),
     s("ui.shell_style", "interface", pick(SHELL_STYLE), "How the shell key (`!`) shows a worktree's terminal: as a full-sized panel of its own (the default), or as a drawer under its project's pane. `C-t` always asks for the drawer.").also("terminal split drawer pane panel window shell"),
     s("ui.progress_blocked", "interface", pick(PROGRESS), "Windows Terminal's progress ring (on the tab and the taskbar button) while a session needs you.").also("windows terminal tab taskbar progress ring colour color wsl"),
     s("ui.progress_errored", "interface", pick(PROGRESS), "Windows Terminal's progress ring while a session has stopped on an error (and none needs you).").also("windows terminal tab taskbar progress ring colour color wsl"),
@@ -856,11 +861,12 @@ pub fn matches(pattern: &str, key: &str) -> bool {
 /// Whether the client (the TUI, the CLI) reads `key` from its own computer's file, rather than
 /// the daemon from its own: the screen, keys, the clipboard and where the daemon is. With
 /// a remote daemon (over ssh) the two files differ, so the settings panel and `config set` say
-/// whose a setting is (ROADMAP WIN3). `ui.shell_exit` is the daemon's: it
-/// decides what happens to a shell that exits.
+/// whose a setting is (ROADMAP WIN3). `ui.shell_exit` and `ui.agent_exit` are the daemon's: they
+/// decide what happens to a shell or an agent that exits.
 pub fn read_by_client(key: &str) -> bool {
     let top = key.split('.').next().unwrap_or(key);
-    matches!(top, "ui" | "keys" | "clipboard" | "client") && key != "ui.shell_exit"
+    matches!(top, "ui" | "keys" | "clipboard" | "client")
+        && !matches!(key, "ui.shell_exit" | "ui.agent_exit")
 }
 
 pub fn find(key: &str) -> Option<&'static Setting> {

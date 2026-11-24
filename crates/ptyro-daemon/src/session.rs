@@ -254,6 +254,9 @@ pub struct Session {
     feed: mpsc::UnboundedSender<Feed>,
     /// Stopping to hibernate: the exit makes it dormant, not exited.
     pub hibernating: AtomicBool,
+    /// Someone stopped or killed it (`ptyro stop`, `kill`, `x`): `[ui] agent_exit = "close"`
+    /// removes it once it has exited, even by a signal.
+    pub stop_asked: AtomicBool,
     /// When the program last wrote visible output, and how much (the activity heuristic, §9.3).
     pub last_output_ms: AtomicU64,
     pub output_bytes: AtomicU64,
@@ -460,6 +463,7 @@ impl Session {
             psp: Mutex::new(PspRecords::default()),
             feed: hub.feed,
             hibernating: AtomicBool::new(false),
+            stop_asked: AtomicBool::new(false),
             last_output_ms: AtomicU64::new(0),
             typing: tokio::sync::Mutex::new(()),
             output_bytes: AtomicU64::new(0),
@@ -511,6 +515,7 @@ impl Session {
             psp: Mutex::new(PspRecords::default()),
             feed: hub.feed,
             hibernating: AtomicBool::new(false),
+            stop_asked: AtomicBool::new(false),
             last_output_ms: AtomicU64::new(0),
             typing: tokio::sync::Mutex::new(()),
             output_bytes: AtomicU64::new(0),
@@ -1551,6 +1556,7 @@ impl Session {
             psp: Mutex::new(PspRecords::default()),
             feed: hub.feed,
             hibernating: AtomicBool::new(false),
+            stop_asked: AtomicBool::new(false),
             last_output_ms: AtomicU64::new(img.last_output_ms),
             typing: tokio::sync::Mutex::new(()),
             output_bytes: AtomicU64::new(img.output_bytes),
@@ -1630,6 +1636,7 @@ impl Session {
             psp: Mutex::new(PspRecords::default()),
             feed: hub.feed,
             hibernating: AtomicBool::new(false),
+            stop_asked: AtomicBool::new(false),
             last_output_ms: AtomicU64::new(0),
             typing: tokio::sync::Mutex::new(()),
             output_bytes: AtomicU64::new(0),
