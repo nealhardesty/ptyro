@@ -38,10 +38,11 @@ pub struct AgentStart {
 /// A structured launch (M10): the protocol, the driver's options, OpenCode's port and password.
 type StructuredStart = (String, ptyro_drive::Opts, Option<(u16, String)>);
 
-/// ptyro's own path, as the hooks and status line an agent runs call it.
+/// ptyro's own path, as the hooks and status line an agent runs call it: the installed name,
+/// never Linux's `… (deleted)` for an image a reinstall replaced under a running daemon.
 fn hook_ptyro() -> String {
     let Ok(exe) = std::env::current_exe() else { return "ptyro".into() };
-    exe.to_string_lossy().into_owned()
+    ptyro_agents::own::installed_name(&exe).to_string_lossy().into_owned()
 }
 
 /// A port nobody listens on right now.

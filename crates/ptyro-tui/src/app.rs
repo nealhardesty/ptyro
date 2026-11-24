@@ -2590,6 +2590,9 @@ impl App {
         {
             if self.keymap.is_prefix(key) {
                 self.start_prefix(key);
+            } else if let Some(cmd) = self.keymap.lookup(Table::Global, key).cloned() {
+                // Global keys (`Alt-1`…, shells) mean anywhere, a chat that's typing included.
+                self.run(&cmd);
             } else {
                 self.chat_key(key);
             }
@@ -10921,6 +10924,14 @@ mod tests {
         let alt3 = KeyEvent::new(KeyCode::Char { c: '3' }, Mods(Mods::ALT));
         let c = app.keymap.lookup(Table::Global, alt3).expect("M-3");
         assert_eq!((c.action, c.number()), ("shells.go", Some(3)));
+        // Global means anywhere: a chat that has the keyboard doesn't swallow them, and the
+        // chat waits aside for `session.last`.
+        app.run(&Command { action: "chat.new", arg: None });
+        assert!(app.chat_panel.is_some() && app.focus == Focus::Pane);
+        press(&mut app, '2', crossterm::event::KeyModifiers::ALT);
+        assert!(app.chat_panel.is_none(), "the chat stepped aside");
+        assert_eq!(app.focused_session(), Some(two.id));
+        assert!(app.chat_aside.is_some(), "`session.last` brings it back");
         let mut config = Config::default();
         config.shell.alt_digits = false;
         let (off, _) = crate::keymap::Keymap::new(&config);

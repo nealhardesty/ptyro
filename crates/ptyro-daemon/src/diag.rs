@@ -223,6 +223,7 @@ impl Daemon {
             )));
         }
         let exe = std::env::current_exe().map_err(|e| Error::internal(e.to_string()))?;
+        let exe = ptyro_agents::own::installed_name(&exe);
         let dir = self.paths.data.join("selftest");
         std::fs::create_dir_all(&dir).map_err(|e| Error::internal(e.to_string()))?;
         let id = SessionId::new();
