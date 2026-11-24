@@ -134,7 +134,7 @@ Status markers used below:
 | **Project** | A registered git repository (its main checkout path). A project may appear in several workspaces. |
 | **Worktree** | An isolated `git worktree` checkout of a project on its own branch, created and tracked by ptyro. The project's main checkout is also represented as a (special, non-deletable) worktree named `@root`. |
 | **Session** | One process running in one ptyro-owned PTY, with its own terminal state — an agent (`claude`, `codex`, …) or a plain shell/command. Sessions are what you attach to. |
-| **Name / title** | **[built UX1.24]** Sessions and worktrees have both. The **name** is the address (`[a-z0-9._-]`, fixed at creation, changed only by `rename`): `ptyro send fix-flaky-test …`. The **title** is free text people read (the task, a PR's title) and changes freely (`rename --title`). By default a name is made from the title or prompt (`fix-flaky-test`), else `<agent>-<corvid>` (`claude-rook`), else a friendly pair; the title is the prompt. |
+| **Name / title** | **[built UX1.24]** Sessions and worktrees have both. The **name** is the address (`[a-z0-9._-]`, fixed at creation, changed only by `rename`): `ptyro send fix-flaky-test …`. The **title** is free text people read (the task, a PR's title) and changes freely (`rename --title`). By default a name is made from the title or prompt (`fix-flaky-test`), else `<project>-<agent>-<n>` (`ptyro-claude-1`), else a friendly pair; the title is the prompt. |
 | **Agent** | A configured session kind backed by an adapter (`claude`, `codex`, `opencode`, `shell`, or a user-defined generic command). |
 | **Conversation** | The agent's own notion of a chat (Claude `session_id`, Codex `thread_id`, …). A ptyro session *has* zero or one current conversation id; resuming a dormant session reuses it. Never confuse the two ids. |
 | **Chat** | **[decided 2026-10-29, §22]** A general-purpose conversation with an agent: no repository, no worktree. A durable tree of nodes in `chat.db`, owned by one workspace on one machine, served by a replaceable *engine* (a hidden structured session). Not a session, and not the agent's *conversation* (a chat may use several over its life). |
@@ -255,8 +255,10 @@ slug, id suffix (≥ 4) or any path inside one of their checkouts. Worktrees are
 `project/name` (`myrepo/@root` is the main checkout), a unique name, an id suffix, or a path
 inside them, so CLI commands default to the worktree you're standing in. Ids are lowercase ULIDs
 (`ptyro_core::model::new_id`). **[built UX1.24]** Default names: from the title or prompt
-(`fix-flaky-test`, made unique), else for an agent session the agent and a corvid
-(`claude-rook`), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
+(`fix-flaky-test`, made unique), else for an agent session its project's slug, the agent and
+the lowest free number from 1 (`ptyro-claude-1`; `claude-1` outside a project; owner,
+2026-11-24: the name alone says which project, where the sidebar's grouping is hard to see, as
+on a phone), else a friendly pair. Script sessions get `<worktree>.<script>`. Create dialogs
 show the suggestion before ⏎ (§11.2h).
 
 **One resolution policy** (owner, 2026-11-09). Every kind of thing a user names resolves the same
@@ -8330,7 +8332,7 @@ agent installed:
   `cd`s into once that is a project, and gives up its number. That keeps UX1.5's "the repository
   you're in is a project" for a plain `ptyro new` in `/tmp`.
 - **The label** (`ptyro_core::session::shell_label`, shared by the TUI, the CLI and the web) is
-  the title, else an agent's or a command's *name* (`claude-rook`, `dev-server`), else for a
+  the title, else an agent's or a command's *name* (`ptyro-claude-1`, `dev-server`), else for a
   shell what runs in it and a short directory (`htop · ~/dl`, `…/tmp` outside home). §23.4's
   directory-only label read badly for agents. A shell's pane header keeps the session's name
   first, as every pane does, with the strip after it.

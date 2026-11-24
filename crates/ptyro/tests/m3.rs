@@ -878,7 +878,7 @@ async fn tui_wizard_fast_path_trusts_sets_up_and_follows_the_agent() {
         sessions.iter().find(|s| s.agent.as_deref() == Some("claude")).expect("agent session");
     assert_eq!(setup.state.label(), "exited 0");
     assert!(setup.ended_ms.unwrap() <= agent.created_ms, "agent after setup");
-    assert!(agent.name.starts_with("claude-"), "an agent and a corvid (UX1.24): {}", agent.name);
+    assert!(agent.name.ends_with("-claude-1"), "project, agent, number: {}", agent.name);
 }
 
 #[tokio::test]

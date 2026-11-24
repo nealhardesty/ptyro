@@ -387,11 +387,7 @@ async fn sessions_and_worktrees_are_named_and_titled_after_what_they_are_for() {
     assert_eq!(s.name, "say-fix-flaky", "named after its prompt");
     assert_eq!(s.title.as_deref(), Some("say fix the flaky test"));
     let plain = spawn(&c, agent(None, None)).await;
-    assert!(
-        plain.name.starts_with("claude-") && !plain.name.ends_with(char::is_numeric),
-        "an agent and a corvid, not claude-2: {}",
-        plain.name
-    );
+    assert_eq!(plain.name, "claude-1", "outside a project: the agent and a number");
     // A worktree for a prompt: named and titled after it.
     let spec = ptyro_core::model::WorktreeSpec {
         project: dir.to_string_lossy().into_owned(),
