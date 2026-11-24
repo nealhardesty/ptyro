@@ -50,7 +50,14 @@ pub fn counted(project: Option<&str>, agent: &str, taken: impl Fn(&str) -> bool)
         Some(p) => format!("{p}-{agent}"),
         None => agent.to_owned(),
     };
-    (1..).map(|k| numbered(&base, k)).find(|n| !taken(n)).expect("infinite")
+    let mut k = 1;
+    loop {
+        let name = numbered(&base, k);
+        if !taken(&name) {
+            return name;
+        }
+        k += 1;
+    }
 }
 
 /// Words a name made from a sentence leaves out.
