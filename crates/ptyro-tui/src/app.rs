@@ -1546,7 +1546,15 @@ impl App {
 
     // ── server messages ─────────────────────────────────────────────────────
 
+    /// What the daemon says: a pane that now shows another session (another device's window,
+    /// a session gone and its pane refilled) tucks the drawer away, as a command does.
     pub fn on_server(&mut self, msg: ServerMsg) {
+        let before = self.quick_stance();
+        self.server_msg(msg);
+        self.tuck_away(before);
+    }
+
+    fn server_msg(&mut self, msg: ServerMsg) {
         self.dirty = true;
         match msg {
             ServerMsg::Screen { frame } => {
@@ -1883,7 +1891,19 @@ impl App {
         }
     }
 
+    /// A reply: what it shows (a new shell, a session a command asked for) arrives after the
+    /// command returned, so it tucks the drawer away here. Not a workspace's saved view, which
+    /// brings back the drawer it was left with.
     pub fn on_reply(&mut self, msg: AppMsg) {
+        if matches!(msg, AppMsg::View(..)) {
+            return self.reply(msg);
+        }
+        let before = self.quick_stance();
+        self.reply(msg);
+        self.tuck_away(before);
+    }
+
+    fn reply(&mut self, msg: AppMsg) {
         self.dirty = true;
         let (pending, res, retry) = match msg {
             AppMsg::Reply(p, r) => (p, r, None),
@@ -2548,6 +2568,14 @@ impl App {
     // ── terminal input ──────────────────────────────────────────────────────
 
     pub fn on_key(&mut self, ck: &crossterm::event::KeyEvent) {
+        // Not every key goes through `run` (a chat's, an overlay's pick): whatever it shows
+        // tucks the drawer away too.
+        let before = self.quick_stance();
+        self.key_event(ck);
+        self.tuck_away(before);
+    }
+
+    fn key_event(&mut self, ck: &crossterm::event::KeyEvent) {
         self.last_input = Instant::now();
         self.dirty = true;
         let Some(key) = crate::keys::key(ck) else { return };
@@ -9273,6 +9301,33 @@ mod tests {
         assert_eq!(app.focused_session(), Some(other));
         assert_ne!(tint(&app), app.depth.fit(app.theme.bar_bg));
         assert!(app.sessions.iter().any(|s| s.id == shell.id));
+    }
+
+    #[test]
+    fn a_session_the_daemon_answers_with_later_tucks_the_drawer_away_too() {
+        let mut app = app();
+        auto_shell(&mut app);
+        with_agents(&mut app);
+        let shell = quick("myrepo.shell", Some("p1-root"));
+        app.sessions.push(shell.clone());
+        app.run(&Command { action: "shell.here", arg: None });
+        app.on_reply(AppMsg::Reply(
+            Pending::Quick(app.config.ui.shell_style),
+            Ok(Reply::Session { info: shell.clone() }),
+        ));
+        assert!(app.drawer.is_some());
+        // `C-q C-c`: the new shell shows when the daemon answers, after the command returned.
+        app.run(&Command { action: "shells.new", arg: None });
+        assert!(app.drawer.is_some(), "nothing new on screen yet");
+        let two = loose("zsh", 2);
+        app.sessions.push(two.clone());
+        app.on_reply(AppMsg::Reply(
+            Pending::Spawned { split: None, spec: Box::default(), back: false },
+            Ok(Reply::Session { info: two.clone() }),
+        ));
+        assert_eq!(app.focused_session(), Some(two.id));
+        assert!(app.drawer.is_none(), "the drawer tucked away");
+        assert!(app.sessions.iter().any(|s| s.id == shell.id), "its shell keeps running");
     }
 
     #[test]
