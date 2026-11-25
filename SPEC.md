@@ -3256,6 +3256,20 @@ Removed on 2026-11-17 (pare-down): the owner never used them.
   and the daemon stay strict: a bad name given as an argument is an error, so a script never
   gets a name it didn't write.
 - **Copy mode** (`prefix [` or `PageUp`, the mouse wheel, or a drag): §11.3 below.
+- **Where a copy goes** (2026-11-25, the owner found it confusing): your copy (copy mode's `y`,
+  a drag) goes to the real terminal's clipboard (OSC 52) and ptyro's paste buffer (`prefix ]`); a
+  program's copy (OSC 52 from a session, §5.6) to the clipboard only. At start the TUI asks its
+  terminal, in the same round trip as the colours (`outer.rs`), XTGETTCAP `Ms`; a `1+r` answer or
+  `52` in the device attributes is **yes**. Inside tmux it asks tmux: `allow-passthrough off` is
+  **no** (the copy travels in its passthrough), the `clipboard` feature in
+  `#{client_termfeatures}` is yes. The Linux console (`TERM=linux`, not asked: `ESC P` sets its
+  palette) is no. Anything else, `0+r` included (a table without `Ms` may still take OSC 52), is
+  **unknown**: a wrong "no" would mislead worse than saying nothing. The copy's toast follows:
+  "to your clipboard (`]` pastes it too)", "to ptyro's buffer only … not to your clipboard: why
+  and the fix", or "`]` pastes, and so does your terminal's paste if it takes clipboard writes".
+  Where it's no, a program's copy says it couldn't reach the clipboard. `]` with nothing of
+  yours, after a program copied, says the copy is on the clipboard and which keys paste it; after
+  pasting yours, it says when a program copied something newer.
 - **Exited sessions** stay on screen, greyed, with a banner "<name> exited N — ⏎ restart · C-q x
   remove" ("⏎ resume" on a dormant one).
 - **Multiple clients:** `--view-only` never sends input, resize or focus; `=` takes control.

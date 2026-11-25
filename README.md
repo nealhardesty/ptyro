@@ -867,6 +867,15 @@ All after the prefix, `Ctrl-Q` or `Ctrl-Space`. The full list is in [`docs/keys.
 | `w` / `o` / `r` | switch workspace / open in an editor, the file manager, a terminal app or a shell / run the default run script |
 | `m` / `g` | a new chat / the chat list |
 
+**Copy and paste.** What you copy in ptyro (`y` in copy mode, or a mouse drag) goes to two places:
+your terminal's clipboard and ptyro's own paste buffer. Paste with your terminal's paste
+(`Ctrl-Shift-V`, `Cmd-V` on a Mac) as usual; `C-q ]` pastes ptyro's buffer, for terminals that
+don't take clipboard writes. What a program copies (Claude's copy, vim's `"+y`) goes to your
+clipboard only, never to ptyro's buffer, so one session can't plant text you paste into another.
+The copy's message says where it went: ptyro asks your terminal at start whether it takes
+clipboard writes (inside tmux, tmux), and when it is known not to, it says why and the fix.
+`C-q ]` says so when a program's copy is on the clipboard and not in the buffer.
+
 ## Configuration
 
 Your config is `~/.config/ptyro/config.toml`; it's optional, and you never have to know its keys:
