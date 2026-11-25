@@ -222,6 +222,10 @@ pre.block { margin: 0; padding: 10px; background: var(--panel); border: 1px soli
 .chips.filter { padding-bottom: 2px; }
 .chips.filter .n { opacity: .75; font-variant-numeric: tabular-nums; }
 .chips.filter button.active:not(.on) .n { color: var(--accent); opacity: 1; font-weight: 600; }
+/* The machine and profile tabs (TABS): one line that scrolls sideways on a phone. */
+.chips.scope { flex-wrap: nowrap; padding-bottom: 2px; }
+.chips.scope button { flex: none; }
+.chips.scope button.on .glyph { color: #fff; }
 .tabs-in { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .stack-in { display: grid; gap: 12px; }
 .proj { display: grid; gap: 6px; margin-bottom: 8px; }

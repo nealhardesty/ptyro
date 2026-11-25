@@ -37,7 +37,7 @@ export function machineChip(name: string | null | undefined): HTMLElement | null
   return h("span", { class: "machine-chip", title: info?.fix ?? m }, dot, ` ${m}`, state ? " " : null, state);
 }
 
-function stateWords(m: Machine): string {
+export function stateWords(m: Machine): string {
   const since = m.since_ms ? ` · ${ago(m.since_ms)} ago` : "";
   switch (m.state) {
     case "offline": return `offline${since}`;

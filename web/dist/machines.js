@@ -32,7 +32,7 @@ export function machineChip(name) {
     const state = info && info.state !== "online" ? badge(stateWords(info), "bad") : null;
     return h("span", { class: "machine-chip", title: info?.fix ?? m }, dot, ` ${m}`, state ? " " : null, state);
 }
-function stateWords(m) {
+export function stateWords(m) {
     const since = m.since_ms ? ` · ${ago(m.since_ms)} ago` : "";
     switch (m.state) {
         case "offline": return `offline${since}`;

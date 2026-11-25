@@ -223,6 +223,7 @@ web-test: ## The web app's logic tests that need no daemon (needs Node)
 	node web/test/qr.mjs
 	node web/test/kit.mjs
 	node web/test/machine.mjs
+	node web/test/scope.mjs
 	node web/test/model.mjs
 	node web/test/shells.mjs
 	node web/test/chats.mjs

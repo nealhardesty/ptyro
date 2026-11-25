@@ -1030,6 +1030,68 @@ const scenarios = {
       try { ptyro("project", "rm", "mvapp", "--yes", "--release"); } catch { /* gone already */ }
     }
   },
+
+  // Machine and profile tabs (TABS.3, SPEC §11.2k): with one profile there is no strip; with
+  // `me` and `work` in use it shows `all`, `[default]`, `[me]`, `[work]` with what needs you on
+  // each; a tab lists only the sessions that run as its profile (a `me` session in the `main`
+  // workspace, whose profile is `default`, is in `[me]` and not in `[default]`); the pick
+  // survives a reload; opening a session outside the tab switches to its tab; a new workspace
+  // starts on the tab's profile; it fits a phone.
+  async tabs() {
+    const strip = `document.querySelector(".chips.scope")`;
+    const tabs = `[...(${strip}?.querySelectorAll("button") ?? [])].map((b) => b.textContent)`;
+    const pick = (label) => tab.eval(`[...${strip}.querySelectorAll("button")].find((b) => b.firstChild.textContent === ${JSON.stringify(label)}).click()`);
+    const on = `${strip}?.querySelector("button.on")?.firstChild.textContent`;
+    ptyro("new", "-d", "-n", "tabs-def", "--", "sh", "-c", "cat");
+    try {
+      await tab.waitFor("its card", card("tabs-def"));
+      await sleep(500);
+      if (await tab.eval(`!!${strip}`)) throw new Error(`a strip with one profile: ${await tab.eval(`JSON.stringify(${tabs})`)}`);
+      ptyro("profile", "new", "me");
+      ptyro("profile", "new", "work");
+      ptyro("ws", "new", "tabsjob", "--profile", "work");
+      ptyro("new", "-d", "-n", "tabs-me", "--agent", "claude", "--profile", "me", "-y");
+      ptyro("send", "tabs-me", "ask rm -rf build", "--wait-ready");
+      ptyro("shells", "new", "-d", "-n", "tabs-job", "-w", "tabsjob", "-C", E.repo, "--", "sh", "-c", "cat");
+      // `me` is in use through its session alone, `work` through its workspace (and its shell).
+      await tab.waitFor("the strip, with what waits on `[me]`", `(() => { const t = ${tabs}; return t[0]?.startsWith("all") && t.some((x) => x.startsWith("[default]")) && t.some((x) => x === "[me] ⚠1") && t.some((x) => x.startsWith("[work]")); })()`, 20_000);
+      if (await tab.eval(on) !== "all") throw new Error("`all` isn't picked at first");
+      await tab.waitFor("every session under `all`", `${card("tabs-def")} && ${card("tabs-me")}`);
+      await pick("[me]");
+      await tab.waitFor("only `me`'s sessions", `${card("tabs-me")} && !${card("tabs-def")} && !document.body.innerText.includes("tabs-job")`);
+      await pick("[default]");
+      await tab.waitFor("no `me` session under `[default]`", `${card("tabs-def")} && !${card("tabs-me")}`);
+      await pick("[work]");
+      await tab.waitFor("`work`'s shell, in its workspace", `!${card("tabs-def")} && !${card("tabs-me")} && document.body.innerText.includes("tabs-job")`);
+      // Kept in the browser: a reload shows `[work]` again.
+      await fresh("#/");
+      await tab.waitFor("`[work]` after a reload", `${on} === "[work]" && !${card("tabs-def")}`, 15_000);
+      // A new workspace starts on the tab's profile.
+      await fresh("#/ws");
+      await tab.waitFor("the workspaces", `document.body.innerText.includes("tabsjob")`, 15_000);
+      await sleep(500);
+      await tab.click("button.icon.plus");
+      await tab.waitFor("the form, on `work`", `document.querySelectorAll(".sheet select").length > 0 && [...document.querySelectorAll(".sheet select")].some((s) => s.value === "work")`, 15_000);
+      // Going to a session outside the tab (a link, a notification, Home) switches to its tab.
+      await fresh(`#/s/${encodeURIComponent(find("tabs-me").id)}`);
+      await tab.waitFor("its page", `!!document.querySelector(".term-box, canvas")`, 15_000);
+      await tab.eval(`location.hash = "#/"`);
+      await tab.waitFor("`[me]` picked by going to its session", `${on} === "[me]" && ${card("tabs-me")}`, 15_000);
+      // A phone: the strip stays one line that scrolls sideways, and the page doesn't.
+      await tab.phone(320, 640);
+      await tab.waitFor("a phone-sized page", `innerWidth <= 320`);
+      const fit = await tab.eval(`(() => { const s = ${strip}; const b = [...s.querySelectorAll("button")]; return { page: document.documentElement.scrollWidth <= innerWidth, line: b.every((x) => x.offsetTop === b[0].offsetTop), scrolls: getComputedStyle(s).overflowX }; })()`);
+      if (!fit.page || !fit.line || fit.scrolls !== "auto") throw new Error(`the strip on a phone: ${JSON.stringify(fit)}`);
+    } finally {
+      for (const n of ["tabs-me", "tabs-job", "tabs-def"]) { try { ptyro("rm", "--stop", "-y", n); } catch { /* gone */ } }
+      try { ptyro("ws", "rm", "tabsjob", "--yes"); } catch { /* gone */ }
+      for (const p of ["me", "work"]) { try { ptyro("profile", "rm", p, "--yes", "--force"); } catch { /* gone */ } }
+      await tab.eval(`localStorage.removeItem("ptyro.tab")`).catch(() => {});
+    }
+    // One profile again: no strip, and the list shows everything.
+    await fresh("#/");
+    await tab.waitFor("no strip with one profile again", `!!document.querySelector("main.list") && !${strip}`, 15_000);
+  },
 };
 
 let failed = 0;

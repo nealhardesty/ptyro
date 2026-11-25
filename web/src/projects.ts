@@ -9,7 +9,8 @@ import type { Project, Worktree, Workspace } from "./data.js";
 import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
-import { againWords, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
+import { againWords, currentTab, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
+import { profileName } from "./machine.js";
 import type { Session } from "./screen.js";
 import { historyOf } from "./library.js";
 
@@ -284,10 +285,12 @@ function projectWorkspaces(p: Project): void {
 
 function workspaceForm(w?: Workspace): void {
   const machines = [...data.machines.values()];
+  // A new one goes where the strip's tab is (TABS): its machine and its profile.
+  const tab = w ? null : currentTab();
   const s = form(w ? `Workspace ${wsLabel(w.name)}` : "New workspace", [
     ...(w ? [] : [{ key: "name", label: "Name", required: true, slug: "name", hint: NAME_HINT } as const]),
     // With other machines (MM1.B): which one it's made on.
-    ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select" as const, options: [["", "This machine"] as [string, string], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`] as [string, string])], value: "" }]),
+    ...(w || !machines.length ? [] : [{ key: "machine", label: "On which machine", type: "select" as const, options: [["", "This machine"] as [string, string], ...machines.map((m) => [m.name, m.state === "online" ? m.name : `${m.name} (${m.state})`] as [string, string])], value: tab?.machine ?? "" }]),
     { key: "profile", label: "Profile", type: "select", options: [[w?.profile ?? "default", w?.profile ?? "default"]], hint: "The account its sessions use unless a worktree or project says otherwise" },
     { key: "notify", label: "Notifications", type: "select", options: [["all", "Everything"], ["badge", "A badge only"], ["mute", "Muted"]], value: w?.notify ?? "all" },
   ], w ? "Save" : "Create", async (v) => {
@@ -307,9 +310,11 @@ function workspaceForm(w?: Workspace): void {
   const machineSel = s.input("machine");
   const onMachine = () => (w ? splitMachine(w.name)[0] : machineSel?.value || null);
   let names: string[] = [];
-  let picked = !!w;
+  let picked = !!w || !!tab;
   const fill = async () => {
-    names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : prof.value);
+    // The tab's profile while the machine picked is the tab's; else what was picked.
+    const want = tab && (tab.machine ?? null) === onMachine() ? profileName(tab) : prof.value;
+    names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : want);
     if (!picked) prof.value = profileFor(names, nameBox?.value.trim() ?? "");
   };
   void fill();

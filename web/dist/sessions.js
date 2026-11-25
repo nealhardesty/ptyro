@@ -1,7 +1,7 @@
 // Sessions (ROADMAP WEB1.2): start a task, and everything a session's row menu does in the TUI
 // (stop, restart, rename, hibernate…), plus its scrollback and events, and talking to several
 // at once.
-import { conn, host } from "./conn.js";
+import { conn, host, store } from "./conn.js";
 import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import { createWorktree, startSession } from "./flow.js";
@@ -9,6 +9,7 @@ import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, conf
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 import { historyOf } from "./library.js";
+import { drawn, follow, resolve, sameScope, scopeParse, scopeText, tabs } from "./machine.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
     "session.menu": "More for this session: stop, restart, rename, hibernate…",
@@ -33,6 +34,7 @@ const ACTIONS = {
     "session.events": "The session's events: status changes, turns, exits",
     "session.find": "Find a session by name, title, project, agent or status",
     "sidebar.filter": "Show every session, only the running ones (a live process), or only the active ones (an agent working or waiting for you, a shell running a command)",
+    "sidebar.tab": "Show one machine and profile's sessions, or all of them: a tab is a profile in use on a machine (its workspaces, or sessions running as it), with ⚠ waiting for you and ● working; a new workspace starts on the tab's machine and profile, and opening a session outside the tab switches to its tab",
 };
 const tip = actions(ACTIONS);
 // A live process, as the TUI and the daemon say it (`is_live`): starting counts.
@@ -514,5 +516,36 @@ let sessionsRef = () => new Map();
 export const allSessions = () => sessionsRef();
 /// The app's session map, for views that title themselves by session.
 export function useSessions(get) { sessionsRef = get; setSessionNames((id) => get().get(id)?.name ?? id); }
+// ── machine and profile tabs (TABS, SPEC §11.2k; the rule is machine.ts's) ──────────────────
+/// The tab picked, kept in the browser beside the chips (`ptyro.show`); null is `all`. What the
+/// list shows is `currentTab()`: a kept tab that is gone, or a strip no longer drawn, is `all`.
+let savedTab = scopeParse(store.get("ptyro.tab"));
+/// The strip's tabs, after `all`, from what the app knows now.
+export const stripTabs = () => tabs(data.workspaces.values(), sessionsRef().values(), conn.machine || "this machine");
+export const currentTab = () => resolve(savedTab, stripTabs());
+/// Pick a tab (`sidebar.tab`; null for `all`).
+export function setTab(t) {
+    keepTab(t);
+    ui.render();
+}
+function keepTab(t) {
+    savedTab = t;
+    if (t)
+        store.set("ptyro.tab", scopeText(t));
+    else
+        store.remove("ptyro.tab");
+}
+/// Going to a session (a link from Home, a notification, the Library, a deep link): outside the
+/// tab shown, the strip switches to the session's tab, else to `all`. The one place every way
+/// to a session's page goes through (app.ts calls it while drawing a session page it opened, so
+/// it draws nothing itself: the list is drawn on the tab when it is next shown).
+export function followSession(s) {
+    // The tab shown; while no strip is drawn (or the page hasn't everything yet), the one kept.
+    const t = stripTabs();
+    const kept = drawn(t) ? resolve(savedTab, t) : savedTab;
+    const next = follow(kept, s);
+    if (!sameScope(kept, next))
+        keepTab(next);
+}
 views.set("scroll", scrollView);
 views.set("events", eventsView);
