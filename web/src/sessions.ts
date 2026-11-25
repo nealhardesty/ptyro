@@ -2,7 +2,7 @@
 // (stop, restart, rename, hibernate…), plus its scrollback and events, and talking to several
 // at once.
 
-import { conn, host } from "./conn.js";
+import { conn, host, store } from "./conn.js";
 import { css, F } from "./color.js";
 import { againLabel, can, data, liveWorktrees, refreshLaunch, splitMachine } from "./data.js";
 import type { Worktree } from "./data.js";
@@ -13,6 +13,8 @@ import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { shellMenuItems } from "./shells.js";
 import { historyOf } from "./library.js";
+import { drawn, follow, profileName, resolve, sameScope, scopeParse, scopeText, tabs } from "./machine.js";
+import type { Scope, Tab } from "./machine.js";
 
 const ACTIONS = {
   "session.new": "Start a task: say what to do, which agent, and where",
@@ -38,6 +40,7 @@ const ACTIONS = {
   "session.events": "The session's events: status changes, turns, exits",
   "session.find": "Find a session by name, title, project, agent or status",
   "sidebar.filter": "Show every session, only the running ones (a live process), or only the active ones (an agent working or waiting for you, a shell running a command)",
+  "sidebar.tab": "Show one machine and profile's sessions, or all of them: a tab is a profile in use on a machine (its workspaces, or sessions running as it), with ⚠ waiting for you and ● working; a new workspace starts on the tab's machine and profile, and opening a session outside the tab switches to its tab",
 } as const;
 const tip = actions(ACTIONS);
 
@@ -63,8 +66,10 @@ const numberIn = (t: string): number | undefined => {
 const AUTO_PROFILE = "automatic (worktree → project pin → workspace)";
 
 /// The new-task sheet (UX1.9): what to do, which agent, and where. `where` preselects a
-/// project (`p:<id>`) or a worktree (`w:<id>`).
+/// project (`p:<id>`) or a worktree (`w:<id>`). Under a tab (TABS) it starts there: a place on
+/// the tab's machine and the tab's profile, so the new session stays in the list shown.
 export function newTask(where?: string, task?: string): void {
+  const tab = currentTab();
   const projects = [...data.projects.values()];
   const wts = liveWorktrees();
   if (!projects.length) {
@@ -88,7 +93,14 @@ export function newTask(where?: string, task?: string): void {
   agent.value = data.defaultAgent in Object.fromEntries(agentOptions) ? data.defaultAgent : agentOptions[0][0];
   const command = input(h("input", { placeholder: "e.g. npm run dev", autocapitalize: "off", spellcheck: "false" }));
   const placeSel = input(h("select", {}, ...place.map(([v, l]) => h("option", { value: v }, l))));
-  placeSel.value = where && place.some(([v]) => v === where) ? where : place[0][0];
+  // The machine a place is on (null: this one).
+  const machineOf = (v: string): string | null => {
+    const [kind, id] = [v.slice(0, 1), v.slice(2)];
+    const slug = kind === "p" ? data.projects.get(id)?.slug : data.worktrees.get(id)?.project_slug;
+    return slug ? splitMachine(slug)[0] : null;
+  };
+  const tabPlace = tab ? place.find(([v]) => machineOf(v) === tab.machine)?.[0] : undefined;
+  placeSel.value = where && place.some(([v]) => v === where) ? where : tabPlace ?? place[0][0];
   const source = input(h("select", {}, ...SOURCES.map(([v, l]) => h("option", { value: v }, l))));
   const which = input(h("input", { placeholder: "", autocapitalize: "off", spellcheck: "false" }));
   const names = h("datalist", { id: "branch-names" });
@@ -115,21 +127,16 @@ export function newTask(where?: string, task?: string): void {
   const freshOnly = [baseRow, check(noSetup, "Skip setup scripts", "Don't run the project's setup script"), check(noFetch, "Don't fetch", "Don't fetch the base first")];
   const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"),
     h("div", { style: "display: grid; gap: 12px; padding-top: 10px" },
-      h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, "The account it runs under")),
+      h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, tab ? "The account it runs under (under a tab, the tab's)" : "The account it runs under")),
       h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What people read: what it's for; its name stays its address")),
       ...freshOnly, argsRow));
-  // The profiles of the machine the place is on.
-  const machineOfPlace = () => {
-    const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
-    const slug = kind === "p" ? data.projects.get(id)?.slug : data.worktrees.get(id)?.project_slug;
-    return slug ? splitMachine(slug)[0] : null;
-  };
+  // The profiles of the machine the place is on; on the tab's machine, the tab's (if it is there).
   let profileMachine: string | null | undefined;
   const loadProfiles = () => {
-    const m = machineOfPlace();
+    const m = machineOf(placeSel.value);
     if (m === profileMachine) return;
     profileMachine = m;
-    void fillProfiles(profile, m, profile.value, ["", AUTO_PROFILE]);
+    void fillProfiles(profile, m, tab && tab.machine === m ? profileName(tab) : profile.value, ["", AUTO_PROFILE]);
   };
   const sync = () => {
     const fresh = placeSel.value.startsWith("p:");
@@ -484,6 +491,35 @@ let sessionsRef: () => Map<string, Session> = () => new Map();
 export const allSessions = (): Map<string, Session> => sessionsRef();
 /// The app's session map, for views that title themselves by session.
 export function useSessions(get: () => Map<string, Session>): void { sessionsRef = get; setSessionNames((id) => get().get(id)?.name ?? id); }
+
+// ── machine and profile tabs (TABS, SPEC §11.2k; the rule is machine.ts's) ──────────────────
+
+/// The tab picked, kept in the browser beside the chips (`ptyro.show`); null is `all`. What the
+/// list shows is `currentTab()`: a kept tab that is gone, or a strip no longer drawn, is `all`.
+let savedTab: Scope | null = scopeParse(store.get("ptyro.tab"));
+/// The strip's tabs, after `all`, from what the app knows now.
+export const stripTabs = (): Tab[] => tabs(data.workspaces.values(), sessionsRef().values(), conn.machine || "this machine");
+export const currentTab = (): Scope | null => resolve(savedTab, stripTabs());
+/// Pick a tab (`sidebar.tab`; null for `all`).
+export function setTab(t: Scope | null): void {
+  keepTab(t);
+  ui.render();
+}
+function keepTab(t: Scope | null): void {
+  savedTab = t;
+  if (t) store.set("ptyro.tab", scopeText(t)); else store.remove("ptyro.tab");
+}
+/// Going to a session (a link from Home, a notification, the Library, a deep link): outside the
+/// tab shown, the strip switches to the session's tab, else to `all`. The one place every way
+/// to a session's page goes through (app.ts calls it while drawing a session page it opened, so
+/// it draws nothing itself: the list is drawn on the tab when it is next shown).
+export function followSession(s: Session): void {
+  // The tab shown; while no strip is drawn (or the page hasn't everything yet), the one kept.
+  const t = stripTabs();
+  const kept = drawn(t) ? resolve(savedTab, t) : savedTab;
+  const next = follow(kept, s);
+  if (!sameScope(kept, next)) keepTab(next);
+}
 
 views.set("scroll", scrollView);
 views.set("events", eventsView);

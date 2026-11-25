@@ -108,6 +108,23 @@ pub fn machines() -> Vec<CompletionCandidate> {
     machines.into_iter().map(|m| candidate(m.name, Some(m.state.label().to_owned()))).collect()
 }
 
+/// `ls --machine`: `here` (this machine), then the linked ones.
+pub fn scope_machines() -> Vec<CompletionCandidate> {
+    let mut out = vec![candidate("here".into(), Some("this machine".into()))];
+    out.extend(machines());
+    out
+}
+
+/// `ls --profile`: this machine's profiles, then the linked machines' with their name on
+/// (`laptop2:work`), which only the daemon knows.
+pub fn scope_profiles() -> Vec<CompletionCandidate> {
+    let mut out = profiles();
+    if let Some(Reply::Profiles { profiles }) = ask(Request::ProfileList) {
+        out.extend(profiles.into_iter().filter_map(|p| Some(candidate(p.name, Some(p.machine?)))));
+    }
+    out
+}
+
 fn config() -> Config {
     Paths::from_env().ok().and_then(|p| Config::load(&Config::path(&p)).ok()).unwrap_or_default()
 }

@@ -7,7 +7,7 @@ import { conn, store, token } from "./conn.js";
 import { Term } from "./term.js";
 import { FEATURE, GIVE_UP_MS, Outbox, RESEND_MS, lostTitle } from "./outbox.js";
 import { autoFocus, hardKey, isMac, ownKeyboard, shellDigit, strayKey } from "./keys.js";
-import { PressGate, actions, ago, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
+import { PressGate, actions, ago, badge, h, patch, sheet, statusWord, tipOf, ui, views } from "./kit.js";
 import { can, data, loadAll, machineOf, onEvent, splitMachine } from "./data.js";
 import { moveMaybeSpotted, staleMaybeChanged } from "./projects.js";
 import "./settings.js";
@@ -15,11 +15,11 @@ import "./panel.js";
 import "./library.js";
 import { landOnHome } from "./home.js";
 import { chatsAside, chatsShown, findAllChats, newChat } from "./chats.js";
-import { machineChip } from "./machines.js";
-import { broadcast, marked, newTask, sessionMenu, useSessions } from "./sessions.js";
+import { machineChip, stateWords } from "./machines.js";
+import { broadcast, currentTab, followSession, marked, newTask, sessionMenu, setTab, stripTabs, useSessions } from "./sessions.js";
 import { offerSetup, setupBanner, setupConnected, setupEvent } from "./settings.js";
 import { altDigitsOn, goShell, listWorkspace, readAltDigits, shellStrip, shellsGroup, shellsWorkspace } from "./shells.js";
-import { apply as showMachine, offlineText } from "./machine.js";
+import { apply as showMachine, count, drawn, keepsSession, offlineText, sameScope } from "./machine.js";
 // What this app does, by name: the Web column of docs/parity.md names these, and `make parity`
 // checks every name it uses is here (SPEC §1.3, ROADMAP WEB1). Each is its control's tooltip.
 const ACTIONS = {
@@ -243,13 +243,38 @@ function setShow(m) {
     store.set("ptyro.show", m);
     render();
 }
+/// The machine and profile tabs over the list (`sidebar.tab`, SPEC §11.2k): `all`, then each tab
+/// with what needs you on it (`⚠N` waiting, `●N` working) and an offline machine marked. Drawn
+/// only with two tabs or more; it scrolls sideways on a narrow screen.
+function scopeStrip(tabs, picked) {
+    if (!drawn(tabs))
+        return null;
+    const marks = (blocked, working) => [
+        blocked ? h("span", { class: "glyph blocked" }, ` ⚠${blocked}`) : null,
+        working ? h("span", { class: "glyph working" }, ` ●${working}`) : null
+    ];
+    const [b, w] = count(app.sessions.values());
+    const tabButton = (scope, label, kids) => {
+        const on = sameScope(scope, picked);
+        return h("button", { class: on ? "on" : "", "aria-pressed": String(on), onclick: () => setTab(scope) }, label, ...kids);
+    };
+    return h("div", { class: "chips scope", title: tipOf("sidebar.tab") }, tabButton(null, "all", marks(b, w)), ...tabs.map((t) => {
+        const m = t.scope.machine ? data.machines.get(t.scope.machine) : undefined;
+        return tabButton(t.scope, t.label, [...marks(t.blocked, t.working), m && m.state !== "online" ? h("span", {}, " ", badge(stateWords(m), "bad")) : null]);
+    }));
+}
 function listView() {
     const order = ["blocked", "errored", "working", "starting", "done", "idle", "unknown", "shell", "dormant", "exited"];
-    const everything = [...app.sessions.values()].filter(KEEPS[show]).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
-    const all = [...app.sessions.values()].filter(KEEPS.all);
+    // The tab picked (TABS): only the sessions that run as its profile on its machine.
+    const tabs = stripTabs();
+    const tab = currentTab();
+    const inTab = [...app.sessions.values()].filter((s) => !tab || keepsSession(tab, s));
+    const everything = inTab.filter(KEEPS[show]).sort((a, b) => order.indexOf(statusOf(a)) - order.indexOf(statusOf(b)) || a.name.localeCompare(b.name));
+    const all = inTab.filter(KEEPS.all);
+    const tabLabel = tab ? tabs.find((t) => sameScope(t.scope, tab))?.label : undefined;
     // SHELLS have their group (SPEC §23.14), so they aren't among the cards twice.
     listCards = () => { const f = everything.filter((s) => !s.loose && matches(s)); return f.length ? f.map(sessionCard) : query ? [h("p", { class: "empty" }, `Nothing matches “${query}”.`)] : []; };
-    const body = everything.length ? listCards() : all.length ? [h("div", { class: "empty" }, h("p", {}, `Nothing is ${show} right now.`), h("button", { class: "small", title: tipOf("sidebar.filter"), onclick: () => setShow("all") }, "Show every session"))] : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"), data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
+    const body = everything.length ? listCards() : all.length ? [h("div", { class: "empty" }, h("p", {}, `Nothing is ${show} right now.`), h("button", { class: "small", title: tipOf("sidebar.filter"), onclick: () => setShow("all") }, "Show every session"))] : tabLabel ? [h("div", { class: "empty" }, h("p", {}, `Nothing runs as ${tabLabel} yet.`), h("button", { class: "small", title: tipOf("sidebar.tab"), onclick: () => setTab(null) }, "Show every machine and profile"), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"))] : [h("div", { class: "empty" }, h("p", {}, "Nothing is running."), h("button", { class: "primary", title: tipOf("session.new"), onclick: () => newTask() }, "Start a task"), data.projects.size ? null : h("p", {}, h("a", { href: "#/setup", title: tipOf("first.run") }, "Set up ptyro first: your agents, accounts and repositories")))];
     const picked = [...marked].filter((id) => app.sessions.has(id));
     const tools = selecting
         ? h("div", { class: "select-bar" }, h("span", {}, `${picked.length} selected`), h("button", { class: "small primary", disabled: !picked.length, title: tipOf("session.broadcast"), onclick: () => { broadcast(picked); selecting = false; render(); } }, "Type to them"), h("button", { class: "small", onclick: () => { selecting = false; marked.clear(); render(); } }, "Cancel"))
@@ -259,8 +284,8 @@ function listView() {
     const filter = all.length ? h("div", { class: "chips filter", title: tipOf("sidebar.filter") }, ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
     // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
     const aside = chatsShown() ? chatsAside() : null;
-    const shells = can("full") || [...app.sessions.values()].some((s) => s.loose) ? shellsGroup(app.sessions.values(), sessionCard) : null;
-    return h("div", {}, head, tools, filter, all.length > 6 || query ? searchBar : null, h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body), aside));
+    const shells = can("full") || inTab.some((s) => s.loose) ? shellsGroup(inTab, sessionCard, tab) : null;
+    return h("div", {}, head, tools, scopeStrip(tabs, tab), filter, all.length > 6 || query ? searchBar : null, h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body), aside));
 }
 let shell = null;
 /// This device may type into the session: `control` scope or more, and it is running.
@@ -559,6 +584,15 @@ function render() {
     const here = r.view === "session" ? r.id : null;
     const entered = here !== shownSession;
     shownSession = here;
+    // A session opened from anywhere (Home, a notification, the Library, a link): outside the
+    // tab, the strip follows it (once it is known: a link can open before the list arrives).
+    if (entered)
+        toFollow = here;
+    const going = toFollow ? app.sessions.get(toFollow) : undefined;
+    if (going) {
+        followSession(going);
+        toFollow = null;
+    }
     const view = withTabs(r.view, r.view === "session" ? sessionView(r.id) : views.has(r.view) ? views.get(r.view)(r.id ?? "") : listView());
     // A session page opened (or opened again): its terminal has the keys, once it may.
     if (entered && shell && shell.id === here)
@@ -583,6 +617,8 @@ function render() {
 }
 /// The session whose page the last render drew (null: another page).
 let shownSession = null;
+/// A session page just opened whose session the strip hasn't followed yet.
+let toFollow = null;
 function subscribe(id) {
     if (app.viewing) {
         if (shell?.id === app.viewing)

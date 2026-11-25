@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ptyro_client::{Client, ConnectOptions};
 use ptyro_core::paths::Paths;
+use ptyro_core::scope::{Scope, bare};
 use ptyro_core::session::{SessionInfo, SpawnSpec};
 use ptyro_core::{Error, ErrorCode, TermSize};
 use ptyro_protocol::{ClientKind, Encoding, Reply, Request};
@@ -291,11 +292,16 @@ async fn dispatch(
                 ptyro_tui::Options { raw, view_only, workspace, restarted, ..Default::default() };
             attach_with(&ctx, client, info, tui).await
         }
-        Some(Cmd::List { json, all, status, project, workspace, chats }) => {
-            if all {
+        Some(Cmd::List { json, all, status, project, workspace, machine, profile, chats }) => {
+            if all && (machine.is_some() || profile.is_some()) {
+                Err(Error::invalid(
+                    "ls --all lists the history, which keeps no machine or profile: leave out --machine and --profile, or --all",
+                ))
+            } else if all {
                 history(&ctx, json).await
             } else {
-                list(&ctx, json, Filter { status, project, workspace, chats }).await
+                let f = Filter { status, project, workspace, machine, profile, chats };
+                list(&ctx, json, f).await
             }
         }
         Some(Cmd::Stop { sessions }) => crate::script::stop(&ctx, sessions).await,
@@ -1184,12 +1190,22 @@ pub struct Filter {
     pub status: Option<ptyro_core::selector::State>,
     pub project: Option<String>,
     pub workspace: Option<String>,
+    /// A machine as typed: a linked one's name, this one's, or `here` (`list` resolves it).
+    pub machine: Option<String>,
+    /// The profile its sessions run as.
+    pub profile: Option<String>,
     /// Chats' engines too (SPEC §22.2).
     pub chats: bool,
 }
 
 impl Filter {
-    fn keeps(&self, s: &SessionInfo, projects: &[ptyro_core::model::ProjectInfo]) -> bool {
+    /// `at`: the machine `--machine` resolved to, `Some(None)` for this one.
+    fn keeps(
+        &self,
+        s: &SessionInfo,
+        projects: &[ptyro_core::model::ProjectInfo],
+        at: Option<&Option<String>>,
+    ) -> bool {
         let status_ok = self.status.is_none_or(|want| {
             want.matches(&s.state, s.status.as_ref().map(|r| r.status), || s.is_active())
         });
@@ -1199,8 +1215,121 @@ impl Filter {
                 .is_some_and(|id| id == p || projects.iter().any(|x| x.id == id && x.slug == p))
         });
         let ws_ok = self.workspace.as_deref().is_none_or(|w| s.workspace.as_deref() == Some(w));
-        status_ok && project_ok && ws_ok && (self.chats || s.chat.is_none())
+        // The tabs' rule (TABS, SPEC §11.2k) when both are given; each alone otherwise. A
+        // profile is named as people read it (`work`: any machine's) or with its machine on
+        // (`laptop2:work`).
+        let scope_ok = match (at, self.profile.as_deref()) {
+            (Some(m), Some(p)) => Scope::new(m.clone(), p).keeps_session(s),
+            (Some(m), None) => s.machine == *m,
+            (None, Some(p)) => s.profile == p || bare(&s.profile, s.machine.as_deref()) == p,
+            (None, None) => true,
+        };
+        status_ok && project_ok && ws_ok && scope_ok && (self.chats || s.chat.is_none())
     }
+}
+
+/// The machine `ls --machine` names: `None` for this one (its own name, or `here`), a linked
+/// one's name as it is known here, else an error that says which there are.
+async fn machine_named(client: &Client, name: &str) -> Result<Option<String>, Error> {
+    let name = name.trim();
+    let own = match client.request(Request::Status).await? {
+        Reply::Status { status } => status.machine,
+        _ => None,
+    };
+    if name == "here" || own.as_deref().is_some_and(|o| ptyro_core::lookup::same(o, name)) {
+        return Ok(None);
+    }
+    let linked = match client.request(Request::MachineList).await? {
+        Reply::Machines { machines } => machines,
+        _ => Vec::new(),
+    };
+    if let Some(m) = linked.iter().find(|m| ptyro_core::lookup::same(&m.name, name)) {
+        return Ok(Some(m.name.clone()));
+    }
+    let mut known = vec![own.unwrap_or_else(|| "here".into())];
+    known.extend(linked.into_iter().map(|m| m.name));
+    Err(Error::new(
+        ErrorCode::NotFound,
+        format!("no machine is called {name:?}: say one of {}", known.join(", ")),
+    ))
+}
+
+/// The machines a profile `ls --profile` names is on (`None`: this one): one defined here or on a
+/// linked machine, or one a session runs as; else an error that says which there are.
+async fn profile_named(
+    client: &Client,
+    name: &str,
+    all: &[SessionInfo],
+) -> Result<Vec<Option<String>>, Error> {
+    let mut known: Vec<(String, Option<String>)> = match client
+        .request(Request::ProfileList)
+        .await?
+    {
+        Reply::Profiles { profiles } => profiles.into_iter().map(|p| (p.name, p.machine)).collect(),
+        _ => Vec::new(),
+    };
+    known.extend(all.iter().map(|s| (s.profile.clone(), s.machine.clone())));
+    let mut on: Vec<Option<String>> = known
+        .iter()
+        .filter(|(k, m)| k == name || bare(k, m.as_deref()) == name)
+        .map(|(_, m)| m.clone())
+        .collect();
+    if !on.is_empty() {
+        on.sort();
+        on.dedup();
+        return Ok(on);
+    }
+    let mut known: Vec<String> = known.into_iter().map(|(k, _)| k).collect();
+    known.sort();
+    known.dedup();
+    Err(Error::new(
+        ErrorCode::NotFound,
+        format!("no profile is called {name:?}: the profiles are {}", known.join(", ")),
+    ))
+}
+
+/// `ls --machine M --profile P` names one tab: refused, with what to say instead, when P isn't on
+/// M (`on`: the machines it is on, from [`profile_named`]).
+fn profile_on(at: &Option<String>, profile: &str, on: &[Option<String>]) -> Result<(), Error> {
+    if on.contains(at) {
+        return Ok(());
+    }
+    let say = |m: &Option<String>| format!("--machine {}", m.as_deref().unwrap_or("here"));
+    let fix = on.iter().map(say).collect::<Vec<_>>().join(" or ");
+    let msg = match on {
+        // Named with its machine on: `laptop2:work` is laptop2's.
+        [Some(m)] if bare(profile, Some(m)) != profile => format!("{profile} is {m}'s: say {fix}"),
+        _ => {
+            let here = at.as_deref().map_or_else(|| "this machine".to_owned(), str::to_owned);
+            let names: Vec<&str> =
+                on.iter().map(|m| m.as_deref().unwrap_or("this machine")).collect();
+            format!(
+                "there is no profile {profile} on {here}: it is on {}: say {fix}",
+                names.join(", ")
+            )
+        }
+    };
+    Err(Error::new(ErrorCode::NotFound, msg))
+}
+
+/// Without a daemon only this machine can be named (`here`, or its own name): a linked one is
+/// known only to the daemon.
+fn machine_without_daemon(ctx: &Ctx, name: &str) -> Result<(), Error> {
+    let own = ptyro_core::machine::name(
+        ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
+            .ok()
+            .and_then(|c| c.daemon.machine_name)
+            .as_deref(),
+    );
+    if name.trim() == "here" || ptyro_core::lookup::same(&own, name.trim()) {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorCode::DaemonUnavailable,
+        format!(
+            "the daemon is not running, so no linked machine is known: start it (`ptyro daemon start`) to list {name}'s sessions"
+        ),
+    ))
 }
 
 async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
@@ -1222,7 +1351,17 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                 filter.project = Some(info.id);
             }
             let mut all = sessions(&client).await?;
-            all.retain(|s| filter.keeps(s, &projects));
+            let at = match &filter.machine {
+                Some(m) => Some(machine_named(&client, m).await?),
+                None => None,
+            };
+            if let Some(p) = &filter.profile {
+                let on = profile_named(&client, p, &all).await?;
+                if let Some(m) = &at {
+                    profile_on(m, p, &on)?;
+                }
+            }
+            all.retain(|s| filter.keeps(s, &projects, at.as_ref()));
             (all, worktrees)
         }
         // No local daemon simply means no sessions (`local` too: this computer's own); an
@@ -1233,6 +1372,9 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                 remote.is_none() || ptyro_client::is_local(remote.as_deref())
             } =>
         {
+            if let Some(m) = &filter.machine {
+                machine_without_daemon(ctx, m)?;
+            }
             (Vec::new(), Vec::new())
         }
         Err(e) => return Err(e),
@@ -1635,6 +1777,38 @@ mod restart_tests {
                 "--restarted",
                 "0.0.68:0.0.69"
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::profile_on;
+
+    /// `ls --machine M --profile P` that can't both hold says what to say instead.
+    #[test]
+    fn a_profile_not_on_the_machine_named_says_where_it_is() {
+        let l2 = || Some("laptop2".to_owned());
+        let err = |at: Option<String>, p: &str, on: &[Option<String>]| {
+            profile_on(&at, p, on).unwrap_err().message
+        };
+        assert!(profile_on(&None, "work", &[None, l2()]).is_ok());
+        assert!(profile_on(&l2(), "work", &[None, l2()]).is_ok());
+        assert_eq!(
+            err(None, "laptop2:work", &[l2()]),
+            "laptop2:work is laptop2's: say --machine laptop2"
+        );
+        assert_eq!(
+            err(l2(), "laptop3:work", &[Some("laptop3".into())]),
+            "laptop3:work is laptop3's: say --machine laptop3"
+        );
+        assert_eq!(
+            err(None, "work", &[l2()]),
+            "there is no profile work on this machine: it is on laptop2: say --machine laptop2"
+        );
+        assert_eq!(
+            err(Some("laptop3".into()), "work", &[None, l2()]),
+            "there is no profile work on laptop3: it is on this machine, laptop2: say --machine here or --machine laptop2"
         );
     }
 }

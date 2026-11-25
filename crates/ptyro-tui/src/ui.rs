@@ -2,6 +2,7 @@
 
 use ptyro_core::SessionId;
 use ptyro_core::config::key_label;
+use ptyro_core::scope::Scope;
 use ptyro_core::session::{SessionInfo, SessionKind, Show};
 use ptyro_core::status::AgentStatus;
 use ratatui::Frame;
@@ -98,6 +99,9 @@ pub(crate) fn fg(app: &App, c: Color) -> Style {
 pub fn draw(app: &App, f: &mut Frame<'_>) {
     app.links.borrow_mut().clear();
     app.strip_hits.borrow_mut().clear();
+    // The tabs once for the frame: the strip, the tree and the hint all ask (SPEC §11.2k).
+    let tabs = app.tabs();
+    *app.tabs_frame.borrow_mut() = Some(tabs);
     let area = f.area();
     if app.opts.raw {
         draw_raw(app, f, area);
@@ -125,6 +129,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     } else if app.which_key_shown() {
         draw_which_key(app, f, area);
     }
+    *app.tabs_frame.borrow_mut() = None;
 }
 
 /// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.
@@ -168,6 +173,7 @@ pub(crate) const WHICH_KEY: &[(&str, &[(&str, &str)])] = &[
             ("pane.close", "close"),
             ("focus.toggle", "sidebar"),
             ("sidebar.filter", "sidebar filter"),
+            ("sidebar.tab_next", "next tab"),
             ("copy.enter", "scroll back"),
         ],
     ),
@@ -400,10 +406,13 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         title.push(Span::raw(" "));
         title.push(b);
     }
-    // The workspace profile's tightest rate-limit window (M4.17).
+    // The workspace profile's tightest rate-limit window (M4.17); with the tab strip drawn it is
+    // on each profile's tab instead, a linked machine's too (SPEC §11.2k).
+    let strip = tab_strip(app, area.width);
     if let Some(w) = app
         .usage_for(&app.workspace_profile())
         .into_iter()
+        .filter(|_| strip.is_none())
         .flat_map(|u| u.windows.iter())
         .max_by_key(|w| w.used_percent)
     {
@@ -414,7 +423,8 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         ));
     }
     let body = sidebar_body(app, area);
-    let mut lines = vec![Line::from(title), filter_line(app, area.width)];
+    let mut lines: Vec<Line<'static>> = strip.map(|s| tab_line(app, s)).into_iter().collect();
+    lines.extend([Line::from(title), filter_line(app, area.width)]);
     lines.extend(body.lines.into_iter().skip(body.skip).map(|(_, l)| l));
     if body.empty {
         let key = |a: &str| app.keymap.key_for(a).unwrap_or_else(|| a.to_owned());
@@ -443,8 +453,14 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
     } else if app.focus == Focus::Sidebar {
         // The keys as they are bound now, not as they were by default.
         let nav = |a: &str| app.keymap.key_in(Table::Nav, a).unwrap_or_else(|| a.to_owned());
+        // With tabs over the sidebar, how to move among them (SPEC §11.2k).
+        let tabs = if sidebar_head(app) > 2 {
+            format!(" · {}{} tab", nav("sidebar.tab_prev"), nav("sidebar.tab_next"))
+        } else {
+            String::new()
+        };
         format!(
-            " ⏎ open/fold · {} new · {} stop · {} filter · Esc",
+            " ⏎ open/fold · {} new · {} stop · {} filter{tabs} · Esc",
             nav("session.new"),
             nav("session.stop"),
             nav("sidebar.filter")
@@ -467,6 +483,144 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
             c.set_symbol("│").set_style(fg(app, col));
         }
     }
+}
+
+/// How many lines the sidebar has over its tree: the title and the filter chips, and the tab
+/// strip above them when it is drawn (SPEC §11.2k). Drawing and clicking share it.
+pub(crate) fn sidebar_head(app: &App) -> u16 {
+    2 + u16::from(ptyro_core::scope::drawn(&app.tabs()))
+}
+
+/// A tab of the strip over the sidebar: what it picks, how it reads, and the columns (from the
+/// sidebar's left edge) it covers.
+pub(crate) struct TabChip {
+    pub scope: Option<Scope>,
+    pub spans: Vec<Span<'static>>,
+    pub from: u16,
+    pub to: u16,
+}
+
+/// The tab strip over the sidebar, laid out: its tabs in sight, and the edges with more.
+pub(crate) struct TabStrip {
+    pub chips: Vec<TabChip>,
+    /// The `‹` and `›` columns, when there are tabs out of sight that way.
+    pub left: Option<u16>,
+    pub right: Option<u16>,
+}
+
+/// The tab strip over the sidebar (SPEC §11.2k), laid out in `width`: `all`, then each tab with
+/// what needs you (`⚠N` blocked, `●N` working), this machine's profiles' usage and a linked
+/// machine's link when it is down. Wider than the sidebar, it scrolls to keep the selected tab
+/// in sight, a `‹` / `›` at the edge saying more is that way (a click on one moves a tab).
+/// `None` when no strip is drawn (one machine, one profile). Drawing and clicking share it.
+pub(crate) fn tab_strip(app: &App, width: u16) -> Option<TabStrip> {
+    let t = &app.theme;
+    let tabs = app.tabs();
+    if !ptyro_core::scope::drawn(&tabs) {
+        return None;
+    }
+    let counts = |(blocked, working): (usize, usize)| {
+        let mut v = Vec::new();
+        if blocked > 0 {
+            v.push((format!(" ⚠{blocked}"), t.blocked));
+        }
+        if working > 0 {
+            v.push((format!(" ●{working}"), t.working));
+        }
+        v
+    };
+    // What it picks, its label, what follows the label with its colour.
+    type Item = (Option<Scope>, String, Vec<(String, Color)>);
+    let mut items: Vec<Item> =
+        vec![(None, "all".into(), counts(ptyro_core::scope::count(&app.sessions)))];
+    for tab in tabs {
+        let mut extra = counts((tab.blocked, tab.working));
+        // Its profile's tightest rate-limit window (moved from the title); a linked machine's
+        // comes with its mirror, the profile named as the tab names it (`laptop2:work`).
+        if let Some(pct) = app
+            .usage_for(&tab.scope.profile)
+            .into_iter()
+            .flat_map(|u| u.windows.iter())
+            .map(|w| w.used_percent)
+            .max()
+        {
+            extra.push((format!(" {pct}%"), if pct >= 80 { t.blocked } else { t.dim }));
+        }
+        if let Some(m) = &tab.scope.machine {
+            use ptyro_core::model::MachineState as S;
+            match app.machines.iter().find(|x| x.name == *m).map(|x| x.state) {
+                Some(S::Offline) => extra.push((" offline".into(), t.error)),
+                Some(S::Mismatch) => extra.push((" other version".into(), t.error)),
+                Some(S::Connecting) => extra.push((" connecting…".into(), t.dim)),
+                Some(S::Online) | None => {}
+            }
+        }
+        items.push((Some(tab.scope), tab.label, extra));
+    }
+    let width = width as usize;
+    let shown = app.scope_shown();
+    let sel = items.iter().position(|i| i.0.as_ref() == shown).unwrap_or(0);
+    let wide = |i: &Item| {
+        2 + UnicodeWidthStr::width(i.1.as_str())
+            + i.2.iter().map(|e| UnicodeWidthStr::width(e.0.as_str())).sum::<usize>()
+    };
+    let w: Vec<usize> = items.iter().map(wide).collect();
+    // From column 1 (column 0 is a space, or `‹`); a tab is followed by a space; `›` takes the
+    // last two columns when tabs are left out after.
+    let used =
+        |from: usize, to: usize| -> usize { 1 + w[from..=to].iter().sum::<usize>() + to - from };
+    let n = items.len();
+    let more = |to: usize| if to + 1 < n { 2 } else { 0 };
+    let mut start = 0;
+    while start < sel && used(start, sel) + more(sel) > width {
+        start += 1;
+    }
+    let mut end = sel;
+    while end + 1 < n && used(start, end + 1) + more(end + 1) <= width {
+        end += 1;
+    }
+    let mut x = 1u16;
+    let mut chips = Vec::new();
+    for (i, (scope, mut label, extra)) in items.into_iter().enumerate().take(end + 1).skip(start) {
+        // The one tab that doesn't fit even alone gives way in its label.
+        let over = used(i, i) + more(i);
+        if over > width {
+            let keep = UnicodeWidthStr::width(label.as_str()).saturating_sub(over - width + 1);
+            truncate_width(&mut label, keep.max(1));
+            label.push('…');
+        }
+        let picked = i == sel;
+        let on = fg(app, t.accent).add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        let mut spans =
+            vec![Span::styled(format!(" {label}"), if picked { on } else { fg(app, t.text) })];
+        for (text, c) in extra {
+            spans.push(Span::styled(text, if picked { on } else { fg(app, c) }));
+        }
+        spans.push(Span::styled(" ", if picked { on } else { Style::default() }));
+        let to = x
+            + spans.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum::<usize>()
+                as u16;
+        chips.push(TabChip { scope, spans, from: x, to });
+        x = to + 1;
+    }
+    let right = (end + 1 < n).then(|| (width as u16).saturating_sub(1));
+    Some(TabStrip { chips, left: (start > 0).then_some(0), right })
+}
+
+fn tab_line(app: &App, strip: TabStrip) -> Line<'static> {
+    let dim = fg(app, app.theme.dim);
+    let mut spans = vec![Span::styled(if strip.left.is_some() { "‹" } else { " " }, dim)];
+    let mut x = 1u16;
+    for c in strip.chips {
+        spans.push(Span::raw(" ".repeat(c.from.saturating_sub(x) as usize)));
+        spans.extend(c.spans);
+        x = c.to;
+    }
+    if let Some(r) = strip.right {
+        spans.push(Span::raw(" ".repeat(r.saturating_sub(x) as usize)));
+        spans.push(Span::styled("›", dim));
+    }
+    Line::from(spans)
 }
 
 /// The chips of the filter strip under the sidebar's title: each with its label and the columns
@@ -546,8 +700,8 @@ pub(crate) fn sidebar_body(app: &App, area: Rect) -> SidebarBody {
     let sessions: std::collections::HashMap<SessionId, &SessionInfo> =
         app.sessions.iter().map(|s| (s.id, s)).collect();
     let width = area.width as usize;
-    // Less the title, the filter strip and the hint line.
-    let room = area.height.saturating_sub(3) as usize;
+    // Less the tab strip, the title, the filter strip and the hint line.
+    let room = area.height.saturating_sub(sidebar_head(app) + 1) as usize;
     let mut firsts: Vec<(usize, Line<'static>)> = Vec::new();
     // Each session row's detail lines, as wide (the row in focus) and as narrow.
     let mut details: Vec<Vec<Line<'static>>> = Vec::new();

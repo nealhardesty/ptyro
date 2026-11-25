@@ -24,6 +24,7 @@ pub mod paths;
 pub mod project;
 pub mod removal;
 pub mod retired;
+pub mod scope;
 pub mod screen;
 pub mod secret;
 pub mod selector;

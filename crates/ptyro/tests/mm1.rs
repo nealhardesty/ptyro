@@ -53,7 +53,7 @@ impl Two {
         let there = TempDaemon::start_with(
             BIN,
             &[("PTYRO_SSH", to1.as_str())],
-            Some("[daemon]\nmachine_name = \"laptop2\"\n"),
+            Some("[daemon]\nmachine_name = \"laptop2\"\n[profiles.work]\n"),
         )
         .unwrap();
         let here = TempDaemon::start_with(
@@ -216,6 +216,41 @@ async fn another_machines_workspaces_sit_beside_ours_and_work_from_here() {
     assert!(ws.contains(&"main".to_owned()) && ws.contains(&"laptop2:main".to_owned()), "{ws:?}");
     let ws_there = workspaces(&there).await;
     assert_eq!(ws_there, ["main"], "nothing changed there");
+    // `ls --machine` picks one machine's (TABS, SPEC §11.2k): a linked one's, or ours.
+    let ls = |args: &[&str]| -> Vec<String> {
+        let out = t.here.cmd().args(["ls", "--json"]).args(args).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        v.as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(ls(&["--machine", "laptop2"]), ["laptop2:fix-flaky-test"]);
+    assert_eq!(ls(&["--machine", "laptop2", "--profile", "default"]), ["laptop2:fix-flaky-test"]);
+    assert_eq!(ls(&["--profile", "laptop2:default"]), ["laptop2:fix-flaky-test"]);
+    assert_eq!(ls(&["--profile", "default"]).len(), 2, "every machine's default");
+    assert_eq!(ls(&["--machine", "laptop1"]), ["local-one"]);
+    assert_eq!(ls(&["--machine", "here"]), ["local-one"]);
+    assert_eq!(ls(&["--machine", "laptop2", "--profile", "work"]), Vec::<String>::new());
+    // A machine and a profile that can't both hold: refused, with what to say instead.
+    let refused = |args: &[&str]| -> String {
+        let out = t.here.cmd().args(["ls"]).args(args).output().unwrap();
+        assert!(!out.status.success(), "{args:?} listed");
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    let err = refused(&["--machine", "here", "--profile", "laptop2:work"]);
+    assert!(err.contains("laptop2:work is laptop2's: say --machine laptop2"), "{err}");
+    let err = refused(&["--machine", "here", "--profile", "work"]);
+    assert!(err.contains("no profile work on this machine: it is on laptop2"), "{err}");
+    // Completed as they are named: `here` and the linked machines, the linked profiles with
+    // their machine on.
+    let complete = |words: &[&str]| -> String {
+        let out =
+            t.here.cmd().env("PTYRO_COMPLETE", "fish").args(["--", "ptyro"]).args(words).output();
+        String::from_utf8_lossy(&out.unwrap().stdout).into_owned()
+    };
+    let m = complete(&["ls", "--machine", ""]);
+    assert!(m.contains("here") && m.contains("laptop2"), "{m}");
+    let p = complete(&["ls", "--profile", ""]);
+    assert!(p.contains("default") && p.contains("laptop2:work"), "{p}");
 
     // Addressed as laptop2:name, by its id, or by a name only it has: it happens there.
     until_screen(&here, "laptop2:fix-flaky-test", "ready-").await;

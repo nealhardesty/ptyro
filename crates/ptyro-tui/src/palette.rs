@@ -46,6 +46,8 @@ pub enum Target {
     Theme(String),
     /// Palette: open this chat (SPEC §22.12).
     Chat(String),
+    /// Palette: pick this tab over the sidebar (`None`: `all`, SPEC §11.2k).
+    Tab(Option<ptyro_core::scope::Scope>),
 }
 
 #[derive(Debug, Clone)]

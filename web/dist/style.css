@@ -35,7 +35,7 @@ header .icon { padding: 4px 8px; background: none; border: none; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
 .dot.open { background: var(--ok); } .dot.connecting { background: var(--warn); } .dot.rejected { background: var(--bad); }
 
-main.list { padding: 8px 16px; display: grid; gap: 8px; }
+main.list { padding: 8px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 main.center { padding: 40px 24px; display: grid; gap: 14px; justify-items: center; text-align: center; }
 .pair input { width: 100%; max-width: 420px; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--panel); color: var(--text); font: inherit; }
@@ -222,6 +222,10 @@ pre.block { margin: 0; padding: 10px; background: var(--panel); border: 1px soli
 .chips.filter { padding-bottom: 2px; }
 .chips.filter .n { opacity: .75; font-variant-numeric: tabular-nums; }
 .chips.filter button.active:not(.on) .n { color: var(--accent); opacity: 1; font-weight: 600; }
+/* The machine and profile tabs (TABS): one line that scrolls sideways on a phone. */
+.chips.scope { flex-wrap: nowrap; padding-bottom: 2px; }
+.chips.scope button { flex: none; }
+.chips.scope button.on .glyph { color: #fff; }
 .tabs-in { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
 .stack-in { display: grid; gap: 12px; }
 .proj { display: grid; gap: 6px; margin-bottom: 8px; }
@@ -269,7 +273,7 @@ header .icon, .sheet-head .icon { min-width: 36px; min-height: 36px; display: in
 
 .offline { text-align: center; padding: 6px; font-size: 13px; background: var(--warn); color: #fff; }
 .searchbar { padding: 8px 8px 0; }
-.cards { display: grid; gap: 8px; }
+.cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 kbd { font: 12px ui-monospace, Menlo, monospace; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; background: var(--panel); }
 .banner { margin: 6px 8px; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 8px; font-size: 13px;
   display: flex; gap: 10px; align-items: center; justify-content: space-between; }

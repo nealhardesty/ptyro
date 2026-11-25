@@ -655,6 +655,45 @@ async fn the_profile_cli_edits_the_config() {
     assert!(out.contains("acme"), "{out}");
 }
 
+/// `ls --profile` lists the sessions running as it, whatever their workspace's profile; with
+/// `--machine` (this one's name, or `here`) the tabs' rule (TABS, SPEC §11.2k).
+#[tokio::test]
+async fn ls_by_profile_and_machine() {
+    let mut w = World::new("[daemon]\nmachine_name = \"laptop1\"\n[profiles.me]\n");
+    w.ok(&["new", "-d", "-n", "plain", "--", "sleep", "60"]);
+    w.ok(&["new", "-d", "-n", "mine", "--profile", "me", "--", "sleep", "60"]);
+    let names = |args: &[&str]| -> Vec<String> {
+        let out = w.ok(&[&["ls", "--json"], args].concat());
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        v.as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_owned()).collect()
+    };
+    assert_eq!(names(&["--profile", "me"]), ["mine"]);
+    assert_eq!(names(&["--profile", "default"]), ["plain"]);
+    assert_eq!(names(&["--machine", "here", "--profile", "me"]), ["mine"]);
+    assert_eq!(names(&["--machine", "LAPTOP1"]).len(), 2, "this machine by its name, any case");
+    assert_eq!(names(&["--profile", "me", "--status", "exited"]), Vec::<String>::new());
+    // A name that isn't one says which there are.
+    let out = w.cli(&["ls", "--profile", "nosuch"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("default") && err.contains("me"), "{err}");
+    let out = w.cli(&["ls", "--machine", "laptop9"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("say one of laptop1"), "{err}");
+    // The history keeps no machine or profile: refused, not the flags quietly dropped.
+    let out = w.cli(&["ls", "--all", "--profile", "me"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("leave out --machine and --profile"), "{err}");
+    // Without a daemon only this machine is known: another is refused, this one lists nothing.
+    w.d.stop();
+    let out = w.cli(&["ls", "--machine", "laptop9"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("daemon is not running"), "{err}");
+    for here in ["here", "laptop1"] {
+        let out = w.cli(&["ls", "--machine", here]);
+        assert!(out.status.success(), "{here}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
 #[tokio::test]
 async fn workspaces_reconcile_and_gc() {
     let w = World::new("[worktrees]\nfetch = false\nstale_days = 0\n");

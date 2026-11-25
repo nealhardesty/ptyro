@@ -286,7 +286,17 @@ impl App {
 
     /// Make `id`'s row visible and select it (UX3.3): its workspace, project and worktree unfold.
     /// A row the tree can't place yet (its project's news still on the way) is placed when it can.
+    /// One the tab over the sidebar doesn't list switches to the tab that has it (SPEC §11.2k):
+    /// every way to a session (a pick, a jump, a notification, a new one) comes through here.
     pub(crate) fn reveal(&mut self, id: SessionId) {
+        self.reveal_from(id, std::time::Instant::now(), true);
+    }
+
+    /// [`Self::reveal`], waiting `since` then; `follow`: it may still switch tab.
+    fn reveal_from(&mut self, id: SessionId, since: std::time::Instant, follow: bool) {
+        if follow {
+            self.follow_tab_to_session(id);
+        }
         let Some(s) = self.session(id) else { return };
         let ws = crate::tree::fold_key(&self.tree().home(s));
         for node in [s.project.clone(), s.worktree.clone(), Some(ws)].into_iter().flatten() {
@@ -298,7 +308,7 @@ impl App {
                 self.set_sel(&rows, i);
                 self.revealing = None;
             }
-            None => self.revealing = Some((id, std::time::Instant::now())),
+            None => self.revealing = Some((id, since, follow)),
         }
     }
 
@@ -312,7 +322,7 @@ impl App {
         }
         self.collapsed.remove(project);
         self.collapsed.remove(id);
-        let rows = self.rows();
+        let rows = self.rows_with(&Row::Worktree(id.to_owned()));
         if let Some(i) = rows.iter().position(|r| *r == Row::Worktree(id.to_owned())) {
             self.set_sel(&rows, i);
         }
@@ -320,11 +330,11 @@ impl App {
 
     /// Try a pending reveal again (news arrived), for a few seconds.
     pub(crate) fn retry_reveal(&mut self) {
-        if let Some((id, since)) = self.revealing {
+        if let Some((id, since, follow)) = self.revealing {
             if since.elapsed() > std::time::Duration::from_secs(5) {
                 self.revealing = None;
             } else {
-                self.reveal(id);
+                self.reveal_from(id, since, follow);
             }
         }
     }

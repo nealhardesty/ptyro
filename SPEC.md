@@ -3737,6 +3737,104 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   once. A remote session's pane header has its machine's dot, and its state on the right when down.
 - Profile badges count per machine: another machine's implicit `default` shows none.
 
+### 11.2k What TABS added **[built TABS]**
+
+Decided by the owner 2026-11-25 (ROADMAP TABS). With several machines and profiles the sidebar
+gets too long: a strip of tabs over it picks one machine and one profile, and the tree under it
+lists only that tab's. `ptyro_core::scope` (`scope.rs`) is the one definition for the TUI, the CLI
+and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps in step with it.
+
+- **A tab is a machine and a profile in use there** (`Scope { machine, profile }`, `machine: None`
+  this one, as `SessionInfo.machine` says): a profile is in use on a machine when one of its
+  workspaces has it or one of its sessions runs as it. A defined profile with neither has no tab.
+  A chat's engine (§22.2) is hidden from the tree, so it makes no tab and counts on none. Another
+  machine's profiles reach this one with its name on (`laptop2:work`, §16.4b): `Scope.profile` is
+  that name, `Scope::profile_name()` the one people read (`work`).
+- **Labels** (`scope::tabs(workspaces, sessions, here)`, `here` the daemon's own `Status.machine`):
+  the machine's name on every tab while there is more than one machine, `[profile]` only while that
+  machine has more than one tab: `laptop1 [me]`, `laptop1 [work]`, `laptop2`; on one machine
+  `[me]`, `[work]`.
+- **Order:** `all` first; then this machine's tabs, then each other machine's, sorted by name (the
+  sidebar's machine order, §11.2j); within a machine `default` first, then the other profiles
+  alphabetically.
+- **`all`** is today's sidebar, and is not a `Tab` (a kept scope is `Option<Scope>`, `None` for
+  `all`). With one tab besides it (one machine, one profile) the strip is not drawn and nothing
+  changes (`scope::drawn`).
+- **What a tab lists is the sessions that run as its profile** (`Scope::keeps_session`: same
+  machine, the session's own profile, which a worktree or a project's pin can make differ from its
+  workspace's, §10.10). A workspace shows under a tab when its own profile is the tab's or a session
+  listed under it (`Inputs::home`, §11.2j) runs as the tab's (`Scope::keeps_workspace(w, under)`);
+  under it, only the tab's sessions. So a workspace can show under two tabs, and nothing of another
+  profile ever shows in a profile's tab. A quick terminal goes with its worktree: it never makes a
+  tab nor moves you to one, and under a tab it shows only when it runs as the tab's profile. Chats
+  aren't sessions and stay with their workspace.
+- **Every tab carries what needs you:** blocked `⚠N` and working `●N` (`Tab.blocked`,
+  `Tab.working`: running real sessions, not quick terminals; `scope::count` gives `all`'s); an
+  offline machine says so. Each profile's usage is on its tab, a linked machine's too (moved from
+  the sidebar's title).
+- **The tab is where new things go:** a new workspace defaults to the tab's machine and profile.
+  The wizard keeps its own profile rule; its context is the selected row, which is in the tab.
+- **Going to something outside the tab** (`w`, a notification, the attention jump, peek's ⏎,
+  opening a session by name) switches to the tab that has it (`Scope::of(session)`,
+  `Scope::of_workspace(w)`: that tab always exists), else to `all`.
+- **Saved with the view** beside the filter chips (both apply together): a saved tab that no longer
+  exists, or a strip that is no longer drawn, falls back to `all` (`scope::resolve`).
+- **Home is not scoped:** it stays everything.
+- **The TUI** (TABS.2, `ui.rs` `tab_strip`, `tree.rs` `Inputs.scope`):
+  - **The strip** is the sidebar's first line, above the title and the filter chips, and takes no
+    line when it isn't drawn. `all` first, then each tab: ` label ⚠N ●N `, zero counts hidden.
+    Each profile's tab, a linked machine's too, adds its tightest rate-limit window (` 63%`, the
+    blocked colour at 80% or more); while the strip is drawn the title no longer shows usage. A linked machine's
+    tab adds ` offline`, ` other version` or ` connecting…`. Wider than the sidebar, the strip
+    scrolls to keep the selected tab in sight, with `‹`/`›` at the edges (a click on one moves a
+    tab).
+  - **Picking:** a click on a tab, the wheel over the strip (one tab per 150 ms, so a flick
+    doesn't race through them), `sidebar.tab_next` / `sidebar.tab_prev`
+    (`}` / `{` after the prefix and in the sidebar), `sidebar.tab_all` and `tab NAME` in the
+    palette. The sidebar's hint line says `{} tab` while the strip is drawn. With no strip the
+    actions say why there are no tabs.
+  - **What the tree lists:** a workspace whose own profile is the tab's shows whole (its projects,
+    worktrees and `+ new shell`, empty or not), so you can make things in it. One shown only for
+    the tab's sessions in it drops its empty headers, like the filter. A quick terminal goes with
+    its worktree and never moves the tab. SHELLS keep the tab's profile; CHATS show with their
+    workspace. Folds, `1`–`9`, `j`/`k` and the attention order follow the tab.
+  - **Saved** as `SavedView.scope`: the tab you picked, kept as it is. The tab in effect
+    (`scope_shown`) is it while it is a tab, else `all`; so a linked machine's tab after a daemon
+    restart shows `all` until the machine's mirror is back, then returns by itself. Only a pick or
+    a follow changes it. A change with the sidebar focused re-selects a row, so the workspace
+    you're in is one the tab shows.
+  - **Going outside the tab:** every way to a session (`reveal`: picks, `/`, the palette, the
+    attention jump, peek's ⏎, notifications, a new session the wizard put elsewhere) and to a
+    workspace, project or worktree (`rows_with`: `w`, the palette's jumps) switches tab, with a
+    toast `showing X`; nothing switches when the filter would hide it anyway. A reveal still
+    waiting for its session follows only until you pick a tab yourself. Attaching on a
+    session or a workspace does too (a workspace once, not again on a reconnect). Answering in
+    peek (`y`/`a`/`n`) moves no focus, so it doesn't switch.
+  - **A new workspace:** the machine picker opens on the tab's machine, and the profile is the
+    tab's when the machine is.
+- **The web** (TABS.3, `sidebar.tab`): the same strip over the session list, above the `all /
+  running / active` chips and combined with them (their counts are the tab's). `all` and each tab
+  carry `⚠N` / `●N`; a linked machine that isn't online carries its link state. One line that
+  scrolls sideways on a phone. Kept in the browser (`ptyro.tab`, beside `ptyro.show`). The rule is
+  mirrored in `web/src/machine.ts` and kept equal to `scope.rs` by `web/test/scope.mjs`. The list
+  is flat, so a workspace shows only through SHELLS' groups. Opening any session's page (the list,
+  Home, a notification, the Library, a link) goes through one hook that switches to the session's
+  tab when the one shown doesn't list it. The new-workspace form starts on the tab's machine and
+  profile, and under a tab new things start in it: SHELLS' ＋ in a workspace of the tab's profile on
+  its machine (else with the profile given), a new task on the tab's machine with the tab's
+  profile. Opening a quick terminal never switches the tab. Home and the CHATS aside aren't scoped. Usage stays on Home and More → Usage (the web's
+  list never had it).
+- **CLI:** `ptyro ls --machine M --profile P` (with `--status`, `-p`, `-w`, `--json`). `--machine`
+  takes a linked machine's name, this one's own, or `here`, any case; another name is refused with
+  the ones there are. `--profile` takes a profile as people read it (`work`: any machine's) or
+  with its machine on (`laptop2:work`); one that is neither defined nor run as is refused with the
+  ones there are. Both together are one tab (`Scope::new(machine, profile).keeps_session`).
+  A pair that can't both hold is refused, saying which `--machine` to use (`laptop2:work is
+  laptop2's: say --machine laptop2`); `ls --all` (the history keeps no machine or profile)
+  refuses both; without a daemon only `here` or this machine's own name can be given. In
+  completion `--machine` offers `here` and the linked machines, `--profile` the linked machines'
+  profiles with their machine on (`laptop2:work`).
+
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 
 **[built M2]** The real table is generated: `C-q ?` lists it and the palette shows each
@@ -3961,7 +4059,7 @@ ptyro                                  # TUI
 ptyro attach [<session>] [--raw] [--view-only] [--workspace <ws>]
 ptyro new [--agent <a>[@<profile>]] [--profile <pr>] [--project <p>] [--wt <name>|--new-wt [<name>]|--here|--cwd <dir>]
           [--name <n>] [--prompt <text>|--prompt-file <f>] [--detach] [--override-pin] [-- <args…>]
-ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]   # §2.3's words
+ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--machine <m>] [--profile <pr>] [--all] [--json]   # §2.3's words; --machine/--profile §11.2k
 ptyro status [<session>] [--explain] [--json]
 ptyro send <session…> <text> [--no-enter] [--raw] [--wait-ready]
 ptyro read <session> [--screen|--scrollback [N]] [--plain|--ansi] [--json]
@@ -4061,7 +4159,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
     would redo every poll; a flag means one thing in every command, docs/commands.md);
   - `events [--follow] [--session S] [-l N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
-- **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
+- **Listing:** `ls --status/--project/--workspace`, and `--machine/--profile` (§11.2k); `attach --workspace`.
 - **`attach --tab|--pane`** (WIN3, `ptyro_tui::tab`): open the session in a new tab or pane of
   the terminal instead, attached with this ptyro and its `--remote`. The innermost terminal that
   can be asked wins: tmux (`new-window` / `split-window -- <ptyro> attach <id>`), else Windows

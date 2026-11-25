@@ -8,6 +8,7 @@ import { data, liveWorktrees, workspaceOf } from "./data.js";
 import { conn, host } from "./conn.js";
 import { startSession } from "./flow.js";
 import { shellLabel } from "./shellkit.js";
+import { startIn } from "./machine.js";
 import { actions, NAME_HINT, ask, enc, form, go, h, menu, ui } from "./kit.js";
 const ACTIONS = {
     "shells": "SHELLS: your numbered terminals that belong to the workspace, not a worktree (any command)",
@@ -92,9 +93,10 @@ function doing(s) {
 }
 const watchLabel = (w) => w.t === "silence" ? `silence ${Math.round((w.ms ?? 0) / 1000)}s` : w.t === "match" ? `match ${w.re}` : w.t;
 /// Start a shell in SHELLS: `slot` asks for a number, `argv` a command, `scratch` its own
-/// directory. The daemon starts it in its home when no directory is given here.
+/// directory, `profile` the one it runs as (else its workspace's). The daemon starts it in its
+/// home when no directory is given here.
 export async function newLooseShell(opts = {}) {
-    await startSession({ cwd: opts.cwd ?? "~", argv: opts.argv ?? [], loose: true, slot: opts.slot ?? null, scratch: !!opts.scratch, workspace: opts.workspace ?? null });
+    await startSession({ cwd: opts.cwd ?? "~", argv: opts.argv ?? [], loose: true, slot: opts.slot ?? null, scratch: !!opts.scratch, workspace: opts.workspace ?? null, profile: opts.profile });
 }
 /// Show shell N (one lost in a restart starts again); an empty number gets a new shell.
 export async function goShell(sessions, n, workspace) {
@@ -113,17 +115,25 @@ export async function goShell(sessions, n, workspace) {
     // Alt+2 goes to shell 2's terminal, never still to the one left.
     ui.render();
 }
-/// The ＋ of SHELLS: a shell, a scratch shell, or a command.
-export function newShellMenu(workspace) {
+/// The ＋ of SHELLS: a shell, a scratch shell, or a command. `profile`: the one they run as,
+/// when no workspace of it is there (a tab's, TABS).
+export function newShellMenu(workspace, profile) {
     menu("New in SHELLS", [
-        { title: tip("shells.new"), label: "A shell", hint: "The next free number", run: () => newLooseShell({ workspace }) },
-        { title: tip("shells.scratch"), label: "A scratch shell", hint: "A new, empty directory that goes with it", run: () => newLooseShell({ workspace, scratch: true }) },
-        { title: tip("shells.new"), label: "A command, or with options…", hint: "htop, ssh prod, a dev server; its directory, number, name", run: () => commandForm(workspace) },
+        { title: tip("shells.new"), label: "A shell", hint: "The next free number", run: () => newLooseShell({ workspace, profile }) },
+        { title: tip("shells.scratch"), label: "A scratch shell", hint: "A new, empty directory that goes with it", run: () => newLooseShell({ workspace, profile, scratch: true }) },
+        { title: tip("shells.new"), label: "A command, or with options…", hint: "htop, ssh prod, a dev server; its directory, number, name", run: () => commandForm(workspace, profile) },
     ]);
 }
+/// Where SHELLS' ＋ starts one under a tab (TABS): in it, so the list doesn't leave the tab.
+const tabbed = (tab) => {
+    if (!tab)
+        return {};
+    const w = startIn(tab, data.workspaces.values(), lastWorkspace);
+    return { workspace: w.workspace ?? undefined, profile: w.profile };
+};
 /// Everything `ptyro shells new` takes: a command (else a shell), where, its number, name, title,
 /// a scratch directory, and the workspace.
-function commandForm(workspace) {
+function commandForm(workspace, profile) {
     const wss = [...new Set(["main", ...[...data.workspaces.values()].map((w) => w.name)])];
     const ws = workspace ?? listWorkspace();
     form("New in SHELLS", [
@@ -137,21 +147,22 @@ function commandForm(workspace) {
         { key: "private", label: "Private", type: "check", value: data.privateDefault, hint: "The knowledge base keeps nothing of it" },
     ], "Start", async (v) => {
         const slot = v.slot ? Number(v.slot) : undefined;
-        await startSession({ cwd: v.dir || "~", argv: [], command: v.cmd || undefined, loose: true, slot: slot ?? null, workspace: v.workspace || null,
+        await startSession({ cwd: v.dir || "~", argv: [], command: v.cmd || undefined, loose: true, slot: slot ?? null, workspace: v.workspace || null, profile,
             name: v.name || undefined, title: v.title || undefined, scratch: !!v.scratch, private: !!v.private });
     });
 }
-/// The SHELLS group of the session list: numbered cards, or `＋ new shell`.
-export function shellsGroup(sessions, card) {
+/// The SHELLS group of the session list: numbered cards, or `＋ new shell`. Under a tab (`tab`,
+/// TABS) the new ones start in it.
+export function shellsGroup(sessions, card, tab) {
     const list = shellsOf(sessions);
     const workspaces = new Set(list.map((s) => s.workspace ?? "main"));
     if (lastWorkspace && !workspaces.has(lastWorkspace))
         lastWorkspace = undefined;
     if (!lastWorkspace && workspaces.size === 1)
         lastWorkspace = [...workspaces][0];
-    const head = h("div", { class: "shells-head", title: tip("shells") }, h("span", { class: "shells-title" }, "SHELLS"), h("button", { class: "icon plus", title: tip("shells.new"), "aria-label": "New shell", onclick: () => newShellMenu() }, "＋"));
+    const head = h("div", { class: "shells-head", title: tip("shells") }, h("span", { class: "shells-title" }, "SHELLS"), h("button", { class: "icon plus", title: tip("shells.new"), "aria-label": "New shell", onclick: () => { const w = tabbed(tab); newShellMenu(w.workspace, w.profile); } }, "＋"));
     if (!list.length) {
-        return h("section", { class: "shells" }, head, h("button", { class: "small shell-new", title: tip("shells.new"), onclick: () => void newLooseShell() }, "＋ new shell"));
+        return h("section", { class: "shells" }, head, h("button", { class: "small shell-new", title: tip("shells.new"), onclick: () => void newLooseShell(tabbed(tab)) }, "＋ new shell"));
     }
     const firsts = windowsOf(list);
     const cardOf = (s) => {
