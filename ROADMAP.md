@@ -50,7 +50,7 @@ Conventions:
 | **WEB2** | Real typing on the web | Letters as you type them (also mid-composition), dictation as one paste, the terminal takes the keys, every key exactly once across reconnects, predicted echo on a slow link (done 2026-11-19) |
 | **KB** | Knowledge base | One memory for you and your agents: agent sessions, chats, projects' documents, comments, file names and commits, notes and shell commands (what they print only where you ask for it), searched by words and meaning from the CLI, the TUI's Library and the web, and by agents through three tools; `ptyro ingest folder/`; no model call at ingest; pointers offered at a prompt where you switch that on (decided 2026-11-19; the code of every task KB0 to KB5 is built, 2026-11-20, and reviewed, PR #121; open: three things were not run, and the boxes of KB0, KB0.3 and KB1 stay unticked for them: a real agent inside the TUI (KB0.3's flags in an interactive Claude session; step 1 of the "Done when" with the real Claude and Codex), the golden set with the real embedding model (KB1.6's `make kb-eval-real`: the model was not on the machine), and anything on Linux by hand (CI runs the tests there); SPEC §25) |
 | **HOME** | Home | One look at everything, ranked: what needs you, what was left hanging, what is being worked on and what is quiet, a row a project, with where each was left off (from the knowledge base) and every profile's usage; where a bare `ptyro` and the web app open (done 2026-11-23; the owner's hand check open) |
-| **TABS** | Machine and profile tabs | A strip of tabs over the sidebar, one per machine and profile in use (and `all`), each with what needs you; the sidebar lists the chosen tab's workspaces and the sessions running as its profile; in the TUI, the web and `ptyro ls` (decided 2026-11-25 by the owner) |
+| **TABS** | Machine and profile tabs | A strip of tabs over the sidebar, one per machine and profile in use (and `all`), each with what needs you; the sidebar lists the chosen tab's workspaces and the sessions running as its profile; in the TUI, the web and `ptyro ls` (done 2026-11-25) |
 | **Backlog** | Later / maybe | Editor, tasks, jj, libghostty, relay, … |
 
 Critical path: **M0 → M1 → M2 → M3 → M4** gives a daily-driver. M5 can interleave with M3/M4.
@@ -3878,7 +3878,7 @@ strip is small and complete. No model writes any of it.
 
 ---
 
-## TABS — Machine and profile tabs (decided 2026-11-25 by the owner)
+## TABS — Machine and profile tabs (decided 2026-11-25 by the owner; built 2026-11-25)
 
 **Goal:** the sidebar gets too long with several machines and profiles. A strip of tabs over it
 picks one machine and profile; the workspaces stay in the tree on the left, now only the tab's.
@@ -3905,17 +3905,21 @@ picks one machine and profile; the workspaces stay in the tree on the left, now 
   tab that no longer exists falls back to `all`.
 - Home is not scoped: it stays everything.
 
-- [ ] **TABS.1 The rule, and `ptyro ls`** — S. `ptyro_core::scope`: `Scope` (machine, profile),
+- [x] **TABS.1 The rule, and `ptyro ls`** — S. `ptyro_core::scope`: `Scope` (machine, profile),
   the tabs in use with their labels and counts, what a tab keeps (a session, a workspace), as
   one definition for the TUI, the CLI and the web (like `Show`). `ptyro ls --machine M
-  --profile P` (and `--json`). SPEC §11.2k.
-- [ ] **TABS.2 The TUI's strip** — M. The strip over the sidebar (only with two tabs or more), a
+  --profile P` (and `--json`). SPEC §11.2k. *Done (2026-11-25):* `crates/ptyro-core/src/scope.rs` (unit tests), `ls` in
+  `crates/ptyro/src/cli.rs`, `tests/m3.rs` `ls_by_profile_and_machine`, `tests/mm1.rs`.
+- [x] **TABS.2 The TUI's strip** — M. The strip over the sidebar (only with two tabs or more), a
   click picks a tab, keys and palette actions cycle and pick them, the tree follows the tab
   (folds, numbering, `j`/`k`), the tab is saved with the view, going to something outside it
-  switches tab, a new workspace defaults to it, the usage moves onto the tabs.
-- [ ] **TABS.3 The web's strip** — M. The same strip over the session list (kept in the browser
+  switches tab, a new workspace defaults to it, the usage moves onto the tabs. *Done (2026-11-25):* `ui.rs` `tab_strip`, `tree.rs`
+  `Inputs.scope`, `follow_tab` in `app.rs`; `}` / `{`, `sidebar.tab_all`, `tab NAME`; tests in
+  `tree.rs` and `app.rs`.
+- [x] **TABS.3 The web's strip** — M. The same strip over the session list (kept in the browser
   like the chips), the same rule, going to a session outside it switches tab, a new workspace
-  defaults to it; a `make web-e2e` scenario.
+  defaults to it; a `make web-e2e` scenario. *Done (2026-11-25):* `sidebar.tab`; the rule in
+  `web/src/machine.ts`, `web/test/scope.mjs`; the `tabs` scenario of `make web-e2e`.
 
 **Done when:** with two profiles on this machine and a linked machine, the strip shows `all`,
 `laptop1 [work]`, `laptop1 [me]` and `laptop2`, each with its counts; picking `[me]` lists only

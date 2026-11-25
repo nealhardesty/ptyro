@@ -80,6 +80,7 @@ action by name, finds any setting, and switches the theme (`theme ptyro-light`; 
 | `Z` | everything at once: the sidebar fills the screen with every row open (`⏎` opens one; `C-q Z`, `z` or `Esc` goes back) |
 | `C-z` | fold the whole sidebar (as `Z` does in the sidebar); again: unfold it as it was |
 | `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
+| `{` / `}` | the previous / next machine and profile tab over the sidebar, `all` among them (drawn with two machines or profiles; also a click on a tab; `sidebar.tab_all` and `tab NAME` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
 | `x` / `X` | stop the session: an agent's turn is interrupted and it gets a moment to exit, then it's signalled (an exited one is removed instead; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it; an agent is too with `[ui] agent_exit = "close"`) / kill it now (SIGKILL). Both ask first unless `[ui] confirm_kill = false`, and both keep it listed; Stop and remove (`session.remove`, its row menu) forgets it too. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
@@ -149,6 +150,7 @@ Focus the sidebar with `Ctrl-Q Tab`, or `Ctrl-Q Ctrl-Q`. These keys need no pref
 | `z` | everything at once: the sidebar full-screen, every row open |
 | `Z` | fold everything: every workspace, project, worktree and CHATS section, so the sidebar is one line a workspace (the selection moves to the row it folded into); `Z` again unfolds it as it was before, and whatever arrived meanwhile opens too |
 | `f` | filter the list: all → running → active (a machine, project or worktree with nothing running under it is hidden) |
+| `{` / `}` | the previous / next machine and profile tab: the tree lists only that machine's sessions running as that profile |
 | `<` / `>` | the sidebar a column narrower / wider (or drag its edge) |
 | `u` / `P` | do what the last message offers / add a project |
 | `.` | everything you can do with this row (a session, worktree or project), with the keys. A project's: new task, worktree or shell, trust, workspaces, rename, scripts, open, **move** (`project.move`: its repository moved; where it is now), **leave** (`project.leave`: out of this workspace) and **forget** (`project.remove`), and its history in the Library (`kb.history`). A project whose directory is gone shows `missing` in the sidebar (`missing →?` when ptyro found where it went, and a toast offers the move on `u`); its menu leads with move, then forget |

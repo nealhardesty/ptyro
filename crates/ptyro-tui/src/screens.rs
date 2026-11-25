@@ -286,7 +286,10 @@ impl App {
 
     /// Make `id`'s row visible and select it (UX3.3): its workspace, project and worktree unfold.
     /// A row the tree can't place yet (its project's news still on the way) is placed when it can.
+    /// One the tab over the sidebar doesn't list switches to the tab that has it (SPEC §11.2k):
+    /// every way to a session (a pick, a jump, a notification, a new one) comes through here.
     pub(crate) fn reveal(&mut self, id: SessionId) {
+        self.follow_tab_to_session(id);
         let Some(s) = self.session(id) else { return };
         let ws = crate::tree::fold_key(&self.tree().home(s));
         for node in [s.project.clone(), s.worktree.clone(), Some(ws)].into_iter().flatten() {
@@ -312,7 +315,7 @@ impl App {
         }
         self.collapsed.remove(project);
         self.collapsed.remove(id);
-        let rows = self.rows();
+        let rows = self.rows_with(&Row::Worktree(id.to_owned()));
         if let Some(i) = rows.iter().position(|r| *r == Row::Worktree(id.to_owned())) {
             self.set_sel(&rows, i);
         }

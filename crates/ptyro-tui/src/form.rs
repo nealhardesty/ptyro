@@ -691,11 +691,16 @@ impl App {
     pub(crate) fn open_workspace_form(&mut self, machine: Option<String>) {
         let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
         let suggested = if machine.is_none() { self.free_workspace_name() } else { String::new() };
+        // Under a tab of that machine (SPEC §11.2k), its profile is the one picked.
+        let prefer = match &self.scope {
+            Some(s) if s.machine == machine => s.profile_name().to_owned(),
+            _ => suggested.clone(),
+        };
         let mut form = Form::new(
             format!("New workspace{on}"),
             vec![
                 Field::name("name", "Name", &suggested, "What you'll pick it by"),
-                self.profile_field(machine.as_deref(), &suggested),
+                self.profile_field(machine.as_deref(), &prefer),
                 Field::choice(
                     "notify",
                     "Notifications",

@@ -3,6 +3,13 @@
 //! sessions under it and then its other sessions. A project in several workspaces shows under
 //! each; a session under one, the workspace it started in. Pure: built from what the daemon reported, so it
 //! is unit-tested.
+//!
+//! A tab over it (TABS, SPEC §11.2k) narrows it to one machine and one profile: only the
+//! workspaces [`Scope::keeps_workspace`] keeps, and under them only the tab's sessions. A
+//! workspace whose own profile is the tab's shows whole (its projects and worktrees, empty or not,
+//! so you can start something there); one shown only for a session of the tab's under it drops
+//! the headers left empty, as the filter does. A quick terminal goes with its worktree: it shows
+//! wherever its worktree does, and never keeps a header by itself.
 
 use std::collections::HashSet;
 
@@ -11,6 +18,7 @@ use ptyro_core::config::ShellsSection;
 use ptyro_core::model::{
     MAIN_WORKSPACE, ProjectInfo, WorkspaceInfo, WorktreeInfo, WorktreeState, split_machine,
 };
+use ptyro_core::scope::Scope;
 use ptyro_core::session::{SessionInfo, Show};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +105,8 @@ pub struct Inputs<'a> {
     /// The sidebar's filter: everything, what is running, or what is busy now. A header with
     /// nothing under it is dropped while it filters.
     pub show: Show,
+    /// The tab over the sidebar (SPEC §11.2k): one machine and one profile; `None` is `all`.
+    pub scope: Option<&'a Scope>,
     /// Chats not archived, pinned first then the newest (SPEC §22.12).
     pub chats: &'a [ptyro_core::chats::ChatInfo],
     /// How many unpinned chats each CHATS section shows; `None`: chats are off.
@@ -194,6 +204,33 @@ impl Inputs<'_> {
         self.show != Show::All
     }
 
+    /// Whether a session is listed: the filter keeps it, and so does the tab. A quick terminal
+    /// goes with its worktree, so the tab doesn't judge it.
+    fn keeps(&self, s: &SessionInfo) -> bool {
+        self.show.keeps(s) && (s.quick || self.scope.is_none_or(|t| t.keeps_session(s)))
+    }
+
+    /// Whether the tab shows this workspace (always under `all`): its own profile is the tab's,
+    /// or a session listed under it runs as the tab's (not a quick terminal: it follows).
+    pub fn lists_workspace(&self, ws: &WorkspaceInfo) -> bool {
+        self.scope.is_none_or(|t| {
+            t.keeps_workspace(
+                ws,
+                self.sessions.iter().filter(|s| !s.quick && self.home(s) == ws.name),
+            )
+        })
+    }
+
+    /// Whether the headers left with nothing under them are dropped in this workspace: while the
+    /// filter filters, and under a tab whose profile isn't the workspace's own (it shows only for
+    /// the tab's sessions in it).
+    fn prune(&self, ws: &str) -> bool {
+        self.filtering()
+            || self.scope.is_some_and(|t| {
+                self.workspaces.iter().find(|w| w.name == ws).is_none_or(|w| w.profile != t.profile)
+            })
+    }
+
     /// Every key that folds a row the sidebar can show: workspaces, their CHATS sections,
     /// projects and worktrees (`sidebar.fold_all`).
     pub fn fold_keys(&self) -> HashSet<String> {
@@ -245,17 +282,20 @@ impl Inputs<'_> {
             rows.extend(
                 self.sessions
                     .iter()
-                    .filter(|s| self.show.keeps(s))
+                    .filter(|s| self.keeps(s))
                     .map(|s| if s.quick { Row::Quick(s.id) } else { Row::Session(s.id) }),
             );
             return rows;
         }
         // A project shows under every workspace that has it; each session under one (`home`).
         for ws in self.order() {
+            if !self.lists_workspace(ws) {
+                continue;
+            }
             let folded = honour_collapse && self.collapsed.contains(&fold_key(&ws.name));
             let (mut body, others, any_project) = self.body(ws, honour_collapse);
             body.extend(self.shell_rows(&ws.name, others, any_project, honour_collapse));
-            if self.filtering() && body.is_empty() {
+            if self.prune(&ws.name) && body.is_empty() {
                 continue;
             }
             rows.push(Row::Workspace(ws.name.clone()));
@@ -275,6 +315,7 @@ impl Inputs<'_> {
         honour_collapse: bool,
     ) -> (Vec<Row>, Vec<&'b SessionInfo>, bool) {
         let mut rows = Vec::new();
+        let prune = self.prune(&ws.name);
         let projects: Vec<&ProjectInfo> = ws
             .projects
             .iter()
@@ -289,9 +330,9 @@ impl Inputs<'_> {
                     .filter(|s| s.worktree.as_deref() == Some(w.id.as_str()))
                     // In another workspace that has this project too: listed there.
                     .filter(|s| self.home(s) == ws.name)
-                    .filter(|s| self.show.keeps(s))
+                    .filter(|s| self.keeps(s))
                     .partition(|s| s.quick);
-                if self.filtering() && sessions.is_empty() {
+                if prune && sessions.is_empty() {
                     continue;
                 }
                 inner.push(Row::Worktree(w.id.clone()));
@@ -303,7 +344,7 @@ impl Inputs<'_> {
                 inner.extend(quick.into_iter().map(|s| Row::Quick(s.id)));
                 inner.extend(sessions.into_iter().map(|s| Row::Session(s.id)));
             }
-            if self.filtering() && inner.is_empty() {
+            if prune && inner.is_empty() {
                 continue;
             }
             rows.push(Row::Project(p.id.clone()));
@@ -317,7 +358,7 @@ impl Inputs<'_> {
         let others: Vec<&SessionInfo> = self
             .sessions
             .iter()
-            .filter(|s| self.show.keeps(s))
+            .filter(|s| self.keeps(s))
             .filter(|s| {
                 let under_project = s.project.as_ref().is_some_and(|p| shown.contains(&p.as_str()))
                     && s.worktree.as_ref().is_some_and(|w| {
@@ -376,7 +417,7 @@ impl Inputs<'_> {
             return rows;
         }
         let empty = numbered.is_empty() && quick.is_empty() && rest.is_empty();
-        if empty && (self.filtering() || self.shells == ShellsSection::WhenUsed) {
+        if empty && (self.prune(ws) || self.shells == ShellsSection::WhenUsed) {
             return Vec::new();
         }
         let mut rows = vec![Row::Shells(ws.to_owned())];
@@ -581,6 +622,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             show: Show::All,
+            scope: None,
             chats: &[],
             recent: None,
             shells: ShellsSection::Never,
@@ -662,6 +704,7 @@ mod tests {
             recent: Some(1),
             shells: ShellsSection::Never,
             show: Show::All,
+            scope: None,
         };
         assert_eq!(
             i.rows(),
@@ -714,6 +757,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             show: Show::All,
+            scope: None,
             chats: &[],
             recent: None,
             shells: ShellsSection::Never,
@@ -777,6 +821,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             show: Show::All,
+            scope: None,
             chats: &[],
             recent: None,
             shells: ShellsSection::Never,
@@ -845,6 +890,7 @@ mod tests {
             sessions: &sessions,
             collapsed: &collapsed,
             show: Show::All,
+            scope: None,
             chats: &[],
             recent: None,
             shells: ShellsSection::Never,
@@ -919,6 +965,7 @@ mod tests {
             recent: None,
             shells: ShellsSection::Never,
             show,
+            scope: None,
         };
         let ids = |show| -> Vec<SessionId> {
             inputs(show).rows().iter().filter_map(Row::session).collect()
@@ -963,6 +1010,105 @@ mod tests {
         );
     }
 
+    /// ROADMAP TABS "done when": two profiles here and a linked machine. `[me]` lists only the
+    /// sessions running as `me`: a `me` session in a `work` workspace shows under it there (and
+    /// not in `[work]`); an empty workspace of `me` stays, to start something in; with one
+    /// machine and one profile no strip is drawn.
+    #[test]
+    fn a_tab_lists_its_machine_and_profile_s_sessions_and_its_own_workspaces_whole() {
+        use ptyro_core::scope::{self, Scope};
+        let with = |mut w: WorkspaceInfo, profile: &str| {
+            w.profile = profile.into();
+            w
+        };
+        let wss = vec![
+            with(ws("w", "main", &["p"]), "work"),
+            with(ws("h", "home", &[]), "me"),
+            with(ws("r", "laptop2:main", &[]), "laptop2:default"),
+        ];
+        let projects = vec![project("p")];
+        let worktrees =
+            vec![wt("root", "p", true, 1), wt("t2", "p", false, 2), wt("t3", "p", false, 3)];
+        let as_ = |mut s: SessionInfo, profile: &str| {
+            s.profile = profile.into();
+            s
+        };
+        let job = session("job", Some("root"), Some("p"), Some("main"));
+        let job = as_(job, "work");
+        let side = as_(session("side", Some("root"), Some("p"), Some("main")), "me");
+        let other = as_(session("other", Some("t2"), Some("p"), Some("main")), "work");
+        let quick =
+            SessionInfo { quick: true, ..as_(session("q", Some("t2"), Some("p"), None), "work") };
+        let mut far =
+            as_(session("laptop2:far", None, None, Some("laptop2:main")), "laptop2:default");
+        far.machine = Some("laptop2".into());
+        let sessions = vec![job.clone(), side.clone(), other.clone(), quick.clone(), far.clone()];
+        let tabs = scope::tabs(&wss, &sessions, "laptop1");
+        let labels: Vec<&str> = tabs.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(labels, ["laptop1 [me]", "laptop1 [work]", "laptop2"]);
+        assert!(scope::drawn(&tabs));
+        let collapsed = HashSet::new();
+        // A tab by its place on the strip (`None`: `all`).
+        let at = |tab: Option<usize>, show| Inputs {
+            workspaces: &wss,
+            projects: &projects,
+            worktrees: &worktrees,
+            sessions: &sessions,
+            collapsed: &collapsed,
+            show,
+            scope: tab.map(|i| &tabs[i].scope),
+            chats: &[],
+            recent: None,
+            shells: ShellsSection::WhenUsed,
+        };
+        let (me, work, laptop2) = (Some(0), Some(1), Some(2));
+        assert_eq!(tabs[2].scope, Scope::new(Some("laptop2".into()), "default"));
+        // `[me]`: `main` (work's) only for `side`, its other worktrees dropped; `home` (me's)
+        // stays though empty; nothing of laptop2.
+        assert_eq!(
+            at(me, Show::All).rows(),
+            vec![
+                Row::Workspace("main".into()),
+                Row::Project("p".into()),
+                Row::Worktree("root".into()),
+                Row::Session(side.id),
+                Row::Workspace("home".into()),
+            ]
+        );
+        assert_eq!(at(me, Show::All).sessions(), [side.id], "numbers and j/k follow");
+        // `[work]`: `main` is its own, so whole (the empty worktree too, and the quick terminal
+        // with its worktree); not `side`, not `home`.
+        assert_eq!(
+            at(work, Show::All).rows(),
+            vec![
+                Row::Workspace("main".into()),
+                Row::Project("p".into()),
+                Row::Worktree("root".into()),
+                Row::Session(job.id),
+                Row::Worktree("t2".into()),
+                Row::Quick(quick.id),
+                Row::Session(other.id),
+                Row::Worktree("t3".into()),
+            ]
+        );
+        assert_eq!(at(work, Show::All).sessions(), [job.id, other.id]);
+        // laptop2: its workspace and session alone.
+        let rows = at(laptop2, Show::All).rows();
+        assert_eq!(rows[0], Row::Workspace("laptop2:main".into()));
+        assert!(rows.contains(&Row::Session(far.id)) && !rows.contains(&Row::Session(job.id)));
+        assert!(!rows.contains(&Row::Workspace("main".into())));
+        // `all` is everything, as without tabs.
+        assert_eq!(at(None, Show::All).sessions(), [job.id, side.id, other.id, far.id]);
+        // With the filter: both apply, and an own workspace's empty headers go as the filter
+        // says.
+        let rows = at(work, Show::Running).rows();
+        assert!(!rows.contains(&Row::Worktree("t3".into())), "{rows:?}");
+        assert!(!rows.contains(&Row::Session(side.id)) && rows.contains(&Row::Session(job.id)));
+        // One machine and one profile: no strip.
+        let one = [wss[0].clone()];
+        assert!(!scope::drawn(&scope::tabs(&one, std::slice::from_ref(&job), "laptop1")));
+    }
+
     /// SPEC §23.6: a workspace's SHELLS, its loose sessions by number then any other session
     /// with no row; folded with its heading; `never` lists only the others, as before.
     #[test]
@@ -985,6 +1131,7 @@ mod tests {
                 sessions: &sessions,
                 collapsed,
                 show: Show::All,
+                scope: None,
                 chats: &[],
                 recent: None,
                 shells,

@@ -3778,9 +3778,43 @@ and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps i
 - **Saved with the view** beside the filter chips (both apply together): a saved tab that no longer
   exists, or a strip that is no longer drawn, falls back to `all` (`scope::resolve`).
 - **Home is not scoped:** it stays everything.
-- **The TUI** (TABS.2): the strip over the sidebar, a click picks a tab, keys and palette actions
-  cycle and pick them; folds, numbering and `j`/`k` follow the tab.
-- **The web** (TABS.3): the same strip over the session list, kept in the browser like the chips.
+- **The TUI** (TABS.2, `ui.rs` `tab_strip`, `tree.rs` `Inputs.scope`):
+  - **The strip** is the sidebar's first line, above the title and the filter chips, and takes no
+    line when it isn't drawn. `all` first, then each tab: ` label ⚠N ●N `, zero counts hidden.
+    This machine's profile tabs add their tightest rate-limit window (` 63%`, the blocked colour
+    at 80% or more); while the strip is drawn the title no longer shows usage. A linked machine's
+    tab adds ` offline`, ` other version` or ` connecting…`. Wider than the sidebar, the strip
+    scrolls to keep the selected tab in sight, with `‹`/`›` at the edges (a click on one moves a
+    tab).
+  - **Picking:** a click on a tab, the wheel over the strip, `sidebar.tab_next` / `sidebar.tab_prev`
+    (`}` / `{` after the prefix and in the sidebar), `sidebar.tab_all` and `tab NAME` in the
+    palette. The sidebar's hint line says `{} tab` while the strip is drawn. With no strip the
+    actions say why there are no tabs.
+  - **What the tree lists:** a workspace whose own profile is the tab's shows whole (its projects,
+    worktrees and `+ new shell`, empty or not), so you can make things in it. One shown only for
+    the tab's sessions in it drops its empty headers, like the filter. A quick terminal goes with
+    its worktree and never moves the tab. SHELLS keep the tab's profile; CHATS show with their
+    workspace. Folds, `1`–`9`, `j`/`k` and the attention order follow the tab.
+  - **Saved** as `SavedView.scope`; a tab that disappears falls back to `all` on load or on the
+    next tick.
+  - **Going outside the tab:** every way to a session (`reveal`: picks, `/`, the palette, the
+    attention jump, peek's ⏎, notifications, a new session the wizard put elsewhere) and to a
+    workspace, project or worktree (`rows_with`: `w`, the palette's jumps) switches tab, with a
+    toast `showing X`; nothing switches when the filter would hide it anyway. Attaching on a
+    session or a workspace does too (a workspace once, not again on a reconnect). Answering in
+    peek (`y`/`a`/`n`) moves no focus, so it doesn't switch.
+  - **A new workspace:** the machine picker opens on the tab's machine, and the profile is the
+    tab's when the machine is.
+- **The web** (TABS.3, `sidebar.tab`): the same strip over the session list, above the `all /
+  running / active` chips and combined with them (their counts are the tab's). `all` and each tab
+  carry `⚠N` / `●N`; a linked machine that isn't online carries its link state. One line that
+  scrolls sideways on a phone. Kept in the browser (`ptyro.tab`, beside `ptyro.show`). The rule is
+  mirrored in `web/src/machine.ts` and kept equal to `scope.rs` by `web/test/scope.mjs`. The list
+  is flat, so a workspace shows only through SHELLS' groups. Opening any session's page (the list,
+  Home, a notification, the Library, a link) goes through one hook that switches to the session's
+  tab when the one shown doesn't list it. The new-workspace form starts on the tab's machine and
+  profile. Home and the CHATS aside aren't scoped. Usage stays on Home and More → Usage (the web's
+  list never had it).
 - **CLI:** `ptyro ls --machine M --profile P` (with `--status`, `-p`, `-w`, `--json`). `--machine`
   takes a linked machine's name, this one's own, or `here`, any case; another name is refused with
   the ones there are. `--profile` takes a profile as people read it (`work`: any machine's) or

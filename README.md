@@ -538,6 +538,12 @@ profile, then start a new session.
 - **A project can be in several workspaces** (`ptyro ws add-project WS PROJECT`, or a project's menu →
   `project.workspaces` in the TUI). It shows under each one; a session shows under the workspace
   it started in.
+- **Tabs for machines and profiles.** With more than one profile in use, or another machine
+  linked, a strip of tabs sits over the sidebar: `all`, then one per machine and profile
+  (`laptop1 [work] ⚠1`, `laptop1 [me]`, `laptop2`), each counting what's blocked and working.
+  A tab lists only the sessions that run as its profile, so work and personal never share a
+  list. Click one, or `{` / `}` in the TUI; tap one on the web; `ptyro ls --machine M
+  --profile P` from the CLI. A new workspace starts on the tab's machine and profile.
 
 `ptyro profile detect --apply` finds the multi-account setup you already have (aliases,
 `~/.claude-*` dirs). Profiles prevent accidents; they are not a security sandbox. Details:
