@@ -21,7 +21,8 @@
 //! [`Scope::profile_name`] the one people read (`work`).
 //!
 //! A chat's engine (SPEC §22.2) is hidden from the session tree, so it neither makes a tab nor
-//! counts on one.
+//! counts on one. A quick terminal (UX1.25) goes with its worktree: it never makes a tab nor
+//! counts on one (and, in the clients, going to it never switches the tab).
 //!
 //! [`Show`]: crate::session::Show
 
@@ -118,7 +119,7 @@ pub fn tabs(workspaces: &[WorkspaceInfo], sessions: &[SessionInfo], here: &str) 
     let mut scopes: Vec<Scope> = workspaces
         .iter()
         .map(Scope::of_workspace)
-        .chain(sessions.iter().filter(|s| listed(s)).map(Scope::of))
+        .chain(sessions.iter().filter(|s| listed(s) && !s.quick).map(Scope::of))
         .collect();
     let key =
         |s: &Scope| (s.machine.clone(), s.profile_name() != DEFAULT_PROFILE, s.profile.clone());
@@ -355,6 +356,16 @@ mod tests {
         assert_eq!(labels(&t), ["[default]"]);
         let t = tabs(&w, &[session(None, "x", "solo")], "laptop1");
         assert_eq!(labels(&t), ["[default]", "[solo]"]);
+    }
+
+    #[test]
+    fn a_quick_terminal_makes_no_tab() {
+        let w = [ws(None, "main", "default")];
+        let mut quick = session(None, "q", "ghost");
+        quick.quick = true;
+        let t = tabs(&w, std::slice::from_ref(&quick), "laptop1");
+        assert_eq!(labels(&t), ["[default]"]);
+        assert!(!drawn(&t));
     }
 
     #[test]

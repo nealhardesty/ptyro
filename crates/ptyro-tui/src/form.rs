@@ -691,11 +691,20 @@ impl App {
     pub(crate) fn open_workspace_form(&mut self, machine: Option<String>) {
         let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
         let suggested = if machine.is_none() { self.free_workspace_name() } else { String::new() };
-        // Under a tab of that machine (SPEC §11.2k), its profile is the one picked.
-        let prefer = match &self.scope {
-            Some(s) if s.machine == machine => s.profile_name().to_owned(),
-            _ => suggested.clone(),
+        // Under a tab of that machine (SPEC §11.2k), its profile is the one picked when the form
+        // offers it; one in use only through a session (not defined there) can't be, so the
+        // default is the name's, as without a tab.
+        let offered = |name: &str| {
+            name == ptyro_core::model::DEFAULT_PROFILE
+                || self
+                    .profiles
+                    .iter()
+                    .any(|p| p.machine == machine && p.name.rsplit(':').next() == Some(name))
         };
+        let prefer = self
+            .scope_shown()
+            .filter(|s| s.machine == machine && offered(s.profile_name()))
+            .map_or_else(|| suggested.clone(), |s| s.profile_name().to_owned());
         let mut form = Form::new(
             format!("New workspace{on}"),
             vec![

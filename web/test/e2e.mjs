@@ -1036,12 +1036,14 @@ const scenarios = {
   // each; a tab lists only the sessions that run as its profile (a `me` session in the `main`
   // workspace, whose profile is `default`, is in `[me]` and not in `[default]`); the pick
   // survives a reload; opening a session outside the tab switches to its tab; a new workspace
-  // starts on the tab's profile; it fits a phone.
+  // starts on the tab's profile; a new shell or task under a tab lands in it; it fits a phone.
   async tabs() {
     const strip = `document.querySelector(".chips.scope")`;
     const tabs = `[...(${strip}?.querySelectorAll("button") ?? [])].map((b) => b.textContent)`;
     const pick = (label) => tab.eval(`[...${strip}.querySelectorAll("button")].find((b) => b.firstChild.textContent === ${JSON.stringify(label)}).click()`);
     const on = `${strip}?.querySelector("button.on")?.firstChild.textContent`;
+    const kept = (profile) => `localStorage.getItem("ptyro.tab") === ${JSON.stringify(JSON.stringify({ profile }))}`;
+    const made = [];
     ptyro("new", "-d", "-n", "tabs-def", "--", "sh", "-c", "cat");
     try {
       await tab.waitFor("its card", card("tabs-def"));
@@ -1075,16 +1077,36 @@ const scenarios = {
       // Going to a session outside the tab (a link, a notification, Home) switches to its tab.
       await fresh(`#/s/${encodeURIComponent(find("tabs-me").id)}`);
       await tab.waitFor("its page", `!!document.querySelector(".term-box, canvas")`, 15_000);
+      // The page can draw before the list arrives: the strip follows once the session is known.
+      await tab.waitFor("the tab switched to `[me]`", kept("me"), 15_000);
       await tab.eval(`location.hash = "#/"`);
       await tab.waitFor("`[me]` picked by going to its session", `${on} === "[me]" && ${card("tabs-me")}`, 15_000);
+      // Under `[me]` (no workspace of its own), SHELLS' `＋ new shell` starts one running as `me`:
+      // its page opens and the tab stays `[me]`.
+      await tab.waitFor("SHELLS' ＋ new shell", `!!document.querySelector(".shells .shell-new")`);
+      await tab.click(".shells .shell-new");
+      const shell = await until("a shell running as `me`", () => sessions().find((s) => s.loose && s.profile === "me"));
+      made.push(shell.name);
+      await tab.waitFor("its page", `location.hash === ${JSON.stringify(`#/s/${encodeURIComponent(shell.id)}`)}`, 15_000);
+      await sleep(300);
+      if (!(await tab.eval(kept("me")))) throw new Error(`the tab moved: ${await tab.eval(`localStorage.getItem("ptyro.tab")`)}`);
+      // A new task under `[me]` runs as `me`.
+      await tab.eval(`location.hash = "#/"`);
+      await tab.waitFor("`[me]` still", `${on} === "[me]"`, 15_000);
+      await tab.click("header button.icon.plus");
+      await tab.waitFor("the task sheet, on `me`", `[...document.querySelectorAll(".sheet select")].some((s) => s.value === "me")`, 15_000);
+      await tab.click(".sheet-foot button:not(.primary)");
       // A phone: the strip stays one line that scrolls sideways, and the page doesn't.
       await tab.phone(320, 640);
       await tab.waitFor("a phone-sized page", `innerWidth <= 320`);
       const fit = await tab.eval(`(() => { const s = ${strip}; const b = [...s.querySelectorAll("button")]; return { page: document.documentElement.scrollWidth <= innerWidth, line: b.every((x) => x.offsetTop === b[0].offsetTop), scrolls: getComputedStyle(s).overflowX }; })()`);
       if (!fit.page || !fit.line || fit.scrolls !== "auto") throw new Error(`the strip on a phone: ${JSON.stringify(fit)}`);
     } finally {
-      for (const n of ["tabs-me", "tabs-job", "tabs-def"]) { try { ptyro("rm", "--stop", "-y", n); } catch { /* gone */ } }
-      try { ptyro("ws", "rm", "tabsjob", "--yes"); } catch { /* gone */ }
+      for (const n of ["tabs-me", "tabs-job", "tabs-def", ...made]) { try { ptyro("rm", "--stop", "-y", n); } catch { /* gone */ } }
+      // Its sessions go a moment after `rm`: until then the workspace isn't empty.
+      await until("the sessions gone", () => !sessions().some((s) => ["tabs-me", "tabs-job", "tabs-def", ...made].includes(s.name)), 20_000, 250);
+      const wsGone = () => { const v = JSON.parse(ptyro("ws", "ls", "--json")); return !(Array.isArray(v) ? v : v.workspaces ?? []).some((w) => w.name === "tabsjob"); };
+      await until("`ws rm tabsjob`", () => { if (!wsGone()) { try { ptyro("ws", "rm", "tabsjob", "--yes"); } catch { /* again */ } } return wsGone(); }, 20_000, 250);
       for (const p of ["me", "work"]) { try { ptyro("profile", "rm", p, "--yes", "--force"); } catch { /* gone */ } }
       await tab.eval(`localStorage.removeItem("ptyro.tab")`).catch(() => {});
     }

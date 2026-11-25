@@ -293,7 +293,11 @@ async fn dispatch(
             attach_with(&ctx, client, info, tui).await
         }
         Some(Cmd::List { json, all, status, project, workspace, machine, profile, chats }) => {
-            if all {
+            if all && (machine.is_some() || profile.is_some()) {
+                Err(Error::invalid(
+                    "ls --all lists the history, which keeps no machine or profile: leave out --machine and --profile, or --all",
+                ))
+            } else if all {
                 history(&ctx, json).await
             } else {
                 let f = Filter { status, project, workspace, machine, profile, chats };
@@ -1250,9 +1254,13 @@ async fn machine_named(client: &Client, name: &str) -> Result<Option<String>, Er
     ))
 }
 
-/// A profile `ls --profile` can name: one defined here or on a linked machine, or one a session
-/// runs as; else an error that says which there are.
-async fn profile_named(client: &Client, name: &str, all: &[SessionInfo]) -> Result<(), Error> {
+/// The machines a profile `ls --profile` names is on (`None`: this one): one defined here or on a
+/// linked machine, or one a session runs as; else an error that says which there are.
+async fn profile_named(
+    client: &Client,
+    name: &str,
+    all: &[SessionInfo],
+) -> Result<Vec<Option<String>>, Error> {
     let mut known: Vec<(String, Option<String>)> = match client
         .request(Request::ProfileList)
         .await?
@@ -1261,8 +1269,15 @@ async fn profile_named(client: &Client, name: &str, all: &[SessionInfo]) -> Resu
         _ => Vec::new(),
     };
     known.extend(all.iter().map(|s| (s.profile.clone(), s.machine.clone())));
-    if known.iter().any(|(k, m)| k == name || bare(k, m.as_deref()) == name) {
-        return Ok(());
+    let mut on: Vec<Option<String>> = known
+        .iter()
+        .filter(|(k, m)| k == name || bare(k, m.as_deref()) == name)
+        .map(|(_, m)| m.clone())
+        .collect();
+    if !on.is_empty() {
+        on.sort();
+        on.dedup();
+        return Ok(on);
     }
     let mut known: Vec<String> = known.into_iter().map(|(k, _)| k).collect();
     known.sort();
@@ -1270,6 +1285,50 @@ async fn profile_named(client: &Client, name: &str, all: &[SessionInfo]) -> Resu
     Err(Error::new(
         ErrorCode::NotFound,
         format!("no profile is called {name:?}: the profiles are {}", known.join(", ")),
+    ))
+}
+
+/// `ls --machine M --profile P` names one tab: refused, with what to say instead, when P isn't on
+/// M (`on`: the machines it is on, from [`profile_named`]).
+fn profile_on(at: &Option<String>, profile: &str, on: &[Option<String>]) -> Result<(), Error> {
+    if on.contains(at) {
+        return Ok(());
+    }
+    let say = |m: &Option<String>| format!("--machine {}", m.as_deref().unwrap_or("here"));
+    let fix = on.iter().map(say).collect::<Vec<_>>().join(" or ");
+    let msg = match on {
+        // Named with its machine on: `laptop2:work` is laptop2's.
+        [Some(m)] if bare(profile, Some(m)) != profile => format!("{profile} is {m}'s: say {fix}"),
+        _ => {
+            let here = at.as_deref().map_or_else(|| "this machine".to_owned(), str::to_owned);
+            let names: Vec<&str> =
+                on.iter().map(|m| m.as_deref().unwrap_or("this machine")).collect();
+            format!(
+                "there is no profile {profile} on {here}: it is on {}: say {fix}",
+                names.join(", ")
+            )
+        }
+    };
+    Err(Error::new(ErrorCode::NotFound, msg))
+}
+
+/// Without a daemon only this machine can be named (`here`, or its own name): a linked one is
+/// known only to the daemon.
+fn machine_without_daemon(ctx: &Ctx, name: &str) -> Result<(), Error> {
+    let own = ptyro_core::machine::name(
+        ptyro_core::config::Config::load(&ptyro_core::config::Config::path(&ctx.paths))
+            .ok()
+            .and_then(|c| c.daemon.machine_name)
+            .as_deref(),
+    );
+    if name.trim() == "here" || ptyro_core::lookup::same(&own, name.trim()) {
+        return Ok(());
+    }
+    Err(Error::new(
+        ErrorCode::DaemonUnavailable,
+        format!(
+            "the daemon is not running, so no linked machine is known: start it (`ptyro daemon start`) to list {name}'s sessions"
+        ),
     ))
 }
 
@@ -1297,7 +1356,10 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                 None => None,
             };
             if let Some(p) = &filter.profile {
-                profile_named(&client, p, &all).await?;
+                let on = profile_named(&client, p, &all).await?;
+                if let Some(m) = &at {
+                    profile_on(m, p, &on)?;
+                }
             }
             all.retain(|s| filter.keeps(s, &projects, at.as_ref()));
             (all, worktrees)
@@ -1310,6 +1372,9 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                 remote.is_none() || ptyro_client::is_local(remote.as_deref())
             } =>
         {
+            if let Some(m) = &filter.machine {
+                machine_without_daemon(ctx, m)?;
+            }
             (Vec::new(), Vec::new())
         }
         Err(e) => return Err(e),
@@ -1712,6 +1777,38 @@ mod restart_tests {
                 "--restarted",
                 "0.0.68:0.0.69"
             ]
+        );
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::profile_on;
+
+    /// `ls --machine M --profile P` that can't both hold says what to say instead.
+    #[test]
+    fn a_profile_not_on_the_machine_named_says_where_it_is() {
+        let l2 = || Some("laptop2".to_owned());
+        let err = |at: Option<String>, p: &str, on: &[Option<String>]| {
+            profile_on(&at, p, on).unwrap_err().message
+        };
+        assert!(profile_on(&None, "work", &[None, l2()]).is_ok());
+        assert!(profile_on(&l2(), "work", &[None, l2()]).is_ok());
+        assert_eq!(
+            err(None, "laptop2:work", &[l2()]),
+            "laptop2:work is laptop2's: say --machine laptop2"
+        );
+        assert_eq!(
+            err(l2(), "laptop3:work", &[Some("laptop3".into())]),
+            "laptop3:work is laptop3's: say --machine laptop3"
+        );
+        assert_eq!(
+            err(None, "work", &[l2()]),
+            "there is no profile work on this machine: it is on laptop2: say --machine laptop2"
+        );
+        assert_eq!(
+            err(Some("laptop3".into()), "work", &[None, l2()]),
+            "there is no profile work on laptop3: it is on this machine, laptop2: say --machine here or --machine laptop2"
         );
     }
 }

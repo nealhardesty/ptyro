@@ -99,6 +99,9 @@ pub(crate) fn fg(app: &App, c: Color) -> Style {
 pub fn draw(app: &App, f: &mut Frame<'_>) {
     app.links.borrow_mut().clear();
     app.strip_hits.borrow_mut().clear();
+    // The tabs once for the frame: the strip, the tree and the hint all ask (SPEC §11.2k).
+    let tabs = app.tabs();
+    *app.tabs_frame.borrow_mut() = Some(tabs);
     let area = f.area();
     if app.opts.raw {
         draw_raw(app, f, area);
@@ -126,6 +129,7 @@ pub fn draw(app: &App, f: &mut Frame<'_>) {
     } else if app.which_key_shown() {
         draw_which_key(app, f, area);
     }
+    *app.tabs_frame.borrow_mut() = None;
 }
 
 /// The menu after the prefix (UX1.14): what each next key does, grouped, as bound now.
@@ -403,7 +407,7 @@ fn draw_sidebar(app: &App, f: &mut Frame<'_>, area: Rect) {
         title.push(b);
     }
     // The workspace profile's tightest rate-limit window (M4.17); with the tab strip drawn it is
-    // on this machine's profile tabs instead (SPEC §11.2k).
+    // on each profile's tab instead, a linked machine's too (SPEC §11.2k).
     let strip = tab_strip(app, area.width);
     if let Some(w) = app
         .usage_for(&app.workspace_profile())
@@ -531,33 +535,31 @@ pub(crate) fn tab_strip(app: &App, width: u16) -> Option<TabStrip> {
         vec![(None, "all".into(), counts(ptyro_core::scope::count(&app.sessions)))];
     for tab in tabs {
         let mut extra = counts((tab.blocked, tab.working));
-        match &tab.scope.machine {
-            // This machine's profile: its tightest rate-limit window (moved from the title).
-            None => {
-                if let Some(pct) = app
-                    .usage_for(&tab.scope.profile)
-                    .into_iter()
-                    .flat_map(|u| u.windows.iter())
-                    .map(|w| w.used_percent)
-                    .max()
-                {
-                    extra.push((format!(" {pct}%"), if pct >= 80 { t.blocked } else { t.dim }));
-                }
-            }
-            Some(m) => {
-                use ptyro_core::model::MachineState as S;
-                match app.machines.iter().find(|x| x.name == *m).map(|x| x.state) {
-                    Some(S::Offline) => extra.push((" offline".into(), t.error)),
-                    Some(S::Mismatch) => extra.push((" other version".into(), t.error)),
-                    Some(S::Connecting) => extra.push((" connecting…".into(), t.dim)),
-                    Some(S::Online) | None => {}
-                }
+        // Its profile's tightest rate-limit window (moved from the title); a linked machine's
+        // comes with its mirror, the profile named as the tab names it (`laptop2:work`).
+        if let Some(pct) = app
+            .usage_for(&tab.scope.profile)
+            .into_iter()
+            .flat_map(|u| u.windows.iter())
+            .map(|w| w.used_percent)
+            .max()
+        {
+            extra.push((format!(" {pct}%"), if pct >= 80 { t.blocked } else { t.dim }));
+        }
+        if let Some(m) = &tab.scope.machine {
+            use ptyro_core::model::MachineState as S;
+            match app.machines.iter().find(|x| x.name == *m).map(|x| x.state) {
+                Some(S::Offline) => extra.push((" offline".into(), t.error)),
+                Some(S::Mismatch) => extra.push((" other version".into(), t.error)),
+                Some(S::Connecting) => extra.push((" connecting…".into(), t.dim)),
+                Some(S::Online) | None => {}
             }
         }
         items.push((Some(tab.scope), tab.label, extra));
     }
     let width = width as usize;
-    let sel = items.iter().position(|i| i.0 == app.scope).unwrap_or(0);
+    let shown = app.scope_shown();
+    let sel = items.iter().position(|i| i.0.as_ref() == shown).unwrap_or(0);
     let wide = |i: &Item| {
         2 + UnicodeWidthStr::width(i.1.as_str())
             + i.2.iter().map(|e| UnicodeWidthStr::width(e.0.as_str())).sum::<usize>()

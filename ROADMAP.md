@@ -3884,7 +3884,7 @@ strip is small and complete. No model writes any of it.
 picks one machine and profile; the workspaces stay in the tree on the left, now only the tab's.
 
 **Decided by the owner (2026-11-25):**
-- A tab is a **machine + profile in use** there: `laptop1 [work]`, `laptop1 [me]`, `laptop2`. The
+- A tab is a **machine + profile in use** there: `laptop1 [me]`, `laptop1 [work]`, `laptop2`. The
   machine's name is on every tab while there is more than one machine; the profile only while
   that machine has more than one tab. A profile is in use on a machine when one of its
   workspaces has it or one of its sessions runs as it. A defined profile with neither has no tab.
@@ -3894,15 +3894,19 @@ picks one machine and profile; the workspaces stay in the tree on the left, now 
   worktree or a project's pin can make differ from its workspace's, SPEC §10.10). A workspace
   shows under tab X when its own profile is X or something under it runs as X; under it, only
   the X sessions. So a workspace can show under two tabs, and nothing of another profile ever
-  shows in a profile's tab.
+  shows in a profile's tab: a quick terminal goes with its worktree, never makes a tab and never
+  moves you to one. Chats aren't sessions, so they stay with their workspace (amended
+  2026-11-25 after review).
 - **Every tab carries what needs you**: blocked `⚠N`, working `●N`; an offline machine says so.
   This machine's profiles show their usage there too (moved from the sidebar's title).
 - **The tab is where new things go**: a new workspace defaults to the tab's machine and profile.
   The wizard keeps its own profile rule; its context is the selected row, which is in the tab.
-- **Going to something outside the tab** (`w`, a notification, the attention jump, answering a
-  blocked agent, opening a session by name) switches to a tab that has it, else to `all`.
+- **Going to something outside the tab** (`w`, a notification, the attention jump, peek's ⏎,
+  opening a session by name) switches to a tab that has it, else to `all`. Answering in peek
+  (`y`/`a`/`n`) takes you nowhere, so it doesn't switch (amended 2026-11-25 after review).
 - It works with the filter chips (`all / running / active`); both are saved with the view. A saved
-  tab that no longer exists falls back to `all`.
+  tab that isn't there now (a linked machine not yet reconnected) shows as `all` and is kept: it
+  comes back when the tab does.
 - Home is not scoped: it stays everything.
 
 - [x] **TABS.1 The rule, and `ptyro ls`** — S. `ptyro_core::scope`: `Scope` (machine, profile),
@@ -3922,7 +3926,7 @@ picks one machine and profile; the workspaces stay in the tree on the left, now 
   `web/src/machine.ts`, `web/test/scope.mjs`; the `tabs` scenario of `make web-e2e`.
 
 **Done when:** with two profiles on this machine and a linked machine, the strip shows `all`,
-`laptop1 [work]`, `laptop1 [me]` and `laptop2`, each with its counts; picking `[me]` lists only
+`laptop1 [me]`, `laptop1 [work]` and `laptop2`, each with its counts; picking `[me]` lists only
 the sessions running as `me` (a `me` session in a `work` workspace shows under its workspace
 there, and not in `[work]`); the same in the web and with `ptyro ls --profile me`; with one
 machine and one profile no strip is drawn.

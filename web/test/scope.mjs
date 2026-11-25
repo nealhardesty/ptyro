@@ -3,7 +3,7 @@
 // counts, and when no strip is drawn. No browser.
 //   node web/test/scope.mjs
 import assert from "node:assert/strict";
-import { bare, count, drawn, follow, keepsSession, keepsWorkspace, profileName, resolve, sameScope, scopeNew, scopeOf, scopeOfWorkspace, scopeParse, scopeText, tabs } from "../dist/machine.js";
+import { bare, count, drawn, follow, keepsSession, keepsWorkspace, profileName, resolve, sameScope, scopeNew, scopeOf, scopeOfWorkspace, scopeParse, scopeText, startIn, tabProfile, tabs } from "../dist/machine.js";
 
 const ws = (machine, name, profile) => ({ id: name, machine, name, profile, notify: "all", projects: [], created_ms: 0 });
 const session = (machine, name, profile, extra = {}) => ({ id: name, machine, name, profile, kind: "agent", state: { t: "running" }, created_ms: 0, ...extra });
@@ -107,6 +107,13 @@ const scope = (machine, profile) => ({ machine, profile });
   assert.deepEqual(labels(tabs(w, [session(null, "x", "solo")], "laptop1")), ["[default]", "[solo]"]);
 }
 
+// A quick terminal makes no tab.
+{
+  const t = tabs([ws(null, "main", "default")], [session(null, "q", "ghost", { quick: true })], "laptop1");
+  assert.deepEqual(labels(t), ["[default]"]);
+  assert.ok(!drawn(t));
+}
+
 // A saved tab that is gone falls back to `all`.
 {
   const t = tabs([ws(null, "main", "default"), ws(null, "job", "work")], [], "laptop1");
@@ -139,6 +146,35 @@ const scope = (machine, profile) => ({ machine, profile });
   const one = tabs([ws(null, "main", "default")], [session(null, "x", "default")], "laptop1");
   assert.equal(resolve(follow(scope(null, "work"), session(null, "x", "default")), one), null);
   assert.ok(sameScope(null, null) && !sameScope(null, work) && sameScope(work, scope(null, "work")));
+}
+
+// A quick terminal goes with its worktree: going to it never moves the tab.
+{
+  const work = scope(null, "work");
+  assert.deepEqual(follow(work, session(null, "q", "me", { quick: true })), work);
+  assert.equal(follow(null, session(null, "q", "me", { quick: true })), null);
+}
+
+// A form under a tab preselects its profile only on its machine, and only if it is there.
+{
+  const work = scope(null, "work");
+  assert.equal(tabProfile(work, null, ["default", "work"]), "work");
+  assert.equal(tabProfile(work, "laptop2", ["default", "work"]), null, "another machine: the form's own default");
+  assert.equal(tabProfile(work, null, ["default"]), null, "not among the options: the form's own default");
+  assert.equal(tabProfile(null, null, ["default", "work"]), null);
+  assert.equal(tabProfile(scope("laptop2", "laptop2:work"), "laptop2", ["default", "work"]), "work");
+}
+
+// Something new under a tab lands in it: a workspace of its profile (the one shown first), else
+// the profile asked for explicitly.
+{
+  const w = [ws(null, "main", "default"), ws(null, "job", "work"), ws(null, "job2", "work"), ws("laptop2", "laptop2:main", "laptop2:default"), ws("laptop2", "laptop2:side", "laptop2:work")];
+  assert.deepEqual(startIn(scope(null, "work"), w), { workspace: "job" });
+  assert.deepEqual(startIn(scope(null, "work"), w, "job2"), { workspace: "job2" });
+  assert.deepEqual(startIn(scope(null, "work"), w, "main"), { workspace: "job" }, "the one shown isn't the tab's");
+  assert.deepEqual(startIn(scope("laptop2", "laptop2:work"), w), { workspace: "laptop2:side" });
+  assert.deepEqual(startIn(scope(null, "me"), w), { workspace: null, profile: "me" });
+  assert.deepEqual(startIn(scope("laptop2", "laptop2:me"), w), { workspace: "laptop2:main", profile: "me" }, "reached through a workspace of its machine");
 }
 
 console.log("scope: ok");

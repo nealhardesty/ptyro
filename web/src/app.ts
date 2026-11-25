@@ -325,7 +325,7 @@ function listView(): HTMLElement {
     ...SHOWS.map((m, i) => h("button", { class: `${m === show ? "on" : ""} ${m}`, "aria-pressed": String(m === show), onclick: () => setShow(m) }, `${m} `, h("span", { class: "n" }, String(counts[i]))))) : null;
   // On a wide screen, the CHATS section beside them (the TUI's sidebar has it under each workspace).
   const aside = chatsShown() ? chatsAside() : null;
-  const shells = can("full") || inTab.some((s) => s.loose) ? shellsGroup(inTab, sessionCard) : null;
+  const shells = can("full") || inTab.some((s) => s.loose) ? shellsGroup(inTab, sessionCard, tab) : null;
   return h("div", {}, head, tools, scopeStrip(tabs, tab), filter, all.length > 6 || query ? searchBar : null, h("main", { class: `list${aside ? " with-chats" : ""}`, title: tip("sessions") }, setupBanner(), shells, h("div", { class: "cards" }, ...body), aside));
 }
 

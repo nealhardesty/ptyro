@@ -75,6 +75,12 @@ fn drawer_share() -> f32 {
     crate::quick::DRAWER_SHARE
 }
 
+/// What the tab keys say while there is no strip (SPEC §11.2k).
+const NO_TABS: &str = "no tabs: every session here is one machine's and one profile's";
+
+/// How long after the wheel moved a tab its next turn waits.
+const TAB_WHEEL_GAP: Duration = Duration::from_millis(150);
+
 /// Where the TUI remembers which workspace it showed last.
 pub const LAST_WORKSPACE: &str = "_tui";
 
@@ -768,8 +774,15 @@ pub struct App {
     pub sidebar_zoom: bool,
     /// Which sessions the sidebar lists: all, the running ones, or the active ones.
     pub show: Show,
-    /// The tab over the sidebar: one machine and one profile, `None` for `all` (SPEC §11.2k).
+    /// The tab picked over the sidebar: one machine and one profile, `None` for `all` (SPEC
+    /// §11.2k). Kept (and saved) while it isn't a tab, a linked machine's mirror still empty
+    /// after a restart: [`App::scope_shown`] is the one in effect, `all` meanwhile.
     pub scope: Option<ptyro_core::scope::Scope>,
+    /// The tabs worked out once for the frame being drawn (`ui::draw`), so the strip, the tree
+    /// and the hint don't each work them out again.
+    pub(crate) tabs_frame: std::cell::RefCell<Option<Vec<Tab>>>,
+    /// When the wheel over the strip last moved a tab: a trackpad's flick sends many at once.
+    tab_wheel_at: Option<Instant>,
     /// `opts.workspace` has moved the tab once (at attach); a reload later leaves the tab alone.
     opened_on_workspace: bool,
     /// The quick terminal's drawer, when open, and the share of its host it takes (UX1.25).
@@ -777,8 +790,9 @@ pub struct App {
     pub drawer_share: f32,
     /// The split layout a full-sized panel replaced, kept whole for `` ` `` (UX3.1).
     pub kept: Option<Box<crate::screens::Screen>>,
-    /// A session whose row is to be selected once the tree can place it (UX3.3).
-    pub(crate) revealing: Option<(SessionId, Instant)>,
+    /// A session whose row is to be selected once the tree can place it (UX3.3), since when,
+    /// and whether it may still switch tab (a tab picked meanwhile is yours, SPEC §11.2k).
+    pub(crate) revealing: Option<(SessionId, Instant, bool)>,
     /// Tools (an editor) whose screen goes back to what it replaced when they exit (UX3.1).
     pub(crate) tool_back: HashSet<SessionId>,
     /// What quick new (`session.again`) starts, and in which worktree (UX3.7); `None`: not
@@ -899,6 +913,8 @@ impl App {
             sidebar_zoom: false,
             show: Default::default(),
             scope: None,
+            tabs_frame: std::cell::RefCell::new(None),
+            tab_wheel_at: None,
             opened_on_workspace: false,
             drawer: None,
             drawer_share: crate::quick::DRAWER_SHARE,
@@ -1142,7 +1158,7 @@ impl App {
             self.sidebar = saved.sidebar;
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.show = saved.show;
-            self.scope = ptyro_core::scope::resolve(saved.scope.as_ref(), &self.tabs());
+            self.scope = saved.scope;
             self.restore_drawer(saved.drawer, saved.drawer_share);
             self.restore_kept(saved.kept, &ordered_all);
         }
@@ -1517,7 +1533,6 @@ impl App {
         if self.client.is_some() && self.again_for.as_ref() != Some(&self.context().1) {
             self.refresh_again();
         }
-        self.settle_scope();
         self.health_tick(self.started);
         self.sources_tick();
         self.home_tick();
@@ -3168,6 +3183,7 @@ impl App {
             "sidebar.show_active" => self.set_show(Show::Active),
             "sidebar.tab_next" => self.cycle_tab(1),
             "sidebar.tab_prev" => self.cycle_tab(-1),
+            "sidebar.tab_all" if !ptyro_core::scope::drawn(&self.tabs()) => self.toast(NO_TABS),
             "sidebar.tab_all" => self.set_scope(None),
             "sidebar.toggle" => {
                 self.sidebar = !self.sidebar;
@@ -3369,52 +3385,89 @@ impl App {
 
     /// The tabs over the sidebar, after `all` (SPEC §11.2k): each machine and profile in use.
     pub fn tabs(&self) -> Vec<Tab> {
+        if let Some(tabs) = self.tabs_frame.borrow().as_ref() {
+            return tabs.clone();
+        }
         let here = self.machine.as_deref().unwrap_or("this machine");
         ptyro_core::scope::tabs(&self.workspaces, &self.sessions, here)
     }
 
+    /// The tab in effect: the one picked while it is a tab and the strip is drawn, else `None`
+    /// (`all`). The pick itself stays, so a linked machine's tab comes back with its mirror.
+    pub(crate) fn scope_shown(&self) -> Option<&Scope> {
+        let picked = self.scope.as_ref()?;
+        ptyro_core::scope::resolve(Some(picked), &self.tabs()).is_some().then_some(picked)
+    }
+
     /// Pick a tab (`None`: `all`), saved with the view. The sidebar is shown, so the change is
-    /// seen, as with the filter.
+    /// seen, as with the filter. A reveal still waiting for its row no longer switches tab.
     pub(crate) fn set_scope(&mut self, scope: Option<Scope>) {
         let label = scope_label(&self.tabs(), scope.as_ref());
         self.scope = scope;
         self.sidebar = true;
+        if let Some(r) = &mut self.revealing {
+            r.2 = false;
+        }
         self.toast(format!("sidebar: {label}"));
+        self.scope_changed();
+    }
+
+    /// After the tab changed: the sidebar's selection on a row the tab shows, so the workspace
+    /// you're in is one of its; then the view is saved.
+    fn scope_changed(&mut self) {
+        if self.focus == Focus::Sidebar {
+            let rows = self.rows();
+            let i = self.sel_index(&rows);
+            self.set_sel(&rows, i);
+        }
         self.view_changed();
     }
 
-    /// The next or previous tab, `all` among them, round.
+    /// The next or previous tab from the one in effect, `all` among them, round.
     fn cycle_tab(&mut self, step: isize) {
         let tabs = self.tabs();
         if !ptyro_core::scope::drawn(&tabs) {
-            self.toast("no tabs: every session here is one machine's and one profile's");
+            self.toast(NO_TABS);
             return;
         }
+        let shown = self.scope_shown().cloned();
         let every: Vec<Option<Scope>> =
             std::iter::once(None).chain(tabs.into_iter().map(|t| Some(t.scope))).collect();
-        let cur = every.iter().position(|s| *s == self.scope).unwrap_or(0);
+        let cur = every.iter().position(|s| *s == shown).unwrap_or(0);
         let next = (cur as isize + step).rem_euclid(every.len() as isize) as usize;
         self.set_scope(every[next].clone());
+    }
+
+    /// The wheel over the strip: a tab per turn, not one per event of a trackpad's flick.
+    fn wheel_tab(&mut self, step: isize) {
+        if self.tab_wheel_at.is_some_and(|t| t.elapsed() < TAB_WHEEL_GAP) {
+            return;
+        }
+        self.tab_wheel_at = Some(Instant::now());
+        self.cycle_tab(step);
     }
 
     /// Going to something outside the tab (SPEC §11.2k): the tab `to` when it is one, else
     /// `all`, said in a short message. Nothing changes under `all`, or when `to` is the tab.
     pub(crate) fn follow_tab(&mut self, to: Option<Scope>) {
-        if self.scope.is_none() || self.scope == to {
+        let shown = self.scope_shown().cloned();
+        if shown.is_none() || shown == to {
             return;
         }
         let tabs = self.tabs();
         self.scope = ptyro_core::scope::resolve(to.as_ref(), &tabs);
         self.toast(format!("showing {}", scope_label(&tabs, self.scope.as_ref())));
-        self.view_changed();
+        self.scope_changed();
     }
 
     /// A session going on screen that the tab doesn't list: its own tab. A quick terminal goes
-    /// with its worktree, so it moves nothing.
+    /// with its worktree, so it moves nothing; nor does one the filter hides anyway.
     pub(crate) fn follow_tab_to_session(&mut self, id: SessionId) {
+        let shown = self.scope_shown();
         let to = self
             .session(id)
-            .filter(|s| !s.quick && self.scope.as_ref().is_some_and(|t| !t.keeps_session(s)))
+            .filter(|s| !s.quick && self.show.keeps(s))
+            .filter(|s| shown.is_some_and(|t| !t.keeps_session(s)))
             .map(Scope::of);
         if let Some(to) = to {
             self.follow_tab(Some(to));
@@ -3426,7 +3479,7 @@ impl App {
     /// anyway, the tab stays.
     pub(crate) fn rows_with(&mut self, row: &Row) -> Vec<Row> {
         let rows = self.rows();
-        if self.scope.is_none() || rows.contains(row) {
+        if self.scope_shown().is_none() || rows.contains(row) {
             return rows;
         }
         let project = match row {
@@ -3464,18 +3517,6 @@ impl App {
             self.cycle_tab(1);
         } else if let Some(c) = strip.chips.into_iter().find(|c| (c.from..c.to).contains(&col)) {
             self.set_scope(c.scope);
-        }
-    }
-
-    /// A tab that is gone (its last workspace and session of that profile went, or the strip is
-    /// no longer drawn) falls back to `all`.
-    fn settle_scope(&mut self) {
-        if self.scope.is_some() && !self.workspaces.is_empty() {
-            let kept = ptyro_core::scope::resolve(self.scope.as_ref(), &self.tabs());
-            if kept.is_none() {
-                self.scope = None;
-                self.view_changed();
-            }
         }
     }
 
@@ -4567,7 +4608,7 @@ impl App {
             });
         }
         // Under a tab, its machine is the one picked (SPEC §11.2k).
-        let at = match self.scope.as_ref().and_then(|s| s.machine.as_ref()) {
+        let at = match self.scope_shown().and_then(|s| s.machine.as_ref()) {
             Some(m) => self.machines.iter().position(|x| x.name == *m).map_or(0, |i| i + 1),
             None => 0,
         };
@@ -4983,7 +5024,7 @@ impl App {
                 let label = scope_label(&tabs, scope.as_ref());
                 items.push(Item {
                     label: format!("tab {label}"),
-                    detail: if scope == self.scope {
+                    detail: if scope.as_ref() == self.scope_shown() {
                         "the tab shown".into()
                     } else if scope.is_none() {
                         "the sidebar lists every machine and profile".into()
@@ -5533,7 +5574,13 @@ impl App {
                 if let Some(i) = rows.iter().position(|r| *r == Row::Worktree(id.clone())) {
                     self.set_sel(&rows, i);
                 }
-                match self.sessions.iter().find(|s| s.worktree.as_deref() == Some(id.as_str())) {
+                // One the tab (switched to the worktree's, if it had to) lists, so it doesn't
+                // switch again.
+                let shown = self.scope_shown();
+                let mut there =
+                    self.sessions.iter().filter(|s| s.worktree.as_deref() == Some(id.as_str()));
+                let first = there.clone().next();
+                match there.find(|s| shown.is_none_or(|t| t.keeps_session(s))).or(first) {
                     Some(s) => {
                         let sid = s.id;
                         self.show(sid, None);
@@ -6079,7 +6126,7 @@ impl App {
                 }
                 // The wheel over the tab strip moves among the tabs.
                 K::ScrollDown | K::ScrollUp if y == side.y && crate::ui::sidebar_head(self) > 2 => {
-                    self.cycle_tab(if matches!(m.kind, K::ScrollDown) { 1 } else { -1 });
+                    self.wheel_tab(if matches!(m.kind, K::ScrollDown) { 1 } else { -1 });
                 }
                 K::ScrollDown => {
                     let rows = self.rows();
@@ -6247,7 +6294,7 @@ impl App {
             sessions: &self.sessions,
             collapsed: &self.collapsed,
             show: self.show,
-            scope: self.scope.as_ref(),
+            scope: self.scope_shown(),
             chats: &self.chat_list,
             recent: self.config.chat.enabled.then_some(self.config.chat.recent as usize),
             shells: self.config.shell.section,
@@ -6421,7 +6468,7 @@ impl App {
             self.sidebar = saved.sidebar;
             self.sidebar_width = saved.sidebar_width.clamp(12, SIDEBAR_MAX);
             self.show = saved.show;
-            self.scope = ptyro_core::scope::resolve(saved.scope.as_ref(), &self.tabs());
+            self.scope = saved.scope;
             self.restore_drawer(saved.drawer, saved.drawer_share);
             let known: Vec<SessionId> = ordered.iter().chain(&quick).copied().collect();
             self.restore_kept(saved.kept, &known);
@@ -10079,6 +10126,8 @@ mod tests {
         app.sessions.push(ours.clone());
         assert!(crate::ui::tab_strip(&app, 30).is_none());
         assert_eq!(crate::ui::sidebar_head(&app), 2);
+        act(&mut app, "sidebar.tab_all");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.starts_with("no tabs")));
         app.workspaces.clear();
         app.projects.clear();
         app.worktrees.clear();
@@ -10155,7 +10204,7 @@ mod tests {
         let mut gone = view.clone();
         gone["scope"] = serde_json::json!({"profile": "nobody"});
         app.apply_view(Some(gone));
-        assert_eq!(app.scope, None);
+        assert_eq!(app.scope_shown(), None);
         // Going to a session outside the tab: its tab.
         app.scope = Some(here.clone());
         app.pick(blocked.id);
@@ -10185,8 +10234,172 @@ mod tests {
         // laptop2's last workspace and session go: its tab does, and `all` is shown.
         app.workspaces.retain(|w| w.machine.is_none());
         app.sessions.retain(|s| s.machine.is_none());
-        app.settle_scope();
-        assert_eq!(app.scope, None);
+        assert_eq!(app.scope_shown(), None);
+    }
+
+    /// Two tabs, laptop1 and laptop2 (each machine's `default`), with laptop2's session.
+    fn two_machines(app: &mut App) -> (Scope, Scope, SessionInfo) {
+        app.machine = Some("laptop1".into());
+        let mut far = with_laptop2(app, ptyro_core::model::MachineState::Online);
+        app.sessions.retain(|s| s.id != far.id);
+        far.profile = "laptop2:default".into();
+        app.sessions.push(far.clone());
+        (Scope::new(None, "default"), Scope::new(Some("laptop2".into()), "default"), far)
+    }
+
+    /// After a restart the linked machine's mirror is empty until its link is back: the tab
+    /// saved on it shows `all` meanwhile, stays picked and saved, and comes back with it.
+    #[test]
+    fn a_saved_linked_machine_tab_waits_for_its_mirror_instead_of_being_lost() {
+        let mut app = app();
+        let (_, there, far) = two_machines(&mut app);
+        app.set_scope(Some(there.clone()));
+        let view =
+            serde_json::to_value(app.view_requests().unwrap()[0].clone()).unwrap()["view"].clone();
+        let (theirs, rest): (Vec<WorkspaceInfo>, Vec<WorkspaceInfo>) =
+            app.workspaces.drain(..).partition(|w| w.machine.is_some());
+        app.workspaces = rest;
+        app.sessions.retain(|s| s.machine.is_none());
+        app.scope = None;
+        app.apply_view(Some(view));
+        assert_eq!(app.scope.as_ref(), Some(&there), "still the one picked");
+        assert_eq!(app.scope_shown(), None, "all, meanwhile");
+        assert!(app.rows().contains(&Row::Workspace("main".into())));
+        let _ = screen(&app);
+        let saved = serde_json::to_value(app.view_requests().unwrap()[0].clone()).unwrap();
+        assert_eq!(saved["view"]["scope"], serde_json::to_value(&there).unwrap(), "saved as is");
+        // The mirror arrives: the tab is back.
+        app.workspaces.extend(theirs);
+        app.sessions.push(far.clone());
+        assert_eq!(app.scope_shown(), Some(&there));
+        let rows = app.rows();
+        assert!(rows.contains(&Row::Session(far.id)), "{rows:?}");
+        assert!(!rows.contains(&Row::Workspace("main".into())), "{rows:?}");
+    }
+
+    /// A tab change with the sidebar focused moves the workspace you're in to one it shows.
+    #[test]
+    fn a_tab_change_in_the_sidebar_moves_the_workspace_you_are_in_to_one_it_shows() {
+        let mut app = app();
+        let ws = |name: &str, profile: &str, projects: &[&str]| -> WorkspaceInfo {
+            serde_json::from_value(serde_json::json!({
+                "id": name, "name": name, "profile": profile, "projects": projects,
+                "notify": "all", "created_ms": 0,
+            }))
+            .unwrap()
+        };
+        app.projects.push(project("p1", "myrepo"));
+        app.worktrees.push(root("p1"));
+        app.workspaces = vec![ws("job", "work", &["p1"]), ws("home", "me", &[])];
+        let mut build = placed("build", Some("p1"), Some("p1-root"));
+        build.profile = "work".into();
+        app.sessions.push(build);
+        app.focus = Focus::Sidebar;
+        let rows = app.rows();
+        let at = rows.iter().position(|r| *r == Row::Workspace("job".into())).unwrap();
+        app.set_sel(&rows, at);
+        assert_eq!(app.workspace, "job");
+        act(&mut app, "sidebar.tab_next");
+        assert_eq!(app.scope_shown(), Some(&Scope::new(None, "me")));
+        assert_eq!(app.workspace, "home", "a workspace `[me]` lists");
+        assert_eq!(app.selected_row(), Some(Row::Workspace("home".into())));
+    }
+
+    /// Revealing a session the filter hides anyway doesn't switch tab (SPEC §11.2k).
+    #[test]
+    fn a_reveal_switches_no_tab_for_a_session_the_filter_hides() {
+        let mut app = app();
+        let (here, there, far) = two_machines(&mut app);
+        app.sessions.iter_mut().find(|s| s.id == far.id).unwrap().state =
+            ProcessState::Exited { code: Some(0), signal: None };
+        app.scope = Some(here.clone());
+        app.show = Show::Running;
+        app.reveal(far.id);
+        assert_eq!(app.scope_shown(), Some(&here), "hidden there too: the tab stays");
+        app.show = Show::All;
+        app.reveal(far.id);
+        assert_eq!(app.scope_shown(), Some(&there));
+    }
+
+    /// A trackpad's flick over the strip moves one tab, not one per event.
+    #[test]
+    fn the_wheel_over_the_strip_moves_one_tab_per_turn() {
+        use crossterm::event::MouseEventKind as K;
+        let mut app = app();
+        let (here, there, _) = two_machines(&mut app);
+        let side = app.sidebar_area().unwrap();
+        let wheel = |app: &mut App| app.on_mouse(&mouse(K::ScrollDown, side.x + 1, side.y));
+        for _ in 0..5 {
+            wheel(&mut app);
+        }
+        assert_eq!(app.scope_shown(), Some(&here), "one tab on from `all`");
+        // A moment later the next turn moves on.
+        app.tab_wheel_at = Instant::now().checked_sub(TAB_WHEEL_GAP * 2);
+        wheel(&mut app);
+        assert_eq!(app.scope_shown(), Some(&there));
+    }
+
+    /// A reveal waiting for its row doesn't take back a tab you picked meanwhile.
+    #[test]
+    fn a_pending_reveal_leaves_a_tab_picked_meanwhile_alone() {
+        let mut app = app();
+        let (here, there, far) = two_machines(&mut app);
+        // laptop2's workspace isn't mirrored yet: its session is listed under ours under `all`,
+        // so laptop2's tab can't place it.
+        app.workspaces.retain(|w| w.machine.is_none());
+        app.scope = Some(here.clone());
+        app.reveal(far.id);
+        assert_eq!(app.scope_shown(), Some(&there));
+        assert!(app.revealing.is_some_and(|r| r.2), "waits, and may still switch");
+        app.set_scope(Some(here.clone()));
+        app.retry_reveal();
+        assert_eq!(app.scope_shown(), Some(&here), "the tab picked stays");
+        assert!(app.revealing.is_some_and(|r| !r.2), "it still selects its row once it can");
+        // Without the pick, a retry would have switched.
+        app.revealing.as_mut().unwrap().2 = true;
+        app.retry_reveal();
+        assert_eq!(app.scope_shown(), Some(&there));
+    }
+
+    /// The palette's worktree jump shows a session the tab lists, so it switches no tab; a
+    /// linked machine's tab carries its usage, as this machine's do.
+    #[test]
+    fn a_worktree_jump_keeps_the_tab_and_every_tab_carries_its_usage() {
+        let mut app = app();
+        with_project(&mut app);
+        let mut build = placed("build", Some("p1"), Some("p1-root"));
+        build.profile = "work".into();
+        let mut side = placed("side", Some("p1"), Some("p1-root"));
+        side.profile = "me".into();
+        app.sessions.extend([build, side.clone()]);
+        let me = Scope::new(None, "me");
+        app.scope = Some(me.clone());
+        app.picked(Target::Worktree("p1-root".into()), Purpose::Palette);
+        assert_eq!(app.scope_shown(), Some(&me));
+        assert_eq!(app.focused_session(), Some(side.id));
+        // Usage: laptop2's comes named as its tab names its profile.
+        let mut app = app_with_laptop2_usage();
+        app.sidebar_width = 60;
+        let first = screen(&app).lines().next().unwrap().to_owned();
+        assert!(first.contains(" laptop2 42% "), "{first}");
+    }
+
+    fn app_with_laptop2_usage() -> App {
+        let mut app = app();
+        two_machines(&mut app);
+        let usage = ptyro_core::status::Usage {
+            profile: "laptop2:default".into(),
+            machine: Some("laptop2".into()),
+            agent: "claude".into(),
+            windows: vec![ptyro_core::status::UsageWindow {
+                name: "5h".into(),
+                used_percent: 42,
+                resets_at_ms: None,
+            }],
+            ..Default::default()
+        };
+        app.usage.insert((usage.profile.clone(), usage.agent.clone()), usage);
+        app
     }
 
     #[test]

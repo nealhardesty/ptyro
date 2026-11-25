@@ -119,6 +119,8 @@ export function keepsWorkspace(t: Scope, w: ScopedWorkspace, under: Iterable<Sco
 
 /// Shown in the session tree: anything but a chat's engine.
 const listed = (s: ScopedSession): boolean => !s.chat;
+/// Makes a tab: shown in the tree, and not a quick terminal (it goes with its worktree).
+const ownsTab = (s: ScopedSession): boolean => listed(s) && !s.quick;
 
 /// [blocked, working] among `sessions`: running real sessions only (not quick terminals, not
 /// chats' engines).
@@ -140,7 +142,7 @@ const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 export function tabs(workspaces: Iterable<ScopedWorkspace>, sessions: Iterable<ScopedSession>, here: string): Tab[] {
   const all = [...sessions];
   const scopes: Scope[] = [];
-  for (const s of [...[...workspaces].map(scopeOfWorkspace), ...all.filter(listed).map(scopeOf)]) {
+  for (const s of [...[...workspaces].map(scopeOfWorkspace), ...all.filter(ownsTab).map(scopeOf)]) {
     if (!scopes.some((x) => sameScope(x, s))) scopes.push(s);
   }
   scopes.sort((a, b) =>
@@ -168,8 +170,27 @@ export function resolve(saved: Scope | null, t: Tab[]): Scope | null {
 
 /// The tab to keep on going to a session: the one kept while it lists the session (`all` lists
 /// everything), else the session's own. That one is always a tab while the strip is drawn, and
-/// `resolve` makes it `all` when it isn't, so it holds even before everything has loaded.
-export const follow = (kept: Scope | null, s: ScopedSession): Scope | null => !kept || keepsSession(kept, s) ? kept : scopeOf(s);
+/// `resolve` makes it `all` when it isn't, so it holds even before everything has loaded. A quick
+/// terminal goes with its worktree and never moves the tab.
+export const follow = (kept: Scope | null, s: ScopedSession): Scope | null => !kept || s.quick || keepsSession(kept, s) ? kept : scopeOf(s);
+
+/// The profile a form that creates something preselects under a tab: the tab's (as people read
+/// it), while the machine picked is the tab's and the profile is among `names` there; else null
+/// (the form's own default).
+export function tabProfile(t: Scope | null, machine: string | null, names: string[]): string | null {
+  return t && t.machine === machine && names.includes(profileName(t)) ? profileName(t) : null;
+}
+
+/// Where something started under a tab lands in it: a workspace of the tab's machine whose own
+/// profile is the tab's (`prefer`, the one the list shows, first); else the profile to ask for
+/// (as people read it), in a workspace of that machine to reach it by (null: this machine's own).
+export function startIn(t: Scope, workspaces: Iterable<ScopedWorkspace & { name: string }>, prefer?: string): { workspace: string | null; profile?: string } {
+  const there = [...workspaces].filter((w) => mach(w.machine) === t.machine);
+  const own = there.filter((w) => w.profile === t.profile);
+  const w = own.find((x) => x.name === prefer) ?? own[0];
+  if (w) return { workspace: w.name };
+  return { workspace: t.machine ? there[0]?.name ?? null : null, profile: profileName(t) };
+}
 
 /// A scope as the browser keeps it (`{"profile":"work"}`, this machine's left out, as the Rust
 /// one serializes), and back; anything else is `all`.

@@ -7,7 +7,7 @@ import { machineChip } from "./machines.js";
 import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, confirm, enc, errText, facts, fixOf, form, go, h, menu, pending, profileFor, row, safeDecode, section, sheet, statusWord, textSheet, ui, views, withFix } from "./kit.js";
 import { fillProfiles } from "./settings.js";
 import { againWords, currentTab, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
-import { profileName } from "./machine.js";
+import { tabProfile } from "./machine.js";
 import { historyOf } from "./library.js";
 const ACTIONS = {
     "projects": "Projects and their worktrees, with what each is doing",
@@ -279,18 +279,18 @@ function workspaceForm(w) {
     const machineSel = s.input("machine");
     const onMachine = () => (w ? splitMachine(w.name)[0] : machineSel?.value || null);
     let names = [];
-    let picked = !!w || !!tab;
+    let picked = !!w;
+    // The tab's profile, while the machine picked is the tab's and the profile is there.
+    const tabbed = () => tabProfile(tab, onMachine(), names);
     const fill = async () => {
-        // The tab's profile while the machine picked is the tab's; else what was picked.
-        const want = tab && (tab.machine ?? null) === onMachine() ? profileName(tab) : prof.value;
-        names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : want);
+        names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : prof.value);
         if (!picked)
-            prof.value = profileFor(names, nameBox?.value.trim() ?? "");
+            prof.value = tabbed() ?? profileFor(names, nameBox?.value.trim() ?? "");
     };
     void fill();
     prof.addEventListener("change", () => { if (prof.value !== "@new")
         picked = true; });
-    nameBox?.addEventListener("input", () => { if (!picked)
+    nameBox?.addEventListener("input", () => { if (!picked && !tabbed())
         prof.value = profileFor(names, nameBox.value.trim()); });
     machineSel?.addEventListener("change", () => void fill());
 }

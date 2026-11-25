@@ -10,7 +10,7 @@ import { actions, NAME_HINT, SLUG_HINT, tipOf, ago, ask, badge, bar, Cache, conf
 import { fillProfiles } from "./settings.js";
 import type { Item } from "./kit.js";
 import { againWords, currentTab, newShell, newTask, openQuickShell, allSessions, startAgain } from "./sessions.js";
-import { profileName } from "./machine.js";
+import { tabProfile } from "./machine.js";
 import type { Session } from "./screen.js";
 import { historyOf } from "./library.js";
 
@@ -310,16 +310,16 @@ function workspaceForm(w?: Workspace): void {
   const machineSel = s.input("machine");
   const onMachine = () => (w ? splitMachine(w.name)[0] : machineSel?.value || null);
   let names: string[] = [];
-  let picked = !!w || !!tab;
+  let picked = !!w;
+  // The tab's profile, while the machine picked is the tab's and the profile is there.
+  const tabbed = () => tabProfile(tab, onMachine(), names);
   const fill = async () => {
-    // The tab's profile while the machine picked is the tab's; else what was picked.
-    const want = tab && (tab.machine ?? null) === onMachine() ? profileName(tab) : prof.value;
-    names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : want);
-    if (!picked) prof.value = profileFor(names, nameBox?.value.trim() ?? "");
+    names = await fillProfiles(prof, onMachine(), w ? (w.profile ? splitMachine(w.profile)[1] : "default") : prof.value);
+    if (!picked) prof.value = tabbed() ?? profileFor(names, nameBox?.value.trim() ?? "");
   };
   void fill();
   prof.addEventListener("change", () => { if (prof.value !== "@new") picked = true; });
-  nameBox?.addEventListener("input", () => { if (!picked) prof.value = profileFor(names, nameBox.value.trim()); });
+  nameBox?.addEventListener("input", () => { if (!picked && !tabbed()) prof.value = profileFor(names, nameBox.value.trim()); });
   machineSel?.addEventListener("change", () => void fill());
 }
 

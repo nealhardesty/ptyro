@@ -8,8 +8,8 @@
 //! workspaces [`Scope::keeps_workspace`] keeps, and under them only the tab's sessions. A
 //! workspace whose own profile is the tab's shows whole (its projects and worktrees, empty or not,
 //! so you can start something there); one shown only for a session of the tab's under it drops
-//! the headers left empty, as the filter does. A quick terminal goes with its worktree: it shows
-//! wherever its worktree does, and never keeps a header by itself.
+//! the headers left empty, as the filter does. A quick terminal shows only under its own
+//! profile's tab, with its worktree, and never keeps a header by itself.
 
 use std::collections::HashSet;
 
@@ -205,9 +205,9 @@ impl Inputs<'_> {
     }
 
     /// Whether a session is listed: the filter keeps it, and so does the tab. A quick terminal
-    /// goes with its worktree, so the tab doesn't judge it.
+    /// too: nothing of another profile shows under a tab (though one never keeps a header).
     fn keeps(&self, s: &SessionInfo) -> bool {
-        self.show.keeps(s) && (s.quick || self.scope.is_none_or(|t| t.keeps_session(s)))
+        self.show.keeps(s) && self.scope.is_none_or(|t| t.keeps_session(s))
     }
 
     /// Whether the tab shows this workspace (always under `all`): its own profile is the tab's,
@@ -1107,6 +1107,52 @@ mod tests {
         // One machine and one profile: no strip.
         let one = [wss[0].clone()];
         assert!(!scope::drawn(&scope::tabs(&one, std::slice::from_ref(&job), "laptop1")));
+    }
+
+    /// Nothing of another profile shows under a tab, a quick terminal neither; one of the tab's
+    /// shows with its worktree, but never keeps a header by itself.
+    #[test]
+    fn a_quick_terminal_shows_only_under_its_own_profile_s_tab() {
+        let mut main = ws("w", "main", &["p"]);
+        main.profile = "work".into();
+        let wss = vec![main];
+        let projects = vec![project("p")];
+        let worktrees = vec![wt("root", "p", true, 1), wt("t2", "p", false, 2)];
+        let as_ = |mut s: SessionInfo, profile: &str, quick: bool| {
+            s.profile = profile.into();
+            s.quick = quick;
+            s
+        };
+        let side = as_(session("side", Some("root"), Some("p"), Some("main")), "me", false);
+        let theirs = as_(session("q1", Some("root"), Some("p"), None), "work", true);
+        let mine = as_(session("q2", Some("root"), Some("p"), None), "me", true);
+        let lone = as_(session("q3", Some("t2"), Some("p"), None), "me", true);
+        let sessions = vec![side.clone(), theirs.clone(), mine.clone(), lone.clone()];
+        let collapsed = HashSet::new();
+        let (me, work) = (Scope::new(None, "me"), Scope::new(None, "work"));
+        let rows = |scope: &Scope| {
+            Inputs {
+                workspaces: &wss,
+                projects: &projects,
+                worktrees: &worktrees,
+                sessions: &sessions,
+                collapsed: &collapsed,
+                show: Show::All,
+                scope: Some(scope),
+                chats: &[],
+                recent: None,
+                shells: ShellsSection::WhenUsed,
+            }
+            .rows()
+        };
+        let under_me = rows(&me);
+        assert!(under_me.contains(&Row::Quick(mine.id)), "{under_me:?}");
+        assert!(!under_me.contains(&Row::Quick(theirs.id)), "work's, under [me]: {under_me:?}");
+        assert!(!under_me.contains(&Row::Worktree("t2".into())), "keeps no header: {under_me:?}");
+        let under_work = rows(&work);
+        assert!(under_work.contains(&Row::Quick(theirs.id)), "{under_work:?}");
+        assert!(!under_work.contains(&Row::Quick(mine.id)), "me's, under [work]: {under_work:?}");
+        assert!(!under_work.contains(&Row::Quick(lone.id)), "{under_work:?}");
     }
 
     /// SPEC §23.6: a workspace's SHELLS, its loose sessions by number then any other session

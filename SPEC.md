@@ -3752,8 +3752,8 @@ and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps i
   that name, `Scope::profile_name()` the one people read (`work`).
 - **Labels** (`scope::tabs(workspaces, sessions, here)`, `here` the daemon's own `Status.machine`):
   the machine's name on every tab while there is more than one machine, `[profile]` only while that
-  machine has more than one tab: `laptop1 [work]`, `laptop1 [me]`, `laptop2`; on one machine
-  `[work]`, `[me]`.
+  machine has more than one tab: `laptop1 [me]`, `laptop1 [work]`, `laptop2`; on one machine
+  `[me]`, `[work]`.
 - **Order:** `all` first; then this machine's tabs, then each other machine's, sorted by name (the
   sidebar's machine order, §11.2j); within a machine `default` first, then the other profiles
   alphabetically.
@@ -3765,15 +3765,17 @@ and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps i
   workspace's, §10.10). A workspace shows under a tab when its own profile is the tab's or a session
   listed under it (`Inputs::home`, §11.2j) runs as the tab's (`Scope::keeps_workspace(w, under)`);
   under it, only the tab's sessions. So a workspace can show under two tabs, and nothing of another
-  profile ever shows in a profile's tab.
+  profile ever shows in a profile's tab. A quick terminal goes with its worktree: it never makes a
+  tab nor moves you to one, and under a tab it shows only when it runs as the tab's profile. Chats
+  aren't sessions and stay with their workspace.
 - **Every tab carries what needs you:** blocked `⚠N` and working `●N` (`Tab.blocked`,
   `Tab.working`: running real sessions, not quick terminals; `scope::count` gives `all`'s); an
-  offline machine says so. This machine's profiles show their usage on their tabs (moved from the
-  sidebar's title).
+  offline machine says so. Each profile's usage is on its tab, a linked machine's too (moved from
+  the sidebar's title).
 - **The tab is where new things go:** a new workspace defaults to the tab's machine and profile.
   The wizard keeps its own profile rule; its context is the selected row, which is in the tab.
-- **Going to something outside the tab** (`w`, a notification, the attention jump, answering a
-  blocked agent, opening a session by name) switches to the tab that has it (`Scope::of(session)`,
+- **Going to something outside the tab** (`w`, a notification, the attention jump, peek's ⏎,
+  opening a session by name) switches to the tab that has it (`Scope::of(session)`,
   `Scope::of_workspace(w)`: that tab always exists), else to `all`.
 - **Saved with the view** beside the filter chips (both apply together): a saved tab that no longer
   exists, or a strip that is no longer drawn, falls back to `all` (`scope::resolve`).
@@ -3781,12 +3783,13 @@ and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps i
 - **The TUI** (TABS.2, `ui.rs` `tab_strip`, `tree.rs` `Inputs.scope`):
   - **The strip** is the sidebar's first line, above the title and the filter chips, and takes no
     line when it isn't drawn. `all` first, then each tab: ` label ⚠N ●N `, zero counts hidden.
-    This machine's profile tabs add their tightest rate-limit window (` 63%`, the blocked colour
-    at 80% or more); while the strip is drawn the title no longer shows usage. A linked machine's
+    Each profile's tab, a linked machine's too, adds its tightest rate-limit window (` 63%`, the
+    blocked colour at 80% or more); while the strip is drawn the title no longer shows usage. A linked machine's
     tab adds ` offline`, ` other version` or ` connecting…`. Wider than the sidebar, the strip
     scrolls to keep the selected tab in sight, with `‹`/`›` at the edges (a click on one moves a
     tab).
-  - **Picking:** a click on a tab, the wheel over the strip, `sidebar.tab_next` / `sidebar.tab_prev`
+  - **Picking:** a click on a tab, the wheel over the strip (one tab per 150 ms, so a flick
+    doesn't race through them), `sidebar.tab_next` / `sidebar.tab_prev`
     (`}` / `{` after the prefix and in the sidebar), `sidebar.tab_all` and `tab NAME` in the
     palette. The sidebar's hint line says `{} tab` while the strip is drawn. With no strip the
     actions say why there are no tabs.
@@ -3795,12 +3798,16 @@ and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps i
     the tab's sessions in it drops its empty headers, like the filter. A quick terminal goes with
     its worktree and never moves the tab. SHELLS keep the tab's profile; CHATS show with their
     workspace. Folds, `1`–`9`, `j`/`k` and the attention order follow the tab.
-  - **Saved** as `SavedView.scope`; a tab that disappears falls back to `all` on load or on the
-    next tick.
+  - **Saved** as `SavedView.scope`: the tab you picked, kept as it is. The tab in effect
+    (`scope_shown`) is it while it is a tab, else `all`; so a linked machine's tab after a daemon
+    restart shows `all` until the machine's mirror is back, then returns by itself. Only a pick or
+    a follow changes it. A change with the sidebar focused re-selects a row, so the workspace
+    you're in is one the tab shows.
   - **Going outside the tab:** every way to a session (`reveal`: picks, `/`, the palette, the
     attention jump, peek's ⏎, notifications, a new session the wizard put elsewhere) and to a
     workspace, project or worktree (`rows_with`: `w`, the palette's jumps) switches tab, with a
-    toast `showing X`; nothing switches when the filter would hide it anyway. Attaching on a
+    toast `showing X`; nothing switches when the filter would hide it anyway. A reveal still
+    waiting for its session follows only until you pick a tab yourself. Attaching on a
     session or a workspace does too (a workspace once, not again on a reconnect). Answering in
     peek (`y`/`a`/`n`) moves no focus, so it doesn't switch.
   - **A new workspace:** the machine picker opens on the tab's machine, and the profile is the
@@ -3813,13 +3820,20 @@ and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps i
   is flat, so a workspace shows only through SHELLS' groups. Opening any session's page (the list,
   Home, a notification, the Library, a link) goes through one hook that switches to the session's
   tab when the one shown doesn't list it. The new-workspace form starts on the tab's machine and
-  profile. Home and the CHATS aside aren't scoped. Usage stays on Home and More → Usage (the web's
+  profile, and under a tab new things start in it: SHELLS' ＋ in a workspace of the tab's profile on
+  its machine (else with the profile given), a new task on the tab's machine with the tab's
+  profile. Opening a quick terminal never switches the tab. Home and the CHATS aside aren't scoped. Usage stays on Home and More → Usage (the web's
   list never had it).
 - **CLI:** `ptyro ls --machine M --profile P` (with `--status`, `-p`, `-w`, `--json`). `--machine`
   takes a linked machine's name, this one's own, or `here`, any case; another name is refused with
   the ones there are. `--profile` takes a profile as people read it (`work`: any machine's) or
   with its machine on (`laptop2:work`); one that is neither defined nor run as is refused with the
   ones there are. Both together are one tab (`Scope::new(machine, profile).keeps_session`).
+  A pair that can't both hold is refused, saying which `--machine` to use (`laptop2:work is
+  laptop2's: say --machine laptop2`); `ls --all` (the history keeps no machine or profile)
+  refuses both; without a daemon only `here` or this machine's own name can be given. In
+  completion `--machine` offers `here` and the linked machines, `--profile` the linked machines'
+  profiles with their machine on (`laptop2:work`).
 
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 

@@ -9,7 +9,7 @@ import { actions, NAME_HINT, slugInput, confirmsKill, argWords, ask, Cache, conf
 import { fillProfiles } from "./settings.js";
 import { shellMenuItems } from "./shells.js";
 import { historyOf } from "./library.js";
-import { drawn, follow, resolve, sameScope, scopeParse, scopeText, tabs } from "./machine.js";
+import { drawn, follow, profileName, resolve, sameScope, scopeParse, scopeText, tabs } from "./machine.js";
 const ACTIONS = {
     "session.new": "Start a task: say what to do, which agent, and where",
     "session.menu": "More for this session: stop, restart, rename, hibernate…",
@@ -54,8 +54,10 @@ const numberIn = (t) => {
 };
 const AUTO_PROFILE = "automatic (worktree → project pin → workspace)";
 /// The new-task sheet (UX1.9): what to do, which agent, and where. `where` preselects a
-/// project (`p:<id>`) or a worktree (`w:<id>`).
+/// project (`p:<id>`) or a worktree (`w:<id>`). Under a tab (TABS) it starts there: a place on
+/// the tab's machine and the tab's profile, so the new session stays in the list shown.
 export function newTask(where, task) {
+    const tab = currentTab();
     const projects = [...data.projects.values()];
     const wts = liveWorktrees();
     if (!projects.length) {
@@ -80,7 +82,14 @@ export function newTask(where, task) {
     agent.value = data.defaultAgent in Object.fromEntries(agentOptions) ? data.defaultAgent : agentOptions[0][0];
     const command = input(h("input", { placeholder: "e.g. npm run dev", autocapitalize: "off", spellcheck: "false" }));
     const placeSel = input(h("select", {}, ...place.map(([v, l]) => h("option", { value: v }, l))));
-    placeSel.value = where && place.some(([v]) => v === where) ? where : place[0][0];
+    // The machine a place is on (null: this one).
+    const machineOf = (v) => {
+        const [kind, id] = [v.slice(0, 1), v.slice(2)];
+        const slug = kind === "p" ? data.projects.get(id)?.slug : data.worktrees.get(id)?.project_slug;
+        return slug ? splitMachine(slug)[0] : null;
+    };
+    const tabPlace = tab ? place.find(([v]) => machineOf(v) === tab.machine)?.[0] : undefined;
+    placeSel.value = where && place.some(([v]) => v === where) ? where : tabPlace ?? place[0][0];
     const source = input(h("select", {}, ...SOURCES.map(([v, l]) => h("option", { value: v }, l))));
     const which = input(h("input", { placeholder: "", autocapitalize: "off", spellcheck: "false" }));
     const names = h("datalist", { id: "branch-names" });
@@ -105,20 +114,15 @@ export function newTask(where, task) {
     const baseRow = h("label", { class: "field" }, h("span", {}, "Base"), base, h("small", {}, "The ref the new branch starts from"));
     const argsRow = h("label", { class: "field" }, h("span", {}, "Agent arguments"), args, h("small", {}, "Extra arguments for the agent's command"));
     const freshOnly = [baseRow, check(noSetup, "Skip setup scripts", "Don't run the project's setup script"), check(noFetch, "Don't fetch", "Don't fetch the base first")];
-    const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, "The account it runs under")), h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What people read: what it's for; its name stays its address")), ...freshOnly, argsRow));
-    // The profiles of the machine the place is on.
-    const machineOfPlace = () => {
-        const [kind, id] = [placeSel.value.slice(0, 1), placeSel.value.slice(2)];
-        const slug = kind === "p" ? data.projects.get(id)?.slug : data.worktrees.get(id)?.project_slug;
-        return slug ? splitMachine(slug)[0] : null;
-    };
+    const more = h("details", { class: "more" }, h("summary", { style: "cursor: pointer; color: var(--muted)" }, "More options"), h("div", { style: "display: grid; gap: 12px; padding-top: 10px" }, h("label", { class: "field" }, h("span", {}, "Profile"), profile, h("small", {}, tab ? "The account it runs under (under a tab, the tab's)" : "The account it runs under")), h("label", { class: "field" }, h("span", {}, "Title"), title, h("small", {}, "What people read: what it's for; its name stays its address")), ...freshOnly, argsRow));
+    // The profiles of the machine the place is on; on the tab's machine, the tab's (if it is there).
     let profileMachine;
     const loadProfiles = () => {
-        const m = machineOfPlace();
+        const m = machineOf(placeSel.value);
         if (m === profileMachine)
             return;
         profileMachine = m;
-        void fillProfiles(profile, m, profile.value, ["", AUTO_PROFILE]);
+        void fillProfiles(profile, m, tab && tab.machine === m ? profileName(tab) : profile.value, ["", AUTO_PROFILE]);
     };
     const sync = () => {
         const fresh = placeSel.value.startsWith("p:");

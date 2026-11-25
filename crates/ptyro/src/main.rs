@@ -471,11 +471,11 @@ enum Cmd {
         #[arg(short, long, add = ArgValueCandidates::new(complete::workspaces))]
         workspace: Option<String>,
         /// Only sessions on this machine: a linked machine's name, or this one's (or `here`)
-        #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::machines))]
+        #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(complete::scope_machines))]
         machine: Option<String>,
         /// Only sessions running as this profile (their own, which can differ from their
         /// workspace's)
-        #[arg(long, value_name = "PROFILE", add = ArgValueCandidates::new(complete::profiles))]
+        #[arg(long, value_name = "PROFILE", add = ArgValueCandidates::new(complete::scope_profiles))]
         profile: Option<String>,
         /// Also the agents answering chats (hidden otherwise)
         #[arg(long)]

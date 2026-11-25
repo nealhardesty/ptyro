@@ -659,7 +659,7 @@ async fn the_profile_cli_edits_the_config() {
 /// `--machine` (this one's name, or `here`) the tabs' rule (TABS, SPEC §11.2k).
 #[tokio::test]
 async fn ls_by_profile_and_machine() {
-    let w = World::new("[daemon]\nmachine_name = \"laptop1\"\n[profiles.me]\n");
+    let mut w = World::new("[daemon]\nmachine_name = \"laptop1\"\n[profiles.me]\n");
     w.ok(&["new", "-d", "-n", "plain", "--", "sleep", "60"]);
     w.ok(&["new", "-d", "-n", "mine", "--profile", "me", "--", "sleep", "60"]);
     let names = |args: &[&str]| -> Vec<String> {
@@ -679,6 +679,19 @@ async fn ls_by_profile_and_machine() {
     let out = w.cli(&["ls", "--machine", "laptop9"]);
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success() && err.contains("say one of laptop1"), "{err}");
+    // The history keeps no machine or profile: refused, not the flags quietly dropped.
+    let out = w.cli(&["ls", "--all", "--profile", "me"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("leave out --machine and --profile"), "{err}");
+    // Without a daemon only this machine is known: another is refused, this one lists nothing.
+    w.d.stop();
+    let out = w.cli(&["ls", "--machine", "laptop9"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("daemon is not running"), "{err}");
+    for here in ["here", "laptop1"] {
+        let out = w.cli(&["ls", "--machine", here]);
+        assert!(out.status.success(), "{here}: {}", String::from_utf8_lossy(&out.stderr));
+    }
 }
 
 #[tokio::test]
