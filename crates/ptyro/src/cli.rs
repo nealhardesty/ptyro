@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ptyro_client::{Client, ConnectOptions};
 use ptyro_core::paths::Paths;
+use ptyro_core::scope::{Scope, bare};
 use ptyro_core::session::{SessionInfo, SpawnSpec};
 use ptyro_core::{Error, ErrorCode, TermSize};
 use ptyro_protocol::{ClientKind, Encoding, Reply, Request};
@@ -291,11 +292,12 @@ async fn dispatch(
                 ptyro_tui::Options { raw, view_only, workspace, restarted, ..Default::default() };
             attach_with(&ctx, client, info, tui).await
         }
-        Some(Cmd::List { json, all, status, project, workspace, chats }) => {
+        Some(Cmd::List { json, all, status, project, workspace, machine, profile, chats }) => {
             if all {
                 history(&ctx, json).await
             } else {
-                list(&ctx, json, Filter { status, project, workspace, chats }).await
+                let f = Filter { status, project, workspace, machine, profile, chats };
+                list(&ctx, json, f).await
             }
         }
         Some(Cmd::Stop { sessions }) => crate::script::stop(&ctx, sessions).await,
@@ -1184,12 +1186,22 @@ pub struct Filter {
     pub status: Option<ptyro_core::selector::State>,
     pub project: Option<String>,
     pub workspace: Option<String>,
+    /// A machine as typed: a linked one's name, this one's, or `here` (`list` resolves it).
+    pub machine: Option<String>,
+    /// The profile its sessions run as.
+    pub profile: Option<String>,
     /// Chats' engines too (SPEC §22.2).
     pub chats: bool,
 }
 
 impl Filter {
-    fn keeps(&self, s: &SessionInfo, projects: &[ptyro_core::model::ProjectInfo]) -> bool {
+    /// `at`: the machine `--machine` resolved to, `Some(None)` for this one.
+    fn keeps(
+        &self,
+        s: &SessionInfo,
+        projects: &[ptyro_core::model::ProjectInfo],
+        at: Option<&Option<String>>,
+    ) -> bool {
         let status_ok = self.status.is_none_or(|want| {
             want.matches(&s.state, s.status.as_ref().map(|r| r.status), || s.is_active())
         });
@@ -1199,8 +1211,66 @@ impl Filter {
                 .is_some_and(|id| id == p || projects.iter().any(|x| x.id == id && x.slug == p))
         });
         let ws_ok = self.workspace.as_deref().is_none_or(|w| s.workspace.as_deref() == Some(w));
-        status_ok && project_ok && ws_ok && (self.chats || s.chat.is_none())
+        // The tabs' rule (TABS, SPEC §11.2k) when both are given; each alone otherwise. A
+        // profile is named as people read it (`work`: any machine's) or with its machine on
+        // (`laptop2:work`).
+        let scope_ok = match (at, self.profile.as_deref()) {
+            (Some(m), Some(p)) => Scope::new(m.clone(), p).keeps_session(s),
+            (Some(m), None) => s.machine == *m,
+            (None, Some(p)) => s.profile == p || bare(&s.profile, s.machine.as_deref()) == p,
+            (None, None) => true,
+        };
+        status_ok && project_ok && ws_ok && scope_ok && (self.chats || s.chat.is_none())
     }
+}
+
+/// The machine `ls --machine` names: `None` for this one (its own name, or `here`), a linked
+/// one's name as it is known here, else an error that says which there are.
+async fn machine_named(client: &Client, name: &str) -> Result<Option<String>, Error> {
+    let name = name.trim();
+    let own = match client.request(Request::Status).await? {
+        Reply::Status { status } => status.machine,
+        _ => None,
+    };
+    if name == "here" || own.as_deref().is_some_and(|o| ptyro_core::lookup::same(o, name)) {
+        return Ok(None);
+    }
+    let linked = match client.request(Request::MachineList).await? {
+        Reply::Machines { machines } => machines,
+        _ => Vec::new(),
+    };
+    if let Some(m) = linked.iter().find(|m| ptyro_core::lookup::same(&m.name, name)) {
+        return Ok(Some(m.name.clone()));
+    }
+    let mut known = vec![own.unwrap_or_else(|| "here".into())];
+    known.extend(linked.into_iter().map(|m| m.name));
+    Err(Error::new(
+        ErrorCode::NotFound,
+        format!("no machine is called {name:?}: say one of {}", known.join(", ")),
+    ))
+}
+
+/// A profile `ls --profile` can name: one defined here or on a linked machine, or one a session
+/// runs as; else an error that says which there are.
+async fn profile_named(client: &Client, name: &str, all: &[SessionInfo]) -> Result<(), Error> {
+    let mut known: Vec<(String, Option<String>)> = match client
+        .request(Request::ProfileList)
+        .await?
+    {
+        Reply::Profiles { profiles } => profiles.into_iter().map(|p| (p.name, p.machine)).collect(),
+        _ => Vec::new(),
+    };
+    known.extend(all.iter().map(|s| (s.profile.clone(), s.machine.clone())));
+    if known.iter().any(|(k, m)| k == name || bare(k, m.as_deref()) == name) {
+        return Ok(());
+    }
+    let mut known: Vec<String> = known.into_iter().map(|(k, _)| k).collect();
+    known.sort();
+    known.dedup();
+    Err(Error::new(
+        ErrorCode::NotFound,
+        format!("no profile is called {name:?}: the profiles are {}", known.join(", ")),
+    ))
 }
 
 async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
@@ -1222,7 +1292,14 @@ async fn list(ctx: &Ctx, json: bool, mut filter: Filter) -> Result<i32, Error> {
                 filter.project = Some(info.id);
             }
             let mut all = sessions(&client).await?;
-            all.retain(|s| filter.keeps(s, &projects));
+            let at = match &filter.machine {
+                Some(m) => Some(machine_named(&client, m).await?),
+                None => None,
+            };
+            if let Some(p) = &filter.profile {
+                profile_named(&client, p, &all).await?;
+            }
+            all.retain(|s| filter.keeps(s, &projects, at.as_ref()));
             (all, worktrees)
         }
         // No local daemon simply means no sessions (`local` too: this computer's own); an

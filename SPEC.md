@@ -3737,6 +3737,56 @@ The daily loop (ROADMAP UX3, RESEARCH R-UX-34…37). `crates/ptyro-tui/src/scree
   once. A remote session's pane header has its machine's dot, and its state on the right when down.
 - Profile badges count per machine: another machine's implicit `default` shows none.
 
+### 11.2k What TABS added **[built TABS]**
+
+Decided by the owner 2026-11-25 (ROADMAP TABS). With several machines and profiles the sidebar
+gets too long: a strip of tabs over it picks one machine and one profile, and the tree under it
+lists only that tab's. `ptyro_core::scope` (`scope.rs`) is the one definition for the TUI, the CLI
+and the web, like `Show` (§11.2i); the web mirrors it in TypeScript and keeps in step with it.
+
+- **A tab is a machine and a profile in use there** (`Scope { machine, profile }`, `machine: None`
+  this one, as `SessionInfo.machine` says): a profile is in use on a machine when one of its
+  workspaces has it or one of its sessions runs as it. A defined profile with neither has no tab.
+  A chat's engine (§22.2) is hidden from the tree, so it makes no tab and counts on none. Another
+  machine's profiles reach this one with its name on (`laptop2:work`, §16.4b): `Scope.profile` is
+  that name, `Scope::profile_name()` the one people read (`work`).
+- **Labels** (`scope::tabs(workspaces, sessions, here)`, `here` the daemon's own `Status.machine`):
+  the machine's name on every tab while there is more than one machine, `[profile]` only while that
+  machine has more than one tab: `laptop1 [work]`, `laptop1 [me]`, `laptop2`; on one machine
+  `[work]`, `[me]`.
+- **Order:** `all` first; then this machine's tabs, then each other machine's, sorted by name (the
+  sidebar's machine order, §11.2j); within a machine `default` first, then the other profiles
+  alphabetically.
+- **`all`** is today's sidebar, and is not a `Tab` (a kept scope is `Option<Scope>`, `None` for
+  `all`). With one tab besides it (one machine, one profile) the strip is not drawn and nothing
+  changes (`scope::drawn`).
+- **What a tab lists is the sessions that run as its profile** (`Scope::keeps_session`: same
+  machine, the session's own profile, which a worktree or a project's pin can make differ from its
+  workspace's, §10.10). A workspace shows under a tab when its own profile is the tab's or a session
+  listed under it (`Inputs::home`, §11.2j) runs as the tab's (`Scope::keeps_workspace(w, under)`);
+  under it, only the tab's sessions. So a workspace can show under two tabs, and nothing of another
+  profile ever shows in a profile's tab.
+- **Every tab carries what needs you:** blocked `⚠N` and working `●N` (`Tab.blocked`,
+  `Tab.working`: running real sessions, not quick terminals; `scope::count` gives `all`'s); an
+  offline machine says so. This machine's profiles show their usage on their tabs (moved from the
+  sidebar's title).
+- **The tab is where new things go:** a new workspace defaults to the tab's machine and profile.
+  The wizard keeps its own profile rule; its context is the selected row, which is in the tab.
+- **Going to something outside the tab** (`w`, a notification, the attention jump, answering a
+  blocked agent, opening a session by name) switches to the tab that has it (`Scope::of(session)`,
+  `Scope::of_workspace(w)`: that tab always exists), else to `all`.
+- **Saved with the view** beside the filter chips (both apply together): a saved tab that no longer
+  exists, or a strip that is no longer drawn, falls back to `all` (`scope::resolve`).
+- **Home is not scoped:** it stays everything.
+- **The TUI** (TABS.2): the strip over the sidebar, a click picks a tab, keys and palette actions
+  cycle and pick them; folds, numbering and `j`/`k` follow the tab.
+- **The web** (TABS.3): the same strip over the session list, kept in the browser like the chips.
+- **CLI:** `ptyro ls --machine M --profile P` (with `--status`, `-p`, `-w`, `--json`). `--machine`
+  takes a linked machine's name, this one's own, or `here`, any case; another name is refused with
+  the ones there are. `--profile` takes a profile as people read it (`work`: any machine's) or
+  with its machine on (`laptop2:work`); one that is neither defined nor run as is refused with the
+  ones there are. Both together are one tab (`Scope::new(machine, profile).keeps_session`).
+
 ### 11.3 Default key map (after prefix) **[built M2; differs from the proposal where noted]**
 
 **[built M2]** The real table is generated: `C-q ?` lists it and the palette shows each
@@ -3961,7 +4011,7 @@ ptyro                                  # TUI
 ptyro attach [<session>] [--raw] [--view-only] [--workspace <ws>]
 ptyro new [--agent <a>[@<profile>]] [--profile <pr>] [--project <p>] [--wt <name>|--new-wt [<name>]|--here|--cwd <dir>]
           [--name <n>] [--prompt <text>|--prompt-file <f>] [--detach] [--override-pin] [-- <args…>]
-ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--all] [--json]   # §2.3's words
+ptyro ls [--status live|active|exited|dormant|<agent status>] [--project <p>] [--machine <m>] [--profile <pr>] [--all] [--json]   # §2.3's words; --machine/--profile §11.2k
 ptyro status [<session>] [--explain] [--json]
 ptyro send <session…> <text> [--no-enter] [--raw] [--wait-ready]
 ptyro read <session> [--screen|--scrollback [N]] [--plain|--ansi] [--json]
@@ -4061,7 +4111,7 @@ and then removes the session unless `--keep` (changed 2026-11-09: `kill` is SIGK
     would redo every poll; a flag means one thing in every command, docs/commands.md);
   - `events [--follow] [--session S] [-l N] [--json]`;
   - `stop S…` (graceful, kept listed; `kill` also removed until 2026-11-09, §7.3).
-- **Listing:** `ls --status/--project/--workspace`; `attach --workspace`.
+- **Listing:** `ls --status/--project/--workspace`, and `--machine/--profile` (§11.2k); `attach --workspace`.
 - **`attach --tab|--pane`** (WIN3, `ptyro_tui::tab`): open the session in a new tab or pane of
   the terminal instead, attached with this ptyro and its `--remote`. The innermost terminal that
   can be asked wins: tmux (`new-window` / `split-window -- <ptyro> attach <id>`), else Windows
