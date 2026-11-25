@@ -171,9 +171,27 @@ impl Daemon {
                         state,
                         ProcessState::Exited { signal: Some(_), .. } | ProcessState::Failed { .. }
                     );
-                // Agents always; commands and scripts when they failed or ran a while; shells never
-                // (you typed `exit`).
+                // `[ui] agent_exit = "close"`: an agent that exited cleanly, or that someone
+                // stopped, goes; a crashed one stays to be looked at. Not a chat's engine, and not
+                // while the daemon itself stops.
+                let agent_closes = kind == SessionKind::Agent
+                    && state != ProcessState::Dormant
+                    && !s.hibernating.load(Ordering::Relaxed)
+                    && !s.is_quick()
+                    && s.meta
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .place
+                        .chat
+                        .is_none()
+                    && !*self.shutdown.borrow()
+                    && self.config.reading().ui.agent_exit == ptyro_core::config::AgentExit::Close
+                    && (s.stop_asked.load(Ordering::Relaxed)
+                        || matches!(state, ProcessState::Exited { code: Some(0), signal: None }));
+                // Agents always (unless they close); commands and scripts when they failed or ran
+                // a while; shells never (you typed `exit`).
                 let wanted = state != ProcessState::Dormant
+                    && !agent_closes
                     && !s.hibernating.load(Ordering::Relaxed)
                     && match kind {
                         SessionKind::Agent => true,
@@ -192,6 +210,7 @@ impl Daemon {
                 // A plain shell too, unless `[ui] shell_exit = "keep"` (a restart's dormant ones
                 // stay: they come back).
                 let closes = s.is_quick()
+                    || agent_closes
                     || (kind == SessionKind::Shell
                         && state != ProcessState::Dormant
                         && !s.hibernating.load(Ordering::Relaxed)

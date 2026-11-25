@@ -931,3 +931,47 @@ async fn a_prompt_whose_enter_was_lost_is_sent() {
     let screen = String::from_utf8_lossy(&w.cli(&["read", "cx"]).stdout).into_owned();
     assert!(!screen.contains("a second prompt while one waits"), "{screen}");
 }
+
+/// `[ui] agent_exit = "close"`: an agent that exits cleanly, or that you stop, is removed; one
+/// that crashed (killed from outside, not by ptyro) stays, to be looked at.
+#[cfg(unix)]
+#[tokio::test]
+async fn agent_exit_close_removes_clean_and_stopped_agents_but_keeps_a_crash() {
+    let w = World::new("[ui]\nagent_exit = \"close\"\n");
+    let c = w.d.client().await.unwrap();
+    let gone = |name: &'static str| {
+        let c = &c;
+        async move {
+            let deadline = Instant::now() + WAIT;
+            loop {
+                let all = match c.request(Request::Resolve { addr: "@all".into() }).await.unwrap() {
+                    Reply::Sessions { sessions } => sessions,
+                    other => panic!("{other:?}"),
+                };
+                if !all.iter().any(|s| s.name == name) {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "{name} was not removed");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    // Exits by itself, code 0.
+    agent(&c, "clean", "claude", None).await;
+    w.d.wait_for_text(&c, "clean", "resumed=false", WAIT).await.unwrap();
+    send(&c, "clean", "/exit").await;
+    gone("clean").await;
+    // Stopped by you (`ptyro stop`, `x`): it goes too, however it ended.
+    agent(&c, "stopped", "claude", None).await;
+    w.d.wait_for_text(&c, "stopped", "resumed=false", WAIT).await.unwrap();
+    c.request(Request::Kill { addr: "stopped".into(), signal: None }).await.unwrap();
+    gone("stopped").await;
+    // Crashed: SIGKILL from outside ptyro. It stays, exited.
+    let info = agent(&c, "crash", "claude", None).await;
+    w.d.wait_for_text(&c, "crash", "resumed=false", WAIT).await.unwrap();
+    let pid = info.pid.or(get(&c, "crash").await.pid).expect("a pid");
+    std::process::Command::new("kill").args(["-9", &pid.to_string()]).status().unwrap();
+    wait_for(&c, "crash", "exited", |s| !s.state.is_live()).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!get(&c, "crash").await.state.is_live(), "a crashed agent stays listed");
+}

@@ -1708,6 +1708,12 @@ auto-registration made every directory in a repository hit it (`ptyro new -C rep
     web ask with a dialog. All say `Remove the dormant session NAME?` and `removal::DORMANT`.
 - `Exited` sessions stay visible (greyed, with exit code and final screen) until removed; their
   recorder log remains readable (`ptyro read --scrollback`).
+- **`[ui] agent_exit`** (owner, 2026-11-24; default `keep`). `close` removes an agent session once
+  it has exited with code 0 or after someone asked it to stop (`Request::Kill`: `ptyro stop`,
+  `kill`, `x`, the web's Stop; `Session::stop_asked`), however it then ended. A crash (non-zero,
+  or a signal nobody in ptyro sent) stays, to be looked at. Never a chat's engine, a quick
+  terminal (it closes anyway), a hibernation, or an exit while the daemon itself stops. Its
+  worktree is untouched. Shells have their own `[ui] shell_exit`.
 - `Dormant` = process not running but resumable; the last screen is shown dimmed with a
   "⏎ resume" hint.
 
@@ -4354,7 +4360,8 @@ theme = "ptyro-dark"
 sidebar_width = 30
 confirm_kill = true              # Stop, Kill, and Stop and remove ask first (TUI and web)
 home_at_start = true             # a bare `ptyro`, and the web app with no address, open on home (§26.9)
-shell_exit = "close"             # a shell that exits: close (disappears; agents stay) | keep
+shell_exit = "close"             # a shell that exits: close (disappears) | keep
+agent_exit = "keep"              # an agent that ends: keep (exited row, restartable) | close (gone after a clean exit or your stop; a crash stays)
 on_stop = "next"                 # after you stop a pane's session: next (its neighbour) | stay
 sidebar_detail = "auto"          # lines under each session row: auto | compact | full
 shell_style = "pane"             # what ⏎ on the quick terminal's line shows: pane (full sized) | auto (drawer if the project is open) | drawer
@@ -5547,6 +5554,9 @@ installed app is named after the machine (owner, 2026-11-20, so a phone with sev
 tells them apart): `ptyro serve` asks the daemon for the name when it serves the page (iOS's
 `apple-mobile-web-app-title` and `<title>`) and the manifest (Android's `name`, and `short_name`,
 which is the machine alone when `ptyro <machine>` passes the 12 characters a launcher label shows).
+A name in capitals (`WALRUS`: Windows' and WSL's host names) is lowercased there, `ptyro walrus`
+(owner, 2026-11-24); one with any lowercase letter (`Neal's MacBook`, a `machine_name` you typed)
+is kept as it is.
 Those requests carry no device token, so whoever can reach the server (loopback, the tailnet, the
 configured names) sees the machine's name before signing in, as the certificate already shows its
 host name; set `[daemon] machine_name` for a name other than the macOS ComputerName. Android picks a

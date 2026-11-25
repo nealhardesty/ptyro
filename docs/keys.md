@@ -82,7 +82,7 @@ action by name, finds any setting, and switches the theme (`theme ptyro-light`; 
 | `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
 | `]` | paste what you last copied |
-| `x` / `X` | stop the session: an agent's turn is interrupted and it gets a moment to exit, then it's signalled (an exited one is removed instead; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it) / kill it now (SIGKILL). Both ask first unless `[ui] confirm_kill = false`, and both keep it listed; Stop and remove (`session.remove`, its row menu) forgets it too. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
+| `x` / `X` | stop the session: an agent's turn is interrupted and it gets a moment to exit, then it's signalled (an exited one is removed instead; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it; an agent is too with `[ui] agent_exit = "close"`) / kill it now (SIGKILL). Both ask first unless `[ui] confirm_kill = false`, and both keep it listed; Stop and remove (`session.remove`, its row menu) forgets it too. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session: its name, the address you type to find it; `C-t` in the dialog edits its title instead, what people read |
 | `=` | take control: size the session to your pane (when another client resized it) |
