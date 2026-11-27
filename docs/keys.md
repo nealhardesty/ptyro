@@ -82,7 +82,7 @@ action by name, finds any setting, and switches the theme (`theme ptyro-light`; 
 | `f` | the sidebar's filter: all → running → active → all (also a click on a chip under its title; `sidebar.show_all`, `sidebar.show_running`, `sidebar.show_active` in the palette) |
 | `{` / `}` | the previous / next machine and profile tab over the sidebar, `all` among them (drawn with two machines or profiles; also a click on a tab; `sidebar.tab_all` and `tab NAME` in the palette) |
 | `[` / `PageUp` | copy mode / copy mode, one page up |
-| `]` | paste what you last copied |
+| `]` | paste what you last copied in ptyro (copy mode or a drag), not a program's copy: that goes to your terminal's clipboard only (your terminal's paste has it), and `]` says so when it's newer |
 | `x` / `X` | stop the session: an agent's turn is interrupted and it gets a moment to exit, then it's signalled (an exited one is removed instead; a shell that exits is removed by itself, `[ui] shell_exit = "keep"` leaves it; an agent is too with `[ui] agent_exit = "close"`) / kill it now (SIGKILL). Both ask first unless `[ui] confirm_kill = false`, and both keep it listed; Stop and remove (`session.remove`, its row menu) forgets it too. The pane moves on to the nearest other session (`[ui] on_stop`); `` ` `` brings the stopped one back |
 | `C-r` | run an exited session's command again |
 | `,` | rename the session: its name, the address you type to find it; `C-t` in the dialog edits its title instead, what people read |
@@ -309,7 +309,7 @@ through ptyro too).
 | `/` / `?`, then `n` / `N` | search forward / backward, next / previous match |
 | `[` / `]` (or `{` / `}`) | previous / next shell prompt (bash, zsh, fish and PowerShell sessions) |
 | `v` / `V` / `C-v` | select characters / lines / a block (`o` jumps to the other end) |
-| `y` or `⏎` / `Y` | copy the selection / the line to your terminal's clipboard (works over SSH and in tmux) |
+| `y` or `⏎` / `Y` | copy the selection / the line to your terminal's clipboard (works over SSH and in tmux) and to ptyro's paste buffer (`Ctrl-Q ]`); the message says which it reached: the clipboard (the terminal said it takes clipboard writes), the buffer only (it certainly doesn't, with the fix), or both if your terminal allows it (it didn't say) |
 | `q`, `Esc` or `C-c` | leave (`Esc` first clears a selection) |
 
 ## Mouse

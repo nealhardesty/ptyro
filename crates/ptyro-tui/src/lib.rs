@@ -124,7 +124,7 @@ pub fn pane_size(paths: &Paths) -> Option<TermSize> {
 pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> Result<AttachEnd> {
     let config = Config::load(&Config::path(paths)).unwrap_or_default();
     let mut tui = ratatui::init();
-    let (outer, typed) = outer::query();
+    let (outer, clipboard, typed) = outer::query();
     let push_kitty = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     let kitty = push_kitty;
     connect.outer = Some(ptyro_protocol::OuterTerm { kitty_keyboard: kitty, ..outer });
@@ -168,6 +168,7 @@ pub async fn run(mut connect: ConnectOptions, paths: &Paths, opts: Options) -> R
         kitty,
         Rect::new(0, 0, size.width, size.height),
     );
+    app.clipboard = clipboard;
     let result = event_loop(&mut app, &mut tui, typed).await;
     if app.client.is_some() {
         app.save_view();

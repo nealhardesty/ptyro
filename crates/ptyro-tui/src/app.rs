@@ -76,6 +76,8 @@ fn drawer_share() -> f32 {
 }
 
 /// What the tab keys say while there is no strip (SPEC §11.2k).
+/// How a terminal pastes its clipboard, for messages.
+const PASTE_KEYS: &str = "Ctrl-Shift-V, Cmd-V on a Mac";
 const NO_TABS: &str = "no tabs: every session here is one machine's and one profile's";
 
 /// How long after the wheel moved a tab its next turn waits.
@@ -811,6 +813,13 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub toast: Option<Toast>,
     pub buffer: Option<String>,
+    /// Whether a copy reaches the real terminal's clipboard (asked at startup), so a copy's
+    /// message says where it went.
+    pub clipboard: crate::outer::Clipboard,
+    /// When you last copied into `buffer`, and the last program copy (OSC 52) that went to the
+    /// clipboard instead: which session, and when. `]` says when the clipboard has newer.
+    yanked_at: Option<Instant>,
+    program_copy: Option<(String, Instant)>,
     pub controller: HashMap<SessionId, bool>,
     pub area: Rect,
     pub dirty: bool,
@@ -953,6 +962,9 @@ impl App {
             overlay: None,
             toast: None,
             buffer: None,
+            clipboard: Default::default(),
+            yanked_at: None,
+            program_copy: None,
             controller: HashMap::new(),
             area,
             dirty: true,
@@ -1776,6 +1788,15 @@ impl App {
             DomainEvent::Clipboard { session, text } => {
                 if self.subscribed.contains(&session) && self.config.clipboard.allow_write {
                     crate::osc52(&text);
+                    let name = self.session(session).map_or("a session", |s| s.name.as_str());
+                    let name = name.to_owned();
+                    if let crate::outer::Clipboard::No(why) = &self.clipboard {
+                        let why = why.clone();
+                        self.toast(format!(
+                            "{name} copied text, but it can't reach your clipboard: {why}"
+                        ));
+                    }
+                    self.program_copy = Some((name, Instant::now()));
                 }
             }
             DomainEvent::SessionResumed { session } => {
@@ -3244,7 +3265,19 @@ impl App {
             "copy.enter" => self.enter_copy(CopyStart::Keys { page_up: false }),
             "copy.page_up" => self.enter_copy(CopyStart::Keys { page_up: true }),
             "paste.buffer" => match self.buffer.clone() {
-                Some(text) => self.forward(InputEvent::Paste { text }),
+                Some(text) => {
+                    self.forward(InputEvent::Paste { text });
+                    if let Some(note) = self.newer_on_clipboard() {
+                        self.toast(note);
+                    }
+                }
+                None if self.program_copy.is_some() && self.clipboard_may_work() => {
+                    let name = self.program_copy.as_ref().map_or("", |(n, _)| n.as_str());
+                    self.toast(format!(
+                        "nothing of yours to paste: {name}'s copy went to your clipboard; paste it \
+                         with your terminal's paste ({PASTE_KEYS})"
+                    ));
+                }
                 None => self.toast_offer(
                     "nothing yanked yet",
                     false,
@@ -5935,10 +5968,38 @@ impl App {
         crate::osc52(&text);
         let n = text.chars().count();
         self.buffer = Some(text);
-        self.toast(format!(
-            "copied {n} characters ({} ] pastes)",
-            ptyro_core::config::key_label(&self.keymap.prefix)
-        ));
+        self.yanked_at = Some(Instant::now());
+        let paste = format!("{} ]", ptyro_core::config::key_label(&self.keymap.prefix));
+        use crate::outer::Clipboard as C;
+        self.toast(match &self.clipboard {
+            C::Yes => format!("copied {n} characters to your clipboard ({paste} pastes it too)"),
+            C::No(why) => format!(
+                "copied {n} characters to ptyro's buffer only ({paste} pastes); not to your \
+                 clipboard: {why}"
+            ),
+            C::Unknown => format!(
+                "copied {n} characters: {paste} pastes, and so does your terminal's paste if it \
+                 takes clipboard writes"
+            ),
+        });
+    }
+
+    /// The clipboard may have a program's copy (it isn't known to drop them).
+    fn clipboard_may_work(&self) -> bool {
+        !matches!(self.clipboard, crate::outer::Clipboard::No(_))
+    }
+
+    /// After `]` pasted your last copy: a word when a program copied something newer to the
+    /// clipboard, which your terminal's paste has.
+    fn newer_on_clipboard(&self) -> Option<String> {
+        let (name, at) = self.program_copy.as_ref()?;
+        let newer = self.yanked_at.is_none_or(|y| *at > y);
+        (newer && self.clipboard_may_work()).then(|| {
+            format!(
+                "pasted your last copy; {name} copied something newer to your clipboard: your \
+                 terminal's paste ({PASTE_KEYS}) has it"
+            )
+        })
     }
 
     // ── mouse ───────────────────────────────────────────────────────────────
@@ -9341,6 +9402,61 @@ mod tests {
 
     fn act(app: &mut App, action: &'static str) {
         app.run(&Command { action, arg: None });
+    }
+
+    #[test]
+    fn a_copy_says_where_it_went() {
+        use crate::outer::Clipboard as C;
+        let mut app = app();
+        app.yank("hello".into());
+        assert!(toast_text(&app).contains("your terminal's paste if it takes clipboard writes"));
+        app.clipboard = C::Yes;
+        app.yank("hello".into());
+        assert!(toast_text(&app).starts_with("copied 5 characters to your clipboard"));
+        app.clipboard = C::No("tmux drops it".into());
+        app.yank("hello".into());
+        let t = toast_text(&app);
+        assert!(t.contains("ptyro's buffer only") && t.contains("tmux drops it"), "{t}");
+        assert_eq!(app.buffer.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn paste_says_when_a_program_s_copy_is_on_the_clipboard() {
+        use crate::outer::Clipboard as C;
+        let mut app = app();
+        let s = session("claude");
+        app.sessions = vec![s.clone()];
+        app.subscribed.insert(s.id);
+        // Nothing copied anywhere: the old offer.
+        act(&mut app, "paste.buffer");
+        assert!(toast_text(&app).contains("nothing yanked yet"));
+        // A program copied: that's on the clipboard, not in ptyro's buffer.
+        app.on_event(DomainEvent::Clipboard { session: s.id, text: "x".into() });
+        act(&mut app, "paste.buffer");
+        let t = toast_text(&app);
+        assert!(
+            t.contains("claude's copy went to your clipboard") && t.contains("Ctrl-Shift-V"),
+            "{t}"
+        );
+        // Yours after it: `]` pastes yours, no word.
+        app.yank("mine".into());
+        app.toast = None;
+        act(&mut app, "paste.buffer");
+        assert!(app.toast.is_none());
+        // A program's newer than yours: `]` still pastes yours, and says the clipboard has newer.
+        std::thread::sleep(Duration::from_millis(2));
+        app.on_event(DomainEvent::Clipboard { session: s.id, text: "y".into() });
+        act(&mut app, "paste.buffer");
+        assert!(toast_text(&app).contains("claude copied something newer"));
+        // Where the clipboard is known to drop copies, the program's copy is said lost when it
+        // comes, and `]` doesn't point at the clipboard.
+        let mut app2 = app;
+        app2.clipboard = C::No("tmux drops it".into());
+        app2.buffer = None;
+        app2.on_event(DomainEvent::Clipboard { session: s.id, text: "z".into() });
+        assert!(toast_text(&app2).contains("can't reach your clipboard: tmux drops it"));
+        act(&mut app2, "paste.buffer");
+        assert!(toast_text(&app2).contains("nothing yanked yet"));
     }
 
     #[test]

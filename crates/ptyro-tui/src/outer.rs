@@ -1,5 +1,6 @@
 //! What we learn about the user's real terminal at startup: its default colours (OSC 10/11), so
-//! the daemon can answer programs that pick a theme from them (SPEC §5.6). Codex does.
+//! the daemon can answer programs that pick a theme from them (SPEC §5.6). Codex does. And
+//! whether a copy reaches its clipboard (OSC 52), so a copy's message can say where it went.
 //! Keys typed while we wait for the answer arrive in the same reads: they are kept and replayed.
 
 #[cfg(unix)]
@@ -14,15 +15,87 @@ use ptyro_protocol::OuterTerm;
 
 /// What we ask: both default colours, then the device attributes, which every terminal answers.
 const QUERY: &[u8] = b"\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[c";
+/// Also asked, first, where it is safe: XTGETTCAP for `Ms`, the capability that sets the clipboard
+/// (OSC 52). The Linux console reads `ESC P` as a palette change, so it isn't asked there.
+const ASK_MS: &[u8] = b"\x1bP+q4d73\x1b\\";
+
+/// Whether a copy (OSC 52) reaches the clipboard of the terminal the TUI runs in.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Clipboard {
+    /// The terminal said it takes clipboard writes (XTGETTCAP `Ms`, `52` in its device
+    /// attributes, or tmux's `clipboard` feature for the terminal outside it).
+    Yes,
+    /// Certainly not, with why and the fix: tmux drops the passthrough the copy travels in.
+    No(String),
+    /// Nothing said either way: many terminals that take clipboard writes don't say so.
+    #[default]
+    Unknown,
+}
+
+/// What the replies to [`QUERY`] (and [`ASK_MS`]) say about the clipboard: only a yes. A terminal
+/// answering `0+r` (no `Ms`) may still take OSC 52, so that stays unknown.
+pub fn clipboard_from(reply: &[u8]) -> Clipboard {
+    if find(reply, b"\x1bP1+r4d73").is_some() {
+        return Clipboard::Yes;
+    }
+    // `CSI ? 6x ; … c`: `52` is clipboard access (xterm's list).
+    if let Some(p) = find(reply, b"\x1b[?") {
+        let rest = &reply[p + 3..];
+        if let Some(end) = rest.iter().position(|&b| b == b'c')
+            && rest[..end].split(|&b| b == b';').any(|v| v == b"52")
+        {
+            return Clipboard::Yes;
+        }
+    }
+    Clipboard::Unknown
+}
+
+/// Inside tmux the answer is tmux's: the copy travels in its passthrough (`allow-passthrough`;
+/// off drops it), and tmux knows whether the terminal outside it takes the clipboard (its
+/// `clipboard` feature). `show` is `tmux show -gv allow-passthrough`, `features` is `tmux display
+/// -p '#{client_termfeatures}'`; `None` where tmux didn't answer.
+pub fn clipboard_in_tmux(show: Option<&str>, features: Option<&str>) -> Clipboard {
+    if show.map(str::trim) == Some("off") {
+        return Clipboard::No(
+            "tmux drops it (allow-passthrough is off): add `set -g allow-passthrough on` to \
+             ~/.tmux.conf"
+                .into(),
+        );
+    }
+    if features.is_some_and(|f| f.trim().split(',').any(|x| x == "clipboard")) {
+        return Clipboard::Yes;
+    }
+    Clipboard::Unknown
+}
+
+/// Ask tmux (see [`clipboard_in_tmux`]).
+pub fn tmux_clipboard() -> Clipboard {
+    let ask = |args: &[&str]| {
+        std::process::Command::new("tmux")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    let show = ask(&["show", "-gv", "allow-passthrough"]);
+    let features = ask(&["display", "-p", "#{client_termfeatures}"]);
+    clipboard_in_tmux(show.as_deref(), features.as_deref())
+}
 
 /// Must run in raw mode and before crossterm's event reader starts. The reply to the DA1 query
 /// we append marks the end, so terminals that ignore OSC 10/11 cost one round trip, not a timeout.
 /// Also returns the keys typed meanwhile, for the caller to replay.
 #[cfg(unix)]
-pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
+pub fn query() -> (OuterTerm, Clipboard, Vec<KeyEvent>) {
+    let tmux = std::env::var_os("TMUX").is_some_and(|v| !v.is_empty());
+    let console = std::env::var("TERM").is_ok_and(|t| t == "linux");
     let mut out = std::io::stdout();
-    if out.write_all(QUERY).and_then(|()| out.flush()).is_err() {
-        return (OuterTerm::default(), Vec::new());
+    let ask = if tmux || console { Vec::new() } else { ASK_MS.to_vec() };
+    if out.write_all(&[ask.as_slice(), QUERY].concat()).and_then(|()| out.flush()).is_err() {
+        return (OuterTerm::default(), Clipboard::Unknown, Vec::new());
     }
     let stdin = std::io::stdin();
     let fd = stdin.as_fd();
@@ -51,7 +124,14 @@ pub fn query() -> (OuterTerm, Vec<KeyEvent>) {
         bg: color(&reply, b"\x1b]11;"),
         kitty_keyboard: false,
     };
-    (outer, typed(&reply))
+    let clipboard = if tmux {
+        tmux_clipboard()
+    } else if console {
+        Clipboard::No("the Linux console has no clipboard".into())
+    } else {
+        clipboard_from(&reply)
+    };
+    (outer, clipboard, typed(&reply))
 }
 
 /// The keys among the replies: OSC answers and `CSI ? … c` are dropped, the rest decoded as a
@@ -73,6 +153,14 @@ fn typed(bytes: &[u8]) -> Vec<KeyEvent> {
                         i += 1;
                     }
                     i += if bytes.get(i) == Some(&0x07) { 1 } else { 2 };
+                    continue;
+                }
+                // A DCS answer (XTGETTCAP's), up to ST.
+                Some(b'P') => {
+                    while i < bytes.len() && !bytes[i..].starts_with(b"\x1b\\") {
+                        i += 1;
+                    }
+                    i += 2;
                     continue;
                 }
                 Some(b'[') => {
@@ -209,6 +297,27 @@ mod tests {
     }
 
     #[test]
+    fn a_clipboard_is_known_only_when_the_terminal_says_so() {
+        let ms = b"\x1bP1+r4d73=\x1b\\\x1b[?62;22c";
+        assert_eq!(clipboard_from(ms), Clipboard::Yes);
+        assert_eq!(clipboard_from(b"\x1b[?64;1;4;52;22c"), Clipboard::Yes);
+        // No `Ms` in its table, or nothing said: maybe, so unknown, never a no.
+        assert_eq!(clipboard_from(b"\x1bP0+r4d73\x1b\\\x1b[?62;22c"), Clipboard::Unknown);
+        assert_eq!(clipboard_from(b"\x1b[?62;22c"), Clipboard::Unknown);
+        assert_eq!(clipboard_from(b"\x1b[?6c"), Clipboard::Unknown);
+        assert_eq!(clipboard_from(b"\x1b[?62;152c"), Clipboard::Unknown);
+    }
+
+    #[test]
+    fn inside_tmux_its_passthrough_and_features_decide() {
+        assert!(matches!(clipboard_in_tmux(Some("off\n"), Some("clipboard")), Clipboard::No(_)));
+        let feats = Some("256,bpaste,clipboard,ccolour\n");
+        assert_eq!(clipboard_in_tmux(Some("on\n"), feats), Clipboard::Yes);
+        assert_eq!(clipboard_in_tmux(Some("on"), Some("256,bpaste")), Clipboard::Unknown);
+        assert_eq!(clipboard_in_tmux(None, None), Clipboard::Unknown);
+    }
+
+    #[test]
     fn keys_typed_among_the_replies_are_kept() {
         let none = KeyModifiers::NONE;
         let k = KeyEvent::new;
@@ -232,6 +341,11 @@ mod tests {
         // Replies alone: nothing typed.
         assert!(
             typed(b"\x1b]10;rgb:ffff/8080/0000\x1b\\\x1b]11;rgb:1c/1c/1c\x07\x1b[?6c").is_empty()
+        );
+        // XTGETTCAP's answer is no keys either (not Alt-P and its text).
+        assert_eq!(
+            typed(b"\x1bP1+r4d73=\x1b\\x\x1bP0+r4d73\x1b\\"),
+            vec![k(KeyCode::Char('x'), none)]
         );
     }
 }
